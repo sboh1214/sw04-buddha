@@ -85,6 +85,10 @@ describe('who may dismiss or accept (#173 item 2)', () => {
     // #173 item 7: 수용은 곧 정정 — the market waits until the correction (#176).
     expect(DISPUTE_DECISION_DIALOG.accept.body).toContain('정정');
     expect(DISPUTE_DECISION_DIALOG.accept.body).toContain('잠정 결과에 머물고');
+    // A rejected or retracted correction sends it back to 검토 중 (owner answer 2026-11-02, #176):
+    // the 수용 is no longer said to be final.
+    expect(DISPUTE_DECISION_DIALOG.accept.body).toContain('검토 중으로 돌아갑니다');
+    expect(DISPUTE_DECISION_DIALOG.accept.body).not.toContain('되돌릴 수 없습니다');
     // The reason is the submitter's to read (#173 item 7), public without the decider (#173 13).
     expect(copy.adminMarketDisputeDecisionHint).toContain('이의를 낸 회원이');
   });

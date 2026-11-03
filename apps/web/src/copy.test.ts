@@ -89,6 +89,11 @@ describe('copy', () => {
       copy.marketJudgementDelayedNotice,
       copy.adminMarketJudgementDelayedNote,
       copy.adminMarketScheduledJudgementAtHint,
+      // A 잠정 결과 held past its deadline by a dispute or a waiting correction (#175, #176).
+      copy.marketProvisionalDelayed,
+      copy.marketProvisionalDelayedCorrection,
+      copy.adminMarketDisputeDelayedNote,
+      copy.adminMarketCorrectionDelayedNote,
     ]) {
       expect(text).not.toMatch(/NO|환불|원금/);
     }

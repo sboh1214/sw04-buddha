@@ -109,7 +109,8 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   'link_flags.reason': LINK_FLAG_REASONS,
   // #171's two-person rule: each consumer's kinds — the account restriction's four (#139) the
   // first, the market review (#78), the rule supplement (#80), a paused market's next path (#114),
-  // a CLOSED market's judgement (#152); #130's bot control and the rest add theirs here.
+  // a market's judgement — a CLOSED one's (#152) and a PROVISIONAL one's correction (#176), one
+  // kind; #130's bot control and the rest add theirs here.
   'approval_requests.kind': [
     ...Object.values(ACCOUNT_RESTRICTION_APPROVAL_KINDS),
     MARKET_REVIEW_APPROVAL_KIND,
@@ -124,8 +125,9 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   'market_pauses.reason': MARKET_PAUSE_REASONS,
   'market_pauses.review_result': MARKET_PAUSE_REVIEW_RESULTS,
   'market_pauses.end_kind': MARKET_PAUSE_END_KINDS,
-  // #175: a 판정 이의's status, held by a CHECK so #176 adds its own ('retracted', never the
-  // cash-out's `withdraw*`; 'dismissed', never 'review' or 'appeal').
+  // #175: a 판정 이의's status, held by a CHECK — #176's migration 0057 added
+  // 'closed_by_correction' ('retracted', never the cash-out's `withdraw*`; 'dismissed', never
+  // 'review' or 'appeal').
   'market_disputes.status': MARKET_DISPUTE_STATUSES,
   // #184's purge records: the kinds a run counts (no personal content), and whether a kind was
   // done or failed (owner decision 2026-10-24 14).
@@ -455,6 +457,8 @@ describe('excluded features in stored data (#113)', () => {
       'disputeWindowMinutes',
       'publishedAt',
       'disputeDeadline',
+      // 정정 사유 (#176, migration 0057).
+      'correctionReason',
       'approvalId',
       'registeredBy',
       'approvedBy',
@@ -518,6 +522,8 @@ describe('excluded features in stored data (#113)', () => {
       'decidedAt',
       'decisionReason',
       'retractedAt',
+      // 정정으로 종결's instant (#176, migration 0057).
+      'closedAt',
       'purgedAt',
     ]);
     expect(TABLES.map((table) => table.name)).not.toContain('disputes');
@@ -555,6 +561,35 @@ describe('excluded features in stored data (#113)', () => {
     );
     // The personal table it is (a submitter's), holding no personal probability (the test below).
     expect(personalTables().map((table) => table.name)).toContain('market_disputes');
+  });
+
+  it('names the correction’s columns, CHECKs and stored values, each read above (#176)', () => {
+    // ADR-0105, migration 0057: the 정정 사유 on a judgement version, the closure's instant on a
+    // dispute, the correction mirror on the market and their CHECKs, the new dispute status and
+    // the correction's market event type, which the test above reads for an excluded feature
+    // ('correction', 'corrected', 'closed', 'pending' name none). No new approval kind or admin
+    // action type: a correction is a `market_judgement` request and its four records.
+    const columnsOf = (name: string) =>
+      TABLES.find((table) => table.name === name)?.columns.map((column) => column.name);
+    expect(columnsOf('market_judgements')).toContain('correctionReason');
+    expect(columnsOf('market_disputes')).toContain('closedAt');
+    expect(columnsOf('markets')).toEqual(
+      expect.arrayContaining(['disputeHoldCount', 'correctionPending']),
+    );
+    expect(storageNames()).toEqual(
+      expect.arrayContaining([
+        {
+          where: 'market_judgements constraint',
+          name: 'market_judgements_correction_reason_check',
+        },
+        { where: 'market_disputes constraint', name: 'market_disputes_closed_check' },
+        { where: 'markets constraint', name: 'markets_correction_pending_status_check' },
+        { where: 'market_disputes.status value', name: 'closed_by_correction' },
+        { where: 'market_events.type value', name: 'judgement_corrected' },
+      ]),
+    );
+    expect(MARKET_DISPUTE_STATUSES).toContain('closed_by_correction');
+    expect(MARKET_EVENT_TYPES).toContain('judgement_corrected');
   });
 
   it('passes with the payment and coupon structures kept for paid Coin (D9)', () => {

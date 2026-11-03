@@ -242,7 +242,13 @@ describe('read DTOs', () => {
       ],
       supplement: { pending: null, log: [] },
       pause: { history: [], pending: null, log: [] },
-      judgement: { current: null, pending: null, log: [], disputeWindowUndecided: true },
+      judgement: {
+        current: null,
+        history: [],
+        pending: null,
+        log: [],
+        disputeWindowUndecided: true,
+      },
       disputes: { holding: 0, items: [] },
     };
     expect(adminMarketSchema.parse(admin)).toEqual(admin);
@@ -292,6 +298,7 @@ describe('read DTOs', () => {
       decidedAt: null,
       decisionReason: null,
       retractedAt: null,
+      closedAt: null,
       submitter: { id: 'user-1', nickname: null },
       decidedBy: null,
       purgedAt: null,

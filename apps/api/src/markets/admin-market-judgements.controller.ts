@@ -35,14 +35,19 @@ import { MarketJudgementService } from './market-judgement.service.js';
  * the rule's source, the evidence and the description — and another approves it, which publishes
  * the provisional result (CLOSED → PROVISIONAL) and fixes the dispute deadline; the worker
  * confirms it once that has passed with no 판정 이의 holding it (PROVISIONAL → RESOLVED; #175). A
- * 반려 leaves the market CLOSED to be registered again. The interim one-admin `POST …/resolve` is
- * gone. The decisions name the
- * registration in the path (`:requestId`), as #80's and #114's do: a market has many over its
- * life, one waiting at a time. Each write answers the admin detail (`AdminMarket`, its `judgement`
- * among it). Guards run in order: SessionGuard (401 without a session, 403 for a foreign Origin on
- * a mutation), AdminGuard (403 for a member), OnboardedGuard (409 ONBOARDING_REQUIRED, ADR-0072).
- * Every write names the admin on screen (`expectedAccountId`, ADR-0092), refused before anything
- * is read when it is not the cookie's, and writes its `admin_actions` row (admin-audit.test).
+ * 반려 leaves the market CLOSED to be registered again. 판정 정정 (#176, ADR-0105; #173 items
+ * 2·5·7·8) takes the same routes on a PROVISIONAL market, the body's `correction` naming the
+ * current version and the 정정 사유: its approval makes the next version — the new result, a new
+ * deadline of the first one's length, the version's pending disputes closed — and while it waits
+ * the worker confirms nothing; its 반려 or 철회 carries the version on and sends the accepted
+ * disputes it answered back to pending. The interim one-admin `POST …/resolve` is gone. The
+ * decisions name the registration in the path (`:requestId`), as #80's and #114's do: a market has
+ * many over its life, one waiting at a time. Each write answers the admin detail (`AdminMarket`,
+ * its `judgement` among it). Guards run in order: SessionGuard (401 without a session, 403 for a
+ * foreign Origin on a mutation), AdminGuard (403 for a member), OnboardedGuard (409
+ * ONBOARDING_REQUIRED, ADR-0072). Every write names the admin on screen (`expectedAccountId`,
+ * ADR-0092), refused before anything is read when it is not the cookie's, and writes its
+ * `admin_actions` row (admin-audit.test).
  */
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -60,19 +65,27 @@ export class AdminMarketJudgementsController {
       '(YES, NO or VOID), the rules’ source by its priority (0 the primary, 1–3 a fallback with ' +
       'the reason the primary could not be used; none for a VOID alone, with its reason), 1–5 ' +
       'evidence links, when the evidence was collected (not after now) and what was confirmed. ' +
-      'Nothing changes until the approval; one registration waits per market at a time',
+      'With `correction` — the current judgement version and the correction reason — it ' +
+      'registers a provisional market’s correction (판정 정정) the same way, the whole new ' +
+      'judgement in the body: refused when it changes neither the result nor its grounds, and ' +
+      'while it waits the result is not confirmed. Nothing else changes until the approval; one ' +
+      'registration waits per market at a time',
   })
   @ApiData(adminMarketSchema)
   // VALIDATION_ERROR names, from the body, `result`, `source` ('required' for a YES or NO with
   // none), `fallbackReason` ('required' for a fallback source, 'only for a fallback source'
   // otherwise), `voidReason` ('required' for a VOID, 'only for VOID' otherwise), `evidence.links`
-  // (1–5 http(s) links; 'duplicate' at `evidence.links.<index>`), `evidence.collectedAt` or
-  // `description`; then, in this order, `status` 'not closed', `judgement` 'pending' (another
-  // registration waits); APPROVAL_NOT_ALLOWED `{path: ['request'], message: 'no_decider'}` when no
-  // admin but the registrant could approve it; then `disputeWindow` 'undecided' (the release
-  // setting market.dispute_window has no value), `source` 'unknown' (the rules have no source of
-  // that priority), `result` 'void only' (YES or NO on a market closed early as not judgeable) and
-  // `evidence.collectedAt` 'after now'.
+  // (1–5 http(s) links; 'duplicate' at `evidence.links.<index>`), `evidence.collectedAt`,
+  // `description` or `correction` (`baseVersion`, `reason`); then, in this order, `status` 'not
+  // closed' (a first judgement) or 'not provisional' (a correction), `correction.baseVersion`
+  // 'stale' (not the market's current version), `judgement` 'pending' (another registration
+  // waits); APPROVAL_NOT_ALLOWED `{path: ['request'], message: 'no_decider'}` when no admin but
+  // the registrant could approve it; then `disputeWindow` 'undecided' (a first judgement alone:
+  // the release setting market.dispute_window has no value), `correction` 'unchanged' (the
+  // result, the source, both reasons, the links, the collection time and the description all the
+  // current version's), `source` 'unknown' (the rules have no source of that priority), `result`
+  // 'void only' (YES or NO on a market closed early as not judgeable) and `evidence.collectedAt`
+  // 'after now'.
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
@@ -100,14 +113,20 @@ export class AdminMarketJudgementsController {
       '— before the scheduled judgement time also confirming the NO condition’s event deadline: ' +
       'the provisional result is published (closed → provisional) and the dispute deadline ' +
       'fixed (now plus the dispute window); the worker confirms the result once it has passed ' +
-      'with no judgement dispute pending or accepted',
+      'with no judgement dispute pending or accepted and no correction waiting for its ' +
+      'approval. A correction’s approval makes the next ' +
+      'judgement version instead — the market stays provisional with the new result, a new ' +
+      'dispute deadline of the first one’s length from now, and the replaced version’s pending ' +
+      'disputes closed',
   })
   @ApiData(adminMarketSchema)
   // VALIDATION_ERROR names `reason` or `eventDeadlineConfirmed` from the body, then `requestId`
   // 'unknown' (no judgement registration of this market). APPROVAL_NOT_ALLOWED's `details[0]` is
   // `{path: ['request'], message}`: `retracted` or `decided` for a registration no longer waiting,
-  // then `requester`. Then `status` 'not closed', `disputeWindow` 'undecided' and, at the
-  // decision, `eventDeadlineConfirmed` 'required' (before the scheduled judgement time, false).
+  // then `requester`. Then `status` 'not closed' (a first judgement) or 'not provisional' (a
+  // correction), a first judgement's `disputeWindow` 'undecided' or a correction's
+  // `correction.baseVersion` 'stale', and, at the decision, `eventDeadlineConfirmed` 'required'
+  // (before the scheduled judgement time, false).
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
@@ -133,7 +152,11 @@ export class AdminMarketJudgementsController {
     operationId: 'adminRejectMarketJudgement',
     summary:
       'Reject a waiting judgement (반려) by an admin other than its registrant, in any status, ' +
-      'with a reason; the market stays as it is — a closed one is registered again, by any admin',
+      'with a reason; the market stays as it is — a closed one is registered again, by any ' +
+      'admin. A rejected correction leaves the judgement version, its dispute deadline and its ' +
+      'disputes’ results as they were, sends the accepted disputes it answered back to pending, ' +
+      'and once that deadline has passed with nothing holding the market the worker confirms ' +
+      'the original result within seconds',
   })
   @ApiData(adminMarketSchema)
   // VALIDATION_ERROR names `reason` from the body, then `requestId` 'unknown'. APPROVAL_NOT_ALLOWED
@@ -163,7 +186,10 @@ export class AdminMarketJudgementsController {
     operationId: 'adminRetractMarketJudgement',
     summary:
       'Retract a waiting judgement the acting admin registered (철회), in any status, before ' +
-      'anyone decides it; nothing changes',
+      'anyone decides it; a first judgement’s retraction changes nothing else, and a ' +
+      'correction’s ends as its rejection does: the accepted disputes it answered go back to ' +
+      'pending, and once the dispute deadline has passed with nothing holding the market the ' +
+      'worker confirms the original result within seconds',
   })
   @ApiData(adminMarketSchema)
   // VALIDATION_ERROR names `requestId` 'unknown'. APPROVAL_NOT_ALLOWED `not_requester` for anyone
@@ -189,9 +215,9 @@ export class AdminMarketJudgementsController {
 
 /**
  * 판정 승인 대기 (#152, ADR-0103): the judgement registrations waiting for another admin's approval
- * or 반려, across markets — the decisions themselves are the market's own routes
- * (AdminMarketJudgementsController). Guards as there. A read: no admin_actions row
- * (admin-audit.test).
+ * or 반려, across markets, corrections among them (#176) — the decisions themselves are the
+ * market's own routes (AdminMarketJudgementsController). Guards as there. A read: no
+ * admin_actions row (admin-audit.test).
  */
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -206,8 +232,9 @@ export class AdminMarketJudgementQueueController {
     summary:
       'The judgement registrations waiting for approval, the oldest first, with their market ' +
       '(its status, close and scheduled judgement time too: one still waiting once the market ' +
-      'left closed is shown for its 반려 or 철회), the result registered, and who registered it ' +
-      'and when',
+      'left the status it needs is shown for its 반려 or 철회), the result registered, whether ' +
+      'it is a correction (its base version, reason and the accepted disputes it answers), and ' +
+      'who registered it and when',
   })
   // `cursorQuerySchema` has a component id (CursorQuery), so the parameters are declared here
   // (cursor-query.ts).

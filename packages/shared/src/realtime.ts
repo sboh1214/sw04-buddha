@@ -27,17 +27,18 @@ import {
  * keys are compared within one event type, never across them (they come from different
  * sequences).
  *
- * `market:status` is ordered by `statusEventId` — the `market_events.id` of the transition,
- * drawn while the writer holds the market row FOR UPDATE and therefore the market's commit
- * order — and the market DTOs carry the same key (`MarketSummary.statusEventId`) so a REST
- * snapshot seeds the comparison (A-M3-19, Q-M3-8 (3), M5). Until M5 the event carried no key
- * and a client kept the higher status rank in `MARKET_STATUSES` order, which was a total order
- * only while no transition repeated a status or went back. Neither holds: PAUSED → OPEN goes
- * back (#174), a correction in PROVISIONAL republishes its status with a new result (#176), and
- * an admin edit or a supplement's approval (#80) republishes an unchanged status (A-M4-36), so
- * the key is the rule. The rank stays
- * as the FALLBACK for a row with no key (`statusSupersedes`): a row written outside the transition
- * paths — a test factory — has none, and rank is still the one order such a row can join.
+ * `market:status` is ordered by `statusEventId` — the `market_events.id` of the transition, or
+ * of a correction's `judgement_corrected` (#176, ADR-0105), drawn while the writer holds the
+ * market row FOR UPDATE and therefore the market's commit order — and the market DTOs carry the
+ * same key (`MarketSummary.statusEventId`) so a REST snapshot seeds the comparison (A-M3-19,
+ * Q-M3-8 (3), M5). Until M5 the event carried no key and a client kept the higher status rank
+ * in `MARKET_STATUSES` order, which was a total order only while no transition repeated a status
+ * or went back. Neither holds: PAUSED → OPEN goes back (#174), a correction's approval in
+ * PROVISIONAL republishes its status with a new result under a newer key (#176), and an admin
+ * edit or a supplement's approval (#80) republishes an unchanged status (A-M4-36), so the key is
+ * the rule. The rank stays as the FALLBACK for a row with no key (`statusSupersedes`): a row
+ * written outside the transition paths — a test factory — has none, and rank is still the one
+ * order such a row can join.
  *
  * Families. `realtimeEventSchema` is the publisher's union — everything that may reach
  * Redis. The gateway never parses an inbound message with it: a `market:*` message is
@@ -95,10 +96,10 @@ export function statusRank(status: MarketStatus): number {
  *
  * With a key on both sides it is `supersedes` on `statusEventId`, which is strict: a repeat of
  * the same status (an admin edit republishes it unchanged, A-M4-36) and a late or duplicate
- * delivery both answer false, while the same status with a NEWER event id (a correction in
- * PROVISIONAL, #176) answers true. Without a key on either side it falls back to the status
- * rank, the order every row can join; that path is only ever taken for rows a test factory
- * wrote, but it keeps the function total rather than throwing on a null.
+ * delivery both answer false, while the same status with a NEWER event id (a correction's
+ * approval in PROVISIONAL, #176, ADR-0105) answers true. Without a key on either side it falls
+ * back to the status rank, the order every row can join; that path is only ever taken for rows a
+ * test factory wrote, but it keeps the function total rather than throwing on a null.
  */
 export function statusSupersedes(incoming: StatusKeyed, held: StatusKeyed): boolean {
   if (incoming.statusEventId != null && held.statusEventId != null) {
@@ -153,14 +154,18 @@ export type MarketTradeEvent = z.infer<typeof marketTradeEventSchema>;
  * published by the API's admin actions — a judgement's approval among them, #152 — and the
  * worker's jobs, its confirmation at the dispute deadline among them; an approval or a
  * reschedule that opens the market at once publishes once, the OPEN market with the `opened`
- * event's key, #21), or the same status republished so subscribers refetch a descriptive edit
+ * event's key, #21); a 판정 정정's approval (#176, ADR-0105), PROVISIONAL again with the new
+ * `resolvedResult` under its `judgement_corrected` event's NEWER key, which a client takes as a
+ * later write; or the same status republished so subscribers refetch a descriptive edit
  * (A-M4-36, `MarketAdminService` `update`), a supplement's new rule version (#80, ADR-0101: the
- * approval) or a 판정 이의's submission, retraction or decision (#175, ADR-0104: the labels'
- * flags). `statusEventId` is the transition's `market_events.id` — the key `statusSupersedes`
+ * approval), a 판정 이의's submission, retraction or decision (#175, ADR-0104: the labels'
+ * flags) or a correction's registration, 반려 or 철회 (#176: the flags, and the disputes a 반려 or
+ * 철회 reopens). `statusEventId` is the market's `status_event_id` — the key `statusSupersedes`
  * orders by — and the repeat carries the UNCHANGED one, which is what makes it safe: a client
  * drops it as not newer, and only the REST snapshot it triggers carries `closeAt`, `title`, the
- * rules, their versions or the dispute flags. Required (nullable, never absent)
- * so every publisher states it; null only from a row that has no transition event.
+ * rules, their versions, the judgement version, its deadline or the dispute flags. Required
+ * (nullable, never absent) so every publisher states it; null only from a row that has no
+ * transition event.
  */
 export const marketStatusEventSchema = z
   .object({

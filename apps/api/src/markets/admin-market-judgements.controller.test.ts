@@ -12,32 +12,49 @@
  * job at the deadline, nothing settled and nothing of it public — the event deadline confirmed
  * before the scheduled judgement, and refused for an unknown request, one no longer waiting, its
  * registrant, a market no longer CLOSED and the undecided window; a 반려 and a 철회 writing the
- * record alone, the market registered again by any admin; two writes at once; the 판정 승인 대기
- * queue; the admin on screen; and the interim one-admin `POST …/resolve`, gone. The worker's
+ * record alone, the market registered again by any admin; 판정 정정 (#176, ADR-0105; #173 items
+ * 2·5·7·8, decision 3 '#176 정정 대기', owner answer 2026-11-02) by the same routes — a
+ * registration against the current version listing its accepted disputes, the mirror set and the
+ * status republished, refused for its body and, in order, off PROVISIONAL, against another
+ * version, while one waits, with no decider, changing nothing, an unknown source, after 판정 불가
+ * and evidence after now, reading no setting; its approval — the next version with a deadline of
+ * v1's length from it (the window undecided too), v1's pending disputes 정정으로 종결 and its
+ * accepted one answered, the record, the status under the new key, a new resolve job beside v1's,
+ * a second correction's history — and its refusals; its 반려 and 철회 sending the accepted
+ * disputes it answered back to pending, retractable and decided again; the member disputing v2,
+ * decided by any admin but v2's registrant; the hold and '판정 지연' past the deadline, and the
+ * resolve job registered at once once nothing holds; two writes at once; the 판정 승인 대기 queue;
+ * the admin on screen; and the interim one-admin `POST …/resolve`, gone. The worker's
  * confirmation at the deadline is apps/worker's (market-resolve.test.ts). Skips when TEST_* are
  * unset.
  */
-import { schema } from '@buddha/db';
+import { clockTimestamp, schema } from '@buddha/db';
 import {
   closeMarketEarly,
   completeOnboarding,
   createCategory,
+  createDispute,
+  createFill,
   createJudgementRequest,
   createMarket,
   createOpenedMarket,
+  createProvisionalMarket,
+  resolveMarketNow,
 } from '@buddha/db/test';
 import {
   JOB_NAMES,
   MARKET_JUDGEMENT_APPROVAL_KIND,
   marketChannel,
   marketResolveJobId,
+  type AdminDisputeQueueItem,
   type AdminMarket,
   type AdminMarketJudgementQueueItem,
   type Market,
   type MarketPauseReviewResult,
+  type MyDispute,
 } from '@buddha/shared';
 import { Queue } from 'bullmq';
-import { and, asc, eq, ne } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne } from 'drizzle-orm';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
@@ -71,6 +88,9 @@ const LINK = 'https://www.bok.or.kr/press/2026-10';
 const DESCRIPTION = '한국은행 보도자료에서 기준금리 3.00%를 확인했다.';
 const APPROVAL = '증거와 출처가 규칙에 맞다.';
 const FALLBACK = { name: '통계청 보도자료', url: 'https://kostat.go.kr/press' };
+const CORRECTION = '1차 출처가 발표를 정정해 기준금리는 3.25%다.';
+const DISPUTE_REASON = '발표 원문은 3.25%인데 판정은 3.00%로 보았다.';
+const ACCEPTANCE = '발표 원문을 다시 확인했고 판정과 다르다.';
 
 describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
   let t: TestApp;
@@ -252,6 +272,13 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
     expect(errorOf(res).code).toBe('APPROVAL_NOT_ALLOWED');
     expect(errorOf(res).details).toEqual([{ path: ['request'], message: reason }]);
   }
+  /** A 판정 이의 route's DISPUTE_NOT_ALLOWED with `reason` (#175). */
+  function expectDisputeNotAllowed(res: Res, reason: string) {
+    expect({ status: res.statusCode, error: errorOf(res) }).toMatchObject({
+      status: 409,
+      error: { code: 'DISPUTE_NOT_ALLOWED', details: { reason } },
+    });
+  }
 
   async function marketRow(id: string) {
     const [row] = await t.db.select().from(schema.markets).where(eq(schema.markets.id, id));
@@ -366,6 +393,8 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
         },
         // The rule version the market had (ADR-0101 결과 5): the judgement follows it.
         ruleVersion: 1,
+        // A first judgement (#176: a correction names its base version).
+        correction: null,
       };
       expect(request).toMatchObject({
         kind: MARKET_JUDGEMENT_APPROVAL_KIND,
@@ -403,6 +432,7 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
       });
       expect(answer.judgement).toEqual({
         current: null,
+        history: [],
         pending: entry,
         log: [
           {
@@ -691,6 +721,7 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
         disputeWindowMinutes: 90,
         publishedAt: at,
         disputeDeadline: deadline,
+        correctionReason: null,
         approvalId: requestId,
         registeredBy: registrant.id,
         approvedBy: reviewer.id,
@@ -715,6 +746,9 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
           eventDeadlineConfirmed: true,
           disputeWindowMinutes: 90,
           disputeDeadline: deadline.toISOString(),
+          previous: null,
+          correction: null,
+          closedDisputeIds: [],
           before: { status: 'closed' },
           after: { status: 'provisional' },
         },
@@ -742,6 +776,7 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
         evidence: { links: [LINK], collectedAt: collectedAt.toISOString() },
         description: DESCRIPTION,
         ruleVersion: 1,
+        correctionReason: null,
         eventDeadlineConfirmed: true,
         disputeWindowMinutes: 90,
         publishedAt: at.toISOString(),
@@ -751,6 +786,7 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
         approvedBy: await actorOf(reviewer),
       });
       expect(answer.judgement.pending).toBeNull();
+      expect(answer.judgement.history).toEqual([]);
       expect(answer.judgement.log).toEqual([
         expect.objectContaining({
           requestId,
@@ -1010,6 +1046,10 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
           reason: '증거 링크가 결과를 보이지 않는다',
         },
       });
+      // A first judgement's ends nothing else: no dispute to reopen (decision 10-23).
+      expect((await judgementActionsFor(market.id)).at(-1)!.payload).not.toHaveProperty(
+        'reopenedDisputeIds',
+      );
       expect(await marketRow(market.id)).toEqual(before);
       await sleep(100);
       expect(received).toEqual([]);
@@ -1043,6 +1083,9 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
       createdAt: secondRow!.retractedAt,
       payload: { approvalId: second, result: 'NO' },
     });
+    expect((await judgementActionsFor(market.id)).at(-1)!.payload).not.toHaveProperty(
+      'reopenedDisputeIds',
+    );
     expectNotAllowed(await retract(market.id, second, reviewer), 'retracted');
 
     // A third registration, by the reviewer again: the first one's registrant may approve it.
@@ -1063,6 +1106,878 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
       'market_judgement_approve',
     ]);
     expect((await eventsFor(market.id)).map((event) => event.type)).toEqual(['provisional']);
+  });
+
+  // --- 판정 정정 (#176) ---------------------------------------------------------------------------
+  /**
+   * A PROVISIONAL market as the routes leave it (#176's corrections): `closed()`'s market — its
+   * scheduled judgement passed, so no approval asks for a confirmation — judged v1, a YES on the
+   * primary source registered by `registrant` and approved by `reviewer` at `publishedAt` (default
+   * now) with a 90-minute window, unless told.
+   */
+  async function provisional(input: Parameters<typeof createProvisionalMarket>[1] = {}) {
+    const market = await closed();
+    return createProvisionalMarket(t.db, {
+      marketId: market.id,
+      registeredBy: registrant.id,
+      approvedBy: reviewer.id,
+      disputeWindowMinutes: 90,
+      ...input,
+    });
+  }
+  /** 판정 정정 of version 1 by `third` unless told: NO on the primary source, with its reason. */
+  const correct = (id: string, who: TestUser = third, payload: Record<string, unknown> = {}) =>
+    register(id, who, {
+      result: 'NO',
+      correction: { baseVersion: 1, reason: CORRECTION },
+      ...payload,
+    });
+  /** A member who finished the onboarding, with a fill on `marketId` (none by #119's path). */
+  async function memberWithFill(marketId: string): Promise<TestUser> {
+    const member = await signUpTestUser(t);
+    await completeOnboarding(t.db, { userId: member.id });
+    await createFill(t.db, { marketId, userId: member.id, amountCoin: 50n });
+    return member;
+  }
+  /** The member's 판정 이의 of version 1 unless told (#175's route). */
+  const dispute = (marketId: string, who: TestUser, payload: Record<string, unknown> = {}) =>
+    post(`/api/v1/markets/${marketId}/disputes`, who, {
+      judgementVersion: 1,
+      links: [LINK],
+      reason: DISPUTE_REASON,
+      ...payload,
+    });
+  /** 수용 of a dispute by `who` (#175's route). */
+  const accept = (marketId: string, disputeId: string, who: TestUser = third) =>
+    post(`${marketUrl(marketId)}/disputes/${disputeId}/accept`, who, { reason: ACCEPTANCE });
+  /** The market's disputes, the oldest submission first. */
+  async function disputesFor(marketId: string) {
+    return t.db
+      .select()
+      .from(schema.marketDisputes)
+      .where(eq(schema.marketDisputes.marketId, marketId))
+      .orderBy(asc(schema.marketDisputes.submittedAt), asc(schema.marketDisputes.id));
+  }
+  /** The three display flags of a public read. */
+  const flagsOf = (market: Market) => ({
+    disputeOpen: market.disputeOpen,
+    disputeUnderReview: market.disputeUnderReview,
+    judgementDelayed: market.judgementDelayed,
+  });
+
+  it('registers a provisional market’s correction against its current version: the accepted disputes it answers listed by the server, the mirror set, the status republished unchanged — nothing else moves', async () => {
+    const { market } = await provisional();
+    const primary = await primaryOf(market.id);
+    // v1's disputes: two accepted by an admin who did not register v1, one pending, one dismissed.
+    const { dispute: older } = await createDispute(t.db, {
+      marketId: market.id,
+      status: 'accepted',
+      decidedBy: third.id,
+    });
+    const { dispute: newer } = await createDispute(t.db, {
+      marketId: market.id,
+      status: 'accepted',
+      decidedBy: third.id,
+    });
+    const { dispute: waiting } = await createDispute(t.db, { marketId: market.id });
+    await createDispute(t.db, { marketId: market.id, status: 'dismissed', decidedBy: third.id });
+    const before = await marketRow(market.id);
+    const eventsBefore = await eventsFor(market.id);
+    await listening(market.id, async (received) => {
+      // The reason trimmed; a client's `disputeIds` are none of its business (stripped).
+      const res = await correct(market.id, third, {
+        correction: { baseVersion: 1, reason: ` ${CORRECTION} `, disputeIds: [waiting.id] },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      const answer = detail(res);
+      const [, request] = await requestsFor(market.id);
+      const correction = { baseVersion: 1, reason: CORRECTION, disputeIds: [older.id, newer.id] };
+      const payload = {
+        result: 'NO',
+        source: primary,
+        fallbackReason: null,
+        voidReason: null,
+        evidence: { links: [LINK], collectedAt: expect.any(String) as unknown },
+        ruleVersion: before.ruleVersion,
+        correction,
+      };
+      expect(request).toMatchObject({
+        kind: MARKET_JUDGEMENT_APPROVAL_KIND,
+        targetType: 'market',
+        targetId: market.id,
+        payload,
+        requestedBy: third.id,
+        requestReason: DESCRIPTION,
+        status: 'pending',
+      });
+      expect((await judgementActionsFor(market.id)).at(-1)).toMatchObject({
+        adminId: third.id,
+        type: 'market_judgement_request',
+        createdAt: request!.requestedAt,
+        payload: { approvalId: request!.id, ...payload, description: DESCRIPTION },
+      });
+      // The mirror the labels read, at the registration's instant; nothing else of the market.
+      expect(await marketRow(market.id)).toEqual({
+        ...before,
+        correctionPending: true,
+        updatedAt: request!.requestedAt,
+      });
+      expect(await eventsFor(market.id)).toEqual(eventsBefore);
+      expect(await judgementsFor(market.id)).toHaveLength(1);
+      expect(answer).toMatchObject({
+        status: 'provisional',
+        resolvedResult: 'YES',
+        judgementVersion: 1,
+        updatedAt: request!.requestedAt.toISOString(),
+      });
+      expect(answer.judgement.pending).toEqual({
+        requestId: request!.id,
+        ...payload,
+        evidence: (request!.payload as { evidence: unknown }).evidence,
+        description: DESCRIPTION,
+        requestedBy: await actorOf(third),
+        requestedAt: request!.requestedAt.toISOString(),
+      });
+      expect(answer.judgement.log.map((entry) => [entry.status, entry.correction])).toEqual([
+        ['pending', correction],
+        ['approved', null],
+      ]);
+      expect(answer.judgement.current).toMatchObject({ version: 1, correctionReason: null });
+      expect(answer.judgement.history).toEqual([]);
+      // Republished once, the status and its key unchanged: an open detail refetches its labels.
+      await waitForMessages(received, 1, 'market:status of the registration');
+      await sleep(100);
+      expect(received.map((message) => JSON.parse(message) as unknown)).toEqual([
+        {
+          type: 'market:status',
+          marketId: market.id,
+          status: 'provisional',
+          resolvedResult: 'YES',
+          statusEventId: String(before.statusEventId),
+          ts: request!.requestedAt.toISOString(),
+        },
+      ]);
+    });
+    expect(await jobIds()).toEqual([]);
+    // The 판정 승인 대기 queue marks it a correction.
+    expect((await queue()).json<QueuePage>().data).toEqual([
+      expect.objectContaining({
+        marketId: market.id,
+        status: 'provisional',
+        result: 'NO',
+        correction: { baseVersion: 1, reason: CORRECTION, disputeIds: [older.id, newer.id] },
+        requestedBy: await actorOf(third),
+      }),
+    ]);
+    // Nothing of it is public (#24, #173 item 13): its deadline ahead, the market reads as before.
+    const pub = await publicDetail(market.id);
+    expect(data<Market>(pub)).toMatchObject({
+      resolvedResult: 'YES',
+      judgementVersion: 1,
+      disputeOpen: true,
+      judgementDelayed: false,
+    });
+    for (const hidden of [CORRECTION, DESCRIPTION, LINK, third.id]) {
+      expect(pub.body).not.toContain(hidden);
+    }
+  });
+
+  it('refuses a correction for its body and, in order, off PROVISIONAL, against another version, while one waits, with no decider, changing nothing, an unknown source, YES or NO after 판정 불가 and evidence after now — reading no setting', async () => {
+    const { market, judgement: v1 } = await provisional();
+    // The body's own: a version and a reason of 1..500 characters.
+    for (const [correction, path] of [
+      [{ baseVersion: 0, reason: CORRECTION }, ['correction', 'baseVersion']],
+      [{ reason: CORRECTION }, ['correction', 'baseVersion']],
+      [{ baseVersion: 1 }, ['correction', 'reason']],
+      [{ baseVersion: 1, reason: '   ' }, ['correction', 'reason']],
+      [{ baseVersion: 1, reason: 'x'.repeat(501) }, ['correction', 'reason']],
+    ] as const) {
+      const res = await correct(market.id, third, { correction });
+      expect({ correction, status: res.statusCode }).toEqual({ correction, status: 400 });
+      expect(errorOf(res).details?.map((issue) => issue.path)).toEqual([path]);
+    }
+    // Not PROVISIONAL — CLOSED, or confirmed (#173 item 8: #144's) — before the version; and a
+    // first judgement of a PROVISIONAL market is still refused as not closed.
+    const unjudged = await closed();
+    expectRefused(
+      await correct(unjudged.id, third, { correction: { baseVersion: 3, reason: CORRECTION } }),
+      'status',
+      'not provisional',
+    );
+    const { market: confirmed } = await provisional({
+      publishedAt: new Date(Date.now() - 2 * HOUR_MS),
+    });
+    await resolveMarketNow(t.db, confirmed.id);
+    expectRefused(await correct(confirmed.id), 'status', 'not provisional');
+    expectRefused(await register(market.id, third), 'status', 'not closed');
+    // Against a version the market is not at, before one waiting; then one waits at a time.
+    expect((await correct(market.id, reviewer)).statusCode).toBe(200);
+    expectRefused(
+      await correct(market.id, third, { correction: { baseVersion: 2, reason: CORRECTION } }),
+      ['correction', 'baseVersion'],
+      'stale',
+    );
+    expectRefused(await correct(market.id, third), 'judgement', 'pending');
+    expect((await retract(market.id, await pendingId(market.id), reviewer)).statusCode).toBe(200);
+
+    // v1's result and grounds exactly, as the body would send them again.
+    const unchanged = {
+      result: v1.result,
+      source: { priority: v1.sourcePriority },
+      evidence: { links: v1.evidenceLinks, collectedAt: v1.collectedAt.toISOString() },
+      description: v1.evidenceDescription,
+    };
+    // No admin but the registrant to approve it — before anything about the correction itself.
+    const demoted = await t.db
+      .update(schema.profiles)
+      .set({ role: 'user' })
+      .where(and(ne(schema.profiles.userId, third.id), eq(schema.profiles.role, 'admin')))
+      .returning({ userId: schema.profiles.userId });
+    expectNotAllowed(await correct(market.id, third, unchanged), 'no_decider');
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'admin' })
+      .where(
+        inArray(
+          schema.profiles.userId,
+          demoted.map((row) => row.userId),
+        ),
+      );
+    // No setting is read: a correction's deadline takes v1's length (#173 item 5).
+    await setWindow(null);
+    // Nothing to change — a dismissal's, not a correction's (#173 item 7): the texts compared
+    // trimmed, the instant by its moment.
+    expectRefused(await correct(market.id, third, unchanged), 'correction', 'unchanged');
+    expectRefused(
+      await correct(market.id, third, {
+        ...unchanged,
+        evidence: { links: [` ${v1.evidenceLinks[0]!} `], collectedAt: iso(+v1.collectedAt) },
+        description: ` ${v1.evidenceDescription} `,
+      }),
+      'correction',
+      'unchanged',
+    );
+    // The result kept with new grounds is a correction (#173 item 7 '결과나 근거').
+    const regrounded = await correct(market.id, third, {
+      ...unchanged,
+      description: '1차 출처의 정정 공지를 다시 확인했다.',
+    });
+    expect(regrounded.statusCode, regrounded.body).toBe(200);
+    expect(detail(regrounded).judgement.disputeWindowUndecided).toBe(true);
+    expect((await retract(market.id, await pendingId(market.id), third)).statusCode).toBe(200);
+    await setWindow(1_440);
+    // A source the rules do not have; evidence collected after now.
+    expectRefused(
+      await correct(market.id, third, {
+        source: { priority: 3 },
+        fallbackReason: '1차 출처가 없다',
+      }),
+      'source',
+      'unknown',
+    );
+    expectRefused(
+      await correct(market.id, third, {
+        evidence: { links: [LINK], collectedAt: iso(Date.now() + 10 * MINUTE_MS) },
+      }),
+      ['evidence', 'collectedAt'],
+      'after now',
+    );
+    // A market closed early as 판정 불가 is corrected to VOID alone, as its first judgement was
+    // (ADR-0102 binds the market, not the version) — before the evidence's instant.
+    const voidOnly = await closedEarly('not_judgeable');
+    await createProvisionalMarket(t.db, {
+      marketId: voidOnly.id,
+      result: 'VOID',
+      registeredBy: registrant.id,
+      approvedBy: reviewer.id,
+    });
+    expectRefused(
+      await correct(voidOnly.id, third, {
+        result: 'YES',
+        evidence: { links: [LINK], collectedAt: iso(Date.now() + HOUR_MS) },
+      }),
+      'result',
+      'void only',
+    );
+    const voided = await correct(voidOnly.id, third, {
+      result: 'VOID',
+      source: null,
+      voidReason: '정정 검토에서도 판정 불가로 보았다.',
+    });
+    expect(voided.statusCode, voided.body).toBe(200);
+    // A refusal writes nothing: the two retracted above and the waiting VOID alone.
+    expect((await requestsFor(market.id)).map((row) => row.status)).toEqual([
+      'approved',
+      'retracted',
+      'retracted',
+    ]);
+    expect((await marketRow(market.id)).correctionPending).toBe(false);
+    expect(await requestsFor(unjudged.id)).toEqual([]);
+    expect(await requestsFor(confirmed.id)).toHaveLength(1);
+  });
+
+  it('approves a correction by another admin: the next version with the new result and a deadline of v1’s length from the approval, v1’s pending disputes closed and its accepted one answered, the record, the status under the new key, a new resolve job beside v1’s; a second correction’s v3 with the history the newest first', async () => {
+    // v1 through the routes, so its resolve job waits for its deadline.
+    const market = await closed();
+    await setWindow(90);
+    expect((await register(market.id)).statusCode).toBe(200);
+    expect((await approve(market.id, await pendingId(market.id))).statusCode).toBe(200);
+    const [v1] = await judgementsFor(market.id);
+    const v1Job = marketResolveJobId(market.id, v1!.disputeDeadline);
+    // v1's disputes: one accepted through the route (a correction follows, #173 item 7), one
+    // pending, one retracted.
+    const { dispute: accepted } = await createDispute(t.db, { marketId: market.id });
+    expect((await accept(market.id, accepted.id, reviewer)).statusCode).toBe(200);
+    const { dispute: waiting } = await createDispute(t.db, { marketId: market.id });
+    const { dispute: gone } = await createDispute(t.db, {
+      marketId: market.id,
+      status: 'retracted',
+    });
+    expect((await marketRow(market.id)).disputeHoldCount).toBe(2);
+    // The window changed since: a correction reads none of it (#173 item 5 '첫 기한과 같은 길이').
+    await setWindow(30);
+    const grounds = '정정된 발표 원문을 확인했다.';
+    expect((await correct(market.id, third, { description: grounds })).statusCode).toBe(200);
+    const requestId = await pendingId(market.id);
+    // Its registrant decides nothing of it; v1's registrant may (#173 item 2).
+    expectNotAllowed(await approve(market.id, requestId, third), 'requester');
+    const eventsBefore = await eventsFor(market.id);
+    let answer!: AdminMarket;
+    await listening(market.id, async (received) => {
+      const res = await approve(market.id, requestId, registrant);
+      expect(res.statusCode, res.body).toBe(200);
+      answer = detail(res);
+      await waitForMessages(received, 1, 'market:status of the correction');
+      await sleep(100);
+      const request = (await requestsFor(market.id)).find((row) => row.id === requestId)!;
+      expect(request).toMatchObject({ status: 'approved', decidedBy: registrant.id });
+      const at = request.decidedAt!;
+      const deadline = new Date(at.getTime() + 90 * MINUTE_MS);
+      // The approver's `judgement_corrected` event: no status on either side (ADR-0095 결정 4).
+      const events = await eventsFor(market.id);
+      expect(events).toHaveLength(eventsBefore.length + 1);
+      const event = events.at(-1)!;
+      expect(event).toMatchObject({
+        type: 'judgement_corrected',
+        actorId: registrant.id,
+        fromStatus: null,
+        toStatus: null,
+        createdAt: at,
+        payload: {
+          version: 2,
+          previousVersion: 1,
+          result: 'NO',
+          previousResult: 'YES',
+          approvalId: requestId,
+          requestedBy: third.id,
+          disputeDeadline: deadline.toISOString(),
+          closedDisputes: 1,
+        },
+      });
+      // Still PROVISIONAL, the new result, version and deadline, the mirrors reset, its key the
+      // correction's event.
+      expect(await marketRow(market.id)).toMatchObject({
+        status: 'provisional',
+        resolvedResult: 'NO',
+        resolvedAt: null,
+        judgementVersion: 2,
+        disputeDeadline: deadline,
+        disputeHoldCount: 0,
+        correctionPending: false,
+        statusEventId: event.id,
+        updatedAt: at,
+      });
+      // v1 kept as it was published (#173 item 13); v2 with v1's window from the approval.
+      const [kept, v2] = await judgementsFor(market.id);
+      expect(kept).toEqual(v1);
+      expect(v2).toMatchObject({
+        version: 2,
+        result: 'NO',
+        sourcePriority: 0,
+        evidenceLinks: [LINK],
+        evidenceDescription: grounds,
+        correctionReason: CORRECTION,
+        eventDeadlineConfirmed: false,
+        disputeWindowMinutes: 90,
+        publishedAt: at,
+        disputeDeadline: deadline,
+        approvalId: requestId,
+        registeredBy: third.id,
+        approvedBy: registrant.id,
+        provisionalEventId: event.id,
+      });
+      // v1's pending dispute 정정으로 종결 at the approval (#173 item 8); the accepted one stays
+      // accepted — answered — and the retracted one as it was.
+      expect(
+        (await disputesFor(market.id)).map(({ id, status, closedAt, decidedBy }) => ({
+          id,
+          status,
+          closedAt,
+          decidedBy,
+        })),
+      ).toEqual([
+        { id: accepted.id, status: 'accepted', closedAt: null, decidedBy: reviewer.id },
+        { id: waiting.id, status: 'closed_by_correction', closedAt: at, decidedBy: null },
+        { id: gone.id, status: 'retracted', closedAt: null, decidedBy: null },
+      ]);
+      expect((await judgementActionsFor(market.id)).at(-1)).toMatchObject({
+        adminId: registrant.id,
+        type: 'market_judgement_approve',
+        createdAt: at,
+        payload: {
+          approvalId: requestId,
+          version: 2,
+          result: 'NO',
+          reason: APPROVAL,
+          eventDeadlineConfirmed: false,
+          disputeWindowMinutes: 90,
+          disputeDeadline: deadline.toISOString(),
+          previous: {
+            version: 1,
+            result: 'YES',
+            disputeDeadline: v1!.disputeDeadline.toISOString(),
+          },
+          correction: { baseVersion: 1, reason: CORRECTION, disputeIds: [accepted.id] },
+          closedDisputeIds: [waiting.id],
+          before: { status: 'provisional' },
+          after: { status: 'provisional' },
+        },
+      });
+      // The answer: v2 current, v1 in the history, v2's disputes (none yet).
+      expect(answer).toMatchObject({
+        status: 'provisional',
+        resolvedResult: 'NO',
+        judgementVersion: 2,
+        disputeDeadline: deadline.toISOString(),
+        statusEventId: String(event.id),
+        updatedAt: at.toISOString(),
+        disputes: { holding: 0, items: [] },
+      });
+      expect(answer.events[0]).toMatchObject({ type: 'judgement_corrected' });
+      expect(answer.judgement.current).toMatchObject({
+        version: 2,
+        result: 'NO',
+        correctionReason: CORRECTION,
+        disputeWindowMinutes: 90,
+        publishedAt: at.toISOString(),
+        disputeDeadline: deadline.toISOString(),
+        registeredBy: await actorOf(third),
+        approvedBy: await actorOf(registrant),
+      });
+      expect(answer.judgement.history).toEqual([
+        expect.objectContaining({
+          version: 1,
+          result: 'YES',
+          correctionReason: null,
+          disputeWindowMinutes: 90,
+          disputeDeadline: v1!.disputeDeadline.toISOString(),
+          registeredBy: await actorOf(registrant),
+          approvedBy: await actorOf(reviewer),
+        }),
+      ]);
+      expect(answer.judgement.pending).toBeNull();
+      expect(answer.judgement.log[0]).toMatchObject({
+        requestId,
+        status: 'approved',
+        version: 2,
+        correction: { baseVersion: 1, reason: CORRECTION, disputeIds: [accepted.id] },
+      });
+      // Published once after COMMIT: the new result under the newer key, so a late snapshot of
+      // v1 cannot roll it back.
+      expect(received.map((message) => JSON.parse(message) as unknown)).toEqual([
+        {
+          type: 'market:status',
+          marketId: market.id,
+          status: 'provisional',
+          resolvedResult: 'NO',
+          statusEventId: String(event.id),
+          ts: at.toISOString(),
+        },
+      ]);
+      // The worker confirms v2 at its deadline; v1's job stays — it finds the later deadline and
+      // skips (`not_due`): nothing is cancelled.
+      const v2Job = marketResolveJobId(market.id, deadline);
+      expect(await jobIds()).toEqual([v1Job, v2Job].sort());
+      expect(await jobQueue.getJob(v2Job)).toMatchObject({
+        name: JOB_NAMES.marketResolve,
+        data: { marketId: market.id },
+        delay: 90 * MINUTE_MS,
+      });
+    });
+    // The public detail: the new result, version and deadline, disputes taken again — nothing of
+    // the correction itself (#24, #173 item 13).
+    const pub = await publicDetail(market.slug);
+    expect(data<Market>(pub)).toMatchObject({
+      status: 'provisional',
+      resolvedResult: 'NO',
+      statusEventId: answer.statusEventId,
+      judgementVersion: 2,
+      disputeDeadline: answer.disputeDeadline,
+      disputeOpen: true,
+      disputeUnderReview: false,
+      judgementDelayed: false,
+    });
+    for (const hidden of [CORRECTION, grounds, third.id, registrant.id]) {
+      expect(pub.body).not.toContain(hidden);
+    }
+    // Decided once; v1 is no longer the one to correct, v2 is.
+    expectNotAllowed(await approve(market.id, requestId, reviewer), 'decided');
+    expectRefused(await correct(market.id, reviewer), ['correction', 'baseVersion'], 'stale');
+    const next = await correct(market.id, reviewer, {
+      result: 'YES',
+      correction: { baseVersion: 2, reason: CORRECTION },
+    });
+    expect(next.statusCode, next.body).toBe(200);
+    expect(detail(next).judgement.pending?.correction).toEqual({
+      baseVersion: 2,
+      reason: CORRECTION,
+      disputeIds: [],
+    });
+    // Approved: v3 current, still at v1's length, and the history the newest first.
+    const v3 = await approve(market.id, await pendingId(market.id), third);
+    expect(v3.statusCode, v3.body).toBe(200);
+    expect(detail(v3).judgement.current).toMatchObject({
+      version: 3,
+      result: 'YES',
+      disputeWindowMinutes: 90,
+    });
+    expect(detail(v3).judgement.history.map((entry) => entry.version)).toEqual([2, 1]);
+  });
+
+  it('refuses a correction’s approval by its registrant, off PROVISIONAL, against another version (before the confirmation is asked) and before the scheduled judgement without the confirmation; approves one confirmed with the window undecided, at the base version’s length', async () => {
+    const { market } = await provisional();
+    expect((await correct(market.id)).statusCode).toBe(200);
+    expectNotAllowed(await approve(market.id, await pendingId(market.id), third), 'requester');
+    // Requests the routes leave none of, so the factory writes them: one waiting on a CLOSED
+    // market, and one against a version the market is not at — each refused, and a 반려 ends it.
+    const unjudged = await closed();
+    const off = await createJudgementRequest(t.db, {
+      marketId: unjudged.id,
+      by: third.id,
+      correction: { baseVersion: 1 },
+    });
+    expectRefused(await approve(unjudged.id, off.id), 'status', 'not provisional');
+    const ended = await reject(unjudged.id, off.id);
+    expect(ended.statusCode, ended.body).toBe(200);
+    expect(detail(ended)).toMatchObject({ status: 'closed', judgement: { pending: null } });
+    const { market: other } = await provisional();
+    const ahead = await createJudgementRequest(t.db, {
+      marketId: other.id,
+      by: third.id,
+      result: 'NO',
+      correction: { baseVersion: 2 },
+    });
+    expectRefused(await approve(other.id, ahead.id), ['correction', 'baseVersion'], 'stale');
+    expect((await requestsFor(other.id)).at(-1)!.status).toBe('pending');
+    expect(await judgementsFor(other.id)).toHaveLength(1);
+    expect((await eventsFor(other.id)).map((event) => event.type)).toEqual(['provisional']);
+    // Before the scheduled judgement the approver confirms the NO condition's event deadline, a
+    // correction's approval too (decision 3 '등록 시점') — asked after the base version: a stale
+    // one unconfirmed is 'stale'.
+    const { market: early } = await createProvisionalMarket(t.db, {
+      registeredBy: registrant.id,
+      approvedBy: reviewer.id,
+      disputeWindowMinutes: 45,
+      market: { createdBy: registrant.id, categoryId: category.id },
+    });
+    const staleEarly = await createJudgementRequest(t.db, {
+      marketId: early.id,
+      by: third.id,
+      result: 'NO',
+      correction: { baseVersion: 2 },
+    });
+    expectRefused(await approve(early.id, staleEarly.id), ['correction', 'baseVersion'], 'stale');
+    expect((await reject(early.id, staleEarly.id)).statusCode).toBe(200);
+    expect((await correct(early.id)).statusCode).toBe(200);
+    const earlyId = await pendingId(early.id);
+    expectRefused(await approve(early.id, earlyId), 'eventDeadlineConfirmed', 'required');
+    expect(await marketRow(early.id)).toMatchObject({
+      judgementVersion: 1,
+      correctionPending: true,
+    });
+    // Confirmed while the window is undecided: a correction reads no setting, its deadline of
+    // the base version's length from the approval (decision 10-5).
+    await setWindow(null);
+    const confirmed = await approve(early.id, earlyId, reviewer, { eventDeadlineConfirmed: true });
+    expect(confirmed.statusCode, confirmed.body).toBe(200);
+    const decidedAt = (await requestsFor(early.id)).find((row) => row.id === earlyId)!.decidedAt!;
+    expect(detail(confirmed).judgement.current).toMatchObject({
+      version: 2,
+      eventDeadlineConfirmed: true,
+      disputeWindowMinutes: 45,
+      disputeDeadline: iso(decidedAt.getTime() + 45 * MINUTE_MS),
+    });
+    await setWindow(1_440);
+  });
+
+  it('rejects a correction: the version, its deadline and its disputes’ results carry on, the accepted dispute it answered back to pending — one accepted since stays — the mirror cleared, the status republished; the reopened one is decided again', async () => {
+    const { market } = await provisional();
+    const v1Deadline = market.disputeDeadline!;
+    const { dispute: answered } = await createDispute(t.db, { marketId: market.id });
+    expect((await accept(market.id, answered.id)).statusCode).toBe(200);
+    expect((await correct(market.id, reviewer)).statusCode).toBe(200);
+    const requestId = await pendingId(market.id);
+    // A dispute accepted after the registration: not one this correction answers.
+    const { dispute: later } = await createDispute(t.db, { marketId: market.id });
+    expect((await accept(market.id, later.id)).statusCode).toBe(200);
+    const before = await marketRow(market.id);
+    expect(before).toMatchObject({ disputeHoldCount: 2, correctionPending: true });
+    const eventsBefore = await eventsFor(market.id);
+    await listening(market.id, async (received) => {
+      const res = await reject(market.id, requestId, third, { reason: ' 정정할 근거가 부족하다 ' });
+      expect(res.statusCode, res.body).toBe(200);
+      const request = (await requestsFor(market.id)).find((row) => row.id === requestId)!;
+      expect(request).toMatchObject({ status: 'rejected', decidedBy: third.id });
+      const at = request.decidedAt!;
+      // Back to pending, the decision cleared and the submission kept (owner answer 2026-11-02).
+      const rows = await disputesFor(market.id);
+      expect(
+        rows.map(({ id, status, decidedBy, decisionReason }) => [
+          id,
+          status,
+          decidedBy,
+          decisionReason,
+        ]),
+      ).toEqual([
+        [answered.id, 'pending', null, null],
+        [later.id, 'accepted', third.id, ACCEPTANCE],
+      ]);
+      expect(rows[0]).toMatchObject({ submittedAt: answered.submittedAt, decidedAt: null });
+      // Both statuses hold: the mirror kept; the correction's cleared at the decision's instant.
+      expect(await marketRow(market.id)).toEqual({
+        ...before,
+        correctionPending: false,
+        updatedAt: at,
+      });
+      expect(await eventsFor(market.id)).toEqual(eventsBefore);
+      expect(await judgementsFor(market.id)).toHaveLength(1);
+      expect((await judgementActionsFor(market.id)).at(-1)).toMatchObject({
+        adminId: third.id,
+        type: 'market_judgement_reject',
+        createdAt: at,
+        payload: {
+          approvalId: requestId,
+          result: 'NO',
+          reason: '정정할 근거가 부족하다',
+          reopenedDisputeIds: [answered.id],
+        },
+      });
+      const answer = detail(res);
+      expect(answer).toMatchObject({
+        status: 'provisional',
+        resolvedResult: 'YES',
+        judgementVersion: 1,
+        disputeDeadline: v1Deadline.toISOString(),
+        judgement: { pending: null, current: { version: 1 }, history: [] },
+      });
+      expect(answer.disputes).toMatchObject({
+        holding: 2,
+        items: [
+          { id: answered.id, status: 'pending', decidedBy: null },
+          { id: later.id, status: 'accepted' },
+        ],
+      });
+      // Republished once, unchanged: an open detail refetches its labels and disputes.
+      await waitForMessages(received, 1, 'market:status of the rejection');
+      await sleep(100);
+      expect(received.map((message) => JSON.parse(message) as unknown)).toEqual([
+        {
+          type: 'market:status',
+          marketId: market.id,
+          status: 'provisional',
+          resolvedResult: 'YES',
+          statusEventId: String(before.statusEventId),
+          ts: at.toISOString(),
+        },
+      ]);
+    });
+    // The deadline ahead: nothing registered (v1's own job confirms it then).
+    expect(await jobIds()).toEqual([]);
+    // Pending again, it is decided again by an admin who did not register v1 — dismissed here.
+    const dismissed = await post(`${marketUrl(market.id)}/disputes/${answered.id}/dismiss`, third, {
+      reason: '정정 반려 뒤 다시 보니 판정과 같다.',
+    });
+    expect(dismissed.statusCode, dismissed.body).toBe(200);
+    expect(detail(dismissed).disputes.holding).toBe(1);
+    expect((await marketRow(market.id)).disputeHoldCount).toBe(1);
+  });
+
+  it('retracts a correction as a rejection ends one: its accepted dispute back to pending and retractable again by its submitter before the deadline', async () => {
+    const { market } = await provisional();
+    const member = await memberWithFill(market.id);
+    const submitted = await dispute(market.id, member);
+    expect(submitted.statusCode, submitted.body).toBe(201);
+    const disputeId = data<MyDispute>(submitted).id;
+    expect((await accept(market.id, disputeId)).statusCode).toBe(200);
+    expect((await correct(market.id, reviewer)).statusCode).toBe(200);
+    const requestId = await pendingId(market.id);
+    // Accepted, the member cannot take it back.
+    expect((await post(`/api/v1/me/disputes/${disputeId}/retract`, member)).statusCode).toBe(409);
+    await listening(market.id, async (received) => {
+      expectNotAllowed(await retract(market.id, requestId, third), 'not_requester');
+      const res = await retract(market.id, requestId, reviewer);
+      expect(res.statusCode, res.body).toBe(200);
+      const request = (await requestsFor(market.id)).find((row) => row.id === requestId)!;
+      expect(request).toMatchObject({ status: 'retracted', decidedBy: null });
+      expect((await judgementActionsFor(market.id)).at(-1)).toMatchObject({
+        adminId: reviewer.id,
+        type: 'market_judgement_retract',
+        createdAt: request.retractedAt,
+        payload: { approvalId: requestId, result: 'NO', reopenedDisputeIds: [disputeId] },
+      });
+      expect(detail(res).disputes.items).toMatchObject([{ id: disputeId, status: 'pending' }]);
+      expect(await marketRow(market.id)).toMatchObject({
+        disputeHoldCount: 1,
+        correctionPending: false,
+        updatedAt: request.retractedAt,
+      });
+      await waitForMessages(received, 1, 'market:status of the retraction');
+      expect(JSON.parse(received[0]!)).toMatchObject({
+        status: 'provisional',
+        resolvedResult: 'YES',
+        ts: request.retractedAt!.toISOString(),
+      });
+    });
+    // Pending again before the deadline: its submitter may take it back (#173 item 6).
+    const mine = await get('/api/v1/me/disputes', member);
+    expect(mine.json<{ data: MyDispute[] }>().data[0]).toMatchObject({
+      id: disputeId,
+      status: 'pending',
+      decidedAt: null,
+      decisionReason: null,
+      retractable: true,
+    });
+    const taken = await post(`/api/v1/me/disputes/${disputeId}/retract`, member);
+    expect(taken.statusCode, taken.body).toBe(200);
+    expect(data<MyDispute>(taken).status).toBe('retracted');
+    expect((await marketRow(market.id)).disputeHoldCount).toBe(0);
+  });
+
+  it('closes the replaced version’s pending disputes as 정정으로 종결, no longer retractable: their submitters dispute the new version under its new deadline, decided by an admin who did not register it, and MY and 이의 접수 read the closure', async () => {
+    const { market } = await provisional();
+    const member = await memberWithFill(market.id);
+    const first = data<MyDispute>(await dispute(market.id, member));
+    expect((await correct(market.id)).statusCode).toBe(200);
+    const corrected = await approve(market.id, await pendingId(market.id));
+    expect(corrected.statusCode, corrected.body).toBe(200);
+    const at = (await requestsFor(market.id)).at(-1)!.decidedAt!;
+    // The screen that showed v1 is stale; v2 takes the member's dispute again (#173 item 8).
+    expectDisputeNotAllowed(await dispute(market.id, member), 'stale_version');
+    const again = await dispute(market.id, member, { judgementVersion: 2 });
+    expect(again.statusCode, again.body).toBe(201);
+    expect(data<MyDispute>(again)).toMatchObject({
+      judgementVersion: 2,
+      status: 'pending',
+      market: { judgementVersion: 2 },
+      retractable: true,
+    });
+    expect((await marketRow(market.id)).disputeHoldCount).toBe(1);
+    // MY: both, the newest first — v1's closed at the approval, its market now at v2.
+    const mine = (await get('/api/v1/me/disputes', member)).json<{ data: MyDispute[] }>().data;
+    expect(mine.map((row) => row.id)).toEqual([data<MyDispute>(again).id, first.id]);
+    expect(mine[1]).toEqual({
+      ...first,
+      status: 'closed_by_correction',
+      closedAt: at.toISOString(),
+      market: { ...first.market, judgementVersion: 2 },
+      retractable: false,
+    });
+    // The dispute screen reads the current version alone.
+    const standing = await get(`/api/v1/me/disputes/markets/${market.id}`, member);
+    expect(data<{ eligibility: string; judgementVersion: number }>(standing)).toMatchObject({
+      eligibility: 'duplicate',
+      judgementVersion: 2,
+    });
+    // 이의 접수 처리됨: the closure, by its instant.
+    const decided = (await get('/api/v1/admin/market-disputes?status=decided', third)).json<{
+      data: AdminDisputeQueueItem[];
+    }>().data;
+    expect(decided).toEqual([
+      expect.objectContaining({
+        id: first.id,
+        status: 'closed_by_correction',
+        closedAt: at.toISOString(),
+        decidedBy: null,
+        market: expect.objectContaining({ id: market.id, judgementVersion: 2 }) as unknown,
+      }),
+    ]);
+    // Closed, v1's dispute is no longer its submitter's to take back (decision 2 '이의 상태').
+    expectDisputeNotAllowed(
+      await post(`/api/v1/me/disputes/${first.id}/retract`, member),
+      'decided',
+    );
+    // v2's dispute is decided by an admin who did not register v2 (#175): not the correction's
+    // registrant, and v1's may (decision 10-4).
+    const dismissV2 = (who: TestUser) =>
+      post(`${marketUrl(market.id)}/disputes/${data<MyDispute>(again).id}/dismiss`, who, {
+        reason: '정정한 판정의 근거와 같다.',
+      });
+    expectDisputeNotAllowed(await dismissV2(third), 'registrant');
+    const dismissed = await dismissV2(registrant);
+    expect(dismissed.statusCode, dismissed.body).toBe(200);
+    expect((await marketRow(market.id)).disputeHoldCount).toBe(0);
+  });
+
+  it('holds a market past its deadline while a correction waits — 판정 지연 — and once it is rejected or retracted with nothing else holding, registers the worker’s confirmation at once; not while a dispute still holds it', async () => {
+    const publishedAt = new Date((await clockTimestamp(t.db)).getTime() - 2 * HOUR_MS);
+    const { market } = await provisional({ publishedAt });
+    const deadline = market.disputeDeadline!;
+    expect(deadline.getTime()).toBeLessThan(Date.now());
+    // Past its deadline with nothing holding: the plain provisional result.
+    const quiet = { disputeOpen: false, disputeUnderReview: false, judgementDelayed: false };
+    expect(flagsOf(data<Market>(await publicDetail(market.id)))).toEqual(quiet);
+    // A correction registered past the deadline (still PROVISIONAL, the worker not there yet)
+    // holds it: '판정 지연', with no dispute under review.
+    expect((await correct(market.id)).statusCode).toBe(200);
+    const delayed = { disputeOpen: false, disputeUnderReview: false, judgementDelayed: true };
+    expect(flagsOf(data<Market>(await publicDetail(market.id)))).toEqual(delayed);
+    expect(flagsOf(detail(await get(marketUrl(market.id))))).toEqual(delayed);
+    // Rejected: nothing holds it now — `market.resolve` under v1's deadline's id, due at once.
+    expect((await reject(market.id, await pendingId(market.id))).statusCode).toBe(200);
+    const jobId = marketResolveJobId(market.id, deadline);
+    expect(await jobIds()).toEqual([jobId]);
+    expect(await jobQueue.getJob(jobId)).toMatchObject({
+      name: JOB_NAMES.marketResolve,
+      data: { marketId: market.id },
+      delay: 0,
+    });
+    expect(flagsOf(data<Market>(await publicDetail(market.id)))).toEqual(quiet);
+    // A correction's record names the disputes it reopened, none here (decision 10-23).
+    expect((await judgementActionsFor(market.id)).at(-1)).toMatchObject({
+      type: 'market_judgement_reject',
+      payload: { reopenedDisputeIds: [] },
+    });
+    // Retracted the same way.
+    await jobQueue.obliterate({ force: true });
+    expect((await correct(market.id)).statusCode).toBe(200);
+    expect((await retract(market.id, await pendingId(market.id), third)).statusCode).toBe(200);
+    expect(await jobIds()).toEqual([jobId]);
+    expect((await judgementActionsFor(market.id)).at(-1)).toMatchObject({
+      type: 'market_judgement_retract',
+      payload: { reopenedDisputeIds: [] },
+    });
+
+    // An accepted dispute the correction answered goes back to pending and still holds: nothing
+    // registered, the market under review and late.
+    await jobQueue.obliterate({ force: true });
+    const { market: held } = await provisional({ publishedAt });
+    const { dispute: answered } = await createDispute(t.db, {
+      marketId: held.id,
+      status: 'accepted',
+      decidedBy: third.id,
+      submittedAt: new Date(held.disputeDeadline!.getTime() - HOUR_MS),
+    });
+    expect((await correct(held.id, reviewer)).statusCode).toBe(200);
+    expect((await reject(held.id, await pendingId(held.id), third)).statusCode).toBe(200);
+    expect((await disputesFor(held.id)).map((row) => [row.id, row.status])).toEqual([
+      [answered.id, 'pending'],
+    ]);
+    expect(await jobIds()).toEqual([]);
+    expect(flagsOf(data<Market>(await publicDetail(held.id)))).toEqual({
+      disputeOpen: false,
+      disputeUnderReview: true,
+      judgementDelayed: true,
+    });
   });
 
   // --- at once ---------------------------------------------------------------------------------
@@ -1148,6 +2063,7 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
         closeAt: first.closeAt.toISOString(),
         scheduledJudgementAt: first.scheduledJudgementAt!.toISOString(),
         result: 'NO',
+        correction: null,
         requestedBy: await actorOf(registrant),
         requestedAt: (await requestsFor(first.id))[0]!.requestedAt.toISOString(),
       },

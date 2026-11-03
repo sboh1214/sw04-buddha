@@ -10,10 +10,13 @@ import { useOperatorId } from '@/hooks/use-operator';
 import { useSessionChanged } from '@/hooks/use-session-changed';
 import { type AdminMarket, type MarketJudgementPending, api, unwrap } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
-import { MARKET_RESULT_LABEL } from '@/lib/market-admin';
+import { MARKET_RESULT_LABEL, judgementVersionMove } from '@/lib/market-admin';
 import {
+  type JudgementDecision,
   type JudgementField,
   judgementApproveDraft,
+  judgementCorrectionEnd,
+  judgementDecisionTexts,
   judgementEarly,
   judgementFailure,
   judgementSourceText,
@@ -37,26 +40,39 @@ import { ReasonField, ReviewDialogShell } from './market-review-dialogs';
  * with a toast and the market as the write committed it goes on screen (`useApplyMarket`) — after
  * an approval, 잠정 결과 with its deadline — and the panel puts focus on what took the button's
  * place (`onClose(true)`).
+ *
+ * A waiting 판정 정정 (#176, ADR-0105; #173 items 5·8, decision 3 '#176 정정 대기', owner answer
+ * 2026-11-02) is decided by the same three, each in its own words (`judgementDecisionTexts`): its
+ * 승인 moves the judgement to the next version ('v1 → v2'), publishes the new result at once, gives
+ * a new deadline the first one's length from the approval (shown) and closes the replaced
+ * version's pending disputes as 정정으로 종결; its 반려 and its 철회 leave the version, its deadline
+ * and its disputes' results as they were, send the accepted disputes registered with it (if any)
+ * back to 검토 중 and — once the 이의 기한 has passed as the detail was read (`readAt`) — say that
+ * the current version is then confirmed within seconds unless a dispute still holds it, after
+ * which it takes no correction (`judgementCorrectionEnd`).
  */
 
-export type JudgementDialogKind = 'approve' | 'reject' | 'retract';
+export type JudgementDialogKind = JudgementDecision;
 
 export function JudgementDialog({
   kind,
   market,
+  readAt,
   onClose,
 }: {
   kind: JudgementDialogKind;
   market: AdminMarket;
+  /** When the detail was read (its query's `dataUpdatedAt`): what a correction's end leaves. */
+  readAt: number;
   onClose: (sent: boolean) => void;
 }) {
   switch (kind) {
     case 'approve':
-      return <ApproveJudgementDialog market={market} onClose={onClose} />;
+      return <ApproveJudgementDialog market={market} readAt={readAt} onClose={onClose} />;
     case 'reject':
-      return <RejectJudgementDialog market={market} onClose={onClose} />;
+      return <RejectJudgementDialog market={market} readAt={readAt} onClose={onClose} />;
     case 'retract':
-      return <RetractJudgementDialog market={market} onClose={onClose} />;
+      return <RetractJudgementDialog market={market} readAt={readAt} onClose={onClose} />;
   }
 }
 
@@ -146,7 +162,10 @@ function useJudgementWrite<V>(
   return { mutation, errorOf, refusal };
 }
 
-/** What the registration a dialog decides says: its result and its source. */
+/**
+ * What the registration a dialog decides says: a correction's move ('v1 → v2', #176), its result
+ * and its source.
+ */
 function PinnedJudgementLine({
   request,
   testId,
@@ -163,8 +182,35 @@ function PinnedJudgementLine({
       wordBreak="break-word"
       data-testid={testId}
     >
+      {request.correction !== null && (
+        <>
+          {copy.adminMarketJudgementCorrectionVersion}{' '}
+          <Text as="span" data-testid={`${testId}-correction`}>
+            {judgementVersionMove(request.correction.baseVersion)}
+          </Text>{' '}
+          ·{' '}
+        </>
+      )}
       {copy.adminMarketJudgementResult} {MARKET_RESULT_LABEL[request.result]} ·{' '}
       {copy.adminMarketJudgementSource} {judgementSourceText(request.source)}
+    </Text>
+  );
+}
+
+/**
+ * A correction's new dispute window as its 승인 gives it (#173 item 5): the length of the version
+ * it replaces — the first one's — counted from the approval, read off the current judgement.
+ */
+function CorrectionWindowLine({ market }: { market: AdminMarket }) {
+  const current = market.judgement.current;
+  if (current === null) return null;
+  return (
+    <Text fontSize="sm" data-testid="market-judgement-approve-window">
+      <Text as="span" fontWeight="medium">
+        {copy.adminMarketJudgementCorrectionWindow}
+      </Text>{' '}
+      {current.disputeWindowMinutes.toLocaleString('ko-KR')}
+      {copy.adminMarketJudgementWindowMinutes}
     </Text>
   );
 }
@@ -267,16 +313,19 @@ export function ApproveJudgementFields({
 
 /**
  * 승인 (CLOSED → PROVISIONAL, an admin other than the registrant, #173 item 1): the result is
- * published as 잠정 결과 at once and the dispute window runs from then (#173 item 5). Before the
+ * published as 잠정 결과 at once and the dispute window runs from then (#173 item 5). A correction's
+ * (#176) moves the version on a PROVISIONAL market, with the new window's length shown. Before the
  * scheduled judgement — as the dialog opened, or as the server said — the approver confirms the
  * NO condition's event deadline (decision 3 '등록 시점'), which is sent (`eventDeadlineConfirmed`)
  * and kept on the judgement. The confirm waits for a reason and, when asked, the confirmation.
  */
 function ApproveJudgementDialog({
   market,
+  readAt,
   onClose,
 }: {
   market: AdminMarket;
+  readAt: number;
   onClose: (sent: boolean) => void;
 }) {
   const operatorId = useOperatorId();
@@ -286,10 +335,13 @@ function ApproveJudgementDialog({
   const [early] = useState(() => judgementEarly(market));
   const [reasonText, setReasonText] = useState('');
   const [confirmed, setConfirmed] = useState(false);
+  const end = judgementCorrectionEnd(decided.request, market, readAt);
+  const correction = end !== null;
+  const texts = judgementDecisionTexts('approve', end);
   const { mutation, errorOf, refusal } = useJudgementWrite(
     market,
     onClose,
-    copy.adminMarketJudgementApproved,
+    texts.done,
     async ({ requestId, reason, eventDeadlineConfirmed, by }: ApproveVariables) =>
       unwrap(
         await api.POST('/api/v1/admin/markets/{id}/judgements/{requestId}/approve', {
@@ -307,8 +359,8 @@ function ApproveJudgementDialog({
   return (
     <ReviewDialogShell
       testId="market-judgement-approve-dialog"
-      title={copy.adminMarketJudgementApproveTitle}
-      body={copy.adminMarketJudgementApproveBody}
+      title={texts.title}
+      body={texts.body}
       confirmLabel={copy.adminMarketJudgementApprove}
       pending={mutation.isPending}
       confirmDisabled={!draft.ready || operatorId === undefined || decided.changed}
@@ -327,6 +379,7 @@ function ApproveJudgementDialog({
     >
       <Stack gap="4">
         <PinnedJudgementLine request={decided.request} testId="market-judgement-approve-request" />
+        {correction && <CorrectionWindowLine market={market} />}
         <ApproveJudgementFields
           asked={asked}
           noCondition={market.noCondition}
@@ -346,24 +399,33 @@ function ApproveJudgementDialog({
 
 /**
  * 반려 (an admin other than the registrant, in any status): the market stays CLOSED and a judgement
- * is registered again — by any admin, this one included (#173 item 1). The confirm waits for a
+ * is registered again — by any admin, this one included (#173 item 1). A correction's (#176) leaves
+ * the current version, its deadline and its disputes' results as they were, and the accepted
+ * disputes it carried go back to 검토 중 (owner answer 2026-11-02); past the deadline as read at
+ * `readAt`, the version is confirmed within seconds once nothing holds it. The confirm waits for a
  * reason.
  */
 function RejectJudgementDialog({
   market,
+  readAt,
   onClose,
 }: {
   market: AdminMarket;
+  readAt: number;
   onClose: (sent: boolean) => void;
 }) {
   const operatorId = useOperatorId();
   const [reasonText, setReasonText] = useState('');
   const draft = revertDraft(reasonText);
   const decided = usePinnedJudgement(market);
+  const texts = judgementDecisionTexts(
+    'reject',
+    judgementCorrectionEnd(decided.request, market, readAt),
+  );
   const { mutation, errorOf, refusal } = useJudgementWrite(
     market,
     onClose,
-    copy.adminMarketJudgementRejected,
+    texts.done,
     async ({ requestId, reason, by }: DecideVariables) =>
       unwrap(
         await api.POST('/api/v1/admin/markets/{id}/judgements/{requestId}/reject', {
@@ -375,8 +437,8 @@ function RejectJudgementDialog({
   return (
     <ReviewDialogShell
       testId="market-judgement-reject-dialog"
-      title={copy.adminMarketJudgementRejectTitle}
-      body={copy.adminMarketJudgementRejectBody}
+      title={texts.title}
+      body={texts.body}
       confirmLabel={copy.adminMarketJudgementReject}
       pending={mutation.isPending}
       confirmDisabled={!draft.ready || operatorId === undefined || decided.changed}
@@ -404,20 +466,30 @@ function RejectJudgementDialog({
   );
 }
 
-/** 철회 (the registrant's alone, any status): nothing to fill in, the confirm says what it does. */
+/**
+ * 철회 (the registrant's alone, any status): nothing to fill in, the confirm says what it does — a
+ * correction's (#176) as its 반려 does (ADR-0105: the accepted disputes it carried go back to 검토
+ * 중 too, and past the deadline the version is confirmed within seconds once nothing holds it).
+ */
 function RetractJudgementDialog({
   market,
+  readAt,
   onClose,
 }: {
   market: AdminMarket;
+  readAt: number;
   onClose: (sent: boolean) => void;
 }) {
   const operatorId = useOperatorId();
   const decided = usePinnedJudgement(market);
+  const texts = judgementDecisionTexts(
+    'retract',
+    judgementCorrectionEnd(decided.request, market, readAt),
+  );
   const { mutation, refusal } = useJudgementWrite(
     market,
     onClose,
-    copy.adminMarketJudgementRetracted,
+    texts.done,
     async ({ requestId, by }: RetractVariables) =>
       unwrap(
         await api.POST('/api/v1/admin/markets/{id}/judgements/{requestId}/retract', {
@@ -429,8 +501,8 @@ function RetractJudgementDialog({
   return (
     <ReviewDialogShell
       testId="market-judgement-retract-dialog"
-      title={copy.adminMarketJudgementRetractTitle}
-      body={copy.adminMarketJudgementRetractBody}
+      title={texts.title}
+      body={texts.body}
       confirmLabel={copy.adminMarketJudgementRetract}
       pending={mutation.isPending}
       confirmDisabled={operatorId === undefined || decided.changed}

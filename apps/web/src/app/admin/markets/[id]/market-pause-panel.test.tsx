@@ -87,7 +87,7 @@ const open: AdminMarket = {
   disputeDeadline: null,
   disputeOpen: false,
   disputes: { holding: 0, items: [] },
-  judgement: { current: null, pending: null, log: [], disputeWindowUndecided: false },
+  judgement: { current: null, history: [], pending: null, log: [], disputeWindowUndecided: false },
 };
 
 /** The pause lasting now: an early result, with its publication instant. */

@@ -53,9 +53,14 @@ import {
  * that holds a market, its 기각 and 수용, the hold past the deadline ('판정 지연'), '이의 검토 중' and
  * the confirmation right after the last 기각 are the database's, the API's and the worker's
  * integration tests (packages/db market-dispute.test.ts, market-disputes.controller.test.ts,
- * private-data.test.ts, worker market-resolve.test.ts), which make fills with `createFill`; the
- * screens' states are unit-tested (dispute-screen.test.tsx, my-disputes.test.tsx,
- * market-dispute-panel.test.tsx, admin-disputes.test.tsx). What stays here is real: the refusals a
+ * private-data.test.ts, worker market-resolve.test.ts), which make fills with `createFill` — and
+ * so, since the 판정 정정 (#176, ADR-0105), are a correction from an accepted dispute, the pending
+ * disputes it closes as 정정으로 종결, the accepted ones a rejected or retracted correction sends
+ * back to 검토 중 and a second dispute on the corrected version
+ * (admin-market-judgements.controller.test.ts, packages/db market-dispute.test.ts); the
+ * correction itself, with no dispute, is correction.spec.ts's. The screens' states are
+ * unit-tested (dispute-screen.test.tsx, my-disputes.test.tsx, market-dispute-panel.test.tsx,
+ * admin-disputes.test.tsx). What stays here is real: the refusals a
  * member without a fill and an operator meet, the deadline the API keeps on its own clock, the
  * public data, the gates, the empty lists — and the market with no dispute confirmed at its
  * deadline as before. The form's 내기 and 철회 are walked once with the member's own reads and writes
@@ -471,7 +476,14 @@ test.describe('판정 이의', () => {
           decidedAt: null,
           decisionReason: null,
           retractedAt: null,
-          market: { id: market.id, slug: market.slug, title: market.title, status: 'provisional' },
+          closedAt: null,
+          market: {
+            id: market.id,
+            slug: market.slug,
+            title: market.title,
+            status: 'provisional',
+            judgementVersion: body.judgementVersion,
+          },
           retractable: true,
         };
         await route.fulfill({ status: 201, json: { data: sent } });

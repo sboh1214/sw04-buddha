@@ -9,6 +9,7 @@ import {
 } from '@buddha/shared';
 import { sql } from 'drizzle-orm';
 import {
+  type AnyPgColumn,
   check,
   foreignKey,
   index,
@@ -41,12 +42,26 @@ const DECIDED_SQL = sqlList(Object.values(MARKET_DISPUTE_DECISION_STATUSES));
 const HOLDING_SQL = sqlList(HOLDING_DISPUTE_STATUSES);
 
 /**
+ * When an ended dispute ended — its decision, its 철회 or its closure by a correction (#176), one of
+ * them exactly — as the 처리됨 index, its reader and the purge CHECK spell it.
+ */
+const endedAtOf = (t: {
+  decidedAt: AnyPgColumn;
+  retractedAt: AnyPgColumn;
+  closedAt: AnyPgColumn;
+}) => sql`coalesce(${t.decidedAt}, ${t.retractedAt}, ${t.closedAt})`;
+
+/**
  * 판정 이의 (#175, ADR-0104; ADR-0093 decision 1 #173 items 1·2·5–8·13): one row per dispute a
  * member submitted against a provisional result, written by `submitMarketDispute` (@buddha/db)
- * under the market lock while the 이의 기한 is ahead, and changed once — dismissed or accepted by an
- * admin other than the version's registrant (`decideMarketDispute`), or retracted by its submitter
- * within the deadline (`retractMarketDispute`). Not `disputes`: that M5 table was dropped with its
- * flow (migration 0016), and a sanction appeal (제재 이의) is email, apart (ADR-0084).
+ * under the market lock while the 이의 기한 is ahead, and ended once — dismissed or accepted by an
+ * admin other than the version's registrant (`decideMarketDispute`), retracted by its submitter
+ * within the deadline (`retractMarketDispute`), or closed by the approval of a correction that
+ * replaced its version while it was pending (`closeDisputesForCorrection`, #176, ADR-0105; #173
+ * item 8 '정정으로 종결'). One move back: an accepted one returns to pending when the correction
+ * registered for it is rejected or retracted (`reopenAcceptedDisputes`, owner answer 2026-11-02),
+ * and is decided again. Not `disputes`: that M5 table was dropped with its flow (migration 0016),
+ * and a sanction appeal (제재 이의) is email, apart (ADR-0084).
  *
  * - `market_id` + `judgement_version`: the judgement disputed (a composite foreign key to
  *   `market_judgements`), the market's current one at the submission — a correction (#176) makes
@@ -57,15 +72,19 @@ const HOLDING_SQL = sqlList(HOLDING_DISPUTE_STATUSES);
  * - `links` (근거 링크, 1..DISPUTE_LINKS_MAX, no null among them; each http(s), ≤ 500 characters,
  *   distinct — the body schema's) and `reason` (trimmed non-blank, ≤ DISPUTE_REASON_MAX): both
  *   required (#173 item 6), the submitter's and the operators' alone (#173 item 13).
- * - `status`: MARKET_DISPUTE_STATUSES — a varchar held by a CHECK, so #176 adds '정정으로 종결' and
- *   accepted → pending for a rejected correction (owner answer 2026-11-02) by a migration.
+ * - `status`: MARKET_DISPUTE_STATUSES — a varchar(20) held by a CHECK; `closed_by_correction`
+ *   (정정으로 종결, exactly 20 characters) came with #176's migration 0057.
  * - `decided_by`, `decided_at`, `decision_reason` (approvalReasonSchema's 1..500): exactly for a
  *   dismissed or accepted one — the reason the submitter reads (#173 item 7) and #24 publishes
- *   without the decider (#173 item 13). `retracted_at`: exactly for a retracted one. Neither
- *   before the submission.
+ *   without the decider (#173 item 13); cleared when a rejected or retracted correction sends an
+ *   accepted one back to pending (the acceptance stays in `admin_actions` and the frozen request).
+ *   `retracted_at`: exactly for a retracted one. `closed_at`: exactly for one closed by a
+ *   correction — the approval's instant; who approved it and the version it made are that
+ *   version's `market_judgements` row (#176). None before the submission.
  * - `purged_at`: when the retention emptied a closed account's dispute in place, once it held
  *   nothing (`retention.moderation_records`, ADR-0087 (6)) — `links` '{}' and `reason` '' from then
- *   on, the row kept so #24's count and statuses survive. Never a pending one.
+ *   on, the row kept so #24's count and statuses survive. Never a pending one, and never before
+ *   its end.
  *
  * The hold (#173 items 1·7): a dispute of the market's current version that is `pending` or
  * `accepted` keeps its PROVISIONAL market from confirmation — `confirmationHold` and the worker's
@@ -73,10 +92,10 @@ const HOLDING_SQL = sqlList(HOLDING_DISPUTE_STATUSES);
  * for the labels alone.
  *
  * Permanent facts (N04 §5) but for the retention's emptying: buddha_app has no DELETE, and a
- * trigger (migration 0056) refuses a DELETE whoever writes and lets an UPDATE only take a pending
- * dispute to dismissed, accepted or retracted, once — with what the submission recorded unchanged
- * — or empty a decided or retracted one's links and reason, once. The judgement and the accounts
- * RESTRICT.
+ * trigger (migrations 0056, 0057) refuses a DELETE whoever writes and lets an UPDATE only take a
+ * pending dispute to dismissed, accepted, retracted or closed_by_correction, or an accepted one
+ * back to pending — with what the submission recorded unchanged — or empty an ended one's links
+ * and reason, once. The judgement and the accounts RESTRICT.
  */
 export const marketDisputes = pgTable(
   'market_disputes',
@@ -96,6 +115,8 @@ export const marketDisputes = pgTable(
     decidedAt: timestampTz(),
     decisionReason: text(),
     retractedAt: timestampTz(),
+    /** 정정으로 종결 (#176): the approval of the correction that replaced its version. */
+    closedAt: timestampTz(),
     purgedAt: timestampTz(),
   },
   (t) => [
@@ -137,10 +158,18 @@ export const marketDisputes = pgTable(
       'market_disputes_retracted_check',
       sql`(${t.status} = 'retracted') = (${t.retractedAt} IS NOT NULL) AND (${t.retractedAt} IS NULL OR ${t.retractedAt} >= ${t.submittedAt})`,
     ),
-    /** Emptied only once it was decided or retracted, and not before that. */
+    /**
+     * 정정으로 종결 (#176): its instant exactly for a dispute a correction closed, never before the
+     * submission.
+     */
+    check(
+      'market_disputes_closed_check',
+      sql`(${t.status} = 'closed_by_correction') = (${t.closedAt} IS NOT NULL) AND (${t.closedAt} IS NULL OR ${t.closedAt} >= ${t.submittedAt})`,
+    ),
+    /** Emptied only once it ended — decided, retracted or closed — and not before that. */
     check(
       'market_disputes_purged_check',
-      sql`${t.purgedAt} IS NULL OR (${t.status} <> 'pending' AND ${t.purgedAt} >= coalesce(${t.decidedAt}, ${t.retractedAt}))`,
+      sql`${t.purgedAt} IS NULL OR (${t.status} <> 'pending' AND ${t.purgedAt} >= ${endedAtOf(t)})`,
     ),
     /**
      * The hold (`confirmationHold`, the worker's confirmation scan): a version's disputes that
@@ -154,11 +183,11 @@ export const marketDisputes = pgTable(
       .on(t.submittedAt, t.id)
       .where(sql`${t.status} = 'pending'`),
     /**
-     * 이의 접수's 처리됨 (`?status=decided`): the latest decision or retraction first, as the
-     * reader spells the key (`coalesce(decided_at, retracted_at)`, then the id).
+     * 이의 접수's 처리됨 (`?status=decided`): the latest decision, retraction or closure first, as
+     * the reader spells the key (`coalesce(decided_at, retracted_at, closed_at)`, then the id).
      */
     index('market_disputes_ended_at_idx')
-      .on(sql`coalesce(${t.decidedAt}, ${t.retractedAt})`, t.id)
+      .on(endedAtOf(t), t.id)
       .where(sql`${t.status} <> 'pending'`),
     /** MY 판정 이의 (`GET /me/disputes`): a member's, the newest first; the retention's join. */
     index('market_disputes_user_id_submitted_at_idx').on(t.userId, t.submittedAt, t.id),

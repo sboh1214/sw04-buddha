@@ -5,17 +5,22 @@ import {
   MARKET_STATUSES,
   type MarketJudgementRequestPayload,
 } from '@buddha/shared';
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq, ne } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { confirmationHold } from './market-dispute.js';
 import {
   approveMarketJudgement,
+  correctMarketJudgement,
   currentMarketJudgement,
   readMarketJudgements,
   resolveProvisionalMarket,
+  setCorrectionPending,
   type ApproveMarketJudgementInput,
+  type CorrectMarketJudgementInput,
 } from './market-judgement.js';
 import {
   approvalRequests,
+  marketDisputes,
   marketEvents,
   marketJudgements,
   marketSettlementSteps,
@@ -24,6 +29,9 @@ import {
 import {
   closeMarketEarly,
   createApprovalRequest,
+  createCorrectedMarket,
+  createCorrectionRequest,
+  createDispute,
   createJudgementRequest,
   createMarket,
   createOpenedMarket,
@@ -40,8 +48,9 @@ const DAY_MS = 24 * HOUR_MS;
 const DAY_WINDOW = 1_440;
 
 type Approving = Omit<ApproveMarketJudgementInput, 'market' | 'now' | 'request'>;
+type Correcting = Omit<CorrectMarketJudgementInput, 'market' | 'now' | 'request'>;
 
-describe.skipIf(!hasTestDb())('market judgements (#152, docker test profile)', () => {
+describe.skipIf(!hasTestDb())('market judgements (#152, #176, docker test profile)', () => {
   let t: TestDb;
 
   beforeAll(async () => {
@@ -108,6 +117,58 @@ describe.skipIf(!hasTestDb())('market judgements (#152, docker test profile)', (
       };
     });
   }
+
+  /**
+   * As the API approves a correction (#176): the same locks and clock as `approve`, and the
+   * request approved in the transaction first (`approvals.approve`) — unless the approver is its
+   * registrant, a caller's bug the helper is to throw on.
+   */
+  function correct(marketId: string, requestId: string, input: Correcting, at?: Date) {
+    return t.db.transaction(async (tx) => {
+      await lockMarket(tx, marketId);
+      const [market] = await tx
+        .select()
+        .from(markets)
+        .where(eq(markets.id, marketId))
+        .for('update');
+      const now = at ?? (await clockTimestamp(tx));
+      await tx
+        .update(approvalRequests)
+        .set({
+          status: 'approved',
+          decidedBy: input.approverId,
+          decisionReason: '정정의 근거가 규칙에 맞다.',
+          decidedAt: now,
+        })
+        .where(
+          and(
+            eq(approvalRequests.id, requestId),
+            eq(approvalRequests.status, 'pending'),
+            ne(approvalRequests.requestedBy, input.approverId),
+          ),
+        );
+      const [request] = await tx
+        .select()
+        .from(approvalRequests)
+        .where(eq(approvalRequests.id, requestId));
+      return {
+        now,
+        result: await correctMarketJudgement(tx, {
+          market: market!,
+          request: request!,
+          now,
+          ...input,
+        }),
+      };
+    });
+  }
+
+  const disputesOf = (marketId: string) =>
+    t.db
+      .select()
+      .from(marketDisputes)
+      .where(eq(marketDisputes.marketId, marketId))
+      .orderBy(asc(marketDisputes.submittedAt));
 
   /** As the worker confirms: the market lock, then the database clock (or the instant given). */
   function confirm(marketId: string, at?: Date) {
@@ -208,6 +269,8 @@ describe.skipIf(!hasTestDb())('market judgements (#152, docker test profile)', (
         disputeWindowMinutes: DAY_WINDOW,
         publishedAt: now,
         disputeDeadline,
+        // Version 1: no 정정 사유 (#176).
+        correctionReason: null,
         approvalId: request.id,
         registeredBy: registrant,
         approvedBy: approverId,
@@ -402,6 +465,11 @@ describe.skipIf(!hasTestDb())('market judgements (#152, docker test profile)', (
       });
       // The rule version moved since the registration (nothing moves it after the close).
       const stale = await createJudgementRequest(t.db, { marketId: market.id, ruleVersion: 3 });
+      // A correction's request is correctMarketJudgement's, whatever the status (#176).
+      const correction = await createJudgementRequest(t.db, {
+        marketId: market.id,
+        correction: { baseVersion: 1 },
+      });
       const cases: [string, Approving, string | RegExp][] = [
         [othersRequest.id, approving, `is no judgement of market ${market.id}`],
         [pauseRequest.id, approving, `is no judgement of market ${market.id}`],
@@ -414,6 +482,7 @@ describe.skipIf(!hasTestDb())('market judgements (#152, docker test profile)', (
         [request.id, { ...approving, disputeWindowMinutes: 0 }, 'out of range'],
         [request.id, { ...approving, disputeWindowMinutes: 10_081 }, 'out of range'],
         [stale.id, approving, 'its judgement followed 3'],
+        [correction.id, approving, 'is a correction: correctMarketJudgement approves it'],
       ];
       for (const [requestId, input, message] of cases) {
         await expect(approve(market.id, requestId, input), requestId).rejects.toThrow(message);
@@ -421,6 +490,291 @@ describe.skipIf(!hasTestDb())('market judgements (#152, docker test profile)', (
       expect(await rowOf(market.id)).toEqual(market);
       expect(await eventsOf(market.id)).toEqual([]);
       expect(await judgementsOf(market.id)).toEqual([]);
+    });
+  });
+
+  describe('correctMarketJudgement (#176)', () => {
+    it('corrects a PROVISIONAL market’s current version: its pending disputes closed, the event, v2 with v1’s window, the market moved', async () => {
+      const published = new Date(Date.now() - HOUR_MS);
+      const { market, judgement: v1 } = await createProvisionalMarket(t.db, {
+        result: 'YES',
+        publishedAt: published,
+      });
+      const submitted = (ms: number) => new Date(published.getTime() + ms);
+      const pending = (
+        await createDispute(t.db, { marketId: market.id, submittedAt: submitted(1) })
+      ).dispute;
+      const accepted = (
+        await createDispute(t.db, {
+          marketId: market.id,
+          status: 'accepted',
+          submittedAt: submitted(2),
+        })
+      ).dispute;
+      const dismissed = (
+        await createDispute(t.db, {
+          marketId: market.id,
+          status: 'dismissed',
+          submittedAt: submitted(3),
+        })
+      ).dispute;
+      const retracted = (
+        await createDispute(t.db, {
+          marketId: market.id,
+          status: 'retracted',
+          submittedAt: submitted(4),
+        })
+      ).dispute;
+      const registrant = await admin();
+      const approverId = await admin();
+      const collectedAt = new Date(Date.now() - MINUTE_MS);
+      const request = await createCorrectionRequest(t.db, {
+        marketId: market.id,
+        result: 'NO',
+        by: registrant,
+        evidence: { links: ['https://example.com/corrected'], collectedAt },
+        description: '1차 출처의 정정 발표를 확인했다.',
+        reason: '  1차 출처가 발표를 정정했다.  ',
+      });
+      // As the route lists them: the base version's accepted disputes.
+      expect(request.payload).toMatchObject({
+        correction: { baseVersion: 1, disputeIds: [accepted.id] },
+      });
+      const before = await rowOf(market.id);
+      expect(before).toMatchObject({ correctionPending: true, disputeHoldCount: 2 });
+      const eventsBefore = await eventsOf(market.id);
+
+      const { now, result } = await correct(market.id, request.id, {
+        approverId,
+        eventDeadlineConfirmed: true,
+      });
+      expect(result.corrected).toBe(true);
+      if (!result.corrected) return;
+      const disputeDeadline = new Date(now.getTime() + DAY_WINDOW * MINUTE_MS);
+      // A later deadline than the first: the approval comes after its publication.
+      expect(disputeDeadline.getTime()).toBeGreaterThan(v1.disputeDeadline.getTime());
+
+      // (1) The pending dispute closed as 정정으로 종결 at the approval, nothing else moved: the
+      // accepted one stays accepted (the correction answers it).
+      const closed = { ...pending, status: 'closed_by_correction', closedAt: now };
+      expect(result.closedDisputes).toEqual([closed]);
+      expect(await disputesOf(market.id)).toEqual([closed, accepted, dismissed, retracted]);
+      // (2) The event: no status on either side, the approver.
+      const events = await eventsOf(market.id);
+      expect(events.slice(0, -1)).toEqual(eventsBefore);
+      expect(events.at(-1)).toEqual({
+        id: result.eventId,
+        marketId: market.id,
+        type: 'judgement_corrected',
+        actorId: approverId,
+        fromStatus: null,
+        toStatus: null,
+        payload: {
+          version: 2,
+          previousVersion: 1,
+          result: 'NO',
+          previousResult: 'YES',
+          approvalId: request.id,
+          requestedBy: registrant,
+          disputeDeadline: disputeDeadline.toISOString(),
+          closedDisputes: 1,
+        },
+        createdAt: now,
+      });
+      // (3) v2: the registration, the trimmed 정정 사유, v1's window from the approval, its event.
+      const [primary] = await t.db.query.marketSources.findMany({
+        where: (sources, { and: both, eq: is }) =>
+          both(is(sources.marketId, market.id), is(sources.priority, 0)),
+      });
+      expect(result.judgement).toEqual({
+        marketId: market.id,
+        version: 2,
+        result: 'NO',
+        sourcePriority: 0,
+        sourceName: primary!.name,
+        sourceUrl: primary!.url,
+        fallbackReason: null,
+        voidReason: null,
+        evidenceLinks: ['https://example.com/corrected'],
+        evidenceDescription: '1차 출처의 정정 발표를 확인했다.',
+        collectedAt,
+        ruleVersion: v1.ruleVersion,
+        eventDeadlineConfirmed: true,
+        disputeWindowMinutes: v1.disputeWindowMinutes,
+        publishedAt: now,
+        disputeDeadline,
+        correctionReason: '1차 출처가 발표를 정정했다.',
+        approvalId: request.id,
+        registeredBy: registrant,
+        approvedBy: approverId,
+        provisionalEventId: result.eventId,
+        createdAt: now,
+      });
+      expect(result.previous).toEqual(v1);
+      expect(await readMarketJudgements(t.db, market.id)).toEqual([result.judgement, v1]);
+      expect(await currentMarketJudgement(t.db, market.id)).toEqual(result.judgement);
+      // (4) The market: still PROVISIONAL, the new result, version and deadline, the mirrors
+      // reset, the key on the correction's event.
+      const row = await rowOf(market.id);
+      expect(result.market).toEqual(row);
+      expect(row).toEqual({
+        ...before,
+        resolvedResult: 'NO',
+        judgementVersion: 2,
+        disputeDeadline,
+        disputeHoldCount: 0,
+        correctionPending: false,
+        statusEventId: result.eventId,
+        updatedAt: now,
+      });
+      // v1's accepted dispute holds nothing now, and nothing else does: the mirror is right.
+      expect(await confirmationHold(t.db, row)).toBe(false);
+      expect(await stepsOf(market.id)).toEqual([]);
+    });
+
+    it('gives every version the first one’s window, from its own approval (#173 item 5)', async () => {
+      const first = await createProvisionalMarket(t.db, {
+        publishedAt: new Date(Date.now() - HOUR_MS),
+        disputeWindowMinutes: 7,
+      });
+      const second = await createCorrectedMarket(t.db, {
+        marketId: first.market.id,
+        correctedAt: new Date(Date.now() - 30 * MINUTE_MS),
+      });
+      const third = await createCorrectedMarket(t.db, { marketId: first.market.id });
+      for (const { judgement } of [first, second, third]) {
+        expect(judgement.disputeWindowMinutes).toBe(7);
+        expect(judgement.disputeDeadline.getTime()).toBe(
+          judgement.publishedAt.getTime() + 7 * MINUTE_MS,
+        );
+      }
+      expect(third.judgement.version).toBe(3);
+      expect(third.previous).toEqual(second.judgement);
+      expect(third.market).toMatchObject({
+        judgementVersion: 3,
+        disputeDeadline: third.judgement.disputeDeadline,
+        resolvedResult: 'YES',
+      });
+    });
+
+    it('skips a market not PROVISIONAL (not_provisional) or past its base version (stale), writing nothing', async () => {
+      const approving: Correcting = { approverId: await admin(), eventDeadlineConfirmed: true };
+      // Confirmed before the correction was written (a waiting one would have held it), or not
+      // judged yet.
+      const { market: confirmed } = await createProvisionalMarket(t.db, {
+        publishedAt: new Date(Date.now() - DAY_MS - MINUTE_MS),
+      });
+      await resolveMarketNow(t.db, confirmed.id);
+      const closed = await createMarket(t.db, { status: 'closed' });
+      for (const marketId of [confirmed.id, closed.id]) {
+        const before = await rowOf(marketId);
+        const request = await createJudgementRequest(t.db, {
+          marketId,
+          correction: { baseVersion: 1 },
+        });
+        expect((await correct(marketId, request.id, approving)).result).toEqual({
+          corrected: false,
+          reason: 'not_provisional',
+        });
+        expect(await rowOf(marketId)).toEqual(before);
+      }
+      // Corrected to v2 since the request was written against v1.
+      const { market } = await createProvisionalMarket(t.db);
+      const late = await createJudgementRequest(t.db, {
+        marketId: market.id,
+        correction: { baseVersion: 1 },
+      });
+      const { market: moved } = await createCorrectedMarket(t.db, { marketId: market.id });
+      const events = await eventsOf(market.id);
+      expect((await correct(market.id, late.id, approving)).result).toEqual({
+        corrected: false,
+        reason: 'stale',
+      });
+      expect(await rowOf(market.id)).toEqual(moved);
+      expect(await eventsOf(market.id)).toEqual(events);
+      expect(await judgementsOf(market.id)).toHaveLength(2);
+    });
+
+    it('throws on a caller’s bug before anything is judged or written', async () => {
+      const { market } = await createProvisionalMarket(t.db, {
+        publishedAt: new Date(Date.now() - HOUR_MS),
+      });
+      const pending = (await createDispute(t.db, { marketId: market.id })).dispute;
+      const registrant = await admin();
+      const approving: Correcting = { approverId: await admin(), eventDeadlineConfirmed: true };
+      const corrected = (input: Partial<Parameters<typeof createJudgementRequest>[1]> = {}) =>
+        createJudgementRequest(t.db, {
+          marketId: market.id,
+          by: registrant,
+          correction: { baseVersion: 1 },
+          ...input,
+        });
+      const first = await createJudgementRequest(t.db, { marketId: market.id });
+      const blank = await corrected({ correction: { baseVersion: 1, reason: '   ' } });
+      const long = await corrected({ correction: { baseVersion: 1, reason: '가'.repeat(501) } });
+      const ruleMoved = await corrected({ ruleVersion: 3 });
+      const own = await corrected();
+      const cases: [string, Correcting, string][] = [
+        [first.id, approving, 'is a first judgement: approveMarketJudgement takes it'],
+        [blank.id, approving, 'A correction has a reason of 1 to 500 characters'],
+        [long.id, approving, 'A correction has a reason of 1 to 500 characters'],
+        [ruleMoved.id, approving, 'its judgement followed 3'],
+        [
+          own.id,
+          { ...approving, approverId: registrant },
+          'A judgement is approved by an admin other than its registrant',
+        ],
+        // createMarket's scheduled judgement is two days after the close: still ahead.
+        [
+          own.id,
+          { ...approving, eventDeadlineConfirmed: false },
+          'A judgement approved before its scheduled time confirms the event deadline',
+        ],
+      ];
+      const before = await rowOf(market.id);
+      const events = await eventsOf(market.id);
+      for (const [requestId, input, message] of cases) {
+        await expect(correct(market.id, requestId, input), message).rejects.toThrow(message);
+      }
+      expect(await rowOf(market.id)).toEqual(before);
+      expect(await eventsOf(market.id)).toEqual(events);
+      expect(await judgementsOf(market.id)).toHaveLength(1);
+      expect((await disputesOf(market.id))[0]).toEqual(pending);
+      // A PROVISIONAL row with no judgement row behind it (a factory's): nothing to correct.
+      const bare = await createMarket(t.db, { status: 'provisional' });
+      const orphan = await createJudgementRequest(t.db, {
+        marketId: bare.id,
+        correction: { baseVersion: 1 },
+      });
+      await expect(correct(bare.id, orphan.id, approving)).rejects.toThrow(
+        'has no judgement of version 1',
+      );
+    });
+  });
+
+  describe('setCorrectionPending (#176)', () => {
+    it('writes the mirror and the instant on a PROVISIONAL market, and refuses true on any other', async () => {
+      const { market } = await createProvisionalMarket(t.db);
+      const at = await clockTimestamp(t.db);
+      const set = (marketId: string, pending: boolean) =>
+        t.db.transaction(async (tx) => {
+          await lockMarket(tx, marketId);
+          return setCorrectionPending(tx, { marketId, pending, now: at });
+        });
+      expect(await set(market.id, true)).toEqual({
+        ...market,
+        correctionPending: true,
+        updatedAt: at,
+      });
+      expect(await set(market.id, false)).toEqual({
+        ...market,
+        correctionPending: false,
+        updatedAt: at,
+      });
+      const closed = await createMarket(t.db, { status: 'closed' });
+      await expect(set(closed.id, true)).rejects.toThrow();
+      expect(await rowOf(closed.id)).toEqual(closed);
+      await expect(set(randomUUID(), false)).rejects.toThrow('not found');
     });
   });
 
@@ -557,8 +911,8 @@ describe.skipIf(!hasTestDb())('market judgements (#152, docker test profile)', (
     it('reads a market’s judgements newest first, and its current one by judgement_version', async () => {
       const { market, judgement, request } = await createProvisionalMarket(t.db);
       expect(await readMarketJudgements(t.db, market.id)).toEqual([judgement]);
-      // A second version as #176's correction will write one (its own request and event), the
-      // market pointing at it.
+      // A second version written by hand before the market points at it (its own request, event
+      // and 정정 사유; correctMarketJudgement writes both at once, below).
       const approverId = judgement.approvedBy;
       const correction = await createApprovalRequest(t.db, {
         kind: MARKET_JUDGEMENT_APPROVAL_KIND,
@@ -570,7 +924,7 @@ describe.skipIf(!hasTestDb())('market judgements (#152, docker test profile)', (
       });
       const [event] = await t.db
         .insert(marketEvents)
-        .values({ marketId: market.id, type: 'provisional', actorId: approverId })
+        .values({ marketId: market.id, type: 'judgement_corrected', actorId: approverId })
         .returning();
       const [v2] = await t.db
         .insert(marketJudgements)
@@ -578,6 +932,7 @@ describe.skipIf(!hasTestDb())('market judgements (#152, docker test profile)', (
           ...judgement,
           version: 2,
           result: 'NO',
+          correctionReason: '1차 출처가 발표를 정정했다.',
           approvalId: correction.id,
           provisionalEventId: event!.id,
         })
@@ -586,6 +941,15 @@ describe.skipIf(!hasTestDb())('market judgements (#152, docker test profile)', (
       expect(await currentMarketJudgement(t.db, market.id)).toEqual(judgement);
       await t.db.update(markets).set({ judgementVersion: 2 }).where(eq(markets.id, market.id));
       expect(await currentMarketJudgement(t.db, market.id)).toEqual(v2);
+      // A corrected market's: every version, the newest first, the current one the correction's.
+      const corrected = await createCorrectedMarket(t.db);
+      const third = await createCorrectedMarket(t.db, { marketId: corrected.market.id });
+      expect(await readMarketJudgements(t.db, corrected.market.id)).toEqual([
+        third.judgement,
+        corrected.judgement,
+        corrected.previous,
+      ]);
+      expect(await currentMarketJudgement(t.db, corrected.market.id)).toEqual(third.judgement);
       // None for a market not judged yet, or judged by the interim route before #152 (D4).
       for (const status of ['closed', 'resolved'] as const) {
         const none = await createMarket(t.db, { status, resolvedResult: null });
@@ -737,6 +1101,103 @@ describe.skipIf(!hasTestDb())('market judgements (#152, docker test profile)', (
       await expect(resolveMarketNow(t.db, past.market.id)).rejects.toThrow(
         'was not confirmed (not_provisional)',
       );
+    });
+
+    it('createCorrectionRequest registers a correction of the current version as the route does; createCorrectedMarket approves one (#176)', async () => {
+      const { market } = await createProvisionalMarket(t.db, { result: 'NO' });
+      const older = (
+        await createDispute(t.db, {
+          marketId: market.id,
+          status: 'accepted',
+          submittedAt: new Date(Date.now() - 2_000),
+        })
+      ).dispute;
+      const newer = (
+        await createDispute(t.db, {
+          marketId: market.id,
+          status: 'accepted',
+          submittedAt: new Date(Date.now() - 1_000),
+        })
+      ).dispute;
+      await createDispute(t.db, { marketId: market.id, status: 'dismissed' });
+      const request = await createCorrectionRequest(t.db, { marketId: market.id });
+      expect(request).toMatchObject({
+        kind: MARKET_JUDGEMENT_APPROVAL_KIND,
+        targetId: market.id,
+        status: 'pending',
+        payload: {
+          result: 'YES',
+          correction: {
+            baseVersion: 1,
+            reason: expect.any(String) as unknown,
+            disputeIds: [older.id, newer.id],
+          },
+        },
+      });
+      // The mirror the route writes with it, at the registration's instant; the hold is the
+      // request.
+      expect(await rowOf(market.id)).toMatchObject({
+        correctionPending: true,
+        updatedAt: request.requestedAt,
+      });
+      expect(await confirmationHold(t.db, await rowOf(market.id))).toBe(true);
+      await expect(resolveMarketNow(t.db, market.id)).rejects.toThrow(/a correction waiting/);
+      // Given: stored as given; a market with no judgement has none to correct.
+      expect(
+        (
+          await createCorrectionRequest(t.db, {
+            marketId: market.id,
+            baseVersion: 5,
+            reason: '정정 사유',
+            disputeIds: [],
+          })
+        ).payload,
+      ).toMatchObject({ correction: { baseVersion: 5, reason: '정정 사유', disputeIds: [] } });
+      const closed = await createMarket(t.db, { status: 'closed' });
+      await expect(createCorrectionRequest(t.db, { marketId: closed.id })).rejects.toThrow(
+        'has no judgement',
+      );
+
+      // createCorrectedMarket: a fresh PROVISIONAL market's YES corrected to NO by default, the
+      // request approved by another admin, the market at v2.
+      const made = await createCorrectedMarket(t.db);
+      expect(made.previous).toMatchObject({ version: 1, result: 'YES' });
+      expect(made.judgement).toMatchObject({
+        version: 2,
+        result: 'NO',
+        correctionReason: expect.any(String) as unknown,
+        approvedBy: made.request.decidedBy,
+        registeredBy: made.request.requestedBy,
+      });
+      expect(made.request).toMatchObject({
+        status: 'approved',
+        decidedAt: made.judgement.publishedAt,
+      });
+      expect(made.market).toMatchObject({
+        status: 'provisional',
+        resolvedResult: 'NO',
+        judgementVersion: 2,
+        statusEventId: made.eventId,
+        correctionPending: false,
+      });
+      expect((await eventsOf(made.market.id)).map((event) => event.type)).toEqual([
+        'provisional',
+        'judgement_corrected',
+      ]);
+      expect(made.closedDisputes).toEqual([]);
+      const someone = await admin();
+      await expect(
+        createCorrectedMarket(t.db, {
+          marketId: made.market.id,
+          registeredBy: someone,
+          approvedBy: someone,
+        }),
+      ).rejects.toThrow('the registrant never approves the correction');
+      // Confirmed: nothing to correct — the registration's mirror refuses it
+      // (markets_correction_pending_status_check), and the factory throws.
+      const { market: confirmed } = await resolveMarketNow(t.db, made.market.id);
+      await expect(createCorrectedMarket(t.db, { marketId: confirmed.id })).rejects.toThrow();
+      expect(await rowOf(confirmed.id)).toEqual(confirmed);
     });
   });
 });

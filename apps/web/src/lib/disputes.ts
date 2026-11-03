@@ -86,24 +86,31 @@ export const myMarketDisputeKey = (marketId: string, accountId: string | undefin
 
 // ---- statuses -------------------------------------------------------------------------
 
-/** A dispute's status in the member's and the operators' words: 검토 중 · 기각 · 수용 · 철회. */
+/**
+ * A dispute's status in the member's and the operators' words: 검토 중 · 기각 · 수용 · 철회 ·
+ * 정정으로 종결 (#176, ADR-0105; #173 item 8 — a pending dispute of a version a correction replaced).
+ */
 export const DISPUTE_STATUS_LABEL: Record<MarketDisputeStatus, string> = {
   pending: copy.disputeStatusPending,
   dismissed: copy.disputeStatusDismissed,
   accepted: copy.disputeStatusAccepted,
   retracted: copy.disputeStatusRetracted,
+  closed_by_correction: copy.disputeStatusClosedByCorrection,
 };
 
 /**
  * Colour only reinforces the label (PLAN 11.2): orange under review — the market waits for it — and
- * for 수용, which holds it too until its correction (#176); `no` for 기각 and gray once retracted,
- * as a proposal's 반려 and 철회.
+ * for 수용, which holds it too until its correction; `no` for 기각, and gray once retracted or closed
+ * by a correction (no decision either way, #176), as a proposal's 철회. MY reads it through
+ * `myDisputePalette`, which turns a 수용 a correction already answered gray; the operators' record
+ * keeps the status's colour.
  */
 export const DISPUTE_STATUS_PALETTE: Record<MarketDisputeStatus, 'gray' | 'orange' | 'no'> = {
   pending: 'orange',
   dismissed: 'no',
   accepted: 'orange',
   retracted: 'gray',
+  closed_by_correction: 'gray',
 };
 
 // ---- the deadline ---------------------------------------------------------------------
@@ -140,7 +147,8 @@ export function openDisputeDeadline(
 /**
  * Why a submission is refused or not offered, in the member's words (DISPUTE_NOT_ALLOWED's
  * `details.reason` and `MyMarketDispute.eligibility` alike, one sentence each): the market shows
- * no provisional result, the judgement on screen was replaced (#176), the 이의 기한 has come, the
+ * no provisional result, the judgement on screen was replaced (a correction, #176), the 이의 기한 has
+ * come, the
  * account is an admin's (#173 item 15), it has no fill on the market (#173 item 6), it disputed
  * this version already (a retracted one counts); a retraction's — decided, retracted; and a
  * decision's registrant, which no member meets.
@@ -163,8 +171,9 @@ export const DISPUTE_REFUSAL_TEXT: Readonly<Record<DisputeNotAllowedReason, stri
  * - `pending`: the standing is still being read (the session, `GET /me`, the standing) — or read
  *   again: the live row is a 잠정 결과 the `provisional` event moved it to, its REST read (with the
  *   version and the deadline) not in yet, or the standing was read for another version than the
- *   row's (before the judgement, or before a correction #176 replaced it; the screen reads it
- *   again, and it says nothing of this version meanwhile);
+ *   row's (before the judgement, or before a correction replaced it, #176; the screen reads it
+ *   again, and it says nothing of this version meanwhile — the form is offered again on the new
+ *   version, the member's dispute of the old one being MY's alone);
  * - `failed`: the standing's read failed — 다시 시도;
  * - `closed`: no form, one sentence why (`DISPUTE_REFUSAL_TEXT`) — the market no longer shows a
  *   provisional result or the deadline came on the live row (its status and the screen's timer
@@ -349,15 +358,57 @@ export function disputeRetractFailureMessage(error: unknown): string {
 // ---- a dispute as read ----------------------------------------------------------------
 
 /**
- * The instant a dispute took its status, and what that instant is called: 낸 시각 while pending,
- * the 기각's or 수용's (`decidedAt`), the 철회's (`retractedAt`).
+ * The instant a dispute took its status, and what that instant is called: 낸 시각 while pending
+ * (a dispute a rejected or retracted correction sent back to 검토 중 included: its decision was
+ * cleared, #176), the 기각's or 수용's (`decidedAt`), the 철회's (`retractedAt`), the 정정으로 종결's
+ * (`closedAt`, the correction's approval).
  */
 export function disputeStatusTime(
-  dispute: Pick<MyDispute, 'status' | 'submittedAt' | 'decidedAt' | 'retractedAt'>,
+  dispute: Pick<MyDispute, 'status' | 'submittedAt' | 'decidedAt' | 'retractedAt' | 'closedAt'>,
 ): { label: string; at: string } {
   if (dispute.status === 'retracted' && dispute.retractedAt !== null) {
     return { label: copy.disputeRetractedAt, at: dispute.retractedAt };
   }
+  if (dispute.status === 'closed_by_correction' && dispute.closedAt !== null) {
+    return { label: copy.disputeClosedAt, at: dispute.closedAt };
+  }
   if (dispute.decidedAt !== null) return { label: copy.disputeDecidedAt, at: dispute.decidedAt };
   return { label: copy.disputeSubmittedAt, at: dispute.submittedAt };
+}
+
+/**
+ * What MY adds under one of the member's disputes (#175, #176, ADR-0105): for one the market's
+ * judgement has moved past — `market.judgementVersion` above the dispute's — that the judgement
+ * was corrected: an accepted one was answered by it, and one closed by it (정정으로 종결) may be
+ * submitted again on the corrected judgement within its deadline (#173 item 8); for an accepted
+ * one of the current version, that a correction follows (#173 item 7). `null` for the rest.
+ */
+export function disputeNote(
+  dispute: Pick<MyDispute, 'status' | 'judgementVersion'> & {
+    market: Pick<MyDispute['market'], 'judgementVersion'>;
+  },
+): { kind: 'accepted' | 'corrected' | 'closed'; text: string } | null {
+  if (dispute.status === 'closed_by_correction') {
+    return { kind: 'closed', text: copy.disputeClosedByCorrectionNote };
+  }
+  if (dispute.status !== 'accepted') return null;
+  return dispute.judgementVersion < dispute.market.judgementVersion
+    ? { kind: 'corrected', text: copy.disputeAcceptedCorrectedNote }
+    : { kind: 'accepted', text: copy.disputeAcceptedNote };
+}
+
+/**
+ * The colour of one of the member's disputes in MY and on the submission screen: its status's
+ * (DISPUTE_STATUS_PALETTE), but gray for a 수용 a correction already answered — the market's
+ * judgement moved past its version (`disputeNote`'s 'corrected', #176): it holds the market no
+ * more and waits for nothing, so it no longer reads orange.
+ */
+export function myDisputePalette(
+  dispute: Pick<MyDispute, 'status' | 'judgementVersion'> & {
+    market: Pick<MyDispute['market'], 'judgementVersion'>;
+  },
+): 'gray' | 'orange' | 'no' {
+  return disputeNote(dispute)?.kind === 'corrected'
+    ? 'gray'
+    : DISPUTE_STATUS_PALETTE[dispute.status];
 }

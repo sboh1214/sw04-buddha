@@ -66,6 +66,8 @@ import {
   SETTLEMENT_POLL_INTERVAL_MS,
   TRADING_CLOSE_POLL_MS,
   adminMarketPollInterval,
+  judgementDelayedNote,
+  judgementVersionMove,
   judgementVersionName,
   provisionalMarketPollDelay,
   scheduledMarketPollDelay,
@@ -647,6 +649,47 @@ describe('marketEventRows', () => {
       null,
     ]) {
       expect(marketEventRows('provisional', bad)).toBeUndefined();
+    }
+  });
+
+  it('reads a 판정 정정 as its versions, results, new deadline and closed disputes (#176)', () => {
+    // The approval's `judgement_corrected` event (ADR-0105): no status change; the request and
+    // its registrant are ids, which no row prints.
+    const deadline = '2026-12-03T01:00:00.000Z';
+    const payload = {
+      version: 2,
+      previousVersion: 1,
+      result: 'YES',
+      previousResult: 'NO',
+      approvalId: '3f2504e0-4f89-11d3-9a0c-0305e82c3303',
+      requestedBy: 'registrant-id',
+      disputeDeadline: deadline,
+      closedDisputes: 3,
+    };
+    const rows = marketEventRows('judgement_corrected', payload);
+    expect(rows).toEqual([
+      { label: copy.eventJudgementVersion, value: 'v1 → v2' },
+      { label: copy.marketResolvedResult, value: `${copy.no} → ${copy.yes}` },
+      { label: copy.eventDisputeDeadline, value: formatKst(deadline) },
+      { label: copy.eventClosedDisputes, value: `3${copy.adminMarketDisputesHoldingUnit}` },
+    ]);
+    expect(JSON.stringify(rows)).not.toContain('registrant-id');
+    expect(MARKET_EVENT_LABEL.judgement_corrected).toBe(copy.eventJudgementCorrected);
+    expect(marketEventLabel('judgement_corrected', payload)).toBe('판정 정정');
+    expect(judgementVersionMove(2)).toBe('v2 → v3');
+    // The result kept with new grounds still says both.
+    expect(
+      marketEventRows('judgement_corrected', { ...payload, result: 'NO', closedDisputes: 0 }),
+    ).toContainEqual({ label: copy.marketResolvedResult, value: `${copy.no} → ${copy.no}` });
+    for (const bad of [
+      { ...payload, version: 1 },
+      { ...payload, previousResult: 'MAYBE' },
+      { ...payload, disputeDeadline: 'nope' },
+      { ...payload, closedDisputes: -1 },
+      { version: 2, result: 'YES', disputeDeadline: deadline },
+      null,
+    ]) {
+      expect(marketEventRows('judgement_corrected', bad)).toBeUndefined();
     }
   });
 
@@ -1625,22 +1668,42 @@ describe('tradingMarketPollDelay (#114, ADR-0102)', () => {
   });
 });
 
+describe('judgementDelayedNote (#173 item 11)', () => {
+  it('names what holds a delayed market: the schedule, a waiting correction, or a dispute', () => {
+    const idle = { pending: null };
+    expect(judgementDelayedNote({ status: 'closed', judgement: idle })).toBe(
+      copy.adminMarketJudgementDelayedNote,
+    );
+    // #175: a pending or accepted 판정 이의 holds it past the deadline.
+    expect(judgementDelayedNote({ status: 'provisional', judgement: idle })).toBe(
+      copy.adminMarketDisputeDelayedNote,
+    );
+    // #176: a correction waiting for its approval holds it, and is what decides it next.
+    expect(judgementDelayedNote({ status: 'provisional', judgement: { pending: {} } })).toBe(
+      copy.adminMarketCorrectionDelayedNote,
+    );
+    // Never a NO for lateness (N03 §4).
+    expect(copy.adminMarketCorrectionDelayedNote).not.toMatch(/NO|환불|원금/);
+  });
+});
+
 describe('provisionalMarketPollDelay (#152, ADR-0103)', () => {
   const disputeDeadline = '2026-12-02T01:00:00.000Z';
   const at = (iso: string) => new Date(iso).getTime();
-  /** No 판정 이의 holds it (#175). */
+  /** No 판정 이의 holds it (#175), and no correction waits (#176). */
   const FREE = { holding: 0 };
+  const IDLE = { pending: null };
 
   it('reads a 잠정 결과 market again at its dispute deadline', () => {
     expect(
       provisionalMarketPollDelay(
-        { status: 'provisional', disputeDeadline, disputes: FREE },
+        { status: 'provisional', disputeDeadline, disputes: FREE, judgement: IDLE },
         at('2026-12-02T00:59:00.000Z'),
       ),
     ).toBe(60_000);
     expect(
       provisionalMarketPollDelay(
-        { status: 'provisional', disputeDeadline, disputes: FREE },
+        { status: 'provisional', disputeDeadline, disputes: FREE, judgement: IDLE },
         at('2026-12-02T00:59:59.999Z'),
       ),
     ).toBe(1);
@@ -1653,7 +1716,7 @@ describe('provisionalMarketPollDelay (#152, ADR-0103)', () => {
     for (const now of [disputeDeadline, '2026-12-02T01:00:00.001Z', '2026-12-03T00:00:00.000Z']) {
       expect(
         provisionalMarketPollDelay(
-          { status: 'provisional', disputeDeadline, disputes: FREE },
+          { status: 'provisional', disputeDeadline, disputes: FREE, judgement: IDLE },
           at(now),
         ),
         now,
@@ -1664,14 +1727,42 @@ describe('provisionalMarketPollDelay (#152, ADR-0103)', () => {
   it('stops past the deadline while a 판정 이의 holds it, and resumes once none does (#175)', () => {
     // ADR-0104: a pending or accepted dispute keeps the market PROVISIONAL past its deadline, and
     // nothing confirms it then; the read at the deadline still comes (its 판정 지연 note).
-    const held = { status: 'provisional' as const, disputeDeadline, disputes: { holding: 2 } };
+    const held = {
+      status: 'provisional' as const,
+      disputeDeadline,
+      disputes: { holding: 2 },
+      judgement: IDLE,
+    };
     expect(provisionalMarketPollDelay(held, at('2026-12-02T00:59:00.000Z'))).toBe(60_000);
     for (const now of [disputeDeadline, '2026-12-03T00:00:00.000Z']) {
       expect(provisionalMarketPollDelay(held, at(now)), now).toBe(false);
     }
     // The last 기각's answer holds none: the API's `market.resolve` confirms it within seconds.
     expect(
-      provisionalMarketPollDelay({ ...held, disputes: FREE }, at('2026-12-03T00:00:00.000Z')),
+      provisionalMarketPollDelay(
+        { ...held, disputes: FREE, judgement: IDLE },
+        at('2026-12-03T00:00:00.000Z'),
+      ),
+    ).toBe(PROVISIONAL_DEADLINE_POLL_MS);
+  });
+
+  it('stops past the deadline while a correction waits, and resumes once it is decided (#176)', () => {
+    // ADR-0105 (decision 3 '#176 정정 대기'): a waiting correction holds the confirmation — on a
+    // PROVISIONAL market the registration waiting is one — with no dispute holding it.
+    const waiting = {
+      status: 'provisional' as const,
+      disputeDeadline,
+      disputes: FREE,
+      judgement: { pending: { requestId: 'r' } },
+    };
+    expect(provisionalMarketPollDelay(waiting, at('2026-12-02T00:59:00.000Z'))).toBe(60_000);
+    for (const now of [disputeDeadline, '2026-12-03T00:00:00.000Z']) {
+      expect(provisionalMarketPollDelay(waiting, at(now)), now).toBe(false);
+    }
+    // Rejected or retracted with nothing holding: the API's `market.resolve` confirms it within
+    // seconds, and the detail follows it.
+    expect(
+      provisionalMarketPollDelay({ ...waiting, judgement: IDLE }, at('2026-12-03T00:00:00.000Z')),
     ).toBe(PROVISIONAL_DEADLINE_POLL_MS);
   });
 
@@ -1679,7 +1770,7 @@ describe('provisionalMarketPollDelay (#152, ADR-0103)', () => {
     for (const status of MARKET_STATUSES.filter((value) => value !== 'provisional')) {
       expect(
         provisionalMarketPollDelay(
-          { status, disputeDeadline, disputes: FREE },
+          { status, disputeDeadline, disputes: FREE, judgement: IDLE },
           at(disputeDeadline),
         ),
         status,
@@ -1687,18 +1778,29 @@ describe('provisionalMarketPollDelay (#152, ADR-0103)', () => {
     }
     expect(provisionalMarketPollDelay(undefined)).toBe(false);
     expect(
-      provisionalMarketPollDelay({ status: 'provisional', disputeDeadline: null, disputes: FREE }),
+      provisionalMarketPollDelay({
+        status: 'provisional',
+        disputeDeadline: null,
+        disputes: FREE,
+        judgement: IDLE,
+      }),
     ).toBe(false);
     expect(
       provisionalMarketPollDelay({
         status: 'provisional',
         disputeDeadline: 'nope',
         disputes: FREE,
+        judgement: IDLE,
       }),
     ).toBe(false);
     expect(
       provisionalMarketPollDelay(
-        { status: 'provisional', disputeDeadline: '2027-07-01T00:00:00.000Z', disputes: FREE },
+        {
+          status: 'provisional',
+          disputeDeadline: '2027-07-01T00:00:00.000Z',
+          disputes: FREE,
+          judgement: IDLE,
+        },
         at(disputeDeadline),
       ),
     ).toBe(MAX_TIMEOUT_MS);
@@ -1712,6 +1814,7 @@ describe('adminMarketPollInterval', () => {
     closeAt: '2999-01-01T00:00:00.000Z',
     disputeDeadline: status === 'provisional' ? '2000-01-01T00:00:00.000Z' : null,
     disputes: { holding: 0 },
+    judgement: { pending: null },
   });
 
   it('is the settlement poll for a confirmed market, the 개장 예정 re-read for a scheduled one', () => {

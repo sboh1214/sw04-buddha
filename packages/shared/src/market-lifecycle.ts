@@ -10,7 +10,8 @@
  * - CLOSED → OPEN·PAUSED: no reopening after the close, without exception (item 4).
  * - Any edge into VOID: VOID is a result (`MARKET_RESULTS`), chosen in the judgement (item 4).
  * - RESOLVED → PROVISIONAL: a correction happens in PROVISIONAL only (item 8), so it changes the
- *   result and republishes the status without a status change.
+ *   result and republishes the status without a status change (#176, ADR-0105: its
+ *   `judgement_corrected` event, written beside `transitionMarket`, not through it).
  */
 import type { MarketStatus } from './enums.js';
 
@@ -45,8 +46,8 @@ export const MARKET_LIFECYCLE_TRANSITIONS: Readonly<Record<MarketStatus, readonl
     // item 1, ADR-0103); a rejected one leaves the market CLOSED to be judged again.
     closed: ['provisional'],
     // #152: confirmed by the worker (actor NULL) once the dispute deadline has passed with nothing
-    // held — no 판정 이의 pending or accepted (#175), and from #176 no correction waiting (#173
-    // item 1).
+    // held — no 판정 이의 pending or accepted (#175) and no correction waiting (#176) (#173 item
+    // 1). A correction stays PROVISIONAL: a new version, no edge.
     provisional: ['resolved'],
     // #126: the payout starts at once (item 1).
     resolved: ['settling'],

@@ -49,7 +49,10 @@ import { E2E_CONSENT_VERSIONS } from './consent-versions';
  * judgement since #152: the first registers it and the second approves it, which publishes the
  * 잠정 결과 (`judgeMarket`); the worker confirms it once its dispute window — the release setting
  * the suite's global setup enters while it is 미정 (global-setup.ts) — has passed, no 판정 이의
- * holding it (#175: only a member with a fill submits one, and nobody can trade until #119).
+ * holding it (#175: only a member with a fill submits one, and nobody can trade until #119). And
+ * in every 판정 정정 since #176: the first registers it and the second approves it — the next
+ * judgement version, its result and a new deadline of the first one's length (`registerCorrection`
+ * and `approveJudgementAsReviewer`) — or rejects it; while it waits, it holds the confirmation.
  *
  * Everything here is re-runnable against a persistent local database: a fresh email per
  * sign-up, a random tag in every market title and slug.
@@ -2161,6 +2164,12 @@ export interface JudgementOptions {
   collectedAt?: string;
   /** What was confirmed: HELPER_JUDGEMENT_DESCRIPTION unless given. */
   description?: string;
+  /**
+   * A 판정 정정's own part (#176, ADR-0105): the version it replaces and its 정정 사유 — the
+   * other fields are then the new version's in full. Null, a first judgement, unless given
+   * (`registerCorrection` gives it).
+   */
+  correction?: { baseVersion: number; reason: string } | null;
 }
 
 /** An evidence link of a spec's judgement: https, under the market's own path, `n` apart. */
@@ -2172,7 +2181,9 @@ export function judgementEvidenceLink(marketId: string, n = 1): string {
  * 판정 등록 (#152, ADR-0103; ADR-0093 decision 3 the #152 rows) through
  * `POST /admin/markets/:id/judgements` as the admin `context` is signed in as (ADR-0092): the
  * answer as it came, for a spec that reads a refusal. The body is `options` over a YES on the 1차
- * 출처 with one evidence link — no market price, volume or majority goes in it (#152 AC 8).
+ * 출처 with one evidence link — no market price, volume or majority goes in it (#152 AC 8) — and,
+ * for a 판정 정정 (#176), its `correction`; `correction: null` for a first judgement, which the API
+ * also takes left out.
  */
 export async function sendJudgementRegistration(
   context: APIRequestContext,
@@ -2197,6 +2208,7 @@ export async function sendJudgementRegistration(
         collectedAt: options.collectedAt ?? new Date(Date.now() - 5 * MINUTE_MS).toISOString(),
       },
       description: options.description ?? HELPER_JUDGEMENT_DESCRIPTION,
+      correction: options.correction ?? null,
       expectedAccountId: await accountIdOf(context),
     },
   });
@@ -2206,7 +2218,7 @@ export async function sendJudgementRegistration(
  * `sendJudgementRegistration` as `admin`, which must be taken: the market as the registration
  * left it — still CLOSED, nothing published (#173 item 1) — with the registration in
  * `judgement.pending`, what `approveJudgementAsReviewer` decides. The market must be CLOSED, the
- * dispute window decided and no other registration waiting.
+ * dispute window decided and no other registration waiting. A 판정 정정 is `registerCorrection`'s.
  */
 export async function registerJudgement(
   admin: APIRequestContext,
@@ -2253,8 +2265,11 @@ async function pendingJudgementOf(context: APIRequestContext, marketId: string):
  * reason and the confirmation of the NO condition's event deadline, which an approval before the
  * scheduled judgement needs (decision 3 '등록 시점') and every spec market's comes before (its
  * scheduled judgement is days out, `timesFor`), naming the waiting registration (`requestId`, read
- * when not given). The answer is the market PROVISIONAL with its result, judgement v1 and the
- * dispute deadline the window fixed; the approval publishes `market:status`.
+ * when not given). The answer is the market PROVISIONAL with its result and its dispute deadline:
+ * for a first judgement judgement v1 and the deadline the window fixed; for a 판정 정정 (#176,
+ * `registerCorrection`) the next version, the correction's result and a new deadline of the
+ * replaced version's length from the approval (#173 item 5). The approval publishes
+ * `market:status` — a correction's under a newer event (ADR-0105).
  */
 export async function approveJudgementAsReviewer(
   admin: APIRequestContext,
@@ -2273,7 +2288,9 @@ export async function approveJudgementAsReviewer(
 
 /**
  * 철회 (#152) of the registration waiting on a market by its registrant `admin`, in any status. The
- * answer is the market with no registration waiting and its status as it was.
+ * answer is the market with no registration waiting and its status as it was — for a 판정 정정
+ * (#176) its version and deadline too, the confirmation following them again (past the deadline
+ * the API queues it at once, ADR-0105).
  */
 export async function retractJudgement(
   admin: APIRequestContext,
@@ -2287,8 +2304,8 @@ export async function retractJudgement(
 /**
  * Retracts the registration `context`'s admin left waiting on a market, so a run that failed
  * halfway leaves the 판정 승인 대기 list of a persistent database no longer (a waiting registration
- * never expires). Best effort, for a `finally`: nothing when none waits, or when another admin
- * registered it.
+ * never expires — and a waiting 판정 정정 holds the market's confirmation, #176). Best effort, for
+ * a `finally`: nothing when none waits, or when another admin registered it.
  */
 export async function leaveNoJudgement(
   context: APIRequestContext,
@@ -2303,7 +2320,8 @@ export async function leaveNoJudgement(
  * `result` on the 1차 출처 (무효 on none, with its reason) and the second seed admin approves it
  * (`approveJudgementAsReviewer`). The answer is the market PROVISIONAL — its 잠정 결과 public at once
  * — and the worker confirms it once its dispute deadline passes (`waitForResolved`): no spec
- * holds it with a 판정 이의 (#175, ADR-0104 — none can submit one without a fill, #119). The API,
+ * holds it with a 판정 이의 (#175, ADR-0104 — none can submit one without a fill, #119), and a 판정
+ * 정정 (#176, `registerCorrection`) holds it only until the spec approves or rejects it. The API,
  * not the UI: judgement.spec.ts walks the screens. A 무효 judged here goes on, once confirmed, to
  * stay 지급 중 with a failed step until #126 pays 무효 (ADR-0103) — on a database kept between runs,
  * so the specs leave a 무효 judgement at its registration. Retracts what it left waiting on a
@@ -2329,10 +2347,94 @@ export async function judgeMarket(
   }
 }
 
+// ---- 판정 정정 (#176) ------------------------------------------------------------------------
+
+/** The 정정 사유 every helper correction gives unless told otherwise (1..500 characters). */
+export const HELPER_CORRECTION_REASON =
+  '자동화 테스트의 판정 정정입니다. 1차 출처가 발표를 정정했습니다.';
+
+/** What every helper correction says was confirmed unless told otherwise (1..500 characters). */
+export const HELPER_CORRECTION_DESCRIPTION =
+  '자동화 테스트의 정정한 판정입니다. 1차 출처의 정정 발표를 확인했습니다.';
+
+export interface CorrectionOptions extends Omit<JudgementOptions, 'correction'> {
+  /** The version it replaces: the market's current one unless given (another is 'stale'). */
+  baseVersion?: number;
+  /** The 정정 사유: HELPER_CORRECTION_REASON unless given. */
+  reason?: string;
+}
+
+/**
+ * 판정 정정 (#176, ADR-0105; ADR-0093 decision 1 #173 items 2·5·7·8) of a PROVISIONAL market as
+ * `admin`, which must be taken, through the registration route with its `correction`: `options`
+ * over the current judgement's 1차 출처 with the other of YES and NO for its result, the evidence
+ * link of the next version (`judgementEvidenceLink(marketId, version + 1)`) and
+ * HELPER_CORRECTION_DESCRIPTION, so the result and its grounds change (one that changes nothing is
+ * refused 'unchanged', #173 item 7). A 무효 base takes a `result`: a spec never approves a 무효,
+ * which stays 지급 중 until #126. The answer is the market as the registration left it — still
+ * PROVISIONAL with its version, result and deadline, the correction in `judgement.pending`, what
+ * `approveJudgementAsReviewer` approves — and the confirmation is held while it waits, past the
+ * deadline too (decision 3 '#176 정정 대기'). So it is registered within the version's dispute
+ * window: at the deadline the worker confirms a market nothing holds, and a confirmed one takes no
+ * correction (#173 item 8). Any admin may register it, the version's registrant and approver too.
+ */
+export async function registerCorrection(
+  admin: APIRequestContext,
+  marketId: string,
+  options: CorrectionOptions = {},
+): Promise<AdminMarket> {
+  const { baseVersion, reason, ...judgement } = options;
+  const market = await unwrap<AdminMarket>(await admin.get(`/api/v1/admin/markets/${marketId}`));
+  const base = market.judgement.current;
+  if (base === null) throw new Error(`market ${marketId} has no judgement to correct`);
+  if (judgement.result === undefined && base.result === 'VOID') {
+    throw new Error(`market ${marketId} was judged 무효: give the correction its result`);
+  }
+  const registered = await unwrap<AdminMarket>(
+    await sendJudgementRegistration(admin, marketId, {
+      ...judgement,
+      result: judgement.result ?? (base.result === 'YES' ? 'NO' : 'YES'),
+      links: judgement.links ?? [judgementEvidenceLink(marketId, base.version + 1)],
+      description: judgement.description ?? HELPER_CORRECTION_DESCRIPTION,
+      correction: {
+        baseVersion: baseVersion ?? base.version,
+        reason: reason ?? HELPER_CORRECTION_REASON,
+      },
+    }),
+  );
+  if ((registered.judgement.pending?.correction ?? null) === null) {
+    throw new Error(`market ${marketId} has no waiting correction after its registration`);
+  }
+  return registered;
+}
+
+/**
+ * Retracts the 판정 정정 `context`'s admin left waiting on a market (`leaveNoJudgement` for a
+ * correction alone), so a run that failed halfway leaves no market of a persistent database held:
+ * a waiting correction holds the confirmation and never expires (decision 3 '#176 정정 대기'), and
+ * its 철회 lets the worker confirm the version as it stands. Best effort, for a `finally`: nothing
+ * when none waits, when a first judgement waits, or when another admin registered it.
+ */
+export async function leaveNoCorrection(
+  context: APIRequestContext,
+  marketId: string,
+): Promise<void> {
+  const retract = async () => {
+    const market = await unwrap<AdminMarket>(
+      await context.get(`/api/v1/admin/markets/${marketId}`),
+    );
+    const pending = market.judgement.pending;
+    if (pending === null || pending.correction === null) return;
+    await retractJudgement(context, marketId, pending.requestId);
+  };
+  await retract().catch(() => undefined);
+}
+
 /**
  * How long a spec waits, from now, for the worker to confirm `market`'s 잠정 결과: until its
- * dispute deadline (`AdminMarket.disputeDeadline`, fixed at the approval) and
- * RESOLVE_AFTER_DEADLINE_MS past it. Throws for a market with no deadline: none is PROVISIONAL.
+ * dispute deadline (`AdminMarket.disputeDeadline`, fixed at the approval of its current version —
+ * a 판정 정정's approval gives a new one, #176) and RESOLVE_AFTER_DEADLINE_MS past it. Throws for a
+ * market with no deadline: none is PROVISIONAL.
  */
 export function resolveWaitMs(
   market: Pick<AdminMarket, 'id' | 'disputeDeadline'>,
@@ -2348,7 +2450,9 @@ export function resolveWaitMs(
  * Waits, polling the admin detail through the API, until the worker has confirmed the 잠정 결과
  * of a market (`judgeMarket`) — PROVISIONAL → RESOLVED at its dispute deadline (#173 item 1), no
  * 판정 이의 holding it (#175, none here can), and from there on to 지급 중 and 지급 완료 at once —
- * and answers the market as it then reads. Skips
+ * and answers the market as it then reads. The deadline is read once, at the start
+ * (`resolveWaitMs`): with a 판정 정정 (#176) a spec calls this once the correction is approved — the
+ * new deadline — or rejected, never while it waits and holds the market. Skips
  * the test when that cannot be waited for (`skipUnlessResolvable`): a spec calls that before it
  * makes anything, so this is a backstop.
  */

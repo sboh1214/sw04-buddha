@@ -1,6 +1,7 @@
 import {
   HOLDING_DISPUTE_STATUSES,
   MARKET_DISPUTE_DECISION_STATUSES,
+  MARKET_JUDGEMENT_APPROVAL_KIND,
   approvalReasonSchema,
   disputeDecisionRefusal,
   disputeLinksSchema,
@@ -15,11 +16,18 @@ import {
   type MarketDisputeDecision,
   type MarketStatus,
 } from '@buddha/shared';
-import { and, asc, desc, eq, gt, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { alias } from 'drizzle-orm/pg-core';
 import type * as schema from './schema/index.js';
-import { marketDisputes, marketJudgements, markets, orders, profiles } from './schema/index.js';
+import {
+  approvalRequests,
+  marketDisputes,
+  marketJudgements,
+  markets,
+  orders,
+  profiles,
+} from './schema/index.js';
 
 type MarketRow = typeof markets.$inferSelect;
 
@@ -36,15 +44,19 @@ type Reader = Pick<NodePgDatabase<typeof schema>, 'select'>;
  * 판정 이의 (#175, ADR-0104; ADR-0093 decision 1 #173 items 1·2·5–8·13·15, decision 3 '#176 정정
  * 대기', the owner's answers of 2026-11-02 and 2026-11-03): the one place a dispute is written, as a
  * judgement is `approveMarketJudgement`'s — `submitMarketDispute` (a member, while the 이의 기한 is
- * ahead), `retractMarketDispute` (its submitter, likewise) and `decideMarketDispute` (기각·수용, one
- * admin other than the version's registrant) — each keeping `markets.dispute_hold_count` in the
- * same transaction, and the one place the hold is asked (`confirmationHold`, and
- * `marketConfirmationHeld` for the worker's scan), which #176 extends with its pending correction.
- * Each writer is called under `lockMarket`, with the market read `FOR UPDATE` after the lock and
- * `now` the DB clock read after the last lock, in the caller's transaction; each writes no admin
- * action (the API's) and publishes nothing (the caller republishes `market:status` after COMMIT).
- * Never the confirmation: the worker alone confirms (ADR-0103 9-12), the API registering
- * `market.resolve` after the last dismissal past the deadline.
+ * ahead), `retractMarketDispute` (its submitter, likewise), `decideMarketDispute` (기각·수용, one
+ * admin other than the version's registrant), and for a 판정 정정 (#176, ADR-0105)
+ * `closeDisputesForCorrection` (정정으로 종결, inside `correctMarketJudgement`) and
+ * `reopenAcceptedDisputes` (a rejected or retracted correction's accepted disputes back to
+ * pending) — each keeping `markets.dispute_hold_count` in the same transaction (the closing's is
+ * set to 0 with the version it moves), and the one place the hold is asked (`confirmationHold`,
+ * and `marketConfirmationHeld` for the worker's scan): a holding dispute of the current version,
+ * or a waiting correction. Each writer is called under `lockMarket`, with the market read `FOR
+ * UPDATE` after the lock and `now` the DB clock read after the last lock, in the caller's
+ * transaction; each writes no admin action (the API's) and publishes nothing (the caller
+ * republishes `market:status` after COMMIT). Never the confirmation: the worker alone confirms
+ * (ADR-0103 9-12), the API registering `market.resolve` after the last dismissal past the
+ * deadline, or after a correction's 반려 or 철회 that leaves nothing holding past it.
  */
 
 /** HOLDING_DISPUTE_STATUSES as SQL literals, as the WHERE of `market_disputes_holding_idx`. */
@@ -59,12 +71,30 @@ function holdingDisputesOf(marketId: SQLWrapper | string, version: SQLWrapper | 
   return sql`${marketDisputes.marketId} = ${marketId} AND ${marketDisputes.judgementVersion} = ${version} AND ${marketDisputes.status} IN (${HOLDING_SQL})`;
 }
 
+/** MARKET_JUDGEMENT_APPROVAL_KIND as an SQL literal, as the hold spells it. */
+const JUDGEMENT_KIND_SQL = sql.raw(`'${MARKET_JUDGEMENT_APPROVAL_KIND}'`);
+
 /**
- * Whether something holds a PROVISIONAL market's confirmation past its 이의 기한 (#173 items 1·7):
- * a dispute of its current judgement version that is pending or accepted — an accepted one waits
- * for its correction (#176), and goes back to pending if that is rejected (owner answer
- * 2026-11-02). The authoritative read, never the `dispute_hold_count` mirror. #176 adds its pending
- * correction here and in `marketConfirmationHeld`. False for a market with no judgement.
+ * The `market_judgement` requests waiting on market `marketId` — a column of an outer query (the
+ * uuid cast to text, as `target_id` holds it) or a value — by the approval requests' indexes: one
+ * market's in `approval_requests_target_idx`, the waiting ones of a scan in
+ * `approval_requests_pending_requested_at_idx` (#176, decision 3 '#176 정정 대기'). Any waiting
+ * one, without reading its payload: on a PROVISIONAL market only a correction waits through the
+ * routes (a first judgement's needs CLOSED), so this errs toward holding.
+ */
+function waitingJudgementsOf(marketId: SQL | string): SQL {
+  return sql`${approvalRequests.targetType} = 'market' AND ${approvalRequests.targetId} = ${marketId} AND ${approvalRequests.kind} = ${JUDGEMENT_KIND_SQL} AND ${approvalRequests.status} = 'pending'`;
+}
+
+/**
+ * Whether something holds a PROVISIONAL market's confirmation past its 이의 기한 (#173 items 1·7;
+ * decision 3 '#176 정정 대기'): a dispute of its current judgement version that is pending or
+ * accepted — an accepted one waits for a correction, and goes back to pending if the one
+ * registered for it is rejected or retracted (owner answer 2026-11-02) — or a waiting
+ * `market_judgement` request, a correction (#176, ADR-0105: its 반려 or 철회 carries on with the
+ * version's deadline and disputes, its approval makes the next version with a new deadline). The
+ * authoritative read, never the `dispute_hold_count` or `correction_pending` mirror. False for a
+ * market with no judgement.
  */
 export async function confirmationHold(
   executor: Reader,
@@ -76,16 +106,26 @@ export async function confirmationHold(
     .from(marketDisputes)
     .where(holdingDisputesOf(market.id, market.judgementVersion))
     .limit(1);
-  return held !== undefined;
+  if (held !== undefined) return true;
+  const [waiting] = await executor
+    .select({ id: approvalRequests.id })
+    .from(approvalRequests)
+    .where(waitingJudgementsOf(market.id))
+    .limit(1);
+  return waiting !== undefined;
 }
 
 /**
  * `confirmationHold` as SQL about the `markets` row of the outer query — `EXISTS` of a holding
- * dispute of its current version — for the worker's scan (`dueProvisionalMarkets`), so a held
- * market takes no slot of its batch. Each market is one lookup in `market_disputes_holding_idx`.
+ * dispute of its current version, or of a waiting `market_judgement` request (#176) — for the
+ * worker's scan (`dueProvisionalMarkets`), so a held market takes no slot of its batch. Read by
+ * index, never by a sequential scan: the holding disputes in `market_disputes_holding_idx`, the
+ * waiting requests in `approval_requests_pending_requested_at_idx` (a queue's few rows, which the
+ * planner hashes once for the batch) or `approval_requests_target_idx` (per market), as it costs
+ * them — the schema test reads the plan.
  */
 export function marketConfirmationHeld(): SQL {
-  return sql`EXISTS (SELECT 1 FROM ${marketDisputes} WHERE ${holdingDisputesOf(markets.id, markets.judgementVersion)})`;
+  return sql`(EXISTS (SELECT 1 FROM ${marketDisputes} WHERE ${holdingDisputesOf(markets.id, markets.judgementVersion)}) OR EXISTS (SELECT 1 FROM ${approvalRequests} WHERE ${waitingJudgementsOf(sql`${markets.id}::text`)}))`;
 }
 
 /**
@@ -110,9 +150,9 @@ export async function hasMarketFill(
 }
 
 /**
- * One more (+1), one fewer (−1) or as many (0, an acceptance) holding disputes on the market's
- * mirror, and `updated_at` at the write's instant — the `ts` its republished `market:status`
- * carries — read back.
+ * One more (+1), one fewer (−1) or as many (0, an acceptance or a reopening) holding disputes on
+ * the market's mirror, and `updated_at` at the write's instant — the `ts` its republished
+ * `market:status` carries — read back.
  */
 async function moveHoldCount(
   tx: Executor,
@@ -261,14 +301,16 @@ export type RetractMarketDisputeResult =
 
 /**
  * 판정 이의 철회 (#175; #173 item 6 '기한 안에 철회할 수 있다'): the submitter takes back a dispute
- * that is pending while its version's 이의 기한 is ahead (`now < deadline`); a decided or retracted
- * one, or one whose deadline has come — it has become the reason the market waits — is refused
- * (`disputeRetractionRefusal` of @buddha/shared, status first). Whose it is is the caller's
- * question (another account's is NOT_FOUND). It stays the one of its version: no second dispute.
+ * that is pending while its version's 이의 기한 is ahead (`now < deadline`); a decided, retracted
+ * or correction-closed one (#176: `decided`), or one whose deadline has come — it has become the
+ * reason the market waits — is refused (`disputeRetractionRefusal` of @buddha/shared, status
+ * first). Whose it is is the caller's question (another account's is NOT_FOUND). It stays the
+ * one of its version: no second dispute.
  *
  * The dispute `retracted` at `now`, and one fewer on `markets.dispute_hold_count`. A pending
- * dispute of a version that is not the market's current one throws: #176 closes those when it
- * moves the version.
+ * dispute of a version that is not the market's current one throws: a correction closes those
+ * when it moves the version (`closeDisputesForCorrection`, #176). A dispute a rejected or
+ * retracted correction sent back to pending is retractable again while the deadline is ahead.
  */
 export async function retractMarketDispute(
   tx: Executor,
@@ -336,13 +378,16 @@ export type DecideMarketDisputeResult =
  * it (a correction, #176), with a reason the submitter reads. A dispute no longer pending is
  * refused (`disputeDecisionRefusal` of @buddha/shared, status first: `retracted`, `decided`); a
  * decision by the registrant or by the submitter throws — the API refuses it first (`registrant`,
- * `own`), and here it is a caller's bug, as an approval by its registrant is. Final: no decision is
- * undone (#176 adds accepted → pending for a rejected correction, owner answer 2026-11-02). The
- * market's status is not asked again: a pending dispute exists only on a PROVISIONAL market of its
- * version. Admins who declared an interest (#173 item 15) are #143's to keep out.
+ * `own`), and here it is a caller's bug, as an approval by its registrant is. A dismissal is final;
+ * an acceptance is undone only when the correction registered for it is rejected or retracted
+ * (`reopenAcceptedDisputes`, owner answer 2026-11-02; #176), and the dispute, pending again, is
+ * decided here again. The market's status is not asked again: a pending dispute exists only on a
+ * PROVISIONAL market of its version. Admins who declared an interest (#173 item 15) are #143's to
+ * keep out.
  *
  * The dispute `dismissed` or `accepted`, the admin, `now` and the reason; a dismissal takes one
- * off `markets.dispute_hold_count` — an accepted dispute still holds until its correction.
+ * off `markets.dispute_hold_count` — an accepted dispute still holds until a correction moves the
+ * version. `held` reads a waiting correction too (`confirmationHold`).
  */
 export async function decideMarketDispute(
   tx: Executor,
@@ -388,14 +433,121 @@ export async function decideMarketDispute(
   return { decided: true, dispute: decided, market: row, held: await confirmationHold(tx, row) };
 }
 
+/** Oldest submission first, then the id: the order a version's disputes are read in. */
+const bySubmission = (a: MarketDisputeRow, b: MarketDisputeRow) =>
+  a.submittedAt.getTime() - b.submittedAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+
+export interface CloseDisputesForCorrectionInput {
+  /**
+   * The market row the caller read `FOR UPDATE` after `lockMarket`, before the correction moves
+   * it: its `judgement_version` is the version replaced.
+   */
+  market: Pick<MarketRow, 'id' | 'judgementVersion'>;
+  /** The correction's approval instant: each closure's `closed_at`. */
+  now: Date;
+}
+
+/**
+ * 정정으로 종결 (#176, ADR-0105; ADR-0093 decision 1 #173 item 8): the pending disputes of the
+ * version a correction's approval replaces, `closed_by_correction` at `now` — no decider, no
+ * reason; their submitters may dispute the new version within its new deadline. The accepted ones
+ * stay accepted: the correction answers them, and they hold nothing once the version moved. Only
+ * `correctMarketJudgement` calls it, before it moves the version (ADR-0104 결과 5), so no pending
+ * dispute is ever left on an old version (`retractMarketDispute`, `decideMarketDispute` assume
+ * none); the mirror is set to 0 by that same move, not here. Returns the closed disputes, the
+ * oldest submission first; none when none was pending. A market with no judgement throws.
+ */
+export async function closeDisputesForCorrection(
+  tx: Executor,
+  { market, now }: CloseDisputesForCorrectionInput,
+): Promise<MarketDisputeRow[]> {
+  if (market.judgementVersion === null) {
+    throw new Error(`Market ${market.id} has no judgement whose disputes a correction closes`);
+  }
+  const closed = await tx
+    .update(marketDisputes)
+    .set({ status: 'closed_by_correction', closedAt: now })
+    .where(
+      and(
+        eq(marketDisputes.marketId, market.id),
+        eq(marketDisputes.judgementVersion, market.judgementVersion),
+        eq(marketDisputes.status, 'pending'),
+      ),
+    )
+    .returning();
+  return closed.sort(bySubmission);
+}
+
+export interface ReopenAcceptedDisputesInput {
+  /** The market row the caller read `FOR UPDATE` after `lockMarket`: its current version. */
+  market: Pick<MarketRow, 'id' | 'judgementVersion'>;
+  /**
+   * The accepted disputes the rejected or retracted correction answered — its request's frozen
+   * `correction.disputeIds` (the server listed them at the registration).
+   */
+  disputeIds: readonly string[];
+  /** The DB clock read after the locks: the market's `updated_at`. */
+  now: Date;
+}
+
+export interface ReopenAcceptedDisputesResult {
+  /** The disputes sent back to pending, the oldest submission first (none when none was left). */
+  disputes: MarketDisputeRow[];
+  /** The market row read back: `dispute_hold_count` as it was (both statuses hold), `now`. */
+  market: MarketRow;
+}
+
+/**
+ * accepted → pending (#176, ADR-0105; owner answer 2026-11-02): when a correction is rejected —
+ * or retracted by its registrant, this PR's choice: the correction the dispute waited for is gone
+ * either way — the disputes it was registered for (`disputeIds`) that are still `accepted` on the
+ * market's current version go back to pending, their decision cleared (`decided_by`, `decided_at`
+ * and `decision_reason`, as market_disputes_decision_check holds; the acceptance stays in
+ * `admin_actions` `market_dispute_accept` and the frozen request) and their submission kept, so
+ * they rejoin the queue by their submission. An admin who did not register the version dismisses
+ * one or accepts it again with a new correction (`decideMarketDispute`); its submitter may retract
+ * it again before the deadline. A dispute accepted after the registration is not among them and
+ * stays accepted; one of another market or version, or no longer accepted, is left as it is. The
+ * market stays PROVISIONAL at its version, its deadline as it was; the mirror does not move.
+ */
+export async function reopenAcceptedDisputes(
+  tx: Executor,
+  { market, disputeIds, now }: ReopenAcceptedDisputesInput,
+): Promise<ReopenAcceptedDisputesResult> {
+  const reopened =
+    disputeIds.length === 0 || market.judgementVersion === null
+      ? []
+      : await tx
+          .update(marketDisputes)
+          .set({ status: 'pending', decidedBy: null, decidedAt: null, decisionReason: null })
+          .where(
+            and(
+              inArray(marketDisputes.id, [...disputeIds]),
+              eq(marketDisputes.marketId, market.id),
+              eq(marketDisputes.judgementVersion, market.judgementVersion),
+              eq(marketDisputes.status, 'accepted'),
+            ),
+          )
+          .returning();
+  return {
+    disputes: reopened.sort(bySubmission),
+    market: await moveHoldCount(tx, market.id, 0, now),
+  };
+}
+
 // ---- readers --------------------------------------------------------------------------------
 
-/** The market a dispute is about, as the member's and the operators' lists link to it. */
+/**
+ * The market a dispute is about, as the member's and the operators' lists link to it, with its
+ * current judgement version: a dispute of an older one is of a version a correction replaced
+ * (#176).
+ */
 export interface DisputeMarketRef {
   id: string;
   slug: string;
   title: string;
   status: MarketStatus;
+  judgementVersion: number;
 }
 
 /** A dispute as the operators read it: with its submitter's and decider's nicknames. */
@@ -437,7 +589,19 @@ const marketRef = {
   slug: markets.slug,
   title: markets.title,
   status: markets.status,
+  judgementVersion: markets.judgementVersion,
 };
+
+/** `marketRef` as read: a disputed market has a judgement (the dispute's foreign key names one). */
+function marketRefOf(
+  market: Omit<DisputeMarketRef, 'judgementVersion'> & {
+    judgementVersion: number | null;
+  },
+): DisputeMarketRef {
+  const { judgementVersion } = market;
+  if (judgementVersion === null) throw new Error(`Disputed market ${market.id} has no judgement`);
+  return { ...market, judgementVersion };
+}
 
 /** The row comparison of a keyset page, both halves bound and cast (apps/api `keysetPredicate`). */
 function keysetBound(key: SQLWrapper, after: Keyset, direction: 'before' | 'after'): SQL {
@@ -483,17 +647,21 @@ export async function readMarketDisputes(
   }));
 }
 
-/** The 처리됨 half's key: when it was decided or retracted (`market_disputes_ended_at_idx`). */
-const endedAt = sql<Date>`coalesce(${marketDisputes.decidedAt}, ${marketDisputes.retractedAt})`;
+/**
+ * The 처리됨 half's key: when it was decided, retracted or closed by a correction (#176) — one of
+ * them exactly — as `market_disputes_ended_at_idx` spells it.
+ */
+const endedAt = sql<Date>`coalesce(${marketDisputes.decidedAt}, ${marketDisputes.retractedAt}, ${marketDisputes.closedAt})`;
 
 /**
  * 이의 접수 (`GET /admin/market-disputes`, #175): `pending` — 검토 대기, the oldest submission first
  * over `(submitted_at, id)` ascending (`market_disputes_pending_submitted_at_idx`), the keyset the
- * submission's — or `decided` — 처리됨, every dispute no longer pending (dismissed, accepted,
- * retracted; ADMIN_DISPUTE_LIST_STATUS_MEMBERS), the latest decision or retraction first over
- * `(coalesce(decided_at, retracted_at), id)` descending (`market_disputes_ended_at_idx`), the
- * keyset that instant's. Each with its market and the two nicknames; no price, majority or
- * position (N03 §5).
+ * submission's, a dispute a rejected or retracted correction reopened among them by its
+ * submission (#176) — or `decided` — 처리됨, every dispute no longer pending (dismissed, accepted,
+ * retracted, closed by a correction; ADMIN_DISPUTE_LIST_STATUS_MEMBERS), the latest end first over
+ * `(coalesce(decided_at, retracted_at, closed_at), id)` descending
+ * (`market_disputes_ended_at_idx`), the keyset that instant's. Each with its market (its current
+ * version too) and the two nicknames; no price, majority or position (N03 §5).
  */
 export async function readAdminDisputes(
   executor: Reader,
@@ -531,11 +699,12 @@ export async function readAdminDisputes(
     ...row.dispute,
     submitterNickname: row.submitterNickname,
     deciderNickname: row.deciderNickname,
-    market: row.market,
+    market: marketRefOf(row.market),
   }));
   return pageOf(items, limit, (item) => {
-    const at = pending ? item.submittedAt : (item.decidedAt ?? item.retractedAt);
-    // market_disputes_decision_check and _retracted_check: an ended dispute has its instant.
+    const at = pending ? item.submittedAt : (item.decidedAt ?? item.retractedAt ?? item.closedAt);
+    // market_disputes_decision_check, _retracted_check and _closed_check: an ended dispute has
+    // its instant.
     if (at === null) throw new Error(`Dispute ${item.id} ended with no instant`);
     return { createdAt: at, id: item.id };
   });
@@ -550,7 +719,8 @@ const memberDisputeColumns = {
 /**
  * MY 판정 이의 (`GET /me/disputes`, #175): `userId`'s disputes, the newest submission first over
  * `(submitted_at, id)` descending (`market_disputes_user_id_submitted_at_idx`), each with its
- * market and its version's 이의 기한. Never who decided one (#173 item 13): the DTO leaves
+ * market — its current version, so a dispute of a version a correction replaced reads as such
+ * (#176) — and its own version's 이의 기한. Never who decided one (#173 item 13): the DTO leaves
  * `decided_by` out.
  */
 export async function readMyDisputes(
@@ -579,7 +749,7 @@ export async function readMyDisputes(
     .limit(limit + 1);
   const items = rows.map(({ dispute, market, disputeDeadline }) => ({
     ...dispute,
-    market,
+    market: marketRefOf(market),
     disputeDeadline,
   }));
   return pageOf(items, limit, (item) => ({ createdAt: item.submittedAt, id: item.id }));
@@ -650,7 +820,7 @@ export async function readMyMarketDispute(
     eligibility: refusal ?? 'eligible',
     judgementVersion: version,
     dispute: row
-      ? { ...row.dispute, market: row.market, disputeDeadline: row.disputeDeadline }
+      ? { ...row.dispute, market: marketRefOf(row.market), disputeDeadline: row.disputeDeadline }
       : null,
   };
 }

@@ -13,6 +13,8 @@ const THIRD = 'third';
 const PENDING_ID = 'e1b07384-d9a0-4c9b-8e2f-2d1c0f8a4b11';
 const DISMISSED_ID = 'e2b07384-d9a0-4c9b-8e2f-2d1c0f8a4b12';
 const PURGED_ID = 'e3b07384-d9a0-4c9b-8e2f-2d1c0f8a4b13';
+const ACCEPTED_ID = 'e4b07384-d9a0-4c9b-8e2f-2d1c0f8a4b14';
+const CLOSED_ID = 'e5b07384-d9a0-4c9b-8e2f-2d1c0f8a4b15';
 
 const current: AdminMarketJudgement = {
   version: 1,
@@ -30,6 +32,7 @@ const current: AdminMarketJudgement = {
   approvalId: 'a1b2c3d4-0000-4000-8000-000000000001',
   registeredBy: REGISTRANT,
   approvedBy: APPROVER,
+  correctionReason: null,
 };
 
 const disputeOf = (id: string, fields: Partial<AdminMarketDispute> = {}): AdminMarketDispute => ({
@@ -42,6 +45,7 @@ const disputeOf = (id: string, fields: Partial<AdminMarketDispute> = {}): AdminM
   decidedAt: null,
   decisionReason: null,
   retractedAt: null,
+  closedAt: null,
   submitter: { id: 'member', nickname: '낸이' },
   decidedBy: null,
   purgedAt: null,
@@ -65,7 +69,7 @@ const held = {
   openInterest: { yes: 4321, no: 8765 },
   judgementVersion: 1,
   disputeDeadline: current.disputeDeadline,
-  judgement: { current, pending: null, log: [], disputeWindowUndecided: false },
+  judgement: { current, history: [], pending: null, log: [], disputeWindowUndecided: false },
   disputes: {
     holding: 1,
     items: [
@@ -88,10 +92,41 @@ const held = {
   },
 } as unknown as AdminMarket;
 
-const draw = (market: AdminMarket, operatorId: string | undefined) =>
+const draw = (
+  market: AdminMarket,
+  operatorId: string | undefined,
+  onCorrect?: () => void,
+  formOpen = false,
+) =>
   renderWithQueries(
-    <MarketDisputesBody market={market} operatorId={operatorId} onOpen={() => {}} />,
+    <MarketDisputesBody
+      market={market}
+      operatorId={operatorId}
+      onOpen={() => {}}
+      formOpen={formOpen}
+      onCorrect={onCorrect}
+    />,
   );
+
+/**
+ * The same market with an accepted dispute waiting for its correction (#176, ADR-0105) beside the
+ * pending one.
+ */
+const accepted = {
+  ...held,
+  disputes: {
+    holding: 2,
+    items: [
+      ...held.disputes.items,
+      disputeOf(ACCEPTED_ID, {
+        status: 'accepted',
+        decidedAt: '2026-11-30T07:00:00.000Z',
+        decisionReason: '출처가 정정 발표를 냈습니다.',
+        decidedBy: APPROVER,
+      }),
+    ],
+  },
+};
 
 const isOff = (html: string, testId: string) => {
   const element = byTestId(html, testId);
@@ -201,6 +236,97 @@ describe('MarketDisputesBody', () => {
     );
   });
 
+  it('offers 정정 등록 on an accepted one while a correction can be registered (#176)', () => {
+    const at = `market-judgement-dispute-${ACCEPTED_ID}`;
+    // Any admin, the judgement's registrant included (ADR-0105: as #152's registration).
+    for (const operator of [THIRD, REGISTRANT.id]) {
+      const html = draw(accepted, operator, () => {});
+      expect(byTestId(html, `${at}-correct`)?.text, operator).toBe(copy.adminMarketDisputeCorrect);
+      expect(isOff(html, `${at}-correct`), operator).toBe(false);
+      expect(byTestId(html, `${at}-dismiss`), operator).toBeUndefined();
+      expect(byTestId(html, `${at}-accept`), operator).toBeUndefined();
+    }
+    expect(
+      isOff(
+        draw(accepted, undefined, () => {}),
+        `${at}-correct`,
+      ),
+    ).toBe(true);
+    // None while one waits (one at a time), once confirmed, or with nothing to open.
+    const waiting = {
+      ...accepted,
+      judgement: { ...accepted.judgement, pending: {} },
+    } as unknown as AdminMarket;
+    expect(
+      byTestId(
+        draw(waiting, THIRD, () => {}),
+        `${at}-actions`,
+      ),
+    ).toBeUndefined();
+    const resolved = { ...accepted, status: 'resolved' } as AdminMarket;
+    expect(
+      byTestId(
+        draw(resolved, THIRD, () => {}),
+        `${at}-actions`,
+      ),
+    ).toBeUndefined();
+    expect(byTestId(draw(accepted, THIRD), `${at}-actions`)).toBeUndefined();
+  });
+
+  it('hides 정정 등록 while the panel’s form is open, kept drawn for focus to come back to (#176)', () => {
+    const at = `market-judgement-dispute-${ACCEPTED_ID}`;
+    // The form's own submit is named 정정 등록 too, and the row would open nothing more: hidden —
+    // out of sight and of the accessibility tree — but still drawn, so the panel can put focus
+    // back on the row that opened the form once it closes unsent (`useJudgementRefocus`).
+    const open = draw(accepted, THIRD, () => {}, true);
+    expect(byTestId(open, `${at}-actions`)?.attributes).toHaveProperty('hidden');
+    expect(byTestId(open, `${at}-correct`)?.text).toBe(copy.adminMarketDisputeCorrect);
+    expect(isOff(open, `${at}-correct`)).toBe(false);
+    // Closed, it is shown again.
+    expect(
+      byTestId(
+        draw(accepted, THIRD, () => {}),
+        `${at}-actions`,
+      )?.attributes,
+    ).not.toHaveProperty('hidden');
+    // The pending one's 기각 and 수용 are not the form's: they stay.
+    const pendingAt = `market-judgement-dispute-${PENDING_ID}`;
+    expect(byTestId(open, `${pendingAt}-actions`)?.attributes).not.toHaveProperty('hidden');
+    // The block gets it from the panel (`MarketDisputes`).
+    expect(
+      byTestId(
+        renderWithQueries(<MarketDisputes market={accepted} formOpen onCorrect={() => {}} />, [
+          [ME_QUERY_KEY, { id: THIRD }],
+        ]),
+        `${at}-actions`,
+      )?.attributes,
+    ).toHaveProperty('hidden');
+  });
+
+  it('shows a dispute a correction closed with its closing time and no action (#176)', () => {
+    const closed = {
+      ...held,
+      disputes: {
+        holding: 0,
+        items: [
+          disputeOf(CLOSED_ID, {
+            status: 'closed_by_correction',
+            closedAt: '2026-11-30T08:00:00.000Z',
+          }),
+        ],
+      },
+    };
+    const at = `market-judgement-dispute-${CLOSED_ID}`;
+    const html = draw(closed, THIRD, () => {});
+    expect(byTestId(html, `${at}`)?.attributes['data-status']).toBe('closed_by_correction');
+    expect(byTestId(html, `${at}-status`)?.text).toBe(copy.disputeStatusClosedByCorrection);
+    expect(byTestId(html, `${at}-closed-at`)?.text).toBe(
+      `${copy.adminDisputeClosedAt} ${formatKst('2026-11-30T08:00:00.000Z')}`,
+    );
+    expect(byTestId(html, `${at}-decision`)).toBeUndefined();
+    expect(byTestId(html, `${at}-actions`)).toBeUndefined();
+  });
+
   it('says none is filed, and holds no count then', () => {
     const empty = { ...held, disputes: { holding: 0, items: [] } } as AdminMarket;
     const html = draw(empty, THIRD);
@@ -211,7 +337,7 @@ describe('MarketDisputesBody', () => {
   });
 
   it('names each element once and draws no market price, volume or count (#152 AC 8)', () => {
-    const html = draw(held, REGISTRANT.id);
+    const html = draw(accepted, REGISTRANT.id, () => {});
     const ids = testIdsStartingWith(html, 'market-judgement-dispute');
     expect(ids.length).toBeGreaterThan(20);
     expect(ids.filter((id, at) => ids.indexOf(id) !== at)).toEqual([]);
@@ -236,7 +362,13 @@ describe('MarketDisputes', () => {
   it('draws nothing before a judgement, and the block from one on', () => {
     const before = {
       ...held,
-      judgement: { current: null, pending: null, log: [], disputeWindowUndecided: false },
+      judgement: {
+        current: null,
+        history: [],
+        pending: null,
+        log: [],
+        disputeWindowUndecided: false,
+      },
     } as AdminMarket;
     expect(renderWithQueries(<MarketDisputes market={before} />)).toBe('');
     const html = renderWithQueries(<MarketDisputes market={held} />, [

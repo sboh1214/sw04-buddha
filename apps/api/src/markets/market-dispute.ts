@@ -1,6 +1,7 @@
 import {
   readMarketDisputes,
   type AdminDisputeRead,
+  type DisputeMarketRef,
   type MarketDisputeRead,
   type MemberDisputeRead,
 } from '@buddha/db';
@@ -23,9 +24,11 @@ import { type MarketRow } from './market.service.js';
  * 판정 이의 (#175, ADR-0104; market-dispute.ts in @buddha/shared and @buddha/db) as the API answers
  * it: the refusal, the member's form of a dispute (`MyDispute`, never the decider — #173 item 13)
  * and the operators' (`AdminMarketDispute`, the submitter and the decider named as every admin
- * record names an account: the id and the current nickname, null once its member closed it).
- * Nothing here is public: the public `Market` carries the deadline, the version and the flags
- * (`toMarketSummary`), and the count, the statuses and the reasons are #24's to publish.
+ * record names an account: the id and the current nickname, null once its member closed it), each
+ * with its market's current judgement version — a dispute of an older one is of a version a 판정
+ * 정정 replaced (#176, ADR-0105). Nothing here is public: the public `Market` carries the deadline,
+ * the version and the flags (`toMarketSummary`), and the count, the statuses and the reasons are
+ * #24's to publish.
  */
 
 const MESSAGES: Readonly<Record<DisputeNotAllowedReason, string>> = {
@@ -49,7 +52,19 @@ export function disputeNotAllowed(reason: DisputeNotAllowedReason): AppError {
 
 const iso = (at: Date | null) => at?.toISOString() ?? null;
 
-/** What a dispute says and how it ended: the submitter's and the operators' alike. */
+/** The market a dispute links to (`DisputeMarket`), its current judgement version among it. */
+const disputeMarketOf = ({ id, slug, title, status, judgementVersion }: DisputeMarketRef) => ({
+  id,
+  slug,
+  title,
+  status,
+  judgementVersion,
+});
+
+/**
+ * What a dispute says and how it ended — decided, retracted or closed by a correction (#176) —
+ * the submitter's and the operators' alike.
+ */
 function disputeFieldsOf(row: MarketDisputeRead | MemberDisputeRead) {
   return {
     id: row.id,
@@ -61,6 +76,7 @@ function disputeFieldsOf(row: MarketDisputeRead | MemberDisputeRead) {
     decidedAt: iso(row.decidedAt),
     decisionReason: row.decisionReason,
     retractedAt: iso(row.retractedAt),
+    closedAt: iso(row.closedAt),
   };
 }
 
@@ -73,12 +89,7 @@ function disputeFieldsOf(row: MarketDisputeRead | MemberDisputeRead) {
 export function toMyDispute(row: MemberDisputeRead, nowMs: number): MyDispute {
   return {
     ...disputeFieldsOf(row),
-    market: {
-      id: row.market.id,
-      slug: row.market.slug,
-      title: row.market.title,
-      status: row.market.status,
-    },
+    market: disputeMarketOf(row.market),
     retractable: disputeRetractionRefusal(row, row.disputeDeadline, nowMs) === null,
   };
 }
@@ -99,12 +110,7 @@ export function toAdminMarketDispute(row: MarketDisputeRead): AdminMarketDispute
 export function toAdminDisputeQueueItem(row: AdminDisputeRead): AdminDisputeQueueItem {
   return {
     ...toAdminMarketDispute(row),
-    market: {
-      id: row.market.id,
-      slug: row.market.slug,
-      title: row.market.title,
-      status: row.market.status,
-    },
+    market: disputeMarketOf(row.market),
   };
 }
 

@@ -96,14 +96,17 @@ export type MarketPauseDecisionLogEntry = components['schemas']['MarketPauseDeci
 export type AdminMarketPauseDecisionItem = components['schemas']['AdminMarketPauseDecisionItem'];
 /**
  * 판정 등록과 별도 검토자 승인 (#152, ADR-0103): `AdminMarket.judgement` — the current judgement,
- * the registration waiting on the market and every registration — one judgement, a registration
- * waiting and one entry of the log, a source as a judgement names it, the registration's body and
- * a row of the 판정 승인 대기 queue (`GET /admin/market-judgements`).
+ * the versions a correction replaced (`history`, #176, ADR-0105), the registration waiting on the
+ * market and every registration — one judgement, a registration waiting and one entry of the log,
+ * what a correction's registration says (`correction`: the version it replaces, its reason and
+ * the accepted disputes registered with it), a source as a judgement names it, the registration's
+ * body and a row of the 판정 승인 대기 queue (`GET /admin/market-judgements`).
  */
 export type AdminMarketJudgementState = components['schemas']['AdminMarketJudgementState'];
 export type AdminMarketJudgement = components['schemas']['AdminMarketJudgement'];
 export type MarketJudgementPending = components['schemas']['MarketJudgementPending'];
 export type MarketJudgementLogEntry = components['schemas']['MarketJudgementLogEntry'];
+export type MarketJudgementCorrection = components['schemas']['MarketJudgementCorrection'];
 export type JudgementSource = components['schemas']['JudgementSource'];
 export type RegisterJudgementBody = components['schemas']['RegisterJudgementBody'];
 export type AdminMarketJudgementQueueItem = components['schemas']['AdminMarketJudgementQueueItem'];

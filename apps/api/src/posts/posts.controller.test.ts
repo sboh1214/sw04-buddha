@@ -13,9 +13,11 @@ import {
   completeOnboarding,
   createCategory,
   createComment,
+  createCorrectionRequest,
   createMarket,
   createMedia,
   createPost,
+  createProvisionalMarket,
   createUser,
 } from '@buddha/db/test';
 import {
@@ -602,6 +604,22 @@ describe.skipIf(!hasTestInfra)('/api/v1/posts (integration)', () => {
     expect((await shown(post.id)).market).toMatchObject({ judgementDelayed: true });
     // An open market reads no delay, whatever its times.
     expect((await written()).market).toMatchObject({ status: 'open', judgementDelayed: false });
+  });
+
+  it("says '판정 지연' and no '이의 검토 중' of a post's PROVISIONAL market a waiting correction alone holds past its deadline (#176)", async () => {
+    // Judged two days ago with a day's window, then a 판정 정정 registered: no dispute holds it
+    // (ADR-0105 decision 2 '표시', the `correction_pending` mirror).
+    const { market: held } = await createProvisionalMarket(t.db, {
+      market: { title: '정정을 기다리는 시장' },
+      publishedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+    });
+    await createCorrectionRequest(t.db, { marketId: held.id, result: 'NO' });
+    const flags = { status: 'provisional', judgementDelayed: true, disputeUnderReview: false };
+    const post = await written({ marketId: held.id });
+    expect(post.market).toMatchObject({ id: held.id, ...flags });
+    const [card] = (await page(`marketId=${held.id}`)).data;
+    expect(card?.market).toMatchObject({ id: held.id, ...flags });
+    expect((await shown(post.id)).market).toMatchObject(flags);
   });
 
   it('shows no market on a post whose market went back to a draft, until it is public again (#78)', async () => {

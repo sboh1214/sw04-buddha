@@ -20,11 +20,13 @@ const dispute = (id: string, fields: Partial<MyDispute> = {}): MyDispute => ({
   decidedAt: null,
   decisionReason: null,
   retractedAt: null,
+  closedAt: null,
   market: {
     id: '3f2504e0-4f89-11d3-9a0c-0305e82c3301',
     slug: 'first-snow',
     title: '첫눈이 올까?',
     status: 'provisional',
+    judgementVersion: 1,
   },
   retractable: true,
   ...fields,
@@ -98,6 +100,46 @@ describe('MyDisputes', () => {
     );
     expect(byTestId(html, `my-dispute-${ACCEPTED}-retract`)).toBeUndefined();
     expect(byTestId(html, 'my-disputes-more')).toBeUndefined();
+  });
+
+  it('says the judgement was corrected for a dispute of an older version (#176, ADR-0105)', () => {
+    const CLOSED = 'd3b07384-d9a0-4c9b-8e2f-2d1c0f8a4b13';
+    // The market's judgement moved on to v2; both were filed on v1.
+    const market = { ...dispute(PENDING).market, judgementVersion: 2 };
+    const html = drawn([
+      {
+        items: [
+          dispute(ACCEPTED, {
+            status: 'accepted',
+            decidedAt: '2026-11-30T06:00:00.000Z',
+            decisionReason: '정정이 필요합니다.',
+            retractable: false,
+            market,
+          }),
+          dispute(CLOSED, {
+            status: 'closed_by_correction',
+            closedAt: '2026-11-30T07:00:00.000Z',
+            retractable: false,
+            market,
+          }),
+        ],
+        nextCursor: null,
+      },
+    ]);
+    expect(byTestId(html, `my-dispute-${ACCEPTED}-status`)?.text).toBe('수용');
+    expect(byTestId(html, `my-dispute-${ACCEPTED}-corrected-note`)?.text).toBe(
+      copy.disputeAcceptedCorrectedNote,
+    );
+    expect(byTestId(html, `my-dispute-${ACCEPTED}-accepted-note`)).toBeUndefined();
+    const closed = `my-dispute-${CLOSED}`;
+    expect(byTestId(html, closed)?.attributes['data-status']).toBe('closed_by_correction');
+    expect(byTestId(html, `${closed}-status`)?.text).toBe('정정으로 종결');
+    expect(byTestId(html, `${closed}-closed-note`)?.text).toBe(copy.disputeClosedByCorrectionNote);
+    // Its closing time beside the submission's (MY's own zone formatting, ending in the minute).
+    expect(byTestId(html, `${closed}-times`)?.text).toContain(copy.disputeClosedAt);
+    expect(byTestId(html, `${closed}-times`)?.text).toContain('v1');
+    expect(byTestId(html, `${closed}-retract`)).toBeUndefined();
+    expect(byTestId(html, `${closed}-decision-reason`)).toBeUndefined();
   });
 
   it('holds 철회 off until `GET /me` has said whose list it is', () => {

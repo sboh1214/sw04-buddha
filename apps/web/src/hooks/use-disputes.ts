@@ -296,7 +296,7 @@ export function useRetractDispute() {
  * `disputeOpen` — the server's clock at the read — until its 이의 기한 comes on this screen's
  * clock. A held market publishes nothing at its deadline (the worker skips it), so a one-shot timer
  * takes the link and the note away then, without a reload; a later read that says otherwise wins
- * (a new deadline after a correction, #176, starts a new wait).
+ * (an approved correction's new deadline, #176, ADR-0105, starts a new wait).
  *
  * `anchor` is the server's own instant at the read when the screen has one (the detail's `now`,
  * `detailWindowEnd`): the deadline is then judged at that instant plus the time elapsed since, as

@@ -157,8 +157,10 @@ export function adminMarketQueryOptions(routeId: string) {
  * close and every few seconds after it until the worker closes it (`tradingMarketPollDelay`, #114,
  * ADR-0102: a next-path request then turns moot), and while it is 잠정 결과 at its dispute deadline
  * and every few seconds after it until the worker confirms it (`provisionalMarketPollDelay`, #152,
- * ADR-0103) — no longer once a 판정 이의 holds it past the deadline (#175, ADR-0104: nothing confirms
- * it then; the last 기각's answer starts the poll again) — all in `adminMarketPollInterval`.
+ * ADR-0103) — no longer once a 판정 이의 holds it past the deadline (#175, ADR-0104) or a 판정 정정
+ * waits for its approval (#176, ADR-0105): nothing confirms it then. The last 기각's answer, or a
+ * correction's 반려 or 철회 that leaves nothing holding it, starts the poll again — all in
+ * `adminMarketPollInterval`.
  */
 export function useAdminMarket(routeId: string) {
   return useQuery({

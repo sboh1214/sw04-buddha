@@ -255,8 +255,9 @@ export interface StatusNotice {
 /**
  * What a status other than 거래 중 leaves a reader able to do (PLAN 11.3), one notice per public
  * status (ADR-0093 decision 1, item 12), each saying only what is so in that status — nothing
- * about what a later issue brings (a pause's reason and times #24 — #114 keeps them admin-only —,
- * a correction #176). 개장 예정 promises no
+ * about what a later issue brings (a pause's reason and times #24 — #114 keeps them admin-only) —
+ * and no notice of a correction (#176, ADR-0105: the new result and deadline read as any; its
+ * previous versions and reason are #24's). 개장 예정 promises no
  * open even since the scheduled open opens it (#21, ADR-0100): the time can move, and a close
  * passed first keeps it shut. `open`, `draft` and `review` are absent on purpose: an open market's
  * state is its countdown, and a draft or a market in review never reaches the detail route — the
@@ -294,7 +295,11 @@ const STATUS_NOTICE: Partial<Record<MarketStatus, Omit<StatusNotice, 'detail'>>>
  * A 잠정 결과 keeps its own sentence and adds why it is not confirmed yet while a 판정 이의 holds it
  * (#175, ADR-0104; #173 item 12): under review before its 이의 기한 ('이의 검토 중'), and past it
  * still not confirmed ('판정 지연', owner answer 2026-11-03) — never what the review will decide,
- * nor any payout. The deadline row and the submission link are the detail's (`StatusNotice`).
+ * nor any payout. Past it with no dispute holding it, a 판정 지연 is a correction waiting for its
+ * approval (#176, ADR-0105, decision 3 '#176 정정 대기': `isJudgementDelayed`'s `correctionPending`,
+ * which the public row carries as the flags alone): the line says the judgement is being reviewed
+ * again, never that the result will change — the correction may be rejected. The deadline row and
+ * the submission link are the detail's (`StatusNotice`).
  */
 export function statusNotice(market: {
   status: MarketStatus;
@@ -309,7 +314,13 @@ export function statusNotice(market: {
   if (notice === undefined) return undefined;
   if (market.status === 'provisional') {
     if (readsJudgementDelayed(market)) {
-      return { ...notice, tone: 'warning', detail: copy.marketProvisionalDelayed };
+      return {
+        ...notice,
+        tone: 'warning',
+        detail: readsDisputeUnderReview(market)
+          ? copy.marketProvisionalDelayed
+          : copy.marketProvisionalDelayedCorrection,
+      };
     }
     if (readsDisputeUnderReview(market)) {
       return { ...notice, detail: copy.marketProvisionalUnderReview };

@@ -17,16 +17,25 @@ import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { copy } from '@/copy';
 import { type MyDispute } from '@/lib/api';
-import { DISPUTE_STATUS_LABEL, DISPUTE_STATUS_PALETTE, disputeStatusTime } from '@/lib/disputes';
+import {
+  DISPUTE_STATUS_LABEL,
+  disputeNote,
+  disputeStatusTime,
+  myDisputePalette,
+} from '@/lib/disputes';
 import { judgementVersionName } from '@/lib/market-admin';
 
 /**
  * One of the member's 판정 이의 (#175, ADR-0104), on the submission screen and in MY '판정 이의':
- * its status (검토 중 · 기각 · 수용 · 철회) and the instant it took it, the judgement version it
- * disputes, the decision's reason once decided — the submitter reads it (#173 item 7) — and, for an
- * accepted one, that a correction follows (#176); what it submitted, folded (so a long reason does
- * not push the next one away); and 철회 while the API says it may still be (`retractable`: pending
- * and the deadline ahead). Never who decided it — the API sends no decider (#173 item 13). With
+ * its status (검토 중 · 기각 · 수용 · 철회 · 정정으로 종결, a 수용 a correction already answered in gray
+ * — `myDisputePalette`) and the instant it took it, the judgement version it disputes, the
+ * decision's reason once decided — the submitter reads it (#173 item 7) — and `disputeNote`'s line
+ * (#176, ADR-0105): for an accepted one, that a correction follows, or, once the market's judgement
+ * moved past its version, that the judgement was corrected; for one closed by the correction, that
+ * the corrected judgement takes a new dispute within its deadline. What it submitted, folded (so a
+ * long reason does not push the next one away); and 철회 while the API says it may still be
+ * (`retractable`: pending and the deadline ahead — a dispute a rejected or retracted correction
+ * sent back to 검토 중 again). Never who decided it — the API sends no decider (#173 item 13). With
  * `showMarket` (MY) its market's title is the heading, a link to its detail; on the market's own
  * submission screen the heading is '낸 판정 이의'. Test ids under `my-dispute-<id>`.
  */
@@ -51,6 +60,7 @@ export function DisputeItem({
   const format = useFormatDateTime();
   const { id, status } = dispute;
   const time = disputeStatusTime(dispute);
+  const note = disputeNote(dispute);
   const at = `my-dispute-${id}`;
   return (
     <Box
@@ -65,7 +75,7 @@ export function DisputeItem({
         <Stack gap="1">
           <HStack gap="2" flexWrap="wrap" align="center">
             <Badge
-              colorPalette={DISPUTE_STATUS_PALETTE[status]}
+              colorPalette={myDisputePalette(dispute)}
               variant="subtle"
               data-testid={`${at}-status`}
             >
@@ -103,9 +113,9 @@ export function DisputeItem({
             </Text>
           </Text>
         )}
-        {status === 'accepted' && (
-          <Text fontSize="sm" color="fg.muted" data-testid={`${at}-accepted-note`}>
-            {copy.disputeAcceptedNote}
+        {note !== null && (
+          <Text fontSize="sm" color="fg.muted" data-testid={`${at}-${note.kind}-note`}>
+            {note.text}
           </Text>
         )}
 

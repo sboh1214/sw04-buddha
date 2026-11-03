@@ -88,9 +88,10 @@ function bounded<T>(promise: Promise<T>, what: string): Promise<T> {
  * or paused market — a pause keeps the job, #173 item 3) and cancelled the same way when that
  * instant stops being true (an approved supplement's later close, which registers the new one, an
  * approved early close, a 되돌리기 from SCHEDULED). A resolve job is delayed to the dispute deadline
- * the judgement's approval fixed (CLOSED → PROVISIONAL) and never cancelled: nothing moves that
- * deadline in #152 (#176's correction gives a new one, so a new job). `market.finalize` is not the
- * API's since #152: the worker registers it after its own confirmation (PROVISIONAL → RESOLVED).
+ * the judgement's approval fixed (CLOSED → PROVISIONAL) or a correction's approval (#176), and
+ * never cancelled: a correction gives a new deadline, so a new job, and the earlier deadline's
+ * finds the later one and skips (`not_due`). `market.finalize` is not the API's since #152: the
+ * worker registers it after its own confirmation (PROVISIONAL → RESOLVED).
  *
  * Best effort by design, like MarketPublisher: the transition has COMMITted when this runs,
  * so a failure here is logged and swallowed, never turned into an error response — and never
@@ -168,13 +169,16 @@ export class MarketJobs implements OnApplicationShutdown {
   /**
    * `market.resolve` for one PROVISIONAL market at its `disputeDeadline` (#152, ADR-0103; job id
    * fixed by market and deadline): registered by the judgement's approval, which fixed the deadline
-   * at its instant `now` plus the release setting `market.dispute_window`, so the worker confirms
-   * the result (PROVISIONAL → RESOLVED) once the deadline has passed with nothing held. Nothing
-   * cancels it: a run before the deadline, or on a market confirmed already, skips under the market
-   * lock, and the worker's per-minute scan confirms a market whose job never reached Redis. A run
-   * that finds a 판정 이의 holding the market skips too (`held`, #175) and is removed on completion,
-   * so the dismissal that leaves nothing holding past the deadline registers it again under the
-   * same id, due at once (MarketDisputeService; `now` past `disputeDeadline`: no delay).
+   * at its instant `now` plus the release setting `market.dispute_window` — a correction's (#176)
+   * at its instant plus the corrected version's length, a new deadline and so a new id — so the
+   * worker confirms the result (PROVISIONAL → RESOLVED) once the deadline has passed with nothing
+   * held. Nothing cancels it: a run before the deadline (the market's own, which a correction may
+   * have moved later), or on a market confirmed already, skips under the market lock, and the
+   * worker's per-minute scan confirms a market whose job never reached Redis. A run that finds a
+   * 판정 이의 or a waiting correction holding the market skips too (`held`, #175, #176) and is
+   * removed on completion, so the dismissal — or the correction's 반려 or 철회 — that leaves nothing
+   * holding past the deadline registers it again under the same id, due at once
+   * (MarketDisputeService, MarketJudgementService; `now` past `disputeDeadline`: no delay).
    */
   scheduleResolve(marketId: string, disputeDeadline: Date, now: Date): Promise<void> {
     return this.schedule(

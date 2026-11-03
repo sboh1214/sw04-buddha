@@ -25,8 +25,11 @@ import { MarketDisputeService } from './market-dispute.service.js';
 /**
  * 판정 이의의 기각·수용 (#175, ADR-0104; ADR-0093 decision 1 #173 items 2·7): one admin who did not
  * register the dispute's judgement version — its approver may — dismisses a pending dispute
- * (nothing to change) or accepts it (a correction, #176: the market keeps waiting for it), with a
- * reason the submitter reads. One admin's act, not an approval request: the decision is final.
+ * (nothing to change) or accepts it (a correction: the market keeps waiting for one, registered
+ * and approved through the judgement routes, #176), with a reason the submitter reads. One
+ * admin's act, not an approval request: a dismissal is final, and an acceptance is undone only
+ * when the correction registered for it is rejected or retracted (back to pending, owner answer
+ * 2026-11-02).
  * A dismissal that leaves nothing holding a market past its 이의 기한 has the worker confirm it
  * within seconds (#173 item 7 '모두 기각되면 바로 확정'). Each answers the admin detail
  * (`AdminMarket`, its `disputes` among it). Guards run in order: SessionGuard (401, 403 for a
@@ -82,8 +85,10 @@ export class AdminMarketDisputesController {
     operationId: 'adminAcceptMarketDispute',
     summary:
       'Accept a pending judgement dispute (수용) by an admin who did not register its judgement ' +
-      'version, with a reason the submitter reads: accepting is a correction (#176), and the ' +
-      'market stays provisional — the accepted dispute holding it — until one is approved',
+      'version, with a reason the submitter reads: accepting is a correction, and the market ' +
+      'stays provisional — the accepted dispute holding it — until a correction is registered ' +
+      'and approved; if another admin rejects that correction or its registrant retracts it, ' +
+      'the dispute goes back to pending',
   })
   @ApiData(adminMarketSchema)
   // As on dismiss: VALIDATION_ERROR `reason`; NOT_FOUND; FORBIDDEN for a revoked role;
@@ -110,8 +115,9 @@ export class AdminMarketDisputesController {
 
 /**
  * 이의 접수 (#175, ADR-0104; N03 §8): the judgement disputes across markets, in two halves — 검토
- * 대기 (`pending`, the oldest submission first) and 처리됨 (`decided`: dismissed, accepted or
- * retracted, the latest first) — each with its market, its submitter and its decider. The
+ * 대기 (`pending`, the oldest submission first) and 처리됨 (`decided`: dismissed, accepted,
+ * retracted or closed by a correction, #176, the latest first) — each with its market (its
+ * current judgement version among it), its submitter and its decider. The
  * decisions themselves are the market's own routes (AdminMarketDisputesController), on its admin
  * detail. No price, majority or position (N03 §5). Guards as there. A read: no admin_actions row
  * (admin-audit.test).
@@ -128,8 +134,9 @@ export class AdminMarketDisputeQueueController {
     operationId: 'adminListMarketDisputes',
     summary:
       'Judgement disputes (이의 접수): pending ones the oldest first (status=pending, the ' +
-      'default), or those dismissed, accepted or retracted the latest first (status=decided), ' +
-      'each with its market, judgement version, submitter, links, reason and decision',
+      'default), or those dismissed, accepted, retracted or closed by a correction the latest ' +
+      'first (status=decided), each with its market (and its current judgement version), ' +
+      'judgement version, submitter, links, reason and decision',
   })
   // No `@ApiQuery`: `adminDisputeListQuerySchema` has no component id, so swagger expands it into
   // the cursor/limit/status parameters itself (cursor-query.ts).

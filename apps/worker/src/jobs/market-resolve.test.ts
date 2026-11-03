@@ -6,7 +6,9 @@
  * (market-judgement.test.ts); this covers the worker's transaction around it, the publish, the
  * finalize it registers (a recording stub here; market-jobs.test.ts the queue), and the scan's
  * selection and order — with #175's hold (ADR-0104): a market a 판정 이의 holds is skipped as `held`
- * and left out of the scan, and the job registered after the last dismissal confirms it. Skips when
+ * and left out of the scan, and the job registered after the last dismissal confirms it — and
+ * #176's (ADR-0105): a waiting correction holds it alike, the old deadline's job of a corrected
+ * market is `not_due`, and the corrected version is confirmed at its new deadline. Skips when
  * either is unset, exactly like ledger-audit.test.ts.
  */
 import { randomUUID } from 'node:crypto';
@@ -15,11 +17,15 @@ import {
   decideMarketDispute,
   lockAdminRoles,
   lockMarket,
+  reopenAcceptedDisputes,
   retractMarketDispute,
   schema,
+  setCorrectionPending,
 } from '@buddha/db';
 import {
   connectTestDb,
+  createCorrectedMarket,
+  createCorrectionRequest,
   createDispute,
   createMarket,
   createPosition,
@@ -477,7 +483,7 @@ describe.skipIf(!hasTestInfra)('market.resolve (integration)', () => {
     expect((await marketRow(accepted.market.id)).status).toBe('provisional');
 
     // The pending one dismissed and its job lost: the next minute's scan confirms the market; the
-    // accepted one waits for its correction (#176).
+    // accepted one waits for a correction (#176's tests below).
     await dismiss(pending.id, held.market.id);
     await expect(resolveDueMarkets(t.db, publish, enqueueFinalize)).resolves.toEqual({
       resolved: 1,
@@ -487,6 +493,186 @@ describe.skipIf(!hasTestInfra)('market.resolve (integration)', () => {
     });
     expect((await marketRow(held.market.id)).status).toBe('resolved');
     expect((await marketRow(accepted.market.id)).status).toBe('provisional');
+  });
+
+  /**
+   * As the API rejects a correction (#176): the market lock, its row, the admin lock, the request
+   * rejected, its accepted disputes reopened, the mirror cleared — after COMMIT the API registers
+   * `market.resolve` with no delay when nothing holds past the deadline.
+   */
+  async function rejectCorrection(requestId: string, marketId: string, disputeIds: string[] = []) {
+    const adminId = (await createUser(t.db, { role: 'admin' })).user.id;
+    return t.db.transaction(async (tx) => {
+      await lockMarket(tx, marketId);
+      const [market] = await tx
+        .select()
+        .from(schema.markets)
+        .where(eq(schema.markets.id, marketId))
+        .for('update');
+      await lockAdminRoles(tx, 'shared');
+      const now = await clockTimestamp(tx);
+      await tx
+        .update(schema.approvalRequests)
+        .set({
+          status: 'rejected',
+          decidedBy: adminId,
+          decidedAt: now,
+          decisionReason: '정정할 근거가 부족하다.',
+        })
+        .where(eq(schema.approvalRequests.id, requestId));
+      const { disputes } = await reopenAcceptedDisputes(tx, { market: market!, disputeIds, now });
+      return {
+        disputes,
+        market: await setCorrectionPending(tx, { marketId, pending: false, now }),
+      };
+    });
+  }
+
+  it('skips a due market a waiting correction holds as held, leaves it out of the scan, and confirms the original version once it is rejected (#176)', async () => {
+    const { market: judged } = await provisional(2 * MINUTE_MS, 'NO');
+    const request = await createCorrectionRequest(t.db, { marketId: judged.id, result: 'YES' });
+    const market = await marketRow(judged.id);
+    expect(market).toMatchObject({ correctionPending: true, disputeHoldCount: 0 });
+    const { received, quit } = await subscribeTo(market.id);
+    try {
+      await expect(resolveMarket(t.db, market.id, publish, enqueueFinalize)).resolves.toEqual({
+        outcome: 'skipped',
+        marketId: market.id,
+        reason: 'held',
+      });
+      await expect(resolveDueMarkets(t.db, publish, enqueueFinalize)).resolves.toEqual({
+        resolved: 0,
+        skipped: 0,
+        failed: 0,
+        failures: [],
+      });
+      expect(await marketRow(market.id)).toEqual(market);
+      expect((await eventsOf(market.id)).map((event) => event.type)).toEqual(['provisional']);
+      await sleep(100);
+      expect(received).toEqual([]);
+      expect(enqueued).toEqual([]);
+    } finally {
+      await quit();
+    }
+    // Rejected: the original version, its deadline and its disputes carry on (decision 3 '#176 정정
+    // 대기'), and the job the API registers then confirms v1.
+    await rejectCorrection(request.id, market.id);
+    const result = await resolveMarket(t.db, market.id, publish, enqueueFinalize);
+    expect(result).toMatchObject({ outcome: 'resolved', resolvedResult: 'NO' });
+    expect((await eventsOf(market.id)).at(-1)).toMatchObject({
+      type: 'resolved',
+      payload: { version: 1, result: 'NO', source: 'deadline' },
+    });
+    expect(await marketRow(market.id)).toMatchObject({
+      status: 'resolved',
+      judgementVersion: 1,
+      correctionPending: false,
+    });
+  });
+
+  it('keeps a held market held when a rejected correction reopens its accepted dispute (owner answer 2026-11-02)', async () => {
+    const { market, judgement } = await provisional(2 * MINUTE_MS);
+    const accepted = await disputeOn(market, judgement.publishedAt, 'accepted');
+    const request = await createCorrectionRequest(t.db, { marketId: market.id });
+    const { disputes, market: after } = await rejectCorrection(request.id, market.id, [
+      accepted.id,
+    ]);
+    expect(disputes.map((dispute) => dispute.status)).toEqual(['pending']);
+    expect(after).toMatchObject({ disputeHoldCount: 1, correctionPending: false });
+    await expect(resolveMarket(t.db, market.id, publish, enqueueFinalize)).resolves.toMatchObject({
+      outcome: 'skipped',
+      reason: 'held',
+    });
+    // Dismissed again by an admin who did not register the version: confirmed.
+    expect(await dismiss(accepted.id, market.id)).toMatchObject({ decided: true, held: false });
+    await expect(resolveMarket(t.db, market.id, publish, enqueueFinalize)).resolves.toMatchObject({
+      outcome: 'resolved',
+    });
+  });
+
+  it('after a correction, the old deadline’s job is not_due — the market’s own deadline is read — and nothing is confirmed or published (#176)', async () => {
+    // v1's deadline a minute past; the correction approved now gives v2 a minute from now.
+    const { market, judgement } = await provisional(2 * MINUTE_MS, 'YES');
+    expect(judgement.disputeDeadline.getTime()).toBeLessThan(Date.now());
+    const corrected = await createCorrectedMarket(t.db, { marketId: market.id });
+    expect(corrected.market.disputeDeadline!.getTime()).toBeGreaterThan(Date.now());
+    const { received, quit } = await subscribeTo(market.id);
+    try {
+      // The delayed job registered at v1's approval fires at v1's deadline, now past.
+      await expect(resolveMarket(t.db, market.id, publish, enqueueFinalize)).resolves.toEqual({
+        outcome: 'skipped',
+        marketId: market.id,
+        reason: 'not_due',
+      });
+      // Nor does the scan take it: its deadline is v2's.
+      await expect(resolveDueMarkets(t.db, publish, enqueueFinalize)).resolves.toMatchObject({
+        resolved: 0,
+        skipped: 0,
+      });
+      expect(await marketRow(market.id)).toEqual(corrected.market);
+      expect((await eventsOf(market.id)).map((event) => event.type)).toEqual([
+        'provisional',
+        'judgement_corrected',
+      ]);
+      expect(await stepsOf(market.id)).toEqual([]);
+      await sleep(100);
+      expect(received).toEqual([]);
+      expect(enqueued).toEqual([]);
+    } finally {
+      await quit();
+    }
+  });
+
+  it('confirms the corrected version at its new deadline, by the job or the scan (#176)', async () => {
+    // v1 published five minutes ago, corrected three minutes ago with v1's one-minute window: v2's
+    // deadline two minutes past.
+    const job = await provisional(5 * MINUTE_MS, 'YES');
+    const { judgement: v2 } = await createCorrectedMarket(t.db, {
+      marketId: job.market.id,
+      correctedAt: new Date(Date.now() - 3 * MINUTE_MS),
+    });
+    expect(v2).toMatchObject({ version: 2, result: 'NO', disputeWindowMinutes: 1 });
+    const { received, quit } = await subscribeTo(job.market.id);
+    try {
+      const result = await resolveMarket(t.db, job.market.id, publish, enqueueFinalize);
+      expect(result).toMatchObject({ outcome: 'resolved', resolvedResult: 'NO' });
+      if (result.outcome !== 'resolved') return;
+      expect(result.resolvedAt.getTime()).toBeGreaterThanOrEqual(v2.disputeDeadline.getTime());
+      expect((await eventsOf(job.market.id)).at(-1)).toMatchObject({
+        id: result.statusEventId,
+        type: 'resolved',
+        actorId: null,
+        fromStatus: 'provisional',
+        toStatus: 'resolved',
+        payload: { version: 2, result: 'NO', source: 'deadline' },
+      });
+      expect(await marketRow(job.market.id)).toMatchObject({
+        status: 'resolved',
+        resolvedResult: 'NO',
+        judgementVersion: 2,
+        disputeDeadline: v2.disputeDeadline,
+      });
+      await waitForMessages(received, 1, 'market:status');
+      expect(JSON.parse(received[0]!)).toMatchObject({ status: 'resolved', resolvedResult: 'NO' });
+      expect(enqueued).toEqual([{ marketId: job.market.id, resolvedAt: result.resolvedAt }]);
+    } finally {
+      await quit();
+    }
+    // The scan alike, for a corrected market whose job was lost.
+    const scanned = await provisional(5 * MINUTE_MS, 'NO');
+    await createCorrectedMarket(t.db, {
+      marketId: scanned.market.id,
+      correctedAt: new Date(Date.now() - 3 * MINUTE_MS),
+    });
+    await expect(resolveDueMarkets(t.db, publish, enqueueFinalize)).resolves.toMatchObject({
+      resolved: 1,
+      skipped: 0,
+    });
+    expect(await marketRow(scanned.market.id)).toMatchObject({
+      status: 'resolved',
+      resolvedResult: 'YES',
+      judgementVersion: 2,
+    });
   });
 
   it('leaves the finalize what it needs: the steps it wrote take the market to settled', async () => {

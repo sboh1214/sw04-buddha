@@ -98,9 +98,10 @@ export class MeDisputesController {
   @ApiOperation({
     operationId: 'getMyDisputes',
     summary:
-      "The account's judgement disputes (판정 이의), newest first, each with its market, the " +
-      'links and reason it submitted, its status, the decision’s reason and time, and whether ' +
-      'it may still be retracted',
+      "The account's judgement disputes (판정 이의), newest first, each with its market (and " +
+      'its current judgement version: a dispute of an older one was answered by a correction), ' +
+      'the links and reason it submitted, its status, the decision’s reason and time — or when ' +
+      'a correction closed it — and whether it may still be retracted',
   })
   @ApiQuery(CURSOR_QUERY_PARAMS[0])
   @ApiQuery(CURSOR_QUERY_PARAMS[1])
@@ -143,7 +144,7 @@ export class MeDisputesController {
   @ApiData(myDisputeSchema)
   // FORBIDDEN: a foreign Origin, or `expectedAccountId` not the cookie's account. NOT_FOUND: no
   // dispute of the account by that id. DISPUTE_NOT_ALLOWED's `details.reason`: `retracted`,
-  // `decided` (dismissed or accepted), then `deadline_passed`.
+  // `decided` (dismissed, accepted or closed by a correction), then `deadline_passed`.
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'DISPUTE_NOT_ALLOWED')
   retractMyDispute(
     @CurrentUser() user: SessionUser,

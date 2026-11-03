@@ -40,22 +40,26 @@ export interface ResolveScanResult {
  * PROVISIONAL → RESOLVED for one market once its 이의 기한 has passed with nothing held (#152,
  * ADR-0103; ADR-0093 decision 1 #173 item 1, an automatic edge): the only caller of
  * `resolveProvisionalMarket` (@buddha/db), which judges the status, the deadline and the hold — a
- * 판정 이의 of the current version pending or accepted (#175, ADR-0104), `held` — under the lock
- * and writes the `resolved` event (actor null, payload `{version, result, source: 'deadline'}`),
- * `resolved_at` and the pending settlement steps. Here: the market lock, the DB clock read after
- * it, and no admin action (no admin acted).
+ * 판정 이의 of the current version pending or accepted (#175, ADR-0104), or a correction waiting
+ * for its decision (#176, ADR-0105), `held` — under the lock and writes the `resolved` event
+ * (actor null, payload `{version, result, source: 'deadline'}`: the current version, a corrected
+ * one's after a correction), `resolved_at` and the pending settlement steps. Here: the market lock,
+ * the DB clock read after it, and no admin action (no admin acted).
  *
  * Every caller reaches this through the same transaction — the delayed job the API registered at
  * the approval (`marketResolveJobId`, at the deadline), the same job the API registers again with
  * no delay after the last holding dispute's dismissal past the deadline (#173 item 7 '모두 기각되면
- * 바로 확정'; the first run completed as `held` and was removed), the per-minute scan, a manual
- * script — and it re-verifies the status, the deadline and the hold under the market lock. That
- * is what makes a stale job harmless: one that fires before the deadline (the API's delay read on
- * its clock) finds `not_due` and the scan confirms the market within the minute after it; one
- * that finds a dispute still holding the market finds `held`, and the next dismissal's job or the
- * scan confirms it; a duplicate, or the job after the scan, finds `not_provisional`; two workers
- * racing on one market serialise on `lockMarket` and the second sees the first's status. An
- * unknown id throws, as the close does (market-close.ts): a job left over from a whole-database
+ * 바로 확정'; the first run completed as `held` and was removed) or after a correction's 반려 or
+ * 철회 past it that leaves nothing holding (#176), the job a correction's approval registers at its
+ * new deadline, the per-minute scan, a manual script — and it re-verifies the status, the deadline
+ * and the hold under the market lock. That is what makes a stale job harmless: one that fires
+ * before the deadline (the API's delay read on its clock) finds `not_due` and the scan confirms the
+ * market within the minute after it, and so does the old deadline's job of a corrected market,
+ * whose deadline moved later (it is never cancelled, ADR-0103 9-12); one that finds a dispute or a
+ * correction still holding the market finds `held`, and the next dismissal's or decision's job or
+ * the scan confirms it; a duplicate, or the job after the scan, finds `not_provisional`; two
+ * workers racing on one market serialise on `lockMarket` and the second sees the first's status.
+ * An unknown id throws, as the close does (market-close.ts): a job left over from a whole-database
  * wipe or a broken producer fails loudly.
  *
  * After COMMIT, `market:status` (`resolved`, the result, the `resolved` event's id as the ordering
@@ -111,17 +115,18 @@ export async function resolveMarket(
  * nothing held, each in its own transaction and each failure caught (`runScan`), so one market's
  * rejection rolls back that market alone and the rest of the batch still runs. It confirms a
  * market whose delayed job was lost — Redis restarted, the API's best-effort add failed after
- * COMMIT — within a minute, and one whose hold (#175's disputes; #176's correction) cleared after
- * its deadline and whose job after the last dismissal was lost. The hold is in the candidate query
- * (`dueProvisionalMarkets`' NOT EXISTS) as well as in the re-check, as the open scan keeps the
- * close there, so a held market never takes a slot of the batch.
+ * COMMIT — within a minute, and one whose hold (#175's disputes; #176's waiting correction)
+ * cleared after its deadline and whose job after the last dismissal, or after the correction's
+ * 반려 or 철회, was lost. The hold is in the candidate query (`dueProvisionalMarkets`' NOT EXISTS)
+ * as well as in the re-check, as the open scan keeps the close there, so a held market never takes
+ * a slot of the batch.
  *
  * Earliest deadline first, at most MARKET_SCAN_BATCH_MAX per run; the next run a minute later
  * drains what is left. `markets_provisional_dispute_deadline_idx` (migration 0055) serves the list
- * — the PROVISIONAL markets by deadline — and `market_disputes_holding_idx` (0056) each one's hold;
- * the schema test reads this query's plan. The candidate list is a plain read; `resolveMarket`
- * re-checks everything under the lock, so a market confirmed or held between the read and its turn
- * counts as skipped.
+ * — the PROVISIONAL markets by deadline — `market_disputes_holding_idx` (0056) the disputes'
+ * hold, and an index of `approval_requests` the waiting corrections' (#176); the schema test reads
+ * this query's plan. The candidate list is a plain read; `resolveMarket` re-checks everything
+ * under the lock, so a market confirmed or held between the read and its turn counts as skipped.
  */
 export async function resolveDueMarkets(
   db: Db,

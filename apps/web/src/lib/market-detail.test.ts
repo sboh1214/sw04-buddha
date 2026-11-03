@@ -425,10 +425,23 @@ describe('statusNotice (PLAN 11.3, #174)', () => {
       message: copy.marketProvisionalNotice,
       detail: copy.marketProvisionalDelayed,
     });
-    // Never the CLOSED market's delay sentence, nor a promise of a result, a refund or a payout.
+    // '판정 지연' past it with no dispute holding it: a correction waits for its approval (#176,
+    // ADR-0105, decision 3 '#176 정정 대기') — the judgement reviewed again, no dispute named.
+    expect(statusNotice({ ...base, judgementDelayed: true, disputeUnderReview: false })).toEqual({
+      tone: 'warning',
+      message: copy.marketProvisionalNotice,
+      detail: copy.marketProvisionalDelayedCorrection,
+    });
+    expect(copy.marketProvisionalDelayedCorrection).not.toContain('이의를 검토');
+    // Never the CLOSED market's delay sentence, nor a promise of a result, a refund or a payout —
+    // nor that a correction changes the result: it may be rejected.
     expect(late?.message).not.toBe(copy.marketJudgementDelayedNotice);
-    for (const text of [copy.marketProvisionalUnderReview, copy.marketProvisionalDelayed]) {
-      expect(text).not.toMatch(/NO|YES|환불|원금|지급/);
+    for (const text of [
+      copy.marketProvisionalUnderReview,
+      copy.marketProvisionalDelayed,
+      copy.marketProvisionalDelayedCorrection,
+    ]) {
+      expect(text).not.toMatch(/NO|YES|환불|원금|지급|정정/);
     }
     // A cached flag says nothing once the market moved on: a confirmed market reads its own.
     expect(

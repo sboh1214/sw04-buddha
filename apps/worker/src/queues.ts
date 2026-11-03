@@ -96,8 +96,9 @@ export const JOB_SCHEDULES = [
   { id: 'market-open-scan', queue: 'markets', name: JOB_NAMES.marketOpen, repeat: EVERY_MINUTE },
   { id: 'market-close-scan', queue: 'markets', name: JOB_NAMES.marketClose, repeat: EVERY_MINUTE },
   // #152 (ADR-0103): the PROVISIONAL markets whose dispute deadline has passed with nothing held —
-  // also one whose hold (#175's disputes, #176's correction) cleared after its deadline and whose
-  // job after the last dismissal (ADR-0104) was lost.
+  // also one whose hold (#175's disputes, #176's waiting correction) cleared after its deadline
+  // and whose job after the last dismissal (ADR-0104) or the correction's 반려 or 철회 (ADR-0105)
+  // was lost.
   {
     id: 'market-resolve-scan',
     queue: 'markets',

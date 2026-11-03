@@ -38,12 +38,15 @@ const reasonText = (column: AnyPgColumn): SQL =>
 /**
  * 판정 (#152, ADR-0103; ADR-0093 decision 1 #173 items 1·5·9·13, decision 3 the #152 rows): every
  * approved judgement of a market, numbered from 1 — v1 is the first approved one, and only
- * approved ones take a number (#176's corrections add v2 on). Written by `approveMarketJudgement`
- * (@buddha/db) in the transaction of its CLOSED → PROVISIONAL `provisional` event, when an admin
- * other than the registrant approves a `market_judgement` approval request (#171): the
- * registration is that request's frozen payload and reason, copied here; a rejected or retracted
- * registration stays in `approval_requests` alone. `markets.judgement_version` names the current
- * one and `markets.dispute_deadline` mirrors its deadline.
+ * approved ones take a number; each approved 판정 정정 adds the next (#176, ADR-0105; #173 items
+ * 2·8). Written by `approveMarketJudgement` (@buddha/db) in the transaction of its CLOSED →
+ * PROVISIONAL `provisional` event, or by `correctMarketJudgement` in that of a PROVISIONAL
+ * market's `judgement_corrected` one, when an admin other than the registrant approves a
+ * `market_judgement` approval request (#171): the registration is that request's frozen payload
+ * and reason, copied here; a rejected or retracted registration stays in `approval_requests`
+ * alone. `markets.judgement_version` names the current one and `markets.dispute_deadline` mirrors
+ * its deadline; the earlier versions stay as they were published (#173 item 13: public through
+ * #24).
  *
  * - `result`: YES, NO or VOID — VOID is chosen here and nowhere before the close (#173 item 4).
  * - The source (decision 3 '판정 출처'): `source_priority` (0 the 1차 출처, 1..3 the 대체 출처 in
@@ -60,13 +63,18 @@ const reasonText = (column: AnyPgColumn): SQL =>
  * - `event_deadline_confirmed`: whether the approver confirmed the NO condition's event deadline —
  *   required before the scheduled judgement (decision 3 '등록 시점', the API's), false otherwise.
  * - 이의 기한 (#173 item 5): `dispute_window_minutes`, the release setting `market.dispute_window` as
- *   the approval read it, `published_at`, the approval's instant (the `provisional` event's), and
- *   `dispute_deadline`, exactly the one plus the other — fixed then, never moved by a later change
- *   of the setting; #176 reuses the length for a correction's deadline.
+ *   the first approval read it — a correction's is its base version's, so every version of a
+ *   market has v1's length ('정정 뒤의 기한: 첫 기한과 같은 길이') — `published_at`, the approval's
+ *   instant (its event's), and `dispute_deadline`, exactly the one plus the other — fixed then,
+ *   never moved by a later change of the setting.
+ * - `correction_reason` (정정 사유, #176): why the version replaced the one before it — exactly for
+ *   a version after the first, trimmed, 1..500 (as `market_rule_versions.reason`), public with the
+ *   record (#173 item 13, #24).
  * - `approval_id` (one judgement per request), `registered_by` (its requester — never a decider of
  *   its 판정 이의, `decideMarketDispute`, #175), `approved_by` (never the registrant, ADR-0056 1-1) and
- *   `provisional_event_id`. Admins only, with every reason, until #24 publishes the record without
- *   the two accounts.
+ *   `provisional_event_id` — the event that published it: v1's `provisional`, a correction's
+ *   `judgement_corrected` (the name kept: the foreign key asks no type). Admins only, with every
+ *   reason, until #24 publishes the record without the two accounts.
  *
  * Permanent facts (N04 §5): no retention, nothing rewrites or deletes one. buddha_app may INSERT
  * and SELECT only, and a trigger refuses an UPDATE or a DELETE whoever writes (migration 0055).
@@ -78,7 +86,7 @@ export const marketJudgements = pgTable(
     marketId: uuid()
       .notNull()
       .references(() => markets.id, { onDelete: 'restrict' }),
-    /** 1 for the first approved judgement, then one more per correction (#176). */
+    /** 1 for the first approved judgement, then one more per approved correction (#176). */
     version: integer().notNull(),
     result: marketResultEnum().notNull(),
     sourcePriority: smallint(),
@@ -94,6 +102,8 @@ export const marketJudgements = pgTable(
     disputeWindowMinutes: integer().notNull(),
     publishedAt: timestampTz().notNull(),
     disputeDeadline: timestampTz().notNull(),
+    /** 정정 사유 (#176, ADR-0105): null for version 1 alone. */
+    correctionReason: text(),
     approvalId: uuid()
       .notNull()
       .unique('market_judgements_approval_id_unique')
@@ -145,5 +155,13 @@ export const marketJudgements = pgTable(
     ),
     /** The two-person rule its request's CHECK holds too (ADR-0056 1-1, decision 3 '역할'). */
     check('market_judgements_approver_check', sql`${t.approvedBy} <> ${t.registeredBy}`),
+    /**
+     * 정정 사유 (#176): exactly for a version after the first — a correction's — as a request's
+     * reason (trimmed non-blank, ≤ 500).
+     */
+    check(
+      'market_judgements_correction_reason_check',
+      sql`(${t.version} = 1) = (${t.correctionReason} IS NULL) AND (${t.correctionReason} IS NULL OR (${reasonText(t.correctionReason)}))`,
+    ),
   ],
 );

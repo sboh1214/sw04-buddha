@@ -383,7 +383,8 @@ export const copy = {
   // 화면에서 '거래 마감' 대신 '판정 지연'(marketStatusJudgementDelayed)으로 보인다(#173 11항). #175
   // (ADR-0104)가 판정 이의를 더해, 이의가 잡아 둔 잠정 결과 시장은 이의 기한 전에는 '이의 검토 중'
   // (marketStatusDisputeUnderReview), 기한이 지나도 확정되지 않았으면 '판정 지연'으로 보인다(#173 12항, 오너 답
-  // 2026-11-03). 지연의 사유와 다음 검토 시각은 #142가 붙인다. 검색 필터는 없다(ADR-0095 8-6).
+  // 2026-11-03). #176(ADR-0105)의 승인을 기다리는 판정 정정이 잡아 둔 시장도 기한이 지나면 '판정 지연'이다(결정
+  // 3 '#176 정정 대기'). 지연의 사유와 다음 검토 시각은 #142가 붙인다. 검색 필터는 없다(ADR-0095 8-6).
   // 홈은 거래 중만 보이고(ADR-0065), 다른 상태는 검색(#15)이 고른다. 카운트다운의 marketCloseAt '마감'·
   // marketClosed '마감됨'과는 다른 자리다.
   marketStatusDraft: '초안',
@@ -491,9 +492,12 @@ export const copy = {
   adminMarketJudgementDelayed: '판정 지연',
   adminMarketJudgementDelayedNote:
     '예정 판정 시각이 지났습니다. 사용자 화면에는 판정 지연으로 보입니다.',
-  // 잠정 결과의 판정 지연(#175, 오너 답 2026-11-03): 이의 기한이 지났는데 판정 이의가 잡아 둔 시장.
+  // 잠정 결과의 판정 지연(#175, 오너 답 2026-11-03): 이의 기한이 지났는데 판정 이의가 잡아 둔 시장, 그리고
+  // 승인을 기다리는 판정 정정이 잡아 둔 시장(#176, 결정 3 '#176 정정 대기').
   adminMarketDisputeDelayedNote:
     '이의 기한이 지났지만 처리하지 않았거나 수용한 판정 이의가 있어 확정되지 않았습니다. 사용자 화면에는 판정 지연으로 보입니다.',
+  adminMarketCorrectionDelayedNote:
+    '이의 기한이 지났지만 승인을 기다리는 판정 정정이 있어 확정되지 않았습니다. 사용자 화면에는 판정 지연으로 보입니다.',
   adminMarketCategory: '카테고리',
   adminMarketCategoryPlaceholder: '카테고리 선택',
   // 태그 (#17, ADR-0093 결정 2 #172 2항): 카테고리 다음 칸. 이름을 치고 Enter나 넣기로 넣고(쉼표로 나눈
@@ -1033,12 +1037,13 @@ export const copy = {
   // 거래 마감한 시장에 관리자 한 명이 결과(YES·NO·무효), 규칙의 출처에서 고른 판정 출처, 증거 링크와 수집
   // 시각, 확인한 내용을 등록하고, 등록하지 않은 다른 관리자가 승인하면 그 결과가 잠정 결과로 공개되고 이의
   // 기간(출시 설정, 승인한 순간에 시장마다 고정)이 흐른다. 이의 기한이 지나고 처리하지 않았거나 수용한 판정
-  // 이의(#175)가 없으면 워커가 결과를 확정하고 지급이 이어진다. 반려하면 거래 마감에 남고 다시 등록한다. 무효도
-  // 같은 길을 간다. 시장 가격·거래량은 판정 화면에 없다(#152 AC 8). 등록·승인한 관리자와 증거는 지금 관리자만
-  // 본다(공개 판정 기록은 #24).
+  // 이의(#175)와 승인을 기다리는 판정 정정(#176)이 없으면 워커가 결과를 확정하고 지급이 이어진다. 반려하면 거래
+  // 마감에 남고 다시 등록한다. 무효도 같은 길을 간다. 잠정 결과인 동안의 판정 정정은 같은 등록과 승인을 거친다
+  // (아래 '판정 정정'). 시장 가격·거래량은 판정 화면에 없다(#152 AC 8). 등록·승인한 관리자와 증거는 지금
+  // 관리자만 본다(공개 판정 기록은 #24).
   adminMarketJudgement: '판정',
   adminMarketJudgementIntro:
-    '거래 마감한 시장의 결과를 한 관리자가 출처·증거와 함께 등록하고, 등록하지 않은 다른 관리자가 승인합니다. 승인하면 잠정 결과가 공개되고, 이의 기한이 지나도록 처리하지 않았거나 수용한 판정 이의가 없으면 결과가 자동으로 확정됩니다. 반려하면 거래 마감 상태로 남고 다시 등록합니다.',
+    '거래 마감한 시장의 결과를 한 관리자가 출처·증거와 함께 등록하고, 등록하지 않은 다른 관리자가 승인합니다. 승인하면 잠정 결과가 공개되고, 이의 기한이 지나도록 처리하지 않았거나 수용한 판정 이의와 승인을 기다리는 판정 정정이 없으면 결과가 자동으로 확정됩니다. 반려하면 거래 마감 상태로 남고 다시 등록합니다. 잠정 결과인 동안에는 같은 등록과 승인으로 판정을 정정합니다.',
   adminMarketJudgementRegister: '판정 등록',
   // 출시 설정의 이의 기간이 미정이면 등록과 승인을 서버가 거절한다(기한을 정할 값이 없다).
   adminMarketJudgementWindowUndecided:
@@ -1085,7 +1090,7 @@ export const copy = {
     '출처에서 무엇을 확인했는지 적습니다. 판정 기록에 관리자·시각과 함께 남습니다. 500자까지 쓸 수 있습니다.',
   adminMarketJudgementRegistered: '판정을 등록했습니다. 다른 관리자가 승인하거나 반려합니다.',
   // 등록 칸을 연 뒤 시장이 더 등록을 받지 않게 되면(다른 관리자가 먼저 등록했거나 거래 마감이 아니다) 칸은
-  // 쓴 것과 함께 남고 까닭을 말한다.
+  // 쓴 것과 함께 남고 까닭을 말한다. 정정 칸의 까닭은 아래 '판정 정정'의 것이다.
   adminMarketJudgementFormStatus:
     '거래 마감 상태가 아니어서 판정을 등록할 수 없습니다. 쓴 내용을 확인한 뒤 칸을 닫아 주세요.',
   adminMarketJudgementFormPending:
@@ -1114,9 +1119,12 @@ export const copy = {
   adminMarketJudgementDeadline: '이의 기한',
   adminMarketJudgementDeadlineConfirmed: '사건 기한 확인',
   adminMarketJudgementDeadlineConfirmedDone: '승인한 관리자가 확인함',
-  // 처리하지 않았거나 수용한 판정 이의(#175)가 있으면 기한이 지나도 확정되지 않는다(아래 '판정 이의' 묶음).
+  // 처리하지 않았거나 수용한 판정 이의(#175)나 승인을 기다리는 판정 정정(#176)이 있으면 기한이 지나도 확정되지
+  // 않는다(아래 '판정 이의' 묶음).
   adminMarketJudgementProvisionalNote:
-    '이의 기한이 지나고 처리하지 않았거나 수용한 판정 이의가 없으면 결과가 자동으로 확정되고 지급이 이어집니다.',
+    '이의 기한이 지나고 처리하지 않았거나 수용한 판정 이의와 승인을 기다리는 판정 정정이 없으면 결과가 자동으로 확정되고 지급이 이어집니다.',
+  // 지금 판정이 정정으로 만든 버전이면 그 정정 사유(판정 버전 이력의 버전마다도).
+  adminMarketJudgementCorrectionReason: '정정 사유',
   // 판정 기록(AdminMarket.judgement.log, 최근 것부터): 등록마다 끝난 방식과 등록한 내용, 결정.
   adminMarketJudgementLog: '판정 기록',
   adminMarketJudgementLogEmpty: '판정 기록이 없습니다.',
@@ -1150,6 +1158,67 @@ export const copy = {
   adminMarketJudgementRetracted: '판정을 철회했습니다.',
   adminMarketJudgementRequestChanged:
     '이 창을 연 뒤 기다리는 판정이 바뀌었습니다. 창을 닫고 다시 확인해 주세요.',
+  // 판정 정정 (#176, ADR-0105; ADR-0093 결정 1 #173 1·2·5·7·8·13·15항, 결정 3 '#176 정정 대기', 오너 답
+  // 2026-11-02): 잠정 결과인 시장에서만, 기다리는 판정이 없을 때 판정 칸의 '판정 정정'이나 수용한 판정 이의의
+  // '정정 등록'이 지금 판정으로 채운 등록 칸을 정정 사유 칸과 함께 연다. 등록하지 않은 다른 관리자가 승인하면
+  // 판정 버전이 하나 올라가고 새 결과가 잠정 결과로 공개되며, 첫 이의 기한과 같은 길이의 새 이의 기한이 승인한
+  // 때부터 흐르고(#173 5항), 지금 버전의 검토 중인 판정 이의는 정정으로 종결된다(#173 8항). 반려하거나 철회하면
+  // 지금 버전과 그 기한·이의 결과가 그대로 이어지고, 정정과 함께 등록된 수용한 이의는 검토 중으로 돌아간다(오너
+  // 답 2026-11-02, 철회도 같게). 결과나 근거를 바꿀 것이 없으면 정정하지 않는다(#173 7항: 이의는 기각한다).
+  // 'v1 → v2'처럼 버전은 화살표로 잇는다.
+  adminMarketJudgementCorrect: '판정 정정',
+  adminMarketJudgementCorrectionFormTitle: '판정 정정',
+  adminMarketJudgementCorrectionFormHint:
+    '지금 판정의 내용으로 채워 두었습니다. 고칠 결과나 근거를 바꿔 적고 정정 사유를 씁니다. 등록만으로는 판정과 결과가 바뀌지 않지만, 정정이 승인되거나 반려·철회되기 전에는 이의 기한이 지나도 결과가 확정되지 않습니다. 다른 관리자가 승인하면 판정 버전이 하나 올라가고 새 결과가 잠정 결과로 공개됩니다. 결과나 근거를 바꿀 것이 없으면 정정하지 않습니다.',
+  adminMarketJudgementCorrectionVersion: '판정 버전',
+  adminMarketJudgementCorrectionReasonHint:
+    '판정을 고치는 까닭을 적습니다. 판정 버전 이력에 남고 공개 판정 기록이 보일 사유입니다. 500자까지 쓸 수 있습니다.',
+  // '이 정정과 함께 등록되는 수용한 판정 이의 2건'(등록 칸)과 '이 정정과 함께 등록된 수용한 판정 이의 2건'(기다리는
+  // 정정): 뒤에 수와 adminMarketDisputesHoldingUnit이 붙는다. 그 아래 줄의 안내는 수와 상관없이 쓴다.
+  adminMarketJudgementCorrectionDisputes: '이 정정과 함께 등록되는 수용한 판정 이의',
+  adminMarketJudgementCorrectionDisputesRegistered: '이 정정과 함께 등록된 수용한 판정 이의',
+  adminMarketJudgementCorrectionDisputesNote:
+    '정정이 반려되거나 철회되면 실린 이의는 검토 중으로 돌아갑니다.',
+  adminMarketJudgementCorrectionRegister: '정정 등록',
+  adminMarketJudgementCorrectionRegistered:
+    '판정 정정을 등록했습니다. 다른 관리자가 승인하거나 반려합니다.',
+  adminMarketJudgementCorrectionFormStatus:
+    '잠정 결과 상태가 아니어서 판정을 정정할 수 없습니다. 쓴 내용을 확인한 뒤 칸을 닫아 주세요.',
+  adminMarketJudgementCorrectionFormStale:
+    '그 사이 판정이 정정되어 이 칸이 고치려던 판정이 지금 판정이 아닙니다. 쓴 내용을 확인한 뒤 칸을 닫아 주세요.',
+  adminMarketJudgementPendingCorrection: '승인을 기다리는 판정 정정',
+  adminMarketJudgementCorrectionPendingStatus:
+    '잠정 결과 상태가 아니어서 정정을 승인할 수 없습니다. 반려하거나 철회해 끝내세요.',
+  adminMarketJudgementCorrectionPendingStale:
+    '정정하려던 판정이 지금 판정이 아니어서 승인할 수 없습니다. 반려하거나 철회해 끝내세요.',
+  adminMarketJudgementCorrectionApproveTitle: '판정 정정을 승인합니다',
+  adminMarketJudgementCorrectionApproveBody:
+    '승인하면 판정 버전이 하나 올라가고 이 결과가 잠정 결과로 바로 공개됩니다. 새 이의 기한은 첫 이의 기한과 같은 길이로 승인한 때부터 흐르고, 지금 판정 버전의 검토 중인 판정 이의는 정정으로 종결됩니다. 이의를 낸 회원은 새 이의 기한 안에 다시 낼 수 있습니다.',
+  // 승인 창의 '새 이의 기간 1,440분': 뒤에 첫 판정의 이의 기간과 adminMarketJudgementWindowMinutes가 붙는다.
+  adminMarketJudgementCorrectionWindow: '새 이의 기간',
+  adminMarketJudgementCorrectionApproved:
+    '판정 정정을 승인했습니다. 새 잠정 결과가 공개되었습니다.',
+  adminMarketJudgementCorrectionRejectTitle: '판정 정정을 반려합니다',
+  // 반려 창과 철회 창의 본문은 문장을 잇는다: 처음 문장, 정정에 실린 수용한 이의가 있으면 그것이 검토 중으로
+  // 돌아간다는 문장(adminMarketJudgementCorrectionReopen), 화면이 읽은 때 이의 기한이 이미 지났으면 결과가 곧
+  // 확정된다는 문장(adminMarketJudgementCorrectionEndConfirms — API가 지연 없는 확정을 건다), 철회면 묻는 말.
+  adminMarketJudgementCorrectionRejectBody:
+    '반려하면 이 정정이 끝나고 지금 판정 버전과 그 이의 기한, 판정 이의의 처리 결과가 그대로 이어집니다.',
+  adminMarketJudgementCorrectionRejected: '판정 정정을 반려했습니다.',
+  adminMarketJudgementCorrectionRetractTitle: '판정 정정을 철회합니다',
+  adminMarketJudgementCorrectionRetractBody:
+    '철회하면 등록한 정정이 끝나고 지금 판정 버전과 그 이의 기한, 판정 이의의 처리 결과가 그대로 이어집니다.',
+  adminMarketJudgementCorrectionReopen:
+    '이 정정과 함께 등록된 수용한 판정 이의는 검토 중으로 돌아갑니다. 판정을 등록하지 않은 관리자가 그 이의를 다시 기각하거나 새 정정과 함께 수용합니다.',
+  adminMarketJudgementCorrectionEndConfirms:
+    '이의 기한이 이미 지났으므로 결과 확정을 기다리게 하는 판정 이의가 남지 않으면 지금 판정대로 결과가 곧 확정되고, 확정된 뒤에는 정정할 수 없습니다.',
+  adminMarketJudgementCorrectionRetractConfirm: '계속할까요?',
+  adminMarketJudgementCorrectionRetracted: '판정 정정을 철회했습니다.',
+  // 판정 버전 이력(AdminMarket.judgement.history): 지금 판정 전의 버전, 최근 것부터. 버전마다 결과, 출처, 증거,
+  // 수집 시각, 공개 시각, 이의 기한, 등록·승인한 관리자, 정정 사유. 정정한 적이 없으면 그리지 않는다.
+  adminMarketJudgementHistory: '판정 버전 이력',
+  adminMarketJudgementHistoryIntro:
+    '정정되기 전의 판정입니다. 최근 것부터 보입니다. 지우거나 고칠 수 없습니다.',
   // 판정의 거절(VALIDATION_ERROR가 짚는 곳마다, MARKET_JUDGEMENT_REFUSALS).
   errMarketJudgementResult: '결과를 골라 주세요.',
   errMarketJudgementVoidOnly: '판정 불가로 조기 마감한 시장은 무효로만 판정합니다.',
@@ -1174,8 +1243,21 @@ export const copy = {
   errMarketJudgementDeadlineConfirm:
     '예정 판정 시각 전에는 NO 조건의 사건 기한을 확인해야 승인할 수 있습니다.',
   errMarketJudgementUnknown: '이 시장의 판정 등록이 아닙니다. 화면을 새로 고쳐 주세요.',
+  // 판정 정정의 거절(#176): 잠정 결과가 아닌 시장, 그 사이 바뀐 판정 버전, 바꾼 것이 없는 정정, 정정 사유.
+  errMarketJudgementCorrectionStatus:
+    '잠정 결과 상태의 시장만 판정을 정정할 수 있습니다. 화면을 새로 고쳐 주세요.',
+  errMarketJudgementCorrectionDecisionStatus:
+    '잠정 결과 상태가 아니어서 정정을 승인할 수 없습니다. 화면을 새로 고쳐 주세요. 기다리는 정정은 반려하거나 철회해 끝냅니다.',
+  errMarketJudgementCorrectionStale:
+    '그 사이 판정이 정정되었습니다. 화면을 새로 고쳐 지금 판정을 확인해 주세요.',
+  errMarketJudgementCorrectionDecisionStale:
+    '정정하려던 판정이 지금 판정이 아닙니다. 화면을 새로 고쳐 주세요. 기다리는 정정은 반려하거나 철회해 끝냅니다.',
+  errMarketJudgementCorrectionUnchanged:
+    '지금 판정과 결과·근거가 모두 같습니다. 결과나 근거를 바꿀 것이 없으면 정정하지 않습니다.',
+  errMarketJudgementCorrectionReason: '정정 사유를 1~500자로 입력해 주세요.',
   // 판정 승인 대기 (GET /admin/market-judgements): 기다리는 판정 등록, 오래 기다린 것부터. 검수 대기 화면의
-  // 넷째 묶음이다. 예정 판정 시각 전의 판정은 그렇다고 표시한다.
+  // 넷째 묶음이다. 예정 판정 시각 전의 판정은 그렇다고 표시하고, 판정 정정(#176)은 '판정 정정 v1 → v2'로
+  // 표시한다.
   adminMarketJudgements: '판정 승인 대기',
   adminMarketJudgementsIntro:
     '승인을 기다리는 판정입니다. 오래 기다린 것부터 보입니다. 등록한 관리자가 아닌 관리자가 시장 상세에서 승인하거나 반려합니다.',
@@ -1188,6 +1270,7 @@ export const copy = {
   adminMarketJudgementsColScheduledJudgementAt: '예정 판정',
   adminMarketJudgementsColCloseAt: '거래 마감',
   adminMarketJudgementsEarly: '예정 판정 전',
+  adminMarketJudgementsCorrection: '판정 정정',
   // 관리자 상세의 거래 현황: 체결·포지션에서 나온 값만 보인다(직접 AMM 상태는 #125에서 지웠다).
   adminMarketTradeStats: '거래 현황',
   tradeStatsLastPrice: '현재가',
@@ -1213,7 +1296,9 @@ export const copy = {
   eventClosed: '마감',
   // 판정(#152): 다른 관리자가 승인하면 거래 마감 → 잠정 결과(provisional, 행위자는 승인한 관리자; 판정 버전,
   // 결과, 이의 기한), 이의 기한이 지나면 워커가 잠정 결과 → 결과 확정(resolved; 판정 버전, 결과 — 판정 이의가
-  // 잡아 두었으면 마지막 기각 뒤, #175, 행위자 없음). #152 전의
+  // 잡아 두었으면 마지막 기각 뒤, #175, 행위자 없음). 판정 정정(#176)의 승인은 상태를 바꾸지 않는 '판정 정정'
+  // 하나를 남긴다(행위자는 승인한 관리자; 이전 → 새 판정 버전과 결과, 새 이의 기한, 정정으로 종결한 판정 이의의
+  // 수). #152 전의
   // 결과 확정 기록은 관리자 한 명이 바로 확정한 판정이다(결과, 메모, 근거 URL). 워커가 결과 확정 → 지급
   // 중으로 옮기고(settling) 지급 중 → 지급 완료로 끝낸다(finalized). 이름은 그 상태의 라벨을 따른다
   // (ADR-0093 결정 1의 12, #174).
@@ -1221,6 +1306,9 @@ export const copy = {
   eventResolved: '결과 확정',
   eventJudgementVersion: '판정 버전',
   eventDisputeDeadline: '이의 기한',
+  eventJudgementCorrected: '판정 정정',
+  // '정정으로 종결한 판정 이의 2건': 뒤에 수와 adminMarketDisputesHoldingUnit이 붙는다.
+  eventClosedDisputes: '정정으로 종결한 판정 이의',
   eventResolveNote: '메모',
   eventResolveEvidence: '근거 URL',
   eventSettling: '지급 시작',
@@ -1783,8 +1871,8 @@ export const copy = {
   // #187의 반복 링크 검토 목록(ADR-0083)의 항목: '신고·제재 기록'의 기간으로 탐지된 때와 '확인함' 가운데
   // 늦은 때부터 센다(오너 결정 2026-10-24 13). 이름은 그 목록을 부르는 말(ADR-0083 '검토 목록')로 골랐다.
   adminRetentionKindLinkFlags: '반복 링크 검토 목록',
-  // 판정 이의(#175, ADR-0104): 탈퇴한 계정이 낸 것 가운데 기각·수용되거나 철회된 것의 근거 링크와 사유 —
-  // '신고·제재 기록'의 기간으로 탈퇴 시각과 처리·철회 시각 가운데 늦은 때부터 센다. 그 자리에서 비우고 이의
+  // 판정 이의(#175, ADR-0104): 탈퇴한 계정이 낸 것 가운데 기각·수용·철회되거나 정정으로 종결된 것(#176)의
+  // 근거 링크와 사유 — '신고·제재 기록'의 기간으로 탈퇴 시각과 처리·철회·종결 시각 가운데 늦은 때부터 센다. 그 자리에서 비우고 이의
   // 건수와 처리 상태는 남는다(#24의 공개 기록). 검토 중인 것은 지우지 않는다.
   adminRetentionKindMarketDisputes: '판정 이의 본문',
   adminRetentionKindConsentRecords: '동의 기록',
@@ -1960,8 +2048,9 @@ export const copy = {
 
   // 상태별 안내 (PLAN 11.3). 색과 배지는 MARKET_STATUS_LABEL/PALETTE가 맡고, 이 문구는
   // 그 아래에서 "지금 무엇을 할 수 있는지"를 말한다. 그 상태의 사실만 적고, 다른 이슈가 만들 것
-  // (중단 사유와 시각의 공개 #24, 판정 정정 #176, 무효 지급 #126)은 약속하지 않는다(#174의 글; #114는 사유를
-  // 관리자 화면에만 둔다). 개장 예정의 안내는 예정 개장
+  // (중단 사유와 시각의 공개 #24, 무효 지급 #126)은 약속하지 않는다(#174의 글; #114는 사유를 관리자 화면에만
+  // 둔다). 판정 정정(#176)은 알리지 않는다: 바뀐 결과와 새 이의 기한이 그대로 보이고, 이전 버전과 정정 사유는
+  // 공개 판정 기록(#24)이 보인다. 개장 예정의 안내는 예정 개장
   // 시각의 자동 개장(#21) 뒤에도 여는 시각을 약속하지 않는다: 그 시각은 바뀔 수 있고, 그 전에 거래 마감
   // 시각이 지나면 열리지 않는다(ADR-0100).
   marketScheduledNotice: '아직 열리지 않은 시장입니다. 지금은 거래할 수 없습니다.',
@@ -3462,6 +3551,8 @@ export const copy = {
   // 잠정 결과가 공개된 시장에 체결 이력이 있는 회원이 이의 기한 안에 근거 링크와 사유로 내는 이의다. 판정 버전마다
   // 한 사람이 한 번, 기한 안에 철회할 수 있고 고칠 수 없다. 판정을 등록하지 않은 관리자 한 명이 기각하거나 수용하고
   // (수용은 판정 정정, #176), 처리하지 않았거나 수용한 이의가 있으면 이의 기한이 지나도 결과가 확정되지 않는다.
+  // 판정이 정정되면 그 버전의 검토 중인 이의는 '정정으로 종결'되고, 낸 회원은 새 판정에 새 기한 안에 다시 낼 수
+  // 있다(#176, #173 8항).
   // 제재 이의(이메일, ADR-0084)와 따로 받으니 회원 화면은 '판정 이의'라고 쓴다. 근거 링크와 사유, 제출한 회원은
   // 회원 본인과 운영자만 보고(#173 13항), 처리 사유는 본인에게 보인다(#173 7항). 정정·결과 확정·지급을 이 글로
   // 약속하지 않는다. 시장 상세의 상태별 안내 안: 잠정 결과 동안 '이의 기한' 줄(비로그인에게도, #173 6항)과, 기한
@@ -3469,11 +3560,15 @@ export const copy = {
   marketDisputeDeadline: '이의 기한',
   marketDisputeSubmit: '판정 이의 제출',
   // 잠정 결과 안내 아래의 한 줄: 이의가 잡아 둔 동안('이의 검토 중'), 그리고 기한이 지나도 그런 동안('판정 지연',
-  // 오너 답 2026-11-03). 검토 기한은 없고 지연의 사유는 #142가 붙인다.
+  // 오너 답 2026-11-03). 기한이 지나도 승인을 기다리는 판정 정정이 잡아 둔 동안(#176, 결정 3 '#176 정정 대기')은
+  // 이의가 아니라 판정을 다시 검토한다고만 말한다: 정정은 반려될 수 있어 결과가 바뀐다고 약속하지 않는다. 검토
+  // 기한은 없고 지연의 사유는 #142가 붙인다.
   marketProvisionalUnderReview:
     '판정 이의를 검토하고 있습니다. 검토가 끝날 때까지 결과는 확정되지 않습니다.',
   marketProvisionalDelayed:
     '이의 기한이 지났지만 판정 이의를 검토하고 있어 결과가 아직 확정되지 않았습니다.',
+  marketProvisionalDelayedCorrection:
+    '이의 기한이 지났지만 판정을 다시 검토하고 있어 결과가 아직 확정되지 않았습니다.',
   // 토론 목록 위와 글쓰기 화면(시장을 고른 때)의 한 줄(결정 3 '#175 토론의 이의 안내'): 이의 기한 전의 잠정 결과
   // 시장에서만, 기한이 지나면 사라진다. 뒤에 marketDisputeSubmit 링크가 붙는다.
   discussionDisputeNote: '토론 글은 판정 이의가 아닙니다.',
@@ -3520,20 +3615,27 @@ export const copy = {
     '이 판정에는 이미 판정 이의를 냈습니다. 판정마다 한 번 낼 수 있고, 철회한 이의도 그 한 번입니다.',
   disputeRefusalDecided: '이미 처리된 판정 이의입니다.',
   disputeRefusalRetracted: '이미 철회한 판정 이의입니다.',
-  // 낸 이의(제출 화면과 MY): 상태(검토 중·기각·수용·철회), 그 시각, 처리 사유, 접은 내용, 기한 안이면 철회.
+  // 낸 이의(제출 화면과 MY): 상태(검토 중·기각·수용·철회·정정으로 종결), 그 시각, 처리 사유, 접은 내용, 기한
+  // 안이면 철회. 판정이 정정된 뒤의 이전 버전 이의는 MY가 그렇다고 말한다(#176): 수용한 것은 '판정이 정정되었습니다',
+  // 정정으로 종결된 것은 새 판정에 다시 낼 수 있다는 것.
   disputeMine: '낸 판정 이의',
   disputeStatusPending: '검토 중',
   disputeStatusDismissed: '기각',
   disputeStatusAccepted: '수용',
   disputeStatusRetracted: '철회',
+  disputeStatusClosedByCorrection: '정정으로 종결',
   disputeSubmittedAt: '낸 시각',
   disputeDecidedAt: '처리 시각',
   disputeRetractedAt: '철회 시각',
+  disputeClosedAt: '종결 시각',
   disputeDecisionReason: '처리 사유',
   disputeJudgementVersion: '판정 버전',
   disputeContent: '낸 내용',
   disputeAcceptedNote:
     '수용된 이의는 판정 정정으로 이어집니다. 정정이 끝날 때까지 결과는 확정되지 않습니다.',
+  disputeAcceptedCorrectedNote: '판정이 정정되었습니다.',
+  disputeClosedByCorrectionNote:
+    '판정이 정정되어 검토하지 않고 종결된 이의입니다. 정정된 판정에는 그 이의 기한 안에 다시 낼 수 있습니다.',
   disputeRetract: '철회',
   disputeRetractTitle: '판정 이의를 철회합니다',
   disputeRetractBody:
@@ -3550,7 +3652,8 @@ export const copy = {
   myDisputesOpen: '판정 이의 보기',
 
   // --- admin: 이의 접수 (#175, ADR-0104; ADR-0093 결정 1 #173 2·7·13·15항) ---
-  // 관리자 메뉴 '이의 접수'(N03 §8의 이름): 검토 대기(오래 기다린 것부터)와 처리됨(최근 처리·철회부터). 기각·수용은
+  // 관리자 메뉴 '이의 접수'(N03 §8의 이름): 검토 대기(오래 기다린 것부터)와 처리됨(최근 처리·철회·정정으로 종결부터,
+  // #176). 기각·수용은
   // 시장 상세의 판정 칸에서 그 판정 버전을 등록하지 않은 관리자 한 명이 한다(승인한 관리자는 처리할 수 있다).
   // 시장 가격·거래량·다수의 쪽은 이 화면들에 없다(N03 §5, #152 AC 8). 이해관계를 밝힌 관리자의 제외는 #143이다.
   adminDisputes: '이의 접수',
@@ -3559,7 +3662,7 @@ export const copy = {
   adminDisputesPending: '검토 대기',
   adminDisputesDecided: '처리됨',
   adminDisputesEmptyPending: '검토를 기다리는 판정 이의가 없습니다.',
-  adminDisputesEmptyDecided: '처리했거나 철회된 판정 이의가 없습니다.',
+  adminDisputesEmptyDecided: '처리했거나 철회되었거나 정정으로 종결된 판정 이의가 없습니다.',
   adminDisputeVersion: '판정 버전',
   adminDisputeSubmitter: '낸 회원',
   adminDisputeSubmittedAt: '접수 시각',
@@ -3569,10 +3672,13 @@ export const copy = {
   adminDisputeDecidedAt: '처리 시각',
   adminDisputeDecisionReason: '처리 사유',
   adminDisputeRetractedAt: '철회 시각',
-  // 탈퇴한 계정의 처리·철회된 이의는 보존기간(신고·제재 기록)이 지나면 근거 링크와 사유를 비운다(ADR-0087 (6)).
+  adminDisputeClosedAt: '정정으로 종결한 시각',
+  // 탈퇴한 계정의 처리·철회·종결된 이의는 보존기간(신고·제재 기록)이 지나면 근거 링크와 사유를 비운다(ADR-0087
+  // (6), #176).
   adminDisputePurged: '보존기간이 지나 근거 링크와 사유를 지웠습니다.',
   // 판정 칸의 '판정 이의' 묶음: 현재 판정 버전의 이의, 오래된 것부터. 처리하지 않았거나 수용한 이의의 수(확정을
-  // 기다리게 하는 것)와, 판정을 등록한 관리자에게는 버튼이 꺼진 까닭.
+  // 기다리게 하는 것)와, 판정을 등록한 관리자에게는 버튼이 꺼진 까닭. 수용한 이의에는 기다리는 판정이 없는 동안
+  // '정정 등록'(#176)이 판정 정정 칸을 연다(누구든, 판정을 등록한 관리자도).
   adminMarketDisputes: '판정 이의',
   adminMarketDisputesIntro:
     '이 판정 버전에 접수된 판정 이의입니다. 처리하지 않았거나 수용한 이의가 있으면 이의 기한이 지나도 결과가 확정되지 않습니다.',
@@ -3586,17 +3692,21 @@ export const copy = {
     '자신이 낸 판정 이의는 기각하거나 수용할 수 없습니다. 다른 관리자가 처리합니다.',
   adminMarketDisputeDismiss: '기각',
   adminMarketDisputeAccept: '수용',
+  adminMarketDisputeCorrect: '정정 등록',
   adminMarketDisputeDismissTitle: '판정 이의를 기각합니다',
   adminMarketDisputeDismissBody:
     '결과나 근거를 바꿀 것이 없으면 기각합니다. 기각은 되돌릴 수 없습니다. 이의 기한이 지났고 남은 이의가 없으면 결과가 곧 확정됩니다.',
   adminMarketDisputeAcceptTitle: '판정 이의를 수용합니다',
+  // 수용은 정정으로 이어지고, 수용한 뒤 등록된 정정이 반려되거나 철회되면 검토 중으로 돌아간다(오너 답
+  // 2026-11-02, #176). 이미 기다리는 정정은 등록할 때의 수용한 이의만 실어 두므로 그 뒤에 수용한 이의는 싣지 않는다.
   adminMarketDisputeAcceptBody:
-    '수용은 판정 정정으로 이어지고, 정정은 다시 등록과 다른 관리자의 승인을 거칩니다. 정정이 끝날 때까지 이 시장은 잠정 결과에 머물고 결과가 확정되지 않습니다. 수용은 되돌릴 수 없습니다.',
+    '수용은 판정 정정으로 이어지고, 정정은 다시 등록과 다른 관리자의 승인을 거칩니다. 정정이 끝날 때까지 이 시장은 잠정 결과에 머물고 결과가 확정되지 않습니다. 수용한 뒤 등록된 정정을 다른 관리자가 반려하거나 등록한 관리자가 철회하면 이 이의는 검토 중으로 돌아갑니다.',
   adminMarketDisputeDecisionReason: '처리 사유',
   adminMarketDisputeDecisionHint:
     '이의를 낸 회원이 이 사유를 봅니다. 공개 판정 기록에는 처리한 관리자 없이 사유가 보일 수 있습니다. 500자까지 쓸 수 있습니다.',
   adminMarketDisputeDismissed: '판정 이의를 기각했습니다.',
-  adminMarketDisputeAccepted: '판정 이의를 수용했습니다. 판정 정정을 기다립니다.',
+  adminMarketDisputeAccepted:
+    '판정 이의를 수용했습니다. 기다리는 판정이 없으면 이 이의의 정정 등록으로 판정 정정을 등록합니다.',
   adminMarketDisputeChanged:
     '그 사이 이 이의가 처리되었거나 철회되었습니다. 창을 닫고 새로 읽은 내용을 확인해 주세요.',
   errAdminDisputeDecided: '이미 처리된 판정 이의입니다. 새로 읽은 내용을 확인해 주세요.',

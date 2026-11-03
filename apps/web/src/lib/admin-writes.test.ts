@@ -191,12 +191,13 @@ describe('the admin the admin writes name (ADR-0092)', () => {
       '../app/admin/markets/[id]/market-pause-panel.tsx': 6,
       // the confirms of 거래 일시 중단, 재개·조기 마감 요청, 승인, 반려 and 철회 (#114)
       '../app/admin/markets/[id]/market-pause-dialogs.tsx': 5,
-      // the buttons opening 판정 등록, 승인, 반려 and 철회, the form's fields and its 판정 등록 (#152)
-      '../app/admin/markets/[id]/market-judgement-panel.tsx': 6,
+      // the buttons opening 판정 등록, 판정 정정 (#176), 승인, 반려 and 철회, the form's fields and its
+      // 판정 등록 (#152)
+      '../app/admin/markets/[id]/market-judgement-panel.tsx': 7,
       // the confirms of 승인, 반려 and 철회 (#152)
       '../app/admin/markets/[id]/market-judgement-dialogs.tsx': 3,
-      // the buttons opening 기각 and 수용 (#175)
-      '../app/admin/markets/[id]/market-dispute-panel.tsx': 2,
+      // the buttons opening 기각 and 수용 (#175), and an accepted one's 정정 등록 (#176)
+      '../app/admin/markets/[id]/market-dispute-panel.tsx': 3,
       // the confirm of 기각 or 수용 (#175: one dialog, its kind's route)
       '../app/admin/markets/[id]/market-dispute-dialogs.tsx': 1,
       // 만들기, and the form's fields
@@ -298,9 +299,10 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
     '../app/admin/markets/[id]/market-pause-panel.tsx': [
       'const [action, setAction] = useHeldForOperator<PauseAction>();',
     ],
-    // 판정 (#152): the registration form and the three dialogs, with the result, the source, the
-    // reasons, the links, the instant and the description picked and typed, and the approval's
-    // event-deadline confirmation
+    // 판정 (#152): the registration form — a first judgement's or a correction's (#176) — and the
+    // three dialogs, with the result, the source, the reasons, the links, the instant, the
+    // description and a correction's reason picked and typed, and the approval's event-deadline
+    // confirmation
     '../app/admin/markets/[id]/market-judgement-panel.tsx': [
       'const [action, setAction] = useHeldForOperator<JudgementAction>();',
     ],
@@ -353,9 +355,10 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
       keys: ["<SupplementRequestForm\n              key={operatorId ?? ''}\n"],
       fieldsets: 1,
     },
-    // 판정 등록's form (#152), with everything picked and typed in it
+    // 판정 등록's form (#152), with everything picked and typed in it — and 판정 정정's (#176), the
+    // same form drawn again when the action turns from one to the other
     '../app/admin/markets/[id]/market-judgement-panel.tsx': {
-      keys: ["<JudgementRegisterForm key={operatorId ?? ''} market={market} onClose={close} />"],
+      keys: ["<JudgementRegisterForm\n              key={`${action}:${operatorId ?? ''}`}\n"],
       fieldsets: 1,
     },
     '../app/admin/themes/admin-themes.tsx': {
@@ -433,17 +436,25 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
     expect(source('../app/admin/markets/[id]/market-pause-panel.tsx')).toContain(
       '{action !== null && (\n        <PauseDialog kind={action} market={market} readAt={readAt} onClose={close} />',
     );
-    // And each judgement dialog (#152), and the registration form only while held for its admin.
+    // And each judgement dialog (#152), and the registration form — a correction's too (#176) —
+    // only while held for its admin.
     const judgement = source('../app/admin/markets/[id]/market-judgement-panel.tsx');
     expect(judgement).toContain(
-      "{action !== null && action !== 'register' && (\n        <JudgementDialog kind={action} market={market} onClose={close} />",
+      '{action !== null && !isFormAction(action) && (\n        <JudgementDialog kind={action} market={market} readAt={readAt} onClose={close} />',
     );
-    expect(judgement).toContain("action === 'register' ? (");
+    expect(judgement).toContain('isFormAction(action) ? (');
     // And the 판정 이의 block's 기각 or 수용 dialog (#175), drawn in the judgement panel.
     expect(source('../app/admin/markets/[id]/market-dispute-panel.tsx')).toContain(
       '{action !== null && (\n        <DisputeDecisionDialog\n          action={action}\n          market={market}',
     );
-    expect(judgement).toContain('disputes={<MarketDisputes market={market} />}');
+    // An accepted dispute's 정정 등록 opens the panel's correction form, held as the panel's (#176):
+    // every action opens through `open`, which holds it (and notes what opened a form, for focus).
+    expect(judgement).toContain(
+      "<MarketDisputes\n            market={market}\n            formOpen={isFormAction(action)}\n            onCorrect={() => open('correct')}\n          />",
+    );
+    expect(judgement).toContain(
+      'const open = (next: JudgementAction) => {\n    if (isFormAction(next)) refocus.opened();\n    setAction(next);\n  };',
+    );
     expect(source('../app/admin/settings/admin-release-settings.tsx')).toContain(
       '{editing !== null && <ChangeDialog item={editing} onClose={() => setEditing(null)} />}',
     );
@@ -533,13 +544,14 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
         '<PausePanelBody\n        market={market}\n        readAt={readAt}\n        operatorId={operatorId}\n        onOpen={setAction}',
       ],
       // The judgement panel likewise (#152): 판정 등록 off while the dispute window is undecided,
-      // 승인 and 반려 off for the registrant, 철회 its alone.
+      // 판정 정정 (#176) for any admin, 승인 and 반려 off for the registrant, 철회 its alone.
       '../app/admin/markets/[id]/market-judgement-panel.tsx': [
-        "disabled={operatorId === undefined || unavailable !== null}\n                onClick={() => onOpen('register')}",
+        "disabled={operatorId === undefined || unavailable !== null}\n                  onClick={() => onOpen('register')}",
+        "disabled={operatorId === undefined}\n                onClick={() => onOpen('correct')}",
         "disabled={operatorId === undefined || requester !== false || !approvable}\n          onClick={() => onOpen('approve')}",
         "disabled={operatorId === undefined || requester !== false}\n          onClick={() => onOpen('reject')}",
         "disabled={operatorId === undefined}\n            onClick={() => onOpen('retract')}",
-        '<JudgementPanelBody\n        market={market}\n        readAt={readAt}\n        operatorId={operatorId}\n        onOpen={setAction}',
+        '<JudgementPanelBody\n        market={market}\n        readAt={readAt}\n        operatorId={operatorId}\n        onOpen={open}',
       ],
     };
     for (const [file, buttons] of Object.entries(opens)) {

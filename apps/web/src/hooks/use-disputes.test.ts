@@ -39,7 +39,14 @@ const dispute = (fields: Partial<MyDispute> = {}): MyDispute => ({
   decidedAt: null,
   decisionReason: null,
   retractedAt: null,
-  market: { id: MARKET, slug: 'first-snow', title: '첫눈이 올까?', status: 'provisional' },
+  closedAt: null,
+  market: {
+    id: MARKET,
+    slug: 'first-snow',
+    title: '첫눈이 올까?',
+    status: 'provisional',
+    judgementVersion: 1,
+  },
   retractable: true,
   ...fields,
 });

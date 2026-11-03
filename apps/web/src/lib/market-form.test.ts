@@ -901,7 +901,7 @@ const market: AdminMarket = {
   disputeDeadline: null,
   disputeOpen: false,
   disputes: { holding: 0, items: [] },
-  judgement: { current: null, pending: null, log: [], disputeWindowUndecided: false },
+  judgement: { current: null, history: [], pending: null, log: [], disputeWindowUndecided: false },
   missingOpenItems: [],
   leadCloseGapMinutes: null,
   // Never submitted (#78): no request, no editor, no record.

@@ -112,7 +112,7 @@ import {
   writeLimitEvents,
 } from './schema/index.js';
 import { closeDb, createDb } from './client.js';
-import { dueProvisionalMarkets } from './market-judgement.js';
+import { dueProvisionalMarkets, setCorrectionPending } from './market-judgement.js';
 import { openScheduledMarket } from './market-open.js';
 import { allowRuleSupplement } from './market-rules-content.js';
 import { storedReleaseSettingValue } from './release-settings.js';
@@ -122,6 +122,8 @@ import {
   createApprovalRequest,
   createCategory,
   createConsents,
+  createCorrectedMarket,
+  createCorrectionRequest,
   createDispute,
   createMarket,
   createMarketInReview,
@@ -2822,6 +2824,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         { column: 'approved_by', type: 'text', nullable: 'NO', default: null },
         { column: 'provisional_event_id', type: 'bigint', nullable: 'NO', default: null },
         { column: 'created_at', type: instant, nullable: 'NO', default: 'now()' },
+        // Migration 0057 (#176): the 정정 사유, added last.
+        { column: 'correction_reason', type: 'text', nullable: 'YES', default: null },
       ]);
       const { rows: constraints } = await t.db.execute<{
         name: string;
@@ -2841,6 +2845,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         { name: 'market_judgements_approval_id_unique', type: 'u', action: ' ' },
         { name: 'market_judgements_approved_by_user_id_fk', type: 'f', action: 'r' },
         { name: 'market_judgements_approver_check', type: 'c', action: ' ' },
+        { name: 'market_judgements_correction_reason_check', type: 'c', action: ' ' },
         { name: 'market_judgements_dispute_check', type: 'c', action: ' ' },
         { name: 'market_judgements_evidence_check', type: 'c', action: ' ' },
         { name: 'market_judgements_fallback_reason_check', type: 'c', action: ' ' },
@@ -2903,7 +2908,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       const fallback = { sourcePriority: 1, fallbackReason: '1차 출처가 발표하지 않았다.' };
       const cases: [Record<string, unknown>, string][] = [
         // Versions from 1, the market's and the rules'.
-        [{ version: 0 }, 'market_judgements_version_check'],
+        // (With a reason: a version other than 1 takes one since migration 0057.)
+        [{ version: 0, correctionReason: '사유' }, 'market_judgements_version_check'],
         [{ ruleVersion: 0 }, 'market_judgements_version_check'],
         // The source: all three or none, a priority of the rules, none only for a VOID.
         [{ sourceName: null }, 'market_judgements_source_check'],
@@ -2988,10 +2994,12 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       ];
       for (const [index, values] of accepted.entries()) {
         const request = await approvedRequest(market.id, registrant.id, approver.id);
+        // A later version is a correction's, with its reason (migration 0057).
         const [made] = await insertJudgement({
           ...row,
           ...values,
           version: index + 2,
+          correctionReason: '1차 출처가 발표를 정정했다.',
           approvalId: request.id,
         });
         expect(made, JSON.stringify(values)).toMatchObject(values);
@@ -3004,11 +3012,13 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         state: '23505',
         constraint: 'market_judgements_market_id_version_pk',
       });
-      expect(await refusal(insertJudgement({ ...row, version: 99 }))).toEqual({
+      // Version 99 is a correction's: with its reason (migration 0057).
+      const corrected = { ...row, version: 99, correctionReason: '1차 출처가 발표를 정정했다.' };
+      expect(await refusal(insertJudgement(corrected))).toEqual({
         state: '23505',
         constraint: 'market_judgements_approval_id_unique',
       });
-      const fresh = { ...row, version: 99, approvalId: another.id };
+      const fresh = { ...corrected, approvalId: another.id };
       expect(await refusal(insertJudgement({ ...fresh, marketId: randomUUID() }))).toEqual({
         state: '23503',
         constraint: 'market_judgements_market_id_markets_id_fk',
@@ -3173,13 +3183,38 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       // Markets past their deadline with a dispute of each status (#175): the pending and the
       // accepted one hold theirs, in the disputes' partial index.
       const disputed: Record<string, string> = {};
-      for (const status of ['pending', 'accepted', 'dismissed', 'retracted'] as const) {
+      for (const status of [
+        'pending',
+        'accepted',
+        'dismissed',
+        'retracted',
+        'closed_by_correction',
+      ] as const) {
         disputed[status] = (
           await createDispute(t.db, {
             status,
             market: { publishedAt: new Date(Date.now() - 2 * DAY_WINDOW * MINUTE) },
           })
         ).market.id;
+      }
+      // And one past its deadline a waiting correction holds (#176); a few retracted requests of
+      // other markets give the approval requests' indexes rows to skip.
+      const corrected = (
+        await createProvisionalMarket(t.db, {
+          publishedAt: new Date(Date.now() - 2 * DAY_WINDOW * MINUTE),
+        })
+      ).market.id;
+      await createCorrectionRequest(t.db, { marketId: corrected });
+      for (let index = 0; index < 5; index += 1) {
+        const { market: other } = await createProvisionalMarket(t.db);
+        await createApprovalRequest(t.db, {
+          kind: MARKET_JUDGEMENT_APPROVAL_KIND,
+          targetType: 'market',
+          targetId: other.id,
+          payload: {},
+          requestedBy: (await createUser(t.db, { role: 'admin' })).user.id,
+          retracted: {},
+        });
       }
       // A table this small would be scanned whole, or read through a bitmap, or through any index
       // and sorted — with the anti-join, sorting these few rows costs the planner less than reading
@@ -3188,6 +3223,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       // deadline index, and the holds from the disputes' partial index.
       await analyze('markets');
       await analyze('market_disputes');
+      await analyze('approval_requests');
       const plan = await t.db.transaction(async (tx) => {
         await tx.execute(sql`SET LOCAL enable_seqscan = off`);
         await tx.execute(sql`SET LOCAL enable_bitmapscan = off`);
@@ -3199,6 +3235,12 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       });
       expect(plan).toMatch(/Index (Only )?Scan using markets_provisional_dispute_deadline_idx/);
       expect(plan).toMatch(/Index (Only )?Scan using market_disputes_holding_idx/);
+      // The waiting corrections (#176): by an index of the approval requests, never sequentially —
+      // the few pending ones hashed once from the queue's partial index, or each market's looked
+      // up in the target index, as the planner costs them.
+      expect(plan).toMatch(
+        /Index (Only )?Scan using approval_requests_(pending_requested_at|target)_idx/,
+      );
       expect(plan).not.toMatch(/Sort/);
       const { rows: disputeIndexes } = await t.db.execute<{ definition: string }>(sql`
         SELECT indexdef AS definition FROM pg_indexes
@@ -3212,9 +3254,12 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       ]);
       // And it returns what the scan confirms: the due markets nothing holds, the earliest first.
       const due = (await dueProvisionalMarkets(t.db)).map((row) => row.id);
-      expect(due.slice(0, 2).sort()).toEqual([disputed.dismissed, disputed.retracted].sort());
+      expect(due.slice(0, 3).sort()).toEqual(
+        [disputed.dismissed, disputed.retracted, disputed.closed_by_correction].sort(),
+      );
       expect(due).not.toContain(disputed.pending);
       expect(due).not.toContain(disputed.accepted);
+      expect(due).not.toContain(corrected);
     });
   });
 
@@ -3291,6 +3336,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         { column: 'decision_reason', type: 'text', nullable: 'YES', default: null },
         { column: 'retracted_at', type: instant, nullable: 'YES', default: null },
         { column: 'purged_at', type: instant, nullable: 'YES', default: null },
+        // Migration 0057 (#176): 정정으로 종결's instant, added last.
+        { column: 'closed_at', type: instant, nullable: 'YES', default: null },
       ]);
       const { rows: constraints } = await t.db.execute<{
         name: string;
@@ -3300,6 +3347,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         SELECT conname AS name, contype AS type, confdeltype AS action FROM pg_constraint
         WHERE conrelid = 'market_disputes'::regclass ORDER BY conname`);
       expect(constraints).toEqual([
+        { name: 'market_disputes_closed_check', type: 'c', action: ' ' },
         { name: 'market_disputes_decided_by_user_id_fk', type: 'f', action: 'r' },
         { name: 'market_disputes_decision_check', type: 'c', action: ' ' },
         { name: 'market_disputes_judgement_fk', type: 'f', action: 'r' },
@@ -3328,8 +3376,9 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         'market_disputes_user_id_submitted_at_idx',
       ]);
       const definition = (name: string) => indexes.find((index) => index.name === name)?.definition;
+      // The closure too since migration 0057 (#176).
       expect(definition('market_disputes_ended_at_idx')).toMatch(
-        /\(COALESCE\(decided_at, retracted_at\), id\) WHERE \(\(status\)::text <> 'pending'::text\)$/,
+        /\(COALESCE\(decided_at, retracted_at, closed_at\), id\) WHERE \(\(status\)::text <> 'pending'::text\)$/,
       );
       expect(definition('market_disputes_pending_submitted_at_idx')).toMatch(
         /\(submitted_at, id\) WHERE \(\(status\)::text = 'pending'::text\)$/,
@@ -3372,7 +3421,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       const refused = (constraint: string) => ({ state: '23514', constraint });
       const cases: [Record<string, unknown>, string][] = [
         [{ status: 'withdrawn' }, 'market_disputes_status_check'],
-        [{ status: 'closed_by_correction' }, 'market_disputes_status_check'],
+        // A status of migration 0057 (#176), refused without its instant.
+        [{ status: 'closed_by_correction' }, 'market_disputes_closed_check'],
         [{ links: [] }, 'market_disputes_links_check'],
         [
           { links: Array.from({ length: 6 }, (_, i) => `${LINK}/${i}`) },
@@ -3483,7 +3533,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(people?.disputesSubmitted).toEqual([]);
     });
 
-    it('lets an UPDATE only decide or retract a pending dispute once, or the retention empty an ended one once; no DELETE, whoever writes', async () => {
+    it('lets an UPDATE only decide or retract a pending dispute, or the retention empty an ended one once; no DELETE, whoever writes', async () => {
       const { member, decider, row } = await disputeFixture();
       const later = new Date(row.submittedAt.getTime() + 1_000);
       const [pending] = await insertDispute(row);
@@ -3494,10 +3544,11 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         decidedAt: new Date(row.submittedAt.getTime() + 1),
         decisionReason: '바꿀 것이 없다.',
       };
+      // Migration 0057's message (#176): a closure by a correction and accepted → pending too.
       const changesOnce = {
         state: '23000',
         message: expect.stringContaining(
-          'changes once, from pending to dismissed, accepted or retracted',
+          'moves only from pending to dismissed, accepted, retracted or closed_by_correction, or from accepted back to pending',
         ) as unknown,
       };
       const keepsItsSubmission = {
@@ -3541,11 +3592,13 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       ).toEqual({ state: '23514', constraint: 'market_disputes_purged_check' });
       const [dismissed] = await t.db.update(marketDisputes).set(decision).where(where).returning();
       expect(dismissed).toEqual({ ...pending, ...decision });
-      // A decided dispute takes no other move, nor a second decision, nor a 철회.
+      // A dismissed dispute takes no other move, nor a second decision, nor a 철회, nor a closure.
       for (const change of [
         { status: 'accepted' as const },
+        { status: 'pending' as const, decidedBy: null, decidedAt: null, decisionReason: null },
         { decisionReason: '다른 사유' },
         { status: 'retracted' as const, retractedAt: later },
+        { status: 'closed_by_correction' as const, closedAt: later },
       ]) {
         expect(
           await guarded(t.db.update(marketDisputes).set(change).where(where)),
@@ -3655,6 +3708,334 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         .values({ kind: 'market_disputes', count: 1, periodDays: 30, ranAt: new Date() })
         .returning();
       expect(purge).toMatchObject({ kind: 'market_disputes', outcome: 'done' });
+    });
+  });
+
+  describe('judgement corrections (migration 0057, #176)', () => {
+    const LINK = 'https://example.com/evidence';
+    const REASON = '1차 출처가 발표를 정정했다.';
+
+    /** The refusal the guard raises: 23000 with its message. */
+    async function guarded(write: Promise<unknown>) {
+      const error = await write.then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      return { state: sqlState(error), message: errorMessage(error) };
+    }
+
+    /** A `judgement_corrected` event and an approved `market_judgement` request of `marketId`. */
+    async function correctionOf(marketId: string, registrant: string, approver: string) {
+      const [event] = await t.db
+        .insert(marketEvents)
+        .values({ marketId, type: 'judgement_corrected', actorId: approver })
+        .returning();
+      const request = await createApprovalRequest(t.db, {
+        kind: MARKET_JUDGEMENT_APPROVAL_KIND,
+        targetType: 'market',
+        targetId: marketId,
+        payload: { result: 'NO' },
+        requestedBy: registrant,
+        reason: '정정 발표를 확인했다.',
+        decision: { status: 'approved', by: approver },
+      });
+      return { approvalId: request.id, provisionalEventId: event!.id };
+    }
+
+    it('adds the 정정 사유, the closure’s instant and the correction mirror, each with its CHECK', async () => {
+      const { rows: columns } = await t.db.execute<{
+        table: string;
+        column: string;
+        type: string;
+        nullable: string;
+        default: string | null;
+      }>(sql`
+        SELECT table_name AS "table", column_name AS "column", data_type AS type,
+          is_nullable AS nullable, column_default AS "default"
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND (table_name, column_name) IN (
+          ('market_judgements', 'correction_reason'), ('market_disputes', 'closed_at'),
+          ('markets', 'correction_pending'))
+        ORDER BY table_name`);
+      expect(columns).toEqual([
+        {
+          table: 'market_disputes',
+          column: 'closed_at',
+          type: 'timestamp with time zone',
+          nullable: 'YES',
+          default: null,
+        },
+        {
+          table: 'market_judgements',
+          column: 'correction_reason',
+          type: 'text',
+          nullable: 'YES',
+          default: null,
+        },
+        {
+          table: 'markets',
+          column: 'correction_pending',
+          type: 'boolean',
+          nullable: 'NO',
+          default: 'false',
+        },
+      ]);
+      const refused = (constraint: string) => ({ state: '23514', constraint });
+
+      // The 정정 사유: exactly for a version after the first, trimmed non-blank, at most 500.
+      const { market, judgement } = await createProvisionalMarket(t.db);
+      const v2 = {
+        ...judgement,
+        version: 2,
+        correctionReason: REASON,
+        ...(await correctionOf(market.id, judgement.registeredBy, judgement.approvedBy)),
+      };
+      const insertJudgement = (values: Record<string, unknown>) =>
+        t.db
+          .insert(marketJudgements)
+          .values({ ...v2, ...values } as typeof marketJudgements.$inferInsert)
+          .returning();
+      const { market: fresh } = await createProvisionalMarket(t.db);
+      for (const values of [
+        { correctionReason: null },
+        { correctionReason: '   ' },
+        { correctionReason: '가'.repeat(501) },
+        // Version 1 takes none (another market's v1, so no key is in the way).
+        {
+          marketId: fresh.id,
+          version: 1,
+          ...(await correctionOf(fresh.id, judgement.registeredBy, judgement.approvedBy)),
+        },
+      ]) {
+        expect(await refusal(insertJudgement(values)), JSON.stringify(values)).toEqual(
+          refused('market_judgements_correction_reason_check'),
+        );
+      }
+      const [made] = await insertJudgement({ correctionReason: '가'.repeat(500) });
+      expect(made).toMatchObject({ version: 2, correctionReason: '가'.repeat(500) });
+
+      // 정정으로 종결: its instant exactly for that status, not before the submission; no decision
+      // and no 철회 with it; emptied only from its instant on.
+      const { user: member } = await createUser(t.db);
+      const { user: decider } = await createUser(t.db, { role: 'admin' });
+      const submittedAt = new Date(judgement.publishedAt.getTime() + 1);
+      const closedAt = new Date(submittedAt.getTime() + 1_000);
+      const row = {
+        marketId: market.id,
+        judgementVersion: 1,
+        userId: member.id,
+        links: [LINK],
+        reason: '발표 원문과 다르다.',
+        status: 'closed_by_correction',
+        submittedAt,
+        closedAt,
+      };
+      const insertDispute = (values: Record<string, unknown>) =>
+        t.db
+          .insert(marketDisputes)
+          .values({ ...row, ...values } as typeof marketDisputes.$inferInsert)
+          .returning();
+      const cases: [Record<string, unknown>, string][] = [
+        [{ closedAt: null }, 'market_disputes_closed_check'],
+        [{ status: 'pending' }, 'market_disputes_closed_check'],
+        [{ status: 'retracted', retractedAt: closedAt }, 'market_disputes_closed_check'],
+        [{ closedAt: new Date(submittedAt.getTime() - 1) }, 'market_disputes_closed_check'],
+        [
+          { decidedBy: decider.id, decidedAt: closedAt, decisionReason: '사유' },
+          'market_disputes_decision_check',
+        ],
+        [{ retractedAt: closedAt }, 'market_disputes_retracted_check'],
+        [
+          { purgedAt: new Date(closedAt.getTime() - 1), links: [], reason: '' },
+          'market_disputes_purged_check',
+        ],
+      ];
+      for (const [values, constraint] of cases) {
+        expect(await refusal(insertDispute(values)), JSON.stringify(values)).toEqual(
+          refused(constraint),
+        );
+      }
+      for (const values of [
+        { closedAt: submittedAt },
+        { purgedAt: closedAt, links: [], reason: '' },
+      ]) {
+        const { user: other } = await createUser(t.db);
+        const [closed] = await insertDispute({ ...values, userId: other.id });
+        expect(closed, JSON.stringify(values)).toMatchObject({
+          status: 'closed_by_correction',
+          ...values,
+        });
+      }
+
+      // The correction mirror: false unless written, true on a PROVISIONAL market alone, and a
+      // market that still says a correction waits cannot leave PROVISIONAL.
+      expect(market.correctionPending).toBe(false);
+      for (const status of MARKET_STATUSES.filter((value) => value !== 'provisional')) {
+        expect(
+          await refusal(
+            createMarket(t.db, { status, resolvedResult: 'YES', correctionPending: true }),
+          ),
+          status,
+        ).toEqual(refused('markets_correction_pending_status_check'));
+      }
+      const waiting = await createMarket(t.db, { status: 'provisional', correctionPending: true });
+      expect(waiting.correctionPending).toBe(true);
+      expect(
+        await refusal(
+          t.db.update(markets).set({ status: 'resolved' }).where(eq(markets.id, waiting.id)),
+        ),
+      ).toEqual(refused('markets_correction_pending_status_check'));
+      const at = await clockTimestamp(t.db);
+      expect(
+        await t.db.transaction((tx) =>
+          setCorrectionPending(tx, { marketId: waiting.id, pending: false, now: at }),
+        ),
+      ).toMatchObject({ correctionPending: false, updatedAt: at });
+    });
+
+    it('lets the trigger close a pending dispute and reopen an accepted one, and still nothing else, whoever writes', async () => {
+      const { market, judgement } = await createProvisionalMarket(t.db);
+      const { user: decider } = await createUser(t.db, { role: 'admin' });
+      const submittedAt = new Date(judgement.publishedAt.getTime() + 1);
+      const decision = {
+        status: 'accepted' as const,
+        decidedBy: decider.id,
+        decidedAt: new Date(submittedAt.getTime() + 1),
+        decisionReason: '정정이 필요하다.',
+      };
+      const cleared = { decidedBy: null, decidedAt: null, decisionReason: null };
+      const later = new Date(submittedAt.getTime() + 1_000);
+      const dispute = async (values: Record<string, unknown> = {}) => {
+        const { user: member } = await createUser(t.db);
+        const [made] = await t.db
+          .insert(marketDisputes)
+          .values({
+            marketId: market.id,
+            judgementVersion: 1,
+            userId: member.id,
+            links: [LINK],
+            reason: '발표 원문과 다르다.',
+            submittedAt,
+            ...values,
+          } as typeof marketDisputes.$inferInsert)
+          .returning();
+        return made!;
+      };
+      const update = (id: string, values: Record<string, unknown>) =>
+        t.db
+          .update(marketDisputes)
+          .set(values as Partial<typeof marketDisputes.$inferInsert>)
+          .where(eq(marketDisputes.id, id))
+          .returning();
+      const moves = {
+        state: '23000',
+        message: expect.stringContaining(
+          'moves only from pending to dismissed, accepted, retracted or closed_by_correction, or from accepted back to pending',
+        ) as unknown,
+      };
+
+      // pending → closed_by_correction, at its instant, and nothing leaves that status.
+      const pending = await dispute();
+      const [closed] = await update(pending.id, {
+        status: 'closed_by_correction',
+        closedAt: later,
+      });
+      expect(closed).toEqual({ ...pending, status: 'closed_by_correction', closedAt: later });
+      for (const change of [
+        { status: 'pending', closedAt: null },
+        { ...decision, status: 'dismissed', closedAt: null },
+        { closedAt: new Date(later.getTime() + 1) },
+      ]) {
+        expect(await guarded(update(pending.id, change)), JSON.stringify(change)).toEqual(moves);
+      }
+
+      // accepted → pending, its decision cleared — the CHECK holds that — and decided again.
+      const accepted = await dispute(decision);
+      expect(await refusal(update(accepted.id, { status: 'pending' }))).toEqual({
+        state: '23514',
+        constraint: 'market_disputes_decision_check',
+      });
+      for (const change of [
+        { status: 'dismissed' },
+        { status: 'retracted', retractedAt: later, ...cleared },
+        { status: 'closed_by_correction', closedAt: later, ...cleared },
+      ]) {
+        expect(await guarded(update(accepted.id, change)), JSON.stringify(change)).toEqual(moves);
+      }
+      expect(
+        await guarded(update(accepted.id, { status: 'pending', ...cleared, reason: '고친 사유' })),
+      ).toEqual({
+        state: '23000',
+        message: expect.stringContaining('keeps what its submission recorded') as unknown,
+      });
+      const [reopened] = await update(accepted.id, { status: 'pending', ...cleared });
+      expect(reopened).toEqual({ ...accepted, status: 'pending', ...cleared });
+      const [again] = await update(accepted.id, { ...decision, status: 'dismissed' });
+      expect(again).toMatchObject({ status: 'dismissed', decidedBy: decider.id });
+
+      // The retention empties a closed one once, its instant kept; an emptied accepted one never
+      // goes back to pending.
+      const emptied = { purgedAt: later, links: [], reason: '' };
+      expect(
+        await guarded(update(pending.id, { ...emptied, closedAt: new Date(later.getTime() + 1) })),
+      ).toEqual({
+        state: '23000',
+        message: expect.stringContaining('is emptied by its retention alone') as unknown,
+      });
+      const [purged] = await update(pending.id, emptied);
+      expect(purged).toEqual({ ...closed, ...emptied });
+      const old = await dispute(decision);
+      await update(old.id, emptied);
+      expect(await guarded(update(old.id, { status: 'pending', ...cleared }))).toEqual(moves);
+
+      // The owner neither: the trigger is every role's.
+      const owner = createDb(testDbUrls()!.migrateUrl, { max: 1 });
+      try {
+        expect(
+          await guarded(
+            owner
+              .update(marketDisputes)
+              .set({ status: 'pending', closedAt: null })
+              .where(eq(marketDisputes.id, pending.id)),
+          ),
+        ).toEqual(moves);
+        const another = await dispute(decision);
+        const [ownerReopened] = await owner
+          .update(marketDisputes)
+          .set({ status: 'pending', ...cleared })
+          .where(eq(marketDisputes.id, another.id))
+          .returning();
+        expect(ownerReopened).toMatchObject({ status: 'pending', decidedBy: null });
+      } finally {
+        await closeDb(owner);
+      }
+    });
+
+    it('writes a correction as the helpers do: v2 with v1’s window, the closures, the mirrors', async () => {
+      // The whole write, through the factory over correctMarketJudgement: what each new column
+      // and CHECK holds once a real correction has run (packages/db market-judgement.test.ts
+      // covers the helper itself).
+      const { market } = await createProvisionalMarket(t.db, { disputeWindowMinutes: 30 });
+      const pending = (await createDispute(t.db, { marketId: market.id })).dispute;
+      const corrected = await createCorrectedMarket(t.db, { marketId: market.id });
+      expect(corrected.judgement).toMatchObject({
+        version: 2,
+        disputeWindowMinutes: 30,
+        correctionReason: expect.any(String) as unknown,
+      });
+      const [closed] = await t.db
+        .select()
+        .from(marketDisputes)
+        .where(eq(marketDisputes.id, pending.id));
+      expect(closed).toMatchObject({
+        status: 'closed_by_correction',
+        closedAt: corrected.judgement.publishedAt,
+      });
+      expect(corrected.market).toMatchObject({
+        disputeHoldCount: 0,
+        correctionPending: false,
+        statusEventId: corrected.eventId,
+      });
     });
   });
 

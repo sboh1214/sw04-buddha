@@ -10,24 +10,31 @@ import {
 } from './api';
 import { formatKst } from './datetime';
 import {
-  JUDGEMENT_FORM_UNAVAILABLE_NOTE,
   JUDGEMENT_SOURCE_NONE,
   JUDGEMENT_STATUS_LABEL,
   type JudgementFormValues,
   collectedAtWait,
   isJudgementRegistrant,
   judgementApproveDraft,
+  judgementCorrectionBase,
+  judgementCorrectionDefaults,
+  judgementCorrectionEnd,
+  judgementCorrectionRows,
   judgementCurrentRows,
+  judgementDeadlinePassed,
+  judgementDecisionTexts,
   judgementDraft,
   judgementEarly,
   judgementFailure,
   judgementFormDefaults,
+  judgementFormUnavailableNote,
   judgementLogRows,
   judgementRegistrationRows,
   judgementSourceChoices,
   judgementSourceLabel,
   judgementSourceText,
   judgementUnapprovable,
+  judgementUnapprovableNote,
   judgementUnavailable,
   marketJudgementVoidOnly,
   scheduledJudgementWait,
@@ -50,7 +57,7 @@ const apiError = (status: number, code: string, details?: unknown) =>
 const refused = (path: (string | number)[], message: string) =>
   apiError(400, 'VALIDATION_ERROR', [{ path, message }]);
 
-const none = { current: null, pending: null, log: [], disputeWindowUndecided: false };
+const none = { current: null, history: [], pending: null, log: [], disputeWindowUndecided: false };
 
 const pending: MarketJudgementPending = {
   requestId: 'a1b2c3d4-0000-4000-8000-000000000001',
@@ -66,6 +73,7 @@ const pending: MarketJudgementPending = {
   ruleVersion: 2,
   requestedBy: REGISTRANT,
   requestedAt: '2026-11-30T02:00:00.000Z',
+  correction: null,
 };
 
 const current: AdminMarketJudgement = {
@@ -84,6 +92,21 @@ const current: AdminMarketJudgement = {
   approvalId: pending.requestId,
   registeredBy: REGISTRANT,
   approvedBy: APPROVER,
+  correctionReason: null,
+};
+
+/** A correction of `current` (v1 → v2, #176) waiting for its approval. */
+const correcting: MarketJudgementPending = {
+  ...pending,
+  requestId: 'a1b2c3d4-0000-4000-8000-000000000003',
+  result: 'YES',
+  source: { priority: 0, name: '기상청', url: 'https://www.weather.go.kr' },
+  fallbackReason: null,
+  correction: {
+    baseVersion: 1,
+    reason: '출처가 정정 발표를 냈습니다.',
+    disputeIds: ['d1b07384-d9a0-4c9b-8e2f-2d1c0f8a4b11'],
+  },
 };
 
 /** Each field's value as a good registration holds it, a YES on the primary. */
@@ -95,6 +118,7 @@ const good: JudgementFormValues = {
   links: [' https://example.com/a '],
   collectedLocal: '2026-11-30T11:30',
   description: ' 공식 발표를 확인했습니다. ',
+  correctionReason: '',
 };
 
 /**
@@ -136,8 +160,44 @@ describe('the panel’s state (#152)', () => {
         judgement: { ...none, disputeWindowUndecided: true },
       }),
     ).toBe('undecided');
-    expect(JUDGEMENT_FORM_UNAVAILABLE_NOTE.undecided).toBe(
+    expect(judgementFormUnavailableNote('undecided', false)).toBe(
       copy.adminMarketJudgementWindowUndecided,
+    );
+    expect(judgementFormUnavailableNote('status', false)).toBe(copy.adminMarketJudgementFormStatus);
+    expect(judgementFormUnavailableNote('pending', false)).toBe(
+      copy.adminMarketJudgementFormPending,
+    );
+  });
+
+  it('offers 판정 정정 on a provisional market with none waiting, on its current version (#176)', () => {
+    const provisional = { status: 'provisional' as const, judgement: { ...none, current } };
+    expect(judgementUnavailable(provisional, 1)).toBeNull();
+    expect(judgementCorrectionBase(provisional)).toBe(current);
+    // #173 item 8: before the confirmation alone; one waiting at a time; on the current version.
+    for (const status of MARKET_STATUSES.filter((value) => value !== 'provisional')) {
+      expect(judgementUnavailable({ ...provisional, status }, 1), status).toBe('status');
+      expect(judgementCorrectionBase({ ...provisional, status }), status).toBeNull();
+    }
+    expect(judgementUnavailable(provisional, 2)).toBe('stale');
+    const waiting = {
+      ...provisional,
+      judgement: { ...provisional.judgement, pending: correcting },
+    };
+    expect(judgementUnavailable(waiting, 1)).toBe('pending');
+    expect(judgementCorrectionBase(waiting)).toBeNull();
+    // A correction reads no setting: an undecided window does not stop it (#173 item 5).
+    const undecided = {
+      ...provisional,
+      judgement: { ...provisional.judgement, disputeWindowUndecided: true },
+    };
+    expect(judgementUnavailable(undecided, 1)).toBeNull();
+    // A market with no judgement has nothing to correct.
+    expect(judgementCorrectionBase({ status: 'provisional', judgement: none })).toBeNull();
+    expect(judgementFormUnavailableNote('status', true)).toBe(
+      copy.adminMarketJudgementCorrectionFormStatus,
+    );
+    expect(judgementFormUnavailableNote('stale', true)).toBe(
+      copy.adminMarketJudgementCorrectionFormStale,
     );
   });
 
@@ -152,6 +212,38 @@ describe('the panel’s state (#152)', () => {
         judgement: { ...none, pending, disputeWindowUndecided: true },
       }),
     ).toBe('undecided');
+    expect(judgementUnapprovableNote('status', false)).toBe(copy.adminMarketJudgementPendingStatus);
+    // The undecided window says it in its own warning.
+    expect(judgementUnapprovableNote('undecided', false)).toBeNull();
+  });
+
+  it('approves a waiting correction only on a provisional market, on its version (#176)', () => {
+    const waiting = { ...none, current, pending: correcting };
+    expect(judgementUnapprovable({ status: 'provisional', judgement: waiting })).toBeNull();
+    // The payload tells a correction, never the status: a first judgement there is 'status'.
+    expect(
+      judgementUnapprovable({ status: 'provisional', judgement: { ...waiting, pending } }),
+    ).toBe('status');
+    expect(judgementUnapprovable({ status: 'resolved', judgement: waiting })).toBe('status');
+    expect(
+      judgementUnapprovable({
+        status: 'provisional',
+        judgement: { ...waiting, current: { ...current, version: 2 } },
+      }),
+    ).toBe('stale');
+    // It reads no setting.
+    expect(
+      judgementUnapprovable({
+        status: 'provisional',
+        judgement: { ...waiting, disputeWindowUndecided: true },
+      }),
+    ).toBeNull();
+    expect(judgementUnapprovableNote('status', true)).toBe(
+      copy.adminMarketJudgementCorrectionPendingStatus,
+    );
+    expect(judgementUnapprovableNote('stale', true)).toBe(
+      copy.adminMarketJudgementCorrectionPendingStale,
+    );
   });
 
   it('bars the registrant alone, and nobody until the admin on screen is known (decision 3 역할)', () => {
@@ -185,6 +277,35 @@ describe('the panel’s state (#152)', () => {
     expect(marketJudgementVoidOnly({ pause: { history: [], pending: null, log: [] } })).toBe(false);
     expect(judgementFormDefaults(true).result).toBe('VOID');
     expect(judgementFormDefaults(false).result).toBe('');
+    expect(judgementFormDefaults(false).correctionReason).toBe('');
+  });
+
+  it('prefills a correction with the version it replaces, its reason empty (#176)', () => {
+    expect(judgementCorrectionDefaults(current)).toEqual({
+      result: 'NO',
+      source: '1',
+      fallbackReason: pending.fallbackReason,
+      voidReason: '',
+      links: pending.evidence.links,
+      // 2026-11-30 01:00 UTC in KST.
+      collectedLocal: '2026-11-30T10:00',
+      description: pending.description,
+      correctionReason: '',
+    });
+    // A VOID with no source picks 규칙의 출처 없음 and keeps its reason.
+    const voided = judgementCorrectionDefaults({
+      ...current,
+      result: 'VOID',
+      source: null,
+      fallbackReason: null,
+      voidReason: '규칙 밖의 출처뿐입니다.',
+    });
+    expect(voided).toMatchObject({
+      result: 'VOID',
+      source: JUDGEMENT_SOURCE_NONE,
+      fallbackReason: '',
+      voidReason: '규칙 밖의 출처뿐입니다.',
+    });
   });
 
   it('warns before the scheduled judgement alone, and never without one (decision 3 등록 시점)', () => {
@@ -303,6 +424,19 @@ describe('the rows', () => {
         formatKst,
       )[2],
     ).toEqual({ label: copy.adminMarketJudgementApprovedBy, value: copy.postAuthorFormer });
+    // A version a correction made says why, last (#176): the history's entries read the same.
+    expect(
+      judgementCurrentRows(
+        { ...current, version: 2, correctionReason: '출처가 정정 발표를 냈습니다.' },
+        formatKst,
+      ).at(-1),
+    ).toEqual({
+      label: copy.adminMarketJudgementCorrectionReason,
+      value: '출처가 정정 발표를 냈습니다.',
+    });
+    expect(judgementCurrentRows(current, formatKst).map((row) => row.label)).not.toContain(
+      copy.adminMarketJudgementCorrectionReason,
+    );
   });
 
   it('read a log entry with how it ended, never an account id', () => {
@@ -335,6 +469,23 @@ describe('the rows', () => {
       expect(JSON.stringify(rows)).not.toMatch(/registrant"|approver"/);
     }
     expect(Object.values(JUDGEMENT_STATUS_LABEL)).toEqual(['대기', '승인', '반려', '철회']);
+    // A first judgement says no correction.
+    expect(approved.map((row) => row.label)).not.toContain(
+      copy.adminMarketJudgementCorrectionReason,
+    );
+  });
+
+  it('read a correction’s move and reason first, never its disputes’ ids (#176)', () => {
+    expect(judgementCorrectionRows(correcting.correction)).toEqual([
+      { label: copy.adminMarketJudgementCorrectionVersion, value: 'v1 → v2' },
+      { label: copy.adminMarketJudgementCorrectionReason, value: '출처가 정정 발표를 냈습니다.' },
+    ]);
+    expect(judgementCorrectionRows(null)).toEqual([]);
+    const rows = judgementLogRows({ ...correcting, ...logOf('approved'), version: 2 }, formatKst);
+    expect(rows.slice(0, 2)).toEqual(judgementCorrectionRows(correcting.correction));
+    // The move names the version the approval made: no second '판정 버전' row.
+    expect(rows.filter((row) => row.label === copy.adminMarketJudgementVersion)).toHaveLength(1);
+    expect(JSON.stringify(rows)).not.toContain('d1b07384');
   });
 });
 
@@ -354,6 +505,8 @@ describe('judgementDraft (registerJudgementBodySchema’s rules)', () => {
       voidReason: null,
       evidence: { links: ['https://example.com/a'], collectedAt: '2026-11-30T02:30:00.000Z' },
       description: '공식 발표를 확인했습니다.',
+      // A first judgement: the generated body asks the key (openapi-typescript's default).
+      correction: null,
     });
     // A reason typed and then left behind by another choice is not sent (the API refuses it).
     expect(draft({ fallbackReason: '남은 글', voidReason: '남은 글' }).registration).toMatchObject({
@@ -455,6 +608,76 @@ describe('judgementDraft (registerJudgementBodySchema’s rules)', () => {
   });
 });
 
+describe('judgementDraft for a correction (#176, ADR-0105)', () => {
+  /** The current judgement with an instant to the millisecond, as an API write could hold it. */
+  const base: AdminMarketJudgement = {
+    ...current,
+    evidence: { ...current.evidence, collectedAt: '2026-11-30T01:00:30.123Z' },
+  };
+  const prefilled = judgementCorrectionDefaults(base);
+  const draft = (values: Partial<JudgementFormValues>) =>
+    judgementDraft({ ...prefilled, ...values }, false, NOW, base);
+
+  it('sends the version it replaces and its reason, trimmed, with the new grounds', () => {
+    const { ready, registration } = draft({
+      result: 'YES',
+      source: '0',
+      correctionReason: ' 출처가 정정 발표를 냈습니다. ',
+    });
+    expect(ready).toBe(true);
+    expect(registration).toMatchObject({
+      result: 'YES',
+      source: { priority: 0 },
+      // The fallback reason typed for the old source is not sent with the primary.
+      fallbackReason: null,
+      correction: { baseVersion: 1, reason: '출처가 정정 발표를 냈습니다.' },
+    });
+  });
+
+  it('asks the correction reason, 1..500 characters', () => {
+    const changed = { result: 'YES', source: '0' };
+    expect(draft(changed).errors.correctionReason).toBe(copy.errMarketJudgementCorrectionReason);
+    expect(draft(changed).ready).toBe(false);
+    expect(draft({ ...changed, correctionReason: 'a'.repeat(501) }).ready).toBe(false);
+    expect(draft({ ...changed, correctionReason: 'a'.repeat(500) }).ready).toBe(true);
+    // A first judgement asks none, whatever the field holds.
+    expect(judgementDraft(good, false, NOW).errors.correctionReason).toBeNull();
+  });
+
+  it('refuses one that changes neither the result nor its grounds, as the API does (#173 item 7)', () => {
+    const same = draft({ correctionReason: '다시 봤습니다.' });
+    expect(same.errors.correction).toBe(copy.errMarketJudgementCorrectionUnchanged);
+    expect(same.ready).toBe(false);
+    expect(same.registration).toBeNull();
+    // Untouched, the instant is the base's own to the millisecond: still the same grounds.
+    expect(prefilled.collectedLocal).toBe('2026-11-30T10:00');
+    // Text compared trimmed: spaces alone change nothing.
+    expect(
+      draft({ correctionReason: '다시 봤습니다.', description: ` ${base.description} ` }).errors
+        .correction,
+    ).toBe(copy.errMarketJudgementCorrectionUnchanged);
+    // The same result with new grounds is a correction (#173 item 7 '결과나 근거').
+    const regrounded = draft({
+      correctionReason: '증거를 보탭니다.',
+      links: [...base.evidence.links, 'https://kostat.go.kr/c'],
+    });
+    expect(regrounded.ready).toBe(true);
+    expect(regrounded.registration?.result).toBe('NO');
+    expect(regrounded.registration?.evidence.collectedAt).toBe(base.evidence.collectedAt);
+    // A new instant typed is sent as typed (KST, to the minute).
+    expect(
+      draft({ correctionReason: '다시 확인했습니다.', collectedLocal: '2026-11-30T11:00' })
+        .registration?.evidence.collectedAt,
+    ).toBe('2026-11-30T02:00:00.000Z');
+  });
+
+  it('compares only grounds that could be sent: each field says what it lacks first', () => {
+    const blank = draft({ description: '', correctionReason: '사유' });
+    expect(blank.errors.description).toBe(copy.errMarketJudgementDescription);
+    expect(blank.errors.correction).toBeNull();
+  });
+});
+
 describe('judgementApproveDraft (decision 3 등록 시점)', () => {
   it('needs a reason, and before the scheduled judgement the event deadline confirmed', () => {
     expect(judgementApproveDraft('', false, false).ready).toBe(false);
@@ -471,6 +694,112 @@ describe('judgementApproveDraft (decision 3 등록 시점)', () => {
     });
     // A box checked while not asked is not sent as a confirmation.
     expect(judgementApproveDraft('확인', true, false).eventDeadlineConfirmed).toBe(false);
+  });
+});
+
+describe('judgementDecisionTexts (#176)', () => {
+  /** A correction's end as its dialog reads it: the disputes it carried, the deadline passed. */
+  const end = (reopened: number, deadlinePassed: boolean) => ({ reopened, deadlinePassed });
+
+  it('says what each decision does, a correction’s in its own words', () => {
+    expect(judgementDecisionTexts('approve', null)).toEqual({
+      title: copy.adminMarketJudgementApproveTitle,
+      body: copy.adminMarketJudgementApproveBody,
+      done: copy.adminMarketJudgementApproved,
+    });
+    // #173 items 5·8: the first deadline's length from the approval; pending disputes closed.
+    const approve = judgementDecisionTexts('approve', end(1, true));
+    expect(approve.title).toBe(copy.adminMarketJudgementCorrectionApproveTitle);
+    expect(approve.body).toBe(copy.adminMarketJudgementCorrectionApproveBody);
+    expect(approve.body).toContain('첫 이의 기한과 같은 길이');
+    expect(approve.body).toContain('정정으로 종결');
+    expect(approve.done).toBe(copy.adminMarketJudgementCorrectionApproved);
+    // Decision 3 '#176 정정 대기': the version carries on.
+    for (const kind of ['reject', 'retract'] as const) {
+      const texts = judgementDecisionTexts(kind, end(0, false));
+      expect(texts.body, kind).toContain('그대로 이어집니다');
+      expect(texts.body, kind).not.toContain('거래 마감');
+      expect(texts.title, kind).toContain('판정 정정');
+    }
+    expect(judgementDecisionTexts('reject', null).body).toBe(copy.adminMarketJudgementRejectBody);
+    expect(judgementDecisionTexts('retract', null).done).toBe(copy.adminMarketJudgementRetracted);
+  });
+
+  it('sends the disputes it carried back to 검토 중 — only when it carried any', () => {
+    // Owner answer 2026-11-02: an accepted dispute's correction rejected — or retracted, ADR-0105 —
+    // sends it back to 검토 중.
+    for (const kind of ['reject', 'retract'] as const) {
+      expect(judgementDecisionTexts(kind, end(2, false)).body, kind).toContain(
+        copy.adminMarketJudgementCorrectionReopen,
+      );
+      expect(judgementDecisionTexts(kind, end(2, false)).body, kind).toContain(
+        '검토 중으로 돌아갑니다',
+      );
+      expect(judgementDecisionTexts(kind, end(0, false)).body, kind).not.toContain('검토 중');
+    }
+    expect(judgementDecisionTexts('reject', end(1, false)).body).toBe(
+      `${copy.adminMarketJudgementCorrectionRejectBody} ${copy.adminMarketJudgementCorrectionReopen}`,
+    );
+    expect(judgementDecisionTexts('reject', end(0, false)).body).toBe(
+      copy.adminMarketJudgementCorrectionRejectBody,
+    );
+  });
+
+  it('says, past the deadline, that the version is confirmed within seconds and then stays', () => {
+    // The API queues the confirmation at once once nothing holds it (ADR-0105, as the last 기각).
+    expect(copy.adminMarketJudgementCorrectionEndConfirms).toContain('곧 확정');
+    expect(copy.adminMarketJudgementCorrectionEndConfirms).toContain('정정할 수 없습니다');
+    for (const kind of ['reject', 'retract'] as const) {
+      expect(judgementDecisionTexts(kind, end(0, true)).body, kind).toContain(
+        copy.adminMarketJudgementCorrectionEndConfirms,
+      );
+      expect(judgementDecisionTexts(kind, end(0, false)).body, kind).not.toContain('곧 확정');
+    }
+    // Each sentence in its order, the 철회's question last.
+    expect(judgementDecisionTexts('retract', end(1, true)).body).toBe(
+      [
+        copy.adminMarketJudgementCorrectionRetractBody,
+        copy.adminMarketJudgementCorrectionReopen,
+        copy.adminMarketJudgementCorrectionEndConfirms,
+        copy.adminMarketJudgementCorrectionRetractConfirm,
+      ].join(' '),
+    );
+    expect(judgementDecisionTexts('retract', end(0, false)).body).toBe(
+      `${copy.adminMarketJudgementCorrectionRetractBody} ${copy.adminMarketJudgementCorrectionRetractConfirm}`,
+    );
+    // A first judgement's 반려 and 철회 have no deadline yet to speak of.
+    expect(judgementDecisionTexts('reject', null).body).not.toContain('곧 확정');
+  });
+
+  it('reads the deadline at the detail’s read instant, and the disputes off the correction', () => {
+    const provisional = {
+      status: 'provisional' as const,
+      disputeDeadline: current.disputeDeadline,
+    };
+    const deadline = Date.parse(current.disputeDeadline);
+    expect(judgementDeadlinePassed(provisional, deadline - 1)).toBe(false);
+    expect(judgementDeadlinePassed(provisional, deadline)).toBe(true);
+    expect(judgementDeadlinePassed({ ...provisional, status: 'resolved' }, deadline + 1)).toBe(
+      false,
+    );
+    expect(judgementDeadlinePassed({ ...provisional, disputeDeadline: null }, deadline)).toBe(
+      false,
+    );
+    expect(judgementDeadlinePassed({ ...provisional, disputeDeadline: 'x' }, deadline)).toBe(false);
+    expect(judgementCorrectionEnd(correcting, provisional, deadline)).toEqual({
+      reopened: 1,
+      deadlinePassed: true,
+    });
+    expect(
+      judgementCorrectionEnd(
+        { correction: { baseVersion: 1, reason: '사유', disputeIds: [] } },
+        provisional,
+        deadline - 1,
+      ),
+    ).toEqual({ reopened: 0, deadlinePassed: false });
+    // A first judgement's registration, or none: no correction's end.
+    expect(judgementCorrectionEnd(pending, provisional, deadline)).toBeNull();
+    expect(judgementCorrectionEnd(null, provisional, deadline)).toBeNull();
   });
 });
 
@@ -522,6 +851,29 @@ describe('judgementFailure', () => {
     });
     expect(alert(['status'], 'not closed', 'decision')).toMatchObject({
       message: copy.errMarketJudgementDecisionStatus,
+    });
+    // A correction's (#176): the market no longer PROVISIONAL, its version moved meanwhile.
+    expect(alert(['status'], 'not provisional')).toEqual({
+      kind: 'alert',
+      message: copy.errMarketJudgementCorrectionStatus,
+      refresh: true,
+    });
+    expect(alert(['status'], 'not provisional', 'decision')).toMatchObject({
+      message: copy.errMarketJudgementCorrectionDecisionStatus,
+      refresh: true,
+    });
+    expect(alert(['correction', 'baseVersion'], 'stale')).toEqual({
+      kind: 'alert',
+      message: copy.errMarketJudgementCorrectionStale,
+      refresh: true,
+    });
+    expect(alert(['correction', 'baseVersion'], 'stale', 'decision')).toMatchObject({
+      message: copy.errMarketJudgementCorrectionDecisionStale,
+      refresh: true,
+    });
+    expect(alert(['correction', 'baseVersion'], 'Too small')).toMatchObject({
+      kind: 'alert',
+      message: copy.errMarketInvalid,
     });
     expect(alert(['judgement'], 'pending')).toMatchObject({
       message: copy.errMarketJudgementPending,
@@ -598,6 +950,17 @@ describe('judgementFailure', () => {
     expect(at(['description'], 'Too small')).toMatchObject({
       field: 'description',
       message: copy.errMarketJudgementDescription,
+    });
+    // A correction's reason, and a correction that changes nothing (#176).
+    expect(at(['correction', 'reason'], 'Too small')).toEqual({
+      kind: 'field',
+      field: 'correctionReason',
+      message: copy.errMarketJudgementCorrectionReason,
+    });
+    expect(at(['correction'], 'unchanged')).toEqual({
+      kind: 'field',
+      field: 'correction',
+      message: copy.errMarketJudgementCorrectionUnchanged,
     });
     expect(
       judgementFailure(refused(['eventDeadlineConfirmed'], 'required'), 'decision'),

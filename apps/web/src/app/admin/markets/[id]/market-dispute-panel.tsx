@@ -6,6 +6,7 @@ import { copy } from '@/copy';
 import { useHeldForOperator, useOperatorId } from '@/hooks/use-operator';
 import { disputeDecisionUnavailable, disputeHoldingText } from '@/lib/admin-disputes';
 import { type AdminMarket } from '@/lib/api';
+import { judgementCorrectionBase } from '@/lib/market-judgement';
 import { DisputeRecord } from '../../disputes/dispute-record';
 import { type DisputeAction, DisputeDecisionDialog } from './market-dispute-dialogs';
 
@@ -16,9 +17,19 @@ import { type DisputeAction, DisputeDecisionDialog } from './market-dispute-dial
  * (`useHeldForOperator`, ADR-0092 answer 1) — once `['me']` turns from A to B in place, the dialog
  * closes with the reason A typed. Drawn on any market with a current judgement (its version's
  * disputes, in every status, the record staying once confirmed); before one, nothing. Focus comes
- * back to its heading once a decision went through and took the button away (WCAG 2.4.3).
+ * back to its heading once a decision went through and took the button away (WCAG 2.4.3). An
+ * accepted dispute's 정정 등록 (#176) is the 판정 panel's (`onCorrect` opens its correction form,
+ * `formOpen` while it is open), and so is focus going back to it once that form closes unsent.
  */
-export function MarketDisputes({ market }: { market: AdminMarket }) {
+export function MarketDisputes({
+  market,
+  formOpen = false,
+  onCorrect,
+}: {
+  market: AdminMarket;
+  formOpen?: boolean;
+  onCorrect?: () => void;
+}) {
   const operatorId = useOperatorId();
   const [action, setAction] = useHeldForOperator<DisputeAction>();
   const heading = useRef<HTMLParagraphElement>(null);
@@ -39,6 +50,8 @@ export function MarketDisputes({ market }: { market: AdminMarket }) {
         market={market}
         operatorId={operatorId}
         onOpen={setAction}
+        formOpen={formOpen}
+        onCorrect={onCorrect}
         headingRef={heading}
       />
       {action !== null && (
@@ -59,24 +72,36 @@ export function MarketDisputes({ market }: { market: AdminMarket }) {
  * The block as drawn for `operatorId` (undefined until `GET /me` answers): the current version's
  * disputes, the oldest first (`AdminMarket.disputes.items`), each as the operators read it
  * (`DisputeRecord`: the submitter, the links, the reason, how it ended), and how many hold the
- * confirmation (`holding` — pending, or accepted and waiting for its correction, #176). A pending
- * one offers 기각 and 수용 to any admin who did not register the judgement (#173 item 2: the approver
+ * confirmation (`holding` — pending, or accepted and waiting for its correction). A pending one
+ * offers 기각 and 수용 to any admin who did not register the judgement (#173 item 2: the approver
  * may), off until the admin on screen is known; for the registrant both are off, with the note why
- * (`disputeDecisionUnavailable`), and so for an admin who submitted it. No market price, volume,
+ * (`disputeDecisionUnavailable`), and so for an admin who submitted it — a dispute a rejected or
+ * retracted correction sent back to 검토 중 (#176, owner answer 2026-11-02) among them. An accepted
+ * one offers 정정 등록 (`onCorrect`, #176, ADR-0105; #173 item 7: 수용은 곧 정정) to any admin while
+ * a correction can be registered (`judgementCorrectionBase`: PROVISIONAL, none waiting) — the
+ * correction is registered with every accepted dispute of the version, so each row opens the same
+ * form. While that form is open (`formOpen`) each row's 정정 등록 is hidden, not taken out: it would
+ * open nothing more and name the form's own submit twice, and kept drawn it is where focus goes
+ * back once the form closes unsent (the panel's `useJudgementRefocus`). No market price, volume,
  * count or majority is drawn (N03 §5, #152 AC 8). `headingRef` is what focus comes back to.
  */
 export function MarketDisputesBody({
   market,
   operatorId,
   onOpen,
+  formOpen = false,
+  onCorrect,
   headingRef,
 }: {
   market: AdminMarket;
   operatorId: string | undefined;
   onOpen: (action: DisputeAction) => void;
+  formOpen?: boolean;
+  onCorrect?: () => void;
   headingRef?: RefObject<HTMLParagraphElement | null>;
 }) {
   const { holding, items } = market.disputes;
+  const correctable = onCorrect !== undefined && judgementCorrectionBase(market) !== null;
   const pending = items.filter((dispute) => dispute.status === 'pending');
   const unavailable = pending.map((dispute) =>
     disputeDecisionUnavailable(dispute, market, operatorId),
@@ -144,28 +169,47 @@ export function MarketDisputesBody({
                 dispute={dispute}
                 prefix={prefix}
                 actions={
-                  dispute.status === 'pending' && (
-                    <HStack gap="2" flexWrap="wrap" data-testid={`${prefix}-actions`}>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={operatorId === undefined || unavailable !== null}
-                        onClick={() => onOpen({ kind: 'dismiss', disputeId: dispute.id })}
-                        data-testid={`${prefix}-dismiss`}
-                      >
-                        {copy.adminMarketDisputeDismiss}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={operatorId === undefined || unavailable !== null}
-                        onClick={() => onOpen({ kind: 'accept', disputeId: dispute.id })}
-                        data-testid={`${prefix}-accept`}
-                      >
-                        {copy.adminMarketDisputeAccept}
-                      </Button>
-                    </HStack>
-                  )
+                  dispute.status === 'accepted'
+                    ? correctable && (
+                        <HStack
+                          gap="2"
+                          flexWrap="wrap"
+                          hidden={formOpen}
+                          data-testid={`${prefix}-actions`}
+                        >
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={operatorId === undefined}
+                            onClick={onCorrect}
+                            data-testid={`${prefix}-correct`}
+                          >
+                            {copy.adminMarketDisputeCorrect}
+                          </Button>
+                        </HStack>
+                      )
+                    : dispute.status === 'pending' && (
+                        <HStack gap="2" flexWrap="wrap" data-testid={`${prefix}-actions`}>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={operatorId === undefined || unavailable !== null}
+                            onClick={() => onOpen({ kind: 'dismiss', disputeId: dispute.id })}
+                            data-testid={`${prefix}-dismiss`}
+                          >
+                            {copy.adminMarketDisputeDismiss}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={operatorId === undefined || unavailable !== null}
+                            onClick={() => onOpen({ kind: 'accept', disputeId: dispute.id })}
+                            data-testid={`${prefix}-accept`}
+                          >
+                            {copy.adminMarketDisputeAccept}
+                          </Button>
+                        </HStack>
+                      )
                 }
               />
             );

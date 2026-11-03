@@ -83,18 +83,24 @@ export const marketWithCategory = {
 
 /**
  * What a market's status displays read of its row (`MarketDisplayState`, market-times.ts): the
- * status, the scheduled judgement, the current judgement's 이의 기한 and the 판정 이의 holding it
+ * status, the scheduled judgement, the current judgement's 이의 기한, the 판정 이의 holding it
  * (`dispute_hold_count`, the mirror the @buddha/db dispute helpers keep under the market lock;
- * #175, ADR-0104) — every list's row carries them, so no list joins the disputes.
+ * #175, ADR-0104) and whether a 판정 정정 waits (`correction_pending`, the mirror the judgement
+ * writes keep likewise; #176, ADR-0105) — every list's row carries them, so no list joins the
+ * disputes or the approval requests.
  */
 export function displayStateOf(
-  row: Pick<MarketRow, 'status' | 'scheduledJudgementAt' | 'disputeDeadline' | 'disputeHoldCount'>,
+  row: Pick<
+    MarketRow,
+    'status' | 'scheduledJudgementAt' | 'disputeDeadline' | 'disputeHoldCount' | 'correctionPending'
+  >,
 ): MarketDisplayState {
   return {
     status: row.status,
     scheduledJudgementAt: row.scheduledJudgementAt?.toISOString() ?? null,
     disputeDeadline: row.disputeDeadline?.toISOString() ?? null,
     disputeHoldCount: row.disputeHoldCount,
+    correctionPending: row.correctionPending,
   };
 }
 
@@ -104,8 +110,8 @@ export function displayStateOf(
  * read the same answer. Displays, not statuses: nothing is written at those instants, so unlike the
  * instants a write orders its rows by they need no database clock (clock.ts):
  * - `judgementDelayed` '판정 지연' (#22, ADR-0098; ADR-0093 decision 1 #173 items 11·12): a CLOSED
- *   market whose scheduled judgement has passed, or a PROVISIONAL one a 판정 이의 still holds once
- *   its 이의 기한 has come (#175, ADR-0104, owner answer 2026-11-03);
+ *   market whose scheduled judgement has passed, or a PROVISIONAL one a 판정 이의 or a waiting 판정
+ *   정정 still holds once its 이의 기한 has come (#175, ADR-0104, owner answer 2026-11-03; #176);
  * - `disputeUnderReview` '이의 검토 중' (#173 item 12): PROVISIONAL with a 판정 이의 holding it;
  * - `disputeOpen`: PROVISIONAL before its 이의 기한 — 판정 이의 are taken (#173 items 5·6);
  * - `judgementVersion` and `disputeDeadline`, the current judgement's, public since #175 (#173
