@@ -9,6 +9,8 @@ import {
   AUTO_NICKNAME_PATTERN,
   CATEGORY_SLUGS,
   SEED_ADMIN_GRANT_REASON,
+  SUBCATEGORY_SLUGS,
+  tagKey,
 } from '@buddha/shared';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -20,14 +22,16 @@ import {
   chargePackages,
   ledgerEntries,
   marketEvents,
+  marketTags,
   markets,
   phoneVerifications,
   priceTicks,
   profiles,
   releaseSettings,
+  tags,
   user,
 } from './schema/index.js';
-import { SEED_RULE_NO_DELAY_NO } from './seed-markets.js';
+import { SEED_MARKETS, SEED_RULE_NO_DELAY_NO } from './seed-markets.js';
 import { createUser } from './test/factories.js';
 import { connectTestDb, hasTestDb, testDbUrls, type TestDb } from './test/harness.js';
 
@@ -522,6 +526,83 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     expect(await t.db.select().from(chargePackages)).toHaveLength(0);
   });
 
+  describe('categories (#17, ADR-0093 decision 2 #172 item 1)', () => {
+    /** Every category row, by slug, as the operators' screens read it. */
+    async function tree() {
+      return t.db.select().from(categories).orderBy(asc(categories.slug));
+    }
+
+    it('starts a fresh database with the five top-level categories and their 21, by tens', async () => {
+      const output = runSeed({ admin: false });
+      expect(output).toContain('categories: 26 inserted, 0 already there');
+      const rows = await tree();
+      const bySlug = new Map(rows.map((row) => [row.slug, row]));
+      expect(rows).toHaveLength(ALL_CATEGORY_SLUGS.length);
+      CATEGORY_SLUGS.forEach((slug, index) => {
+        expect(bySlug.get(slug), slug).toMatchObject({
+          parentId: null,
+          sortOrder: (index + 1) * 10,
+          isActive: true,
+        });
+        SUBCATEGORY_SLUGS[slug].forEach((leaf, leafIndex) => {
+          expect(bySlug.get(leaf), leaf).toMatchObject({
+            parentId: bySlug.get(slug)!.id,
+            sortOrder: (leafIndex + 1) * 10,
+            isActive: true,
+          });
+        });
+      });
+    });
+
+    it('leaves a category an admin renamed, reordered or hid as the admin left it', async () => {
+      // Every deploy runs the seed (deploy/deploy.sh): before #17 it rewrote the name, the order
+      // and the parent of every seed slug, which would undo the operators' work on each deploy.
+      runSeed({ admin: false });
+      const set = (slug: string, values: Partial<typeof categories.$inferInsert>) =>
+        t.db.update(categories).set(values).where(eq(categories.slug, slug));
+      await set('economy', { nameKo: '경제·금융' });
+      await set('fx', { sortOrder: 40 });
+      await set('rates', { sortOrder: 30 });
+      await set('weather', { sortOrder: 5 });
+      await set('typhoons', { isActive: false });
+      await set('culture', { isActive: false });
+      const before = await tree();
+
+      const output = runSeed({ admin: false });
+      expect(output).toContain('categories: 0 inserted, 26 already there');
+      expect(await tree()).toEqual(before);
+    });
+
+    it('puts a missing seed category back, and skips one whose name a sibling took', async () => {
+      // A seed slug can be missing from an existing tree only when the seed's list grows; deleted
+      // here by hand to stand in for that. The operators' tree wins a name: their 'broadcast' is
+      // already 방송 under 엔터테인먼트, so the seed's 'tv' is not made and the deploy goes on.
+      runSeed({ admin: false });
+      await t.db.delete(categories).where(inArray(categories.slug, ['food', 'tv']));
+      const [entertainment] = await t.db
+        .select({ id: categories.id })
+        .from(categories)
+        .where(eq(categories.slug, 'entertainment'));
+      const [broadcast] = await t.db
+        .insert(categories)
+        .values({ slug: 'broadcast', nameKo: '방송', sortOrder: 50, parentId: entertainment!.id })
+        .returning();
+
+      const { stdout, stderr } = runSeedIo({ admin: false });
+      expect(stdout).toContain('categories: 1 inserted, 24 already there');
+      expect(stderr.split(NEWLINE).filter((line) => line.includes('category tv:'))).toHaveLength(1);
+      const rows = await tree();
+      const [culture] = rows.filter((row) => row.slug === 'culture');
+      expect(rows.find((row) => row.slug === 'food')).toMatchObject({
+        nameKo: '음식',
+        parentId: culture!.id,
+        sortOrder: 40,
+      });
+      expect(rows.find((row) => row.slug === 'tv')).toBeUndefined();
+      expect(rows.find((row) => row.slug === 'broadcast')).toEqual(broadcast);
+    });
+  });
+
   describe('markets (M3 design 2, PLAN 13 M3)', () => {
     /** The database's own clock, so a bound on a seeded instant compares like with like. */
     async function dbNow(): Promise<number> {
@@ -554,7 +635,15 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
         .orderBy(asc(markets.slug));
       const ticks = await t.db.select().from(priceTicks).orderBy(asc(priceTicks.id));
       const events = await t.db.select().from(marketEvents).orderBy(asc(marketEvents.id));
-      return { rows, ticks, events };
+      // #17: each market's tags in their order, and the tags themselves.
+      const linked = await t.db
+        .select({ slug: markets.slug, position: marketTags.position, name: tags.name })
+        .from(marketTags)
+        .innerJoin(markets, eq(markets.id, marketTags.marketId))
+        .innerJoin(tags, eq(tags.id, marketTags.tagId))
+        .orderBy(asc(markets.slug), asc(marketTags.position));
+      const tagRows = await t.db.select().from(tags).orderBy(asc(tags.id));
+      return { rows, ticks, events, linked, tagRows };
     }
 
     it('creates the 14 markets as drafts with a created event, and no price or tick', async () => {
@@ -719,26 +808,162 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       expect(mine[0]).not.toContain('is already past');
     });
 
-    it('is idempotent: a second run adds no market, tick or event', async () => {
+    it('is idempotent: a second run adds no market, tick, event or tag', async () => {
       runSeed();
       const first = await marketState();
+      expect(first.linked.length).toBeGreaterThan(0);
       const output = runSeed();
       expect(output).toContain('already exists');
       expect(output).toContain('markets: 0 inserted, 14 already existed');
       expect(await marketState()).toEqual(first);
     });
 
-    it('never mentions sports or elections (PLAN 0.2)', async () => {
+    it('tags each market as listed, in order, one tag per name across markets (#17)', async () => {
+      // The admin create path's way (ADR-0093 decision 2 #172 item 2): positions 1..n in the
+      // order given, and a name several markets carry ('서울', '기상청', '통계청') is one tag.
       runSeed();
-      const { rows } = await marketState();
-      const categoryRows = await t.db.select().from(categories);
-      const text = [
-        ...rows.flatMap((row) => [row.slug, row.title, row.rules]),
-        ...categoryRows.flatMap((row) => [row.slug, row.nameKo]),
-      ].join(' ');
-      for (const banned of ['스포츠', '선거', 'sport', 'election']) {
-        expect(text).not.toContain(banned);
+      const { linked, tagRows } = await marketState();
+      const bySlug = Object.groupBy(linked, (row) => row.slug);
+      for (const market of SEED_MARKETS) {
+        expect(
+          bySlug[market.slug]?.map((row) => [row.position, row.name]),
+          market.slug,
+        ).toEqual(market.tags.map((name, index) => [index + 1, name]));
       }
+      const keys = new Set(SEED_MARKETS.flatMap((market) => market.tags.map(tagKey)));
+      expect(tagRows).toHaveLength(keys.size);
+      // The generated key is the shared `tagKey` of the stored name.
+      for (const row of tagRows) expect(row.nameKey, row.name).toBe(tagKey(row.name));
+    });
+
+    it('links a tag that exists in the spelling it was made with, and makes the rest (#17)', async () => {
+      // An operator made 'cpi' before the seed ran: the CPI market's 'CPI' is that tag, shown as
+      // first spelled (#17: a tag keeps the spelling it was first made with).
+      const [existing] = await t.db.insert(tags).values({ name: 'cpi' }).returning();
+      runSeed();
+      const { linked, tagRows } = await marketState();
+      const cpi = linked.filter((row) => row.slug === 'cpi-september-2026-above-2pct');
+      expect(cpi.map((row) => row.name)).toEqual(['물가', 'cpi', '통계청']);
+      expect(tagRows.filter((row) => row.nameKey === 'cpi')).toEqual([existing]);
+    });
+
+    it('leaves the tags an admin gave a seed market as they are (#17)', async () => {
+      // A re-seed never rewrites the tags of a market that has any: an operator replaced this
+      // one's five with one of their own.
+      runSeed();
+      const [market] = await t.db
+        .select({ id: markets.id })
+        .from(markets)
+        .where(eq(markets.slug, 'korea-telco-6g-trial-2026'));
+      await t.db.delete(marketTags).where(eq(marketTags.marketId, market!.id));
+      const [ai] = await t.db.insert(tags).values({ name: 'AI' }).returning();
+      await t.db.insert(marketTags).values({ marketId: market!.id, tagId: ai!.id, position: 1 });
+      const before = await marketState();
+      runSeed();
+      const after = await marketState();
+      expect(after).toEqual(before);
+      expect(after.linked.filter((row) => row.slug === 'korea-telco-6g-trial-2026')).toEqual([
+        { slug: 'korea-telco-6g-trial-2026', position: 1, name: 'AI' },
+      ]);
+    });
+
+    it("gives a seed market with no tag at all the seed's tags, and leaves a tagged one alone (#17 AC 9)", async () => {
+      // A database #174's 0048 wiped and seeded before #17 deployed has the 14 drafts and no
+      // market_tags row (deleted here by hand to stand in for that). The next seed tags them, so
+      // they can pass the open-items check — but a market an operator already tagged keeps its set.
+      runSeed();
+      const telco = 'korea-telco-6g-trial-2026';
+      await t.db.delete(marketTags);
+      const [market] = await t.db
+        .select({ id: markets.id })
+        .from(markets)
+        .where(eq(markets.slug, telco));
+      const [ai] = await t.db.insert(tags).values({ name: 'AI' }).returning();
+      await t.db.insert(marketTags).values({ marketId: market!.id, tagId: ai!.id, position: 1 });
+      const before = await marketState();
+
+      const { stdout } = runSeedIo();
+      expect(stdout).toContain(
+        "markets: 0 inserted, 14 already existed (13 of them given the seed's tags), 0 skipped",
+      );
+      const tagged = stdout.split(NEWLINE).filter((line) => line.includes('(it had none)'));
+      expect(tagged).toHaveLength(SEED_MARKET_COUNT - 1);
+      expect(tagged.some((line) => line.includes(telco))).toBe(false);
+      const after = await marketState();
+      // Only the links change: the rows, their events and the tags (every one made by the first
+      // run, never deleted) stay.
+      expect(after.rows).toEqual(before.rows);
+      expect(after.events).toEqual(before.events);
+      expect(after.tagRows).toEqual(before.tagRows);
+      const bySlug = Object.groupBy(after.linked, (row) => row.slug);
+      for (const seed of SEED_MARKETS) {
+        expect(
+          bySlug[seed.slug]?.map((row) => [row.position, row.name]),
+          seed.slug,
+        ).toEqual(seed.slug === telco ? [[1, 'AI']] : seed.tags.map((name, i) => [i + 1, name]));
+      }
+      // And once only: the next run finds every market tagged.
+      const again = await marketState();
+      expect(runSeed()).toContain(
+        "markets: 0 inserted, 14 already existed (0 of them given the seed's tags)",
+      );
+      expect(await marketState()).toEqual(again);
+    });
+
+    it('gives no tags to a draft an admin cleared since #17, nor to a market past the draft', async () => {
+      // Both without a market_tags row, as in the test above: the cleared draft has an admin record
+      // whose snapshot names its (empty) tags, and the opened one changes tags on the record only.
+      runSeed();
+      await t.db.delete(marketTags);
+      const [cleared, opened] = SEED_MARKETS.map((seed) => seed.slug);
+      const [clearedRow] = await t.db
+        .select({ id: markets.id, createdBy: markets.createdBy })
+        .from(markets)
+        .where(eq(markets.slug, cleared!));
+      await t.db.insert(adminActions).values({
+        adminId: clearedRow!.createdBy,
+        type: 'market_update',
+        targetType: 'market',
+        targetId: clearedRow!.id,
+        payload: { before: { tags: ['서울'] }, after: { tags: [] } },
+      });
+      await t.db.update(markets).set({ status: 'open' }).where(eq(markets.slug, opened!));
+
+      const { stdout } = runSeedIo();
+      expect(stdout).toContain(
+        `markets: 0 inserted, 14 already existed (${SEED_MARKET_COUNT - 2} of them given the seed's tags)`,
+      );
+      const linked = (await marketState()).linked;
+      expect(linked.filter((row) => row.slug === cleared || row.slug === opened)).toEqual([]);
+      expect(new Set(linked.map((row) => row.slug)).size).toBe(SEED_MARKET_COUNT - 2);
+    });
+
+    it('skips a seed market whose category the operators kept out of the tree, with a warning', async () => {
+      // The seed never fails on the operators' tree: their economy sub-category 'interest' is
+      // already 금리, so the seed's 'rates' is not made, and the market filed under it is not
+      // either. Deleted by hand before any market exists, to stand in for a seed slug added later.
+      runSeed({ admin: false });
+      await t.db.delete(categories).where(eq(categories.slug, 'rates'));
+      const [economy] = await t.db
+        .select({ id: categories.id })
+        .from(categories)
+        .where(eq(categories.slug, 'economy'));
+      await t.db
+        .insert(categories)
+        .values({ slug: 'interest', nameKo: '금리', sortOrder: 50, parentId: economy!.id });
+
+      const { stdout, stderr } = runSeedIo();
+      expect(stdout).toContain(
+        "markets: 13 inserted, 0 already existed (0 of them given the seed's tags), 1 skipped (category not in the tree)",
+      );
+      const skipped = stderr
+        .split(NEWLINE)
+        .filter((line) => line.includes('market bok-october-rate-cut-2026:'));
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0]).toContain('category "rates" is not in the tree');
+      const { rows } = await marketState();
+      expect(rows).toHaveLength(SEED_MARKET_COUNT - 1);
+      expect(rows.find((row) => row.slug === 'bok-october-rate-cut-2026')).toBeUndefined();
     });
 
     it('skips the markets when no admin is configured', async () => {
@@ -789,5 +1014,12 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     // Each market is a check-then-insert under the same lock: 14, not 28, one event each.
     expect(await t.db.select().from(markets)).toHaveLength(SEED_MARKET_COUNT);
     expect(await t.db.select().from(marketEvents)).toHaveLength(SEED_MARKET_COUNT);
+    // And each market's tags once, every shared tag one row (#17).
+    expect(await t.db.select().from(marketTags)).toHaveLength(
+      SEED_MARKETS.reduce((count, market) => count + market.tags.length, 0),
+    );
+    expect(await t.db.select().from(tags)).toHaveLength(
+      new Set(SEED_MARKETS.flatMap((market) => market.tags.map(tagKey))).size,
+    );
   }, 60_000);
 });

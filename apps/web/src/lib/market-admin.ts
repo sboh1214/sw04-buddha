@@ -7,6 +7,8 @@ import {
   type MarketEventType,
   type MarketResult,
   type MarketStatus,
+  OPEN_ITEMS,
+  type OpenItem,
   type PaymentStatus,
   type SettlementStep,
   type SettlementStepStatus,
@@ -485,10 +487,58 @@ export function marketEventRows(type: MarketEventType, payload: unknown): EventR
 }
 
 /**
- * The toast for a refused transition (design 3.4/3.6, 5.5): RULES_REQUIRED on open,
- * MARKET_NOT_OPEN on close, VALIDATION_ERROR naming `status` for any other state-machine
- * violation — the two "refresh the screen" messages, since the state on screen is what is
- * stale (a second 판정 of a market another admin has already judged lands here).
+ * The open-items check's names (#17), in OPEN_ITEMS order: the draft's notice and the toast of a
+ * refused 열기 say the same words (brief labels: 정산 규칙 · 카테고리 · 태그 1~5개).
+ */
+export const OPEN_ITEM_LABEL: Record<OpenItem, string> = {
+  rules: copy.openItemRules,
+  category: copy.openItemCategory,
+  tags: copy.openItemTags,
+};
+
+/** `items` as one line of labels, in OPEN_ITEMS order whatever order they came in, each once. */
+function openItemList(items: readonly OpenItem[]): string {
+  return OPEN_ITEMS.filter((item) => items.includes(item))
+    .map((item) => OPEN_ITEM_LABEL[item])
+    .join(' · ');
+}
+
+/**
+ * The admin draft's notice (#17): '열기 전에 채울 항목: 정산 규칙 · 태그 1~5개' while the open-items
+ * check finds something missing (`AdminMarket.missingOpenItems`), `undefined` when nothing is. A
+ * draft only — the check is what leaving the draft takes; an open market whose category was hidden
+ * later keeps it (#172 item 1) and gets no notice.
+ */
+export function openItemsNotice(market: {
+  status: MarketStatus;
+  missingOpenItems: readonly OpenItem[];
+}): string | undefined {
+  if (market.status !== 'draft' || market.missingOpenItems.length === 0) return undefined;
+  return `${copy.adminMarketOpenItems}: ${openItemList(market.missingOpenItems)}`;
+}
+
+/**
+ * The items an OPEN_ITEMS_MISSING names: one `{path: [item], message}` per missing item (for the
+ * category the message is why, which the label does not repeat). Unknown paths are skipped.
+ */
+function missingItemsOf(error: ApiError): OpenItem[] {
+  if (!Array.isArray(error.details)) return [];
+  return (error.details as unknown[]).flatMap((issue) => {
+    const path: unknown =
+      typeof issue === 'object' && issue !== null ? (issue as { path?: unknown }).path : undefined;
+    const item: unknown = Array.isArray(path) ? path[0] : undefined;
+    return (OPEN_ITEMS as readonly unknown[]).includes(item) ? [item as OpenItem] : [];
+  });
+}
+
+/**
+ * The toast for a refused transition (design 3.4/3.6, 5.5): OPEN_ITEMS_MISSING on open (#17 —
+ * '열기 전에 채울 항목이 있습니다: …' naming what the refusal names, or the line alone when it
+ * names nothing this screen knows), MARKET_NOT_OPEN on close, VALIDATION_ERROR naming `status`
+ * for any other state-machine violation — the two "refresh the screen" messages, since the state
+ * on screen is what is stale (a second 판정 of a market another admin has already judged lands
+ * here). RULES_REQUIRED is no transition's any more (open answers OPEN_ITEMS_MISSING instead): it
+ * is the PATCH that blanks an open market's rules, which `marketFormError` puts on the field.
  * NOT_FOUND is the market itself (every admin write answers 404 for an unknown id): not a "try
  * again". A NOT_FOUND naming `categoryId` never reaches here — the form callers hand it to
  * `marketFormError` first. The cookie of another account (`isForAnotherAccount` — every market
@@ -497,7 +547,12 @@ export function marketEventRows(type: MarketEventType, payload: unknown): EventR
  */
 export function transitionErrorMessage(error: unknown): string {
   if (isForAnotherAccount(error)) return copy.sessionChanged;
-  if (isApiError(error, 'RULES_REQUIRED')) return copy.errMarketRulesRequired;
+  if (isApiError(error, 'OPEN_ITEMS_MISSING')) {
+    const items = openItemList(missingItemsOf(error));
+    return items === ''
+      ? `${copy.errMarketOpenItemsMissing}.`
+      : `${copy.errMarketOpenItemsMissing}: ${items}`;
+  }
   if (isApiError(error, 'MARKET_NOT_OPEN')) return copy.errMarketNotOpen;
   if (isApiError(error, 'NOT_FOUND')) return copy.adminMarketNotFound;
   if (isApiError(error, 'VALIDATION_ERROR')) {
@@ -517,6 +572,7 @@ export type MarketFormField =
   | 'rules'
   | 'resolutionSource'
   | 'categoryId'
+  | 'tags'
   | 'imageUrl'
   | 'closeAt'
   | 'slug';
@@ -527,6 +583,7 @@ const API_FIELD_TO_FORM: Record<string, MarketFormField> = {
   rules: 'rules',
   resolutionSource: 'resolutionSource',
   categoryId: 'categoryId',
+  tags: 'tags',
   imageUrl: 'imageUrl',
   closeAt: 'closeAt',
   slug: 'slug',
@@ -535,8 +592,11 @@ const API_FIELD_TO_FORM: Record<string, MarketFormField> = {
 /**
  * Where a refused create/update lands on the form: the field the API named, with the message
  * the admin can act on. `slug` is the UNIQUE collision (design 3.4), `categoryId` an unknown
- * (404) or retired category. Anything else — including a VALIDATION_ERROR naming `status`,
- * which is not a field the form has — is `undefined` and goes to the generic toast.
+ * (404) category or one a market may not be filed under, said by why (#17: hidden, under a hidden
+ * parent, or holding sub-categories), `tags` (and `tags.N`) a list the API refused — a second
+ * name of one tag, a malformed name, too many, or none left on an open market. Anything else —
+ * including a VALIDATION_ERROR naming `status`, which is not a field the form has — is
+ * `undefined` and goes to the generic toast.
  */
 export function marketFormError(
   error: unknown,
@@ -561,7 +621,9 @@ function fieldMessage(field: MarketFormField, error: ApiError): string {
       // zod rule's refusal (pattern / uuid-shaped) says how the slug is malformed.
       return isSlugTaken(error) ? copy.errMarketSlugTaken : copy.errMarketSlug;
     case 'categoryId':
-      return copy.errMarketCategoryUnavailable;
+      return categoryMessage(error);
+    case 'tags':
+      return tagsMessage(error);
     case 'closeAt':
       return copy.errMarketCloseAt;
     case 'title':
@@ -574,6 +636,42 @@ function fieldMessage(field: MarketFormField, error: ApiError): string {
     case 'imageUrl':
       return copy.errMarketImageUrl;
   }
+}
+
+/**
+ * Why the API refused the category (#17, ADR-0093 decision 2 #172 item 1): the VALIDATION_ERROR's
+ * issue message is the reason (`CATEGORY_UNSELECTABLE_REASONS`); a 404 (unknown id) or a reason
+ * this screen does not know is the plain "cannot be chosen".
+ */
+function categoryMessage(error: ApiError): string {
+  if (!isApiError(error, 'VALIDATION_ERROR')) return copy.errMarketCategoryUnavailable;
+  switch (validationMessage(error)) {
+    case 'inactive':
+      return copy.errMarketCategoryHidden;
+    case 'parent_inactive':
+      return copy.errMarketCategoryParentHidden;
+    case 'subcategories':
+      return copy.errMarketCategoryHasChildren;
+    default:
+      return copy.errMarketCategoryUnavailable;
+  }
+}
+
+/**
+ * Why the API refused the tags (#17): `marketTagsSchema`'s duplicate ('duplicate tag', naming the
+ * second one's index), the open market left without any ('required while open', naming `tags`),
+ * the list over MARKET_TAGS_MAX (naming `tags` itself), and otherwise a name `tagNameSchema`
+ * refused (naming `tags.N`): zod's 'Too big' for the length, the pattern's message for the rest.
+ */
+function tagsMessage(error: ApiError): string {
+  const message = validationMessage(error);
+  if (message === 'duplicate tag') return copy.errMarketTagDuplicate;
+  if (message === 'required while open') return copy.errMarketTagsOpen;
+  const first: unknown = Array.isArray(error.details) ? (error.details as unknown[])[0] : undefined;
+  const path: unknown =
+    typeof first === 'object' && first !== null ? (first as { path?: unknown }).path : undefined;
+  if (!Array.isArray(path) || path.length < 2) return copy.errMarketTagsMax;
+  return message?.startsWith('Too big') ? copy.errMarketTagLength : copy.errMarketTagFormat;
 }
 
 function isSlugTaken(error: ApiError): boolean {

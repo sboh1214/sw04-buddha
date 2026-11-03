@@ -7,6 +7,7 @@ import { type Category, type MarketSummary } from '@/lib/api';
 import { groupCategories } from '@/lib/category-tree';
 import { type MarketFormValues } from '@/lib/market-form';
 import { MarketPreview } from './market-preview';
+import { MarketTagsField } from './market-tags-field';
 
 interface MarketFormFieldsProps {
   form: UseFormReturn<MarketFormValues>;
@@ -86,14 +87,17 @@ export function MarketFormFields({
 
                 A market is filed under a LEAF: a parent that has active leaves is the group's
                 label and not an option of its own, the way Kalshi files a series under a
-                sub-category and never under "Economics" itself. A parent with no active leaves
-                is offered as a plain option instead — the API accepts any active category at
-                either level, and there is no leaf to send the market to.
+                sub-category and never under "Economics" itself — and the API refuses it naming
+                `categoryId` (#17, ADR-0093 decision 2 #172 item 1: 'subcategories'). A parent with
+                no active leaves is offered as a plain option instead: it is a leaf itself. The
+                list is the public one, so a hidden category, or one under a hidden parent, is not
+                offered at all.
 
                 The one hidden option per group is for a market that already sits on such a
-                parent — filed before its leaves existed; the seed does not move existing rows
-                (ADR-0041). `marketToFormValues` prefills that parent's id, and a `<select>`
-                whose value matches no option displays as blank while the form quietly holds
+                parent — filed before its leaves existed: neither the seed (ADR-0041) nor an
+                admin adding a sub-category (#17) moves existing rows, and an edit that keeps the
+                category is not checked again. `marketToFormValues` prefills that parent's id, and
+                a `<select>` whose value matches no option displays as blank while the form holds
                 the id, so the admin would read 카테고리 선택 for a market that is in 경제.
                 `hidden` keeps it out of the list, `disabled` keeps a browser that ignores
                 `hidden` (older iOS) from letting it be picked, and the closed control still
@@ -130,6 +134,8 @@ export function MarketFormFields({
           <Field.ErrorText>{errors.categoryId?.message}</Field.ErrorText>
         </Field.Root>
       </HStack>
+
+      <MarketTagsField form={form} disabled={disabled} />
 
       <HStack gap="2" align="start" flexWrap="wrap">
         <Field.Root invalid={!!errors.imageUrl} disabled={disabled} flex="1" minW="56">

@@ -1,8 +1,12 @@
 import {
   type ExcludedTextHit,
   MARKET_SLUG_PATTERN,
+  MARKET_TAGS_MAX,
+  MARKET_TAGS_MIN,
   SUBCATEGORY_SLUGS,
   findExcludedText,
+  marketTagsSchema,
+  tagKey,
 } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { SEED_MARKETS, SEED_RULE_NO_DELAY_NO, type SeedMarket } from './seed-markets.js';
@@ -47,7 +51,46 @@ describe('seed market copy (#125)', () => {
   });
 });
 
-/** The seed's text a market's screen shows: the card and the detail with its 규칙 and 출처. */
+describe('seed market tags (#17, ADR-0093 decision 2 #172 item 2)', () => {
+  it('gives every market 1..5 tags the API would take, none twice', () => {
+    for (const { slug, tags } of SEED_MARKETS) {
+      expect(tags.length, slug).toBeGreaterThanOrEqual(MARKET_TAGS_MIN);
+      expect(tags.length, slug).toBeLessThanOrEqual(MARKET_TAGS_MAX);
+      // The admin entry's own schema: the length, the charset and no two the same tag, case
+      // ignored. Its output is the literal itself — already normalised, so the spelling written
+      // here is the one stored when the seed makes the tag (seed.ts refuses anything else).
+      const parsed = marketTagsSchema.safeParse(tags);
+      expect(parsed.error?.issues, slug).toBeUndefined();
+      expect(parsed.data, slug).toEqual(tags);
+      expect(new Set(tags.map(tagKey)).size, slug).toBe(tags.length);
+    }
+  });
+
+  it('spells a tag the same in every market it is on, and shares the common ones', () => {
+    // One tag per key, shown with the spelling it was first made with: a second spelling in a
+    // later market would never be seen, so the copy here must not disagree with itself.
+    const spellings = new Map<string, Set<string>>();
+    for (const { tags } of SEED_MARKETS) {
+      for (const name of tags) {
+        spellings.set(tagKey(name), (spellings.get(tagKey(name)) ?? new Set()).add(name));
+      }
+    }
+    for (const [key, names] of spellings) expect([...names], key).toHaveLength(1);
+    // Shared across markets where the subject is: one tag, each of its markets.
+    const marketsOf = (name: string) =>
+      SEED_MARKETS.filter((market) => market.tags.includes(name)).length;
+    expect(marketsOf('서울')).toBeGreaterThanOrEqual(2);
+    expect(marketsOf('기상청')).toBeGreaterThanOrEqual(2);
+    expect(marketsOf('통계청')).toBeGreaterThanOrEqual(2);
+    // And the most a market takes, so the seed exercises the CHECK's upper end.
+    expect(SEED_MARKETS.some((market) => market.tags.length === MARKET_TAGS_MAX)).toBe(true);
+  });
+});
+
+/**
+ * The seed's text a market's screen shows: the card and the detail with its 규칙 and 출처. Its
+ * tags are on the detail too (#17), checked one by one below.
+ */
 const SCREEN_FIELDS = ['title', 'description', 'rules', 'resolutionSource'] as const;
 type ScreenField = (typeof SCREEN_FIELDS)[number];
 
@@ -104,6 +147,21 @@ describe('seed market copy and the excluded features (#113)', () => {
       ),
     );
     expect(hits).toEqual([]);
+  });
+
+  it('names nothing the plan leaves out in a tag either (#17)', () => {
+    // The detail shows each tag as a link of its own, so each is checked alone; no won amount
+    // is listed for a tag.
+    const hits = SEED_MARKETS.flatMap((market) =>
+      market.tags.flatMap((name) =>
+        findExcludedText(name).map(
+          (hit) => `${market.slug} tag '${name}': ${hit.feature} '${hit.match}'`,
+        ),
+      ),
+    );
+    expect(hits).toEqual([]);
+    // The check reads a tag: a paid-purchase word as a tag fails.
+    expect(findExcludedText('충전').map((hit) => hit.feature)).toContain('paid-purchase');
   });
 
   it('needs every listed won amount: each still clears a hit where it is listed', () => {

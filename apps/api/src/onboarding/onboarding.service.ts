@@ -11,7 +11,8 @@ import {
   type RecordConsentsBody,
   type ValidationIssue,
 } from '@buddha/shared';
-import { and, eq, inArray, notInArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, notInArray, or, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { AppError } from '../common/errors/app-error.js';
 import { DB } from '../infra/db/db.provider.js';
 import { MeService } from '../me/me.service.js';
@@ -182,16 +183,16 @@ export class OnboardingService {
   }
 
   /**
-   * The interest categories (#57-7), replacing what the account had, from the active categories
-   * only (top-level and sub-categories, D10: operators keep the list; the seeded one until #17), as
-   * many as it likes, and the step answered (`interests_answered_at`, kept from its first answer).
-   * They are a public profile item (#37-5), so a write is a `PublicItemEdit` asked of the onboarding
-   * (`assertPublicItemOnboarding`, rather than OnboardedGuard: a dropping needs sign-in only) and
-   * of the restriction (`assertPublicItemEdit`), in that order, under the profile's lock — and only
-   * the onboarding screen's write while the step is unanswered, within
-   * INTERESTS_FIRST_ANSWER_WINDOW_HOURS of the nickname step, is `first` (`from: 'step'`). The
-   * screen's skip of an unanswered step past that window is no public item's edit: it answers the
-   * step, which is asked of the onboarding only.
+   * The interest categories (#57-7), replacing what the account had, from the categories the list
+   * offers only — active, under an active parent (top-level and sub-categories; operators keep the
+   * list on `/admin/categories`, #17) — as many as it likes, and the step answered
+   * (`interests_answered_at`, kept from its first answer). They are a public profile item (#37-5),
+   * so a write is a `PublicItemEdit` asked of the onboarding (`assertPublicItemOnboarding`, rather
+   * than OnboardedGuard: a dropping needs sign-in only) and of the restriction
+   * (`assertPublicItemEdit`), in that order, under the profile's lock — and only the onboarding
+   * screen's write while the step is unanswered, within INTERESTS_FIRST_ANSWER_WINDOW_HOURS of the
+   * nickname step, is `first` (`from: 'step'`). The screen's skip of an unanswered step past that
+   * window is no public item's edit: it answers the step, which is asked of the onboarding only.
    */
   private async writeInterests(
     userId: string,
@@ -241,10 +242,21 @@ export class OnboardingService {
         await assertPublicItemEdit(tx, userId, edit);
       }
       if (wanted.length > 0) {
+        // Active, and under an active parent: what `GET /categories` offers (#17 — hiding a
+        // top-level category hides its sub-categories with it, ADR-0093 decision 2 #172 item 1).
+        const { categories } = schema;
+        const parent = alias(categories, 'parent');
         const active = await tx
-          .select({ id: schema.categories.id })
-          .from(schema.categories)
-          .where(and(inArray(schema.categories.id, wanted), eq(schema.categories.isActive, true)));
+          .select({ id: categories.id })
+          .from(categories)
+          .leftJoin(parent, eq(parent.id, categories.parentId))
+          .where(
+            and(
+              inArray(categories.id, wanted),
+              eq(categories.isActive, true),
+              or(isNull(categories.parentId), eq(parent.isActive, true)),
+            ),
+          );
         const known = new Set(active.map((row) => row.id));
         const unknown: ValidationIssue[] = categoryIds.flatMap((id, index) =>
           known.has(id)

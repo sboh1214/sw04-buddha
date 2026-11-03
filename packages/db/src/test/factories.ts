@@ -15,8 +15,10 @@ import {
   SETTLEMENT_STEPS,
   closedAccountEmail,
   orphanMediaRetryHours,
+  normalizeTagName,
   readPostDocument,
   relatedMarketPair,
+  tagKey,
   type ImageContentType,
   type MarketResult,
   type MarketStatus,
@@ -53,6 +55,7 @@ import {
   marketProposals,
   marketSearches,
   marketSettlementSteps,
+  marketTags,
   marketWatchEvents,
   marketWatches,
   markets,
@@ -76,6 +79,7 @@ import {
   reports,
   session,
   startGrants,
+  tags,
   themeMarkets,
   themeNotices,
   themes,
@@ -219,6 +223,13 @@ export interface CreateMarketInput {
    * Other statuses never get rows.
    */
   settlementSteps?: boolean;
+  /**
+   * Tag names (#17), linked in this order as `market_tags` positions 1..n; a name no tag has makes
+   * the tag, one differing from an existing tag only in case links that tag (as the API does).
+   * Default none — which the interim open refuses (the open-items check): a draft a test opens
+   * through the route gives some.
+   */
+  tags?: string[];
 }
 
 /**
@@ -266,6 +277,27 @@ export async function createMarket(db: Db, input: CreateMarketInput = {}) {
     })
     .returning();
   const market = row!;
+  if (input.tags && input.tags.length > 0) {
+    // `tags` takes no UPDATE (migration 0049): insert what is new, then read every id by its key
+    // (`name_key` is `lower(name)`, the API's `tagKey` on a normalised name).
+    await db
+      .insert(tags)
+      .values(input.tags.map((name) => ({ name: normalizeTagName(name) })))
+      .onConflictDoNothing({ target: tags.nameKey });
+    const keys = input.tags.map((name) => tagKey(name));
+    const stored = await db
+      .select({ id: tags.id, nameKey: tags.nameKey })
+      .from(tags)
+      .where(inArray(tags.nameKey, keys));
+    const idByKey = new Map(stored.map((found) => [found.nameKey, found.id]));
+    await db.insert(marketTags).values(
+      keys.map((key, index) => ({
+        marketId: market.id,
+        tagId: idByKey.get(key)!,
+        position: index + 1,
+      })),
+    );
+  }
   if (
     input.settlementSteps !== false &&
     (status === 'resolved' || status === 'settling' || status === 'settled')

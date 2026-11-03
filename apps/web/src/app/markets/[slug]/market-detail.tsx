@@ -59,6 +59,7 @@ import { HEADER_HEIGHT_PX } from '@/lib/nav';
 import { type RecentMove, recentMove } from '@/lib/ticks';
 import { useSession } from '@/lib/use-session';
 import { MarketDiscussion } from './market-discussion';
+import { MarketTags } from './market-tags';
 
 /**
  * The live half of 시장 상세: everything that a `market:tick` or a `market:status` may change
@@ -77,7 +78,8 @@ import { MarketDiscussion } from './market-discussion';
  *
  * The frame (#122, ADR-0067) is N02 §4's list in the owner's order (ADR-0061 decision 1, item 16;
  * approved from this PR's screenshots, owner decisions 2026-10-17): 요약 — the question with its
- * category, status, countdown, 관심 등록, YES·NO, 거래량 and 참여자 — then 배경, 규칙·출처·마감, 공개
+ * category, status, countdown, 관심 등록, YES·NO, 거래량 and 참여자, and at its end the links out:
+ * the tags (#17) and the themes (#81) — then 배경, 규칙·출처·마감, 공개
  * 판정 기록, the chart, 호가창 with 최근 체결 and 내 거래, 내 포지션 and 내 대기 주문, 토론 (#47,
  * ADR-0075), and then 관련 시장 (#65, ADR-0068). The order at each width is
  * `lib/market-detail.ts`'s — the sections are rendered by iterating `DETAIL_SLOTS`, where 배경, 규칙
@@ -223,6 +225,9 @@ export function MarketDetail({
           <>
             <MarketSummary market={data} move={recentMove(series.data?.points)} />
             <StatusNotice market={data} />
+            {/* The '#이름' chips (#17), each its tag's search: the first of the two lines of links
+                out at the end of 요약, the themes' after it (market-tags.tsx). */}
+            <MarketTags tags={data.tags} />
           </>
         )}
         {themes}

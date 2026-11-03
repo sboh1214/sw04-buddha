@@ -9,17 +9,18 @@
 --                   holds drizzle.__drizzle_migrations.
 --   buddha_app      DML only. No CREATE anywhere. Per-table restrictions
 --                   (ledger_entries, market_events, admin_actions, payment_events,
---                   market_watch_events, retention_purges: INSERT/SELECT only; release_settings,
---                   approval_requests, start_grants, start_grant_numbers, themes, theme_notices:
---                   no DELETE — approval_requests' retention goes through a SECURITY DEFINER
---                   function, 0044; market_searches, phone_verification_refused_sends,
---                   consent_records, post_revisions, post_comment_revisions, post_likes,
---                   comment_likes, notice_revisions, profile_item_removals,
---                   restriction_end_changes, write_limit_events, link_uses: no UPDATE; link_flags:
---                   no UPDATE but of its review_action_id column; post_comment_counts: SELECT
---                   only, written by its trigger) are applied later by migrations with REVOKE
+--                   market_watch_events, retention_purges, tags: INSERT/SELECT only;
+--                   release_settings, approval_requests, start_grants, start_grant_numbers,
+--                   themes, theme_notices: no DELETE — approval_requests' retention goes
+--                   through a SECURITY DEFINER function, 0044; market_searches,
+--                   phone_verification_refused_sends, consent_records, post_revisions,
+--                   post_comment_revisions, post_likes, comment_likes, notice_revisions,
+--                   profile_item_removals, restriction_end_changes, write_limit_events,
+--                   link_uses: no UPDATE; link_flags: no UPDATE but of its review_action_id
+--                   column; post_comment_counts: SELECT only, written by its trigger) are
+--                   applied later by migrations with REVOKE
 --                   (0001, 0015, 0020, 0021, 0023, 0026, 0030, 0031, 0032, 0033, 0034, 0035,
---                   0036, 0039, 0040, 0041, 0044, 0045), see bottom.
+--                   0036, 0039, 0040, 0041, 0044, 0045, 0049), see bottom.
 
 CREATE ROLE buddha_migrate LOGIN PASSWORD 'buddha';
 CREATE ROLE buddha_app LOGIN PASSWORD 'buddha';
@@ -60,5 +61,6 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO buddha_app;
 -- comment_likes: UPDATE), 0036 (notice_revisions: UPDATE), 0039 (profile_item_removals: UPDATE),
 -- 0040 (restriction_end_changes: UPDATE), 0041 (write_limit_events, link_uses, link_flags:
 -- UPDATE — then GRANT UPDATE (review_action_id) ON link_flags, an operator's mark '확인함'),
--- 0044 (retention_purges: UPDATE, DELETE) and 0045 (themes, theme_notices: DELETE).
+-- 0044 (retention_purges: UPDATE, DELETE), 0045 (themes, theme_notices: DELETE) and 0049 (tags:
+-- UPDATE, DELETE — a tag is never renamed or deleted, #17).
 -- Default privileges are applied at CREATE time, so a REVOKE afterwards sticks.

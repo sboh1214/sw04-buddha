@@ -120,17 +120,21 @@ export type SetOnboardingNicknameBody = z.infer<typeof setOnboardingNicknameBody
  */
 export const INTEREST_CATEGORIES_INPUT_MAX = 200;
 
-/** The category ids one interests write names: active categories, top-level or sub (#57-7). */
+/**
+ * The category ids one interests write names: active categories under an active parent (what
+ * `GET /categories` lists, #17), top-level or sub (#57-7).
+ */
 const interestCategoryIdsSchema = z
   .array(z.number().int().min(1).max(INT4_MAX))
   .max(INTEREST_CATEGORIES_INPUT_MAX);
 
 /**
  * `POST /me/onboarding/interests`: the onboarding's interests step (#57-7), from its screen — the
- * categories picked, top-level and sub-categories alike, active ones only; an empty list is the
- * skip, which the screen also sends when the account leaves it, or the start-Coin notice before it,
- * without an answer (owner decision 2026-10-21, ADR-0078). The step is answered either way and never
- * asked again. Ids repeat harmlessly.
+ * categories picked, top-level and sub-categories alike, active ones under an active parent only
+ * (what `GET /categories` lists, #17); an empty list is the skip, which the screen also sends when
+ * the account leaves it, or the start-Coin notice before it, without an answer (owner decision
+ * 2026-10-21, ADR-0078). The step is answered either way and never asked again. Ids repeat
+ * harmlessly.
  */
 export const answerInterestsStepBodySchema = z
   .object({ categoryIds: interestCategoryIdsSchema, expectedAccountId: expectedAccountIdSchema })

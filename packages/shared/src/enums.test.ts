@@ -28,11 +28,17 @@ describe('enums', () => {
     expect(enums.reportReasonSchema.safeParse('wrong_forecast').success).toBe(false);
   });
 
-  it('never contains sports or election categories (PLAN 0.2)', () => {
-    for (const slug of enums.ALL_CATEGORY_SLUGS) {
-      expect(slug).not.toMatch(/sport|election|politic/i);
-    }
+  it('seeds five top-level categories (the operators add any others, sports and politics too — D10)', () => {
     expect(enums.CATEGORY_SLUGS).toHaveLength(5);
+    expect(enums.ADMIN_ACTION_TYPES).toEqual(
+      expect.arrayContaining([
+        'category_create',
+        'category_rename',
+        'category_reorder',
+        'category_hide',
+        'category_show',
+      ]),
+    );
   });
 
   it('keeps the category tree two levels deep with slugs unique across both', () => {

@@ -46,9 +46,10 @@ const { marketProposals } = schema;
  * 3. The number's own lock (`buddha:proposal`, the hash), taken before the limits are counted:
  *    two submissions on one number — two tabs, or two accounts the number verified one after
  *    another — count one after the other, so neither limit is passed by a race.
- * 4. The date (today in Korea or later, at the database clock) and the category (active), then
- *    the limits (PROPOSAL_LIMITED) — for a member: an operator's account is exempt (owner decision
- *    2026-10-19, as from #187's frequency limits and the upload limit) — then the row, 접수.
+ * 4. The date (today in Korea or later, at the database clock) and the category (active, and under
+ *    an active parent when it is a sub-category), then the limits (PROPOSAL_LIMITED) — for a
+ *    member: an operator's account is exempt (owner decision 2026-10-19, as from #187's frequency
+ *    limits and the upload limit) — then the row, 접수.
  *
  * The form's checks come before the limits, so a refusal for the limits means the form itself
  * was fine; the onboarding and the restrictions come before both, as a guard's would. An
@@ -213,18 +214,30 @@ export class ProposalsService {
   }
 
   /**
-   * An unknown or retired category is VALIDATION_ERROR naming `categoryId`, as the interest
-   * categories answer (a member picks from the active list). FOR KEY SHARE so the row cannot go
-   * before the proposal that references it is written.
+   * An unknown or retired category, or one under a hidden top-level category (#17: hiding a
+   * top-level category hides its sub-categories, ADR-0093 decision 2 #172 item 1), is
+   * VALIDATION_ERROR naming `categoryId`, as the interest categories answer (a member picks from
+   * the active list, either level). FOR KEY SHARE so the row cannot go before the proposal that
+   * references it is written; the parent is read unlocked, as a wish needs no more.
    */
   private async requireActiveCategory(tx: Tx, categoryId: number): Promise<void> {
+    const { categories } = schema;
     const [category] = await tx
-      .select({ isActive: schema.categories.isActive })
-      .from(schema.categories)
-      .where(eq(schema.categories.id, categoryId))
+      .select({ isActive: categories.isActive, parentId: categories.parentId })
+      .from(categories)
+      .where(eq(categories.id, categoryId))
       .limit(1)
       .for('key share');
-    if (!category?.isActive) {
+    let parentActive = true;
+    if (category?.parentId != null) {
+      const [parent] = await tx
+        .select({ isActive: categories.isActive })
+        .from(categories)
+        .where(eq(categories.id, category.parentId))
+        .limit(1);
+      parentActive = parent?.isActive ?? false;
+    }
+    if (!category?.isActive || !parentActive) {
       throw new AppError('VALIDATION_ERROR', {
         message: 'Unknown or inactive category',
         details: [{ path: ['categoryId'], message: 'not an active category' }],

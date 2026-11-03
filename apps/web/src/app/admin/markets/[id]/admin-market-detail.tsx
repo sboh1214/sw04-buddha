@@ -39,7 +39,9 @@ import { nicknameShown } from '@/lib/account-closure';
 import { SEARCH_INPUT_MAX_LENGTH } from '@/lib/market-search';
 import { listSection, listView } from '@/lib/query-client';
 import {
+  adminMarketKey,
   applyRelatedMarkets,
+  refreshAfterMarketFormRefusal,
   useAdminMarket,
   useAdminRelatedMarkets,
   useAdminRelatedSearch,
@@ -77,6 +79,7 @@ import {
   marketIdParam,
   marketEventRows,
   marketFormError,
+  openItemsNotice,
   settlementStepViews,
   transitionErrorMessage,
 } from '@/lib/market-admin';
@@ -190,11 +193,18 @@ export function AdminMarketDetail({ id }: { id: string }) {
       </Stack>
 
       <TransitionButtons market={data} />
+      <OpenItemsNotice market={data} />
 
       <Card.Root>
         <Card.Body>
           <DataList.Root orientation="horizontal" size="sm">
             <Item label={copy.adminMarketCategory}>{data.category.nameKo}</Item>
+            {/* The stored spellings in entry order (#17), as the public detail draws them. */}
+            <Item label={copy.adminMarketTags}>
+              <Text as="span" data-testid="market-detail-tags">
+                {data.tags.length === 0 ? '—' : data.tags.join(', ')}
+              </Text>
+            </Item>
             <Item label={copy.adminMarketDescription}>{data.description ?? '—'}</Item>
             <Item label={copy.adminMarketRules}>{data.rules || '—'}</Item>
             <Item label={copy.adminMarketSource}>{data.resolutionSource ?? '—'}</Item>
@@ -243,6 +253,26 @@ export function AdminMarketDetail({ id }: { id: string }) {
   );
 }
 
+/**
+ * What the draft still needs before 열기 (#17, the open-items check): '열기 전에 채울 항목: 정산 규칙 ·
+ * 태그 1~5개', from the server's `missingOpenItems` (`openItemsNotice`) — so a category hidden after
+ * it was picked shows here too. Nothing once nothing is missing, and nothing on any other status.
+ * Beside 열기 rather than in the form: it is what 열기 will refuse, and the form below is where each
+ * item is filled in.
+ */
+function OpenItemsNotice({ market }: { market: AdminMarket }) {
+  const notice = openItemsNotice(market);
+  if (notice === undefined) return null;
+  return (
+    <Alert.Root status="warning" role="status" data-testid="market-open-items">
+      <Alert.Indicator />
+      <Alert.Content>
+        <Alert.Description>{notice}</Alert.Description>
+      </Alert.Content>
+    </Alert.Root>
+  );
+}
+
 function BackLink() {
   return (
     <ChakraLink
@@ -269,8 +299,10 @@ function Item({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /**
- * 열기 / 마감 / 판정 (PLAN 12, design 3.4, ADR-0046). Each is a Dialog except 열기, whose only
- * refusal — blank rules — is reversible from the form below and is named in its toast. 열기
+ * 열기 / 마감 / 판정 (PLAN 12, design 3.4, ADR-0046). Each is a Dialog except 열기, whose refusal —
+ * the open-items check (#17: 정산 규칙, 카테고리, 태그 1~5개), which the draft's notice says
+ * beforehand — is reversible from the form below and is named in its toast; the detail is read
+ * again then, so the notice names what the server found, a category hidden meanwhile included. 열기
  * stays while there is no way to trade (owner decision #125 (a)): the market is listed, and its
  * detail says 거래 준비 중 in place of the order panel. There is no 무효: the admin void and its
  * cost refund went with #125 (N03 §6); VOID as a 판정 is #152's. The 판정 form lives in its own
@@ -290,6 +322,7 @@ function Item({ label, children }: { label: string; children: ReactNode }) {
  */
 function TransitionButtons({ market }: { market: AdminMarket }) {
   const apply = useApplyMarket(market.id);
+  const queryClient = useQueryClient();
   const operatorId = useOperatorId();
   const sessionChanged = useSessionChanged();
   const [confirm, setConfirm] = useHeldForOperator<'close' | 'resolve'>();
@@ -300,6 +333,10 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
   const onError = (error: unknown) => {
     if (sessionChanged(error)) setConfirm(null);
     toaster.create({ type: 'error', title: transitionErrorMessage(error) });
+    // The screen's notice was the last read's: what the server refused for goes on it now.
+    if (isApiError(error, 'OPEN_ITEMS_MISSING')) {
+      void queryClient.invalidateQueries({ queryKey: adminMarketKey(market.id) });
+    }
   };
 
   const open = useMutation({
@@ -566,15 +603,18 @@ function EditMarketCard({ market }: { market: AdminMarket }) {
 
 function EditMarketForm({ market, categories }: { market: AdminMarket; categories: Category[] }) {
   const apply = useApplyMarket(market.id);
+  const queryClient = useQueryClient();
   // The admin on screen, whom a save names (ADR-0092): 저장 waits for `GET /me`.
   const operatorId = useOperatorId();
   const sessionChanged = useSessionChanged();
   const original = useMemo(() => marketToFormValues(market, categories), [market, categories]);
   const editable = isEditable(market.status);
-  const rulesRequired = market.status === 'open';
+  // An open market may not be edited down to no rules, nor to no tags (#17): the API refuses both.
+  // One opened before #17 with no tags keeps its other fields editable (`marketFormSchema`).
+  const openMarket = market.status === 'open';
   const schema = useMemo(
-    () => marketFormSchema({ original, rulesRequired }),
-    [original, rulesRequired],
+    () => marketFormSchema({ original, rulesRequired: openMarket, tagsRequired: openMarket }),
+    [original, openMarket],
   );
   // The open market's confirmation goes with the form, which EditMarketCard draws again for each
   // admin on screen (`key`): a confirmation A opened never names B (ADR-0092 answer 1).
@@ -618,9 +658,11 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
     onError: (error) => {
       setPending(null);
       sessionChanged(error);
+      // A refused category also reads the select's list again (#17).
       const fieldError = marketFormError(error);
       if (fieldError) {
         setError(fieldError.field, { message: fieldError.message });
+        void refreshAfterMarketFormRefusal(queryClient, fieldError.field);
         return;
       }
       toaster.create({ type: 'error', title: transitionErrorMessage(error) });

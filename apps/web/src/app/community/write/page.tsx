@@ -15,7 +15,8 @@ export const metadata: Metadata = {
 
 /**
  * The write screen (#46, ADR-0073): a post on the market `?market=<id>` names, or — opened from
- * the community list with none — a picker that finds one by its title first (#45-1: «두 곳 모두에서»;
+ * the community list with none — a picker that finds one first, by its title or a tag's exact name
+ * (#17) (#45-1: «두 곳 모두에서»;
  * the market detail's own 글쓰기, in its 토론 section, lands here with the market — #47, ADR-0075).
  * Any public status takes a post (#45-6; ADR-0093 decision 3, the #174 row: 개장 예정, 거래 일시
  * 중단 and 취소 too); a draft, one in review or an unknown id reads as no market, so the

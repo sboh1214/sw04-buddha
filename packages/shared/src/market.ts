@@ -19,6 +19,8 @@ import {
   TICKS_MAX_POINTS,
 } from './constants.js';
 import { expectedAccountIdSchema, namesAFieldBesideAccount } from './expected-account.js';
+import { openItemSchema } from './market-open-items.js';
+import { marketTagsSchema } from './tags.js';
 import {
   type MarketStatus,
   marketEventTypeSchema,
@@ -129,6 +131,14 @@ export const marketSchema = z
     description: z.string().nullable(),
     rules: z.string(),
     resolutionSource: z.string().nullable(),
+    /**
+     * The market's tags (#17), in the order the operator entered them, each as its tag's stored
+     * spelling — the one it was first made with. The detail shows them, each a link to its
+     * exact-match search; cards do not (ADR-0093 decision 2 #172 item 2). 1..5 once the
+     * open-items check has passed (open requires them); a draft may have none, and so may a market
+     * opened before #17 deployed or a seed market an older seed inserted without them.
+     */
+    tags: z.array(z.string()),
     resolvedAt: z.iso.datetime().nullable(),
     settledAt: z.iso.datetime().nullable(),
   })
@@ -215,7 +225,9 @@ export const marketCategoryFilterSchema = z
 
 /**
  * A search term (ADR-0061 decision 1, item 14; ADR-0066): trimmed, 1..MARKET_SEARCH_TERM_MAX
- * characters. A market's title holding it (case-insensitive, `%`·`_`·`\` literal) is a match.
+ * characters. A market's title holding it (case-insensitive, `%`·`_`·`\` literal) is a match, and
+ * so is a market with a tag of that name (an exact match, `tagKey`, #17) — the detail's tag links
+ * search for the tag's name.
  * `GET /markets?q=` and the recorded search (`POST /me/search-history`) take the same one, so a
  * term the screen can search is a term it can record. A NUL is refused by the API's global pipe
  * (Postgres text cannot store one).
@@ -232,7 +244,10 @@ export const marketListQuerySchema = cursorQuerySchema.extend({
   category: marketCategoryFilterSchema.optional(),
   status: marketListStatusSchema.default('open'),
   sort: marketSortSchema.default(DEFAULT_MARKET_SORT),
-  /** Title search: a partial match, case-insensitive (the search screen's, ADR-0066). */
+  /**
+   * The search screen's (ADR-0066): a title holding it, case-insensitive, or a tag of exactly that
+   * name, case and spaces aside (#17).
+   */
   q: marketSearchTermSchema.optional(),
 });
 export type MarketListQuery = z.infer<typeof marketListQuerySchema>;
@@ -472,6 +487,12 @@ export const adminMarketSchema = marketSchema
     settlementSteps: z.array(adminSettlementStepSchema),
     /** Newest first, at most 100. */
     events: z.array(marketEventSchema),
+    /**
+     * What the open-items check finds missing (`missingOpenItems`, #17), in OPEN_ITEMS order —
+     * on a draft, what the open refuses it for; empty once it may open. Every status reports it,
+     * so a market whose category was hidden after it opened shows that too.
+     */
+    missingOpenItems: z.array(openItemSchema),
   })
   .meta({ id: 'AdminMarket' });
 export type AdminMarket = z.infer<typeof adminMarketSchema>;
@@ -490,11 +511,20 @@ export const marketSlugSchema = z
 const marketFields = {
   title: z.string().trim().min(1).max(MARKET_TITLE_MAX),
   description: z.string().max(MARKET_TEXT_MAX).nullish(),
-  /** May be blank while draft; `open` refuses a blank one with RULES_REQUIRED. */
+  /** May be blank while draft; the open-items check counts a blank one missing (`rules`). */
   rules: z.string().max(MARKET_TEXT_MAX),
   resolutionSource: z.string().trim().max(MARKET_SOURCE_MAX).nullish(),
-  /** int4 column: an unbounded id would reach Postgres as an out-of-range parameter (500). */
+  /**
+   * int4 column: an unbounded id would reach Postgres as an out-of-range parameter (500). One a new
+   * market may be filed under (`categoryUnselectableReason`), refused naming the field otherwise.
+   */
   categoryId: z.number().int().positive().max(INT4_MAX),
+  /**
+   * The whole set, in order (`marketTagsSchema`): a create without it makes a draft with none, an
+   * edit without it keeps the stored ones, an edit with it replaces them. A name no tag has yet
+   * makes the tag.
+   */
+  tags: marketTagsSchema.optional(),
   imageUrl: z
     .url({ protocol: /^https?$/ })
     .max(MARKET_IMAGE_URL_MAX)
@@ -551,8 +581,9 @@ export type ResolveMarketBody = z.infer<typeof resolveMarketBodySchema>;
 
 /**
  * `GET /admin/markets` (no `.meta`: query DTO). Any status, DRAFT and REVIEW included; omitted =
- * all. `q` is a title search like the public list's (a case-insensitive partial match, `%`·`_`·`\`
- * literal), which the admin's 관련 시장 picker finds the market to link with (#65, ADR-0068).
+ * all. `q` is a title search (a case-insensitive partial match, `%`·`_`·`\` literal; not the public
+ * list's tag match), which the admin's 관련 시장 picker finds the market to link with (#65,
+ * ADR-0068).
  */
 export const adminMarketListQuerySchema = cursorQuerySchema.extend({
   status: marketStatusSchema.optional(),

@@ -256,6 +256,49 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     expect(tooLong.statusCode).toBe(400);
   });
 
+  it('searches a tag by its exact name, case and spaces aside, beside the title partial match (#17)', async () => {
+    // ADR-0061 decision 1 item 14 / ADR-0066 result 3 / #17 choice 12: `q` is a title holding the
+    // term OR a tag named exactly the term (`tagKey`): the detail's tag links search the name.
+    const chip = await market({ title: '삼성전자 10만 원 돌파?', tags: ['AI', '반도체 산업'] });
+    const titled = await market({ title: '반도체 수출 증가?', tags: ['수출'] });
+    const ai = await market({ title: '코스피 3000 돌파?', tags: ['ai'] });
+    // A draft with the tag stays hidden, as with a title match.
+    await market({ title: '초안', status: 'draft', tags: ['AI'] });
+    const ids = async (q: string) => {
+      const res = await get(`/api/v1/markets?q=${encodeURIComponent(q)}`);
+      expect(res.statusCode, q).toBe(200);
+      return res
+        .json<ListPage>()
+        .data.map((row) => row.id)
+        .sort();
+    };
+    // 'ai' linked the tag 'AI' made first: both markets carry the one tag.
+    expect(await ids('AI')).toEqual([chip.id, ai.id].sort());
+    expect(await ids('Ai')).toEqual([chip.id, ai.id].sort());
+    // Case and the spaces around and inside the term aside, and NFD spelled.
+    expect(await ids('  반도체   산업 ')).toEqual([chip.id]);
+    expect(await ids('반도체 산업'.normalize('NFD'))).toEqual([chip.id]);
+    // Exact, never partial: '반도체' is no tag here, but it is in a title.
+    expect(await ids('반도체')).toEqual([titled.id]);
+    expect(await ids('산업')).toEqual([]);
+    expect(await ids('A')).toEqual([]);
+    // A title partial match still works, and either half finds a market once.
+    expect(await ids('돌파')).toEqual([chip.id, ai.id].sort());
+    expect(await ids('수출')).toEqual([titled.id]);
+    // The status filter narrows the tag match too: open by default, every public status on all.
+    const closed = await market({ title: '마감된 시장', status: 'closed', tags: ['AI'] });
+    expect(await ids('AI')).not.toContain(closed.id);
+    const all = await get(`/api/v1/markets?status=all&q=AI`);
+    expect(
+      all
+        .json<ListPage>()
+        .data.map((row) => row.id)
+        .sort(),
+    ).toEqual([chip.id, ai.id, closed.id].sort());
+    // Cards carry no tags (the detail does).
+    expect(all.json<ListPage>().data[0]).not.toHaveProperty('tags');
+  });
+
   it('searches every public status with status=all, never a draft or a review, and filters within it (#15)', async () => {
     // The search screen (ADR-0066): it starts on every public status (ADR-0061 decision 1, item
     // 13), and a closed market is found through the status filter (N02 §3); one filter per public
@@ -861,7 +904,12 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
   });
 
   it('finds a market by id, by slug and by a decomposed (NFD) slug; hides drafts and reviews', async () => {
-    const open = await market({ slug: '한글-시장-2026', title: '한글 시장', description: '설명' });
+    const open = await market({
+      slug: '한글-시장-2026',
+      title: '한글 시장',
+      description: '설명',
+      tags: ['한국', 'K-팝'],
+    });
     const draft = await market({ slug: 'draft-market', status: 'draft' });
     const review = await market({ slug: 'review-market', status: 'review' });
 
@@ -877,8 +925,12 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       resolutionSource: open.resolutionSource,
       status: 'open',
       resolvedAt: null,
+      // In position order, the stored spelling (#17).
+      tags: ['한국', 'K-팝'],
     });
     expect(detail).not.toHaveProperty('voidedAt');
+    // Nothing of the admin detail's open-items check.
+    expect(detail).not.toHaveProperty('missingOpenItems');
     // PLAN 7.1: no author on the public detail; and nothing of the direct AMM (#125).
     for (const field of ['createdBy', 'pYesBp', 'qYes', 'qNo', 'liquidityB', 'reserveCoin']) {
       expect(detail).not.toHaveProperty(field);

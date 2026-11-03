@@ -1,3 +1,11 @@
+import {
+  MARKET_TAGS_MAX,
+  MARKET_TAGS_MIN,
+  TAG_NAME_MAX,
+  marketTagsSchema,
+  tagNameSchema,
+} from '@buddha/shared';
+import fc from 'fast-check';
 import { createFormControl } from 'react-hook-form';
 import { afterAll, describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
@@ -7,11 +15,13 @@ import {
   EMPTY_MARKET_FORM,
   FOLLOW_SERVER_RESET,
   type MarketFormValues,
+  addTags,
   isHttpUrl,
   marketFormSchema,
   marketToFormValues,
   resolveMarketFormSchema,
   toCreateMarketBody,
+  sameTags,
   toResolveMarketBody,
   toUpdateMarketBody,
 } from './market-form';
@@ -152,9 +162,17 @@ describe('toCreateMarketBody', () => {
       rules: '한국은행 발표 기준',
       resolutionSource: '한국은행',
       categoryId: 3,
+      tags: [],
       imageUrl: null,
       closeAt: '2026-10-01T00:00:00.000Z',
     });
+  });
+
+  it('sends the tags in entry order, and none as an empty list (a draft may have none, #17)', () => {
+    expect(toCreateMarketBody({ ...valid, tags: ['금리', 'CPI'] }).tags).toEqual(['금리', 'CPI']);
+    expect(toCreateMarketBody(valid).tags).toEqual([]);
+    // What the box holds and has not added is never sent.
+    expect(toCreateMarketBody({ ...valid, tagInput: '서울' })).not.toHaveProperty('tagInput');
   });
 
   it('sends no initial probability or liquidity: a market is made without them (#125)', () => {
@@ -192,6 +210,24 @@ describe('toUpdateMarketBody', () => {
     });
   });
 
+  it('sends the whole ordered tag set only when it changed (#17)', () => {
+    const tagged = { ...original, tags: ['금리', 'CPI'] };
+    expect(toUpdateMarketBody(tagged, tagged)).toEqual({});
+    // A tag added, one removed, the order changed: the whole set, in its new order.
+    expect(toUpdateMarketBody({ ...tagged, tags: ['금리', 'CPI', '서울'] }, tagged)).toEqual({
+      tags: ['금리', 'CPI', '서울'],
+    });
+    expect(toUpdateMarketBody({ ...tagged, tags: ['CPI'] }, tagged)).toEqual({ tags: ['CPI'] });
+    expect(toUpdateMarketBody({ ...tagged, tags: ['CPI', '금리'] }, tagged)).toEqual({
+      tags: ['CPI', '금리'],
+    });
+    expect(toUpdateMarketBody({ ...tagged, tags: [] }, tagged)).toEqual({ tags: [] });
+    // Re-cased only: the same tag, which the API would keep in its first spelling anyway.
+    expect(toUpdateMarketBody({ ...tagged, tags: ['금리', 'cpi'] }, tagged)).toEqual({});
+    // The box is never sent.
+    expect(toUpdateMarketBody({ ...tagged, tagInput: '서울' }, tagged)).toEqual({});
+  });
+
   it('never sends a blank category (a retired one prefilled as "")', () => {
     const noCategory = { ...original, categoryId: '' };
     expect(toUpdateMarketBody(noCategory, noCategory)).toEqual({});
@@ -200,6 +236,132 @@ describe('toUpdateMarketBody', () => {
     const edited = { ...noCategory, title: '고친 질문' };
     expect(marketFormSchema({ now, original: noCategory }).safeParse(edited).success).toBe(true);
     expect(toUpdateMarketBody(edited, noCategory)).toEqual({ title: '고친 질문' });
+  });
+});
+
+describe('addTags', () => {
+  it('normalises a typed name and adds it at the end', () => {
+    expect(addTags([], '  서울  ')).toEqual({ tags: ['서울'], rest: '' });
+    expect(addTags(['서울'], '한국   영화')).toEqual({ tags: ['서울', '한국 영화'], rest: '' });
+    // NFC: a name typed in decomposed jamo is the composed one.
+    expect(addTags([], '서울'.normalize('NFD')).tags).toEqual(['서울']);
+  });
+
+  it("splits a pasted list on commas, skipping blanks ('a, b,')", () => {
+    expect(addTags([], '서울, 기상청,  , CPI,')).toEqual({
+      tags: ['서울', '기상청', 'CPI'],
+      rest: '',
+    });
+    // A box of blanks adds nothing and leaves nothing behind.
+    expect(addTags(['서울'], ' , ,')).toEqual({ tags: ['서울'], rest: '' });
+  });
+
+  it('refuses a second name of one tag, case and spacing aside', () => {
+    expect(addTags(['AI'], 'ai')).toEqual({
+      tags: ['AI'],
+      rest: 'ai',
+      error: copy.errMarketTagDuplicate,
+    });
+    expect(addTags(['한국 영화'], '한국  영화').error).toBe(copy.errMarketTagDuplicate);
+    // Within one pasted list too.
+    expect(addTags([], 'CPI, cpi')).toEqual({
+      tags: ['CPI'],
+      rest: 'cpi',
+      error: copy.errMarketTagDuplicate,
+    });
+  });
+
+  it('refuses a sixth tag', () => {
+    const five = ['a1', 'a2', 'a3', 'a4', 'a5'];
+    expect(five).toHaveLength(MARKET_TAGS_MAX);
+    expect(addTags(five, '서울')).toEqual({
+      tags: five,
+      rest: '서울',
+      error: copy.errMarketTagsMax,
+    });
+    // A list that would run past five adds up to five and keeps the rest in the box.
+    expect(addTags(['a1', 'a2', 'a3', 'a4'], 'b1, b2, b3')).toEqual({
+      tags: ['a1', 'a2', 'a3', 'a4', 'b1'],
+      rest: 'b2, b3',
+      error: copy.errMarketTagsMax,
+    });
+  });
+
+  it('explains a name too long or outside the allowed characters', () => {
+    const long = '가'.repeat(TAG_NAME_MAX + 1);
+    expect(addTags([], long)).toEqual({ tags: [], rest: long, error: copy.errMarketTagLength });
+    expect(addTags([], '가'.repeat(TAG_NAME_MAX)).tags).toHaveLength(1);
+    for (const bad of ['#AI', 'K-', '서울!', '-서울', '이모지🙂', '_밑줄']) {
+      expect(addTags([], bad), bad).toEqual({
+        tags: [],
+        rest: bad,
+        error: copy.errMarketTagFormat,
+      });
+    }
+    for (const good of ['S&P500', 'K-팝', '2026 지방선거', 'C++', '원·달러', 'v1.0']) {
+      expect(addTags([], good).tags, good).toEqual([good]);
+    }
+  });
+
+  it('adds the names before a refused one and keeps it, with what follows, in the box as typed', () => {
+    expect(addTags([], '서울, 기상#청 ,날씨')).toEqual({
+      tags: ['서울'],
+      rest: '기상#청 ,날씨',
+      error: copy.errMarketTagFormat,
+    });
+  });
+
+  it("takes one name exactly when the shared tagNameSchema does — the API's rule", () => {
+    fc.assert(
+      fc.property(
+        fc.oneof(
+          fc.string({ maxLength: 24 }),
+          fc.stringMatching(/^[가-힣A-Za-z0-9 \-_.&+·#!]{0,24}$/),
+        ),
+        (typed) => {
+          fc.pre(!typed.includes(',') && typed.trim() !== '');
+          const added = addTags([], typed);
+          const parsed = tagNameSchema.safeParse(typed);
+          expect(added.tags.length === 1, typed).toBe(parsed.success);
+          if (parsed.success) expect(added.tags).toEqual([parsed.data]);
+        },
+      ),
+    );
+  });
+
+  it('never leaves a list the shared marketTagsSchema would refuse', () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.stringMatching(/^[가-힣A-Za-z0-9 ,]{0,12}$/), { maxLength: 8 }),
+        (inputs) => {
+          let tags: string[] = [];
+          for (const input of inputs) tags = addTags(tags, input).tags;
+          expect(marketTagsSchema.safeParse(tags).success).toBe(true);
+        },
+      ),
+    );
+  });
+});
+
+describe('sameTags', () => {
+  it('is the same tags in the same order, case and spacing aside (the API compares so)', () => {
+    expect(sameTags([], [])).toBe(true);
+    expect(sameTags(['AI', '서울'], ['ai', '서울'])).toBe(true);
+    expect(sameTags(['한국 영화'], ['한국  영화'])).toBe(true);
+    expect(sameTags(['AI', '서울'], ['서울', 'AI'])).toBe(false);
+    expect(sameTags(['AI'], ['AI', '서울'])).toBe(false);
+    expect(sameTags(['AI'], ['AJ'])).toBe(false);
+  });
+});
+
+describe('the tag copy', () => {
+  it('names the shared bounds, so a change to them shows here', () => {
+    expect(copy.openItemTags).toContain(`${String(MARKET_TAGS_MIN)}~${String(MARKET_TAGS_MAX)}개`);
+    expect(copy.adminMarketTagsHint).toContain(
+      `${String(MARKET_TAGS_MIN)}~${String(MARKET_TAGS_MAX)}개`,
+    );
+    expect(copy.errMarketTagsMax).toContain(`${String(MARKET_TAGS_MAX)}개`);
+    expect(copy.errMarketTagLength).toContain(`${String(TAG_NAME_MAX)}자`);
   });
 });
 
@@ -235,7 +397,72 @@ const market: AdminMarket = {
   settlementSteps: [],
   statusEventId: '1',
   events: [],
+  tags: [],
+  missingOpenItems: [],
 };
+
+describe('marketFormSchema tags', () => {
+  const tagMessages = (result: {
+    error?: { issues: { message: string; path: PropertyKey[] }[] };
+  }) =>
+    result.error?.issues
+      .filter((issue) => issue.path[0] === 'tags' || issue.path[0] === 'tagInput')
+      .map((issue) => `${String(issue.path[0])}: ${issue.message}`) ?? [];
+
+  it('accepts none on a draft, and up to five distinct valid names', () => {
+    const schema = marketFormSchema({ now });
+    expect(schema.safeParse({ ...valid, tags: [] }).success).toBe(true);
+    expect(schema.safeParse({ ...valid, tags: ['a1', 'a2', 'a3', 'a4', 'a5'] }).success).toBe(true);
+  });
+
+  it('refuses what the box would have refused (a backstop), on the tags field', () => {
+    const schema = marketFormSchema({ now });
+    expect(tagMessages(schema.safeParse({ ...valid, tags: ['AI', 'ai'] }))).toEqual([
+      `tags: ${copy.errMarketTagDuplicate}`,
+    ]);
+    expect(
+      tagMessages(schema.safeParse({ ...valid, tags: ['a1', 'a2', 'a3', 'a4', 'a5', 'a6'] })),
+    ).toEqual([`tags: ${copy.errMarketTagsMax}`]);
+    expect(tagMessages(schema.safeParse({ ...valid, tags: ['#AI'] }))).toEqual([
+      `tags: ${copy.errMarketTagFormat}`,
+    ]);
+  });
+
+  it('refuses an open market edited down to no tags, as the API does', () => {
+    const open = marketFormSchema({ now, tagsRequired: true });
+    expect(tagMessages(open.safeParse({ ...valid, tags: [] }))).toEqual([
+      `tags: ${copy.errMarketTagsOpen}`,
+    ]);
+    expect(open.safeParse({ ...valid, tags: ['금리'] }).success).toBe(true);
+    // Emptied: refused when the market had tags.
+    const tagged = { ...valid, tags: ['금리'] };
+    expect(
+      tagMessages(
+        marketFormSchema({ now, original: tagged, tagsRequired: true }).safeParse({
+          ...tagged,
+          tags: [],
+        }),
+      ),
+    ).toEqual([`tags: ${copy.errMarketTagsOpen}`]);
+    // Untouched and empty is exempt, unlike the rules: a market opened before #17 has no tags,
+    // and an edit of its title or close time must still save (the form then sends no tags).
+    const legacy = { ...valid, tags: [] };
+    expect(
+      marketFormSchema({ now, original: legacy, tagsRequired: true }).safeParse({
+        ...legacy,
+        title: '새 제목',
+      }).success,
+    ).toBe(true);
+  });
+
+  it('refuses a save while the box holds a name it did not add, rather than dropping it', () => {
+    const schema = marketFormSchema({ now });
+    expect(tagMessages(schema.safeParse({ ...valid, tagInput: '서울#' }))).toEqual([
+      `tagInput: ${copy.errMarketTagPending}`,
+    ]);
+    expect(schema.safeParse({ ...valid, tagInput: '   ' }).success).toBe(true);
+  });
+});
 
 describe('marketFormSchema rulesRequired', () => {
   it('requires rules only for the edit form of an open market', () => {
@@ -313,10 +540,19 @@ describe('marketToFormValues', () => {
       rules: '',
       resolutionSource: '',
       categoryId: '2',
+      tags: [],
+      tagInput: '',
       imageUrl: '',
       closeAt: '2026-10-01T09:00',
       slug: 'rate-cut-2026',
     });
+  });
+
+  it('prefills the tags as stored, in order, and an empty box', () => {
+    const values = marketToFormValues({ ...market, tags: ['AI', '서울'] }, categories);
+    expect(values.tags).toEqual(['AI', '서울']);
+    expect(values.tagInput).toBe('');
+    expect(toUpdateMarketBody(values, values)).toEqual({});
   });
 
   it('leaves the category blank when it is no longer in the active list', () => {

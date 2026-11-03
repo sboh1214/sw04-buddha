@@ -20,7 +20,7 @@ import {
   type PriceSeries,
 } from '@buddha/shared';
 import { randomUUID } from 'node:crypto';
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, inArray } from 'drizzle-orm';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
@@ -69,11 +69,13 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
 
   const future = () => new Date(Date.now() + 7 * DAY_MS).toISOString();
 
+  // Tagged, so a created draft passes the open-items check (#17) unless a test says otherwise.
   const createBody = (overrides: Record<string, unknown> = {}) => ({
     title: '기준금리 3% 이하로 인하?',
     rules: '한국은행 발표 기준. 기한까지 3% 이하로 내리지 않으면 NO.',
     categoryId: category.id,
     closeAt: future(),
+    tags: ['금리', '한국은행'],
     ...overrides,
   });
 
@@ -101,9 +103,17 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
   const open = (id: string) => post(`/api/v1/admin/markets/${id}/open`);
   const close = (id: string) => post(`/api/v1/admin/markets/${id}/close`);
 
-  /** A market row written by the factory (no events, no tick) owned by the test admin. */
+  /**
+   * A market row written by the factory (no events, no tick) owned by the test admin, with one
+   * tag so a draft passes the open-items check (#17) unless the test gives others or none.
+   */
   const market = (input: Parameters<typeof createMarket>[1] = {}) =>
-    createMarket(t.db, { createdBy: admin.id, categoryId: category.id, ...input });
+    createMarket(t.db, {
+      createdBy: admin.id,
+      categoryId: category.id,
+      tags: ['테스트'],
+      ...input,
+    });
 
   const data = <T>(res: { json: <U>() => U }) => res.json<{ data: T }>().data;
   const detail = (res: { json: <U>() => U }) => data<AdminMarket>(res);
@@ -149,15 +159,19 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       settlementSteps: [],
       description: null,
       imageUrl: null,
+      // In the order sent (#17); and nothing missing, so it may open.
+      tags: ['금리', '한국은행'],
+      missingOpenItems: [],
     });
     for (const field of AMM_FIELDS) expect(created).not.toHaveProperty(field);
     expect(created.events.map((event) => event.type)).toEqual(['created']);
-    // The row's birth names the status it starts in and no status it left (#174).
+    // The row's birth names the status it starts in and no status it left (#174); the payload
+    // is the body as sent, tags included.
     expect(created.events[0]).toMatchObject({
       actorId: admin.id,
       fromStatus: null,
       toStatus: 'draft',
-      payload: { slug: 'rate-cut-2026' },
+      payload: { slug: 'rate-cut-2026', tags: ['금리', '한국은행'] },
     });
     expect(await eventsFor(created.id)).toMatchObject([
       { type: 'created', actorId: admin.id, fromStatus: null, toStatus: 'draft' },
@@ -174,7 +188,12 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     });
     // jsonb payloads are JSON-safe: Coin amounts crossed as strings, never bigint.
     const after = (action!.payload as { after: Record<string, unknown> }).after;
-    expect(after).toMatchObject({ slug: 'rate-cut-2026', status: 'draft', lastPrice: null });
+    expect(after).toMatchObject({
+      slug: 'rate-cut-2026',
+      status: 'draft',
+      lastPrice: null,
+      tags: ['금리', '한국은행'],
+    });
     for (const field of AMM_FIELDS) expect(after).not.toHaveProperty(field);
     expect(typeof after.volumeCoin).toBe('string');
 
@@ -246,7 +265,11 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     const retired = await createCategory(t.db, { isActive: false });
     const inactive = await create({ categoryId: retired.id });
     expect(inactive.statusCode).toBe(400);
-    expect(detailPath(inactive)).toEqual(['categoryId']);
+    expect(errorOf(inactive)).toMatchObject({
+      code: 'VALIDATION_ERROR',
+      message: 'This category is disabled',
+      details: [{ path: ['categoryId'], message: 'inactive' }],
+    });
 
     const past = await create({ closeAt: new Date(Date.now() - 1_000).toISOString() });
     expect(past.statusCode).toBe(400);
@@ -271,6 +294,275 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
 
     const blank = detail(await create({ rules: '   ' }));
     expect(blank).toMatchObject({ status: 'draft', rules: '   ' });
+  });
+
+  it('refuses a category no new market may be filed under, naming categoryId with the reason', async () => {
+    // #17 (ADR-0093 decision 2 #172 item 1): hidden, under a hidden parent, or a top level that has
+    // an active sub-category. Create and a category change alike; nothing is written.
+    const retiredParent = await createCategory(t.db, { slug: 'retired', nameKo: '은퇴' });
+    const underRetired = await createCategory(t.db, {
+      slug: 'under-retired',
+      nameKo: '은퇴 하위',
+      parentId: retiredParent.id,
+    });
+    await t.db
+      .update(schema.categories)
+      .set({ isActive: false })
+      .where(eq(schema.categories.id, retiredParent.id));
+    const hidden = await createCategory(t.db, { slug: 'hidden', nameKo: '숨김', isActive: false });
+    const top = await createCategory(t.db, { slug: 'top', nameKo: '상위' });
+    const leaf = await createCategory(t.db, { slug: 'leaf', nameKo: '하위', parentId: top.id });
+    const draft = detail(await create());
+    const live = await market({ status: 'open' });
+    for (const [categoryId, reason, message] of [
+      [hidden.id, 'inactive', 'This category is disabled'],
+      [underRetired.id, 'parent_inactive', 'This category is under a disabled category'],
+      [
+        top.id,
+        'subcategories',
+        'This category has sub-categories: file the market under one of them',
+      ],
+    ] as const) {
+      for (const [what, res] of [
+        ['create', await create({ categoryId })],
+        ['draft', await patch(`/api/v1/admin/markets/${draft.id}`, { categoryId })],
+        ['open', await patch(`/api/v1/admin/markets/${live.id}`, { categoryId })],
+      ] as const) {
+        expect({ what, reason, status: res.statusCode }).toEqual({ what, reason, status: 400 });
+        expect(errorOf(res)).toMatchObject({
+          code: 'VALIDATION_ERROR',
+          message,
+          details: [{ path: ['categoryId'], message: reason }],
+        });
+      }
+    }
+    expect(await t.db.select().from(schema.markets)).toHaveLength(2);
+    expect((await marketRow(draft.id)).categoryId).toBe(category.id);
+    expect((await marketRow(live.id)).categoryId).toBe(category.id);
+    expect((await actionsFor(live.id)).map((row) => row.type)).toEqual([]);
+    // A sub-category is where such a market goes.
+    expect(detail(await create({ categoryId: leaf.id })).category).toEqual({
+      slug: 'leaf',
+      nameKo: '하위',
+    });
+  });
+
+  it('names a past close time before the category on create, and the category first on a PATCH', async () => {
+    // The category's rows are read FOR SHARE before the clock (clock.ts: the instant after every
+    // lock), but each refusal is thrown where it always stood: create checks the close time
+    // first, a PATCH the category change.
+    const hidden = await createCategory(t.db, { slug: 'hidden', nameKo: '숨김', isActive: false });
+    const past = new Date(Date.now() - 1_000).toISOString();
+    const created = await create({ categoryId: hidden.id, closeAt: past });
+    expect(created.statusCode).toBe(400);
+    expect(detailPath(created)).toEqual(['closeAt']);
+    const draft = detail(await create());
+    const patched = await patch(`/api/v1/admin/markets/${draft.id}`, {
+      categoryId: hidden.id,
+      closeAt: past,
+    });
+    expect(patched.statusCode).toBe(400);
+    expect(errorOf(patched).details).toEqual([{ path: ['categoryId'], message: 'inactive' }]);
+    expect(await t.db.select().from(schema.markets)).toHaveLength(1);
+  });
+
+  it('keeps a category hidden after the market was filed: naming the current one again is no change', async () => {
+    // #172 item 1: an existing market keeps its category when it is hidden later, so a PATCH that
+    // sends the current categoryId back (the edit form sends the whole form) is not checked.
+    const draft = detail(await create());
+    const live = await market({ status: 'open' });
+    await t.db
+      .update(schema.categories)
+      .set({ isActive: false })
+      .where(eq(schema.categories.id, category.id));
+    for (const id of [draft.id, live.id]) {
+      const res = await patch(`/api/v1/admin/markets/${id}`, {
+        categoryId: category.id,
+        title: '카테고리를 그대로 둔 수정',
+      });
+      expect({ id, status: res.statusCode }).toEqual({ id, status: 200 });
+      expect(detail(res)).toMatchObject({
+        title: '카테고리를 그대로 둔 수정',
+        category: { slug: 'economy' },
+      });
+      expect(detail(res).missingOpenItems).toContain('category');
+    }
+    // A new market cannot be filed there any more.
+    const refused = await create();
+    expect(refused.statusCode).toBe(400);
+    expect(errorOf(refused).details).toEqual([{ path: ['categoryId'], message: 'inactive' }]);
+  });
+
+  // --- tags (#17) -------------------------------------------------------------------------
+  it('stores the tags in the order sent; a name that exists in another case or spacing links that tag', async () => {
+    // ADR-0093 decision 2 #172 item 2: one tag per name ignoring case and spaces, shared by every
+    // category; the spelling it was first made with is the one every market shows.
+    const first = detail(await create({ tags: ['AI', '반도체 산업', 'K-팝'] }));
+    expect(first.tags).toEqual(['AI', '반도체 산업', 'K-팝']);
+    const other = await createCategory(t.db, { slug: 'society', nameKo: '사회' });
+    const second = detail(
+      await create({ categoryId: other.id, tags: ['  반도체   산업 ', 'ai', '신규 태그'] }),
+    );
+    expect(second.tags).toEqual(['반도체 산업', 'AI', '신규 태그']);
+    // The created event keeps the body as sent (normalised by the schema); the record keeps what
+    // was stored.
+    expect(second.events[0]!.payload).toMatchObject({ tags: ['반도체 산업', 'ai', '신규 태그'] });
+    const [created] = await actionsFor(second.id);
+    expect(created!.payload).toMatchObject({ after: { tags: ['반도체 산업', 'AI', '신규 태그'] } });
+    const stored = await t.db
+      .select({ name: schema.tags.name, nameKey: schema.tags.nameKey })
+      .from(schema.tags);
+    expect(stored.sort((x, y) => (x.name < y.name ? -1 : 1))).toEqual([
+      { name: 'AI', nameKey: 'ai' },
+      { name: 'K-팝', nameKey: 'k-팝' },
+      { name: '반도체 산업', nameKey: '반도체 산업' },
+      { name: '신규 태그', nameKey: '신규 태그' },
+    ]);
+    const links = await t.db
+      .select({ position: schema.marketTags.position })
+      .from(schema.marketTags)
+      .where(eq(schema.marketTags.marketId, second.id))
+      .orderBy(asc(schema.marketTags.position));
+    expect(links.map((link) => link.position)).toEqual([1, 2, 3]);
+    // Without tags a draft has none (the open-items check counts them missing).
+    const bare = detail(await create({ tags: undefined }));
+    expect(bare).toMatchObject({ tags: [], missingOpenItems: ['tags'] });
+    // Two creates making the same new tags at once, in opposite orders: one row per tag.
+    const [a, b] = await Promise.all([
+      create({ tags: ['동시 태그 가', '동시 태그 나'] }),
+      create({ tags: ['동시 태그 나', '동시 태그 가'] }),
+    ]);
+    expect([a.statusCode, b.statusCode]).toEqual([201, 201]);
+    expect(detail(b).tags).toEqual(['동시 태그 나', '동시 태그 가']);
+    const concurrent = await t.db
+      .select()
+      .from(schema.tags)
+      .where(inArray(schema.tags.name, ['동시 태그 가', '동시 태그 나']));
+    expect(concurrent).toHaveLength(2);
+  });
+
+  it('refuses duplicate, malformed or more than five tags naming the field, writing nothing', async () => {
+    for (const [tags, path, message] of [
+      [['AI', ' ai '], ['tags', 1], 'duplicate tag'],
+      [['반도체 산업', '반도체  산업', '금리'], ['tags', 1], 'duplicate tag'],
+      [['#AI'], ['tags', 0], undefined],
+      [['a'.repeat(21)], ['tags', 0], undefined],
+      [['   '], ['tags', 0], undefined],
+      [['하나', '둘', '셋', '넷', '다섯', '여섯'], ['tags'], undefined],
+    ] as const) {
+      const res = await create({ tags });
+      expect({ tags, status: res.statusCode }).toEqual({ tags, status: 400 });
+      expect(errorOf(res).code).toBe('VALIDATION_ERROR');
+      expect(errorOf(res).details?.[0]).toMatchObject({ path, ...(message ? { message } : {}) });
+    }
+    expect(await t.db.select().from(schema.markets)).toHaveLength(0);
+    expect(await t.db.select().from(schema.tags)).toHaveLength(0);
+    // The edit refuses the same, before anything is written.
+    const draft = detail(await create({ tags: ['금리'] }));
+    const dup = await patch(`/api/v1/admin/markets/${draft.id}`, { tags: ['금리', '금리 '] });
+    expect(dup.statusCode).toBe(400);
+    expect(detailPath(dup)).toEqual(['tags', 1]);
+    expect(detail(await get(`/api/v1/admin/markets/${draft.id}`)).tags).toEqual(['금리']);
+    expect((await actionsFor(draft.id)).map((row) => row.type)).toEqual(['market_create']);
+  });
+
+  it('replaces the whole ordered set on an edit that sends tags, and keeps it on one that does not', async () => {
+    const draft = detail(await create({ tags: ['금리', '한국은행'] }));
+    const retitled = detail(await patch(`/api/v1/admin/markets/${draft.id}`, { title: '새 제목' }));
+    expect(retitled.tags).toEqual(['금리', '한국은행']);
+    const reordered = detail(
+      await patch(`/api/v1/admin/markets/${draft.id}`, { tags: ['한국은행', '물가', '금리'] }),
+    );
+    expect(reordered.tags).toEqual(['한국은행', '물가', '금리']);
+    const actions = await actionsFor(draft.id);
+    expect(actions.at(-1)!.payload).toMatchObject({
+      before: { tags: ['금리', '한국은행'] },
+      after: { tags: ['한국은행', '물가', '금리'] },
+    });
+    // A draft may be edited down to none (it cannot open that way).
+    const cleared = detail(await patch(`/api/v1/admin/markets/${draft.id}`, { tags: [] }));
+    expect(cleared).toMatchObject({ tags: [], missingOpenItems: ['tags'] });
+    expect(
+      await t.db.select().from(schema.marketTags).where(eq(schema.marketTags.marketId, draft.id)),
+    ).toEqual([]);
+    // Tags another market uses stay; an unused one stays too (tags are never deleted).
+    expect(await t.db.select().from(schema.tags)).toHaveLength(3);
+    // Statuses other than draft and open refuse a tag edit naming status, like any other field.
+    const closed = await market({ status: 'closed' });
+    const refused = await patch(`/api/v1/admin/markets/${closed.id}`, { tags: ['금리'] });
+    expect(refused.statusCode).toBe(400);
+    expect(detailPath(refused)).toEqual(['status']);
+  });
+
+  it('logs a tag edit of an open market with its before and after, and republishes its status', async () => {
+    // ADR-0093 decision 2 #172 item 14: category and tags may change after the open, recorded with
+    // who, when, before and after (the `market_update` record); viewers refetch on the repeat.
+    const row = await market({ status: 'open', tags: ['AI', '반도체'] });
+    const subscriber = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
+    const received: string[] = [];
+    subscriber.on('message', (_channel, message) => received.push(message));
+    await subscriber.subscribe(marketChannel(row.id));
+    try {
+      const res = await patch(`/api/v1/admin/markets/${row.id}`, { tags: ['반도체', '엔비디아'] });
+      expect(res.statusCode).toBe(200);
+      const edited = detail(res);
+      expect(edited).toMatchObject({ status: 'open', tags: ['반도체', '엔비디아'] });
+      await waitForMessages(received, 1, 'market:status of the tag edit');
+      expect(JSON.parse(received[0]!)).toMatchObject({
+        type: 'market:status',
+        marketId: row.id,
+        status: 'open',
+        ts: edited.updatedAt,
+      });
+      const [action] = await actionsFor(row.id);
+      expect(action).toMatchObject({ adminId: admin.id, type: 'market_update' });
+      expect(action!.payload).toMatchObject({
+        before: { tags: ['AI', '반도체'] },
+        after: { tags: ['반도체', '엔비디아'] },
+      });
+      // The public detail shows the new set.
+      const pub = await t.app.inject({ method: 'GET', url: `/api/v1/markets/${row.id}` });
+      expect(data<Market>(pub).tags).toEqual(['반도체', '엔비디아']);
+
+      // The same tags in another case are no change: nothing rewritten, nothing published, the
+      // stored spelling kept.
+      const same = await patch(`/api/v1/admin/markets/${row.id}`, {
+        tags: [' 반도체', '엔비디아'],
+      });
+      expect(detail(same).tags).toEqual(['반도체', '엔비디아']);
+      const upper = await patch(`/api/v1/admin/markets/${row.id}`, { tags: ['반도체', 'ai'] });
+      expect(detail(upper).tags).toEqual(['반도체', 'AI']);
+      await waitForMessages(received, 2, 'market:status of the second tag edit');
+      await sleep(100);
+      expect(received).toHaveLength(2);
+    } finally {
+      await subscriber.quit();
+    }
+    // An open market keeps at least one: none is refused naming tags, before anything is written.
+    const emptied = await patch(`/api/v1/admin/markets/${row.id}`, { tags: [] });
+    expect(emptied.statusCode).toBe(400);
+    expect(errorOf(emptied)).toMatchObject({
+      code: 'VALIDATION_ERROR',
+      message: 'Tags cannot be removed while the market is open',
+      details: [{ path: ['tags'], message: 'required while open' }],
+    });
+    expect(detail(await get(`/api/v1/admin/markets/${row.id}`)).tags).toEqual(['반도체', 'AI']);
+  });
+
+  it('searches the admin list by title only, never by tag', async () => {
+    // #17 choice 12: the 관련 시장 picker's `q` stays a title partial match (ADR-0068).
+    const tagged = await market({ title: '코스피 3000 돌파?', tags: ['AI'] });
+    const titled = await market({ title: 'AI 반도체 수출 증가?', tags: ['수출'] });
+    const ids = async (q: string) =>
+      data<MarketSummary[]>(await get(`/api/v1/admin/markets?q=${encodeURIComponent(q)}`)).map(
+        (row) => row.id,
+      );
+    expect(await ids('AI')).toEqual([titled.id]);
+    expect(await ids('코스피')).toEqual([tagged.id]);
+    expect(await ids('수출')).toEqual([titled.id]);
+    // Summaries carry no tags (the card has none).
+    const [summary] = data<MarketSummary[]>(await get('/api/v1/admin/markets?q=AI'));
+    expect(summary).not.toHaveProperty('tags');
   });
 
   // --- update ---------------------------------------------------------------------------
@@ -582,26 +874,163 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     }
   });
 
-  it('refuses to open without rules (RULES_REQUIRED) or past the close time; 404 unknown', async () => {
-    const blank = detail(await create({ rules: '  \n ' }));
+  it('refuses to open a draft the open-items check finds wanting (OPEN_ITEMS_MISSING), naming every item in order', async () => {
+    // #17: rules, a category a new market may be filed under, 1..5 tags — all named at once, in
+    // OPEN_ITEMS order. Here: blank rules, a top-level category that got a sub-category after the
+    // draft was filed, and no tags.
+    const blank = detail(await create({ rules: '  \n ', tags: [] }));
+    expect(blank.missingOpenItems).toEqual(['rules', 'tags']);
+    const leaf = await createCategory(t.db, {
+      slug: 'rates',
+      nameKo: '금리',
+      parentId: category.id,
+    });
     const res = await open(blank.id);
     expect(res.statusCode).toBe(422);
-    expect(errorOf(res)).toMatchObject({ code: 'RULES_REQUIRED', details: [{ path: ['rules'] }] });
+    expect(errorOf(res)).toEqual({
+      code: 'OPEN_ITEMS_MISSING',
+      message: 'The market misses what it needs to open: rules, category, tags',
+      details: [
+        { path: ['rules'], message: 'required' },
+        { path: ['category'], message: 'subcategories' },
+        { path: ['tags'], message: 'required' },
+      ],
+    });
+    // The detail reports the same, read without the open's locks.
+    expect(detail(await get(`/api/v1/admin/markets/${blank.id}`)).missingOpenItems).toEqual([
+      'rules',
+      'category',
+      'tags',
+    ]);
+    // Nothing written: still a draft, no event, no record, no tick.
     expect((await marketRow(blank.id)).status).toBe('draft');
+    expect((await eventsFor(blank.id)).map((event) => event.type)).toEqual(['created']);
+    expect((await actionsFor(blank.id)).map((row) => row.type)).toEqual(['market_create']);
     expect(await t.db.select().from(schema.priceTicks)).toHaveLength(0);
 
-    // Rules added later make it openable.
+    // Each fixed in turn leaves the rest named: no RULES_REQUIRED on open any more.
     await patch(`/api/v1/admin/markets/${blank.id}`, { rules: '규칙 추가' });
-    expect((await open(blank.id)).statusCode).toBe(200);
+    expect(errorOf(await open(blank.id)).details).toEqual([
+      { path: ['category'], message: 'subcategories' },
+      { path: ['tags'], message: 'required' },
+    ]);
+    await patch(`/api/v1/admin/markets/${blank.id}`, { categoryId: leaf.id });
+    const tagless = await open(blank.id);
+    expect(errorOf(tagless)).toMatchObject({
+      code: 'OPEN_ITEMS_MISSING',
+      details: [{ path: ['tags'], message: 'required' }],
+    });
+    await patch(`/api/v1/admin/markets/${blank.id}`, { tags: ['금리'] });
+    const opened = await open(blank.id);
+    expect(opened.statusCode).toBe(200);
+    expect(detail(opened)).toMatchObject({ status: 'open', tags: ['금리'], missingOpenItems: [] });
+    // The open's record carries the tags like every snapshot.
+    const openAction = (await actionsFor(blank.id)).find((row) => row.type === 'market_open')!;
+    expect(openAction.payload).toMatchObject({
+      before: { tags: ['금리'] },
+      after: { tags: ['금리'] },
+    });
 
-    const stale = await market({ status: 'draft', closeAt: new Date(Date.now() - 1_000) });
-    const past = await open(stale.id);
+    // A hidden category, and a sub-category under a hidden parent, are missing the same way —
+    // the reason as the message.
+    const hidden = await createCategory(t.db, { slug: 'hidden', nameKo: '숨김' });
+    const hiddenDraft = await market({ status: 'draft', categoryId: hidden.id });
+    const orphanParent = await createCategory(t.db, { slug: 'retired-parent', nameKo: '은퇴' });
+    const orphan = await createCategory(t.db, {
+      slug: 'orphan',
+      nameKo: '고아',
+      parentId: orphanParent.id,
+    });
+    const orphanDraft = await market({ status: 'draft', categoryId: orphan.id });
+    await t.db
+      .update(schema.categories)
+      .set({ isActive: false })
+      .where(eq(schema.categories.id, hidden.id));
+    await t.db
+      .update(schema.categories)
+      .set({ isActive: false })
+      .where(eq(schema.categories.id, orphanParent.id));
+    for (const [row, reason] of [
+      [hiddenDraft, 'inactive'],
+      [orphanDraft, 'parent_inactive'],
+    ] as const) {
+      const refused = await open(row.id);
+      expect({ reason, status: refused.statusCode }).toEqual({ reason, status: 422 });
+      expect(errorOf(refused).details).toEqual([{ path: ['category'], message: reason }]);
+      expect((await marketRow(row.id)).status).toBe('draft');
+      expect(detail(await get(`/api/v1/admin/markets/${row.id}`)).missingOpenItems).toEqual([
+        'category',
+      ]);
+    }
+
+    // What the market lacks comes before the past close time; with nothing missing, the close
+    // time is what refuses it.
+    const stale = await market({
+      status: 'draft',
+      closeAt: new Date(Date.now() - 1_000),
+      tags: [],
+    });
+    const lacking = await open(stale.id);
+    expect(lacking.statusCode).toBe(422);
+    expect(errorOf(lacking).code).toBe('OPEN_ITEMS_MISSING');
+    const staleTagged = await market({
+      status: 'draft',
+      categoryId: leaf.id,
+      closeAt: new Date(Date.now() - 1_000),
+    });
+    const past = await open(staleTagged.id);
     expect(past.statusCode).toBe(400);
     expect(detailPath(past)).toEqual(['closeAt']);
-    expect((await marketRow(stale.id)).status).toBe('draft');
+    expect((await marketRow(staleTagged.id)).status).toBe('draft');
 
     expect((await open(randomUUID())).statusCode).toBe(404);
     expect((await open('not-a-uuid')).statusCode).toBe(400);
+  });
+
+  it('reports what the open-items check finds missing on the admin detail, for every status', async () => {
+    const draft = detail(await create({ rules: '', tags: [] }));
+    expect(draft.missingOpenItems).toEqual(['rules', 'tags']);
+    expect(detail(await get(`/api/v1/admin/markets/${draft.id}`)).missingOpenItems).toEqual([
+      'rules',
+      'tags',
+    ]);
+    // An open market whose category was hidden after it was filed reports it too, as does one
+    // written before tags existed; the public detail carries neither.
+    const live = await market({ status: 'open', tags: [] });
+    expect(detail(await get(`/api/v1/admin/markets/${live.id}`)).missingOpenItems).toEqual([
+      'tags',
+    ]);
+    await t.db
+      .update(schema.categories)
+      .set({ isActive: false })
+      .where(eq(schema.categories.id, category.id));
+    expect(detail(await get(`/api/v1/admin/markets/${live.id}`)).missingOpenItems).toEqual([
+      'category',
+      'tags',
+    ]);
+    expect(detail(await get(`/api/v1/admin/markets/${draft.id}`)).missingOpenItems).toEqual([
+      'rules',
+      'category',
+      'tags',
+    ]);
+    const pub = data<Market>(
+      await t.app.inject({ method: 'GET', url: `/api/v1/markets/${live.id}` }),
+    );
+    expect(pub).not.toHaveProperty('missingOpenItems');
+    // A top level whose only sub-category is hidden holds markets again.
+    await t.db
+      .update(schema.categories)
+      .set({ isActive: true })
+      .where(eq(schema.categories.id, category.id));
+    await createCategory(t.db, {
+      slug: 'hidden-leaf',
+      nameKo: '숨은 하위',
+      parentId: category.id,
+      isActive: false,
+    });
+    expect(detail(await get(`/api/v1/admin/markets/${live.id}`)).missingOpenItems).toEqual([
+      'tags',
+    ]);
   });
 
   it('closes a market whose close time has already passed', async () => {

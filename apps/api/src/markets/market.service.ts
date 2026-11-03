@@ -7,6 +7,7 @@ import {
   TICKS_MAX_POINTS,
   TICKS_SCAN_MAX,
   serializeCoinAmount,
+  tagKey,
   tickBucketSeconds,
   uuidParamSchema,
   type Category,
@@ -19,7 +20,20 @@ import {
   type TickBucketSeconds,
   type TicksQuery,
 } from '@buddha/shared';
-import { and, asc, desc, eq, gte, ilike, inArray, lte, or, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  exists,
+  gte,
+  ilike,
+  inArray,
+  lte,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { DB } from '../infra/db/db.provider.js';
 import { type Page } from '../wallet/wallet.service.js';
@@ -27,6 +41,8 @@ import { marketOrder } from './market-order.js';
 
 export type MarketRow = typeof schema.markets.$inferSelect;
 type FillRow = typeof schema.fills.$inferSelect;
+/** The handle `db.transaction` hands its callback; @buddha/db exports no alias for it. */
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
 /**
  * One row of the sampled-grid tick query. It runs through `db.execute`, which hands back the
@@ -78,16 +94,35 @@ export function toMarketSummary(row: MarketRow, category: CategoryRef): MarketSu
   };
 }
 
-/** Public detail (PLAN 7.1): no author, exposure or settlement steps. */
-export function toMarket(row: MarketRow, category: CategoryRef): Market {
+/**
+ * Public detail (PLAN 7.1): no author, exposure or settlement steps. `tags` are the market's
+ * (`marketTagNames`) — the detail's alone, never a card's (#17).
+ */
+export function toMarket(row: MarketRow, category: CategoryRef, tags: string[]): Market {
   return {
     ...toMarketSummary(row, category),
     description: row.description,
     rules: row.rules,
     resolutionSource: row.resolutionSource,
+    tags,
     resolvedAt: row.resolvedAt?.toISOString() ?? null,
     settledAt: row.settledAt?.toISOString() ?? null,
   };
+}
+
+/**
+ * A market's tag names (#17, ADR-0093 decision 2 #172 item 2) in the order the operator entered
+ * them (`market_tags.position`), each its tag's stored spelling — the one it was first made with.
+ * Through `executor`, so a write answers with what it wrote.
+ */
+export async function marketTagNames(executor: Db | Tx, marketId: string): Promise<string[]> {
+  const rows = await executor
+    .select({ name: schema.tags.name })
+    .from(schema.marketTags)
+    .innerJoin(schema.tags, eq(schema.tags.id, schema.marketTags.tagId))
+    .where(eq(schema.marketTags.marketId, marketId))
+    .orderBy(asc(schema.marketTags.position));
+  return rows.map((row) => row.name);
 }
 
 /** Anonymous (PLAN 7.1): the order and its owner never leave the server. */
@@ -119,6 +154,28 @@ export function isPublicMarket(): SQL {
  */
 export function likePattern(q: string): string {
   return `%${q.replaceAll(/[%_\\]/g, (m) => `\\${m}`)}%`;
+}
+
+/**
+ * The public search (`GET /markets?q=`; ADR-0061 decision 1 item 14, ADR-0066, #17): a title
+ * holding the term (`likePattern`, case-insensitive) or a tag named exactly the term — `tagKey`,
+ * so case and the spaces around and inside it aside, as two tag names are one tag. Not a partial
+ * tag match: the detail's tag links search for the tag's whole name. The tag half is a correlated
+ * EXISTS on `market_tags_tag_id_market_id_idx` behind the unique `name_key`; the title half stays
+ * a plain `ILIKE` with no index of its own (ADR-0066). The admin list's `q` is the title alone.
+ */
+export function matchesSearch(db: Db, q: string): SQL | undefined {
+  const { markets, marketTags, tags } = schema;
+  return or(
+    ilike(markets.title, likePattern(q)),
+    exists(
+      db
+        .select({ one: sql`1` })
+        .from(marketTags)
+        .innerJoin(tags, eq(tags.id, marketTags.tagId))
+        .where(and(eq(marketTags.marketId, markets.id), eq(tags.nameKey, tagKey(q)))),
+    ),
+  );
 }
 
 /**
@@ -163,9 +220,10 @@ export class MarketService {
    * decode for the order serves the first page rather than a 500 (see decodeKeyset).
    *
    * `status=all` is every public status (the search screen's '모든 상태', ADR-0066; CANCELLED
-   * included, ADR-0093 decision 3): DRAFT and REVIEW are still never listed. The title search is
-   * a plain `ILIKE` over the candidate rows, with no index of its own (ADR-0066 says why): the
-   * sort reads every candidate anyway.
+   * included, ADR-0093 decision 3): DRAFT and REVIEW are still never listed. The search
+   * (`matchesSearch`) is a title partial match — a plain `ILIKE` over the candidate rows, with no
+   * index of its own (ADR-0066 says why): the sort reads every candidate anyway — or a tag exact
+   * match (#17).
    */
   async list(query: MarketListQuery): Promise<Page<MarketSummary>> {
     const { markets, categories } = schema;
@@ -174,7 +232,7 @@ export class MarketService {
     const filters = [
       query.status === ALL_MARKET_STATUSES ? isPublicMarket() : eq(markets.status, query.status),
       query.category ? inCategory(this.db, query.category) : undefined,
-      query.q ? ilike(markets.title, likePattern(query.q)) : undefined,
+      query.q ? matchesSearch(this.db, query.q) : undefined,
     ];
 
     let select = this.db
@@ -200,7 +258,8 @@ export class MarketService {
   /**
    * `GET /markets/:idOrSlug`: a uuid-shaped parameter is an id, anything else a slug (which
    * `marketSlugSchema` keeps from ever looking like a uuid). The slug is NFC-normalised like
-   * the stored one, so a decomposed Korean URL still finds the market.
+   * the stored one, so a decomposed Korean URL still finds the market. The tags are a second
+   * statement (#17): the detail alone carries them.
    */
   async getPublic(idOrSlug: string): Promise<Market> {
     const { markets, categories } = schema;
@@ -223,7 +282,7 @@ export class MarketService {
       )
       .limit(1);
     if (!row) throw new AppError('NOT_FOUND', { message: 'Market not found' });
-    return toMarket(row.market, row.category);
+    return toMarket(row.market, row.category, await marketTagNames(this.db, row.market.id));
   }
 
   /**

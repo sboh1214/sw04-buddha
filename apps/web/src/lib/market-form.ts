@@ -3,10 +3,15 @@ import {
   MARKET_RESOLVE_EVIDENCE_URL_MAX,
   MARKET_RESOLVE_NOTE_MAX,
   MARKET_SOURCE_MAX,
+  MARKET_TAGS_MAX,
   MARKET_TEXT_MAX,
   MARKET_TITLE_MAX,
   OUTCOMES,
+  TAG_NAME_MAX,
+  TAG_NAME_PATTERN,
   marketSlugSchema,
+  normalizeTagName,
+  tagKey,
 } from '@buddha/shared';
 import type { KeepStateOptions } from 'react-hook-form';
 import * as z from 'zod';
@@ -34,6 +39,19 @@ export interface MarketFormValues {
   resolutionSource: string;
   /** The category's id as the `<select>` holds it; '' until one is chosen. */
   categoryId: string;
+  /**
+   * The tags in entry order (#17, ADR-0093 decision 2 #172 item 2), each as `normalizeTagName` left
+   * it when it went in (`addTags`); [] until one is added, and a draft may be saved so. A name some
+   * tag already has in another case is linked to that tag's first spelling by the API, which the
+   * form shows once the answer comes back.
+   */
+  tags: string[];
+  /**
+   * What the tag box holds and has not added: never sent. The box adds on Enter and 넣기 only,
+   * and a save with a name still in it is refused (`errMarketTagPending`) rather than dropping
+   * the name.
+   */
+  tagInput: string;
   imageUrl: string;
   /** `datetime-local` in KST (lib/datetime). */
   closeAt: string;
@@ -47,6 +65,8 @@ export const EMPTY_MARKET_FORM: MarketFormValues = {
   rules: '',
   resolutionSource: '',
   categoryId: '',
+  tags: [],
+  tagInput: '',
   imageUrl: '',
   closeAt: '',
   slug: '',
@@ -65,6 +85,61 @@ export function isHttpUrl(value: string): boolean {
 const CATEGORY_ID_PATTERN = /^\d+$/;
 
 /**
+ * Why `name` (normalised) cannot join `tags`, or `undefined` when it can: the shared rules of
+ * `marketTagsSchema` — at most MARKET_TAGS_MAX, TAG_NAME_MAX characters (zod's count, UTF-16 units,
+ * as the API's), TAG_NAME_PATTERN, and no second name of one tag (`tagKey`: case and spacing aside)
+ * — in Korean, so the box says which rule it was.
+ */
+function tagRefusal(tags: readonly string[], name: string): string | undefined {
+  if (tags.length >= MARKET_TAGS_MAX) return copy.errMarketTagsMax;
+  if (name.length > TAG_NAME_MAX) return copy.errMarketTagLength;
+  if (!TAG_NAME_PATTERN.test(name)) return copy.errMarketTagFormat;
+  const key = tagKey(name);
+  if (tags.some((tag) => tagKey(tag) === key)) return copy.errMarketTagDuplicate;
+  return undefined;
+}
+
+/** What adding the tag box's text did (`addTags`). */
+export interface TagAddition {
+  /** The tags after it, in entry order: the names that went in are at the end. */
+  tags: string[];
+  /** What stays in the box: '' once everything went in, else the refused name and those after. */
+  rest: string;
+  /** Why the first name left in the box was refused; absent when nothing was. */
+  error?: string;
+}
+
+/**
+ * The tag box's text added to `tags` (#17, ADR-0093 decision 2 #172 item 2), on Enter or 넣기:
+ * split on commas, so a pasted '서울, 기상청' is two names, each normalised (`normalizeTagName`) and
+ * blanks skipped. The names go in in order until one is refused (`tagRefusal`); that one and the
+ * text after it stay in the box as typed, with the reason, so nothing typed is lost and what goes
+ * in is what the API would take. A comma is never part of a name (TAG_NAME_PATTERN).
+ */
+export function addTags(tags: readonly string[], input: string): TagAddition {
+  const pieces = input.split(',');
+  const next = [...tags];
+  for (const [index, piece] of pieces.entries()) {
+    const name = normalizeTagName(piece);
+    if (name === '') continue;
+    const error = tagRefusal(next, name);
+    if (error !== undefined) {
+      return { tags: next, rest: pieces.slice(index).join(',').trim(), error };
+    }
+    next.push(name);
+  }
+  return { tags: next, rest: '' };
+}
+
+/**
+ * Whether two lists are the same tags in the same order — what the API compares too (#17): a name
+ * that differs only in case or spacing is the same tag, and the API keeps its first spelling.
+ */
+export function sameTags(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((name, index) => tagKey(name) === tagKey(b[index] ?? ''));
+}
+
+/**
  * `original` is the prefilled edit form: a close time the admin did not touch is exempt from
  * the "must be in the future" rule, so a draft whose close time has passed can still have its
  * title fixed (the PATCH body omits an unchanged `closeAt`, and the API checks only what is
@@ -74,15 +149,41 @@ const CATEGORY_ID_PATTERN = /^\d+$/;
  * a draft may be saved with blank rules, a live market may not be edited down to none (the
  * API refuses that with RULES_REQUIRED). Unlike `closeAt`, an untouched blank is not exempt
  * there — an open market without rules is an anomaly the admin must fix before saving
- * anything else. `now` is injectable for tests.
+ * anything else. `tagsRequired` is the same for the tags (#17): a draft may have none, an open
+ * market may not be edited down to none (the API refuses that naming `tags`, 'required while
+ * open'). Unlike the rules, an untouched empty set IS exempt: a market opened before #17 has no
+ * tags, and its other fields must stay editable — the form sends no `tags` while they are
+ * unchanged, which the API takes. The tags' own rules are the box's (`addTags`), checked again
+ * here as a backstop; a name
+ * left in the box is refused (`tagInput`). `now` is injectable for tests.
  */
 export function marketFormSchema(
-  options: { original?: MarketFormValues; now?: () => number; rulesRequired?: boolean } = {},
+  options: {
+    original?: MarketFormValues;
+    now?: () => number;
+    rulesRequired?: boolean;
+    tagsRequired?: boolean;
+  } = {},
 ) {
   const now = options.now ?? Date.now;
   const rules = options.rulesRequired
     ? z.string().trim().min(1, copy.errMarketRulesOpen)
     : z.string().trim();
+  const tags = z.array(z.string()).superRefine((names, ctx) => {
+    const kept: string[] = [];
+    for (const name of names) {
+      const refusal = tagRefusal(kept, normalizeTagName(name));
+      if (refusal !== undefined) {
+        ctx.addIssue({ code: 'custom', message: refusal });
+        return;
+      }
+      kept.push(name);
+    }
+    // Edited down to none: the original had tags (an edit form always passes `original`).
+    if (options.tagsRequired && names.length === 0 && (options.original?.tags.length ?? 1) > 0) {
+      ctx.addIssue({ code: 'custom', message: copy.errMarketTagsOpen });
+    }
+  });
   return z.object({
     title: z.string().trim().min(1, copy.errMarketTitle).max(MARKET_TITLE_MAX, copy.errMarketTitle),
     description: z.string().trim().max(MARKET_TEXT_MAX, copy.errMarketText),
@@ -96,6 +197,8 @@ export function marketFormSchema(
           CATEGORY_ID_PATTERN.test(value),
         copy.errMarketCategory,
       ),
+    tags,
+    tagInput: z.string().refine((value) => value.trim() === '', copy.errMarketTagPending),
     imageUrl: z
       .string()
       .trim()
@@ -197,7 +300,9 @@ const orNull = (value: string): string | null => (value.trim() === '' ? null : v
 
 /**
  * Only for values `marketFormSchema` accepted: `closeAt` parses and `categoryId` is digits. The
- * fields alone — the 미리보기 draws them too; the press adds the admin on screen (ADR-0092).
+ * fields alone — the 미리보기 draws them too; the press adds the admin on screen (ADR-0092). The
+ * tags always go, in entry order: none makes a draft without tags (#17), which the open-items
+ * check then names.
  */
 export function toCreateMarketBody(values: MarketFormValues): CreateMarketFields {
   return {
@@ -206,6 +311,7 @@ export function toCreateMarketBody(values: MarketFormValues): CreateMarketFields
     rules: values.rules.trim(),
     resolutionSource: orNull(values.resolutionSource),
     categoryId: Number(values.categoryId),
+    tags: [...values.tags],
     imageUrl: orNull(values.imageUrl),
     closeAt: kstLocalToIso(values.closeAt) ?? '',
     ...(values.slug.trim() ? { slug: values.slug.trim() } : {}),
@@ -215,7 +321,9 @@ export function toCreateMarketBody(values: MarketFormValues): CreateMarketFields
 /**
  * The PATCH body: only the fields that differ from the prefilled `original`, so an unchanged
  * close time in the past is never sent and the API's per-status refusals (design 3.4) are
- * only met by a field the admin actually touched. The slug is not editable here.
+ * only met by a field the admin actually touched. The slug is not editable here. The tags go as
+ * the whole ordered set when it differs (`sameTags`) — the API replaces the set (#17); a name
+ * only re-cased is no change there either.
  * `{}` when nothing changed; the caller must not send that (the API refuses an update that names no
  * field beside the admin, which the press adds — ADR-0092).
  */
@@ -235,6 +343,7 @@ export function toUpdateMarketBody(
   if (values.categoryId !== original.categoryId && values.categoryId !== '') {
     body.categoryId = next.categoryId;
   }
+  if (!sameTags(values.tags, original.tags)) body.tags = [...values.tags];
   if (next.imageUrl !== before.imageUrl) body.imageUrl = next.imageUrl;
   if (values.closeAt !== original.closeAt) body.closeAt = next.closeAt;
   return body;
@@ -243,7 +352,8 @@ export function toUpdateMarketBody(
 /**
  * The edit form's starting values. `AdminMarket` carries the category by slug, not id, so the
  * id is looked up in the active list; a market whose category has since been retired starts
- * with '' (the select shows the placeholder, and the unchanged value is never sent).
+ * with '' (the select shows the placeholder, and the unchanged value is never sent). The tags
+ * are the stored spellings, in order.
  */
 export function marketToFormValues(market: AdminMarket, categories: Category[]): MarketFormValues {
   const category = categories.find((c) => c.slug === market.category.slug);
@@ -253,6 +363,8 @@ export function marketToFormValues(market: AdminMarket, categories: Category[]):
     rules: market.rules,
     resolutionSource: market.resolutionSource ?? '',
     categoryId: category === undefined ? '' : String(category.id),
+    tags: [...market.tags],
+    tagInput: '',
     imageUrl: market.imageUrl ?? '',
     closeAt: isoToKstLocal(market.closeAt),
     slug: market.slug,

@@ -156,6 +156,9 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/proposals (integration)', () => {
 
   it('refuses a form the owner’s fields do not allow, naming the field, and writes nothing', async () => {
     const category = await createCategory(t.db, { isActive: false });
+    // #17: a sub-category whose top-level category is hidden is hidden with it.
+    const hiddenParent = await createCategory(t.db, { isActive: false });
+    const underHidden = await createCategory(t.db, { parentId: hiddenParent.id });
     const cases: [Record<string, unknown>, string][] = [
       [{ question: '가'.repeat(101) }, 'question'],
       [{ question: '   ' }, 'question'],
@@ -171,6 +174,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/proposals (integration)', () => {
       // A date already past in Korea: a question whose result is known.
       [{ deadline: koreanDate(-1) }, 'deadline'],
       [{ categoryId: category.id }, 'categoryId'],
+      [{ categoryId: underHidden.id }, 'categoryId'],
       [{ categoryId: 2_000_000_000 }, 'categoryId'],
     ];
     for (const [overrides, field] of cases) {
@@ -194,6 +198,30 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/proposals (integration)', () => {
       }),
     );
     expect(ok.statusCode).toBe(201);
+  });
+
+  it('takes a category at either level, and refuses one under a hidden top-level category as a hidden one (#17)', async () => {
+    const parent = await createCategory(t.db);
+    const leaf = await createCategory(t.db, { parentId: parent.id });
+    // Either level, as before: a top-level category with sub-categories too (a wish, not a filing).
+    for (const categoryId of [parent.id, leaf.id]) {
+      const res = await propose(form({ categoryId }));
+      expect({ categoryId, status: res.statusCode }).toEqual({ categoryId, status: 201 });
+    }
+    // Hiding the top-level category hides its sub-category with it, its own state untouched.
+    await t.db
+      .update(schema.categories)
+      .set({ isActive: false })
+      .where(eq(schema.categories.id, parent.id));
+    for (const categoryId of [parent.id, leaf.id]) {
+      const res = await propose(form({ categoryId }));
+      expect({ categoryId, status: res.statusCode }).toEqual({ categoryId, status: 400 });
+      expect(errorOf(res)).toMatchObject({
+        code: 'VALIDATION_ERROR',
+        details: [{ path: ['categoryId'], message: 'not an active category' }],
+      });
+    }
+    expect(await rows()).toHaveLength(2);
   });
 
   it('keeps a proposal from an account that has not finished the onboarding (#57-8)', async () => {

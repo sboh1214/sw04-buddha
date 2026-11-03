@@ -78,6 +78,8 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   'market_settlement_steps.status': SETTLEMENT_STEP_STATUSES,
   'admin_actions.type': ADMIN_ACTION_TYPES,
   'audit_failures.kind': AUDIT_FAILURE_KINDS,
+  // The slugs the seed starts the tree with. An operator's own (#17, `/admin/categories`) are
+  // typed on the admin screen, like a tag's name: no fixed list holds them.
   'categories.slug': ALL_CATEGORY_SLUGS,
   'release_settings.key': [...RELEASE_SETTINGS.keys()],
   'market_watch_events.action': WATCH_EVENT_ACTIONS,

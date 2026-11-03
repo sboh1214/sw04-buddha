@@ -29,7 +29,11 @@ import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { OperatorFieldset } from '@/components/ui/operator-fieldset';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { ADMIN_MARKETS_KEY, useCategories } from '@/hooks/use-admin-markets';
+import {
+  ADMIN_MARKETS_KEY,
+  refreshAfterMarketFormRefusal,
+  useCategories,
+} from '@/hooks/use-admin-markets';
 import { useOperatorId } from '@/hooks/use-operator';
 import { useSessionChanged } from '@/hooks/use-session-changed';
 import { type CreateMarketBody, api, unwrap } from '@/lib/api';
@@ -201,7 +205,8 @@ export function AdminMarkets() {
 
 /**
  * 시장 만들기 → a draft (design 3.4). On success the admin lands on the detail page, where
- * 열기 is: a draft cannot be opened from here, and the rules it may still lack live there. The
+ * 열기 is: a draft cannot be opened from here, and what it may still lack to open — rules, tags
+ * (#17: a draft may be made with none) — is named there and filled in from its form. The
  * draft is made as the admin on screen (`useOperatorId`, ADR-0092): 만들기 waits for `GET /me`,
  * and the cookie of another account is refused (`copy.sessionChanged`, the session asked again).
  * The card is drawn for that admin (keyed by it above) and its fields wait for it too
@@ -239,11 +244,13 @@ function CreateMarketCard() {
     },
     onError: (error) => {
       sessionChanged(error);
-      // A taken slug or a retired category lands on its field (design §4); the rest — and a
-      // VALIDATION_ERROR naming nothing the form has — is the toast.
+      // A taken slug, a category a market may not be filed under or a refused tag lands on its
+      // field (design §4, #17); the rest — and a VALIDATION_ERROR naming nothing the form has — is
+      // the toast. A refused category also reads the select's list again.
       const fieldError = marketFormError(error);
       if (fieldError) {
         setError(fieldError.field, { message: fieldError.message });
+        void refreshAfterMarketFormRefusal(queryClient, fieldError.field);
         return;
       }
       toaster.create({ type: 'error', title: transitionErrorMessage(error) });

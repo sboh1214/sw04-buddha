@@ -151,7 +151,9 @@ export class AdminMarketsController {
   @Get(':id')
   @ApiOperation({
     operationId: 'adminGetMarket',
-    summary: 'One market with its exposure, settlement steps and event log',
+    summary:
+      'One market with its tags, exposure, settlement steps, event log and what the open-items ' +
+      'check finds missing',
   })
   @ApiData(adminMarketSchema)
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
@@ -162,11 +164,15 @@ export class AdminMarketsController {
   @Post()
   @ApiOperation({
     operationId: 'adminCreateMarket',
-    summary: 'Create a draft market (no price until its first fill)',
+    summary:
+      'Create a draft market (no price until its first fill) with up to 5 tags in order; a new ' +
+      'tag name makes the tag, one differing only in case or spaces links the existing tag',
   })
   @ApiData(adminMarketSchema, 201)
-  // NOT_FOUND names `categoryId`; VALIDATION_ERROR names `slug` (taken), `categoryId`
-  // (disabled) or `closeAt` (not in the future) besides the body schema's own issues.
+  // NOT_FOUND names `categoryId`; VALIDATION_ERROR names `slug` (taken), `categoryId` (one no new
+  // market may be filed under: the reason — inactive, parent_inactive, subcategories — is the
+  // message) or `closeAt` (not in the future) besides the body schema's own issues, `tags.N`
+  // among them (a duplicate ignoring case and spaces, a bad name).
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminCreateMarket(
     @CurrentUser() admin: SessionUser,
@@ -182,11 +188,13 @@ export class AdminMarketsController {
   @ApiOperation({
     operationId: 'adminUpdateMarket',
     summary:
-      'Edit a draft (any field) or an open market (text, close time, category; slug ' +
-      'refused naming the field, blank rules refused with RULES_REQUIRED); other statuses ' +
-      'refuse naming status',
+      'Edit a draft (any field) or an open market (text, close time, category, tags; slug ' +
+      'refused naming the field, blank rules refused with RULES_REQUIRED, no tags refused ' +
+      'naming tags); tags replace the whole ordered set; other statuses refuse naming status',
   })
   @ApiData(adminMarketSchema)
+  // VALIDATION_ERROR names `categoryId` as on create unless it is the market's current one (no
+  // change, not checked: a market keeps a category hidden after it was filed).
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
@@ -210,18 +218,20 @@ export class AdminMarketsController {
   @ApiOperation({
     operationId: 'adminOpenMarket',
     summary:
-      'draft → open (interim, until review and the scheduled open); refused without rules ' +
-      '(RULES_REQUIRED) or with a past closeAt',
+      'draft → open (interim, until review and the scheduled open); refused with ' +
+      'OPEN_ITEMS_MISSING when the open-items check finds rules, category or tags missing, ' +
+      'then with a past closeAt',
   })
   @ApiData(adminMarketSchema)
-  // VALIDATION_ERROR names `status` (not a draft) or `closeAt` (already past).
+  // VALIDATION_ERROR names `status` (not a draft) or `closeAt` (already past); OPEN_ITEMS_MISSING
+  // names every missing item, in OPEN_ITEMS order, and comes before the past close time.
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
     'ONBOARDING_REQUIRED',
     'NOT_FOUND',
     'VALIDATION_ERROR',
-    'RULES_REQUIRED',
+    'OPEN_ITEMS_MISSING',
   )
   adminOpenMarket(
     @CurrentUser() admin: SessionUser,

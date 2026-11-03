@@ -25,12 +25,14 @@ import { DEFAULT_SEARCH_FILTERS, type MarketSearch } from '@/lib/market-keys';
 import { SEARCH_INPUT_MAX_LENGTH, searchErrorMessage } from '@/lib/market-search';
 
 /**
- * Picks a market by its title (#46, ADR-0073): the write screen's first step when it was opened
- * without one (#45-1: «커뮤니티 목록에서 시장을 골라»), and the community list's market filter.
+ * Picks a market by its title or a tag (#46, ADR-0073; tags #17): the write screen's first step
+ * when it was opened without one (#45-1: «커뮤니티 목록에서 시장을 골라»), and the community list's
+ * market filter.
  *
  * It searches as the search screen does (`GET /markets` with the term, every public status — a
  * post takes any of them, #45-6 — 추천 order), through the same query options, so a market found
- * here is one the search screen finds too. A draft is never public, so it is never offered.
+ * here is one the search screen finds too: a title holding the term, or a tag named exactly it.
+ * A draft is never public, so it is never offered.
  */
 export function MarketPicker({
   prompt,

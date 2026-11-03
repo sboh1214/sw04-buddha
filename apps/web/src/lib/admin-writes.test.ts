@@ -55,6 +55,15 @@ const SCREENS: Readonly<Record<string, readonly string[]>> = {
     "await api.POST('/api/v1/admin/themes/{id}/notices/{noticeId}/hide', {\n              params: { path: { id: theme.id, noticeId } },\n              body: { expectedAccountId: by },",
     "await api.POST('/api/v1/admin/themes/{id}/notices/{noticeId}/show', {\n              params: { path: { id: theme.id, noticeId } },\n              body: { expectedAccountId: by },",
   ],
+  // 카테고리 (#17, ADR-0093), new since and written the same way: 추가, 이름 바꾸기, 위로 · 아래로,
+  // 숨기기 and 다시 보이기
+  '../app/admin/categories/admin-categories.tsx': [
+    'body: { ...toCreateCategoryFields(values, parent?.id ?? null), expectedAccountId: by },',
+    'body: { nameKo, expectedAccountId: by },',
+    'body: { parentId, ids, expectedAccountId: by },',
+    "await api.POST('/api/v1/admin/categories/{id}/hide', {\n              params: { path: { id: String(id) } },\n              body: { expectedAccountId: by },",
+    "await api.POST('/api/v1/admin/categories/{id}/show', {\n              params: { path: { id: String(id) } },\n              body: { expectedAccountId: by },",
+  ],
   '../app/admin/proposals/[id]/admin-proposal-detail.tsx': [
     'body: { expectedAccountId },',
     'body: toAdoptProposalBody(values, by),',
@@ -128,6 +137,9 @@ describe('the admin the admin writes name (ADR-0092)', () => {
       // 공개, 비공개의 confirm, 저장, 넣기, 빼기의 confirm, 공지 쓰기·고치기, 보이기, 숨기기의 confirm;
       // the buttons opening 비공개, 빼기, 공지 고치기 and 숨기기, and the edit form's fields
       '../app/admin/themes/[id]/admin-theme-detail.tsx': 14,
+      // 위로, 아래로, 숨기기의 confirm, 다시 보이기, 이름 바꾸기의 저장, 추가; the buttons opening
+      // 이름 바꾸기, 숨기기 and 하위 카테고리 추가, and the fields of the rename and add forms
+      '../app/admin/categories/admin-categories.tsx': 11,
       // 검토 시작, 채택·연결·반려의 confirm, 메모 저장; the fields of 채택, 연결, 반려 and the memo
       '../app/admin/proposals/[id]/admin-proposal-detail.tsx': 9,
       // 저장, and the button that opens the dialog
@@ -214,6 +226,12 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
       'const [editing, setEditing] = useHeldForOperator<string>();',
       'const [hiding, setHiding] = useHeldForOperator<AdminThemeNotice>();',
     ],
+    // 이름 바꾸기 (with the name typed), 숨기기's confirmation and 하위 카테고리 추가 (#17)
+    '../app/admin/categories/admin-categories.tsx': [
+      'const [renaming, setRenaming] = useHeldForOperator<number>();',
+      'const [hiding, setHiding] = useHeldForOperator<AdminCategory>();',
+      'const [addingTo, setAddingTo] = useHeldForOperator<number>();',
+    ],
     // the change dialog, with its status and reason
     '../app/admin/settings/admin-release-settings.tsx': [
       'const [editing, setEditing] = useHeldForOperator<ReleaseSetting>();',
@@ -252,6 +270,15 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
         '<NoticeForm\n            key={operatorId ?? \'\'}\n            testId="theme-notice-new"',
       ],
       fieldsets: 1,
+    },
+    // 상위 카테고리 추가 and each 하위 카테고리 추가 (#17); 이름 바꾸기 is held instead (HELD), and
+    // its fieldset is the second
+    '../app/admin/categories/admin-categories.tsx': {
+      keys: [
+        "<CreateCategoryForm key={operatorId ?? ''} parent={null} testId={topFormTestId} />",
+        "<CreateCategoryForm\n                    key={operatorId ?? ''}\n                    parent={top}",
+      ],
+      fieldsets: 2,
     },
     // 채택, 반려 and 연결 — each with its confirmation — and the internal memo
     '../app/admin/proposals/[id]/admin-proposal-detail.tsx': {
@@ -345,6 +372,11 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
       ],
       '../app/admin/settings/admin-release-settings.tsx': [
         'disabled={operatorId === undefined}\n          onClick={onEdit}',
+      ],
+      '../app/admin/categories/admin-categories.tsx': [
+        'disabled={operatorId === undefined}\n                  onClick={() => setAddingTo(top.id)}',
+        'disabled={operatorId === undefined}\n            onClick={onRename}',
+        'disabled={operatorId === undefined}\n              onClick={onHide}',
       ],
       '../app/admin/moderation/link-flags/admin-link-flags.tsx': [
         'disabled={operatorId === undefined}\n            onClick={() => setMarking(true)}',

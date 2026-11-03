@@ -6,6 +6,7 @@ import { AdminModule } from './admin/admin.module.js';
 import { ApprovalsModule } from './approvals/approvals.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { AuthoredModule } from './authored/authored.module.js';
+import { CategoriesModule } from './categories/categories.module.js';
 import { CommentsModule } from './comments/comments.module.js';
 import { CommonModule } from './common/common.module.js';
 import { envFilePaths, envSchema } from './config/env.js';
@@ -114,6 +115,9 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     // 시장 제안 (#77): the proposer's /me/proposals and the operators' /admin/proposals. After the
     // modules above, so the document keeps their routes where they were.
     ProposalsModule,
+    // 카테고리 관리 (#17): the operators' /admin/categories. After the modules above, so the
+    // document keeps their routes where they were.
+    CategoriesModule,
   ],
   controllers: [HealthController],
 })

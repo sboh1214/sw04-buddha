@@ -69,7 +69,8 @@ export class MarketsController {
     operationId: 'listMarkets',
     summary:
       'Markets by status (default open; all is every public status), never draft or in review, ' +
-      'optionally by category and a title search (q, a case-insensitive partial match); sorted ' +
+      'optionally by category and a search (q: a title partial match, case-insensitive, or a ' +
+      'tag of exactly that name, case and spaces aside); sorted ' +
       'recommended (24-hour volume, then the latest opening; the default), newest (latest ' +
       'opening) or closing (soonest close; with all or an ended status, the markets not closed ' +
       'yet (scheduled, open, paused) first and then the ended ones, latest close first)',
@@ -86,7 +87,9 @@ export class MarketsController {
   @Get(':idOrSlug')
   @ApiOperation({
     operationId: 'getMarket',
-    summary: 'One market by id or slug (a draft or in-review one is NOT_FOUND to the public)',
+    summary:
+      'One market by id or slug, with its tags in order (a draft or in-review one is NOT_FOUND ' +
+      'to the public)',
   })
   @ApiData(marketSchema)
   @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')

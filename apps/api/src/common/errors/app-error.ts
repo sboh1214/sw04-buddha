@@ -13,6 +13,8 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   DUPLICATE_REQUEST: HttpStatus.CONFLICT,
   RATE_LIMITED: HttpStatus.TOO_MANY_REQUESTS,
   RULES_REQUIRED: HttpStatus.UNPROCESSABLE_ENTITY,
+  // The market misses what the open-items check requires (#17): what it holds, not the request.
+  OPEN_ITEMS_MISSING: HttpStatus.UNPROCESSABLE_ENTITY,
   VERIFICATION_REQUIRED: HttpStatus.CONFLICT,
   REFUND_NOT_ALLOWED: HttpStatus.CONFLICT,
   PAYMENT_GATEWAY_REFUSED: HttpStatus.CONFLICT,

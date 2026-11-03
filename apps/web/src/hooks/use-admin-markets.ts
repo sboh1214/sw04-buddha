@@ -16,7 +16,7 @@ import {
   api,
   unwrap,
 } from '@/lib/api';
-import { marketIdParam, settlementPollInterval } from '@/lib/market-admin';
+import { type MarketFormField, marketIdParam, settlementPollInterval } from '@/lib/market-admin';
 import {
   CATEGORIES_QUERY_KEY,
   MARKET_FILLS_KEY,
@@ -260,4 +260,20 @@ export function applyMarket(queryClient: QueryClient, id: string, fresh: AdminMa
 export function useApplyMarket(id: string) {
   const queryClient = useQueryClient();
   return (fresh: AdminMarket) => applyMarket(queryClient, id, fresh);
+}
+
+/**
+ * After a market create or edit refused on a field (`marketFormError`): a refusal naming the
+ * category (#17, ADR-0093 decision 2 #172 item 1) says the tree moved under the form — the
+ * category or its parent was hidden, or it got its first sub-category — so the public
+ * `['categories']` the select reads (`useCategories`) is marked and, mounted, read again: the
+ * select drops the hidden one, or offers the sub-categories the message tells the admin to pick.
+ * Any other field leaves it alone. `refetchType` stays `'active'` (PLAN 11.5).
+ */
+export function refreshAfterMarketFormRefusal(
+  queryClient: QueryClient,
+  field: MarketFormField,
+): Promise<void> {
+  if (field !== 'categoryId') return Promise.resolve();
+  return queryClient.invalidateQueries({ queryKey: CATEGORIES_QUERY_KEY });
 }

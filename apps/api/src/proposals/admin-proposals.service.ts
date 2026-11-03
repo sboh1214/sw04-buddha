@@ -17,6 +17,7 @@ import {
   type WithoutExpectedAccount,
 } from '@buddha/shared';
 import { and, desc, eq } from 'drizzle-orm';
+import { readCategorySelectability } from '../categories/category-selectability.js';
 import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
 import { clockTimestamp } from '../infra/db/clock.js';
@@ -123,7 +124,8 @@ export class AdminProposalsService {
    * a parent with no active leaves (ADR-0041, markets sit on leaves). A wish for a parent that has
    * leaves — the proposal form offers either level — is refused as no category ('required'), so
    * a draft never lands on such a parent without the operator choosing it. A category the
-   * operator gives is taken at any level, as the market API takes it (ADR-0041).
+   * operator gives is held to what the market API holds a new market's to (#17,
+   * `readCategorySelectability`), naming the adoption's field.
    */
   async adopt(
     adminId: string,
@@ -295,9 +297,9 @@ export class AdminProposalsService {
    * NOT_FOUND naming `market.marketId`), or a draft made here from the proposal — titled with the
    * question, the YES condition as its rules, the sources as its resolution source, the background
    * as its description — in the category given, else the proposal's where a market may sit
-   * (`requireLeafFallback`), closing at the time given, else `proposalDraftCloseAt`. A draft that
-   * cannot be made — no category, an inactive one, a close time not in the future — is
-   * VALIDATION_ERROR naming the field under `market`, and nothing is written.
+   * (`requireDraftCategory`), closing at the time given, else `proposalDraftCloseAt`. A draft that
+   * cannot be made — no category, one a new market may not be filed under, a close time not in
+   * the future — is VALIDATION_ERROR naming the field under `market`, and nothing is written.
    */
   private async marketFor(
     tx: Tx,
@@ -330,8 +332,7 @@ export class AdminProposalsService {
         'must be in the future',
       );
     }
-    await this.requireActiveCategory(tx, categoryId);
-    if (market.categoryId === undefined) await this.requireLeafFallback(tx, categoryId);
+    await this.requireDraftCategory(tx, categoryId, market.categoryId === undefined);
     const draft = await this.markets.createIn(tx, adminId, {
       title: current.question,
       description: current.background,
@@ -359,45 +360,49 @@ export class AdminProposalsService {
   }
 
   /**
-   * The draft's category, refused as the market service would but naming the adoption's field:
-   * unknown is NOT_FOUND, retired is VALIDATION_ERROR.
+   * The draft's category, refused as the market service refuses a new market's (#17, ADR-0093
+   * decision 2 #172 item 1, `readCategorySelectability`) but naming the adoption's field: unknown
+   * is NOT_FOUND; otherwise VALIDATION_ERROR with the reason — `inactive`, `parent_inactive` (under
+   * a hidden top-level category, which hides it too) or `subcategories` (a top-level category with
+   * an active sub-category, which the market form has the operator file under instead).
+   *
+   * The proposal's own category, standing in when the operator gave none (`wished`), is refused
+   * for the last as no category (`required`), while it has an active leaf: stricter in its words on
+   * purpose — the operator never chose this category; the proposer wished for it, from a form that
+   * offers either level. Read under readCategorySelectability's FOR SHARE locks, so a category
+   * admin write cannot make it unpickable before the draft is written.
    */
-  private async requireActiveCategory(tx: Tx, categoryId: number): Promise<void> {
-    const [category] = await tx
-      .select({ isActive: schema.categories.isActive })
-      .from(schema.categories)
-      .where(eq(schema.categories.id, categoryId))
-      .limit(1)
-      .for('key share');
-    if (!category) {
+  private async requireDraftCategory(tx: Tx, categoryId: number, wished: boolean): Promise<void> {
+    const selectable = await readCategorySelectability(tx, categoryId);
+    if (!selectable.found) {
       throw new AppError('NOT_FOUND', {
         message: 'Category not found',
         details: [{ path: ['market', 'categoryId'], message: 'not found' }],
       });
     }
-    if (!category.isActive) {
-      throw fieldError(['market', 'categoryId'], 'This category is disabled', 'inactive');
-    }
-  }
-
-  /**
-   * The proposal's own category as the draft's, when the operator gave none: refused while it has
-   * an active leaf, which is where the market form would make the operator file it instead.
-   * Stricter than the market API on purpose — the operator never chose this category; the
-   * proposer wished for it.
-   */
-  private async requireLeafFallback(tx: Tx, categoryId: number): Promise<void> {
-    const [leaf] = await tx
-      .select({ id: schema.categories.id })
-      .from(schema.categories)
-      .where(and(eq(schema.categories.parentId, categoryId), eq(schema.categories.isActive, true)))
-      .limit(1);
-    if (leaf) {
-      throw fieldError(
-        ['market', 'categoryId'],
-        'A draft needs a sub-category: the proposal names a category that has some',
-        'required',
-      );
+    switch (selectable.reason) {
+      case null:
+        return;
+      case 'inactive':
+        throw fieldError(['market', 'categoryId'], 'This category is disabled', 'inactive');
+      case 'parent_inactive':
+        throw fieldError(
+          ['market', 'categoryId'],
+          'This category is under a disabled category',
+          'parent_inactive',
+        );
+      case 'subcategories':
+        throw wished
+          ? fieldError(
+              ['market', 'categoryId'],
+              'A draft needs a sub-category: the proposal names a category that has some',
+              'required',
+            )
+          : fieldError(
+              ['market', 'categoryId'],
+              'This category has sub-categories: file the market under one of them',
+              'subcategories',
+            );
     }
   }
 

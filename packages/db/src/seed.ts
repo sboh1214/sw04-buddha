@@ -6,14 +6,19 @@
 // table created by migrations, which is all the seed needs.
 import { randomUUID } from 'node:crypto';
 import {
+  ALL_CATEGORY_SLUGS,
   AUTH_USER_NAME,
+  MARKET_TAGS_MIN,
+  type MarketStatus,
   SEED_ADMIN_GRANT_REASON,
   type CategorySlug,
   SUBCATEGORY_SLUGS,
   type SubcategorySlug,
+  marketTagsSchema,
+  tagKey,
 } from '@buddha/shared';
 import { hashPassword } from 'better-auth/crypto';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { closeDb, createDb, type Db } from './client.js';
 import { loadRootEnv } from './env.js';
 import { SEED_MARKETS } from './seed-markets.js';
@@ -25,12 +30,19 @@ import {
   categories,
   chargePackages,
   marketEvents,
+  marketTags,
   markets,
   profiles,
+  tags,
   user,
 } from './schema/index.js';
 
-/** PLAN 1.3 top-level categories. Sports and elections are forbidden (PLAN 0.2): never add them. */
+/**
+ * The tree a fresh database starts with: PLAN 1.3's top-level categories, spaced by ten. Initial
+ * data only — from the first seed on, the operators keep the tree on `/admin/categories` (#17):
+ * they add, rename, reorder and hide, any category included, sports and politics too (D10,
+ * ADR-0047 O-16), and the seed never changes a row that exists (`seedCategories`).
+ */
 const CATEGORIES: readonly { slug: CategorySlug; nameKo: string; sortOrder: number }[] = [
   { slug: 'economy', nameKo: '경제', sortOrder: 10 },
   { slug: 'culture', nameKo: '문화', sortOrder: 20 },
@@ -43,8 +55,8 @@ const CATEGORIES: readonly { slug: CategorySlug; nameKo: string; sortOrder: numb
  * The second level, one Korean name per slug in `SUBCATEGORY_SLUGS` (shared enums.ts, which is
  * also where the two-level rule is written down). `satisfies` over every leaf slug: a slug added
  * to the shared list without a name here fails to compile rather than seeding a nameless row.
- * Display order within a parent is the order of the shared tuple, spaced by ten like the
- * parents so an admin can slot one between two later.
+ * The starting order within a parent is the order of the shared tuple, spaced by ten like the
+ * parents.
  */
 const SUBCATEGORY_NAMES = {
   housing: '주택',
@@ -73,26 +85,35 @@ const SUBCATEGORY_NAMES = {
 /** better-auth looks a credential account up by (providerId 'credential', accountId = user id). */
 const CREDENTIAL_PROVIDER = 'credential';
 
+/**
+ * Inserts the seed tree's missing rows and leaves every other row alone (#17, ADR-0096): a
+ * category an admin renamed, reordered or hid keeps its name, place and `is_active` through every
+ * deploy's seed. `ON CONFLICT DO NOTHING` with no target, so a row is skipped on either key — its
+ * slug exists (the usual case: every seed after the first), or a sibling already has its name
+ * (`categories_parent_name_ko_unique`, a seed slug added later that an admin got to first). A
+ * fresh database gets the whole tree; a seed slug missing from an existing one is inserted at its
+ * seed place, which the admins can move. A deploy's seed never fails on the operators' tree: a
+ * skipped row is reported, and its sub-categories with it when it is a parent, and a seed market
+ * filed under it is skipped too (`seedMarkets`).
+ */
 async function seedCategories(db: Db): Promise<void> {
-  // Parents first, then the leaves under them: a leaf's `parent_id` is the id the first
-  // statement produced (or already held — the upsert returns the surviving row either way).
+  // Parents first, then the leaves under them. Only an inserted row comes back from RETURNING,
+  // so a leaf's `parent_id` is read back by slug — the slug never changes once made (#17).
   const parents = await db
     .insert(categories)
     .values(CATEGORIES.map((category) => ({ ...category, parentId: null })))
-    .onConflictDoUpdate({
-      target: categories.slug,
-      // is_active is an admin knob: re-seeding must not re-activate a disabled category. The
-      // parent is rewritten to NULL on purpose: a slug in CATEGORIES is top-level by definition.
-      set: { nameKo: sql`excluded.name_ko`, sortOrder: sql`excluded.sort_order`, parentId: null },
-    })
-    .returning({ id: categories.id, slug: categories.slug });
-  const parentIds = new Map(parents.map((row) => [row.slug, row.id]));
+    .onConflictDoNothing()
+    .returning({ id: categories.id });
+  const parentSlugs = CATEGORIES.map((category) => category.slug);
+  const parentRows = await db
+    .select({ id: categories.id, slug: categories.slug })
+    .from(categories)
+    .where(inArray(categories.slug, parentSlugs));
+  const parentIds = new Map(parentRows.map((row) => [row.slug, row.id]));
 
   const leaves = CATEGORIES.flatMap((parent) => {
     const parentId = parentIds.get(parent.slug);
-    if (parentId === undefined) {
-      throw new Error(`[db:seed] category ${parent.slug}: upsert returned no row`);
-    }
+    if (parentId === undefined) return [];
     return SUBCATEGORY_SLUGS[parent.slug].map((slug, index) => ({
       slug,
       nameKo: SUBCATEGORY_NAMES[slug],
@@ -100,19 +121,34 @@ async function seedCategories(db: Db): Promise<void> {
       parentId,
     }));
   });
-  await db
-    .insert(categories)
-    .values(leaves)
-    .onConflictDoUpdate({
-      target: categories.slug,
-      set: {
-        nameKo: sql`excluded.name_ko`,
-        sortOrder: sql`excluded.sort_order`,
-        parentId: sql`excluded.parent_id`,
-      },
-    });
+  const insertedLeaves =
+    leaves.length === 0
+      ? []
+      : await db
+          .insert(categories)
+          .values(leaves)
+          .onConflictDoNothing()
+          .returning({ id: categories.id });
+
+  const present = new Set(
+    (
+      await db
+        .select({ slug: categories.slug })
+        .from(categories)
+        .where(inArray(categories.slug, [...ALL_CATEGORY_SLUGS]))
+    ).map((row) => row.slug),
+  );
+  const missing = ALL_CATEGORY_SLUGS.filter((slug) => !present.has(slug));
+  for (const slug of missing) {
+    console.warn(
+      `[db:seed] category ${slug}: not seeded — a sibling already has its name, or its parent is not there; the tree is the operators' (관리자 → 카테고리)`,
+    );
+  }
+  const inserted = parents.length + insertedLeaves.length;
   console.log(
-    `[db:seed] categories: ${String(CATEGORIES.length)} top-level + ${String(leaves.length)} sub-categories upserted`,
+    `[db:seed] categories: ${String(inserted)} inserted, ${String(
+      ALL_CATEGORY_SLUGS.length - inserted - missing.length,
+    )} already there and left as the operators keep them`,
   );
 }
 
@@ -387,17 +423,102 @@ const SEED_CLOSE_SOON_DAYS = 14;
 const SEED_CLOSE_SOON_MS = SEED_CLOSE_SOON_DAYS * 24 * 60 * 60 * 1_000;
 
 /**
+ * A seed market's tags, the way the admin create path writes them (`linkTags`, #17): each name a
+ * tag already has (the same `name_key`, case ignored) links that tag, keeping the spelling it was
+ * first made with; any other becomes a new tag — `ON CONFLICT (name_key) DO NOTHING`, then the
+ * ids read back by key, so a tag another writer made meanwhile is linked rather than refused. The
+ * new tags are inserted in key order, as the API inserts them, so a seed and an admin making the
+ * same new tags at once wait on each other's index entries in one order and never in a cycle (a
+ * deadlock would fail the deploy's seed or the admin's write). `position` is the order given,
+ * 1..n. The market has no `market_tags` rows when this runs. Tags are never updated or deleted
+ * (migration 0049).
+ */
+async function insertSeedTags(tx: Tx, marketId: string, names: readonly string[]): Promise<void> {
+  const keys = names.map(tagKey);
+  const inKeyOrder = names
+    .map((name, index) => ({ name, key: keys[index]! }))
+    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  await tx
+    .insert(tags)
+    .values(inKeyOrder.map(({ name }) => ({ name })))
+    .onConflictDoNothing({ target: tags.nameKey });
+  const rows = await tx
+    .select({ id: tags.id, nameKey: tags.nameKey })
+    .from(tags)
+    .where(inArray(tags.nameKey, keys));
+  const ids = new Map(rows.map((row) => [row.nameKey, row.id]));
+  await tx.insert(marketTags).values(
+    keys.map((key, index) => {
+      const tagId = ids.get(key);
+      if (tagId === undefined) throw new Error(`[db:seed] tag "${key}": upsert left no row`);
+      return { marketId, tagId, position: index + 1 };
+    }),
+  );
+}
+
+/** Whether the market has any `market_tags` row: a set the seed or an admin gave it. */
+async function hasTags(tx: Tx, marketId: string): Promise<boolean> {
+  const [row] = await tx
+    .select({ marketId: marketTags.marketId })
+    .from(marketTags)
+    .where(eq(marketTags.marketId, marketId))
+    .limit(1);
+  return row !== undefined;
+}
+
+/**
+ * Whether an admin has set this market's tags since #17: every admin market record from #17 on
+ * (`market_create`, `market_update`, the transitions) carries the tag names in its `after`
+ * snapshot, an empty set too, so a draft an admin cleared on purpose has one. Records written
+ * before #17 have no `tags` key — the market's tags were never anybody's choice.
+ */
+async function adminSetTags(tx: Tx, marketId: string): Promise<boolean> {
+  const [row] = await tx
+    .select({ id: adminActions.id })
+    .from(adminActions)
+    .where(
+      and(
+        eq(adminActions.targetType, 'market'),
+        eq(adminActions.targetId, marketId),
+        sql`${adminActions.payload} -> 'after' ? 'tags'`,
+      ),
+    )
+    .limit(1);
+  return row !== undefined;
+}
+
+/** What `seedMarkets` did with one seed market, and the row the staleness report judges. */
+type SeedMarketOutcome =
+  | { kind: 'inserted' | 'existed' | 'tagged'; status: MarketStatus; closeAt: Date }
+  | { kind: 'no-category' };
+
+/**
  * Inserts the seed markets as drafts, one transaction per market under the seed lock: the market
- * row and its 'created' event, as the admin create path writes them (M3 design 3.4), so a crash
- * never leaves a market without its history. Drafts, because a market opens only once another
- * reviewer has checked its rules (N03 §2; #125) — the seed never opens one. No price and no tick:
- * a market has none before its first fill (N02 §5). A market whose slug exists is skipped, never
- * updated. Runs after `seedAdmins`: the first admin is `created_by` and the actor of the event.
+ * row, its tags and its 'created' event, as the admin create path writes them (M3 design 3.4;
+ * #17), so a crash never leaves a market without its history or with half its tags. Drafts,
+ * because a market opens only once another reviewer has checked its rules (N03 §2; #125) — the
+ * seed never opens one. No price and no tick: a market has none before its first fill (N02 §5).
+ * Runs after `seedAdmins`: the first admin is `created_by` and the actor of the event.
  *
  * One deliberate divergence from that path: `close_at` is an absolute instant (ADR-0027), and
  * `assertFutureCloseAt` refuses a past one on create while this writes it anyway, so a late-run
  * seed still gets its 14 drafts. Opening such a draft is refused until an admin moves its close
  * time; the loop below says so on every run.
+ *
+ * A market whose slug exists is never updated, with one exception: a DRAFT with no `market_tags`
+ * row whose tags no admin has set since #17 (`adminSetTags`) gets the seed's tags (#17 AC 9). An
+ * environment seeded before the tag tables existed — a database #174's migration 0048 wiped and
+ * seeded before #17 deployed — would otherwise keep its 14 drafts with no tags, which the
+ * open-items check refuses to open. A market with any tag keeps its set, a draft an admin cleared
+ * on purpose stays clear, and a market past the draft is left alone (after the open a tag change
+ * is on the record, #172 item 14, and the seed writes none). The market row is taken FOR UPDATE
+ * before both are read again, the lock the admin PATCH takes, so an admin who tags it meanwhile
+ * wins. Nothing else of the row changes, and no record is written: the tags are the ones a fresh
+ * seed would have inserted with it.
+ *
+ * A seed market whose category is not in the tree — `seedCategories` skipped its slug because an
+ * operator's sibling took the name — is skipped with a warning: like the categories, a deploy's
+ * seed never fails on the operators' tree.
  */
 async function seedMarkets(db: Db, adminId: string): Promise<void> {
   const categoryRows = await db
@@ -409,28 +530,63 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
   // round trip rather than one per market.
   const reportedAt = await dbNow(db);
 
-  let inserted = 0;
+  const counts: Record<SeedMarketOutcome['kind'], number> = {
+    inserted: 0,
+    existed: 0,
+    tagged: 0,
+    'no-category': 0,
+  };
   for (const seed of SEED_MARKETS) {
-    // `seedCategories` ran first; a missing slug means the category list and the market list
-    // disagree, which is a bug in this package, not a state to seed around.
-    const categoryId = categoryIds.get(seed.category);
-    if (categoryId === undefined) {
-      throw new Error(`[db:seed] market ${seed.slug}: category "${seed.category}" is not seeded`);
-    }
     const closeAt = new Date(seed.closeAt);
     if (Number.isNaN(closeAt.getTime())) {
       throw new Error(`[db:seed] market ${seed.slug}: closeAt "${seed.closeAt}" is not a date`);
     }
-    const outcome = await db.transaction(async (tx) => {
+    // The names the API would take (#17), as written: the literal is the spelling a tag the seed
+    // makes is stored with, so it must be normalised already.
+    const parsedTags = marketTagsSchema.safeParse(seed.tags);
+    if (
+      !parsedTags.success ||
+      parsedTags.data.length < MARKET_TAGS_MIN ||
+      parsedTags.data.some((name, index) => name !== seed.tags[index])
+    ) {
+      throw new Error(
+        `[db:seed] market ${seed.slug}: tags ${JSON.stringify(seed.tags)} are not valid`,
+      );
+    }
+    const outcome = await db.transaction(async (tx): Promise<SeedMarketOutcome> => {
       await lockSeed(tx);
       const [existing] = await tx
         .select({ id: markets.id, status: markets.status, closeAt: markets.closeAt })
         .from(markets)
         .where(eq(markets.slug, seed.slug));
-      // Left exactly as it is, status included: a re-seed never rewrites a market an admin
-      // has been working with. Its status and close time are read back so the report below
-      // judges the row that exists, not the literal in this file.
-      if (existing) return { inserted: false, status: existing.status, closeAt: existing.closeAt };
+      // Left as it is, status included: a re-seed never rewrites a market an admin has been
+      // working with. Its status and close time are read back so the report below judges the
+      // row that exists, not the literal in this file.
+      if (existing) {
+        const row = { status: existing.status, closeAt: existing.closeAt };
+        // Only a draft is given tags: a market that opened changes them on the record alone
+        // (#172 item 14), and the seed writes none.
+        if (existing.status !== 'draft' || (await hasTags(tx, existing.id))) {
+          return { kind: 'existed', ...row };
+        }
+        // A draft with no tag at all, seeded before #17. Locked, then read again — an admin's
+        // PATCH that committed while this waited is the market's set — and given the seed's tags
+        // unless an admin has set its tags since #17 (cleared them on purpose, say).
+        await tx
+          .select({ id: markets.id })
+          .from(markets)
+          .where(eq(markets.id, existing.id))
+          .for('update');
+        if ((await hasTags(tx, existing.id)) || (await adminSetTags(tx, existing.id))) {
+          return { kind: 'existed', ...row };
+        }
+        await insertSeedTags(tx, existing.id, seed.tags);
+        return { kind: 'tagged', ...row };
+      }
+
+      // `seedCategories` ran first and skipped only what the operators' tree blocks.
+      const categoryId = categoryIds.get(seed.category);
+      if (categoryId === undefined) return { kind: 'no-category' };
 
       // `created_at`, `last_price` (NULL: no fill yet) and the statistics are column defaults.
       const [market] = await tx
@@ -449,6 +605,7 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
         })
         .returning({ id: markets.id, status: markets.status });
       if (!market) throw new Error(`[db:seed] market ${seed.slug}: insert returned no row`);
+      await insertSeedTags(tx, market.id, seed.tags);
       const [created] = await tx
         .insert(marketEvents)
         .values({
@@ -465,11 +622,23 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
         .update(markets)
         .set({ statusEventId: created?.id ?? null })
         .where(eq(markets.id, market.id));
-      return { inserted: true, status: market.status, closeAt };
+      return { kind: 'inserted', status: market.status, closeAt };
     });
-    if (outcome.inserted) inserted++;
+    counts[outcome.kind]++;
+    if (outcome.kind === 'no-category') {
+      console.warn(
+        `[db:seed] market ${seed.slug}: not seeded — its category "${seed.category}" is not in the tree (a sibling already has its name); the tree is the operators' (관리자 → 카테고리)`,
+      );
+      continue;
+    }
     console.log(
-      `[db:seed] market ${seed.slug}: ${outcome.inserted ? 'created' : 'already exists'}`,
+      `[db:seed] market ${seed.slug}: ${
+        outcome.kind === 'inserted'
+          ? 'created'
+          : outcome.kind === 'tagged'
+            ? "already exists, given the seed's tags (it had none)"
+            : 'already exists'
+      }`,
     );
     // Every run, not only the one that inserts: the cutoffs are absolute, so an environment
     // seeded before one passes reaches the same state without the seed doing anything — and
@@ -507,7 +676,11 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
     }
   }
   console.log(
-    `[db:seed] markets: ${String(inserted)} inserted, ${String(SEED_MARKETS.length - inserted)} already existed`,
+    `[db:seed] markets: ${String(counts.inserted)} inserted, ${String(
+      counts.existed + counts.tagged,
+    )} already existed (${String(counts.tagged)} of them given the seed's tags), ${String(
+      counts['no-category'],
+    )} skipped (category not in the tree)`,
   );
 }
 
