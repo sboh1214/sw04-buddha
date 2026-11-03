@@ -1,13 +1,14 @@
 /**
- * Admin market CRUD and transitions (PLAN 5.2, 5.5, 12; M3 design 3.4) against the docker
- * `test` profile: create/update per status, the close with its audit row, list/detail, and
- * the guard surface (401/403/CSRF). The rule items (#23, ADR-0097): every one written trimmed and
- * read back, the sources replaced in order, the entry refusals with their paths, the open-items
- * check naming each at the submission and the `rules_edited` record; an open market's version
- * items refused as a supplement's (#80, ADR-0101: the supplement itself is
- * admin-markets-supplement.controller.test.ts's). The market times' own cases (#22) are
- * admin-markets-times.controller.test.ts's; here a
- * complete draft sends them (`timesFor`). The review and the open it leads to (#78, #21) are
+ * Admin market CRUD and transitions (PLAN 5.2, 5.5, 12; M3 design 3.4) against the docker `test`
+ * profile: create/update per status, a transition's instant and lock (the pause's, #114), the
+ * one-admin close gone (#114, ADR-0102: admin-market-pauses.controller.test.ts has the pause and
+ * its approved early close), list/detail, and the guard surface (401/403/CSRF). The rule items
+ * (#23, ADR-0097): every one written trimmed and read back, the sources replaced in order, the
+ * entry refusals with their paths, the open-items check naming each at the submission and the
+ * `rules_edited` record; an open market's version items refused as a supplement's (#80, ADR-0101:
+ * the supplement itself is admin-markets-supplement.controller.test.ts's). The market times' own
+ * cases (#22) are admin-markets-times.controller.test.ts's; here a complete draft sends them
+ * (`timesFor`). The review and the open it leads to (#78, #21) are
  * admin-markets-review.controller.test.ts's. Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
@@ -39,6 +40,7 @@ import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
+import { discoverRoutes } from '../test/routes.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { sleep, waitForLockWaiter, waitForMessages } from '../test/wait.js';
 
@@ -47,6 +49,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const MINUTE_MS = 60_000;
 /** U+0000: Postgres refuses it in text and jsonb, so the pipe must refuse it first. */
 const NUL = String.fromCharCode(0);
+/** A pause's body (#114): the reason and the note, as the pause dialog sends them. */
+const PAUSE_BODY = { reason: 'basis_change', note: '판정 기준을 검토한다.' };
 /** What the direct AMM kept on a market and the admin detail showed (#125 removed them). */
 const AMM_FIELDS = ['liquidityB', 'qYes', 'qNo', 'initialProbBp', 'reserveCoin', 'pYesBp'] as const;
 
@@ -153,7 +157,8 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     post('/api/v1/admin/markets', createBody(overrides));
   /** 검수 제출 (#78): the gate of the open-items check (OPEN_ITEMS_MISSING). */
   const submit = (id: string) => post(`/api/v1/admin/markets/${id}/submit`);
-  const close = (id: string) => post(`/api/v1/admin/markets/${id}/close`);
+  /** 거래 일시 중단 (#114): one admin, at once — the transition these tests watch. */
+  const pause = (id: string) => post(`/api/v1/admin/markets/${id}/pause`, PAUSE_BODY);
 
   /**
    * A market row written by the factory (no events, no tick) owned by the test admin, with one
@@ -917,36 +922,35 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     // log then sorted a transition below an edit that committed while it queued. Every row a
     // transition writes now carries the post-lock database clock, so the row, its payload and
     // the market column all name one instant. (The open's instant — `open_at`, the `opened` event,
-    // the row — is the approval's, in admin-markets-review.controller.test.ts, #21.)
+    // the row — is the approval's, in admin-markets-review.controller.test.ts, #21; an approved
+    // next path's is the decision's, in admin-market-pauses.controller.test.ts, #114.)
     const row = await market({ status: 'open' });
-    const closed = detail(await close(row.id));
-    const closeEvent = (await eventsFor(row.id)).find((event) => event.type === 'closed')!;
-    expect((closeEvent.payload as { closedAt: string }).closedAt).toBe(
-      closeEvent.createdAt.toISOString(),
-    );
-    expect(closeEvent.createdAt.toISOString()).toBe(closed.updatedAt);
-    expect((await marketRow(row.id)).updatedAt.toISOString()).toBe(closed.updatedAt);
-    const closeAction = (await actionsFor(row.id)).find(
-      (action) => action.type === 'market_close',
+    const paused = detail(await pause(row.id));
+    const pauseEvent = (await eventsFor(row.id)).find((event) => event.type === 'paused')!;
+    expect(pauseEvent.createdAt.toISOString()).toBe(paused.updatedAt);
+    expect((await marketRow(row.id)).updatedAt.toISOString()).toBe(paused.updatedAt);
+    expect(paused.pause.history[0]!.pausedAt).toBe(paused.updatedAt);
+    const pauseAction = (await actionsFor(row.id)).find(
+      (action) => action.type === 'market_pause',
     )!;
-    expect(closeAction.createdAt.toISOString()).toBe(closed.updatedAt);
+    expect(pauseAction.createdAt.toISOString()).toBe(paused.updatedAt);
   });
 
   it('keeps a transition above an edit that commits while it waits on the market lock', async () => {
-    // The close begins (its transaction-start `now()` is fixed) and queues on the market
-    // lock; a tag PATCH, which takes only the market row, commits meanwhile. The close then
+    // The pause begins (its transaction-start `now()` is fixed) and queues on the market
+    // lock; a tag PATCH, which takes only the market row, commits meanwhile. The pause then
     // commits with the later instant and must be recorded as the later write: its event and its
     // record carry the post-lock clock, after the edit's record. (An open market's rule items
     // change by a supplement alone since #80, which queues on the market lock itself.)
     const row = await market({ status: 'open' });
     const holder = await t.db.$client.connect();
-    let pending: ReturnType<typeof close> | undefined;
+    let pending: ReturnType<typeof pause> | undefined;
     let released = false;
     try {
       await holder.query('SELECT pg_advisory_lock(hashtext($1))', [row.id]);
-      pending = close(row.id);
-      await waitForLockWaiter(holder, 'the close on the market lock');
-      const edited = await patch(`/api/v1/admin/markets/${row.id}`, { tags: ['마감 전 태그'] });
+      pending = pause(row.id);
+      await waitForLockWaiter(holder, 'the pause on the market lock');
+      const edited = await patch(`/api/v1/admin/markets/${row.id}`, { tags: ['중단 전 태그'] });
       expect(edited.statusCode).toBe(200);
       await holder.query('SELECT pg_advisory_unlock(hashtext($1))', [row.id]);
       released = true;
@@ -957,15 +961,15 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       await pending?.catch(() => undefined);
     }
 
-    const [editAction, closeAction] = await actionsFor(row.id);
-    expect([editAction!.type, closeAction!.type]).toEqual(['market_update', 'market_close']);
-    const closeEvent = (await eventsFor(row.id)).find((event) => event.type === 'closed')!;
-    expect(closeEvent.createdAt.getTime()).toBeGreaterThanOrEqual(editAction!.createdAt.getTime());
-    expect(closeAction!.createdAt).toEqual(closeEvent.createdAt);
-    // What the admin screen renders: the close, with the tags the edit left.
+    const [editAction, pauseAction] = await actionsFor(row.id);
+    expect([editAction!.type, pauseAction!.type]).toEqual(['market_update', 'market_pause']);
+    const pauseEvent = (await eventsFor(row.id)).find((event) => event.type === 'paused')!;
+    expect(pauseEvent.createdAt.getTime()).toBeGreaterThanOrEqual(editAction!.createdAt.getTime());
+    expect(pauseAction!.createdAt).toEqual(pauseEvent.createdAt);
+    // What the admin screen renders: the pause, with the tags the edit left.
     const shown = detail(await get(`/api/v1/admin/markets/${row.id}`));
-    expect(shown.events.map((event) => event.type)).toEqual(['closed']);
-    expect(shown.tags).toEqual(['마감 전 태그']);
+    expect(shown.events.map((event) => event.type)).toEqual(['paused']);
+    expect(shown.tags).toEqual(['중단 전 태그']);
   });
 
   // --- the rule items (#23) ----------------------------------------------------------------
@@ -1489,80 +1493,32 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     ]);
   });
 
-  it('closes a market whose close time has already passed', async () => {
-    // An open market past its close time whose close job has not run (A-M3-31): this button is
-    // the operator's way out. `close` does not check the close time — only the submission, the
-    // approval and the edits do — so it must work here.
-    const row = await market({ status: 'open', closeAt: new Date(Date.now() - 60_000) });
-    const res = await close(row.id);
-    expect(res.statusCode).toBe(200);
-    expect(detail(res).status).toBe('closed');
-    expect((await marketRow(row.id)).status).toBe('closed');
-  });
-
-  it('closes an open market and answers MARKET_NOT_OPEN for anything else', async () => {
-    const row = await market({ status: 'open' });
-    const subscriber = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
-    const received: string[] = [];
-    subscriber.on('message', (_channel, message) => received.push(message));
-    await subscriber.subscribe(marketChannel(row.id));
-    let closed!: AdminMarket;
-    try {
-      const res = await close(row.id);
-      expect(res.statusCode).toBe(200);
-      closed = detail(res);
-      // PLAN 8: exactly one `market:status` on the market's channel, after commit.
-      await waitForMessages(received, 1, 'market:status of the close');
-      await sleep(100);
-      expect(received).toHaveLength(1);
-      expect(JSON.parse(received[0]!)).toMatchObject({
-        type: 'market:status',
-        marketId: row.id,
-        status: 'closed',
-        statusEventId: closed.events[0]!.id,
+  it('serves no route that closes a market at once: the one-admin close is gone (#114)', async () => {
+    // ADR-0093 decision 1 #173 items 2·4, #172 item 14 (ADR-0102): a market closes at its close
+    // (the worker's job, OPEN or PAUSED), or early from PAUSED by another admin's approval of a
+    // next path (admin-market-pauses.controller.test.ts) — never by one admin at once.
+    expect(discoverRoutes().map((route) => route.key)).not.toContain(
+      'POST /admin/markets/:id/close',
+    );
+    // An open market, and one past its close the worker has not closed yet (A-M3-31: the worker's
+    // per-minute scan is the way out now).
+    const open = await market({ status: 'open' });
+    const late = await market({ status: 'open', closeAt: new Date(Date.now() - 60_000) });
+    for (const id of [open.id, late.id]) {
+      const res = await post(`/api/v1/admin/markets/${id}/close`);
+      expect({ status: res.statusCode, code: errorOf(res).code }).toEqual({
+        status: 404,
+        code: 'NOT_FOUND',
       });
-    } finally {
-      await subscriber.quit();
-    }
-    expect(closed.status).toBe('closed');
-    expect(closed.events.map((event) => event.type)).toEqual(['closed']);
-    expect(closed.events[0]).toMatchObject({
-      actorId: admin.id,
-      fromStatus: 'open',
-      toStatus: 'closed',
-      createdAt: closed.updatedAt,
-    });
-    expect(await eventsFor(row.id)).toMatchObject([
-      { type: 'closed', actorId: admin.id, fromStatus: 'open', toStatus: 'closed' },
-    ]);
-    expect(closed.statusEventId).toBe(closed.events[0]!.id);
-    const actions = await actionsFor(row.id);
-    expect(actions.map((action) => action.type)).toEqual(['market_close']);
-    expect(actions[0]).toMatchObject({ adminId: admin.id, targetType: 'market' });
-    expect(actions[0]!.payload).toMatchObject({
-      before: { status: 'open' },
-      after: { status: 'closed' },
-    });
-
-    const again = await close(row.id);
-    expect(again.statusCode).toBe(409);
-    expect(errorOf(again).code).toBe('MARKET_NOT_OPEN');
-
-    // Every other status, PAUSED too: its early close is #114's, with another admin's approval.
-    for (const status of ['draft', 'review', 'scheduled', 'paused', 'cancelled'] as const) {
-      const other = await market({ status });
-      const refused = await close(other.id);
-      expect({ status, code: refused.statusCode }).toEqual({ status, code: 409 });
-      expect(errorOf(refused).code).toBe('MARKET_NOT_OPEN');
-      expect((await marketRow(other.id)).status).toBe(status);
-      expect(await actionsFor(other.id)).toHaveLength(0);
-      expect(await eventsFor(other.id)).toHaveLength(0);
+      expect((await marketRow(id)).status).toBe('open');
+      expect(await eventsFor(id)).toEqual([]);
+      expect(await actionsFor(id)).toEqual([]);
     }
   });
 
   it.each([
     ['submit', 'draft', submit],
-    ['close', 'open', close],
+    ['pause', 'open', pause],
   ] as const)(
     '%s waits for the market advisory lock before touching the row (PLAN 0.2)',
     async (_name, status, transition) => {
@@ -1782,7 +1738,10 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
         await patch(`/api/v1/admin/markets/${draft.id}`, { title: '바뀜', ...asShown }, other),
       ],
       ['submit', await post(`/api/v1/admin/markets/${draft.id}/submit`, asShown, other)],
-      ['close', await post(`/api/v1/admin/markets/${open.id}/close`, asShown, other)],
+      [
+        'pause',
+        await post(`/api/v1/admin/markets/${open.id}/pause`, { ...PAUSE_BODY, ...asShown }, other),
+      ],
     ] as const) {
       expect({ what, status: res.statusCode }).toEqual({ what, status: 403 });
       expect(errorOf(res).code).toBe('FORBIDDEN');
@@ -1804,17 +1763,17 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       ['create', await unnamed('POST', '/api/v1/admin/markets', createBody())],
       ['update', await unnamed('PATCH', `/api/v1/admin/markets/${draft.id}`, { title: 'x' })],
       ['submit', await unnamed('POST', `/api/v1/admin/markets/${draft.id}/submit`, {})],
-      ['close', await unnamed('POST', `/api/v1/admin/markets/${draft.id}/close`, {})],
+      ['pause', await unnamed('POST', `/api/v1/admin/markets/${draft.id}/pause`, PAUSE_BODY)],
     ] as const) {
       expect({ what, status: res.statusCode }).toEqual({ what, status: 400 });
       expect(errorOf(res).code).toBe('VALIDATION_ERROR');
       expect(detailPath(res)).toEqual(['expectedAccountId']);
     }
-    // A tab from before the deploy sends the formerly bodyless close with no body at all: the same
-    // 400, but the schema's own issue (no object) names no field — `details[0].path` is [].
+    // A write with no body at all: the same 400, but the schema's own issue (no object) names no
+    // field — `details[0].path` is [].
     const bodyless = await t.app.inject({
       method: 'POST',
-      url: `/api/v1/admin/markets/${draft.id}/close`,
+      url: `/api/v1/admin/markets/${draft.id}/submit`,
       headers: { origin: jsonHeaders.origin, cookie: admin.cookie },
     });
     expect(bodyless.statusCode).toBe(400);
@@ -1837,9 +1796,9 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       ['market_submit', admin.id],
     ]);
     const live = await market({ status: 'open' });
-    expect((await close(live.id)).statusCode).toBe(200);
+    expect((await pause(live.id)).statusCode).toBe(200);
     expect((await actionsFor(live.id)).map((row) => [row.type, row.adminId])).toEqual([
-      ['market_close', admin.id],
+      ['market_pause', admin.id],
     ]);
   });
 
@@ -1852,7 +1811,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       ['POST', '/api/v1/admin/markets', createBody()],
       ['PATCH', `/api/v1/admin/markets/${row.id}`, { title: 'x' }],
       ['POST', `/api/v1/admin/markets/${row.id}/submit`, undefined],
-      ['POST', `/api/v1/admin/markets/${row.id}/close`, undefined],
+      ['POST', `/api/v1/admin/markets/${row.id}/pause`, PAUSE_BODY],
     ] as const) {
       const asMember = await t.app.inject({
         method,

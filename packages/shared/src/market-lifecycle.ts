@@ -35,10 +35,11 @@ export const MARKET_LIFECYCLE_TRANSITIONS: Readonly<Record<MarketStatus, readonl
     // review again (#172 item 6). #173·#20: ended without opening with another admin's approval
     // (#173 item 10).
     scheduled: ['open', 'draft', 'cancelled'],
-    // #114: paused. At `close_at`: closed, or cancelled when no user fill happened (#120, #20).
+    // #114: paused by one admin (#173 item 2). At `close_at` the worker closes it, or (#120, #20)
+    // cancels it when no user fill happened.
     open: ['paused', 'closed', 'cancelled'],
-    // #114: resumed or closed early, both with another admin's approval; at `close_at` as above,
-    // on schedule (#173 item 3).
+    // #114: resumed (재개) or closed early (조기 마감), each asked for by one admin and approved by
+    // another (#173 items 2·4); at `close_at` as above, on schedule and never later (#173 item 3).
     paused: ['open', 'closed', 'cancelled'],
     // #152: the judgement published once another admin approves it.
     closed: ['provisional'],
@@ -56,8 +57,9 @@ export const MARKET_LIFECYCLE_TRANSITIONS: Readonly<Record<MarketStatus, readonl
  * Edges that keep today's admin actions working on the new statuses until the issue that
  * replaces each one merges (ADR-0047 result 3). Each is deleted by that issue's PR, which also
  * removes the action that takes it: #21 deleted ADR-0027's direct open from a draft (draft →
- * open, ADR-0093 result 2; ADR-0100), so a market opens only from SCHEDULED (PAUSED → OPEN is
- * #114's resume).
+ * open, ADR-0093 result 2; ADR-0100), so a market opens only from SCHEDULED or, by #114's approved
+ * resume, from PAUSED. #114 deleted the one-admin close (ADR-0102), which took the lasting open →
+ * closed edge and so was never listed here: an early end is a pause and an approved early close.
  */
 export const INTERIM_MARKET_TRANSITIONS: readonly {
   from: MarketStatus;

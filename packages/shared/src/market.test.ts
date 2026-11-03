@@ -238,8 +238,37 @@ describe('read DTOs', () => {
         },
       ],
       supplement: { pending: null, log: [] },
+      pause: { history: [], pending: null, log: [] },
     };
     expect(adminMarketSchema.parse(admin)).toEqual(admin);
+    // So is the pause (#114): the public shape carries none of it, the admin one always.
+    expect(marketSchema.parse(admin)).not.toHaveProperty('pause');
+    const { pause: _pause, ...withoutPause } = admin;
+    expect(issuePaths(adminMarketSchema.safeParse(withoutPause))).toEqual(['pause']);
+    const paused = {
+      ...admin,
+      status: 'paused',
+      pause: {
+        history: [
+          {
+            id: marketId,
+            reason: 'early_result',
+            note: '발표가 마감 전에 나왔다.',
+            resultPublishedAt: at,
+            pausedAt: at,
+            pausedBy: { id: 'admin-1', nickname: '운영자1' },
+            reviewResult: null,
+            endKind: null,
+            endedAt: null,
+            endedBy: null,
+          },
+        ],
+        pending: null,
+        log: [],
+      },
+    };
+    expect(adminMarketSchema.parse(paused)).toEqual(paused);
+    expect(marketSchema.parse(paused)).not.toHaveProperty('pause');
     // The review (#78) is the admin's, in every status, and never optional.
     expect(marketSchema.parse(admin)).not.toHaveProperty('review');
     const { review: _review, ...withoutReview } = admin;

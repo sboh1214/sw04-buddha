@@ -222,7 +222,7 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
     // The delayed job's retry, or a duplicate: skipped, and the skip is JSON too.
     await expect(
       run({ name: JOB_NAMES.marketClose, data: { marketId: target.id } }),
-    ).resolves.toEqual({ outcome: 'skipped', marketId: target.id, reason: 'not_open' });
+    ).resolves.toEqual({ outcome: 'skipped', marketId: target.id, reason: 'not_open_or_paused' });
   });
 
   it('rejects a payload the schema refuses with UnrecoverableError (a producer bug, not a retry)', async () => {

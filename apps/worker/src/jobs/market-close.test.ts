@@ -6,14 +6,21 @@
  */
 import { randomUUID } from 'node:crypto';
 import { schema } from '@buddha/db';
-import { connectTestDb, createMarket, hasTestDb, type TestDb } from '@buddha/db/test';
+import {
+  connectTestDb,
+  createMarket,
+  createPauseDecision,
+  createPausedMarket,
+  hasTestDb,
+  type TestDb,
+} from '@buddha/db/test';
 import { MARKET_STATUSES, marketChannel } from '@buddha/shared';
 import { asc, eq } from 'drizzle-orm';
 import { Redis } from 'ioredis';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createPublisher, createPublisherRedis, type Publish } from '../realtime.js';
-import { closeDueMarkets, closeMarket } from './market-close.js';
+import { CLOSABLE_STATUSES, closeDueMarkets, closeMarket } from './market-close.js';
 
 // hasTestDb() loads the root .env first, so TEST_REDIS_URL is visible after it.
 const hasTestInfra = hasTestDb() && Boolean(process.env.TEST_REDIS_URL);
@@ -54,6 +61,13 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
   async function marketRow(id: string) {
     const [row] = await t.db.select().from(schema.markets).where(eq(schema.markets.id, id));
     return row!;
+  }
+
+  async function pausesOf(marketId: string) {
+    return t.db
+      .select()
+      .from(schema.marketPauses)
+      .where(eq(schema.marketPauses.marketId, marketId));
   }
 
   async function eventsOf(marketId: string) {
@@ -144,23 +158,103 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
     }
   });
 
-  // Every status but `open`, `paused` included: PAUSED → CLOSED at `close_at` is #114's.
-  it.each(MARKET_STATUSES.filter((status) => status !== 'open'))(
-    'skips a %s market even when its close time has passed',
-    async (status) => {
-      const market = await createMarket(t.db, {
-        status,
-        closeAt: new Date(Date.now() - MINUTE_MS),
+  it('closes a due PAUSED market on schedule and ends its pause at the close (#114)', async () => {
+    // ADR-0093 decision 1 #173 items 1·3: the close is not extended by the pause, and needs no
+    // review or approval. A next-path request still waiting stays as it was — moot from now on.
+    const closeAt = new Date(Date.now() + 3_000);
+    const { market, pause } = await createPausedMarket(t.db, { closeAt });
+    const waiting = await createPauseDecision(t.db, { marketId: market.id, path: 'resume' });
+    await expect(closeMarket(t.db, market.id, publish)).resolves.toEqual({
+      outcome: 'skipped',
+      marketId: market.id,
+      reason: 'not_due',
+    });
+    expect(await pausesOf(market.id)).toEqual([pause]);
+    await sleep(closeAt.getTime() - Date.now() + 50);
+
+    const { received, quit } = await subscribeTo(market.id);
+    try {
+      const result = await closeMarket(t.db, market.id, publish);
+      expect(result.outcome).toBe('closed');
+      if (result.outcome !== 'closed') return;
+      const event = (await eventsOf(market.id)).at(-1);
+      expect(event).toMatchObject({
+        id: result.statusEventId,
+        type: 'closed',
+        actorId: null,
+        fromStatus: 'paused',
+        toStatus: 'closed',
+        // The worker's payload, a PAUSED market's too.
+        payload: { closedAt: result.closedAt.toISOString(), source: 'job' },
+        createdAt: result.closedAt,
       });
-      await expect(closeMarket(t.db, market.id, publish)).resolves.toEqual({
-        outcome: 'skipped',
+      expect(await marketRow(market.id)).toMatchObject({
+        status: 'closed',
+        statusEventId: result.statusEventId,
+        closeAt,
+        updatedAt: result.closedAt,
+      });
+      // The pause ended at the close, in the same transaction: no approver, request or review.
+      expect(await pausesOf(market.id)).toEqual([
+        {
+          ...pause,
+          endKind: 'closed_at_close',
+          endedAt: result.closedAt,
+          endedBy: null,
+          endEventId: result.statusEventId,
+          endApprovalId: null,
+          reviewResult: null,
+        },
+      ]);
+      const [request] = await t.db
+        .select()
+        .from(schema.approvalRequests)
+        .where(eq(schema.approvalRequests.id, waiting.id));
+      expect(request).toEqual(waiting);
+
+      await waitForMessages(received, 1, 'market:status of the close');
+      expect(JSON.parse(received[0]!)).toEqual({
+        type: 'market:status',
         marketId: market.id,
-        reason: 'not_open',
+        status: 'closed',
+        resolvedResult: null,
+        statusEventId: String(result.statusEventId),
+        ts: result.closedAt.toISOString(),
       });
-      expect((await marketRow(market.id)).status).toBe(status);
-      expect(await eventsOf(market.id)).toEqual([]);
-    },
-  );
+    } finally {
+      await quit();
+    }
+  });
+
+  it('closes a due PAUSED market written without a pause row, ending nothing', async () => {
+    const market = await createMarket(t.db, {
+      status: 'paused',
+      closeAt: new Date(Date.now() - MINUTE_MS),
+    });
+    const result = await closeMarket(t.db, market.id, publish);
+    expect(result).toMatchObject({ outcome: 'closed', marketId: market.id });
+    expect(await eventsOf(market.id)).toMatchObject([
+      { type: 'closed', fromStatus: 'paused', toStatus: 'closed', payload: { source: 'job' } },
+    ]);
+    expect(await pausesOf(market.id)).toEqual([]);
+  });
+
+  // Every status but `open` and `paused` (CLOSABLE_STATUSES).
+  it.each(
+    MARKET_STATUSES.filter((status) => !(CLOSABLE_STATUSES as readonly string[]).includes(status)),
+  )('skips a %s market even when its close time has passed', async (status) => {
+    const market = await createMarket(t.db, {
+      status,
+      closeAt: new Date(Date.now() - MINUTE_MS),
+    });
+    await expect(closeMarket(t.db, market.id, publish)).resolves.toEqual({
+      outcome: 'skipped',
+      marketId: market.id,
+      reason: 'not_open_or_paused',
+    });
+    expect((await marketRow(market.id)).status).toBe(status);
+    expect(await eventsOf(market.id)).toEqual([]);
+  });
 
   it('rejects an unknown market id instead of skipping it (a broken producer must be visible)', async () => {
     await expect(closeMarket(t.db, randomUUID(), publish)).rejects.toThrow(/not found/);
@@ -175,7 +269,7 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
       await expect(closeMarket(t.db, market.id, publish)).resolves.toEqual({
         outcome: 'skipped',
         marketId: market.id,
-        reason: 'not_open',
+        reason: 'not_open_or_paused',
       });
       expect(await eventsOf(market.id)).toHaveLength(1);
       await sleep(100);
@@ -185,7 +279,7 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
     }
   });
 
-  it('scan closes every due open market, oldest deadline first, and leaves the rest alone', async () => {
+  it('scan closes every due open or paused market, oldest deadline first, and leaves the rest alone', async () => {
     const later = await createMarket(t.db, { closeAt: new Date(Date.now() - MINUTE_MS) });
     const earlier = await createMarket(t.db, { closeAt: new Date(Date.now() - 2 * MINUTE_MS) });
     const future = await createMarket(t.db, { closeAt: new Date(Date.now() + MINUTE_MS) });
@@ -201,16 +295,24 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
       status: 'scheduled',
       closeAt: new Date(Date.now() - MINUTE_MS),
     });
-    // Due as well, and left alone until #114 closes a paused market on schedule.
+    // Due as well, and closed on schedule while PAUSED (#114, ADR-0093 decision 1 #173 item 3),
+    // in the deadline order with the rest: the earliest of all.
     const paused = await createMarket(t.db, {
       status: 'paused',
-      closeAt: new Date(Date.now() - MINUTE_MS),
+      closeAt: new Date(Date.now() - 3 * MINUTE_MS),
+    });
+    // And one still ahead stays PAUSED.
+    const pausedAhead = await createMarket(t.db, {
+      status: 'paused',
+      closeAt: new Date(Date.now() + MINUTE_MS),
     });
 
-    const subscribers = await Promise.all([later, earlier, future].map((m) => subscribeTo(m.id)));
+    const subscribers = await Promise.all(
+      [later, earlier, future, paused].map((m) => subscribeTo(m.id)),
+    );
     try {
       await expect(closeDueMarkets(t.db, publish)).resolves.toEqual({
-        closed: 2,
+        closed: 3,
         skipped: 0,
         failed: 0,
         failures: [],
@@ -218,23 +320,31 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
 
       expect((await marketRow(earlier.id)).status).toBe('closed');
       expect((await marketRow(later.id)).status).toBe('closed');
+      expect((await marketRow(paused.id)).status).toBe('closed');
       expect(await marketRow(future.id)).toMatchObject({ status: 'open', statusEventId: null });
+      expect(await marketRow(pausedAhead.id)).toMatchObject({
+        status: 'paused',
+        statusEventId: null,
+      });
       expect((await marketRow(alreadyClosed.id)).statusEventId).toBeNull();
       expect((await marketRow(draft.id)).status).toBe('draft');
       expect((await marketRow(scheduled.id)).status).toBe('scheduled');
-      expect((await marketRow(paused.id)).status).toBe('paused');
 
       // Each close is its own transaction, in deadline order: the earlier deadline's event
       // has the smaller id.
+      const [pausedEvent] = await eventsOf(paused.id);
       const [earlierEvent] = await eventsOf(earlier.id);
       const [laterEvent] = await eventsOf(later.id);
+      expect(pausedEvent).toMatchObject({ fromStatus: 'paused', toStatus: 'closed' });
+      expect(pausedEvent!.id).toBeLessThan(earlierEvent!.id);
       expect(earlierEvent!.id).toBeLessThan(laterEvent!.id);
-      for (const left of [alreadyClosed, draft, scheduled, paused]) {
+      for (const left of [alreadyClosed, draft, scheduled, pausedAhead]) {
         expect(await eventsOf(left.id)).toEqual([]);
       }
 
       await waitForMessages(subscribers[0]!.received, 1, 'status of the later market');
       await waitForMessages(subscribers[1]!.received, 1, 'status of the earlier market');
+      await waitForMessages(subscribers[3]!.received, 1, 'status of the paused market');
       await sleep(100);
       expect(subscribers[2]!.received).toEqual([]);
 

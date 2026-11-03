@@ -9,6 +9,7 @@ import {
   AUTH_USER_NAME,
   CONSENT_ITEMS,
   DEFAULT_JUDGEMENT_TIME_ZONE,
+  MARKET_PAUSE_DECISION_APPROVAL_KIND,
   MARKET_REVIEW_APPROVAL_KIND,
   MARKET_REVIEW_CHECKLIST,
   MARKET_REVIEW_REQUEST_REASON,
@@ -26,10 +27,16 @@ import {
   marketSupplementChangesSchema,
   orphanMediaRetryHours,
   normalizeTagName,
+  pauseReasonNeedsPublishedAt,
+  pauseReasonNeedsReview,
   readPostDocument,
   relatedMarketPair,
   tagKey,
   type ImageContentType,
+  type MarketPauseDecisionRequestPayload,
+  type MarketPausePath,
+  type MarketPauseReason,
+  type MarketPauseReviewResult,
   type MarketResult,
   type MarketRulesSupplementedPayload,
   type MarketSource,
@@ -51,9 +58,15 @@ import {
   type LinkFlagReason,
   type WriteLimitAction,
 } from '@buddha/shared';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { Db } from '../client.js';
 import { openScheduledMarket } from '../market-open.js';
+import {
+  currentMarketPause,
+  endMarketPause,
+  pauseMarket,
+  type MarketPauseRow,
+} from '../market-pause.js';
 import {
   allowRuleSupplement,
   insertRuleVersion,
@@ -75,6 +88,7 @@ import {
   linkUses,
   marketEvents,
   marketLinks,
+  marketPauses,
   marketProposals,
   marketRuleVersions,
   marketSearches,
@@ -241,8 +255,9 @@ export interface CreateMarketInput {
    * Default `open`. A `review` or `scheduled` market made here has no review request and no event:
    * `createMarketInReview` and `createScheduledMarket` make one as the review's routes leave it,
    * and `createOpenedMarket` an `open` one with that history, its `opened` event (#21) and rule v1
-   * (#80). A market of any status made here has no rule version (`rule_version` null), as one
-   * opened before #80 (D4): its rules are not held by migration 0053's guard, and it takes no
+   * (#80); a `paused` one has no pause row either, which `createPausedMarket` writes with that
+   * history (#114). A market of any status made here has no rule version (`rule_version` null), as
+   * one opened before #80 (D4): its rules are not held by migration 0053's guard, and it takes no
    * supplement.
    */
   status?: MarketStatus;
@@ -1948,6 +1963,341 @@ export async function createSupplementedMarket(
     .where(eq(marketRuleVersions.marketId, market.id))
     .orderBy(marketRuleVersions.version);
   return { market, request: opened.request, supplements: made, versions };
+}
+
+/** The note a pause factory writes unless given (what happened, the pausing admin's). */
+const PAUSE_NOTE = '사건 일정이 바뀌어 거래를 멈추고 판정 기준을 검토한다.';
+
+/** The reason a next-path request factory writes unless given (the request's reason). */
+const PAUSE_DECISION_REASON = '검토를 마쳤다.';
+
+/** The approval's reason a next-path factory writes unless given (the decision reason). */
+const PAUSE_DECISION_APPROVAL_REASON = '요청한 경로가 맞다.';
+
+/**
+ * The review result a next-path factory gives a pause of `reason` unless told: `judgeable` for
+ * `basis_change` (the request needs one, Q1), none for the other reasons.
+ */
+const defaultReviewResult = (reason: MarketPauseReason): MarketPauseReviewResult | null =>
+  pauseReasonNeedsReview(reason) ? 'judgeable' : null;
+
+export interface CreateMarketPauseInput {
+  /** An OPEN market: `createOpenedMarket`'s, or `createMarket`'s (no rule version). */
+  marketId: string;
+  /** Default `basis_change` (실질 기준 변경, where an early close usually starts — Q2). */
+  reason?: MarketPauseReason;
+  /** What happened. Default: a sentence. Stored as given (the database holds 1–500, trimmed). */
+  note?: string;
+  /**
+   * The result's publication instant: for `early_result` alone, a minute before the pause unless
+   * given; null (or left out) for the other reasons — given for one, the factory throws, as
+   * `pauseMarket` does.
+   */
+  resultPublishedAt?: Date | null;
+  /** The pausing admin. Default: a fresh admin. */
+  by?: string;
+}
+
+/** A pause a factory made: the market after it, the lasting pause and its `paused` event. */
+export interface MarketPauseMade {
+  market: typeof markets.$inferSelect;
+  pause: MarketPauseRow;
+  /** The `paused` event's id, the market's `status_event_id`. */
+  eventId: number;
+}
+
+/**
+ * A pause (#114, ADR-0102) as `POST /admin/markets/:id/pause` leaves it, of a market already OPEN:
+ * `pauseMarket` in one transaction under the market lock, with the row read FOR UPDATE and the
+ * database clock after it — the `paused` event (actor `by`, payload `{pauseId, reason,
+ * resultPublishedAt}`), the market `paused` and its lasting `market_pauses` row. No `market_pause`
+ * record, as no factory writes a route's. The route's checks are `pauseMarket`'s: a market not
+ * OPEN, a close that has come or a publication instant after the pause pauses nothing, and the
+ * factory throws with the skip reason.
+ */
+export async function createMarketPause(
+  db: Db,
+  input: CreateMarketPauseInput,
+): Promise<MarketPauseMade> {
+  const reason = input.reason ?? 'basis_change';
+  const by = input.by ?? (await createUser(db, { role: 'admin' })).user.id;
+  return db.transaction(async (tx) => {
+    await lockMarket(tx, input.marketId);
+    const [current] = await tx
+      .select()
+      .from(markets)
+      .where(eq(markets.id, input.marketId))
+      .for('update');
+    if (!current) throw new Error(`createMarketPause: market ${input.marketId} not found`);
+    const now = await clockTimestamp(tx);
+    const resultPublishedAt =
+      input.resultPublishedAt !== undefined
+        ? input.resultPublishedAt
+        : pauseReasonNeedsPublishedAt(reason)
+          ? new Date(now.getTime() - MINUTE_MS)
+          : null;
+    const result = await pauseMarket(tx, {
+      market: current,
+      now,
+      actorId: by,
+      reason,
+      note: input.note ?? PAUSE_NOTE,
+      resultPublishedAt,
+    });
+    if (!result.paused) {
+      throw new Error(`createMarketPause: the market did not pause (${result.reason})`);
+    }
+    return { market: result.market, pause: result.pause, eventId: result.eventId };
+  });
+}
+
+export interface CreatePausedMarketInput
+  extends CreateScheduledMarketInput, Omit<CreateMarketPauseInput, 'marketId'> {}
+
+/** A paused market with its history: the review as `ReviewedMarket`, and the pause. */
+export interface PausedMarket extends ReviewedMarket {
+  pause: MarketPauseRow;
+  /** The `paused` event's id, the market's `status_event_id`. */
+  eventId: number;
+}
+
+/**
+ * A PAUSED market (#114, ADR-0102) with its whole history: `createOpenedMarket`'s market (v1 at the
+ * open), then `createMarketPause` — the `paused` event and the lasting pause, by `by` (a fresh
+ * admin by default) for `reason` (`basis_change` by default). `market` is the row after the pause;
+ * `request` the review's, as `createOpenedMarket` returns it. A test that needs a paused market and
+ * none of its history uses `createMarket({ status: 'paused' })`, which has no pause row.
+ */
+export async function createPausedMarket(
+  db: Db,
+  input: CreatePausedMarketInput = {},
+): Promise<PausedMarket> {
+  const { reason, note, resultPublishedAt, by, ...openedInput } = input;
+  const opened = await createOpenedMarket(db, openedInput);
+  const paused = await createMarketPause(db, {
+    marketId: opened.market.id,
+    ...(reason === undefined ? {} : { reason }),
+    ...(note === undefined ? {} : { note }),
+    ...(resultPublishedAt === undefined ? {} : { resultPublishedAt }),
+    ...(by === undefined ? {} : { by }),
+  });
+  return { ...paused, request: opened.request };
+}
+
+export interface CreatePauseDecisionInput {
+  /** A market with a pause: its lasting one is the request's unless `pauseId` names another. */
+  marketId: string;
+  /** 재개 or 조기 마감. Not checked against the review result (the route's rule). */
+  path: MarketPausePath;
+  /**
+   * The review result. Default: `judgeable` for a `basis_change` pause, null for the others. Stored
+   * as given: a test of the route's refusal gives what it would refuse.
+   */
+  reviewResult?: MarketPauseReviewResult | null;
+  /** The pause it decides. Default: the market's lasting one (the factory throws when none). */
+  pauseId?: string;
+  /** The requesting admin. Default: a fresh admin. */
+  by?: string;
+  /** The request's reason. Default: a sentence. */
+  reason?: string;
+  /** The request's instant. Default: the database clock. */
+  requestedAt?: Date;
+  /**
+   * A 반려 by another admin instead (`createApprovalRequest`'s decision), a millisecond after the
+   * request unless `at` is given. Left out with `retracted`: pending.
+   */
+  rejected?: { by: string; reason?: string; at?: Date };
+  /** The requester's 철회 instead, a millisecond after the request unless `at` is given. */
+  retracted?: { at?: Date };
+}
+
+/**
+ * A next-path request (#114, ADR-0102) as `POST /admin/markets/:id/pause-decisions` leaves it: a
+ * `market_pause_decision` approval request about the market (target `market`, payload `{pauseId,
+ * path, reviewResult}` — MarketPauseDecisionRequestPayload — and the request's reason), pending,
+ * or rejected or retracted as asked. Changes nothing of the market and writes no event, as the
+ * route; nor its `market_pause_decision_request` record. The route's checks are not made (the
+ * status, the close, the pause named being the lasting one, one waiting per market, the reason's
+ * rules): a test gives what the route would take, or tests the route's refusal of it — an ended
+ * pause's request (`pauseId`) is the approval's 'stale'. `closeMarketEarly` and `resumeMarket`
+ * make an approved one, with the pause's end.
+ */
+export async function createPauseDecision(db: Db, input: CreatePauseDecisionInput) {
+  const [pause] = await db
+    .select()
+    .from(marketPauses)
+    .where(
+      input.pauseId === undefined
+        ? and(eq(marketPauses.marketId, input.marketId), isNull(marketPauses.endedAt))
+        : eq(marketPauses.id, input.pauseId),
+    );
+  if (!pause) {
+    throw new Error(`createPauseDecision: market ${input.marketId} has no such pause`);
+  }
+  const by = input.by ?? (await createUser(db, { role: 'admin' })).user.id;
+  const payload: MarketPauseDecisionRequestPayload = {
+    pauseId: pause.id,
+    path: input.path,
+    reviewResult:
+      input.reviewResult === undefined ? defaultReviewResult(pause.reason) : input.reviewResult,
+  };
+  return createApprovalRequest(db, {
+    kind: MARKET_PAUSE_DECISION_APPROVAL_KIND,
+    targetType: 'market',
+    targetId: input.marketId,
+    payload: { ...payload },
+    requestedBy: by,
+    reason: input.reason ?? PAUSE_DECISION_REASON,
+    ...(input.requestedAt === undefined ? {} : { requestedAt: input.requestedAt }),
+    ...(input.rejected === undefined
+      ? {}
+      : { decision: { status: 'rejected', ...input.rejected } }),
+    ...(input.retracted === undefined ? {} : { retracted: input.retracted }),
+  });
+}
+
+export interface DecidePauseInput {
+  /** The admin who asks for the path. Default: a fresh admin. */
+  requestedBy?: string;
+  /** The approving admin, never the requester (the factory throws). Default: a fresh admin. */
+  approvedBy?: string;
+  /** Default: `judgeable` for a `basis_change` pause, null for the others. */
+  reviewResult?: MarketPauseReviewResult | null;
+  /** The request's reason. Default: a sentence. */
+  reason?: string;
+  /** The approval's reason (the request's decision reason). Default: a sentence. */
+  approvalReason?: string;
+  /**
+   * The pause first, for a market still OPEN (`createMarketPause`'s fields; the pausing admin is
+   * `requestedBy` unless `by` is given). Ignored for a PAUSED market, whose lasting pause is used.
+   */
+  pause?: Omit<CreateMarketPauseInput, 'marketId'>;
+}
+
+/** A next path a factory approved: the market after it, the ended pause, the request, the event. */
+export interface PauseDecided {
+  /** The market read back after the approval: `open` or `closed`. */
+  market: typeof markets.$inferSelect;
+  /** The pause, ended (`resumed` or `early_closed`). */
+  pause: MarketPauseRow;
+  /** The `market_pause_decision` request, approved. */
+  request: typeof approvalRequests.$inferSelect;
+  /** The `resumed` or `closed` event's id, the market's `status_event_id`. */
+  eventId: number;
+}
+
+/**
+ * A next path approved (#114, ADR-0102) as `POST /admin/markets/:id/pause-decisions/:requestId
+ * /approve` leaves it: the market paused first if it is OPEN (`createMarketPause`, its own
+ * transaction), then in one transaction under the market lock with the row FOR UPDATE a
+ * `market_pause_decision` request about its lasting pause, approved by another admin with a
+ * reason, a millisecond and two after the later of the database clock and the market's last
+ * write, and `endMarketPause` at the approval's instant — the event, the market `open` or `closed`
+ * and the pause's end. No admin records and no job change (the API's). `endMarketPause`'s checks
+ * are made: a market neither OPEN nor PAUSED, a close that has come, or a review result the pause's
+ * reason refuses throws.
+ */
+async function approvePauseDecision(
+  db: Db,
+  marketId: string,
+  path: MarketPausePath,
+  input: DecidePauseInput,
+): Promise<PauseDecided> {
+  const requestedBy = input.requestedBy ?? (await createUser(db, { role: 'admin' })).user.id;
+  const approvedBy = input.approvedBy ?? (await createUser(db, { role: 'admin' })).user.id;
+  if (approvedBy === requestedBy) {
+    throw new Error('approvePauseDecision: the requester never approves the next path');
+  }
+  const [market] = await db
+    .select({ status: markets.status })
+    .from(markets)
+    .where(eq(markets.id, marketId));
+  if (!market) throw new Error(`approvePauseDecision: market ${marketId} not found`);
+  if (market.status === 'open') {
+    await createMarketPause(db, { by: requestedBy, ...input.pause, marketId });
+  }
+  return db.transaction(async (tx) => {
+    await lockMarket(tx, marketId);
+    const [current] = await tx.select().from(markets).where(eq(markets.id, marketId)).for('update');
+    const pause = await currentMarketPause(tx, marketId);
+    if (!current || !pause) {
+      throw new Error(`approvePauseDecision: market ${marketId} has no lasting pause`);
+    }
+    const base = Math.max((await clockTimestamp(tx)).getTime(), current.updatedAt.getTime());
+    const reviewResult =
+      input.reviewResult === undefined ? defaultReviewResult(pause.reason) : input.reviewResult;
+    const at = new Date(base + 2);
+    const request = await createPauseDecision(tx as unknown as Db, {
+      marketId,
+      path,
+      reviewResult,
+      pauseId: pause.id,
+      by: requestedBy,
+      reason: input.reason ?? PAUSE_DECISION_REASON,
+      requestedAt: new Date(base + 1),
+    });
+    const [approved] = await tx
+      .update(approvalRequests)
+      .set({
+        status: 'approved',
+        decidedBy: approvedBy,
+        decisionReason: input.approvalReason ?? PAUSE_DECISION_APPROVAL_REASON,
+        decidedAt: at,
+      })
+      .where(eq(approvalRequests.id, request.id))
+      .returning();
+    const result = await endMarketPause(tx, {
+      market: current,
+      pause,
+      now: at,
+      approverId: approvedBy,
+      path,
+      reviewResult,
+      approvalId: request.id,
+      requestedBy,
+    });
+    if (!result.ended) {
+      throw new Error(`approvePauseDecision: the pause did not end (${result.reason})`);
+    }
+    return {
+      market: result.market,
+      pause: result.pause,
+      request: approved!,
+      eventId: result.eventId,
+    };
+  });
+}
+
+/**
+ * 조기 마감 (#114, ADR-0102; ADR-0093 decision 1 #173 items 2·4) as the routes leave it — a pause if
+ * the market is OPEN, then a next-path request `early_close` approved by another admin — through
+ * `approvePauseDecision` above: the market `closed` by the approver's `closed` event (payload
+ * `{closedAt, source: 'early_close', pauseId, approvalId, requestedBy, reviewResult}`), `close_at`
+ * as it was, the pause `early_closed`. The way a test reaches CLOSED now that the one-admin close
+ * is gone: a `basis_change` pause reviewed `judgeable` unless told (Q2). Works on `createMarket`'s
+ * bare OPEN market as on `createOpenedMarket`'s.
+ */
+export async function closeMarketEarly(
+  db: Db,
+  marketId: string,
+  input: DecidePauseInput = {},
+): Promise<PauseDecided> {
+  return approvePauseDecision(db, marketId, 'early_close', input);
+}
+
+/**
+ * 재개 (#114, ADR-0102; ADR-0093 decision 1 #173 item 2) as the routes leave it — a pause if the
+ * market is OPEN, then a next-path request `resume` approved by another admin — through
+ * `approvePauseDecision` above: the market `open` again by the approver's `resumed` event (payload
+ * `{pauseId, approvalId, requestedBy, reviewResult}`), `open_at` as the first open left it, the
+ * pause `resumed`. A `basis_change` pause is reviewed `judgeable` unless told.
+ */
+export async function resumeMarket(
+  db: Db,
+  marketId: string,
+  input: DecidePauseInput = {},
+): Promise<PauseDecided> {
+  return approvePauseDecision(db, marketId, 'resume', input);
 }
 
 export interface CreateReportInput {

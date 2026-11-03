@@ -59,7 +59,8 @@ test.describe('정산', () => {
     await joined;
     await markDocument(page);
 
-    // --- 마감 through the API: trading stops, and the badge says so without a reload.
+    // --- 마감 through the API — a pause and another admin's approved 조기 마감 since #114
+    // (helpers.ts `closeMarket`): trading stops, and the badge says so without a reload.
     await closeMarket(admin, market.id);
     const badge = page.getByTestId('market-status-badge');
     await expect(badge).toHaveText(copy.marketStatusClosed);

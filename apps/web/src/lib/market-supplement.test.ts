@@ -33,10 +33,12 @@ import {
   marketRuleContent,
   showsSupplementPanel,
   supplementActorName,
+  supplementBoundary,
   supplementChangeRows,
   supplementFailure,
   supplementLogRows,
   supplementRefocus,
+  supplementRejectBody,
   supplementRejectDraft,
   supplementRejectReasonOf,
   supplementRequestDraft,
@@ -136,6 +138,7 @@ const market: AdminMarket = {
   ruleVersion: 1,
   ruleVersions: [v1],
   supplement: { pending: null, log: [] },
+  pause: { history: [], pending: null, log: [] },
 };
 
 /** Before the close (11-29 15:00 UTC) and after it. */
@@ -287,9 +290,13 @@ describe('the 보충 기록 and the 규칙 버전 기록', () => {
       ...MARKET_SUPPLEMENT_REJECT_REASONS,
     ]);
     // 의미 변경 says the change belongs to the pause procedure (#172 item 15, #114) — which the
-    // 반려 itself does not start, as its dialog says.
+    // 반려 itself does not start, as its dialog says, pointing to the pause (실질 기준 변경).
     expect(SUPPLEMENT_REJECT_REASON_LABEL.meaning_change).toContain('거래를 멈추고 검토');
     expect(copy.adminMarketSupplementRejectBody).toContain('반려는 거래를 멈추지 않');
+    expect(copy.adminMarketSupplementRejectBody).toContain('실질 기준 변경을 사유로 일시 중단');
+    expect(copy.adminMarketSupplementBoundary).toContain(
+      '실질 기준 변경을 사유로 거래를 일시 중단',
+    );
   });
 
   it('says each request and how it ended', () => {
@@ -376,10 +383,28 @@ describe('what a supplement write may send', () => {
     expect(supplementRejectDraft('other', ' ').ready).toBe(false);
   });
 
-  it('says the boundary the issue asks the request screen to (#80 AC 8)', () => {
+  it('says the boundary the issue asks the request screen to (#80 AC 8), and where it leads', () => {
+    // Since #114 (ADR-0102) the way to stop and review is there: a pause as 실질 기준 변경.
     expect(copy.adminMarketSupplementBoundary).toBe(
-      '의미를 바꾸는 변경은 보충으로 받지 않습니다. 거래를 멈추고 검토합니다.',
+      '의미를 바꾸는 변경은 보충으로 받지 않습니다. 거래를 멈추고 검토합니다: 실질 기준 변경을 사유로 거래를 일시 중단하세요.',
     );
+    expect(supplementBoundary('open')).toBe(copy.adminMarketSupplementBoundary);
+    // A PAUSED market takes no second pause and keeps its reason: the next path decides.
+    expect(supplementBoundary('paused')).toBe(copy.adminMarketSupplementBoundaryPaused);
+    expect(copy.adminMarketSupplementBoundaryPaused).toContain('재개·조기 마감 요청');
+    expect(copy.adminMarketSupplementBoundaryPaused).not.toContain('일시 중단하세요');
+  });
+
+  it('says in the 반려 dialog the way to stop and review the market’s status leaves', () => {
+    expect(supplementRejectBody('open')).toBe(copy.adminMarketSupplementRejectBody);
+    expect(supplementRejectBody('paused')).toBe(copy.adminMarketSupplementRejectBodyPaused);
+    expect(copy.adminMarketSupplementRejectBodyPaused).toContain('재개·조기 마감 요청');
+    for (const status of ['closed', 'provisional', 'settled'] as const) {
+      expect(supplementRejectBody(status)).toBe(copy.adminMarketSupplementRejectBodyEnded);
+    }
+    for (const status of ['paused', 'closed'] as const) {
+      expect(supplementRejectBody(status)).not.toContain('일시 중단하세요');
+    }
   });
 });
 

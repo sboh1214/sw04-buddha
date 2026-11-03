@@ -131,7 +131,9 @@ describe('the notice above a 더 보기 that failed', () => {
         'app/admin/coupons/admin-coupons.tsx',
         'app/admin/markets/[id]/admin-market-detail.tsx',
         'app/admin/markets/admin-markets.tsx',
-        // 검수 대기 (#78, ADR-0099) and 규칙 보충 대기 (#80, ADR-0101)
+        // 검수 대기 (#78, ADR-0099), 규칙 보충 대기 (#80, ADR-0101) and 일시 중단 결정 대기 (#114,
+        // ADR-0102)
+        'app/admin/markets/reviews/admin-market-pause-decisions.tsx',
         'app/admin/markets/reviews/admin-market-reviews.tsx',
         'app/admin/markets/reviews/admin-market-supplements.tsx',
         'app/admin/moderation/account-restriction-requests/admin-account-requests.tsx',
@@ -231,6 +233,7 @@ describe('the notice above a 더 보기 that failed', () => {
       [
         'useAdminAccountRequests',
         'useAdminGrantCandidates',
+        'useAdminMarketPauseDecisions',
         'useAdminMarketReviews',
         'useAdminMarketSupplements',
         'useAdminModerationActions',

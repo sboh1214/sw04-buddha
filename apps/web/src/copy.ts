@@ -556,10 +556,12 @@ export const copy = {
   adminMarketEditOpenTitle: '거래 중인 시장을 수정합니다',
   adminMarketEditOpenBody:
     '이미 거래가 진행 중인 시장입니다. 카테고리·태그·이미지를 바꾸면 공개 화면에 바로 보입니다. 규칙은 바뀌지 않습니다. 계속할까요?',
-  adminMarketClose: '마감',
-  adminMarketCloseTitle: '시장을 마감합니다',
-  adminMarketCloseBody: '마감하면 더 이상 거래할 수 없습니다. 계속할까요?',
-  adminMarketClosed: '시장을 마감했습니다.',
+  // 거래 일시 중단 중인 시장도 개장 뒤라 같은 칸을 같은 기록과 함께 고친다(#114, ADR-0093 결정 2 #172 14항:
+  // '일시 중단 중을 포함해'). 관리자 한 명의 마감은 #114가 없앴다: 일찍 끝내는 길은 일시 중단 뒤 다른
+  // 관리자가 승인한 조기 마감이다(adminMarketPause…).
+  adminMarketEditPausedTitle: '거래 일시 중단 중인 시장을 수정합니다',
+  adminMarketEditPausedBody:
+    '거래가 일시 중단된 시장입니다. 카테고리·태그·이미지를 바꾸면 공개 화면에 바로 보입니다. 규칙은 바뀌지 않습니다. 계속할까요?',
   // 개설 검수 (#78, ADR-0099; ADR-0093 결정 2 #172 4·5·6항, 결정 3 '#78 수정 기록의 사유'): 초안을 검수
   // 제출하면 내용이 잠기고(검수 중·개장 예정인 시장은 고치지 않는다), 다른 관리자가 체크리스트를 모두
   // 확인하고 승인하면 개장 예정, 반려하면 초안이다. 만든 관리자·내용을 수정한 적이 있는 관리자·제출한
@@ -708,16 +710,20 @@ export const copy = {
   // 중단인 시장의 거래 마감 전에, 관리자가 바꿀 항목의 새 문구와 사유·정산 영향 검토를 적어 요청하고, 요청하지
   // 않은 다른 관리자가 승인하면 바꾼 항목을 고쳐 쓴 전문이 새 규칙 버전이 된다. 보충 문구와 사유는 공개 상세의
   // 규칙 버전 이력에 보이고, 요청·승인한 관리자와 정산 영향 검토는 관리자만 본다. 의미가 바뀌는 변경은
-  // 보충으로 받지 않고(반려 사유 '의미 변경') 거래를 멈추고 검토한다(#114). 한 시장에 기다리는 보충은
-  // 하나이고, 반려·철회는 거래 마감 뒤에도 할 수 있다.
+  // 보충으로 받지 않고(반려 사유 '의미 변경') 거래를 일시 중단하고 검토한다(#114: 실질 기준 변경). 한 시장에
+  // 기다리는 보충은 하나이고, 반려·철회는 거래 마감 뒤에도 할 수 있다.
   adminMarketSupplement: '규칙 보충',
   adminMarketSupplementIntro:
     '개장 뒤 질문·규칙 항목·시각은 보충으로만 바뀝니다. 요청하지 않은 다른 관리자가 승인하면 새 규칙 버전이 되고, 이전 버전은 그대로 남습니다.',
   adminMarketSupplementVersion: '현재 규칙 버전',
   adminMarketSupplementNoVersion: '규칙 버전 없음',
-  // 이슈의 수용 기준 8: 보충 화면은 의미를 바꾸는 변경을 거래 중단 검토로 넘긴다고 밝힌다.
+  // 이슈의 수용 기준 8: 보충 화면은 의미를 바꾸는 변경을 거래 중단 검토로 넘긴다고 밝힌다. 그 길은 이
+  // 시장의 거래 일시 중단(#114, 사유 실질 기준 변경)이다.
   adminMarketSupplementBoundary:
-    '의미를 바꾸는 변경은 보충으로 받지 않습니다. 거래를 멈추고 검토합니다.',
+    '의미를 바꾸는 변경은 보충으로 받지 않습니다. 거래를 멈추고 검토합니다: 실질 기준 변경을 사유로 거래를 일시 중단하세요.',
+  // 이미 일시 중단된 시장은 다시 일시 중단할 수 없고 사유도 바뀌지 않는다: 다음 경로를 요청에서 정한다.
+  adminMarketSupplementBoundaryPaused:
+    '의미를 바꾸는 변경은 보충으로 받지 않습니다. 이 시장은 거래가 일시 중단되어 있으니 재개·조기 마감 요청에서 다음 경로를 정하세요.',
   // 보충을 요청할 수 없는 까닭(요청 버튼 대신 보인다). 기다리는 보충이 있으면 그 요청이 보인다.
   adminMarketSupplementUnavailableStatus:
     '거래 중이거나 거래 일시 중단인 시장만 보충할 수 있습니다.',
@@ -777,9 +783,15 @@ export const copy = {
   adminMarketSupplementApproved: '보충을 승인했습니다. 새 규칙 버전이 공개되었습니다.',
   adminMarketSupplementRejectTitle: '보충을 반려합니다',
   // 반려는 시장을 멈추지 않는다: 의미 변경은 그 변경이 거래 중단 검토의 일이라는 사유이고, 거래를 멈추는 길은
-  // #114가 만든다.
+  // 거래 일시 중단(#114)이다. 거래 중인 시장에서 의미 변경으로 반려하면 일시 중단 칸이 실질 기준 변경과 반려의
+  // 설명을 채운 일시 중단을 권한다(adminMarketPauseOffer).
   adminMarketSupplementRejectBody:
-    '반려하면 규칙은 그대로입니다. 의미가 바뀌는 변경이면 의미 변경을 고르세요. 반려는 거래를 멈추지 않으니, 거래를 멈추고 검토하는 일은 따로 합니다.',
+    '반려하면 규칙은 그대로입니다. 의미가 바뀌는 변경이면 의미 변경을 고르세요. 반려는 거래를 멈추지 않습니다. 거래를 멈추고 검토하려면 반려한 뒤 거래 일시 중단에서 실질 기준 변경을 사유로 일시 중단하세요.',
+  // 일시 중단된 시장(사유는 바뀌지 않는다)과 거래가 끝난 시장(마감에도 기다리던 요청)의 반려.
+  adminMarketSupplementRejectBodyPaused:
+    '반려하면 규칙은 그대로입니다. 의미가 바뀌는 변경이면 의미 변경을 고르세요. 반려는 일시 중단을 끝내지 않습니다. 다음 경로는 거래 일시 중단의 재개·조기 마감 요청에서 정합니다.',
+  adminMarketSupplementRejectBodyEnded:
+    '반려하면 규칙은 그대로입니다. 의미가 바뀌는 변경이면 의미 변경을 고르세요.',
   adminMarketSupplementRejected: '보충을 반려했습니다.',
   adminMarketSupplementRetractTitle: '보충 요청을 철회합니다',
   adminMarketSupplementRetractBody: '철회하면 요청이 끝나고 규칙은 그대로입니다. 계속할까요?',
@@ -843,6 +855,172 @@ export const copy = {
   adminMarketSupplementsColBase: '기준 버전',
   adminMarketSupplementsColItems: '바꾸는 항목',
   adminMarketSupplementsColCloseAt: '거래 마감',
+  // 거래 일시 중단·재개·조기 마감 (#114, ADR-0102; ADR-0093 결정 1 #173 1~4·13항, 결정 2 #172 14·15항, 결정 3
+  // '#114 조기 결과의 공개 시각', 오너 답 2026-11-02 Q1·Q2): 거래 중인 시장은 관리자 한 명이 사유 셋 중 하나와
+  // 설명으로 바로 멈추고(조기 결과면 결과가 공개된 시각도 KST로 적는다), 재개(→ 거래 중)나 조기 마감(→ 거래
+  // 마감)은 한 관리자가 요청하고 요청하지 않은 다른 관리자가 승인한다. 거래 마감 시각은 일시 중단 중에도
+  // 예정대로 오고 늦추지 않는다. 마감 전에 무효로 정하지 않는다: 판정 불가면 조기 마감한 뒤 판정에서 무효 규칙을
+  // 적용한다(#152). 설명과 결과 공개 시각은 지금 관리자만 본다(공개 판정 기록은 #24).
+  adminMarketPause: '거래 일시 중단',
+  adminMarketPauseIntro:
+    '관리자 한 명이 사유와 함께 바로 일시 중단합니다. 재개나 조기 마감은 한 관리자가 요청하고 요청하지 않은 다른 관리자가 승인합니다. 거래 마감 시각은 일시 중단 중에도 예정대로 옵니다.',
+  // 일시 중단 버튼 대신 보이는 까닭: 거래 마감 시각이 지난 시장은 워커가 곧 마감한다.
+  adminMarketPauseUnavailableClosed: '거래 마감 시각이 지나 일시 중단할 수 없습니다.',
+  // 보충의 의미 변경 반려 뒤(#172 15항, ADR-0101 결정 6): 반려는 시장을 멈추지 않으니, 거래 중인 시장의 이
+  // 칸이 실질 기준 변경과 반려 설명을 채운 일시 중단을 권한다. 누르면 일시 중단 창이 그렇게 열린다.
+  adminMarketPauseOffer:
+    '의미 변경으로 반려한 보충이 있습니다. 거래를 멈추고 검토하려면 실질 기준 변경을 사유로 거래를 일시 중단하세요.',
+  // 지금의 일시 중단: 사유, 설명, 중단한 관리자·시각, 조기 결과면 결과 공개 시각.
+  adminMarketPauseCurrent: '지금의 일시 중단',
+  adminMarketPauseReason: '중단 사유',
+  adminMarketPauseNote: '설명',
+  adminMarketPausedBy: '중단한 관리자',
+  adminMarketPausedAt: '중단 시각',
+  adminMarketPauseResultPublishedAt: '결과 공개 시각',
+  // 일시 중단 창.
+  adminMarketPauseTitle: '거래를 일시 중단합니다',
+  adminMarketPauseBody:
+    '일시 중단하면 바로 거래가 멈추고 공개 화면에 거래 일시 중단으로 보입니다. 거래 마감 시각은 그대로입니다. 재개나 조기 마감은 다른 관리자의 승인으로 합니다.',
+  adminMarketPauseNoteHint:
+    '무슨 일이 있었는지 적어 주세요. 일시 중단 기록에 관리자·시각과 함께 남고 관리자만 봅니다. 500자까지 쓸 수 있습니다.',
+  adminMarketPauseResultPublishedAtHint:
+    '결과가 공개된 시각을 KST로 적습니다. 일시 중단 시각보다 늦을 수 없습니다.',
+  adminMarketPaused: '거래를 일시 중단했습니다.',
+  // 중단 사유(MARKET_PAUSE_REASONS, #173 3항: 이 셋뿐)와 고르는 창의 한 줄 안내. 사건 일정이 앞당겨져 거래
+  // 마감을 당겨야 하는 경우는 실질 기준 변경이다(오너 답 Q2).
+  pauseReasonEarlyResult: '사건 선공개(조기 결과)',
+  pauseReasonLedgerFailure: '담보·원장 장애',
+  pauseReasonBasisChange: '실질 기준 변경',
+  pauseReasonEarlyResultHint:
+    '거래 마감 전에 결과가 공개되었습니다. 결과가 공개된 시각을 함께 적습니다. 공개 뒤의 체결도 그대로 두고 판정합니다.',
+  pauseReasonLedgerFailureHint:
+    '담보나 원장에 장애가 생겨 거래를 이어 갈 수 없습니다. 복구한 뒤 재개를 요청합니다.',
+  pauseReasonBasisChangeHint:
+    '시장이 묻는 내용이 실질적으로 바뀌었습니다. 결과가 나오기 전에 사건 일정이 앞당겨져 거래 마감을 당겨야 할 때도 이 사유로 멈추고 조기 마감을 요청합니다.',
+  // 실질 기준 변경으로 멈춘 시장의 검토 결과(MARKET_PAUSE_REVIEW_RESULTS, 오너 답 Q1): 판정 가능이면 운영자가
+  // 재개와 조기 마감 중에서 고르고, 판정 불가면 조기 마감뿐이다.
+  pauseReviewJudgeable: '기존 규칙으로 판정 가능',
+  pauseReviewNotJudgeable: '판정 불가',
+  pauseReviewJudgeableHint: '재개하거나 조기 마감할 수 있습니다.',
+  pauseReviewNotJudgeableHint:
+    '조기 마감만 요청할 수 있습니다. 마감한 뒤 판정에서 무효 규칙을 적용합니다.',
+  // 다음 경로(MARKET_PAUSE_PATHS)와 일시 중단이 끝난 방식(MARKET_PAUSE_END_KINDS). 예정 마감은 거래 마감
+  // 시각에 워커가 마감한 것이다(검토·승인 없음).
+  pausePathResume: '재개',
+  pausePathEarlyClose: '조기 마감',
+  pauseEndResumed: '재개',
+  pauseEndEarlyClosed: '조기 마감',
+  pauseEndClosedAtClose: '예정 마감',
+  pauseOngoing: '진행 중',
+  // 재개·조기 마감 요청 창. 요청한 관리자는 승인·반려하지 않는다(APPROVAL_REFUSALS).
+  adminMarketPauseRequest: '재개·조기 마감 요청',
+  adminMarketPauseRequestUnavailableClosed:
+    '거래 마감 시각이 지나 재개·조기 마감을 요청할 수 없습니다. 시장은 거래 마감 시각에 마감됩니다.',
+  adminMarketPauseRequestTitle: '재개·조기 마감을 요청합니다',
+  // 승인 전에도 거래 마감 시각은 온다(#173 1·3항): 워커가 일시 중단 시장을 승인 없이 마감하고, 기다리던
+  // 요청은 반려나 철회로만 끝난다.
+  adminMarketPauseRequestBody:
+    '요청하지 않은 다른 관리자가 승인하면 그때 거래가 다시 열리거나 시장이 마감됩니다. 승인되기 전에는 일시 중단이 이어지고, 그 사이 거래 마감 시각이 오면 승인 없이도 시장이 마감됩니다. 한 시장에 기다리는 요청은 하나입니다.',
+  adminMarketPauseRequestPath: '다음 경로',
+  adminMarketPauseRequestReview: '검토 결과',
+  adminMarketPauseRequestReviewHint:
+    '실질 기준 변경으로 멈춘 시장은 기존 규칙으로 판정할 수 있는지 검토해 적습니다.',
+  adminMarketPauseRequestReason: '요청 사유',
+  adminMarketPauseDecisionHint:
+    '일시 중단 기록에 관리자·시각과 함께 남습니다. 관리자만 봅니다. 500자까지 쓸 수 있습니다.',
+  adminMarketPauseRequested: '재개·조기 마감을 요청했습니다. 다른 관리자가 승인하거나 반려합니다.',
+  // 요청 창을 연 뒤 일시 중단이 바뀌면(재개된 뒤 다시 멈춤, 마감) 창의 일시 중단은 지난 것이다.
+  adminMarketPauseChanged: '이 창을 연 뒤 일시 중단이 바뀌었습니다. 창을 닫고 다시 확인해 주세요.',
+  // 승인을 기다리는 요청: 경로, 검토 결과, 사유, 요청한 관리자·시각.
+  adminMarketPausePending: '승인을 기다리는 요청',
+  adminMarketPauseRequestedBy: '요청한 관리자',
+  adminMarketPauseRequestedAt: '요청 시각',
+  adminMarketPauseExcludedRequester:
+    '요청한 관리자는 승인·반려할 수 없습니다. 다른 관리자가 결정합니다. 거두려면 철회하세요.',
+  // 거래 마감 시각이 지났거나(워커가 마감한다) 거래 일시 중단이 아니게 된 시장의 요청은 승인할 수 없고, 반려와
+  // 철회로 끝낸다. 요청의 일시 중단이 지금의 것이 아니면 마찬가지다.
+  adminMarketPausePendingClosed:
+    '거래 마감 시각이 지났거나 거래 일시 중단 중이 아니라 승인할 수 없습니다. 반려하거나 철회해 끝내세요.',
+  adminMarketPausePendingStale:
+    '요청한 뒤 일시 중단이 바뀌어 승인할 수 없습니다. 반려하거나 철회해 끝내세요.',
+  adminMarketPauseApprove: '승인',
+  adminMarketPauseReject: '반려',
+  adminMarketPauseRetract: '철회',
+  adminMarketPauseApproveTitle: '요청을 승인합니다',
+  adminMarketPauseApproveResumeBody: '승인하면 거래가 바로 다시 열리고 일시 중단이 끝납니다.',
+  // 조기 마감은 거래 마감 시각(예정된 시각, 규칙 버전의 항목)을 바꾸지 않고 실제로 마감한 시각을 남긴다.
+  adminMarketPauseApproveEarlyCloseBody:
+    '승인하면 시장이 바로 마감되고 판정으로 넘어갑니다. 다시 열 수 없습니다. 거래 마감 시각은 예정된 시각으로 남고, 실제로 마감한 시각이 기록됩니다.',
+  adminMarketPauseApproveReason: '승인 사유',
+  adminMarketPauseResumed: '재개를 승인했습니다. 거래가 다시 열렸습니다.',
+  adminMarketPauseEarlyClosed: '조기 마감을 승인했습니다. 시장이 마감되었습니다.',
+  adminMarketPauseRejectTitle: '요청을 반려합니다',
+  adminMarketPauseRejectBody: '반려하면 요청이 끝나고 시장은 지금 상태 그대로입니다.',
+  adminMarketPauseRejectReason: '반려 사유',
+  adminMarketPauseRejected: '요청을 반려했습니다.',
+  adminMarketPauseRetractTitle: '요청을 철회합니다',
+  adminMarketPauseRetractBody: '철회하면 요청이 끝나고 시장은 지금 상태 그대로입니다. 계속할까요?',
+  adminMarketPauseRetracted: '요청을 철회했습니다.',
+  adminMarketPauseRequestChanged:
+    '이 창을 연 뒤 요청이 바뀌었습니다. 창을 닫고 다시 확인해 주세요.',
+  // 일시 중단 기록(AdminMarket.pause.history, 최근 것부터): 일시 중단마다 끝난 방식, 사유·설명·시각, 검토
+  // 결과, 끝난 시각과 승인한 관리자, 그리고 그 일시 중단의 요청들.
+  adminMarketPauseHistory: '일시 중단 기록',
+  adminMarketPauseHistoryEmpty: '일시 중단 기록이 없습니다.',
+  pauseLogReviewResult: '검토 결과',
+  pauseLogEndedAt: '끝난 시각',
+  pauseLogEndedBy: '승인한 관리자',
+  pauseLogPath: '경로',
+  pauseLogDecidedBy: '결정한 관리자',
+  pauseLogDecidedAt: '결정 시각',
+  pauseLogDecisionReason: '결정 사유',
+  pauseLogRetractedAt: '철회 시각',
+  pauseDecisionStatusPending: '대기',
+  pauseDecisionStatusApproved: '승인',
+  pauseDecisionStatusRejected: '반려',
+  pauseDecisionStatusRetracted: '철회',
+  // 일시 중단과 요청의 거절(VALIDATION_ERROR가 짚는 곳마다, MARKET_PAUSE_REFUSALS).
+  errMarketPauseReason: '중단 사유를 골라 주세요.',
+  errMarketPauseNote: '설명을 1~500자로 입력해 주세요.',
+  errMarketPausePublishedAtRequired: '결과 공개 시각을 입력해 주세요.',
+  errMarketPausePublishedAtTime: '날짜와 시각으로 입력해 주세요.',
+  errMarketPausePublishedAtAfter: '결과 공개 시각은 일시 중단 시각보다 늦을 수 없습니다.',
+  errMarketPausePublishedAtOnly:
+    '결과 공개 시각은 조기 결과로 일시 중단할 때만 적습니다. 화면을 새로 고쳐 주세요.',
+  errMarketPauseStatus: '거래 중인 시장만 일시 중단할 수 있습니다. 화면을 새로 고쳐 주세요.',
+  errMarketPauseClosed: '거래 마감 시각이 지나 일시 중단할 수 없습니다.',
+  errMarketPauseDecisionStatus:
+    '거래 일시 중단 중인 시장이 아닙니다. 화면을 새로 고쳐 주세요. 기다리는 요청은 반려하거나 철회해 끝냅니다.',
+  errMarketPauseDecisionClosed:
+    '거래 마감 시각이 지나 재개·조기 마감을 요청하거나 승인할 수 없습니다. 기다리는 요청은 반려하거나 철회해 끝냅니다.',
+  errMarketPauseDecisionPending: '승인을 기다리는 요청이 이미 있습니다. 화면을 새로 고쳐 주세요.',
+  errMarketPauseDecisionStale:
+    '요청한 뒤 일시 중단이 바뀌어 승인할 수 없습니다. 반려하거나 철회해 끝내세요.',
+  // 화면이 본 일시 중단이 재개되고 다시 일시 중단되어 요청이 적은 일시 중단이 지금의 것이 아니다(요청의
+  // 'stale'). 창을 열기 전에 바뀌었을 수도 있다. 아무것도 남지 않았으니 지금의 일시 중단을 보고 다시 요청한다.
+  errMarketPauseRequestStale:
+    '화면의 일시 중단이 지금의 일시 중단이 아닙니다(그 사이 재개되고 다시 일시 중단되었습니다). 화면을 새로 고친 뒤 다시 요청해 주세요.',
+  errMarketPausePath: '다음 경로를 골라 주세요.',
+  errMarketPauseEarlyCloseOnly: '판정 불가면 조기 마감만 요청할 수 있습니다.',
+  errMarketPauseReviewRequired:
+    '실질 기준 변경으로 멈춘 시장은 검토 결과와 함께 요청합니다. 화면을 새로 고쳐 주세요.',
+  errMarketPauseReviewOnly:
+    '검토 결과는 실질 기준 변경으로 멈춘 시장에만 적습니다. 화면을 새로 고쳐 주세요.',
+  errMarketPauseUnknown: '이 시장의 재개·조기 마감 요청이 아닙니다. 화면을 새로 고쳐 주세요.',
+  // 일시 중단 결정 대기 (GET /admin/market-pause-decisions): 기다리는 재개·조기 마감 요청, 오래 기다린
+  // 것부터. 검수 대기 화면의 셋째 묶음이다. 중단 사유는 그 요청이 정하는 일시 중단의 것이다.
+  adminMarketPauseDecisions: '일시 중단 결정 대기',
+  adminMarketPauseDecisionsIntro:
+    '재개나 조기 마감의 승인을 기다리는 요청입니다. 오래 기다린 것부터 보입니다. 요청한 관리자가 아닌 관리자가 시장 상세에서 승인하거나 반려합니다.',
+  adminMarketPauseDecisionsEmpty: '승인을 기다리는 재개·조기 마감 요청이 없습니다.',
+  adminMarketPauseDecisionsColTitle: '질문',
+  adminMarketPauseDecisionsColStatus: '상태',
+  adminMarketPauseDecisionsColReason: '중단 사유',
+  adminMarketPauseDecisionsColPath: '요청 경로',
+  adminMarketPauseDecisionsColReview: '검토 결과',
+  adminMarketPauseDecisionsColRequestedBy: '요청한 관리자',
+  adminMarketPauseDecisionsColRequestedAt: '요청 시각',
+  adminMarketPauseDecisionsColCloseAt: '거래 마감',
   // 관리자 상세의 거래 현황: 체결·포지션에서 나온 값만 보인다(직접 AMM 상태는 #125에서 지웠다).
   adminMarketTradeStats: '거래 현황',
   tradeStatsLastPrice: '현재가',
@@ -881,6 +1059,12 @@ export const copy = {
   eventRejected: '반려',
   eventReverted: '초안으로 되돌림',
   eventOpenRescheduled: '예정 개장 시각 변경',
+  // 거래 일시 중단(#114): 일시 중단(거래 중 → 거래 일시 중단, 행위자는 멈춘 관리자; 사유와 조기 결과의 공개
+  // 시각), 재개(→ 거래 중, 행위자는 승인한 관리자; 검토 결과), 그리고 승인한 조기 마감은 마감 기록(closed)에
+  // source 'early_close'로 남아 '조기 마감'으로 보인다. 요청한 관리자는 일시 중단 기록이 보인다.
+  eventPaused: '일시 중단',
+  eventResumed: '재개',
+  eventEarlyClosed: '조기 마감',
   eventSystem: '시스템',
   // 규칙 수정 기록(#23): 바뀐 항목의 이름(openItem…)을 ' · '로 잇고, 항목마다 이전·이후를 보인다. #23
   // 전의 기록은 규칙 글 하나의 이전·이후다.
@@ -1114,10 +1298,10 @@ export const copy = {
   errMarketLeadClose: '거래 마감 시각은 발표 예정 시각보다 선행 마감 간격 이상 앞서야 합니다.',
   errMarketLeadCloseUndecided:
     '선행 마감 간격(출시 설정)이 미정이라 발표 예정 시각에 맞춘 마감을 검사할 수 없습니다. 간격을 정한 뒤 다시 저장해 주세요.',
-  // 거래 중인 시장 (#172 14항, 오너 답 A2): 마감은 늦추기만 하고(앞당기는 것은 조기 마감, 지금은 마감 버튼),
-  // 예정 개장·예정 판정 시각은 바꾸지 않는다.
+  // 거래 중인 시장 (#172 14항, 오너 답 A2): 마감은 늦추기만 하고(앞당기는 것은 조기 마감: 거래를 일시
+  // 중단한 뒤 다른 관리자가 승인한다, #114·오너 답 Q2), 예정 개장·예정 판정 시각은 바꾸지 않는다.
   errMarketCloseEarlier:
-    '거래 중인 시장의 거래 마감 시각은 앞당길 수 없습니다. 일찍 끝내려면 마감하세요.',
+    '거래 중인 시장의 거래 마감 시각은 앞당길 수 없습니다. 일찍 끝내려면 거래를 일시 중단한 뒤 조기 마감하세요.',
   errMarketTimeFixed: '거래 중인 시장에서는 바꿀 수 없습니다.',
   errMarketSlug: '슬러그는 영문 소문자·숫자·한글·하이픈 3~80자로 입력하거나 비워 두세요.',
   errMarketSlugTaken: '이미 사용 중인 슬러그입니다.',
@@ -1127,7 +1311,6 @@ export const copy = {
   // 항목을 보인다. 승인에서의 같은 거절은 errMarketReviewOpenItems다.
   errMarketOpenItemsMissing: '검수 제출 전에 채우거나 고칠 항목이 있습니다',
   errMarketRulesOpen: '열린 시장의 규칙은 비울 수 없습니다.',
-  errMarketNotOpen: '거래 중인 시장이 아닙니다. 화면을 새로 고쳐 주세요.',
   errMarketStatus: '지금 상태에서는 할 수 없는 작업입니다. 화면을 새로 고쳐 주세요.',
 
   // --- admin: payments / audit (M3) ---
@@ -1595,7 +1778,8 @@ export const copy = {
 
   // 상태별 안내 (PLAN 11.3). 색과 배지는 MARKET_STATUS_LABEL/PALETTE가 맡고, 이 문구는
   // 그 아래에서 "지금 무엇을 할 수 있는지"를 말한다. 그 상태의 사실만 적고, 다른 이슈가 만들 것
-  // (중단 사유 #114, 이의 #175, 무효 지급 #126)은 약속하지 않는다(#174의 글). 개장 예정의 안내는 예정 개장
+  // (중단 사유와 시각의 공개 #24, 이의 #175, 무효 지급 #126)은 약속하지 않는다(#174의 글; #114는 사유를
+  // 관리자 화면에만 둔다). 개장 예정의 안내는 예정 개장
   // 시각의 자동 개장(#21) 뒤에도 여는 시각을 약속하지 않는다: 그 시각은 바뀔 수 있고, 그 전에 거래 마감
   // 시각이 지나면 열리지 않는다(ADR-0100).
   marketScheduledNotice: '아직 열리지 않은 시장입니다. 지금은 거래할 수 없습니다.',

@@ -6,8 +6,11 @@ import {
   LEAD_CLOSE_GAP_UNDECIDED,
   LEAD_CLOSE_GAP_UNDECIDED_MESSAGE,
   MARKET_REVIEW_CHECKLIST,
+  MARKET_SUPPLEMENT_STATUSES,
   MINUS_SIGN,
   type MarketEventType,
+  type MarketPauseReason,
+  type MarketPauseReviewResult,
   type MarketRejectReason,
   type MarketResult,
   type MarketReviewChecklistItem,
@@ -37,6 +40,8 @@ import {
   type TimeRuleViolation,
   formatCoin,
   isCompleteSource,
+  marketPauseReasonSchema,
+  marketPauseReviewResultSchema,
   marketRejectReasonSchema,
   marketResultSchema,
   coinAmountSchema,
@@ -129,7 +134,8 @@ export const MARKET_RESULT_LABEL: Record<MarketResult, string> = {
 /**
  * Each market event's name in the admin's 이벤트 로그; the five of the 개설 검수 (#78, ADR-0099) are the
  * 검수 기록's names too (lib/market-review.ts). 규칙 수정 is a draft's since #80; after the open the
- * rules change by an approved supplement alone, which writes 규칙 보충 (ADR-0101).
+ * rules change by an approved supplement alone, which writes 규칙 보충 (ADR-0101). 일시 중단 and 재개
+ * are #114's (ADR-0102); its approved early close is a `closed` event, named by `marketEventLabel`.
  */
 export const MARKET_EVENT_LABEL: Record<MarketEventType, string> = {
   created: copy.eventCreated,
@@ -145,6 +151,38 @@ export const MARKET_EVENT_LABEL: Record<MarketEventType, string> = {
   finalized: copy.eventFinalized,
   rules_edited: copy.eventRulesEdited,
   rules_supplemented: copy.eventRulesSupplemented,
+  paused: copy.eventPaused,
+  resumed: copy.eventResumed,
+};
+
+/**
+ * An event's name in the 이벤트 로그: MARKET_EVENT_LABEL's, but 조기 마감 for the `closed` an
+ * approved early close writes (`source: 'early_close'`, #114, ADR-0102) — the worker's close at
+ * `close_at` (`source: 'job'`) and older rows stay 마감.
+ */
+export function marketEventLabel(type: MarketEventType, payload: unknown): string {
+  if (type === 'closed' && EARLY_CLOSED_PAYLOAD.safeParse(payload).success) {
+    return copy.eventEarlyClosed;
+  }
+  return MARKET_EVENT_LABEL[type];
+}
+
+/**
+ * 일시 중단 사유 (#114, ADR-0102; ADR-0093 decision 1 #173 item 3: these three only), in the words
+ * the pause dialog, the panel, the queue and the 이벤트 로그's `paused` rows share. Here rather than
+ * in the pause's own lib (lib/market-pause.ts, the admin's alone), since the 이벤트 로그's rows are
+ * this file's.
+ */
+export const PAUSE_REASON_LABEL: Record<MarketPauseReason, string> = {
+  early_result: copy.pauseReasonEarlyResult,
+  ledger_failure: copy.pauseReasonLedgerFailure,
+  basis_change: copy.pauseReasonBasisChange,
+};
+
+/** 검토 결과 of a 실질 기준 변경 pause (owner answer Q1, 2026-11-02), as PAUSE_REASON_LABEL. */
+export const PAUSE_REVIEW_RESULT_LABEL: Record<MarketPauseReviewResult, string> = {
+  judgeable: copy.pauseReviewJudgeable,
+  not_judgeable: copy.pauseReviewNotJudgeable,
 };
 
 export const SETTLEMENT_STEP_LABEL: Record<SettlementStep, string> = {
@@ -298,29 +336,67 @@ export function scheduledMarketPollDelay(
   return Math.max(1, Math.min(next, untilClose, MAX_TIMEOUT_MS));
 }
 
+/** How often the admin detail re-reads a trading market past its close, until it is closed. */
+export const TRADING_CLOSE_POLL_MS = 5_000;
+
+/**
+ * The admin detail's re-read of a market OPEN or PAUSED (#114, ADR-0102), from the clock `now`.
+ * Nothing else tells this screen that the worker closed it at `close_at` — the admin query joins no
+ * realtime room — and a paused market closes on schedule too (ADR-0093 decision 1 #173 items 1·3),
+ * which makes a next-path request still waiting moot: its 승인 must go off without a reload. So the
+ * detail reads it again at its close and every TRADING_CLOSE_POLL_MS after it until it is neither
+ * (the close job closes it at once, the per-minute scan within a minute, a stopped worker when it
+ * is back). Past the close the delay is the poll, never 0 — which query-core takes for no interval
+ * — so a failed read does not refire at once. False for any other status or an unreadable close;
+ * capped at MAX_TIMEOUT_MS, the next read waiting again.
+ */
+export function tradingMarketPollDelay(
+  market: { status: MarketStatus; closeAt: string } | undefined,
+  now: number = Date.now(),
+): number | false {
+  if (market?.status !== 'open' && market?.status !== 'paused') return false;
+  const closeAt = new Date(market.closeAt).getTime();
+  if (Number.isNaN(closeAt)) return false;
+  const untilClose = closeAt - now;
+  if (untilClose <= 0) return TRADING_CLOSE_POLL_MS;
+  return Math.max(1, Math.min(untilClose, MAX_TIMEOUT_MS));
+}
+
 /**
  * `refetchInterval` of the admin detail (`useAdminMarket`), from the query's state: the settlement
- * poll for a judged market (`settlementPollInterval`), else the 개장 예정 re-reads
- * (`scheduledMarketPollDelay` at the row's `dataUpdatedAt`).
+ * poll for a judged market (`settlementPollInterval`), the 개장 예정 re-reads
+ * (`scheduledMarketPollDelay` at the row's `dataUpdatedAt`), and the close's re-read of a market
+ * OPEN or PAUSED (`tradingMarketPollDelay`, #114).
  */
 export function adminMarketPollInterval(state: {
   data?: { status: MarketStatus; scheduledOpenAt: string | null; closeAt: string };
   dataUpdatedAt: number;
 }): number | false {
   return (
-    settlementPollInterval(state.data) || scheduledMarketPollDelay(state.data, state.dataUpdatedAt)
+    settlementPollInterval(state.data) ||
+    scheduledMarketPollDelay(state.data, state.dataUpdatedAt) ||
+    tradingMarketPollDelay(state.data)
   );
 }
 
 /**
- * Which statuses the edit form saves in (design 3.4): a draft every field; an open market its
- * category, tags and image — its version items (the title, the rule items and the times) change by
- * a supplement alone since #80 (ADR-0101; ADR-0093 decision 2 #172 item 14), so the edit form draws
- * them off (`MarketFormFields`' `versionItemsLocked`). A paused market's category and tags are
- * #114's.
+ * Whether the edit form saves as an opened market's: OPEN or PAUSED (MARKET_SUPPLEMENT_STATUSES) —
+ * the category, the tags and the image with a record, the version items (the title, the rule items
+ * and the times) drawn off since they change by a supplement alone (#80, ADR-0101; ADR-0093
+ * decision 2 #172 item 14, 'after the open' a pause included — #114, ADR-0102), and a save first
+ * confirmed.
+ */
+export function editsAfterOpen(status: MarketStatus): boolean {
+  return (MARKET_SUPPLEMENT_STATUSES as readonly MarketStatus[]).includes(status);
+}
+
+/**
+ * Which statuses the edit form saves in (design 3.4): a draft every field; a market OPEN or PAUSED
+ * its category, tags and image (`editsAfterOpen`) — its version items change by a supplement alone,
+ * so the edit form draws them off (`MarketFormFields`' `versionItemsLocked`).
  */
 export function isEditable(status: MarketStatus): boolean {
-  return status === 'draft' || status === 'open';
+  return status === 'draft' || editsAfterOpen(status);
 }
 
 /**
@@ -550,6 +626,31 @@ const RULES_SUPPLEMENTED_PAYLOAD = z.object({
   reason: z.string(),
 });
 const CLOSED_PAYLOAD = z.object({ closedAt: kstInstant });
+/**
+ * An approved early close (#114, ADR-0102: `closed` with `source: 'early_close'`, the actor the
+ * approver): the actual close instant and the review result (null but for a 실질 기준 변경 pause).
+ * The pause, the request and its requester are ids, which no row of this log prints: the detail's
+ * 일시 중단 기록 shows them, the requester by nickname (ADR-0101 9-11's way).
+ */
+const EARLY_CLOSED_PAYLOAD = z.object({
+  closedAt: kstInstant,
+  source: z.literal('early_close'),
+  reviewResult: marketPauseReviewResultSchema.nullable(),
+});
+/** 일시 중단 (#114): the reason and, for an early result, when it was published (else null). */
+const PAUSED_PAYLOAD = z.object({
+  reason: marketPauseReasonSchema,
+  resultPublishedAt: kstInstant.nullable(),
+});
+/** 재개 (#114): the review result (null but for a 실질 기준 변경 pause); the ids as above. */
+const RESUMED_PAYLOAD = z.object({ reviewResult: marketPauseReviewResultSchema.nullable() });
+
+/** The review result's row, none without one. */
+function reviewResultRows(reviewResult: MarketPauseReviewResult | null): EventRow[] {
+  return reviewResult === null
+    ? []
+    : [{ label: copy.pauseLogReviewResult, value: PAUSE_REVIEW_RESULT_LABEL[reviewResult] }];
+}
 /** The worker's resolved → settling (#174): `{source: 'job'}`, which the 시스템 actor already says. */
 const SETTLING_PAYLOAD = z.object({ source: z.string() });
 const RESOLVE_DETAIL = {
@@ -587,10 +688,12 @@ function resolveDetailRows(detail: {
 /**
  * An event's payload as label/value rows in Korean, for the shapes the API and the worker
  * write (design 3.4's 이벤트 로그, 5.5): the rules diff (each changed rule item since #23, the one
- * rules text before it), a supplement's approval (#80: the version, the items, the reason and the
- * requester), the open and close instants, the 판정 with its note and evidence, the
- * finalize summary, the 개설 검수's records (#78, `reviewDetailRows`) — and no row at all for the
- * start of the payout, whose only field is the `source` the 시스템 actor beside it already says.
+ * rules text before it), a supplement's approval (#80: the version, the items and the reason), the
+ * open and close instants — an early close's with its review result (#114) —, a pause's reason and
+ * early result's publication instant, a resume's review result (#114, ADR-0102: no account id,
+ * ADR-0101 9-11), the 판정 with its note and evidence, the finalize summary, the 개설 검수's records
+ * (#78, `reviewDetailRows`) — and no row at all for the start of the payout, whose only field is
+ * the `source` the 시스템 actor beside it already says, nor for a resume without a review result.
  * The payload is `unknown` on the wire (jsonb), so each shape is checked before it is read;
  * `created` (the whole create body) and anything that does not match are `undefined`, and the
  * screen shows those as `compactJson` instead of a half-read row.
@@ -657,7 +760,31 @@ export function marketEventRows(type: MarketEventType, payload: unknown): EventR
     case 'closed': {
       const parsed = CLOSED_PAYLOAD.safeParse(payload);
       if (!parsed.success) return undefined;
-      return [{ label: copy.adminMarketCloseAtShort, value: formatKst(parsed.data.closedAt) }];
+      const early = EARLY_CLOSED_PAYLOAD.safeParse(payload);
+      return [
+        { label: copy.adminMarketCloseAtShort, value: formatKst(parsed.data.closedAt) },
+        ...(early.success ? reviewResultRows(early.data.reviewResult) : []),
+      ];
+    }
+    case 'paused': {
+      const parsed = PAUSED_PAYLOAD.safeParse(payload);
+      if (!parsed.success) return undefined;
+      const { reason, resultPublishedAt } = parsed.data;
+      return [
+        { label: copy.adminMarketPauseReason, value: PAUSE_REASON_LABEL[reason] },
+        ...(resultPublishedAt === null
+          ? []
+          : [
+              {
+                label: copy.adminMarketPauseResultPublishedAt,
+                value: formatKst(resultPublishedAt),
+              },
+            ]),
+      ];
+    }
+    case 'resumed': {
+      const parsed = RESUMED_PAYLOAD.safeParse(payload);
+      return parsed.success ? reviewResultRows(parsed.data.reviewResult) : undefined;
     }
     case 'submitted':
     case 'approved':
@@ -1057,11 +1184,13 @@ export function openItemsRefused(error: ApiError): string {
  * The toast for a refused transition (design 3.4/3.6, 5.5): OPEN_ITEMS_MISSING on the review's
  * submission (#17, #78 — '검수 제출 전에 채우거나 고칠 항목이 있습니다: …' naming what the refusal
  * names, or the line alone when it names nothing this screen knows), a close already passed naming
- * `closeAt`, MARKET_NOT_OPEN on close, VALIDATION_ERROR naming `status` for any other state-machine
- * violation — the two "refresh the screen" messages, since the state on screen is what is stale (a
- * second 판정 of a market another admin has already judged lands here). There is no admin open to
- * refuse since #21 (ADR-0100): a market opens from 개장 예정 by itself, or by its approval or a
- * reschedule, whose refusals are the review's (`reviewFailure`, lib/market-review.ts).
+ * `closeAt`, VALIDATION_ERROR naming `status` for any other state-machine violation — the "refresh
+ * the screen" message, since the state on screen is what is stale (a second 판정 of a market another
+ * admin has already judged lands here). There is no admin close to refuse since #114 (ADR-0102: an
+ * early end is a pause and another admin's approved early close, whose refusals are the pause's —
+ * `pauseFailure`, lib/market-pause.ts), nor an admin open since #21 (ADR-0100): a market opens from
+ * 개장 예정 by itself, or by its approval or a reschedule, whose refusals are the review's
+ * (`reviewFailure`, lib/market-review.ts).
  * RULES_REQUIRED is no transition's: it is the supplement that leaves an open market without a rule
  * item it had (#23, #80), which `marketFormError` puts on that item's field.
  * NOT_FOUND is the market itself (every admin write answers 404 for an unknown id): not a "try
@@ -1078,7 +1207,6 @@ export function transitionErrorMessage(error: unknown): string {
       ? `${copy.errMarketOpenItemsMissing}.`
       : `${copy.errMarketOpenItemsMissing}: ${items}`;
   }
-  if (isApiError(error, 'MARKET_NOT_OPEN')) return copy.errMarketNotOpen;
   if (isApiError(error, 'NOT_FOUND')) return copy.adminMarketNotFound;
   if (isApiError(error, 'VALIDATION_ERROR')) {
     const field = validationField(error);

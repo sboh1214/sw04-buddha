@@ -42,8 +42,18 @@ import { approvalStatusEnum } from './enums.js';
  * settlementImpact}`, the supplement's reason the request's): at most one waits per market, which
  * the API holds under the market lock. An admin other than its requester approves it — the
  * market's next rule version, whose row references it (`market_rule_versions.approval_id`,
- * migration 0053) — or rejects it, and its requester may retract it, in any status. #184's
- * retention deletes none of them (migration 0044 names the account restriction's kinds alone).
+ * migration 0053) — or rejects it, and its requester may retract it, in any status.
+ *
+ * The next path of a paused market (#114, ADR-0102; ADR-0093 decision 1 #173 items 2·4) — `kind`
+ * `market_pause_decision` (target `market`, the market's id as text; payload `{pauseId, path,
+ * reviewResult}`, the request's reason the requester's): 재개 or 조기 마감 of the pause it names, at
+ * most one waiting per market, which the API holds under the market lock. An admin other than its
+ * requester approves it — the pause's end, whose row references it
+ * (`market_pauses.end_approval_id`, migration 0054) — or rejects it, and its requester may retract
+ * it, in any status; once the market left that pause (closed at its close) its approval is refused.
+ *
+ * #184's retention deletes none of the market kinds (migration 0044 names the account
+ * restriction's kinds alone).
  */
 export const approvalRequests = pgTable(
   'approval_requests',

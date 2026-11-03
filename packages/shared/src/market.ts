@@ -18,6 +18,7 @@ import {
 import { expectedAccountIdSchema, namesAFieldBesideAccount } from './expected-account.js';
 import { marketTitleSchema, ruleItemFields, timeItemFields } from './market-fields.js';
 import { openItemSchema } from './market-open-items.js';
+import { adminMarketPauseStateSchema } from './market-pause.js';
 import { adminMarketReviewSchema } from './market-review.js';
 import { marketRuleItemsSchema } from './market-rules.js';
 import {
@@ -551,6 +552,13 @@ export const adminMarketSchema = marketSchema
      * ended — one still waiting at the close is shown for its 반려 or 철회.
      */
     supplement: adminMarketSupplementSchema,
+    /**
+     * 거래 일시 중단 (#114, ADR-0102), in every status: every pause with how it ended, the
+     * next-path request waiting and every request with how it ended — one still waiting at the
+     * close is shown for its 반려 or 철회. The public `Market` carries none of it (#24 shows the
+     * reason and the times, #173 item 13).
+     */
+    pause: adminMarketPauseStateSchema,
   })
   .meta({ id: 'AdminMarket' });
 export type AdminMarket = z.infer<typeof adminMarketSchema>;
@@ -582,11 +590,12 @@ export const marketSlugSchema = z
  * the lead close (선행 마감) is the open-items check's, never refused on a draft.
  *
  * After the open the version items change by a supplement alone (#80, ADR-0101; ADR-0093 decision
- * 2 #172 item 14): an edit of an OPEN market that changes one is refused, one detail per item
- * (SUPPLEMENT_ONLY_WHILE_OPEN), while its category, tags and image stay editable. A supplement
- * holds the open market's rules (market-supplement.ts): RULES_REQUIRED for an item it newly leaves
- * missing, the close later only and never past the scheduled judgement, with the lead close
- * checked again, and the scheduled open and judgement fixed.
+ * 2 #172 item 14): an edit of an OPEN or PAUSED (#114) market that changes one is refused, one
+ * detail per item (SUPPLEMENT_ONLY_WHILE_OPEN), while its category, tags and image stay editable.
+ * A supplement holds the open market's rules (market-supplement.ts): RULES_REQUIRED for an item it
+ * newly leaves missing, the close later only and never past the scheduled judgement, with the lead
+ * close checked again, and the scheduled open and judgement fixed. Trading ends earlier than the
+ * close only by a pause and an approved 조기 마감 (#114, market-pause.ts).
  */
 const marketFields = {
   title: marketTitleSchema,
@@ -623,11 +632,11 @@ export type CreateMarketBody = z.infer<typeof createMarketBodySchema>;
 
 /**
  * `PATCH /admin/markets/:id`: which fields a status admits is the service's decision — a draft's
- * every field, an OPEN market's category, tags and image (its version items by a supplement alone,
- * `requestMarketSupplementBodySchema`, #80); a market in REVIEW or SCHEDULED is locked (#78, #172
- * item 6: sent back to a draft to edit, its scheduled open moved by
- * `rescheduleMarketOpenBodySchema`), and so is a PAUSED one (#114's). At least one field beside the
- * account.
+ * every field, an OPEN or PAUSED market's category, tags and image (its version items by a
+ * supplement alone, `requestMarketSupplementBodySchema`, #80; PAUSED since #114, ADR-0102, #172
+ * item 14); a market in REVIEW or SCHEDULED is locked (#78, #172 item 6: sent back to a draft to
+ * edit, its scheduled open moved by `rescheduleMarketOpenBodySchema`). At least one field beside
+ * the account.
  */
 export const updateMarketBodySchema = z
   .object(marketFields)

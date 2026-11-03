@@ -7,6 +7,21 @@ export {
   type OpenSource,
 } from './market-open.js';
 export {
+  currentMarketPause,
+  endMarketPause,
+  endPauseAtClose,
+  pauseMarket,
+  readMarketPauses,
+  type EndMarketPauseInput,
+  type EndMarketPauseResult,
+  type EndPauseAtCloseInput,
+  type EndPauseSkipReason,
+  type MarketPauseRow,
+  type PauseMarketInput,
+  type PauseMarketResult,
+  type PauseSkipReason,
+} from './market-pause.js';
+export {
   allowRuleSupplement,
   insertRuleVersion,
   readRuleContent,

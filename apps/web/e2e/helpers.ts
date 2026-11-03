@@ -15,6 +15,9 @@ import {
 import type {
   AdminMarket,
   Category,
+  MarketPausePath,
+  MarketPauseReason,
+  MarketPauseReviewResult,
   MarketReviewChecklistItem,
   MarketRuleItems,
   MarketSupplementChanges,
@@ -38,7 +41,9 @@ import { E2E_CONSENT_VERSIONS } from './consent-versions';
  * helper throws, so a missing seed reads as "run pnpm db:seed" rather than as a 401 or a 404 in
  * the middle of a flow. Both admins take part in every open market since #21: the first submits
  * it for review and the second approves it (`openThroughReview`). So in every rule supplement
- * since #80: the first asks for it and the second approves it (`approveSupplementAsReviewer`).
+ * since #80: the first asks for it and the second approves it (`approveSupplementAsReviewer`). And
+ * in every early close since #114, the one way to close a market before its close: the first
+ * pauses it and asks for the 조기 마감, the second approves it (`closeMarket`).
  *
  * Everything here is re-runnable against a persistent local database: a fresh email per
  * sign-up, a random tag in every market title and slug.
@@ -285,8 +290,8 @@ async function chooseSeedAdminNickname(
 }
 
 /**
- * The reviewer each `admin` context goes with (`test`'s fixtures), for `approveAsReviewer` and
- * `approveSupplementAsReviewer`.
+ * The reviewer each `admin` context goes with (`test`'s fixtures), for `approveAsReviewer`,
+ * `approveSupplementAsReviewer` and `approvePauseDecisionAsReviewer`.
  */
 const reviewers = new WeakMap<APIRequestContext, APIRequestContext>();
 
@@ -299,9 +304,10 @@ const reviewers = new WeakMap<APIRequestContext, APIRequestContext>();
  * `reviewer` is the second seed admin too, once per worker process: the admin who approves what
  * `admin` submits, so `createOpenMarket(admin)` can open a market without every test that wants
  * one asking for a second admin (#21 — a market opens only through the review, which its creator
- * and its submitter never decide, #172 item 5), and what `admin` asks to supplement (#80 — its
- * requester never decides a supplement, #172 item 15). `admin` depends on it and is paired with
- * it here (`reviewers`); a spec that acts as the second admin itself asks for `secondAdmin`.
+ * and its submitter never decide, #172 item 5), what `admin` asks to supplement (#80 — its
+ * requester never decides a supplement, #172 item 15) and the next path `admin` asks for a paused
+ * market (#114 — its requester never decides it, #173 item 2). `admin` depends on it and is paired
+ * with it here (`reviewers`); a spec that acts as the second admin itself asks for `secondAdmin`.
  * Worker-scoped fixtures see no test-scoped `baseURL`, so it reads the project's.
  */
 export const test = base.extend<
@@ -1687,6 +1693,331 @@ export async function leaveNoSupplement(
   await retractSupplement(context, marketId).catch(() => undefined);
 }
 
+// ---- 거래 일시 중단·재개·조기 마감 (#114) ---------------------------------------------------
+
+/**
+ * The note every helper pause gives (1..500 characters): what happened. The admins' alone — no
+ * public answer carries it (#173 item 13's public record is #24's, and the note is not in it).
+ */
+export const HELPER_PAUSE_NOTE = '자동화 테스트의 일시 중단입니다. 거래를 멈추고 검토합니다.';
+
+/** The reason every helper next-path request gives (1..500 characters), the admins' alone. */
+export const HELPER_PAUSE_DECISION_REASON = '자동화 테스트의 요청입니다. 검토를 마쳤습니다.';
+
+/** The reason every helper approval of a next path gives (1..500 characters). */
+const HELPER_PAUSE_APPROVAL_REASON = '요청한 경로와 그 사유를 확인했습니다.';
+
+/**
+ * How long `closeMarket` waits for the worker's close of a market whose close came before its
+ * early close could: the delayed `market.close` job at `close_at`, or the per-minute scan behind it
+ * should the job be lost — a minute, with room for a loaded box.
+ */
+const CLOSE_ON_SCHEDULE_WAIT_MS = 90_000;
+
+export interface PauseOptions {
+  /** The note: HELPER_PAUSE_NOTE unless given. */
+  note?: string;
+  /**
+   * The result's publication instant (ISO), which an `early_result` pause alone records (ADR-0093
+   * decision 3 '#114 조기 결과의 공개 시각'): a minute before now for one unless given, and null
+   * for any other reason unless given — a spec that pins a refusal sends what it pins.
+   */
+  resultPublishedAt?: string | null;
+}
+
+/**
+ * 거래 일시 중단 (#114, ADR-0102; ADR-0093 decision 1 #173 items 2·3) through
+ * `POST /admin/markets/:id/pause` as the admin `context` is signed in as (ADR-0092), one admin and
+ * at once: the reason, one of the three, and the note — the answer as it came, for a spec that
+ * reads a refusal.
+ */
+export async function sendPause(
+  context: APIRequestContext,
+  marketId: string,
+  reason: MarketPauseReason,
+  { note = HELPER_PAUSE_NOTE, resultPublishedAt }: PauseOptions = {},
+): Promise<APIResponse> {
+  const published =
+    resultPublishedAt !== undefined
+      ? resultPublishedAt
+      : reason === 'early_result'
+        ? new Date(Date.now() - MINUTE_MS).toISOString()
+        : null;
+  return context.post(`/api/v1/admin/markets/${marketId}/pause`, {
+    data: {
+      reason,
+      note,
+      resultPublishedAt: published,
+      expectedAccountId: await accountIdOf(context),
+    },
+  });
+}
+
+/**
+ * `sendPause` as `admin`, which must be taken: the market PAUSED, its pause the first of
+ * `pause.history` with no end. The market must be OPEN with its close ahead. `basis_change` (실질
+ * 기준 변경) unless another reason is given: its next path carries a review result
+ * (`requestPauseDecision`'s `reviewResult`).
+ */
+export async function pauseMarket(
+  admin: APIRequestContext,
+  marketId: string,
+  reason: MarketPauseReason = 'basis_change',
+  options: PauseOptions = {},
+): Promise<AdminMarket> {
+  const paused = await unwrap<AdminMarket>(await sendPause(admin, marketId, reason, options));
+  expect(paused.status).toBe('paused');
+  return paused;
+}
+
+export interface PauseDecisionOptions {
+  /**
+   * The pause the request names (`pauseId` — the one its author saw, ADR-0102 9-2): the market's
+   * lasting pause as `context` reads it through the admin API unless given (`currentPauseIdOf`);
+   * a spec that pins the 'stale' refusal names one that has ended, and a caller that holds the
+   * market already passes its pause instead of a read.
+   */
+  pauseId?: string;
+  /**
+   * The review result (owner answer Q1 of 2026-11-02): null unless given — what a pause for
+   * `early_result` or `ledger_failure` takes, while a `basis_change` pause's request needs one.
+   */
+  reviewResult?: MarketPauseReviewResult | null;
+  /** The request's reason: HELPER_PAUSE_DECISION_REASON unless given. */
+  reason?: string;
+}
+
+/**
+ * A well-formed pause id that names no pause: what a request names on a market with no pause
+ * lasting, which the API refuses by its status (`status` 'not paused') before it reads the pause.
+ */
+const NO_PAUSE_ID = '00000000-0000-4000-8000-000000000000';
+
+/** The id of the pause lasting on `market` (`pause.history`'s one with no end), if one lasts. */
+function lastingPauseIdOf(market: AdminMarket): string | undefined {
+  return market.pause.history.find((pause) => pause.endedAt === null)?.id;
+}
+
+/**
+ * The id of the pause lasting on a market as `context` reads it through
+ * `GET /admin/markets/:id` — the pause the admin detail's request dialog opens on and names — or
+ * NO_PAUSE_ID when none lasts.
+ */
+export async function currentPauseIdOf(
+  context: APIRequestContext,
+  marketId: string,
+): Promise<string> {
+  const market = await unwrap<AdminMarket>(await context.get(`/api/v1/admin/markets/${marketId}`));
+  return lastingPauseIdOf(market) ?? NO_PAUSE_ID;
+}
+
+/**
+ * 재개·조기 마감 요청 (#114; #173 item 2) of a paused market through
+ * `POST /admin/markets/:id/pause-decisions` as the admin `context` is signed in as (ADR-0092),
+ * naming the pause it is about (`pauseId`): the answer as it came, for a spec that reads a refusal.
+ */
+export async function sendPauseDecisionRequest(
+  context: APIRequestContext,
+  marketId: string,
+  path: MarketPausePath,
+  {
+    pauseId,
+    reviewResult = null,
+    reason = HELPER_PAUSE_DECISION_REASON,
+  }: PauseDecisionOptions = {},
+): Promise<APIResponse> {
+  const named = pauseId ?? (await currentPauseIdOf(context, marketId));
+  return context.post(`/api/v1/admin/markets/${marketId}/pause-decisions`, {
+    data: {
+      pauseId: named,
+      path,
+      reviewResult,
+      reason,
+      expectedAccountId: await accountIdOf(context),
+    },
+  });
+}
+
+/**
+ * `sendPauseDecisionRequest` as `admin`, which must be taken: the market as the request left it —
+ * still PAUSED until the approval — with the request in `pause.pending`, what
+ * `approvePauseDecisionAsReviewer` decides. The market must be PAUSED with its close ahead and no
+ * other request waiting; `not_judgeable` takes 조기 마감 alone (#173 item 4).
+ */
+export async function requestPauseDecision(
+  admin: APIRequestContext,
+  marketId: string,
+  path: MarketPausePath,
+  options: PauseDecisionOptions = {},
+): Promise<AdminMarket> {
+  const requested = await unwrap<AdminMarket>(
+    await sendPauseDecisionRequest(admin, marketId, path, options),
+  );
+  if (requested.pause.pending === null) {
+    throw new Error(`market ${marketId} has no waiting next path after its request`);
+  }
+  return requested;
+}
+
+/**
+ * `POST /admin/markets/:id/pause-decisions/:requestId/<decision>` as the admin `context` is signed
+ * in as (ADR-0092), the answer as it came: 승인 and 반려 take `{reason}`, 철회 nothing.
+ */
+export async function sendPauseDecision(
+  context: APIRequestContext,
+  marketId: string,
+  requestId: string,
+  decision: 'approve' | 'reject' | 'retract',
+  body: Record<string, unknown> = {},
+): Promise<APIResponse> {
+  return context.post(
+    `/api/v1/admin/markets/${marketId}/pause-decisions/${requestId}/${decision}`,
+    { data: { ...body, expectedAccountId: await accountIdOf(context) } },
+  );
+}
+
+/** The id of the next path waiting on a market, as `context` reads it. Throws when none waits. */
+async function pendingPauseDecisionOf(
+  context: APIRequestContext,
+  marketId: string,
+): Promise<string> {
+  const market = await unwrap<AdminMarket>(await context.get(`/api/v1/admin/markets/${marketId}`));
+  const pending = market.pause.pending?.requestId;
+  if (pending === undefined) throw new Error(`no next path waits on market ${marketId}`);
+  return pending;
+}
+
+/**
+ * 승인 (#114, #173 item 2) of the next path waiting on a market, as the second seed admin `admin`
+ * was handed with (`test`'s `reviewer`) — any admin but its requester decides it, the admin who
+ * paused included — with a reason, naming the waiting request (`requestId`, read when not given).
+ * The answer is the market OPEN (재개) or CLOSED (조기 마감) with its pause ended; the approval
+ * publishes `market:status`, so an open public detail follows without a reload.
+ */
+export async function approvePauseDecisionAsReviewer(
+  admin: APIRequestContext,
+  marketId: string,
+  requestId?: string,
+): Promise<AdminMarket> {
+  const reviewer = reviewerOf(admin);
+  const pending = requestId ?? (await pendingPauseDecisionOf(reviewer, marketId));
+  return unwrap<AdminMarket>(
+    await sendPauseDecision(reviewer, marketId, pending, 'approve', {
+      reason: HELPER_PAUSE_APPROVAL_REASON,
+    }),
+  );
+}
+
+/**
+ * 철회 (#114) of the next path waiting on a market by its requester `admin`, in any status — a
+ * request still waiting at the close ends so, or by another admin's 반려. The answer is the market
+ * with no request waiting and its status and pause as they were.
+ */
+export async function retractPauseDecision(
+  admin: APIRequestContext,
+  marketId: string,
+  requestId?: string,
+): Promise<AdminMarket> {
+  const pending = requestId ?? (await pendingPauseDecisionOf(admin, marketId));
+  return unwrap<AdminMarket>(await sendPauseDecision(admin, marketId, pending, 'retract'));
+}
+
+/**
+ * Retracts the next path `context`'s admin left waiting on a market, so a run that failed halfway
+ * leaves the 일시 중단 결정 대기 list of a persistent database no longer (as `leaveNoSupplement`:
+ * a waiting request never expires). Best effort, for a `finally`: nothing when none waits, or when
+ * another admin asked for it.
+ */
+export async function leaveNoPauseDecision(
+  context: APIRequestContext,
+  marketId: string,
+): Promise<void> {
+  await retractPauseDecision(context, marketId).catch(() => undefined);
+}
+
+/**
+ * 마감 before the close, the one way there is since #114 (ADR-0102; ADR-0093 decision 1 #173 items
+ * 2·4 — the interim one-admin `POST /admin/markets/:id/close` is gone): `admin` pauses the market
+ * as 실질 기준 변경 and asks for its 조기 마감 reviewed 기존 규칙으로 판정 가능 — the owner's answer
+ * Q2 of 2026-11-02 for a close that has to come earlier — and the second seed admin approves it
+ * (`approvePauseDecisionAsReviewer`). Trading stops, and the market waits for its 판정. The answer
+ * is the CLOSED market; its `closeAt` stays the scheduled close, and the `closed` event's
+ * `closedAt` is the actual one. A reader in the market's room is sent `market:status` twice — 거래
+ * 일시 중단, then 거래 마감 — and keeps the newer. The API, not the UI, because closing is a means
+ * here — the settlement spec measures what comes after it; pause.spec.ts walks the screens.
+ *
+ * A market whose close comes while these steps run (a spec that made it close in seconds) has a
+ * step refused for it — `closeAt` 'closed' by the clock — and is closed by the worker on schedule
+ * instead, paused or not (#173 item 1): the helper retracts the request it left waiting and waits
+ * for that close (`CLOSE_ON_SCHEDULE_WAIT_MS`). Any other refusal throws with its body.
+ */
+export async function closeMarket(
+  admin: APIRequestContext,
+  marketId: string,
+): Promise<AdminMarket> {
+  const paused = await sendPause(admin, marketId, 'basis_change');
+  if (!paused.ok()) return closedOnSchedule(admin, marketId, paused);
+  // The pause's answer is the market it paused: its lasting pause is the one to close early.
+  const pauseId = lastingPauseIdOf(await unwrap<AdminMarket>(paused));
+  if (pauseId === undefined) throw new Error(`market ${marketId} has no lasting pause after it`);
+  const requested = await sendPauseDecisionRequest(admin, marketId, 'early_close', {
+    pauseId,
+    reviewResult: 'judgeable',
+  });
+  if (!requested.ok()) return closedOnSchedule(admin, marketId, requested);
+  const requestId = (await unwrap<AdminMarket>(requested)).pause.pending?.requestId;
+  if (requestId === undefined) {
+    throw new Error(`market ${marketId} has no waiting 조기 마감 after its request`);
+  }
+  const approved = await sendPauseDecision(reviewerOf(admin), marketId, requestId, 'approve', {
+    reason: HELPER_PAUSE_APPROVAL_REASON,
+  });
+  if (!approved.ok()) {
+    await leaveNoPauseDecision(admin, marketId);
+    return closedOnSchedule(admin, marketId, approved);
+  }
+  const closed = await unwrap<AdminMarket>(approved);
+  expect(closed.status).toBe('closed');
+  return closed;
+}
+
+/**
+ * The market `closeMarket` could not close early, from the step's refusal: when it says the close
+ * has come (`closeAt` 'closed', the server's clock), the worker's close at `close_at` — waited for
+ * here; when the market reads CLOSED already (the worker came first: `status`), the market; any
+ * other refusal throws with its body.
+ */
+async function closedOnSchedule(
+  admin: APIRequestContext,
+  marketId: string,
+  refused: APIResponse,
+): Promise<AdminMarket> {
+  const body = await refused.text();
+  const failure = new Error(`${refused.url()} -> ${String(refused.status())} ${body}`);
+  if (refused.status() !== 400) throw failure;
+  const { error } = JSON.parse(body) as { error: { details?: { path?: unknown[] }[] } };
+  const field = error.details?.[0]?.path?.[0];
+  const read = async () =>
+    unwrap<AdminMarket>(await admin.get(`/api/v1/admin/markets/${marketId}`));
+  let market = await read();
+  if (market.status === 'closed') return market;
+  if (field !== 'closeAt') throw failure;
+  await expect
+    .poll(
+      async () => {
+        market = await read();
+        return market.status;
+      },
+      {
+        message: `market ${marketId} is not closed on schedule after ${body}`,
+        timeout: CLOSE_ON_SCHEDULE_WAIT_MS,
+        intervals: [1_000],
+      },
+    )
+    .toBe('closed');
+  return market;
+}
+
 /**
  * The category a spec's market is filed under for `topLevelCategory` (`CreateOpenMarketOptions`):
  * that top-level category's first sub-category in display order, or the category itself when it
@@ -1814,22 +2145,6 @@ export function detailWidth(page: Page): 'base' | 'md' {
  */
 export function detailCopyTestId(page: Page, testId: string): string {
   return `${testId}-${detailWidth(page)}`;
-}
-
-/**
- * 마감 through the admin API (`POST /admin/markets/:id/close`): trading stops, and the market
- * waits for the admin's 판정. The API, not the UI, because closing is a means here — the
- * settlement spec measures what comes after it.
- */
-export async function closeMarket(
-  admin: APIRequestContext,
-  marketId: string,
-): Promise<AdminMarket> {
-  return unwrap<AdminMarket>(
-    await admin.post(`/api/v1/admin/markets/${marketId}/close`, {
-      data: { expectedAccountId: await accountIdOf(admin) },
-    }),
-  );
 }
 
 /**

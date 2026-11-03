@@ -808,7 +808,9 @@ test.describe('시장 시간', () => {
       ruleItems: { eventDeadline: dueAt },
       times: { scheduledJudgementAt: dueAt },
     });
-    // 마감 by the operator now (the interim manual close): closed, its judgement still ahead.
+    // 마감 by the operators now — a pause and another admin's approved 조기 마감 (#114) — or, should
+    // its close come first, by the worker on schedule, which `closeMarket` then waits for: closed,
+    // its judgement still ahead or just past.
     const closed = await closeMarket(admin, market.id);
     expect(closed.status).toBe('closed');
 

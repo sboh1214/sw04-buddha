@@ -44,6 +44,7 @@ import {
   type MarketRejectedPayload,
   type MarketRevertedPayload,
   type MarketRuleItems,
+  type MarketStatus,
   type MarketSubmittedPayload,
   type MarketSummary,
   type MarketTimeItems,
@@ -108,6 +109,7 @@ import {
   sameSources,
   type MarketSources,
 } from './market-sources.js';
+import { readMarketPause } from './market-pause.js';
 import { readAdminRuleVersions, readMarketSupplement } from './market-supplement.js';
 import {
   likePattern,
@@ -175,22 +177,24 @@ const BLANK_RULE_ITEMS: MarketRuleItems = {
 };
 
 /**
- * An edit of an open market that changes a version item (#80, ADR-0101; ADR-0093 decision 2 #172
- * item 14): after the open they change by an approved supplement alone — and on a market opened
- * before rule versions (`ruleVersion` null, D4), which takes no supplement, not at all until the
- * close, which the message says instead. One issue per item, in RULE_VERSION_ITEMS order,
- * SUPPLEMENT_ONLY_WHILE_OPEN either way (the detail a client maps).
+ * An edit of an open or paused market (`status`, #114) that changes a version item (#80,
+ * ADR-0101; ADR-0093 decision 2 #172 item 14): after the open they change by an approved
+ * supplement alone — and on a market opened before rule versions (`ruleVersion` null, D4), which
+ * takes no supplement, not at all until the close, which the message says instead. One issue per
+ * item, in RULE_VERSION_ITEMS order, SUPPLEMENT_ONLY_WHILE_OPEN either way (the detail a client
+ * maps).
  */
 function supplementOnlyWhileOpen(
   items: readonly RuleVersionItem[],
   ruleVersion: number | null,
+  status: MarketStatus,
 ): AppError {
   const named = items.join(', ');
   return new AppError('VALIDATION_ERROR', {
     message:
       ruleVersion === null
         ? `${named} cannot change until the close: the market opened before rule versions`
-        : `${named} change by a supplement alone while the market is open`,
+        : `${named} change by a supplement alone while the market is ${status}`,
     details: items.map((item) => ({ path: [item], message: SUPPLEMENT_ONLY_WHILE_OPEN })),
   });
 }
@@ -483,17 +487,19 @@ function toSettlementSteps(rows: SettlementStepRow[]): AdminSettlementStep[] {
 /**
  * Admin market CRUD and transitions (PLAN 5.2, 5.5, 7.3, 12; M3 design 3.4, M5 design 3.3,
  * ADR-0046). Every write is one transaction with its `admin_actions` row and, for a
- * transition, its `market_events` row; close, resolve and the review's writes take the market's
+ * transition, its `market_events` row; resolve and the review's writes take the market's
  * advisory lock first (`lockMarket`) so nothing interleaves with another writer of the same
  * market — the worker's open, close and finalize jobs among them.
  * Realtime events are published, and the worker's jobs registered or cancelled, only after
  * COMMIT, best effort (MarketPublisher, MarketJobs).
  *
- * Close and resolve are the interim admin actions ADR-0047 result 3 and ADR-0093 result 2 keep
- * until the issues that replace them land: open → closed by one admin (#114) and closed → resolved
- * (#152). The interim draft → open went with #21 (ADR-0100): a market opens from SCHEDULED alone,
- * by `openScheduledMarket` (@buddha/db) — the worker's job at its scheduled open, or the approval
- * or the reschedule that finds that instant come, in its own transaction. Every transition writes
+ * Resolve is the interim admin action ADR-0047 result 3 and ADR-0093 result 2 keep until #152's
+ * judgement replaces it (closed → resolved). The interim draft → open went with #21 (ADR-0100): a
+ * market opens from SCHEDULED alone, by `openScheduledMarket` (@buddha/db) — the worker's job at
+ * its scheduled open, or the approval or the reschedule that finds that instant come, in its own
+ * transaction. The interim one-admin open → closed went with #114 (ADR-0102): a market closes at
+ * its close (the worker's job, OPEN or PAUSED), or early from PAUSED by another admin's approval
+ * (MarketPauseService, which pauses and resumes it too). Every transition writes
  * the status through `transitionMarket` (@buddha/db, #174), the one writer of `markets.status`
  * both apps share: it refuses a pair the lifecycle does not list (`canTransitionMarket`), records
  * who, when, from and to on the `market_events` row, and stores that row's id in
@@ -658,13 +664,15 @@ export class MarketAdminService {
   }
 
   /**
-   * PATCH per status: a draft accepts every field; an open market accepts its category, tags and
-   * image, and refuses `slug` naming the field; any other status refuses everything naming
-   * `status`. REVIEW and SCHEDULED are refused because the content locks at the review submission
+   * PATCH per status: a draft accepts every field; an OPEN or PAUSED market accepts its category,
+   * tags and image, and refuses `slug` naming the field; any other status refuses everything naming
+   * `status`. PAUSED is after the open as OPEN is (#114, ADR-0102; ADR-0093 decision 2 #172 item
+   * 14: '개장 뒤', 일시 중단 중 included), so what follows of an open market holds for a paused one
+   * too. REVIEW and SCHEDULED are refused because the content locks at the review submission
    * (#78, ADR-0099; ADR-0093 decision 2 #172 item 6 (a)): what was reviewed is what opens, so a
    * change sends the market back to a draft (`revert`) to be reviewed again, and a SCHEDULED
    * market's scheduled open, the one exception, moves by its own write with a reason
-   * (`reschedule`). PAUSED's edits are #114's, and the later statuses are past trading.
+   * (`reschedule`). The later statuses are past trading.
    *
    * After the open the version items — the title, the rule items and the times (RULE_VERSION_ITEMS,
    * #80, ADR-0101; ADR-0093 decision 2 #172 item 14) — change by an approved supplement alone
@@ -681,8 +689,8 @@ export class MarketAdminService {
    * The times of a draft (#22, ADR-0098): a write whose result breaks the order is refused naming
    * both ends (`assertTimeOrder`); its lead close is never refused: the open-items check names it.
    *
-   * Refusals come in this order: status, slug on an open market, a version item changed on an open
-   * market, tags, a switch condition with no fallback source (`assertFallbackCondition`), category,
+   * Refusals come in this order: status, slug after the open, a version item changed after the
+   * open, tags, a switch condition with no fallback source (`assertFallbackCondition`), category,
    * a close time not in the future, the order, and last a taken slug (the unique index, at the
    * UPDATE).
    *
@@ -700,14 +708,15 @@ export class MarketAdminService {
    *
    * `tags` replace the whole ordered set (#17, ADR-0093 decision 2 #172 items 2 and 14): the
    * market's `market_tags` rows are deleted and the new ones linked — unless they name the same
-   * tags in the same order, which is no change. Absent, the stored ones stay; an open market keeps
-   * one at least ('required while open'). A category change must name a category a new market may
-   * be filed under; the market's current category is no change and is not checked, so a market
-   * keeps a category hidden after it was filed (#172 item 1). Both land in the `market_update`
-   * record's before and after (`snapshot`), its admin, its time and both values: an open market's
-   * category and tags change directly, with that record (#172 item 14).
+   * tags in the same order, which is no change. Absent, the stored ones stay; an open or paused
+   * market keeps one at least ('required while open'). A category change must name a category a
+   * new market may be filed under; the market's current category is no change and is not checked,
+   * so a market keeps a category hidden after it was filed (#172 item 1). Both land in the
+   * `market_update` record's before and after (`snapshot`), its admin, its time and both values: an
+   * open or paused market's category and tags change directly, with that record (#172 item 14).
    *
-   * An edit that MOVES an open market publishes `market:status` after COMMIT. No live event can
+   * An edit that MOVES an open or paused market publishes `market:status` after COMMIT (both are
+   * public, with viewers). No live event can
    * carry a descriptive field: `market:tick` and `market:status` carry absolute numbers, and a
    * client takes `category`, the tags and the image from a REST answer alone (`joinMarket`,
    * market-live.ts), so without it a viewer would keep the old ones until something else made it
@@ -720,12 +729,13 @@ export class MarketAdminService {
   ): Promise<AdminMarket> {
     const { market, moved } = await this.db.transaction(async (tx) => {
       const current = await lockedMarketRow(tx, id);
-      const isOpen = current.status === 'open';
-      if (isOpen) {
+      // OPEN or PAUSED (#114): the market's edits after the open, whichever of the two it is in.
+      const afterOpen = current.status === 'open' || current.status === 'paused';
+      if (afterOpen) {
         if (body.slug !== undefined) {
           throw fieldError(
             'slug',
-            'slug cannot change while the market is open',
+            `slug cannot change while the market is ${current.status}`,
             'immutable while open',
           );
         }
@@ -740,25 +750,30 @@ export class MarketAdminService {
         ...timesOf(current),
         closeAt: current.closeAt.toISOString(),
       };
-      if (isOpen) {
+      if (afterOpen) {
         // #80: the rule version's items stay as the open recorded them or a supplement since made
         // them, and a live market keeps the tags its review required.
         const stored = ruleContentOf(current, currentSources);
         const changed = changedRuleVersionItems(stored, withContent(stored, body));
-        if (changed.length > 0) throw supplementOnlyWhileOpen(changed, current.ruleVersion);
+        if (changed.length > 0) {
+          throw supplementOnlyWhileOpen(changed, current.ruleVersion, current.status);
+        }
         if (body.tags !== undefined && body.tags.length < MARKET_TAGS_MIN) {
           throw fieldError(
             'tags',
-            'Tags cannot be removed while the market is open',
+            `Tags cannot be removed while the market is ${current.status}`,
             'required while open',
           );
         }
       }
-      // An open market's version items are its stored ones (refused above otherwise), so what
-      // follows writes them for a draft alone.
-      const items = isOpen ? before : withRuleItems(before, body);
-      const times = isOpen ? storedTimes : withTimes(storedTimes, body);
-      if (!isOpen && (body.fallbackSources !== undefined || body.fallbackCondition !== undefined)) {
+      // An open or paused market's version items are its stored ones (refused above otherwise),
+      // so what follows writes them for a draft alone.
+      const items = afterOpen ? before : withRuleItems(before, body);
+      const times = afterOpen ? storedTimes : withTimes(storedTimes, body);
+      if (
+        !afterOpen &&
+        (body.fallbackSources !== undefined || body.fallbackCondition !== undefined)
+      ) {
         assertFallbackCondition(items);
       }
 
@@ -784,7 +799,7 @@ export class MarketAdminService {
         assertSelectableCategory(categoryChange.selectability);
         set.categoryId = categoryChange.id;
       }
-      if (!isOpen) {
+      if (!afterOpen) {
         if (body.title !== undefined) set.title = body.title;
         // The rule items the body sends, as `items` holds them; the sources are written below.
         const columns = ruleItemColumns(items);
@@ -875,66 +890,22 @@ export class MarketAdminService {
         payload: { before: beforeSnapshot, after: afterSnapshot },
         createdAt: now,
       });
-      // Gated twice, so a no-op PATCH costs no viewer a request. Of the two statuses an edit
-      // reaches, only OPEN has viewers — a draft is on no public route — and only a row that
+      // Gated twice, so a no-op PATCH costs no viewer a request. Of the statuses an edit reaches,
+      // OPEN and PAUSED have viewers — a draft is on no public route — and only a row that
       // actually MOVED leaves one holding something stale. The gate is the AUDIT projection
       // rather than "the body was non-empty": `snapshot` carries every column a PATCH can reach
       // and not `updatedAt`, so resaving identical text differs nowhere, and the gate stays exact
       // when the next editable column is added.
       return {
         market: await this.toAdminMarket(tx, row, tags, sources),
-        moved: isOpen && JSON.stringify(beforeSnapshot) !== JSON.stringify(afterSnapshot),
+        moved: afterOpen && JSON.stringify(beforeSnapshot) !== JSON.stringify(afterSnapshot),
       };
     });
-    // Outside the transaction, exactly as open/close/resolve publish: a subscriber answers
+    // Outside the transaction, exactly as the transitions publish: a subscriber answers
     // `market:status` with a REFETCH, and one issued before COMMIT would read the row this
     // transaction has not written yet. No job moves: a draft has none, and an open market's
     // close moves by a supplement alone (MarketSupplementService).
     if (moved) await this.publishStatus(market);
-    return market;
-  }
-
-  /**
-   * open → closed by one admin (the manual form of the M5 close job), kept until #114 replaces
-   * it with an early close from PAUSED that another admin approves. Anything else — PAUSED
-   * included — is MARKET_NOT_OPEN. The delayed close job registered for `closeAt` (at the
-   * approval, #21) is cancelled after COMMIT; were it left, the worker would find a closed market
-   * and skip it, so the cancel is hygiene, not safety.
-   */
-  async close(adminId: string, id: string): Promise<AdminMarket> {
-    const { market, closeAt } = await this.db.transaction(async (tx) => {
-      await lockMarket(tx, id);
-      const current = await lockedMarketRow(tx, id);
-      if (current.status !== 'open') {
-        throw new AppError('MARKET_NOT_OPEN', { message: `Market is ${current.status}` });
-      }
-      // The database clock after the market lock (clock.ts): a PATCH or the worker's close job
-      // may have committed while this transaction queued, and every row it writes must sort
-      // after it.
-      const now = await clockTimestamp(tx);
-      const tags = await marketTagNames(tx, id);
-      const sources = await readMarketSources(tx, id);
-      const row = await this.transition(tx, current, {
-        to: 'closed',
-        type: 'closed',
-        actorId: adminId,
-        payload: { closedAt: now.toISOString() },
-        at: now,
-      });
-      await tx.insert(schema.adminActions).values({
-        adminId,
-        type: 'market_close',
-        targetType: 'market',
-        targetId: current.id,
-        payload: { before: snapshot(current, tags, sources), after: snapshot(row, tags, sources) },
-        createdAt: now,
-      });
-      return {
-        market: await this.toAdminMarket(tx, row, tags, sources),
-        closeAt: current.closeAt,
-      };
-    });
-    await Promise.all([this.publishStatus(market), this.jobs.cancelClose(market.id, closeAt)]);
     return market;
   }
 
@@ -1215,8 +1186,8 @@ export class MarketAdminService {
    * (#21, ADR-0100). After COMMIT, when it left SCHEDULED, `market:status` with `draft` — a
    * viewer's detail refetches and finds the market gone (404), and a list drops it on its next
    * read — and the approval's jobs cancelled: `market.open` at the scheduled open and
-   * `market.close` at the close, which the 되돌리기 leaves as they were. Hygiene, as `close`'s
-   * cancel: either job finds a draft under the market lock and skips it.
+   * `market.close` at the close, which the 되돌리기 leaves as they were. Hygiene, as an early close's
+   * cancel (MarketPauseService): either job finds a draft under the market lock and skips it.
    */
   async revert(
     adminId: string,
@@ -1423,7 +1394,8 @@ export class MarketAdminService {
     // submission committing between two reads cannot pair the old content with the new request —
     // the `requestId` a 승인 names would then approve what the reviewer never saw. So do the rule
     // versions and the waiting supplement (#80): an approval between the reads would otherwise
-    // show the new text beside the old history and request.
+    // show the new text beside the old history and request — and the pause and its waiting next
+    // path (#114), which an approval moves with the status.
     return this.db.transaction(
       async (tx) => {
         const [row] = await tx
@@ -1516,10 +1488,11 @@ export class MarketAdminService {
    * the market is held to (`leadCloseGap`, which it reports too), the review (#78,
    * `readMarketReview`: its request, creator, editors, same-condition markets and 검수 기록), and
    * the rule versions with who asked for and made each and the supplement requests (#80,
-   * `readAdminRuleVersions`, `readMarketSupplement`: one statement each). Reads through
-   * `executor` so a transition returns the state it just committed; `tags` are the market's names
-   * in order (`marketTagNames`) and `sources` its sources (`readMarketSources`), which every
-   * caller holds already. MarketSupplementService's writes answer with it too.
+   * `readAdminRuleVersions`, `readMarketSupplement`: one statement each), and the pauses with the
+   * next-path requests (#114, `readMarketPause`: one statement each). Reads through `executor` so a
+   * transition returns the state it just committed; `tags` are the market's names in order
+   * (`marketTagNames`) and `sources` its sources (`readMarketSources`), which every caller holds
+   * already. MarketSupplementService's and MarketPauseService's writes answer with it too.
    *
    * The category's selectability is read in the same statement as its name and WITHOUT the
    * FOR SHARE locks of `readCategorySelectability`: the detail is also read on the pool (`get`),
@@ -1624,6 +1597,7 @@ export class MarketAdminService {
       leadCloseGapMinutes,
       review: await readMarketReview(executor, row),
       supplement: await readMarketSupplement(executor, row.id, ruleVersions),
+      pause: await readMarketPause(executor, row.id),
     };
   }
 
@@ -1632,10 +1606,12 @@ export class MarketAdminService {
    *
    * Sent by every transition that a member can see — to or from a public status: not a review's
    * submission, 반려 or 되돌리기 from REVIEW, which no member sees; an approval or a reschedule that
-   * opens the market sends one, the OPEN status with the `opened` event's key (#21) — and by an
-   * edit that moves an open market's category, tags or image, a SCHEDULED market's open-time change
-   * that leaves it SCHEDULED (#78) and a supplement's approval, which moves an open or paused
-   * market's rules to a new version (#80, MarketSupplementService), where the status is
+   * opens the market sends one, the OPEN status with the `opened` event's key (#21); a pause, and
+   * the approval of its next path — the OPEN status of a resume, which goes back in rank, or the
+   * CLOSED of an early close (#114, MarketPauseService) — and by an edit that moves an open or
+   * paused market's category, tags or image, a SCHEDULED market's open-time change that leaves it
+   * SCHEDULED (#78) and a supplement's approval, which moves an open or paused market's rules to a
+   * new version (#80, MarketSupplementService), where the status is
    * deliberately UNCHANGED. That is not a misuse of the event but the cheapest correct delivery:
    * the web answers every `market:status` by restarting `['market', id]` (realtime-provider.tsx)
    * while `applyStatus` drops an event that does not SUPERSEDE what it holds (market-live.ts) —

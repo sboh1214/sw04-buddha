@@ -84,6 +84,16 @@ export type MarketSupplementPending = components['schemas']['MarketSupplementPen
 export type MarketSupplementLogEntry = components['schemas']['MarketSupplementLogEntry'];
 export type AdminMarketSupplementItem = components['schemas']['AdminMarketSupplementItem'];
 export type MarketSupplementChanges = components['schemas']['MarketSupplementChanges'];
+/**
+ * 거래 일시 중단·재개·조기 마감 (#114, ADR-0102): `AdminMarket.pause` — every pause, the next-path
+ * request waiting on the market and one entry of their log — one pause, and a row of the 일시 중단
+ * 결정 대기 queue (`GET /admin/market-pause-decisions`).
+ */
+export type AdminMarketPauseState = components['schemas']['AdminMarketPauseState'];
+export type AdminMarketPause = components['schemas']['AdminMarketPause'];
+export type MarketPauseDecisionPending = components['schemas']['MarketPauseDecisionPending'];
+export type MarketPauseDecisionLogEntry = components['schemas']['MarketPauseDecisionLogEntry'];
+export type AdminMarketPauseDecisionItem = components['schemas']['AdminMarketPauseDecisionItem'];
 /** One row of `AdminMarket.settlementSteps` (ADR-0046): a judged market's settlement step. */
 export type AdminSettlementStep = components['schemas']['AdminSettlementStep'];
 export type MarketEvent = components['schemas']['MarketEvent'];

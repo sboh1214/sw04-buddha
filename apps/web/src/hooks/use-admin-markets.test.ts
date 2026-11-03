@@ -24,10 +24,12 @@ import { relatedSearchSection } from '@/lib/related-markets';
 import { relatedMarketsInfiniteQueryOptions } from './use-markets';
 import {
   ADMIN_MARKETS_KEY,
+  ADMIN_MARKET_PAUSE_DECISIONS_KEY,
   ADMIN_MARKET_REVIEWS_KEY,
   ADMIN_MARKET_SUPPLEMENTS_KEY,
   ADMIN_RELATED_MARKETS_KEY,
   adminMarketKey,
+  adminMarketPauseDecisionsQueryOptions,
   adminMarketReviewsQueryOptions,
   adminMarketSupplementsQueryOptions,
   adminMarketQueryOptions,
@@ -85,6 +87,7 @@ const draft: AdminMarket = {
   ruleVersion: null,
   ruleVersions: [],
   supplement: { pending: null, log: [] },
+  pause: { history: [], pending: null, log: [] },
   missingOpenItems: [],
   leadCloseGapMinutes: null,
   // Never submitted (#78): no request, no editor, no record.
@@ -708,6 +711,57 @@ describe('the 규칙 보충 대기 queue (#80, ADR-0101)', () => {
       await applyMarket(queryClient, ID, { ...draft, status: 'open' });
       expect(queryClient.getQueryState(ADMIN_MARKET_SUPPLEMENTS_KEY)?.isInvalidated).toBe(true);
       expect(queryClient.getQueryData(ADMIN_MARKET_SUPPLEMENTS_KEY)).toEqual({
+        pages: [],
+        pageParams: [],
+      });
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+});
+
+describe('the 일시 중단 결정 대기 queue (#114, ADR-0102)', () => {
+  it('asks `GET /admin/market-pause-decisions` a page per cursor, under the private admin root', async () => {
+    const get = vi.spyOn(api, 'GET').mockResolvedValue({
+      data: { data: [], meta: { nextCursor: 'c2' } },
+      response: new Response(null, { status: 200 }),
+    } as never);
+    try {
+      const options = adminMarketPauseDecisionsQueryOptions();
+      expect(options.queryKey).toEqual(['admin', 'market-pause-decisions']);
+      expect(await options.queryFn({ pageParam: undefined })).toEqual({
+        items: [],
+        nextCursor: 'c2',
+      });
+      expect(get).toHaveBeenLastCalledWith('/api/v1/admin/market-pause-decisions', {
+        params: { query: {} },
+      });
+      await options.queryFn({ pageParam: 'c2' });
+      expect(get).toHaveBeenLastCalledWith('/api/v1/admin/market-pause-decisions', {
+        params: { query: { cursor: 'c2' } },
+      });
+      expect(options.getNextPageParam({ items: [], nextCursor: null })).toBeUndefined();
+      // Its own root segment: neither a status filter of the admin list nor another queue.
+      for (const other of [
+        ADMIN_MARKETS_KEY,
+        ADMIN_MARKET_REVIEWS_KEY,
+        ADMIN_MARKET_SUPPLEMENTS_KEY,
+      ]) {
+        expect(partialMatchKey(ADMIN_MARKET_PAUSE_DECISIONS_KEY, other)).toBe(false);
+      }
+    } finally {
+      get.mockRestore();
+    }
+  });
+
+  it('is asked again by every admin write to a market: a request adds a row, a decision takes one', async () => {
+    const { queryClient, unsubscribe } = await loadedDetail();
+    try {
+      queryClient.setQueryData(ADMIN_MARKET_PAUSE_DECISIONS_KEY, { pages: [], pageParams: [] });
+      await applyMarket(queryClient, ID, { ...draft, status: 'paused' });
+      expect(queryClient.getQueryState(ADMIN_MARKET_PAUSE_DECISIONS_KEY)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryData(ADMIN_MARKET_PAUSE_DECISIONS_KEY)).toEqual({
         pages: [],
         pageParams: [],
       });

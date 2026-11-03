@@ -20,6 +20,7 @@ import { commentLikes, postLikes } from './likes.js';
 import { linkFlags } from './link-review.js';
 import { marketEvents } from './market-events.js';
 import { marketLinks } from './market-links.js';
+import { marketPauses } from './market-pauses.js';
 import { marketProposals } from './market-proposals.js';
 import { marketRuleVersions } from './market-rule-versions.js';
 import { marketSearches } from './market-searches.js';
@@ -167,6 +168,8 @@ export const marketsRelations = relations(markets, ({ one, many }) => ({
   sources: many(marketSources),
   // 규칙 버전 (#80): v1 from the open and one per approved supplement, `version` the order.
   ruleVersions: many(marketRuleVersions),
+  // 거래 일시 중단 (#114): every pause, `paused_at` the order; at most one lasts.
+  pauses: many(marketPauses),
   posts: many(posts),
   // 시장 제안 (#77): the proposals adopted into this market, and the ones rejected as its
   // duplicates. Admin reads only: a market never shows who proposed it.
@@ -372,6 +375,38 @@ export const marketRuleVersionsRelations = relations(marketRuleVersions, ({ one 
   }),
 }));
 
+// Two references to `user` (who paused, who approved the end) and two to `market_events` (the
+// pause's event and the end's), so each end names its own (as `approval_requester` below).
+export const marketPausesRelations = relations(marketPauses, ({ one }) => ({
+  market: one(markets, { fields: [marketPauses.marketId], references: [markets.id] }),
+  pausedByUser: one(user, {
+    fields: [marketPauses.pausedBy],
+    references: [user.id],
+    relationName: 'market_pause_paused_by',
+  }),
+  pauseEvent: one(marketEvents, {
+    fields: [marketPauses.pauseEventId],
+    references: [marketEvents.id],
+    relationName: 'market_pause_event',
+  }),
+  /** The approver of a resume or an early close; none for the worker's close at `close_at`. */
+  endedByUser: one(user, {
+    fields: [marketPauses.endedBy],
+    references: [user.id],
+    relationName: 'market_pause_ended_by',
+  }),
+  endEvent: one(marketEvents, {
+    fields: [marketPauses.endEventId],
+    references: [marketEvents.id],
+    relationName: 'market_pause_end_event',
+  }),
+  /** The approved `market_pause_decision` request a resume or an early close came in by. */
+  endApproval: one(approvalRequests, {
+    fields: [marketPauses.endApprovalId],
+    references: [approvalRequests.id],
+  }),
+}));
+
 export const themeNoticesRelations = relations(themeNotices, ({ one }) => ({
   theme: one(themes, { fields: [themeNotices.themeId], references: [themes.id] }),
   creator: one(user, { fields: [themeNotices.createdBy], references: [user.id] }),
@@ -456,6 +491,8 @@ export const userRelations = relations(user, ({ one, many }) => ({
   approvalDecisions: many(approvalRequests, { relationName: 'approval_decider' }),
   ruleVersionRequests: many(marketRuleVersions, { relationName: 'rule_version_requester' }),
   ruleVersionsMade: many(marketRuleVersions, { relationName: 'rule_version_creator' }),
+  marketPauses: many(marketPauses, { relationName: 'market_pause_paused_by' }),
+  marketPauseEnds: many(marketPauses, { relationName: 'market_pause_ended_by' }),
 }));
 
 export const sessionRelations = relations(session, ({ one }) => ({

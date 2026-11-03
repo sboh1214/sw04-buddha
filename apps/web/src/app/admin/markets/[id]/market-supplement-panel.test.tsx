@@ -100,6 +100,7 @@ const open: AdminMarket = {
   ruleVersion: 1,
   ruleVersions: [v1],
   supplement: { pending: null, log: [] },
+  pause: { history: [], pending: null, log: [] },
 };
 
 const pending: MarketSupplementPending = {

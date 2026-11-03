@@ -12,8 +12,8 @@
 --                   market_watch_events, retention_purges, tags, market_rule_versions:
 --                   INSERT/SELECT only;
 --                   release_settings, approval_requests, start_grants, start_grant_numbers,
---                   themes, theme_notices: no DELETE — approval_requests' retention goes
---                   through a SECURITY DEFINER function, 0044; market_searches,
+--                   themes, theme_notices, market_pauses: no DELETE — approval_requests'
+--                   retention goes through a SECURITY DEFINER function, 0044; market_searches,
 --                   phone_verification_refused_sends, consent_records, post_revisions,
 --                   post_comment_revisions, post_likes, comment_likes, notice_revisions,
 --                   profile_item_removals, restriction_end_changes, write_limit_events,
@@ -21,7 +21,7 @@
 --                   column; post_comment_counts: SELECT only, written by its trigger) are
 --                   applied later by migrations with REVOKE
 --                   (0001, 0015, 0020, 0021, 0023, 0026, 0030, 0031, 0032, 0033, 0034, 0035,
---                   0036, 0039, 0040, 0041, 0044, 0045, 0049, 0053), see bottom.
+--                   0036, 0039, 0040, 0041, 0044, 0045, 0049, 0053, 0054), see bottom.
 
 CREATE ROLE buddha_migrate LOGIN PASSWORD 'buddha';
 CREATE ROLE buddha_app LOGIN PASSWORD 'buddha';
@@ -63,6 +63,8 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO buddha_app;
 -- 0040 (restriction_end_changes: UPDATE), 0041 (write_limit_events, link_uses, link_flags:
 -- UPDATE — then GRANT UPDATE (review_action_id) ON link_flags, an operator's mark '확인함'),
 -- 0044 (retention_purges: UPDATE, DELETE), 0045 (themes, theme_notices: DELETE), 0049 (tags:
--- UPDATE, DELETE — a tag is never renamed or deleted, #17) and 0053 (market_rule_versions:
--- UPDATE, DELETE — a rule version is a permanent fact, #80; a trigger refuses both to every role).
+-- UPDATE, DELETE — a tag is never renamed or deleted, #17), 0053 (market_rule_versions: UPDATE,
+-- DELETE — a rule version is a permanent fact, #80; a trigger refuses both to every role) and 0054
+-- (market_pauses: DELETE — a pause is a permanent fact, #114; a trigger refuses it to every role
+-- and lets an UPDATE only end a lasting pause, once).
 -- Default privileges are applied at CREATE time, so a REVOKE afterwards sticks.

@@ -255,7 +255,8 @@ export interface StatusNotice {
 /**
  * What a status other than 거래 중 leaves a reader able to do (PLAN 11.3), one notice per public
  * status (ADR-0093 decision 1, item 12), each saying only what is so in that status — nothing
- * about what a later issue brings (a pause's reason #114, the dispute #175). 개장 예정 promises no
+ * about what a later issue brings (a pause's reason and times #24 — #114 keeps them admin-only —,
+ * the dispute #175). 개장 예정 promises no
  * open even since the scheduled open opens it (#21, ADR-0100): the time can move, and a close
  * passed first keeps it shut. `open`, `draft` and `review` are absent on purpose: an open market's
  * state is its countdown, and a draft or a market in review never reaches the detail route — the

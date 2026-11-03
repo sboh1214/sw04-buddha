@@ -896,6 +896,7 @@ const market: AdminMarket = {
   ruleVersion: null,
   ruleVersions: [],
   supplement: { pending: null, log: [] },
+  pause: { history: [], pending: null, log: [] },
   missingOpenItems: [],
   leadCloseGapMinutes: null,
   // Never submitted (#78): no request, no editor, no record.

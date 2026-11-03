@@ -200,9 +200,9 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
 
   it('lists a market past its close time until someone closes it (A-M3-31)', async () => {
     // The list filters on status alone, so a market whose close time has passed keeps its
-    // `open` status until the worker's close job (or an admin) closes it, and it stays listed,
-    // first under `closing`. If a later milestone hides it here, this is the assertion that says
-    // so out loud.
+    // `open` status until the worker's close job (or its per-minute scan) closes it — no admin
+    // can since #114 — and it stays listed, first under `closing`. If a later milestone hides it
+    // here, this is the assertion that says so out loud.
     const expired = await market({
       title: '마감 시각이 지난 시장',
       closeAt: new Date(Date.now() - 60_000),

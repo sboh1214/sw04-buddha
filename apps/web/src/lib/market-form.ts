@@ -376,9 +376,10 @@ const sourceNameField = z.string().trim().max(MARKET_SOURCE_MAX, copy.errMarketS
  * removes it), more than MARKET_FALLBACK_SOURCES_MAX fallbacks, or a switch condition with no
  * fallback to switch to (the fallback field clears it as the last one goes).
  *
- * `openMarket` is the edit form of an open market, which since #80 (ADR-0101; ADR-0093 decision 2
- * #172 item 14) saves only the category, the tags and the image — its version items change by a
- * supplement alone (`supplementFormSchema`), and their inputs are off. It mirrors the API's one
+ * `openMarket` is the edit form of an open market — or a paused one since #114 (ADR-0102:
+ * `editsAfterOpen`) — which since #80 (ADR-0101; ADR-0093 decision 2 #172 item 14) saves only the
+ * category, the tags and the image — its version items change by a supplement alone
+ * (`supplementFormSchema`), and their inputs are off. It mirrors the API's one
  * refusal left there: the tags may not be edited down to none (#17; the API names `tags`,
  * 'required while open'). Tags already missing in `original` block nothing: a market opened before
  * #17 has none, and its other fields must stay editable — the form sends no unchanged field, which

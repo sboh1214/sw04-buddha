@@ -64,7 +64,7 @@ import { RelatedMarketsService } from './related-markets.service.js';
  * of an unlink, whose DELETE has no body; assertExpectedAccount, ADR-0092): a mismatch with the
  * cookie is refused (403 FORBIDDEN naming the field) before anything is read, locked or written,
  * so a market is never created, edited, submitted, approved, rejected, sent back, rescheduled,
- * closed, judged or linked as an admin the user is not looking at. The services are handed the
+ * judged or linked as an admin the user is not looking at. The services are handed the
  * rest of the body: the account is never stored.
  *
  * 개설 검수 (#78, ADR-0099): submit (draft → review), approve (→ scheduled) and reject (→ draft) by
@@ -73,8 +73,11 @@ import { RelatedMarketsService } from './related-markets.service.js';
  * AdminMarketReviewsController's. No route opens a market directly (#21, ADR-0100): the worker
  * opens a SCHEDULED one at its scheduled open, and an approval or a reschedule that finds that
  * instant come opens it at once — the interim draft → open route is gone. After the open the
- * PATCH changes an open market's category, tags and image only: its rule version's items change
- * by a supplement (#80, ADR-0101, AdminMarketSupplementsController).
+ * PATCH changes an open or paused market's category, tags and image only: its rule version's items
+ * change by a supplement (#80, ADR-0101, AdminMarketSupplementsController). No route closes a
+ * market directly either (#114, ADR-0102): the worker closes it at its close, and an early close is
+ * a paused market's next path another admin approves (AdminMarketPausesController) — the interim
+ * one-admin `POST …/close` is gone.
  */
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -215,25 +218,25 @@ export class AdminMarketsController {
   @ApiOperation({
     operationId: 'adminUpdateMarket',
     summary:
-      'Edit a draft (any field) or an open market (its category, tags and image only: slug ' +
-      'refused naming the field, no tags refused naming tags, and its title, rule items and ' +
-      'times — its rule version’s items — change by a supplement alone, each one changed ' +
-      'refused naming it); tags and fallbackSources replace the whole ordered list; other ' +
-      'statuses refuse naming status — review and scheduled are locked (send back to a draft to ' +
-      'edit; reschedule moves a scheduled open)',
+      'Edit a draft (any field) or an open or paused market (its category, tags and image ' +
+      'only: slug refused naming the field, no tags refused naming tags, and its title, rule ' +
+      'items and times — its rule version’s items — change by a supplement alone, each one ' +
+      'changed refused naming it); tags and fallbackSources replace the whole ordered list; ' +
+      'other statuses refuse naming status — review and scheduled are locked (send back to a ' +
+      'draft to edit; reschedule moves a scheduled open)',
   })
   @ApiData(adminMarketSchema)
   // VALIDATION_ERROR names `categoryId` as on create unless it is the market's current one (no
   // change, not checked: a market keeps a category hidden after it was filed), and
   // `fallbackCondition` when a draft's edit of the sources or the condition leaves a switch
-  // condition with no fallback source. An open market's edit that changes a version item (#80:
-  // the title, a rule item or a time) names each, in RULE_VERSION_ITEMS order, 'supplement only
-  // while open' — the stored value again (an instant however spelled, a text however padded) is
-  // no change; `POST /admin/markets/{id}/supplements` changes them. A draft's times (#22):
-  // `closeAt` 'must be in the future'; a result out of order names both ends of each broken
-  // rule, the ends the body sent first; the lead close is never refused on a draft. Order:
-  // status, slug, a version item on an open market, tags, fallbackCondition, category, closeAt
-  // in the future, the order.
+  // condition with no fallback source. An open or paused market's edit that changes a version
+  // item (#80: the title, a rule item or a time) names each, in RULE_VERSION_ITEMS order,
+  // 'supplement only while open' — the stored value again (an instant however spelled, a text
+  // however padded) is no change; `POST /admin/markets/{id}/supplements` changes them. A draft's
+  // times (#22): `closeAt` 'must be in the future'; a result out of order names both ends of each
+  // broken rule, the ends the body sent first; the lead close is never refused on a draft. Order:
+  // status, slug, a version item after the open, tags, fallbackCondition, category, closeAt in
+  // the future, the order.
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminUpdateMarket(
     @CurrentUser() admin: SessionUser,
@@ -398,30 +401,6 @@ export class AdminMarketsController {
     const { expectedAccountId, ...reschedule } = body;
     assertExpectedAccount(admin.id, expectedAccountId);
     return this.markets.reschedule(admin.id, id, reschedule);
-  }
-
-  @Post(':id/close')
-  @HttpCode(200)
-  @ApiOperation({
-    operationId: 'adminCloseMarket',
-    summary: 'open → closed by one admin (interim); any other status is MARKET_NOT_OPEN',
-  })
-  @ApiData(adminMarketSchema)
-  @ApiErrors(
-    'UNAUTHENTICATED',
-    'FORBIDDEN',
-    'ONBOARDING_REQUIRED',
-    'NOT_FOUND',
-    'VALIDATION_ERROR',
-    'MARKET_NOT_OPEN',
-  )
-  adminCloseMarket(
-    @CurrentUser() admin: SessionUser,
-    @Param('id', { schema: uuidParamSchema }) id: string,
-    @Body({ schema: expectedAccountBodySchema }) body: ExpectedAccountBody,
-  ): Promise<AdminMarket> {
-    assertExpectedAccount(admin.id, body.expectedAccountId);
-    return this.markets.close(admin.id, id);
   }
 
   @Post(':id/resolve')

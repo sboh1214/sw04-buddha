@@ -306,7 +306,7 @@ test.describe('탭의 계정이 바뀌는 틈의 관리자 쓰기 (ADR-0092)', (
     }
   });
 
-  test('시장 상세의 마감은 확인 창에서 그 화면의 관리자를 대어 거절되고 창이 닫히며, 시장은 열린 그대로다', async ({
+  test('시장 상세의 거래 일시 중단은 확인 창에서 그 화면의 관리자를 대어 거절되고 창이 닫히며, 시장은 거래 중 그대로다', async ({
     browser,
     page,
     admin,
@@ -318,23 +318,43 @@ test.describe('탭의 계정이 바뀌는 틈의 관리자 쓰기 (ADR-0092)', (
       page,
       secondAdmin,
       `/admin/markets/${market.id}`,
-      () => expect(page.getByTestId('market-close')).toBeVisible(),
+      () => expect(page.getByTestId('market-pause-start')).toBeEnabled(),
     );
     try {
+      // 거래 일시 중단, one admin's at once since #114 (ADR-0102), in place of the interim 마감 —
+      // an early end is a pause and another admin's approved 조기 마감 now.
+      const note = `앞 관리자가 적은 일시 중단 설명 ${market.tag}`;
       const writes = adminWrites(page);
-      await page.getByTestId('market-close').click();
-      const path = `/api/v1/admin/markets/${market.id}/close`;
+      await page.getByTestId('market-pause-start').click();
+      const dialog = page.getByTestId('market-pause-dialog');
+      await dialog.getByTestId('market-pause-reason-ledger_failure').click();
+      await dialog.getByTestId('market-pause-note').fill(note);
+      const path = `/api/v1/admin/markets/${market.id}/pause`;
       const answered = answerOf(page, 'POST', path);
-      await page.getByTestId('market-close-confirm').click();
+      await dialog.getByTestId('market-pause-dialog-confirm').click();
       expect(await answered).toBe(403);
       await expect(sessionChangedToast(page)).toBeVisible();
-      await expect(page.getByTestId('market-close-confirm')).toHaveCount(0);
+      await expect(dialog).toHaveCount(0);
       expect(writes).toEqual([
-        { method: 'POST', path, query: '', body: { expectedAccountId: a.id } },
+        {
+          method: 'POST',
+          path,
+          query: '',
+          body: {
+            reason: 'ledger_failure',
+            note,
+            resultPublishedAt: null,
+            expectedAccountId: a.id,
+          },
+        },
       ]);
-      expect(
-        (await dataOf<AdminMarket>(await admin.get(`/api/v1/admin/markets/${market.id}`))).status,
-      ).toBe('open');
+      // Nobody paused it: still open, with no pause and no `paused` event.
+      const after = await dataOf<AdminMarket>(
+        await admin.get(`/api/v1/admin/markets/${market.id}`),
+      );
+      expect(after.status).toBe('open');
+      expect(after.pause.history).toEqual([]);
+      expect(after.events.map((event) => event.type)).not.toContain('paused');
     } finally {
       await close();
     }

@@ -133,7 +133,6 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
       ...overrides,
     });
   };
-  const close = (id: string) => post(`/api/v1/admin/markets/${id}/close`);
   /** Another onboarded admin, past the guard's role cache. */
   async function anotherAdmin(): Promise<TestUser> {
     const other = await signUpTestUser(t);
@@ -165,6 +164,35 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
     expect(requested.statusCode).toBe(200);
     const requestId = detail(requested).supplement.pending!.requestId;
     const approved = await post(`${url}/${requestId}/approve`, { reason: '뜻이 그대로다' });
+    expect(approved.statusCode).toBe(200);
+    return approved;
+  }
+  /**
+   * 조기 마감 through the routes (#114, ADR-0102), the way a market reaches CLOSED before its close
+   * now that the one-admin close is gone: the test admin pauses it (실질 기준 변경) and asks for the
+   * early close (reviewed 판정 가능, Q2), and another admin approves it. Answers the approval.
+   */
+  async function closeEarly(marketId: string) {
+    const approver = await anotherAdmin();
+    const url = `/api/v1/admin/markets/${marketId}`;
+    const paused = await post(`${url}/pause`, {
+      reason: 'basis_change',
+      note: '사건 일정이 앞당겨졌다.',
+    });
+    expect(paused.statusCode).toBe(200);
+    const requested = await post(`${url}/pause-decisions`, {
+      pauseId: detail(paused).pause.history[0]!.id,
+      path: 'early_close',
+      reviewResult: 'judgeable',
+      reason: '앞당겨진 일정에 맞춰 마감한다.',
+    });
+    expect(requested.statusCode).toBe(200);
+    const requestId = detail(requested).pause.pending!.requestId;
+    const approved = await post(
+      `${url}/pause-decisions/${requestId}/approve`,
+      { reason: '조기 마감이 맞다.' },
+      approver,
+    );
     expect(approved.statusCode).toBe(200);
     return approved;
   }
@@ -481,7 +509,7 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
   });
 
   // --- close job --------------------------------------------------------------------------
-  it('moves the close job with closeAt, and drops it on close', async () => {
+  it('moves the close job with closeAt, and drops it on an early close', async () => {
     // PLAN 5.5: delayed `market.close` for `close_at`, registered at the approval (#21, ADR-0100:
     // admin-markets-review.controller.test.ts); registered here as the approval left it.
     const { market: row } = await createOpenedMarket(t.db, {
@@ -522,8 +550,30 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
     ).toBe(200);
     expect(await jobIds()).toEqual([secondId]);
 
-    // The manual close is the job's job done by hand: the registration is dropped.
-    expect((await close(row.id)).statusCode).toBe(200);
+    // A pause leaves it (the close still comes on schedule, #173 item 3); an approved early close
+    // is the job's job done before its time (#114): the registration is dropped.
+    const paused = await post(`/api/v1/admin/markets/${row.id}/pause`, {
+      reason: 'ledger_failure',
+      note: '원장 장애로 멈춘다.',
+    });
+    expect(paused.statusCode).toBe(200);
+    expect(await jobIds()).toEqual([secondId]);
+    const approver = await anotherAdmin();
+    const requested = await post(`/api/v1/admin/markets/${row.id}/pause-decisions`, {
+      pauseId: detail(paused).pause.history[0]!.id,
+      path: 'early_close',
+      reason: '복구가 마감까지 끝나지 않는다.',
+    });
+    const requestId = detail(requested).pause.pending!.requestId;
+    expect(
+      (
+        await post(
+          `/api/v1/admin/markets/${row.id}/pause-decisions/${requestId}/approve`,
+          { reason: '조기 마감이 맞다.' },
+          approver,
+        )
+      ).statusCode,
+    ).toBe(200);
     expect(await queue.getJob(secondId)).toBeUndefined();
     expect(await jobIds()).toEqual([]);
   });
@@ -546,12 +596,13 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
     let closed!: AdminMarket;
     try {
       // A rule supplement is not a transition (#80): its approval republishes the UNCHANGED key
-      // (A-M4-36), which is what lets a client drop the repeat and still refetch the row.
+      // (A-M4-36), which is what lets a client drop the repeat and still refetch the row. The
+      // early close (#114) is two transitions, the pause and the approved close, each its key.
       edited = detail(await supplement(opened.id, { yesCondition: '고친 YES 조건' }));
-      closed = detail(await close(opened.id));
-      await waitForMessages(received, 2, 'market:status of supplement and close');
+      closed = detail(await closeEarly(opened.id));
+      await waitForMessages(received, 3, 'market:status of supplement, pause and early close');
       await sleep(100);
-      expect(received).toHaveLength(2);
+      expect(received).toHaveLength(3);
     } finally {
       await quit();
     }
@@ -562,9 +613,10 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
       'approved',
       'opened',
       'rules_supplemented',
+      'paused',
       'closed',
     ]);
-    const [, , openedEvent, rulesEvent, closedEvent] = events;
+    const [, , openedEvent, rulesEvent, pausedEvent, closedEvent] = events;
     expect(opened.statusEventId).toBe(openedEvent!.id);
     expect(edited.statusEventId).toBe(String(openedEvent!.id));
     expect(edited.statusEventId).not.toBe(String(rulesEvent!.id));
@@ -572,6 +624,7 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
     expect(BigInt(closed.statusEventId!)).toBeGreaterThan(BigInt(edited.statusEventId!));
     expect(received.map((event) => [event.status, event.statusEventId])).toEqual([
       ['open', String(openedEvent!.id)],
+      ['paused', String(pausedEvent!.id)],
       ['closed', String(closedEvent!.id)],
     ]);
 

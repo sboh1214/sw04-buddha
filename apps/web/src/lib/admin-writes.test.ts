@@ -25,9 +25,9 @@ const SCREENS: Readonly<Record<string, readonly string[]>> = {
     '.mutateAsync({ ...toCreateMarketBody(values), expectedAccountId: operatorId })',
   ],
   '../app/admin/markets/[id]/admin-market-detail.tsx': [
-    // 마감 (the interim 공개 went with #21, ADR-0100: a market opens from 개장 예정 by itself, or by
-    // the approval or the reschedule below)
-    "await api.POST('/api/v1/admin/markets/{id}/close', {\n          params: { path: { id: market.id } },\n          body: { expectedAccountId },",
+    // The interim 공개 went with #21 (ADR-0100: a market opens from 개장 예정 by itself, or by the
+    // approval or the reschedule below) and the one-admin 마감 with #114 (ADR-0102: a pause and
+    // another admin's approved early close, below)
     // 판정
     'body: toResolveMarketBody(values, by),',
     // 수정, at once and after the open market's confirmation
@@ -56,6 +56,15 @@ const SCREENS: Readonly<Record<string, readonly string[]>> = {
   '../app/admin/markets/[id]/market-supplement-dialogs.tsx': [
     'body: { reason, expectedAccountId: by },',
     'body: { rejectReason, reason, expectedAccountId: by },',
+    'body: { expectedAccountId: by },',
+  ],
+  // 거래 일시 중단 (#114, ADR-0102), new since and written the same way: 거래 일시 중단 and 재개·조기
+  // 마감 요청 (naming the pause its dialog opened on) from their dialogs, then 승인 · 반려 · 철회
+  // (each naming the request in its path)
+  '../app/admin/markets/[id]/market-pause-dialogs.tsx': [
+    'body: { reason, note, resultPublishedAt, expectedAccountId: by },',
+    'body: { pauseId, path, reviewResult, reason, expectedAccountId: by },',
+    'body: { reason, expectedAccountId: by },',
     'body: { expectedAccountId: by },',
   ],
   '../app/admin/themes/admin-themes.tsx': [
@@ -150,9 +159,9 @@ describe('the admin the admin writes name (ADR-0092)', () => {
       '../app/admin/moderation/link-flags/admin-link-flags.tsx': 2,
       // 만들기, and the form's fields
       '../app/admin/markets/admin-markets.tsx': 2,
-      // 마감's confirm, 판정's confirm, 저장 and its confirm, 연결, 해제's confirm; the buttons
-      // opening 마감, 판정 and 해제, and the edit form's fields (공개 went with #21)
-      '../app/admin/markets/[id]/admin-market-detail.tsx': 10,
+      // 판정's confirm, 저장 and its confirm, 연결, 해제's confirm; the buttons opening 판정 and 해제,
+      // and the edit form's fields (공개 went with #21, 마감 with #114)
+      '../app/admin/markets/[id]/admin-market-detail.tsx': 8,
       // 검수 제출, and the buttons opening 승인, 반려, 예정 개장 시각 변경 and 초안으로 되돌리기 (#78)
       '../app/admin/markets/[id]/market-review-panel.tsx': 5,
       // the confirms of 승인, 반려, 초안으로 되돌리기 and 예정 개장 시각 변경
@@ -161,6 +170,11 @@ describe('the admin the admin writes name (ADR-0092)', () => {
       '../app/admin/markets/[id]/market-supplement-panel.tsx': 6,
       // the confirms of 승인, 반려 and 철회 (#80)
       '../app/admin/markets/[id]/market-supplement-dialogs.tsx': 3,
+      // the buttons opening 거래 일시 중단 (and the 의미 변경 반려's offer of it), 재개·조기 마감 요청,
+      // 승인, 반려 and 철회 (#114)
+      '../app/admin/markets/[id]/market-pause-panel.tsx': 6,
+      // the confirms of 거래 일시 중단, 재개·조기 마감 요청, 승인, 반려 and 철회 (#114)
+      '../app/admin/markets/[id]/market-pause-dialogs.tsx': 5,
       // 만들기, and the form's fields
       '../app/admin/themes/admin-themes.tsx': 2,
       // 공개, 비공개의 confirm, 저장, 넣기, 빼기의 confirm, 공지 쓰기·고치기, 보이기, 숨기기의 confirm;
@@ -243,9 +257,9 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
    * each per area.
    */
   const HELD: Readonly<Record<string, readonly string[]>> = {
-    // 마감 and 판정 (with its result and note), and a related market's 해제
+    // 판정 (with its result and note; 마감 went with #114), and a related market's 해제
     '../app/admin/markets/[id]/admin-market-detail.tsx': [
-      "const [confirm, setConfirm] = useHeldForOperator<'close' | 'resolve'>();",
+      "const [confirm, setConfirm] = useHeldForOperator<'resolve'>();",
       'const [unlinking, setUnlinking] = useHeldForOperator<AdminRelatedMarket>();',
     ],
     // 개설 검수's four dialogs (#78), with what was checked, picked and typed in them
@@ -255,6 +269,11 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
     // 규칙 보충 (#80): the request form and the three dialogs, with what was typed and picked
     '../app/admin/markets/[id]/market-supplement-panel.tsx': [
       'const [action, setAction] = useHeldForOperator<SupplementAction>();',
+    ],
+    // 거래 일시 중단 (#114): its dialogs, with the reason, the note, the instant, the path and the
+    // review result picked and typed
+    '../app/admin/markets/[id]/market-pause-panel.tsx': [
+      'const [action, setAction] = useHeldForOperator<PauseAction>();',
     ],
     // 비공개로 돌리기, a market's 빼기, the notice opened for editing and a notice's 숨기기
     '../app/admin/themes/[id]/admin-theme-detail.tsx': [
@@ -355,7 +374,7 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
       expect(text.match(/= useHeldForOperator</g), file).toHaveLength(holds.length);
       // No dialog of these is opened in plain state any more.
       expect(text, file).not.toMatch(
-        /useState<(?:'close' \| 'resolve'|AdminRelatedMarket|AdminThemeMarket|AdminThemeNotice|ReleaseSetting|RefundAction) \| null>|const \[(?:confirming|marking), set\w+\] = useState\(false\)|const \[editing, setEditing\] = useState<string/,
+        /useState<(?:'close' \| 'resolve'|'resolve'|AdminRelatedMarket|PauseAction|AdminThemeMarket|AdminThemeNotice|ReleaseSetting|RefundAction) \| null>|const \[(?:confirming|marking), set\w+\] = useState\(false\)|const \[editing, setEditing\] = useState<string/,
       );
     }
     // The 판정 dialog is mounted only while held, so its result and note go with it.
@@ -372,6 +391,10 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
       "{action !== null && action !== 'request' && (\n        <SupplementDialog kind={action} market={market} onClose={close} />",
     );
     expect(supplement).toContain("action === 'request' ? (");
+    // And each pause dialog (#114).
+    expect(source('../app/admin/markets/[id]/market-pause-panel.tsx')).toContain(
+      '{action !== null && (\n        <PauseDialog kind={action} market={market} readAt={readAt} onClose={close} />',
+    );
     expect(source('../app/admin/settings/admin-release-settings.tsx')).toContain(
       '{editing !== null && <ChangeDialog item={editing} onClose={() => setEditing(null)} />}',
     );
@@ -412,7 +435,6 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
     // Nothing is held for nobody (`operatorHold`): a button pressed then would open nothing.
     const opens: Readonly<Record<string, readonly string[]>> = {
       '../app/admin/markets/[id]/admin-market-detail.tsx': [
-        "disabled={operatorId === undefined}\n          onClick={() => setConfirm('close')}",
         "disabled={operatorId === undefined}\n          onClick={() => setConfirm('resolve')}",
         'disabled={operatorId === undefined}\n                      onClick={() => setUnlinking(row)}',
       ],
@@ -451,6 +473,16 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
         "disabled={operatorId === undefined || requester !== false}\n          onClick={() => onOpen('reject')}",
         "disabled={operatorId === undefined}\n            onClick={() => onOpen('retract')}",
         '<SupplementPanelBody\n        market={market}\n        readAt={readAt}\n        operatorId={operatorId}\n        onOpen={setAction}',
+      ],
+      // The pause panel likewise (#114): 승인 and 반려 off for the requester, 철회 its alone.
+      '../app/admin/markets/[id]/market-pause-panel.tsx': [
+        "disabled={operatorId === undefined}\n          onClick={() => onOpen('offer')}",
+        "disabled={operatorId === undefined}\n      onClick={() => onOpen('pause')}",
+        "disabled={operatorId === undefined}\n        onClick={() => onOpen('request')}",
+        "disabled={operatorId === undefined || requester !== false || !approvable}\n          onClick={() => onOpen('approve')}",
+        "disabled={operatorId === undefined || requester !== false}\n          onClick={() => onOpen('reject')}",
+        "disabled={operatorId === undefined}\n            onClick={() => onOpen('retract')}",
+        '<PausePanelBody\n        market={market}\n        readAt={readAt}\n        operatorId={operatorId}\n        onOpen={setAction}',
       ],
     };
     for (const [file, buttons] of Object.entries(opens)) {

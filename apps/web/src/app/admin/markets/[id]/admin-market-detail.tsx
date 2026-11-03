@@ -65,12 +65,12 @@ import {
 } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
 import {
-  MARKET_EVENT_LABEL,
   MARKET_RESULT_LABEL,
   MARKET_STATUS_LABEL,
   MARKET_STATUS_PALETTE,
   canResolve,
   compactJson,
+  editsAfterOpen,
   formatBp,
   formatYesPrice,
   isAwaitingResolution,
@@ -78,6 +78,7 @@ import {
   isClosingSoon,
   isEditable,
   marketIdParam,
+  marketEventLabel,
   marketEventRows,
   marketFormError,
   openItemsNotice,
@@ -109,6 +110,7 @@ import {
 import { LONG_DELAY_SEPARATOR, longDelayText } from '@/lib/market-detail';
 import { timeZoneLabel } from '@/lib/time-zone';
 import { MarketFormFields } from '../market-form-fields';
+import { MarketPausePanel } from './market-pause-panel';
 import { MarketReviewPanel, SubmitReviewButton } from './market-review-panel';
 import { MarketSupplementPanel } from './market-supplement-panel';
 
@@ -208,6 +210,12 @@ export function AdminMarketDetail({ id }: { id: string }) {
           stale card in the page on every render. `readAt` is when this row was read: the
           close-passed warning judges the row read after the close, not a stale one (#21). */}
       <MarketReviewPanel key={`review-${data.id}`} market={data} readAt={market.dataUpdatedAt} />
+      {/* 거래 일시 중단 (#114, ADR-0102): keyed and prefixed as the review panel is — its dialogs
+          name the market and the request they were opened on. `readAt` judges the close: a pause
+          and a next path are refused once it has come, and the detail re-reads an OPEN or PAUSED
+          market at its close (`tradingMarketPollDelay`), so a request waiting turns moot on
+          screen. */}
+      <MarketPausePanel key={`pause-${data.id}`} market={data} readAt={market.dataUpdatedAt} />
       {/* 규칙 보충 (#80, ADR-0101): keyed and prefixed as the review panel is, for the same reasons —
           its form and dialogs name the market they were opened on. */}
       <MarketSupplementPanel
@@ -487,20 +495,21 @@ function SourceLine({ source }: { source: MarketSource }) {
 
 /**
  * 검수 제출 (#78, ADR-0099: `SubmitReviewButton`, the way a draft leaves for review and then, approved
- * by another admin, for 개장 예정), then 마감 / 판정 (PLAN 12, design 3.4, ADR-0046). There is no
- * 열기: a market opens only from 개장 예정, by itself at its scheduled open, or at once when its
- * approval or a reschedule finds that time come (#21, ADR-0100; ADR-0093 decision 1 #173 item 1,
- * decision 2 #172 item 6) — to open sooner an admin moves the scheduled open earlier (decision 3
- * '#21 앞당긴 개장'). There is no 무효: the admin void and its cost refund went with #125 (N03 §6);
- * VOID as a 판정 is #152's. Both are Dialogs; the 판정 form lives in its own component, mounted
- * only while its dialog is open, so every opening starts from an empty form.
- * A judged market offers none of these: the 판정 is final. Both are the interim actions #174 keeps
- * on the new statuses (ADR-0047 result 3, ADR-0093 result 2) — 마감 until #114, 판정 until #152 —
- * so a market in any other status (검수 중, 개장 예정, 거래 일시 중단, 잠정 결과, 지급 중, 취소, …)
- * offers none.
+ * by another admin, for 개장 예정), then 판정 (PLAN 12, design 3.4, ADR-0046). There is no 열기: a
+ * market opens only from 개장 예정, by itself at its scheduled open, or at once when its approval or a
+ * reschedule finds that time come (#21, ADR-0100; ADR-0093 decision 1 #173 item 1, decision 2 #172
+ * item 6) — to open sooner an admin moves the scheduled open earlier (decision 3 '#21 앞당긴 개장').
+ * There is no 마감: a market closes by itself at its close, or early once another admin approves a
+ * paused market's early close (#114, ADR-0102; ADR-0093 decision 1 #173 items 2·4, decision 2 #172
+ * item 14) — the 거래 일시 중단 panel below. There is no 무효: the admin void and its cost refund went
+ * with #125 (N03 §6); VOID as a 판정 is #152's. The 판정 is a Dialog whose form lives in its own
+ * component, mounted only while its dialog is open, so every opening starts from an empty form. A
+ * judged market offers none: the 판정 is final. It is the interim action #174 keeps on the new
+ * statuses (ADR-0047 result 3, ADR-0093 result 2) until #152, so a market in any status but 거래
+ * 마감 offers none.
  *
- * Each names the admin on screen (`useOperatorId`, ADR-0092), so the buttons that open the two
- * dialogs and their confirmations wait for `GET /me`; the cookie of another account is refused
+ * It names the admin on screen (`useOperatorId`, ADR-0092), so the button that opens the dialog and
+ * its confirmation wait for `GET /me`; the cookie of another account is refused
  * (`copy.sessionChanged`), the dialog closes and the session is asked again (`useSessionChanged`).
  * The open dialog is held for the admin who opened it (`useHeldForOperator`, ADR-0091 결정 3): once
  * `['me']` turns from A to B in place, before the session does (ADR-0090 결정 4-2), it closes with
@@ -508,52 +517,15 @@ function SourceLine({ source }: { source: MarketSource }) {
  * owner decision 2026-10-26 17:21 answer 1).
  */
 function TransitionButtons({ market }: { market: AdminMarket }) {
-  const apply = useApplyMarket(market.id);
   const operatorId = useOperatorId();
-  const sessionChanged = useSessionChanged();
-  const [confirm, setConfirm] = useHeldForOperator<'close' | 'resolve'>();
+  const [confirm, setConfirm] = useHeldForOperator<'resolve'>();
   const closeDialog = () => {
     setConfirm(null);
   };
 
-  const onError = (error: unknown) => {
-    if (sessionChanged(error)) setConfirm(null);
-    toaster.create({ type: 'error', title: transitionErrorMessage(error) });
-  };
-
-  const close = useMutation({
-    mutationFn: async (expectedAccountId: string) =>
-      unwrap(
-        await api.POST('/api/v1/admin/markets/{id}/close', {
-          params: { path: { id: market.id } },
-          body: { expectedAccountId },
-        }),
-      ).data,
-    // The answer is the market as the transition committed it (the same shape GET returns):
-    // it goes on the screen now, so a refetch that fails cannot leave the old status under a
-    // toast that says otherwise.
-    onSuccess: async (closed) => {
-      toaster.create({ type: 'success', title: copy.adminMarketClosed });
-      setConfirm(null);
-      await apply(closed);
-    },
-    onError,
-  });
-
   return (
     <HStack gap="2" flexWrap="wrap">
       <SubmitReviewButton market={market} />
-      {market.status === 'open' && (
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={operatorId === undefined}
-          onClick={() => setConfirm('close')}
-          data-testid="market-close"
-        >
-          {copy.adminMarketClose}
-        </Button>
-      )}
       {canResolve(market.status) && (
         <Button
           size="sm"
@@ -566,21 +538,6 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
       )}
 
       {confirm === 'resolve' && <ResolveDialog market={market} onClose={closeDialog} />}
-
-      <ConfirmDialog
-        testId="market-close"
-        open={confirm === 'close'}
-        onClose={closeDialog}
-        title={copy.adminMarketCloseTitle}
-        confirmLabel={copy.adminMarketClose}
-        loading={close.isPending}
-        confirmDisabled={operatorId === undefined}
-        onConfirm={() => {
-          if (operatorId !== undefined) close.mutate(operatorId);
-        }}
-      >
-        <Text>{copy.adminMarketCloseBody}</Text>
-      </ConfirmDialog>
     </HStack>
   );
 }
@@ -712,14 +669,15 @@ function ResolveDialog({ market, onClose }: { market: AdminMarket; onClose: () =
 /**
  * 수정 (design 3.4). The categories are only the select's options, so their load is gated
  * here (as 시장 만들기 does) and the rest of the page does not depend on it. Inputs follow the
- * status: every field while draft (the slug is chosen at creation only); on an open market the
- * category, the tags and the image, its version items — the question, the rule items and the
- * times — drawn but off with the note that they change by a supplement alone (#80, ADR-0101;
- * ADR-0093 decision 2 #172 item 14: the 규칙 보충 panel above), or, on one opened before #80 with no
- * rule version (ADR-0101 9-2), that they stay as they are to the close — it takes no supplement;
- * nothing otherwise — 검수 중 and 개장 예정 say why: the content locks at the submission and is
- * changed by sending it back to a draft (#78, #172 item 6 (a)). Saving an open market first shows
- * PLAN 12's "경고 후 허용" dialog. The body is the diff against the loaded values, so an untouched
+ * status: every field while draft (the slug is chosen at creation only); on a market OPEN or PAUSED
+ * (`editsAfterOpen`: 'after the open' takes a pause in, #114, ADR-0102; ADR-0093 decision 2 #172
+ * item 14) the category, the tags and the image, its version items — the question, the rule items
+ * and the times — drawn but off with the note that they change by a supplement alone (#80,
+ * ADR-0101: the 규칙 보충 panel above), or, on one opened before #80 with no rule version (ADR-0101
+ * 9-2), that they stay as they are to the close — it takes no supplement; nothing otherwise — 검수
+ * 중 and 개장 예정 say why: the content locks at the submission and is changed by sending it back to
+ * a draft (#78, #172 item 6 (a)). Saving such a market first shows PLAN 12's "경고 후 허용" dialog,
+ * in the words of its status. The body is the diff against the loaded values, so an untouched
  * field — a past close time on a draft included — is never sent.
  */
 function EditMarketCard({ market }: { market: AdminMarket }) {
@@ -741,7 +699,7 @@ function EditMarketCard({ market }: { market: AdminMarket }) {
                 : copy.adminMarketEditLocked}
             </Text>
           )}
-          {market.status === 'open' && (
+          {editsAfterOpen(market.status) && (
             <Text
               fontSize="sm"
               color="fg.muted"
@@ -793,12 +751,13 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
     () => (draft ? withJudgementTimeZonePrefilled(original) : original),
     [original, draft],
   );
-  // An open market saves its category, tags and image alone (#80, ADR-0101; #172 item 14): its
-  // version items are off here, and change by the 규칙 보충 panel's request and another admin's
-  // approval, where an emptied rule item (#23) and the close's rules (#22, owner answer 2026-10-31
-  // A2) are checked. It may not be edited down to no tags (#17): the API refuses it; one opened
-  // before #17 with none keeps its other fields editable (`marketFormSchema`).
-  const openMarket = market.status === 'open';
+  // A market OPEN or PAUSED saves its category, tags and image alone (#80, ADR-0101; #172 item 14;
+  // a paused one alike since #114, ADR-0102): its version items are off here, and change by the 규칙
+  // 보충 panel's request and another admin's approval, where an emptied rule item (#23) and the
+  // close's rules (#22, owner answer 2026-10-31 A2) are checked. It may not be edited down to no
+  // tags (#17): the API refuses it; one opened before #17 with none keeps its other fields editable
+  // (`marketFormSchema`).
+  const openMarket = editsAfterOpen(market.status);
   const gap = market.leadCloseGapMinutes;
   const schema = useMemo(() => marketFormSchema({ original, openMarket }), [original, openMarket]);
   // The open market's confirmation goes with the form, which EditMarketCard draws again for each
@@ -866,7 +825,7 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
       toaster.create({ type: 'info', title: copy.adminMarketNoChanges });
       return;
     }
-    if (market.status === 'open') {
+    if (openMarket) {
       setPending(body);
       return;
     }
@@ -912,7 +871,11 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
         testId="market-edit"
         open={pending !== null}
         onClose={() => setPending(null)}
-        title={copy.adminMarketEditOpenTitle}
+        title={
+          market.status === 'paused'
+            ? copy.adminMarketEditPausedTitle
+            : copy.adminMarketEditOpenTitle
+        }
         confirmLabel={copy.save}
         loading={update.isPending}
         confirmDisabled={operatorId === undefined}
@@ -922,7 +885,11 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
           }
         }}
       >
-        <Text>{copy.adminMarketEditOpenBody}</Text>
+        <Text>
+          {market.status === 'paused'
+            ? copy.adminMarketEditPausedBody
+            : copy.adminMarketEditOpenBody}
+        </Text>
       </ConfirmDialog>
     </>
   );
@@ -1387,7 +1354,7 @@ function EventLog({ market }: { market: AdminMarket }) {
             {market.events.map((event) => (
               <Stack key={event.id} gap="0.5" data-testid={`market-event-${event.id}`}>
                 <HStack gap="2" flexWrap="wrap">
-                  <Badge variant="subtle">{MARKET_EVENT_LABEL[event.type]}</Badge>
+                  <Badge variant="subtle">{marketEventLabel(event.type, event.payload)}</Badge>
                   <Text fontSize="xs" color="fg.muted" fontFamily="mono">
                     {event.actorId ?? copy.eventSystem}
                   </Text>
@@ -1406,8 +1373,9 @@ function EventLog({ market }: { market: AdminMarket }) {
 }
 
 /**
- * The known payloads (rules diff, open/close instants, 판정, 정산) as Korean rows; the create
- * body and anything unexpected stay one JSON line (`marketEventRows`).
+ * The known payloads (rules diff, open/close instants, a pause's reason, a resume's or an early
+ * close's review result, 판정, 정산) as Korean rows; the create body and anything unexpected stay
+ * one JSON line (`marketEventRows`).
  */
 function EventPayload({ type, payload }: { type: MarketEventType; payload: unknown }) {
   if (payload === null || payload === undefined) return null;

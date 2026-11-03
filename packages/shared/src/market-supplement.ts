@@ -42,7 +42,8 @@ import { TIME_ITEMS, changedTimeItems, marketTimesSchema } from './market-times.
  * - 반려 (`…/reject`: one of MARKET_SUPPLEMENT_REJECT_REASONS and a reason) by an admin other than
  *   the requester, and 철회 (`…/retract`) by the requester alone, in any status — a request still
  *   waiting at the close ends only so. An approver who reads a change of meaning rejects it
- *   (`meaning_change`), and the market goes to the pause procedure (#114).
+ *   (`meaning_change`): the 반려 changes nothing, and the admin screen then offers the pause of an
+ *   OPEN market for `basis_change` (#114, ADR-0102; market-pause.ts).
  *
  * The request, the approval, the 반려 and the 철회 each write an `admin_actions` row
  * (`market_supplement_request` … `market_supplement_retract`, enums.ts); the approval alone writes
@@ -238,7 +239,8 @@ export function supplementChanges(
 /**
  * 반려 사유 of a supplement: `meaning_change` — the change alters the market's meaning, which no
  * supplement may (#172 item 15: the approver rejects it and the market goes to the pause procedure,
- * #173 items 3·4, #114) — or `other`, with the reason saying what.
+ * #173 items 3·4 — a one-admin pause for `basis_change` the admin screen offers after the 반려,
+ * #114) — or `other`, with the reason saying what.
  */
 export const MARKET_SUPPLEMENT_REJECT_REASONS = ['meaning_change', 'other'] as const;
 export type MarketSupplementRejectReason = (typeof MARKET_SUPPLEMENT_REJECT_REASONS)[number];
@@ -274,9 +276,9 @@ export const MARKET_SUPPLEMENT_REFUSALS = {
 export const SUPPLEMENT_CLOSE_FIXED_WHILE_PAUSED = 'fixed while paused';
 
 /**
- * The refusal of a PATCH of an OPEN market that changes a version item (#172 item 14): one detail
- * per such item, on the item. After the open they change by a supplement alone; the same value
- * again is no change.
+ * The refusal of a PATCH of an OPEN or PAUSED market (PAUSED since #114, ADR-0102) that changes a
+ * version item (#172 item 14): one detail per such item, on the item. After the open they change
+ * by a supplement alone; the same value again is no change.
  */
 export const SUPPLEMENT_ONLY_WHILE_OPEN = 'supplement only while open';
 
