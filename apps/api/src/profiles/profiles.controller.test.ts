@@ -269,12 +269,12 @@ describe.skipIf(!hasTestInfra)('/api/v1/profiles and the 소개 (integration)', 
   it('counts the visible posts and comments and the likes others gave them, never a deleted or hidden one (#37-4)', async () => {
     const publicId = await publicIdOf(member.id);
     const open = await createMarket(t.db);
-    const voided = await createMarket(t.db, { status: 'voided' });
+    const cancelled = await createMarket(t.db, { status: 'cancelled' });
     const other = (await createUser(t.db)).user;
     const now = new Date();
-    // Posts: two visible (one on a voided market, #37-14), one deleted, one hidden.
+    // Posts: two visible (one on a cancelled market, #37-14), one deleted, one hidden.
     const visible = await createPost(t.db, { marketId: open.id, authorId: member.id });
-    const onVoided = await createPost(t.db, { marketId: voided.id, authorId: member.id });
+    const onCancelled = await createPost(t.db, { marketId: cancelled.id, authorId: member.id });
     const deletedPost = await createPost(t.db, {
       marketId: open.id,
       authorId: member.id,
@@ -346,7 +346,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/profiles and the 소개 (integration)', 
     // decision 2026-10-21 answer 3).
     const likers = [reader.id, other.id, member.id];
     for (const userId of likers) await createPostLike(t.db, { postId: visible.id, userId });
-    await createPostLike(t.db, { postId: onVoided.id, userId: reader.id });
+    await createPostLike(t.db, { postId: onCancelled.id, userId: reader.id });
     await createCommentLike(t.db, { commentId: reply.id, userId: reader.id });
     await createCommentLike(t.db, { commentId: reply.id, userId: member.id });
     await createCommentLike(t.db, { commentId: underDeleted.id, userId: other.id });

@@ -72,8 +72,8 @@ export class AdminMarketsController {
   @ApiOperation({
     operationId: 'adminListMarkets',
     summary:
-      'Every market, drafts included, newest first; q narrows it to titles holding the term ' +
-      '(a case-insensitive partial match), as the related-market picker searches',
+      'Every market, draft and in-review ones included, newest first; q narrows it to titles ' +
+      'holding the term (a case-insensitive partial match), as the related-market picker searches',
   })
   // No `@ApiQuery`: `adminMarketListQuerySchema` has no component id, so swagger expands it
   // into the cursor/limit/status/q parameters itself (see markets.controller.ts).
@@ -209,7 +209,9 @@ export class AdminMarketsController {
   @HttpCode(200)
   @ApiOperation({
     operationId: 'adminOpenMarket',
-    summary: 'draft → open; refused without rules (RULES_REQUIRED) or with a past closeAt',
+    summary:
+      'draft → open (interim, until review and the scheduled open); refused without rules ' +
+      '(RULES_REQUIRED) or with a past closeAt',
   })
   @ApiData(adminMarketSchema)
   // VALIDATION_ERROR names `status` (not a draft) or `closeAt` (already past).
@@ -232,7 +234,10 @@ export class AdminMarketsController {
 
   @Post(':id/close')
   @HttpCode(200)
-  @ApiOperation({ operationId: 'adminCloseMarket', summary: 'open → closed' })
+  @ApiOperation({
+    operationId: 'adminCloseMarket',
+    summary: 'open → closed by one admin (interim); any other status is MARKET_NOT_OPEN',
+  })
   @ApiData(adminMarketSchema)
   @ApiErrors(
     'UNAUTHENTICATED',
@@ -255,11 +260,14 @@ export class AdminMarketsController {
   @HttpCode(200)
   @ApiOperation({
     operationId: 'adminResolveMarket',
-    summary: 'closed → resolved: record the final result; settlement starts immediately',
+    summary:
+      'closed → resolved (interim, until the approved provisional judgement): record the final ' +
+      'result, YES or NO; the payout starts immediately',
   })
   @ApiData(adminMarketSchema)
-  // VALIDATION_ERROR names `status` for anything but a closed market — a resolved one
-  // included: a judgement is final, so neither the same result again nor another is accepted.
+  // VALIDATION_ERROR names `status` for anything but a closed market — a provisional or resolved
+  // one included: a judgement is final here, so neither the same result again nor another is
+  // accepted.
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminResolveMarket(
     @CurrentUser() admin: SessionUser,

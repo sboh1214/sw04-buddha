@@ -45,6 +45,7 @@ import {
 } from '@/hooks/use-portfolio';
 import { type Market, type Order, type Position } from '@/lib/api';
 import {
+  MARKET_RESULT_LABEL,
   MARKET_STATUS_LABEL,
   MARKET_STATUS_PALETTE,
   formatContracts,
@@ -158,7 +159,7 @@ export function useHoldings() {
   }
   // Price AND status, both marked from the row the socket keeps live: a `market:status` moves
   // `['market', id]` and publishes no `user:position`, so a holding in a market that has just
-  // closed would otherwise keep announcing 진행 중 here until an unrelated refetch.
+  // closed would otherwise keep announcing 거래 중 here until an unrelated refetch.
   const positions = held.map((row) => {
     const market = live.get(row.marketId);
     return markToLiveMarket(row, { lastPrice: market?.lastPrice, status: market?.status });
@@ -596,9 +597,9 @@ function SettledPositionRow({ position }: { position: Position }) {
         )}
       </HStack>
       <DataList.Root orientation="horizontal" size="sm">
-        {/* A voided market resolved to nothing at all, so it has no result to name. */}
+        {/* YES·NO·무효; a cancelled market ended with no result at all, so it has none to name. */}
         <Item label={copy.marketResolvedResult}>
-          {result === null ? EMPTY : result === 'YES' ? copy.yes : copy.no}
+          {result === null ? EMPTY : MARKET_RESULT_LABEL[result]}
         </Item>
         <Item label={copy.positionQty}>{formatContracts(position.qty)}</Item>
         <Item label={copy.positionRealizedPnl}>

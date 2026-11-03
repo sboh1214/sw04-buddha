@@ -9,6 +9,7 @@ import {
 } from './market.js';
 import {
   RELATED_MARKET_STATUSES,
+  isRelatedMarketShown,
   adminRelatedMarketSchema,
   linkRelatedMarketBodySchema,
   relatedMarketPair,
@@ -18,11 +19,20 @@ const A = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 const B = 'a1b2c3d4-0000-4000-8000-000000000001';
 
 describe('RELATED_MARKET_STATUSES', () => {
-  it('is open, closed, resolved and settled: never voided, never a draft (ADR-0061 decision 1, item 19)', () => {
-    expect(RELATED_MARKET_STATUSES).toEqual(['open', 'closed', 'resolved', 'settled']);
-    // Every public status but voided: the one the owner left out.
+  it('is every public status but cancelled (ADR-0093 decision 3, the #174 row)', () => {
     const shown: readonly string[] = RELATED_MARKET_STATUSES;
-    expect(PUBLIC_MARKET_STATUSES.filter((status) => !shown.includes(status))).toEqual(['voided']);
+    expect(PUBLIC_MARKET_STATUSES.filter((status) => !shown.includes(status))).toEqual([
+      'cancelled',
+    ]);
+  });
+
+  it('leaves out a market whose result is VOID, in any status, and a hidden one', () => {
+    expect(isRelatedMarketShown({ status: 'settled', resolvedResult: 'YES' })).toBe(true);
+    expect(isRelatedMarketShown({ status: 'open', resolvedResult: null })).toBe(true);
+    expect(isRelatedMarketShown({ status: 'provisional', resolvedResult: 'VOID' })).toBe(false);
+    expect(isRelatedMarketShown({ status: 'settled', resolvedResult: 'VOID' })).toBe(false);
+    expect(isRelatedMarketShown({ status: 'cancelled', resolvedResult: null })).toBe(false);
+    expect(isRelatedMarketShown({ status: 'review', resolvedResult: null })).toBe(false);
   });
 });
 

@@ -100,16 +100,32 @@ export function usePositions(status: PositionStatus) {
  * flips that flag is the market finishing: the worker's settlement writes `settled: true` on
  * every holder row together with the market's terminal status. So the market's status is an
  * exact reading of which list its positions moved to, and a screen that only ever asks for
- * `'open'` tells a holder who was paid out that they never participated. `voided` is terminal
- * the same way, though nothing voids a market since #125 (#152 and #126 bring VOID back).
+ * `'open'` tells a holder who was paid out that they never participated. `cancelled` is terminal
+ * too and lists with the finished ones: it ends a market no user traded in (ADR-0093 decision 1,
+ * item 10), so a user holds nothing there — and should a row ever exist, it belongs with the
+ * markets that are over, never among holdings marked to a price that no longer trades.
  *
- * `closed` and `resolved` are deliberately NOT terminal: trading has stopped, but nothing has
- * been paid out, so those rows are still open holdings marked to the market's last price. The
- * worker pays out and writes `settled` in one transaction (ADR-0046); if a step added later lets
- * the Coin step finish before the market is `settled`, this function has to change with it.
+ * Everything before `settled` is deliberately NOT terminal — `paused`, `closed`, `provisional`,
+ * `resolved` and `settling` included: trading has stopped or the payout is under way, but nothing
+ * has been paid out, so those rows are still open holdings marked to the market's last price.
+ * The worker pays out and writes `settled` in one transaction (ADR-0046) that also takes the
+ * market from `settling` to `settled`; if a step added later lets the Coin step finish before the
+ * market is `settled`, this function has to change with it.
  */
 export function positionListStatusFor(marketStatus: MarketStatus): PositionStatus {
-  return marketStatus === 'settled' || marketStatus === 'voided' ? 'settled' : 'open';
+  return marketStatus === 'settled' || marketStatus === 'cancelled' ? 'settled' : 'open';
+}
+
+/**
+ * Where a status sits in the lifecycle for `liveMarketStatus`: its `statusRank`, except that
+ * `paused` shares `open`'s step. OPEN ↔ PAUSED is the one pair a market that has traded moves
+ * along both ways (ADR-0093 decision 1, item 3; `MARKET_LIFECYCLE_TRANSITIONS`), so neither of
+ * the two can be called the later reading from the value alone. Every other edge a held market
+ * can take goes forward in `MARKET_STATUSES` order — the other ways back (review → draft,
+ * scheduled → draft) are before any trade, where nobody holds anything.
+ */
+function lifecycleStep(status: MarketStatus): number {
+  return statusRank(status === 'paused' ? 'open' : status);
 }
 
 /** One cursor page of `GET /me/orders`, the page shape every infinite list in this app holds. */
@@ -272,7 +288,7 @@ export function portfolioTotals(positions: readonly PositionMath[] = []): Portfo
  * `usePositions('open')`. Reading the settled list alone therefore told an account that had
  * just taken a 100 Coin profit that it had realised nothing at all — and it stayed 0 Coin until the
  * market itself finished, which may never happen. A row MOVES between the two lists when the
- * market settles or is voided (`positions.settled`, `positionListStatusFor`), carrying its
+ * market settles (`positions.settled`, `positionListStatusFor`), carrying its
  * accumulated `realizedPnlCoin` with it, so it is never in both and this cannot double count.
  *
  * "Never in both" is an invariant the SOCKET has to keep too, and it did not. A settlement
@@ -299,10 +315,20 @@ export function realizedPnlAcross(...totals: readonly PortfolioTotals[]): bigint
  * THE HAZARD is the one the four `structuralSharing` joins exist for, arriving at RENDER time
  * instead of through a cache write. `['market', id]` and `['positions', …]` are two independent
  * fetches and the market's can be the OLDER of the two — react-query keeps the row it already
- * had when a REFETCH fails, so a positions answer carrying 마감 could be overwritten on screen
- * by a market entry still saying 진행 중, with nothing scheduled to correct it. Ranked by
- * `statusRank`, the same order `applyStatus` and `joinMarket` compare on, so no reading here can
- * walk a badge backwards.
+ * had when a REFETCH fails, so a positions answer carrying 거래 마감 could be overwritten on
+ * screen by a market entry still saying 거래 중, with nothing scheduled to correct it.
+ *
+ * Two orders, because only one side has a key. The live row carries `statusEventId` and every
+ * writer of it compares on `statusSupersedes` (`applyStatus`, `joinMarket`), so it is ordered
+ * against every `market:status` there is; `Position.marketStatus` is a join with no event id
+ * beside it, so the two rows can only be compared by VALUE (`lifecycleStep`). By value the
+ * statuses are not a total order — OPEN ↔ PAUSED goes both ways (#174) — so:
+ * - a live status a step BEHIND the held one is refused: the lifecycle never goes back there, so
+ *   the live row is the older reading, and no reading here can walk a badge backwards;
+ * - a live status on the SAME step — 거래 중 against 거래 일시 중단, either way round — is taken:
+ *   the value cannot say which came later, and the live row is the one the room keeps in event
+ *   order, while the snapshot is a join frozen at the list's last fetch. Ranked by `statusRank`
+ *   alone, a market resumed after the list was read kept its 거래 일시 중단 badge here for good.
  *
  * A status that would move the row to the OTHER list is refused outright. Membership is the
  * server's `positions.settled` flag (`positionListStatusFor`), and a settlement publishes its own `user:position` that `applyPositionEvent` answers with `refetch` PRECISELY
@@ -310,14 +336,14 @@ export function realizedPnlAcross(...totals: readonly PortfolioTotals[]): bigint
  * with no help needed here. That is a recent guarantee rather than an old one: while the reducer
  * wrote the flag in place, this sentence was a promise nothing kept, and the refusal below was
  * resting on it. Taking it anyway would draw an open holding badged
- * 정산 완료 while 평가 금액 and 총 평가 금액 still value the row at the last traded price, which is
+ * 지급 완료 while 평가 금액 and 총 평가 금액 still value the row at the last traded price, which is
  * the fiction `positionValueCoin` and 정산 이력 are both documented never to print. It is the same
  * rule `wroteAnOrder` (market-live.ts) states from the other side: a terminal transition is the
  * REST answer's business, not an event's.
  */
 export function liveMarketStatus(held: MarketStatus, live: MarketStatus | undefined): MarketStatus {
-  if (live === undefined) return held;
-  if (statusRank(live) <= statusRank(held)) return held;
+  if (live === undefined || live === held) return held;
+  if (lifecycleStep(live) < lifecycleStep(held)) return held;
   return positionListStatusFor(live) === positionListStatusFor(held) ? live : held;
 }
 
@@ -336,7 +362,7 @@ export function liveMarketStatus(held: MarketStatus, live: MarketStatus | undefi
  *
  * `marketStatus` is the same story and was the half that was missing. A transition publishes
  * `market:status`, which moves `['market', id]` and nothing else — no `user:position` is
- * published for it — so 보유 포지션 kept announcing a closed market as 진행 중 until an
+ * published for it — so 보유 포지션 kept announcing a closed market as 거래 중 until an
  * unrelated positions refetch. The detail screen already made this call once, passing the live
  * `status` to `MyPosition` rather than trusting the row's copy; this is MY doing the
  * same. Refetching the lists on a status event would be the wrong half: two private requests
@@ -345,9 +371,10 @@ export function liveMarketStatus(held: MarketStatus, live: MarketStatus | undefi
  * terminal one would badge a row the list it is in cannot value.
  *
  * `marketLastPrice` gets NO such guard, and the asymmetry is a decision rather than an oversight
- * — it is the first thing a reader of the two lines below will ask. Status can be ordered from
- * the VALUE: `statusRank` reads the position in `MARKET_STATUSES`, and transitions are monotone,
- * so "newer" is knowable without a counter. A price is not — it moves both ways, and nothing in
+ * — it is the first thing a reader of the two lines below will ask. Status can mostly be ordered
+ * from the VALUE: `lifecycleStep` reads the position in `MARKET_STATUSES`, and every transition a
+ * held market takes goes forward but OPEN ↔ PAUSED, which shares one step, so "newer" is
+ * knowable without a counter everywhere else. A price is not — it moves both ways, and nothing in
  * either row says which reading is later. `Position.version` cannot stand in: it bumps on writes
  * to the POSITION row (`$onUpdate`, migration 0010), and somebody else's trade moves
  * `markets.last_price` without touching it. Ordering them would mean widening the wire (a market

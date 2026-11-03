@@ -6,10 +6,11 @@
  * adds is never missed.
  *
  * Migration 0017 runs exactly this statement, once, before it drops the direct AMM's columns and
- * enum values (#125: the deployed database is wiped, accounts too). deploy/reset-db.sh runs it
+ * enum values (#125: the deployed database is wiped, accounts too), and migration 0048 again
+ * before it rebuilds the market status type (#174, ADR-0093 decision 3). deploy/reset-db.sh runs it
  * again through wipe-cli.ts (docs/RESET.md; #149 uses that procedure in the scope #133 decides,
  * narrowed first if anything is kept), and the test harness's `reset()` runs it before every
- * DB-backed case; wipe.test.ts fails if the migration's copy drifts from this one or the reset
+ * DB-backed case; wipe.test.ts fails if a migration's copy drifts from this one or the reset
  * script stops calling the CLI. TRUNCATE is the table owner's privilege: run it as buddha_migrate
  * (or the superuser), never as buddha_app.
  */

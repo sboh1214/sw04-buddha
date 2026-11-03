@@ -7,6 +7,7 @@ import {
 import { type QueryClient } from '@tanstack/react-query';
 import { copy } from '@/copy';
 import type { Theme, ThemeResult, ThemeSummary } from './api';
+import { MARKET_RESULT_LABEL } from './market-admin';
 import { type HomeFilters, MARKETS_KEY } from './market-keys';
 import type { MarketPage } from './market-live';
 import { restartQueries } from './query-client';
@@ -20,8 +21,10 @@ import { restartQueries } from './query-client';
  * Owner decisions (ADR-0069 decision 4, the #81 rows): the screen name is '테마', with no notice of
  * what it does not have (the service guide's, #136); visitors come in from the public list, the
  * market detail's links, the explore home and the address alone, signed out too; the period sorts a
- * theme as 예정·진행 중·종료; a draft market is on no public page; the results list is the 판정
- * 완료·정산 완료·무효 markets with their result, and nobody's performance. And of 2026-10-19
+ * theme as 예정·진행 중·종료; a draft market is on no public page (nor, since #174, one in review);
+ * the results list is the markets whose result is confirmed — 결과 확정·지급 중·지급 완료 — with
+ * their result (YES·NO·무효), never a provisional one, and nobody's performance (ADR-0093
+ * decision 3, the #174 row). And of 2026-10-19
  * (ADR-0088): the period is Korean dates shown as '10월 20일 ~ 11월 3일'; a notice is plain text
  * whose web addresses are links, marked 수정됨 once edited; the address is the slug. And of the
  * second round the same day: the home's row is the ongoing themes, else the upcoming ones, with
@@ -69,14 +72,15 @@ export const themeMarketsKey = (themeId: string) =>
 
 /**
  * What a market's `market:status` event (realtime-provider.tsx) does to the theme pages' results
- * lists: when the market became 판정 완료·정산 완료·무효, every results list is marked, and the
- * one on screen asks again. The theme page's cards move with the event (they sit under
- * `['markets']`), and without this its results list would go on saying 결과가 나온 시장이 없습니다
- * beside a card marked 판정 완료 until a focus or a remount. A refetch the event cannot spare: it
- * carries no title, slug or decided time, and the market is not in the list yet. Which themes
- * hold the market is the server's to say, so the root of every theme's results is marked; the
- * statuses before a result (열림·마감) mark nothing. `restartQueries`, so a first read still in
- * flight — begun before the transition — is asked again rather than kept.
+ * lists: when the market became 결과 확정·지급 중·지급 완료 (`THEME_RESULT_STATUSES`), every
+ * results list is marked, and the one on screen asks again. The theme page's cards move with the
+ * event (they sit under `['markets']`), and without this its results list would go on saying 결과가
+ * 나온 시장이 없습니다 beside a card marked 결과 확정 until a focus or a remount. A refetch the event cannot
+ * spare: it carries no title, slug or decided time, and the market is not in the list yet. Which
+ * themes hold the market is the server's to say, so the root of every theme's results is marked;
+ * the statuses before a confirmed result (거래 중·거래 마감·잠정 결과, …) and 취소 mark nothing.
+ * `restartQueries`, so a first read still in flight — begun before the transition — is asked again
+ * rather than kept.
  */
 export function refreshThemeResultsOnStatus(
   queryClient: QueryClient,
@@ -324,12 +328,11 @@ export function themeLinkLabel(theme: Pick<ThemeSummary, 'name' | 'status'>): st
 
 /**
  * One row's result as the results list writes it (ADR-0069 decision 4, '결과 목록': YES·NO·무효):
- * the contract's label for a judged market, 무효 for a voided one, which has none.
+ * the result type's label (`MARKET_RESULT_LABEL`), the same words the market's own detail uses. A
+ * row always has one: the list holds confirmed results only, and a cancelled market is not in it.
  */
 export function themeResultLabel(row: Pick<ThemeResult, 'result'>): string {
-  if (row.result === 'YES') return copy.yes;
-  if (row.result === 'NO') return copy.no;
-  return copy.themeResultVoided;
+  return MARKET_RESULT_LABEL[row.result];
 }
 
 /** The address of a theme's page: its slug (owner decision 2026-10-19). */

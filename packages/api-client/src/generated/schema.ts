@@ -201,7 +201,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Every market, drafts included, newest first; q narrows it to titles holding the term (a case-insensitive partial match), as the related-market picker searches */
+        /** Every market, draft and in-review ones included, newest first; q narrows it to titles holding the term (a case-insensitive partial match), as the related-market picker searches */
         get: operations["adminListMarkets"];
         put?: never;
         /** Create a draft market (no price until its first fill) */
@@ -239,7 +239,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** open → closed */
+        /** open → closed by one admin (interim); any other status is MARKET_NOT_OPEN */
         post: operations["adminCloseMarket"];
         delete?: never;
         options?: never;
@@ -256,7 +256,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** draft → open; refused without rules (RULES_REQUIRED) or with a past closeAt */
+        /** draft → open (interim, until review and the scheduled open); refused without rules (RULES_REQUIRED) or with a past closeAt */
         post: operations["adminOpenMarket"];
         delete?: never;
         options?: never;
@@ -308,7 +308,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** closed → resolved: record the final result; settlement starts immediately */
+        /** closed → resolved (interim, until the approved provisional judgement): record the final result, YES or NO; the payout starts immediately */
         post: operations["adminResolveMarket"];
         delete?: never;
         options?: never;
@@ -1282,7 +1282,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Make the theme public; refused naming markets while it has no market that is not a draft (drafts do not count); a published theme stays as it is */
+        /** Make the theme public; refused naming markets while it has no public market (draft and in-review ones do not count); a published theme stays as it is */
         post: operations["adminPublishTheme"];
         delete?: never;
         options?: never;
@@ -1501,7 +1501,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Markets by status (default open; all is every public status), never drafts, optionally by category and a title search (q, a case-insensitive partial match); sorted recommended (24-hour volume, then the latest opening; the default), newest (latest opening) or closing (soonest close; with any status but open, the open markets first and then the ended ones, latest close first) */
+        /** Markets by status (default open; all is every public status), never draft or in review, optionally by category and a title search (q, a case-insensitive partial match); sorted recommended (24-hour volume, then the latest opening; the default), newest (latest opening) or closing (soonest close; with all or an ended status, the markets not closed yet (scheduled, open, paused) first and then the ended ones, latest close first) */
         get: operations["listMarkets"];
         put?: never;
         post?: never;
@@ -1535,7 +1535,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** A market’s discussion: its posts as the community list’s cards, newest first, never a deleted or hidden one, and meta.total, how many the whole list holds; readable in every public status, ended markets too. A draft or unknown market is NOT_FOUND */
+        /** A market’s discussion: its posts as the community list’s cards, newest first, never a deleted or hidden one, and meta.total, how many the whole list holds; readable in every public status, ended markets too. A draft, in-review or unknown market is NOT_FOUND */
         get: operations["listMarketPosts"];
         put?: never;
         post?: never;
@@ -1552,7 +1552,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Markets linked to this one (links are two-way): open, closed, resolved and settled ones, never voided or drafts, sorted recommended (24-hour volume, then the latest opening); a draft or unknown market is NOT_FOUND */
+        /** Markets linked to this one (links are two-way): every public status but cancelled, never one whose result is VOID, sorted recommended (24-hour volume, then the latest opening); a draft, in-review or unknown market is NOT_FOUND */
         get: operations["listRelatedMarkets"];
         put?: never;
         post?: never;
@@ -1569,7 +1569,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** The published themes this market is in, any status, in the public list order; a draft or unknown market is NOT_FOUND */
+        /** The published themes this market is in, any status, in the public list order; a draft, in-review or unknown market is NOT_FOUND */
         get: operations["listMarketThemes"];
         put?: never;
         post?: never;
@@ -1603,7 +1603,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** One market by id or slug (a draft is NOT_FOUND to the public) */
+        /** One market by id or slug (a draft or in-review one is NOT_FOUND to the public) */
         get: operations["getMarket"];
         put?: never;
         post?: never;
@@ -2168,9 +2168,9 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Whether the account watches one market (a draft is NOT_FOUND) */
+        /** Whether the account watches one market (a draft or in-review one is NOT_FOUND) */
         get: operations["getMyWatch"];
-        /** Watch or unwatch one market; repeating either changes nothing (a draft is NOT_FOUND) */
+        /** Watch or unwatch one market in any public status; repeating either changes nothing (a draft or in-review one is NOT_FOUND) */
         put: operations["updateMyWatch"];
         post?: never;
         delete?: never;
@@ -2427,7 +2427,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** A member’s posts on their profile, newest first, as the community list’s cards: never a deleted or hidden one; those on ended and voided markets included, and all of them while the member is under a restriction. An unknown public id is NOT_FOUND, as the profile */
+        /** A member’s posts on their profile, newest first, as the community list’s cards: never a deleted or hidden one; those on ended, cancelled and VOID markets included, and all of them while the member is under a restriction. An unknown public id is NOT_FOUND, as the profile */
         get: operations["listProfilePosts"];
         put?: never;
         post?: never;
@@ -2478,7 +2478,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** The theme's markets in every public status, voided ones too (never drafts): open ones first, soonest close first, then the ended ones, latest close first */
+        /** The theme's markets in every public status, cancelled ones too (never draft or in review): those not closed yet first, soonest close first, then the ended ones, latest close first */
         get: operations["listThemeMarkets"];
         put?: never;
         post?: never;
@@ -2495,7 +2495,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** The theme's resolved, settled and voided markets with their result (YES or NO; none when voided), the most recently decided first */
+        /** The theme's markets whose result is confirmed (resolved, settling or settled; never provisional) with that result (YES, NO or VOID), the most recently confirmed first */
         get: operations["listThemeResults"];
         put?: never;
         post?: never;
@@ -2771,23 +2771,20 @@ export type components = {
             resolutionSource: string | null;
             /** Format: date-time */
             resolvedAt: string | null;
-            /** @enum {string|null} */
-            resolvedResult: "YES" | "NO" | null;
+            resolvedResult: components["schemas"]["MarketResult"] | null;
             rules: string;
             /** Format: date-time */
             settledAt: string | null;
             settlementSteps: components["schemas"]["AdminSettlementStep"][];
             slug: string;
             /** @enum {string} */
-            status: "draft" | "open" | "closed" | "resolved" | "settled" | "voided";
+            status: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
             statusEventId: string | null;
             title: string;
             tradeCount: number;
             traderCount: number;
             /** Format: date-time */
             updatedAt: string;
-            /** Format: date-time */
-            voidedAt: string | null;
             volumeCoin: components["schemas"]["CoinAmount"];
         };
         AdminModerationAction: {
@@ -2990,7 +2987,7 @@ export type components = {
             id: string;
             slug: string;
             /** @enum {string} */
-            status: "draft" | "open" | "closed" | "resolved" | "settled" | "voided";
+            status: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
             title: string;
         };
         AdminRelatedMarket: {
@@ -3011,11 +3008,10 @@ export type components = {
             linkedBy: components["schemas"]["AdminAccountActor"];
             /** Format: date-time */
             openAt: string | null;
-            /** @enum {string|null} */
-            resolvedResult: "YES" | "NO" | null;
+            resolvedResult: components["schemas"]["MarketResult"] | null;
             slug: string;
             /** @enum {string} */
-            status: "draft" | "open" | "closed" | "resolved" | "settled" | "voided";
+            status: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
             statusEventId: string | null;
             title: string;
             tradeCount: number;
@@ -3140,11 +3136,10 @@ export type components = {
             linkedBy: components["schemas"]["AdminAccountActor"];
             /** Format: date-time */
             openAt: string | null;
-            /** @enum {string|null} */
-            resolvedResult: "YES" | "NO" | null;
+            resolvedResult: components["schemas"]["MarketResult"] | null;
             slug: string;
             /** @enum {string} */
-            status: "draft" | "open" | "closed" | "resolved" | "settled" | "voided";
+            status: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
             statusEventId: string | null;
             title: string;
             tradeCount: number;
@@ -3585,31 +3580,34 @@ export type components = {
             resolutionSource: string | null;
             /** Format: date-time */
             resolvedAt: string | null;
-            /** @enum {string|null} */
-            resolvedResult: "YES" | "NO" | null;
+            resolvedResult: components["schemas"]["MarketResult"] | null;
             rules: string;
             /** Format: date-time */
             settledAt: string | null;
             slug: string;
             /** @enum {string} */
-            status: "draft" | "open" | "closed" | "resolved" | "settled" | "voided";
+            status: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
             statusEventId: string | null;
             title: string;
             tradeCount: number;
             traderCount: number;
-            /** Format: date-time */
-            voidedAt: string | null;
             volumeCoin: components["schemas"]["CoinAmount"];
         };
         MarketEvent: {
             actorId: string | null;
             /** Format: date-time */
             createdAt: string;
+            /** @enum {string|null} */
+            fromStatus: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled" | null;
             id: string;
             payload: unknown;
+            /** @enum {string|null} */
+            toStatus: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled" | null;
             /** @enum {string} */
-            type: "created" | "opened" | "closed" | "resolve_proposed" | "result_changed" | "finalized" | "voided" | "rules_edited" | "resolved";
+            type: "created" | "opened" | "closed" | "finalized" | "rules_edited" | "resolved" | "settling";
         };
+        /** @enum {string} */
+        MarketResult: "YES" | "NO" | "VOID";
         MarketSummary: {
             category: {
                 nameKo: string;
@@ -3625,11 +3623,10 @@ export type components = {
             lastPrice: number | null;
             /** Format: date-time */
             openAt: string | null;
-            /** @enum {string|null} */
-            resolvedResult: "YES" | "NO" | null;
+            resolvedResult: components["schemas"]["MarketResult"] | null;
             slug: string;
             /** @enum {string} */
-            status: "draft" | "open" | "closed" | "resolved" | "settled" | "voided";
+            status: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
             statusEventId: string | null;
             title: string;
             tradeCount: number;
@@ -3910,14 +3907,13 @@ export type components = {
             marketLastPrice: number | null;
             marketSlug: string;
             /** @enum {string} */
-            marketStatus: "draft" | "open" | "closed" | "resolved" | "settled" | "voided";
+            marketStatus: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
             marketTitle: string;
             /** @enum {string} */
             outcome: "YES" | "NO";
             qty: number;
             realizedPnlCoin: components["schemas"]["CoinAmount"];
-            /** @enum {string|null} */
-            resolvedResult: "YES" | "NO" | null;
+            resolvedResult: components["schemas"]["MarketResult"] | null;
             settled: boolean;
             /** Format: date-time */
             updatedAt: string;
@@ -4046,7 +4042,7 @@ export type components = {
             id: string;
             slug: string;
             /** @enum {string} */
-            status: "draft" | "open" | "closed" | "resolved" | "settled" | "voided";
+            status: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
             title: string;
         };
         PostSummary: {
@@ -4496,11 +4492,10 @@ export type components = {
             decidedAt: string;
             /** Format: uuid */
             marketId: string;
-            /** @enum {string|null} */
-            result: "YES" | "NO" | null;
+            result: components["schemas"]["MarketResult"];
             slug: string;
             /** @enum {string} */
-            status: "resolved" | "settled" | "voided";
+            status: "resolved" | "settling" | "settled";
             title: string;
         };
         ThemeSummary: {
@@ -5749,7 +5744,7 @@ export interface operations {
                 cursor?: string;
                 limit?: number;
                 q?: string;
-                status?: "draft" | "open" | "closed" | "resolved" | "settled" | "voided";
+                status?: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
             };
             header?: never;
             path?: never;
@@ -12225,7 +12220,7 @@ export interface operations {
                 limit?: number;
                 q?: string;
                 sort?: "recommended" | "newest" | "closing";
-                status?: "open" | "closed" | "resolved" | "settled" | "voided" | "all";
+                status?: "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled" | "all";
             };
             header?: never;
             path?: never;
@@ -14787,7 +14782,7 @@ export interface operations {
                 cursor?: string;
                 limit?: number;
                 sort?: "watched" | "recommended" | "newest" | "closing";
-                status?: "open" | "closed" | "resolved" | "settled" | "voided";
+                status?: "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
             };
             header?: never;
             path?: never;

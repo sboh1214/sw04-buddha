@@ -1,5 +1,6 @@
 import { schema, type Db } from '@buddha/db';
 import {
+  isPublicMarketStatus,
   type AdminProposal,
   type AdminProposalMarket,
   type Proposal,
@@ -124,9 +125,13 @@ export type AdminProposalRow = Awaited<
 
 type MarketRef = ProposalRow['market'];
 
-/** The market as the proposer may see it: its link once it is public, never a draft. */
+/**
+ * The market as the proposer may see it: its link once it is public (`isPublicMarketStatus`),
+ * never while it is DRAFT or REVIEW — an adopted draft goes through review before it opens
+ * (#78) — and still once it is CANCELLED, as the public detail is.
+ */
 function publicMarket(market: MarketRef): ProposalMarket | null {
-  if (market === null || market.status === 'draft') return null;
+  if (market === null || !isPublicMarketStatus(market.status)) return null;
   return { id: market.id, slug: market.slug, title: market.title };
 }
 

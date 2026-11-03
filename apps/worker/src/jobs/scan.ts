@@ -54,10 +54,10 @@ export function messageOf(err: unknown): string {
  * and recorded instead of thrown. The isolation the scans promise ("one market's failure never
  * holds the others") is only true with the catch: the candidate list is ordered by deadline
  * (or judgement time), so a market whose transaction rejects on every attempt (a winning holder
- * with no balance row, a resolved row with no result) is the FIRST candidate of every later
- * run, and an uncaught rejection there means no market due after it is ever reached by the
- * safety net — the exact case the scan exists for. Sequential on purpose: the scans are the
- * bounded single-job fallback of PLAN 5.5, and one market lock at a time keeps a stuck run's
+ * with no balance row, a settling row with no result or a VOID one) is the FIRST candidate of
+ * every later run, and an uncaught rejection there means no market due after it is ever reached
+ * by the safety net — the exact case the scan exists for. Sequential on purpose: the scans are
+ * the bounded single-job fallback of PLAN 5.5, and one market lock at a time keeps a stuck run's
  * blast radius at one transaction.
  *
  * Never throws for a per-market rejection; the caller (jobs/index.ts) logs each failure and

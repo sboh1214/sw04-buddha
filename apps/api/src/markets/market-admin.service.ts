@@ -1,6 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
-import { schema, type Db } from '@buddha/db';
+import {
+  MarketTransitionError,
+  schema,
+  transitionMarket,
+  type Db,
+  type MarketTransition,
+} from '@buddha/db';
 import {
   decodeKeyset,
   encodeKeyset,
@@ -12,7 +18,6 @@ import {
   type AdminMarketListQuery,
   type AdminSettlementStep,
   type CreateMarketBody,
-  type MarketEventType,
   type MarketStatus,
   type MarketSummary,
   type ResolveMarketBody,
@@ -121,7 +126,6 @@ function snapshot(row: MarketRow): Record<string, unknown> {
     traderCount: row.traderCount,
     openAt: row.openAt?.toISOString() ?? null,
     closeAt: row.closeAt.toISOString(),
-    voidedAt: row.voidedAt?.toISOString() ?? null,
   };
 }
 
@@ -131,6 +135,8 @@ function toMarketEvent(row: MarketEventRow): AdminMarket['events'][number] {
     // varchar column; the DTO narrows it to MARKET_EVENT_TYPES.
     type: row.type as AdminMarket['events'][number]['type'],
     actorId: row.actorId,
+    fromStatus: row.fromStatus,
+    toStatus: row.toStatus,
     payload: row.payload ?? null,
     createdAt: row.createdAt.toISOString(),
   };
@@ -168,13 +174,18 @@ function toSettlementSteps(rows: SettlementStepRow[]): AdminSettlementStep[] {
  * Realtime events are published, and the worker's jobs registered or cancelled, only after
  * COMMIT, best effort (MarketPublisher, MarketJobs).
  *
- * Every transition inserts its event row FIRST and stores that row's id in
- * `markets.status_event_id` in the same UPDATE (`recordEvent`): the id is drawn while the
- * transaction holds the row FOR UPDATE, so it is the market's commit order, and it is the key
- * `market:status` and the market DTOs are ordered by (A-M3-19, Q-M3-8 (3)) — the status rank
- * stopped being a total order the day M5's (since removed) `result_changed` repeated a status,
- * and an edit still republishes an unchanged one (A-M4-36). A `rules_edited` event is not a
- * transition and leaves the key alone.
+ * The three transitions are the interim admin actions ADR-0047 result 3 and ADR-0093 result 2
+ * keep until the issues that replace them land: draft → open (#21), open → closed by one admin
+ * (#114) and closed → resolved (#152). Each writes the status through `transitionMarket`
+ * (@buddha/db, #174), the one writer of `markets.status` both apps share: it refuses a pair the
+ * lifecycle does not list (`canTransitionMarket`), records who, when, from and to on the
+ * `market_events` row, and stores that row's id in `markets.status_event_id` in the same
+ * UPDATE. The id is drawn while the transaction holds the row FOR UPDATE, so it is the market's
+ * commit order, and it is the key `market:status` and the market DTOs are ordered by (A-M3-19,
+ * Q-M3-8 (3)) — the status rank is no total order (PAUSED → OPEN goes back), and an edit still
+ * republishes an unchanged status (A-M4-36). Each action checks its own `from` first, so its
+ * refusal keeps the code it always had; the table is the backstop. A `rules_edited` event is not
+ * a transition and leaves the key alone.
  */
 @Injectable()
 export class MarketAdminService {
@@ -249,18 +260,24 @@ export class MarketAdminService {
     if (!inserted) throw new AppError('INTERNAL', { message: 'Market insert failed' });
     // The event references the market and the market keys on the event, so the row is
     // inserted, then the event, then the key written back: two statements, one transaction,
-    // and the row that leaves it has the key every other transition writes in its UPDATE.
-    const eventId = await this.recordEvent(tx, {
-      marketId: inserted.id,
-      type: 'created',
-      actorId: adminId,
-      // The body is JSON-safe as parsed: strings, numbers and nulls only.
-      payload: { ...body, slug },
-      createdAt: now,
-    });
+    // and the row that leaves it has the key every other transition writes in its UPDATE. No
+    // `transitionMarket`: nothing is left, so the row names only the status it starts in.
+    const [event] = await tx
+      .insert(schema.marketEvents)
+      .values({
+        marketId: inserted.id,
+        type: 'created',
+        actorId: adminId,
+        toStatus: 'draft',
+        // The body is JSON-safe as parsed: strings, numbers and nulls only.
+        payload: { ...body, slug },
+        createdAt: now,
+      })
+      .returning({ id: schema.marketEvents.id });
+    if (!event) throw new AppError('INTERNAL', { message: 'Market event insert failed' });
     const [row] = await tx
       .update(schema.markets)
-      .set({ statusEventId: eventId })
+      .set({ statusEventId: event.id })
       .where(eq(schema.markets.id, inserted.id))
       .returning();
     if (!row) throw new AppError('INTERNAL', { message: 'Market update failed' });
@@ -281,8 +298,10 @@ export class MarketAdminService {
   /**
    * PATCH per status: a draft accepts every field; an open market accepts the descriptive
    * fields, the close time and the category, and refuses `slug` naming the field; any other
-   * status refuses everything naming `status`. A rules change is also a `rules_edited` market
-   * event (PLAN 12: allowed after a warning, which is the web's dialog).
+   * status — REVIEW, SCHEDULED and PAUSED too, whose edits #78, #21 and #114 define — refuses
+   * everything naming `status`. A rules change is also a `rules_edited` market event (PLAN 12:
+   * allowed after a warning, which is the web's dialog), which changes no status: its
+   * `from_status`/`to_status` stay null.
    *
    * An edit that MOVES an open market publishes `market:status` after COMMIT. No live event can
    * carry a descriptive field: `market:tick` and `market:status` carry absolute numbers, and a
@@ -372,12 +391,12 @@ export class MarketAdminService {
         payload: { before, after },
         createdAt: now,
       });
-      // Gated twice, so a no-op PATCH costs no viewer a request. Only an OPEN market has
-      // viewers — a draft is on no public route — and only a row that actually MOVED leaves one
-      // holding something stale. The gate is the AUDIT projection rather than "the body was
-      // non-empty": `snapshot` carries every column a PATCH can reach and not `updatedAt`, so
-      // resaving identical text differs nowhere, and the gate stays exact when the next editable
-      // column is added.
+      // Gated twice, so a no-op PATCH costs no viewer a request. Of the two statuses an edit
+      // reaches, only OPEN has viewers — a draft is on no public route — and only a row that
+      // actually MOVED leaves one holding something stale. The gate is the AUDIT projection
+      // rather than "the body was non-empty": `snapshot` carries every column a PATCH can reach
+      // and not `updatedAt`, so resaving identical text differs nowhere, and the gate stays exact
+      // when the next editable column is added.
       return {
         market: await this.toAdminMarket(tx, row),
         moved: current.status === 'open' && JSON.stringify(before) !== JSON.stringify(after),
@@ -403,7 +422,9 @@ export class MarketAdminService {
   }
 
   /**
-   * draft → open (PLAN 0.2: never without rules). Writes the 'opened' event, then publishes
+   * draft → open (PLAN 0.2: never without rules), the interim edge until #78's review and #21's
+   * scheduled open replace it (`INTERIM_MARKET_TRANSITIONS`). Any other status — REVIEW and
+   * SCHEDULED included — is refused naming `status`. Writes the 'opened' event, then publishes
    * `market:status` and registers the delayed `market.close` job for `closeAt` (PLAN 5.5). No
    * price tick: a market has no price before its first fill (N02 §5). Opening stays allowed
    * while no route takes orders (#125): until the CLOB (#119) an open market is shown, not traded.
@@ -421,19 +442,14 @@ export class MarketAdminService {
       const now = await clockTimestamp(tx);
       assertFutureCloseAt(current.closeAt, now);
 
-      const eventId = await this.recordEvent(tx, {
-        marketId: id,
+      const row = await this.transition(tx, current, {
+        to: 'open',
         type: 'opened',
         actorId: adminId,
         payload: { openAt: now.toISOString(), closeAt: current.closeAt.toISOString() },
-        createdAt: now,
+        at: now,
+        set: { openAt: now },
       });
-      const [row] = await tx
-        .update(schema.markets)
-        .set({ status: 'open', openAt: now, statusEventId: eventId, updatedAt: now })
-        .where(eq(schema.markets.id, id))
-        .returning();
-      if (!row) throw new AppError('INTERNAL', { message: 'Market update failed' });
       await tx.insert(schema.adminActions).values({
         adminId,
         type: 'market_open',
@@ -452,9 +468,11 @@ export class MarketAdminService {
   }
 
   /**
-   * open → closed (the manual form of the M5 close job). Anything else: MARKET_NOT_OPEN.
-   * The delayed close job registered for `closeAt` is cancelled after COMMIT; were it left,
-   * the worker would find a closed market and skip it, so the cancel is hygiene, not safety.
+   * open → closed by one admin (the manual form of the M5 close job), kept until #114 replaces
+   * it with an early close from PAUSED that another admin approves. Anything else — PAUSED
+   * included — is MARKET_NOT_OPEN. The delayed close job registered for `closeAt` is cancelled
+   * after COMMIT; were it left, the worker would find a closed market and skip it, so the cancel
+   * is hygiene, not safety.
    */
   async close(adminId: string, id: string): Promise<AdminMarket> {
     const { market, closeAt } = await this.db.transaction(async (tx) => {
@@ -467,19 +485,13 @@ export class MarketAdminService {
       // may have committed while this transaction queued, and every row it writes must sort
       // after it.
       const now = await clockTimestamp(tx);
-      const eventId = await this.recordEvent(tx, {
-        marketId: id,
+      const row = await this.transition(tx, current, {
+        to: 'closed',
         type: 'closed',
         actorId: adminId,
         payload: { closedAt: now.toISOString() },
-        createdAt: now,
+        at: now,
       });
-      const [row] = await tx
-        .update(schema.markets)
-        .set({ status: 'closed', statusEventId: eventId, updatedAt: now })
-        .where(eq(schema.markets.id, id))
-        .returning();
-      if (!row) throw new AppError('INTERNAL', { message: 'Market update failed' });
       await tx.insert(schema.adminActions).values({
         adminId,
         type: 'market_close',
@@ -495,16 +507,19 @@ export class MarketAdminService {
   }
 
   /**
-   * The judgement (PLAN 5.5, 7.3; ADR-0046): closed → resolved, final at once. Any other
-   * status — `resolved` included, whatever the result sent — is refused naming `status`; there
-   * is no way to change a judgement (#26 decides re-judgement).
+   * The judgement (PLAN 5.5, 7.3; ADR-0046): closed → resolved, final at once — the interim edge
+   * until #152's judgement, which another admin approves and which publishes a PROVISIONAL
+   * result first (`INTERIM_MARKET_TRANSITIONS`). The result is YES or NO (VOID is chosen in
+   * #152's judgement and paid by #126). Any other status — `provisional` and `resolved`
+   * included, whatever the result sent — is refused naming `status`; there is no way to change a
+   * judgement here (a correction is #176's, in PROVISIONAL only).
    *
    * One transaction writes the `resolved` event (its id is the new `status_event_id`), the
    * market row (`resolved_result`, `resolved_at`), one `pending` `market_settlement_steps` row
    * per SETTLEMENT_STEPS step — the worker's to-do list, so the step table never lags the
    * status — and the `admin_actions` row. After COMMIT the `market.finalize` job is registered
-   * with no delay: the worker settles the market at once, and its per-minute scan picks up any
-   * `resolved` market whose job never made it to Redis.
+   * with no delay: the worker moves the market to `settling` and pays it out at once, and its
+   * per-minute scan picks up any `resolved` market whose job never made it to Redis.
    *
    * No price tick is written: the chart ends at the last trade, and a settlement is not a
    * price (PRICE_TICK_TRIGGERS 'resolve' stays unused — Q-M5).
@@ -526,25 +541,14 @@ export class MarketAdminService {
         note: body.note ?? null,
         evidenceUrl: body.evidenceUrl ?? null,
       };
-      const eventId = await this.recordEvent(tx, {
-        marketId: id,
+      const row = await this.transition(tx, current, {
+        to: 'resolved',
         type: 'resolved',
         actorId: adminId,
         payload: detail,
-        createdAt: now,
+        at: now,
+        set: { resolvedResult: body.result, resolvedAt: now },
       });
-      const [row] = await tx
-        .update(schema.markets)
-        .set({
-          status: 'resolved',
-          resolvedResult: body.result,
-          resolvedAt: now,
-          statusEventId: eventId,
-          updatedAt: now,
-        })
-        .where(eq(schema.markets.id, id))
-        .returning();
-      if (!row) throw new AppError('INTERNAL', { message: 'Market update failed' });
       // A closed market has never been judged, so no step row exists yet: a plain insert, and
       // the primary key (market_id, step) turns any surprise into a rollback, not a duplicate.
       await tx.insert(schema.marketSettlementSteps).values(
@@ -577,9 +581,10 @@ export class MarketAdminService {
   }
 
   /**
-   * Every status, draft included; newest first over (created_at DESC, id DESC). `q` narrows it to
-   * the titles holding the term, as the public list's search does (`ILIKE`, wildcards literal):
-   * the 관련 시장 picker of the admin detail finds the market to link by it (#65, ADR-0068).
+   * Every status, DRAFT and REVIEW included; newest first over (created_at DESC, id DESC). `q`
+   * narrows it to the titles holding the term, as the public list's search does (`ILIKE`,
+   * wildcards literal): the 관련 시장 picker of the admin detail finds the market to link by it
+   * (#65, ADR-0068).
    */
   async list(query: AdminMarketListQuery): Promise<Page<MarketSummary>> {
     const { markets, categories } = schema;
@@ -622,26 +627,30 @@ export class MarketAdminService {
   }
 
   /**
-   * The transition's `market_events` row, inserted BEFORE the market UPDATE that stores its
-   * id in `status_event_id` (class doc). Returned as the number the bigserial column is read
-   * as, so the caller writes it into the bigint column untranslated.
+   * `current` → `to` through `transitionMarket` (class doc), under the market lock the caller
+   * holds, with `from` the status it read FOR UPDATE; answers the row as the transition left it.
+   * The caller has refused every `from` it does not take with its own code already, so a pair
+   * the lifecycle refuses here is a status the action does not take either: the same `status`
+   * refusal, never a 500.
    */
-  private async recordEvent(
+  private async transition(
     tx: Tx,
-    values: {
-      marketId: string;
-      type: MarketEventType;
-      actorId: string | null;
-      payload: Record<string, unknown> | null;
-      createdAt: Date;
-    },
-  ): Promise<number> {
-    const [event] = await tx
-      .insert(schema.marketEvents)
-      .values(values)
-      .returning({ id: schema.marketEvents.id });
-    if (!event) throw new AppError('INTERNAL', { message: 'Market event insert failed' });
-    return event.id;
+    current: MarketRow,
+    change: Omit<MarketTransition, 'marketId' | 'from'>,
+  ): Promise<MarketRow> {
+    try {
+      await transitionMarket(tx, { marketId: current.id, from: current.status, ...change });
+    } catch (error) {
+      if (error instanceof MarketTransitionError) throw wrongStatus(current.status);
+      throw error;
+    }
+    const [row] = await tx
+      .select()
+      .from(schema.markets)
+      .where(eq(schema.markets.id, current.id))
+      .limit(1);
+    if (!row) throw new AppError('INTERNAL', { message: 'Market update failed' });
+    return row;
   }
 
   /** The row under `FOR UPDATE`, or NOT_FOUND. Callers hold the market lock when it matters. */
@@ -714,7 +723,7 @@ export class MarketAdminService {
     }
 
     // ADR-0046: where the worker stands on a judged market, one row per step (none before the
-    // judgement or for a voided market). Ordered here rather than in SQL: SETTLEMENT_STEPS is
+    // judgement or for a cancelled market). Ordered here rather than in SQL: SETTLEMENT_STEPS is
     // the order the worker runs them in, which no column of the table records.
     const stepRows = await executor
       .select()

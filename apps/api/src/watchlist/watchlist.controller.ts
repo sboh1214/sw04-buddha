@@ -58,7 +58,7 @@ export class MeWatchlistController {
   @Get('watchlist/:marketId')
   @ApiOperation({
     operationId: 'getMyWatch',
-    summary: 'Whether the account watches one market (a draft is NOT_FOUND)',
+    summary: 'Whether the account watches one market (a draft or in-review one is NOT_FOUND)',
   })
   @ApiData(watchStateSchema)
   @ApiErrors('UNAUTHENTICATED', 'NOT_FOUND', 'VALIDATION_ERROR')
@@ -82,7 +82,9 @@ export class MeWatchlistController {
   @Put('watchlist/:marketId')
   @ApiOperation({
     operationId: 'updateMyWatch',
-    summary: 'Watch or unwatch one market; repeating either changes nothing (a draft is NOT_FOUND)',
+    summary:
+      'Watch or unwatch one market in any public status; repeating either changes nothing (a ' +
+      'draft or in-review one is NOT_FOUND)',
   })
   @ApiData(watchStateSchema)
   // FORBIDDEN: a mutation whose Origin is not ours (SessionGuard's CSRF check), or a body whose

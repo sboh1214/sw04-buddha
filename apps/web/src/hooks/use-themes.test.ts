@@ -180,8 +180,9 @@ describe('what an admin theme write marks', () => {
 describe('what a market status event marks (realtime-provider.tsx)', () => {
   const OTHER_ID = '5d2f2a38-91f3-4c3e-8a7e-1f1c0d6f0a11';
 
-  it('marks every theme’s results when a market is judged, settled or voided', async () => {
-    for (const status of ['resolved', 'settled', 'voided'] as const) {
+  it('marks every theme’s results when a market’s result is confirmed, paid or settled', async () => {
+    // THEME_RESULT_STATUSES (ADR-0093 decision 3, the #174 row): 결과 확정·지급 중·지급 완료.
+    for (const status of ['resolved', 'settling', 'settled'] as const) {
       const { queryClient, invalidated } = heldClient();
       queryClient.setQueryData(themeResultsKey(OTHER_ID), { held: true });
       await refreshThemeResultsOnStatus(queryClient, status);
@@ -196,8 +197,18 @@ describe('what a market status event marks (realtime-provider.tsx)', () => {
     }
   });
 
-  it('marks nothing for a status before a result', () => {
-    for (const status of ['draft', 'open', 'closed'] as const) {
+  it('marks nothing for a status before a confirmed result, nor for a cancelled market', () => {
+    // A provisional result may still be corrected (not in the list), and a cancelled market has
+    // no result at all.
+    for (const status of [
+      'draft',
+      'scheduled',
+      'open',
+      'paused',
+      'closed',
+      'provisional',
+      'cancelled',
+    ] as const) {
       const { queryClient, invalidated } = heldClient();
       expect(refreshThemeResultsOnStatus(queryClient, status)).toBeUndefined();
       expect(invalidated(themeResultsKey(ID)), status).toBe(false);

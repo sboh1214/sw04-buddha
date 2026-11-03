@@ -41,7 +41,6 @@ const market: Market = {
   resolutionSource: null,
   resolvedAt: null,
   settledAt: null,
-  voidedAt: null,
 };
 
 const series: PriceSeries = {

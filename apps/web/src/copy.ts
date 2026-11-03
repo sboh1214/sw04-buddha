@@ -377,16 +377,27 @@ export const copy = {
   adminMarketCreated: '시장을 만들었습니다.',
   adminMarketStatusFilter: '상태',
   adminMarketStatusAll: '전체',
+  // 상태 배지의 라벨 (ADR-0093 결정 1의 12, #174). 사용자의 라벨은 그 결정의 글 그대로이고, 사용자에게
+  // 보이지 않는 초안·검수 중은 관리자 화면의 라벨이다(검수 중은 #174의 선택). '판정 지연'·'이의 검토 중'은
+  // 상태가 아니라 표시라서 그것을 셀 자료가 생기는 #22·#142·#175가 붙인다. 홈은 거래 중만 보이고
+  // (ADR-0065), 다른 상태는 검색(#15)이 고른다. 카운트다운의 marketCloseAt '마감'·marketClosed '마감됨'과는
+  // 다른 자리다.
   marketStatusDraft: '초안',
-  marketStatusOpen: '진행 중',
-  // 상태 배지의 라벨 (O-5, ADR-0046). 홈의 상태 필터는 ADR-0065가 없앴고, 다른 상태는 검색(#15)이
-  // 고른다. 카운트다운의 marketCloseAt '마감'·marketClosed '마감됨'과는 다른 자리다.
+  marketStatusReview: '검수 중',
+  marketStatusScheduled: '개장 예정',
+  marketStatusOpen: '거래 중',
+  marketStatusPaused: '거래 일시 중단',
   marketStatusClosed: '거래 마감',
-  marketStatusResolved: '판정 완료',
-  marketStatusSettled: '정산 완료',
-  marketStatusVoided: '무효',
+  marketStatusProvisional: '잠정 결과',
+  marketStatusResolved: '결과 확정',
+  marketStatusSettling: '지급 중',
+  marketStatusSettled: '지급 완료',
+  marketStatusCancelled: '취소',
+  // 결과 유형 VOID의 라벨(ADR-0093 결정 1의 12 (b)). VOID는 상태가 아니라 결과라서, YES·NO가 copy.yes·
+  // copy.no인 자리(상세·내 포지션·MY·관리자 상세·테마 결과)에 이것이 선다.
+  marketResultVoid: '무효',
   adminMarketClosingSoon: '마감 임박',
-  // 관리자 목록·상세의 보조 배지: closed는 판정을, resolved는 워커의 정산을 기다린다.
+  // 관리자 목록·상세의 보조 배지: 거래 마감은 판정을, 결과 확정·지급 중은 워커의 정산을 기다린다.
   adminMarketAwaitingResolution: '판정 대기',
   adminMarketAwaitingSettlement: '정산 대기',
   adminNoMarkets: '시장이 없습니다.',
@@ -433,7 +444,6 @@ export const copy = {
   marketResolvedResult: '결과',
   marketResolvedAt: '판정 시각',
   marketSettledAt: '정산 시각',
-  marketVoidedAt: '무효 시각',
   marketCreatedAt: '생성',
   marketUpdatedAt: '수정',
   marketCreatedBy: '생성자',
@@ -442,12 +452,11 @@ export const copy = {
   eventCreated: '생성',
   eventOpened: '열림',
   eventClosed: '마감',
-  // 이의 단계(M5)의 과거 이벤트. 더 이상 쓰지 않지만 옛 시장의 이벤트 로그에 남아 있다.
-  eventResolveProposed: '결과 제안',
-  eventResultChanged: '결과 변경',
   eventResolved: '판정',
-  eventFinalized: '정산 완료',
-  eventVoided: '무효',
+  // 워커가 결과 확정 → 지급 중으로 옮기고(settling) 지급 중 → 지급 완료로 끝낸다(finalized). 이름은 그
+  // 상태의 라벨을 따른다(ADR-0093 결정 1의 12, #174).
+  eventSettling: '지급 시작',
+  eventFinalized: '지급 완료',
   eventRulesEdited: '규칙 수정',
   eventSystem: '시스템',
   eventRulesBefore: '이전',
@@ -456,11 +465,12 @@ export const copy = {
   // 관리자 상세의 관련 시장 (#65, ADR-0068): 지금 연결된 시장(모든 상태)과 해제, 제목으로 찾아 연결.
   // 연결·해제는 담당자와 시각만 기록에 남고 사유는 받지 않는다(ADR-0061 결정 1의 19).
   adminRelatedMarkets: '관련 시장',
-  // 안내 한 줄은 세 문장을 잇는다(lib/related-markets.ts `relatedHint`). 둘째 문장의 상태는 화면의
-  // 상태 라벨(MARKET_STATUS_LABEL)로 적어 같은 카드의 배지와 같고, #173이 라벨을 바꾸면 따라간다.
+  // 안내 한 줄은 세 문장을 잇는다(lib/related-markets.ts `relatedHint`). 둘째 문장은 상세에 보이지 않는
+  // 시장(ADR-0093 결정 3의 #174 행: 취소와 무효 결과, 그리고 사용자에게 보이지 않는 초안·검수 중)을 화면의
+  // 상태 라벨(MARKET_STATUS_LABEL)과 결과 라벨(marketResultVoid)로 적어 같은 카드의 배지와 같다.
   adminRelatedHint: '연결한 두 시장은 서로의 상세에 관련 시장으로 보입니다.',
-  adminRelatedHintShownLead: '상세에는',
-  adminRelatedHintShownTail: '인 시장만 보입니다.',
+  adminRelatedHintHiddenStatusTail: '인 시장과 결과가',
+  adminRelatedHintHiddenResultTail: '인 시장은 상세에 보이지 않습니다.',
   adminRelatedHintNoEffect: '연결은 두 시장의 규칙·거래·판정·정산을 바꾸지 않습니다.',
   adminRelatedEmpty: '연결된 관련 시장이 없습니다.',
   adminRelatedLinkedAt: '연결',
@@ -518,21 +528,23 @@ export const copy = {
   adminThemePublishedAt: '공개 시각',
   adminThemeMarkets: '시장',
   // 편성은 자유롭다(ADR-0069 결정 4의 #81 '편성 규칙'): 어느 상태의 시장이든 넣고, 초안 시장은 공개
-  // 페이지에 보이지 않으며 공개 조건에도 세지 않는다(오너 결정 2026-10-19 2차). 넣고 빼는 것은 시장의
+  // 페이지에 보이지 않으며 공개 조건에도 세지 않는다(오너 결정 2026-10-19 2차). #174부터 검수 중도
+  // 그렇고, 개장 예정 시장은 열리기 전에도 공개다(ADR-0093 결정 1의 12). 넣고 빼는 것은 시장의
   // 규칙·거래·판정·정산을 바꾸지 않는다(N05 §7).
   adminThemeMarketsHint:
-    '넣은 시장은 테마 페이지에 시장 카드로 보입니다. 초안 시장은 열릴 때까지 보이지 않고, 공개에 필요한 시장으로도 세지 않습니다. 넣고 빼도 시장의 규칙·거래·판정·정산은 바뀌지 않습니다.',
+    '넣은 시장은 테마 페이지에 시장 카드로 보입니다. 초안·검수 중인 시장은 개장 예정이나 거래 중이 될 때까지 보이지 않고, 공개에 필요한 시장으로도 세지 않습니다. 넣고 빼도 시장의 규칙·거래·판정·정산은 바뀌지 않습니다.',
   adminThemeMarketsEmpty: '넣은 시장이 없습니다.',
   adminThemeMarketLinkedAt: '넣음',
   adminThemeMarketUnlink: '빼기',
   adminThemeMarketUnlinkTitle: '테마에서 시장을 뺍니다',
   adminThemeMarketUnlinkBody: '빼면 테마 페이지의 시장과 결과에서 보이지 않습니다. 계속할까요?',
   // 공개에는 초안이 아닌 시장이 하나 이상 있어야 한다(오너 결정 2026-10-19, 초안은 세지 않는 것은 같은
-  // 날 2차). 공개한 뒤 모두 빼는 것은 된다. 앞의 것은 공개 거절, 뒤의 것은 공개 전의 공개하기 옆 안내.
+  // 날 2차; #174부터 검수 중도 세지 않는다). 공개한 뒤 모두 빼는 것은 된다. 앞의 것은 공개 거절, 뒤의
+  // 것은 공개 전의 공개하기 옆 안내.
   adminThemePublishNeedsMarket:
-    '초안이 아닌 시장을 하나 이상 넣어야 공개할 수 있습니다. 초안 시장은 세지 않습니다.',
+    '초안·검수 중이 아닌 시장을 하나 이상 넣어야 공개할 수 있습니다. 초안·검수 중인 시장은 세지 않습니다.',
   adminThemePublishHint:
-    '공개하려면 초안이 아닌 시장이 하나 이상 들어 있어야 합니다. 초안 시장은 열린 뒤부터 셉니다.',
+    '공개하려면 초안·검수 중이 아닌 시장이 하나 이상 들어 있어야 합니다. 초안·검수 중인 시장은 개장 예정이나 거래 중이 된 뒤부터 셉니다.',
   adminThemeMarketUnlinked: '테마에서 시장을 뺐습니다.',
   adminThemeMarketSearchLabel: '넣을 시장 찾기',
   adminThemeMarketSearchSubmit: '찾기',
@@ -588,7 +600,7 @@ export const copy = {
   errMarketInvalid: '입력값을 확인해 주세요.',
   errMarketRulesRequired: '규칙을 채워야 시장을 열 수 있습니다.',
   errMarketRulesOpen: '열린 시장의 규칙은 비울 수 없습니다.',
-  errMarketNotOpen: '진행 중인 시장이 아닙니다. 화면을 새로 고쳐 주세요.',
+  errMarketNotOpen: '거래 중인 시장이 아닙니다. 화면을 새로 고쳐 주세요.',
   errMarketStatus: '지금 상태에서는 할 수 없는 작업입니다. 화면을 새로 고쳐 주세요.',
 
   // --- admin: payments / audit (M3) ---
@@ -901,7 +913,7 @@ export const copy = {
   marketSort: '정렬',
   // 정렬 (ADR-0061 결정 1의 9~11): 규칙으로 센 추천(최근 24시간 거래량 → 신규)이 처음이고, 거래량 순은
   // #132(비정상 체결 제외) 뒤에 돌아온다. 관심 시장을 켰을 때만 최근 관심 등록 순을 고를 수 있고
-  // 켜면 그것이 처음이다(결정 3의 #63). 홈에는 상태 필터가 없고 진행 중 시장만 보인다(결정 1의 13).
+  // 켜면 그것이 처음이다(결정 3의 #63). 홈에는 상태 필터가 없고 거래 중 시장만 보인다(결정 1의 13).
   sortRecommended: '추천',
   sortNewest: '신규',
   sortClosing: '마감 임박',
@@ -914,7 +926,8 @@ export const copy = {
   searchSubmit: '검색',
   marketsEmpty: '아직 열린 시장이 없습니다.',
   // 시장 검색 (#15, ADR-0066): 홈과 다른 결과 화면(ADR-0061 결정 1의 14). 처음에는 공개된 모든 상태를
-  // 보이고, 상태 필터는 '모든 상태'와 상태 라벨마다 하나다(결정 1의 13). 제목의 부분 일치로 찾는다
+  // 보이고, 상태 필터는 '모든 상태'와 상태 라벨마다 하나다(결정 1의 13, 취소 포함은 ADR-0093 결정 3의 #174
+  // 행). 결과 '무효'와 표시 '판정 지연'의 필터는 없다. 제목의 부분 일치로 찾는다
   // (태그는 #17). 결과 없음 · 불러오는 중 · 연결 오류를 서로 다르게 보인다(N02 §3).
   searchTitle: '시장 검색',
   searchStatus: '상태',
@@ -934,9 +947,10 @@ export const copy = {
   recentSearchDelete: '삭제',
   recentSearchesClear: '전체 삭제',
   recentSearchDeleteFailed: '최근 검색을 지우지 못했습니다. 잠시 후 다시 시도해 주세요.',
-  // 관심 시장을 켠 홈: 진행 중인 관심 시장만 보인다(끝난 관심 시장은 MY에 남는다). 뒤 문장은 MY의
-  // 빈 관심 시장과 같다(오너 결정 2026-10-16).
-  watchlistViewEmpty: `진행 중인 관심 시장이 없습니다. ${WATCHLIST_HOW_TO_ADD}`,
+  // 관심 시장을 켠 홈: 거래 중인 관심 시장만 보인다(다른 상태의 관심 시장은 MY에 남는다). 글은 오너가 준
+  // 것이고(ADR-0065), 그 ADR이 #174 때 맞추라고 한 앞의 상태 이름은 거래 중 시장의 라벨이다(ADR-0093
+  // 결정 1 12항). 뒤 문장은 MY의 빈 관심 시장과 같다(오너 결정 2026-10-16).
+  watchlistViewEmpty: `거래 중인 관심 시장이 없습니다. ${WATCHLIST_HOW_TO_ADD}`,
   // 로그인하지 않은 방문자가 관심 시장을 켠 주소를 열었을 때. 목록은 본인에게만 보인다(#37).
   watchlistViewSignedOut: '로그인하면 관심 시장을 볼 수 있습니다.',
   // 카드와 상세 헤더의 짧은 라벨. 숫자·시각은 언제나 호출 쪽에서 붙인다.
@@ -944,7 +958,8 @@ export const copy = {
   marketClosingSoon: '마감 임박',
   marketRemaining: '남은 시간',
   // A-M3-31: 마감 시각이 지난 `open` 시장도 마감 작업이 돌 때까지 목록에 남는다. 카운트다운이
-  // 이 문구로 바뀐다. 상태 배지의 marketStatusClosed와는 다른 자리다.
+  // 이 문구로 바뀐다. 마감 전의 상태(개장 예정·거래 중·거래 일시 중단)는 마감 시각이 지나기 전까지 이
+  // 글이 아니라 남은 시간이다(#174). 상태 배지의 marketStatusClosed와는 다른 자리다.
   marketClosed: '마감됨',
   marketTraders: '참여자',
   // formatRemaining(lib/datetime.ts)이 숫자에 붙이는 단위. 문자열은 여기에만 있다.
@@ -981,14 +996,16 @@ export const copy = {
   marketDiscussionEmpty: '아직 이 시장의 글이 없습니다. 첫 글을 써 보세요.',
   // 관련 시장 (#65, ADR-0068): 토론 뒤, 운영자가 이 시장과 연결한 시장의 카드(홈의 카드 그대로, 추천
   // 순). 보일 시장이 없으면 섹션을 두고 이 안내를 보인다(ADR-0061 결정 1의 19). 연결은 있어도 보일
-  // 상태(진행 중·거래 마감·판정 완료·정산 완료)의 시장이 없을 때도 같은 글이라 '연결된'을 붙이지 않는다.
+  // 시장(취소와 무효 결과를 뺀 공개 상태, ADR-0093 결정 3의 #174 행)이 없을 때도 같은 글이라 '연결된'을
+  // 붙이지 않는다.
   marketRelated: '관련 시장',
   marketRelatedEmpty: '관련 시장이 없습니다.',
   // 테마 (#81, ADR-0088): 운영자가 이름·소개·기간으로 묶은 시장(N05 §7 '주제별 시장 묶음'). 화면 이름은
   // '테마'이고 순위·보상이 없다는 안내는 두지 않는다(ADR-0069 결정 4의 #81 '이름', 서비스 안내 #136이
   // 맡는다). 기간으로 예정·진행 중·종료를 나눠 보인다('진행 기간'). 공개 목록·테마 페이지·홈·시장 상세의
-  // 소속 테마 링크로 들어오고 비로그인도 본다('들어오는 길'). 결과는 판정 완료·정산 완료·무효 시장의
-  // 결과(YES·NO·무효)뿐이고 사람마다의 성과는 없다('결과 목록').
+  // 소속 테마 링크로 들어오고 비로그인도 본다('들어오는 길'). 결과는 결과 확정·지급 중·지급 완료 시장의
+  // 결과(YES·NO·무효)뿐이고 잠정 결과는 싣지 않으며(ADR-0093 결정 3의 #174 행), 사람마다의 성과는 없다
+  // ('결과 목록'). 무효는 copy.marketResultVoid다.
   themesTitle: '테마',
   themesEmpty: '공개된 테마가 없습니다.',
   themeStatusUpcoming: '예정',
@@ -1010,7 +1027,6 @@ export const copy = {
   themeMarketsEmpty: '시장이 없습니다.',
   themeResults: '결과',
   themeResultsEmpty: '결과가 나온 시장이 없습니다.',
-  themeResultVoided: '무효',
   // 탐색 홈의 테마 줄(ADR-0069 결정 4의 #81 '탐색 홈 노출', 오너 결정 2026-10-19 2차): 진행 중인 테마,
   // 없으면 예정된 테마의 카드와 '모든 테마'. 모두 종료면 카드 없이 제목·안내·'모든 테마'이고, 공개된
   // 테마가 하나도 없을 때만 줄이 없다. 예정·종료 때의 제목과 안내 글은 이 PR이 골랐다(ADR-0088).
@@ -1044,12 +1060,17 @@ export const copy = {
   watchRemoveFailed: '관심 해제를 하지 못했습니다. 잠시 후 다시 시도해 주세요.',
 
   // 상태별 안내 (PLAN 11.3). 색과 배지는 MARKET_STATUS_LABEL/PALETTE가 맡고, 이 문구는
-  // 그 아래에서 "지금 무엇을 할 수 있는지"를 말한다.
+  // 그 아래에서 "지금 무엇을 할 수 있는지"를 말한다. 그 상태의 사실만 적고, 다른 이슈가 만들 것
+  // (예약 개장 #21, 중단 사유 #114, 이의 #175, 무효 지급 #126)은 약속하지 않는다(#174의 글).
+  marketScheduledNotice: '아직 열리지 않은 시장입니다. 지금은 거래할 수 없습니다.',
+  marketPausedNotice: '거래가 일시 중단된 시장입니다. 지금은 거래할 수 없습니다.',
   marketClosedNotice: '마감된 시장입니다. 더 이상 거래할 수 없습니다.',
-  marketResolvedNotice: '결과가 판정되었습니다. 정산을 진행하고 있습니다.',
-  marketSettledNotice: '정산이 끝난 시장입니다.',
-  // 원금 환불을 약속하지 않는다(N03 §6). 무효 지급 방식은 #126이 정한다.
-  marketVoidedNotice: '무효 처리된 시장입니다.',
+  marketProvisionalNotice: '잠정 결과가 나온 시장입니다. 결과는 아직 확정되지 않았습니다.',
+  marketResolvedNotice: '결과가 확정된 시장입니다.',
+  marketSettlingNotice: '결과가 확정되어 지급을 진행하고 있습니다.',
+  marketSettledNotice: '지급이 끝난 시장입니다.',
+  // 원금 환불을 약속하지 않는다(N03 §6). 결과를 정하지 않고 끝난 시장이다(ADR-0093 결정 1의 10).
+  marketCancelledNotice: '취소된 시장입니다. 결과를 정하지 않고 끝났습니다.',
 
   // 규칙 섹션 (PLAN 11.1의 Kalshi 원칙: 상세에서 접지 않는다). 이름은 기획의 '규칙'·'출처'
   // (N02 §4, N03 §8, 오너 결정 #14).
@@ -1219,7 +1240,8 @@ export const copy = {
   postDraftDiscardQuestion: '되살린 내용을 버릴까요? 그 뒤에 쓴 내용도 사라집니다.',
   postDraftDiscardConfirm: '버리기',
   postDraftDiscarded: '되살린 내용을 버렸습니다.',
-  // 시장 고르기: 공개 상태의 모든 시장(진행 중·거래 마감·판정 완료·정산 완료·무효, #45-6)을 제목으로 찾는다.
+  // 시장 고르기: 공개 상태의 모든 시장(개장 예정부터 지급 완료·취소까지, #45-6과 ADR-0093 결정 3의 #174
+  // 행)을 제목으로 찾는다.
   marketPickerLabel: '시장 찾기',
   marketPickerPlaceholder: '시장 제목의 일부',
   marketPickerSubmit: '찾기',
@@ -2063,10 +2085,12 @@ export const copy = {
   settlementStepStatusPending: '대기',
   settlementStepStatusDone: '완료',
   settlementStepStatusFailed: '실패',
-  // 정산 완료 안내: 지급은 이미 잔고에 반영됐고 내 손익은 아래 내 포지션이 말한다. '맞힌'이 아니라
-  // 기획의 '정답'(N02 §6, 오너 결정 #14).
+  // 지급 완료 안내: 지급은 이미 잔고에 반영됐고 내 손익은 아래 내 포지션이 말한다. '맞힌'이 아니라
+  // 기획의 '정답'(N02 §6, 오너 결정 #14). 결과가 무효면 정답이 없으니 100 Coin을 말하지 않고 손익의
+  // 자리만 가리킨다. 무효의 지급액(50/50, ADR-0093 결정 1의 9)은 그것을 지급하는 #126이 적는다.
   marketSettledPayout:
     '정답인 계약은 100 Coin씩 지급되었고, 내 손익은 아래 내 포지션에서 볼 수 있습니다.',
+  marketSettledPayoutVoid: '내 손익은 아래 내 포지션에서 볼 수 있습니다.',
   // 관리자 이벤트 로그의 정산 행: 정산 요약(worker market-finalize).
   eventSettledAccounts: '정산 계정 수',
   eventPaidAccounts: '지급 계정 수',

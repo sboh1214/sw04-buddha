@@ -99,8 +99,8 @@ export function adminMarketQueryOptions(routeId: string) {
 }
 
 /**
- * The admin detail, re-read every few seconds while the market is `resolved` so the 정산 단계
- * panel and the 정산 대기 badge follow the worker (`settlementPollInterval`, ADR-0046).
+ * The admin detail, re-read every few seconds while the market is `resolved` or `settling` so the
+ * 정산 단계 panel and the 정산 대기 badge follow the worker (`settlementPollInterval`, ADR-0046).
  */
 export function useAdminMarket(routeId: string) {
   return useQuery({
@@ -177,8 +177,9 @@ export function applyRelatedMarkets(
 }
 
 /**
- * Newest fills, anonymous (`GET /markets/:id/fills`). A draft is invisible on the public
- * routes (404, design 3.2), so the query waits until the market has been opened.
+ * Newest fills, anonymous (`GET /markets/:id/fills`). A draft or a market in review is invisible
+ * on the public routes (404, design 3.2, ADR-0093 decision 1, item 12), so the caller enables the
+ * query once the market is public (`isPublicMarketStatus`).
  */
 export function useMarketFills(id: string, enabled: boolean) {
   return useQuery({

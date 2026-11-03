@@ -15,7 +15,7 @@ import {
   Tag,
   Text,
 } from '@chakra-ui/react';
-import { type MarketStatus, formatCoin, parseCoinAmount } from '@buddha/shared';
+import { formatCoin, isPreCloseMarketStatus, parseCoinAmount } from '@buddha/shared';
 import NextLink from 'next/link';
 import { Fragment, type ReactNode, useState } from 'react';
 import { ComingSoonSection } from '@/components/market/coming-soon-section';
@@ -32,7 +32,11 @@ import { useMarketSocket } from '@/hooks/use-market-socket';
 import { useCategories, useMarket, useMarketTicks } from '@/hooks/use-markets';
 import { type Market } from '@/lib/api';
 import { CATEGORY_TRAIL_SEPARATOR, categoryBreadcrumb } from '@/lib/category-label';
-import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
+import {
+  MARKET_RESULT_LABEL,
+  MARKET_STATUS_LABEL,
+  MARKET_STATUS_PALETTE,
+} from '@/lib/market-admin';
 import {
   type CopiedSection,
   DEFAULT_DETAIL_VIEW,
@@ -48,6 +52,7 @@ import {
   perWidth,
   personalAreaView,
   showsOrderArea,
+  statusNotice,
   viewDisplay,
 } from '@/lib/market-detail';
 import { HEADER_HEIGHT_PX } from '@/lib/nav';
@@ -96,30 +101,6 @@ import { MarketDiscussion } from './market-discussion';
  *   gets one sign-in prompt where 내 포지션 · 내 대기 주문 stand, and neither is ever in the server's
  *   HTML (`personalAreaView`).
  */
-
-/**
- * What a terminal status leaves a reader able to do (PLAN 11.3). `open` and `draft` are absent
- * on purpose: an open market's state is its countdown, and a draft never reaches this route —
- * the API answers NOT_FOUND for one, so the page 404s before this file renders.
- *
- * The tone is a second, redundant channel: every notice says in words what it is, so nothing
- * here is carried by colour alone (PLAN 11.2, AC 6).
- */
-const STATUS_NOTICE: Partial<
-  Record<
-    MarketStatus,
-    { tone: 'info' | 'warning' | 'success' | 'error'; message: string; detail?: string }
-  >
-> = {
-  closed: { tone: 'warning', message: copy.marketClosedNotice },
-  // Judged, and the worker's settlement is running (ADR-0046): usually a few seconds before a
-  // `market:status` moves it on to settled.
-  resolved: { tone: 'info', message: copy.marketResolvedNotice },
-  // The second line says where the Coin went: the payout is already in the balance (the worker's
-  // finalize wrote it, PLAN 5.5), and 내 손익 is the 내 포지션 card below, not this notice.
-  settled: { tone: 'success', message: copy.marketSettledNotice, detail: copy.marketSettledPayout },
-  voided: { tone: 'error', message: copy.marketVoidedNotice },
-};
 
 /**
  * The two tracks from md up: every section, and the order panel. The panel's track is fixed so
@@ -433,12 +414,13 @@ function OrderArea() {
 /**
  * 요약's first row — 카테고리 · 상태 · 마감 카운트다운 · 관심 등록 — over the question.
  *
- * The status badge is rendered for every status, including 진행 중, because it is the one
+ * The status badge is rendered for every status, including 거래 중, because it is the one
  * reading that says what the server currently thinks this market is — and it is what a
- * `market:status` visibly moves. The countdown is rendered only while the market is open: a
- * settled market has nothing to count down to, and its badge already says so. The two DO
- * disagree for an open market whose close time has passed (진행 중 + 마감됨), and that is the
- * truth: the close job has not run yet, so the row is still `open` (A-M3-31).
+ * `market:status` visibly moves. The countdown is rendered only while the market has not closed
+ * (개장 예정, 거래 중, 거래 일시 중단: `isPreCloseMarketStatus`, #174): a settled market has
+ * nothing to count down to, and its badge already says so. The two DO disagree for an open
+ * market whose close time has passed (거래 중 + 마감됨), and that is the truth: the close job has
+ * not run yet, so the row is still `open` (A-M3-31).
  *
  * The category tag writes the whole trail, 경제 › 주택, rather than the leaf alone (ADR-0041's
  * two-level tree): the row only carries the leaf's `{slug, nameKo}`, so the parent's name is
@@ -478,7 +460,9 @@ function MarketHeaderRow({ market, now }: { market: Market; now?: number }) {
       >
         {MARKET_STATUS_LABEL[market.status]}
       </Badge>
-      {market.status === 'open' && <CountdownBadge market={market} now={now} />}
+      {/* Until the market has closed — 개장 예정, 거래 중 and 거래 일시 중단, which closes on schedule
+          (ADR-0093 decision 1, item 3) — the time left to the close; after it, the status says it. */}
+      {isPreCloseMarketStatus(market.status) && <CountdownBadge market={market} now={now} />}
       {/* 관심 등록 (#89): the end of the first row, above the question, on every public status
           (ADR-0061 decision 3) — where ADR-0064 put it and the owner kept it from this PR's
           screenshots (owner decision 2026-10-17). Client-only state behind a placeholder, so this
@@ -527,10 +511,11 @@ function MarketSummary({
 }
 
 /**
- * 상태별 안내 (PLAN 11.3), plus the one read-only fact a decided market carries: the 결과. A
- * settled market adds the line that says the payout has landed. There is no deadline to show
- * any more — the judgement is final at once (ADR-0046) — and the 판정 record itself (note,
- * evidence, instant) is #24's.
+ * 상태별 안내 (PLAN 11.3), plus the one read-only fact a decided market carries: the 결과 —
+ * YES·NO·무효 (`MARKET_RESULT_LABEL`), and no row while there is none (before a judgement, and on a
+ * cancelled market). A settled market adds the line that says the payout has landed
+ * (`statusNotice`). The dispute deadline of a provisional result is #175's, and the 판정 record
+ * itself (note, evidence, instant) is #24's.
  *
  * `role="status"` rather than `role="alert"`: a market closing while someone reads it is worth
  * announcing, but it is not an emergency that should interrupt them mid-sentence.
@@ -539,7 +524,7 @@ function MarketSummary({
  * asks for it on a settled screen as much as on a resolved one.
  */
 function StatusNotice({ market }: { market: Market }) {
-  const notice = STATUS_NOTICE[market.status];
+  const notice = statusNotice(market);
   if (notice === undefined) return null;
   return (
     <Alert.Root status={notice.tone} role="status" data-testid="market-status-notice">
@@ -556,7 +541,7 @@ function StatusNotice({ market }: { market: Market }) {
             <DataList.Item>
               <DataList.ItemLabel>{copy.marketResolvedResult}</DataList.ItemLabel>
               <DataList.ItemValue data-testid="market-detail-result">
-                {market.resolvedResult === 'YES' ? copy.yes : copy.no}
+                {MARKET_RESULT_LABEL[market.resolvedResult]}
               </DataList.ItemValue>
             </DataList.Item>
           </DataList.Root>

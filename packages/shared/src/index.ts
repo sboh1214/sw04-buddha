@@ -28,6 +28,7 @@ export * from './like.js';
 export * from './link-review.js';
 export * from './lmsr.js';
 export * from './market.js';
+export * from './market-lifecycle.js';
 export * from './market-maker/ladder.js';
 export * from './market-maker/risk.js';
 export * from './market-maker/terms.js';

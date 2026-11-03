@@ -623,7 +623,7 @@ M2를 마친 뒤 오너가 세 가지를 정했다(PLAN §17 Q2/Q3): ① 충전�
 ## ADR-0027 — 시장 · LMSR · 거래 · 관리자 시장 CRUD (M3)
 
 - 날짜: 2026-09-06
-- 상태: 채택, 일부 대체됨(ADR-0048: 직접 AMM 체결 `POST /quotes`·`POST /trades`와 슬리피지 가드, `MarketMechanism`, 시장의 LMSR 상태 열과 준비금 `maxLossP`, 관리자 무효와 원가 환불 `MARKET_VOID_REFUND`, 개장 'open' 틱과 LMSR 확률 `pYesBp`, 시드가 검수 없이 연 시장, 결과의 `lmsr.test.ts` 다섯 불변식 — 관리자 시장 생성·수정·열기·마감, 공개 읽기, `GET /me/positions`·`GET /me/orders`, 포지션 회계는 유효), 일부 대체됨(ADR-0050: `realized_pnl_p`와 `volume` 정렬 키 `(volume_p, id)`는 `realized_pnl_coin`·`(volume_coin, id)`이다 — 정렬과 포지션 회계는 유효), 일부 대체됨(ADR-0059: LMSR 엔진의 상태 `{ qYes, qNo, b }`·`cost`·개장 확률 p0로 시작하는 `initState`·틱의 `probabilityBp` — 곡선은 N01 §6 꼴의 `lmsrCost`·`probabilityYes(d, b)`·`referencePriceCoin`·`yesUnitCostCoin`이고 개장 기준은 모든 시장 50%다), 일부 대체됨(ADR-0065: 공개 목록 정렬의 `newest` = (created_at, id) desc와 `volume` = (volume_p, id) desc, 그리고 거래량 기본 정렬 — 정렬은 `recommended`(최근 24시간 거래량 → 실제 개장 시각, 기본)·`newest`(실제 개장 시각 `open_at`, 없으면 끝)·`closing`이고, 거래량 순은 #132가 다시 넣는다. `closing`의 키셋, 정렬별 키셋이라는 결정, 초안 404와 나머지 공개 읽기는 유효), 일부 대체됨(ADR-0092: 관리자 시장의 생성(`POST /admin/markets`)·수정(`PATCH /admin/markets/:id`)·열기·마감(`POST /admin/markets/:id/open`·`/close` — 전에는 본문이 없었다)은 본문에 화면의 관리자 `expectedAccountId`를 받아 무엇을 읽거나 잠그기 전에 쿠키의 계정과 견준다. 다르면 그 칸을 지목한 403 `FORBIDDEN`, 없으면 400이다. 수정의 '한 필드 이상'은 그 칸을 세지 않고, 계정은 저장하지 않는다(`created` 사건의 본문에도 없다). 관리자 시장 화면은 그려진 `Me`의 관리자를 대고, 시장 만들기·고치기의 양식은 그 관리자마다 다시 그리며(그것을 알 때까지 칸이 꺼져 있다) 마감의 확인 창은 연 관리자와 함께 쥐어, 화면의 관리자가 그 자리에서 바뀌면 적던 것이 비고 창이 닫힌다(ADR-0092 결정 1·2·5, 오너 결정 2026-10-26 17:21 답 1). 나머지 결정은 유효)
+- 상태: 채택, 일부 대체됨(ADR-0048: 직접 AMM 체결 `POST /quotes`·`POST /trades`와 슬리피지 가드, `MarketMechanism`, 시장의 LMSR 상태 열과 준비금 `maxLossP`, 관리자 무효와 원가 환불 `MARKET_VOID_REFUND`, 개장 'open' 틱과 LMSR 확률 `pYesBp`, 시드가 검수 없이 연 시장, 결과의 `lmsr.test.ts` 다섯 불변식 — 관리자 시장 생성·수정·열기·마감, 공개 읽기, `GET /me/positions`·`GET /me/orders`, 포지션 회계는 유효), 일부 대체됨(ADR-0050: `realized_pnl_p`와 `volume` 정렬 키 `(volume_p, id)`는 `realized_pnl_coin`·`(volume_coin, id)`이다 — 정렬과 포지션 회계는 유효), 일부 대체됨(ADR-0059: LMSR 엔진의 상태 `{ qYes, qNo, b }`·`cost`·개장 확률 p0로 시작하는 `initState`·틱의 `probabilityBp` — 곡선은 N01 §6 꼴의 `lmsrCost`·`probabilityYes(d, b)`·`referencePriceCoin`·`yesUnitCostCoin`이고 개장 기준은 모든 시장 50%다), 일부 대체됨(ADR-0065: 공개 목록 정렬의 `newest` = (created_at, id) desc와 `volume` = (volume_p, id) desc, 그리고 거래량 기본 정렬 — 정렬은 `recommended`(최근 24시간 거래량 → 실제 개장 시각, 기본)·`newest`(실제 개장 시각 `open_at`, 없으면 끝)·`closing`이고, 거래량 순은 #132가 다시 넣는다. `closing`의 키셋, 정렬별 키셋이라는 결정, 초안 404와 나머지 공개 읽기는 유효), 일부 대체됨(ADR-0092: 관리자 시장의 생성(`POST /admin/markets`)·수정(`PATCH /admin/markets/:id`)·열기·마감(`POST /admin/markets/:id/open`·`/close` — 전에는 본문이 없었다)은 본문에 화면의 관리자 `expectedAccountId`를 받아 무엇을 읽거나 잠그기 전에 쿠키의 계정과 견준다. 다르면 그 칸을 지목한 403 `FORBIDDEN`, 없으면 400이다. 수정의 '한 필드 이상'은 그 칸을 세지 않고, 계정은 저장하지 않는다(`created` 사건의 본문에도 없다). 관리자 시장 화면은 그려진 `Me`의 관리자를 대고, 시장 만들기·고치기의 양식은 그 관리자마다 다시 그리며(그것을 알 때까지 칸이 꺼져 있다) 마감의 확인 창은 연 관리자와 함께 쥐어, 화면의 관리자가 그 자리에서 바뀌면 적던 것이 비고 창이 닫힌다(ADR-0092 결정 1·2·5, 오너 결정 2026-10-26 17:21 답 1). 나머지 결정은 유효), 일부 대체됨(ADR-0095: 상태 draft/open/closed/voided — 상태는 열한 값이고(ADR-0093 #173 12항), 무효는 결과 유형 VOID다. 초안에서 바로 여는 열기와 관리자 한 명의 마감은 #21·#114까지 임시 전이로 남는다. 공개 읽기는 초안과 검수 중을 404로 숨긴다. 나머지 결정은 유효)
 
 ### 맥락
 
@@ -1996,7 +1996,7 @@ flowchart TB
 ## ADR-0046 — 판정 즉시 확정·정산 단계·이의 폐지 (#19)
 
 - 날짜: 2026-10-06
-- 상태: 채택, 일부 대체됨(ADR-0047: 판정 즉시 확정·이의 폐지·`resolved` 무효 불허와 `ADMIN_ADJUST` 보상·`settled`의 뜻·`voided` 분기·`coin` 단계 지급 — 정산 단계 테이블 `market_settlement_steps`와 실패 기록은 유효), 일부 대체됨(ADR-0050: `finalized` 이벤트 payload의 `paidP`는 새로 쓰는 행부터 `paidCoin`이다 — 정산 단계와 이벤트 구조는 유효), 일부 대체됨(ADR-0065: D4의 홈 상태 필터 — 홈에는 상태 필터가 없고 거래 중 시장만 보인다(ADR-0061 결정 1의 13). `resolved`를 '판정 완료' 한 항목으로 두는 `PUBLIC_MARKET_STATUSES`는 API의 `status`와 상태 배지에서 유효하고, 다른 상태는 검색(#15)의 상태 필터가 고른다), 일부 대체됨(ADR-0092: 결정 3의 판정 '요청 `{result, note?, evidenceUrl?}`는 그대로' — 요청에 화면의 관리자 `expectedAccountId`가 더해져, 시장을 잠그기 전에 쿠키의 계정과 견준다. 다르면 그 칸을 지목한 403 `FORBIDDEN`, 없으면 400이고, 계정은 판정의 기록에 남기지 않는다. 관리자 시장 상세의 판정 창은 연 관리자와 함께 쥐어, 화면의 관리자가 그 자리에서 바뀌면 고른 결과와 메모와 함께 닫힌다(ADR-0092 결정 1·5, 오너 결정 2026-10-26 17:21 답 1). 나머지 결정은 유효)
+- 상태: 채택, 일부 대체됨(ADR-0047: 판정 즉시 확정·이의 폐지·`resolved` 무효 불허와 `ADMIN_ADJUST` 보상·`settled`의 뜻·`voided` 분기·`coin` 단계 지급 — 정산 단계 테이블 `market_settlement_steps`와 실패 기록은 유효), 일부 대체됨(ADR-0050: `finalized` 이벤트 payload의 `paidP`는 새로 쓰는 행부터 `paidCoin`이다 — 정산 단계와 이벤트 구조는 유효), 일부 대체됨(ADR-0065: D4의 홈 상태 필터 — 홈에는 상태 필터가 없고 거래 중 시장만 보인다(ADR-0061 결정 1의 13). `resolved`를 '판정 완료' 한 항목으로 두는 `PUBLIC_MARKET_STATUSES`는 API의 `status`와 상태 배지에서 유효하고, 다른 상태는 검색(#15)의 상태 필터가 고른다), 일부 대체됨(ADR-0092: 결정 3의 판정 '요청 `{result, note?, evidenceUrl?}`는 그대로' — 요청에 화면의 관리자 `expectedAccountId`가 더해져, 시장을 잠그기 전에 쿠키의 계정과 견준다. 다르면 그 칸을 지목한 403 `FORBIDDEN`, 없으면 400이고, 계정은 판정의 기록에 남기지 않는다. 관리자 시장 상세의 판정 창은 연 관리자와 함께 쥐어, 화면의 관리자가 그 자리에서 바뀌면 고른 결과와 메모와 함께 닫힌다(ADR-0092 결정 1·5, 오너 결정 2026-10-26 17:21 답 1). 나머지 결정은 유효), 일부 대체됨(ADR-0095: 결정 2의 상태 기계, `resolved` = 정산 진행 중, 결정 7·8의 `PUBLIC_MARKET_STATUSES`(open·closed·resolved·settled·voided)와 라벨 '판정 완료'·'정산 완료' — 판정은 closed → resolved(임시 전이, #152까지)이고 워커가 resolved → settling을 따로 커밋한 뒤 settling → settled로 지급하며, 단계가 실패하면 settling에 남는다. 공개 상태는 DRAFT·REVIEW를 뺀 아홉, 라벨은 ADR-0093 #173 12항. 정산 단계 표와 실패 기록, 매 분 다시 시도는 유효)
 
 이슈 번호 표기는 ADR-0045와 같다(`#N` = `https://github.com/sboh1214/sw04-buddha/issues/N`). 이 ADR은 #19가 기록하고, ADR-0033의 판정·이의·확정 부분을 대체한다.
 
@@ -4475,7 +4475,7 @@ N02 §4의 '데스크톱은 차트·호가와 주문 패널을 병렬', '모바�
 ## ADR-0068 — 관련 시장(#65): 운영자의 양방향 연결·해제, 쌍마다 한 행(`market_links`)과 바뀐 것만의 기록(`admin_actions`의 `market_link`·`market_unlink`), 공개 `GET /markets/:id/related`(거래 중·거래 마감·판정 완료·정산 완료, 추천 순, 커서 페이지), 관리자 `GET`·`POST /admin/markets/:id/related`와 `DELETE /admin/markets/:id/related/:relatedMarketId`, 관리자 목록의 제목 검색, 상세의 토론 뒤 관련 시장 섹션 (#65, 오너 결정 2026-10-17)
 
 - 날짜: 2026-10-17
-- 상태: 채택, 일부 대체됨(ADR-0075: 결정 6 e2e의 '위의 토론은 테두리가 있다' — 토론도 바깥 카드가 없어 테두리가 없고, 관련 시장에 테두리가 없음의 대조는 호가창이 맡는다. 나머지 결정은 유효), 일부 대체됨(ADR-0092: 결정의 관리자 연결 '본문 `{ marketId }`'와 해제 '본문 없음' — 연결은 본문에, 해제는 쿼리(`DELETE /api/v1/admin/markets/:id/related/:relatedMarketId?expectedAccountId=`)에 화면의 관리자를 받아 무엇을 읽기 전에 쿠키의 계정과 견준다. 다르면 그 칸을 지목한 403 `FORBIDDEN`, 없으면 400이다. 관리자 시장 상세의 연결·해제는 그려진 `Me`의 관리자를 대고, 해제의 확인 창은 연 관리자와 함께 쥔다(ADR-0092 결정 1·2·5·8-1, 오너 결정 2026-10-26 17:21 답 1). 나머지 결정은 유효)
+- 상태: 채택, 일부 대체됨(ADR-0075: 결정 6 e2e의 '위의 토론은 테두리가 있다' — 토론도 바깥 카드가 없어 테두리가 없고, 관련 시장에 테두리가 없음의 대조는 호가창이 맡는다. 나머지 결정은 유효), 일부 대체됨(ADR-0092: 결정의 관리자 연결 '본문 `{ marketId }`'와 해제 '본문 없음' — 연결은 본문에, 해제는 쿼리(`DELETE /api/v1/admin/markets/:id/related/:relatedMarketId?expectedAccountId=`)에 화면의 관리자를 받아 무엇을 읽기 전에 쿠키의 계정과 견준다. 다르면 그 칸을 지목한 403 `FORBIDDEN`, 없으면 400이다. 관리자 시장 상세의 연결·해제는 그려진 `Me`의 관리자를 대고, 해제의 확인 창은 연 관리자와 함께 쥔다(ADR-0092 결정 1·2·5·8-1, 오너 결정 2026-10-26 17:21 답 1). 나머지 결정은 유효), 일부 대체됨(ADR-0095: 결정 5의 관리자 안내 '상세에는 {보이는 상태}인 시장만 보입니다' — 안내는 보이지 않는 상태(초안·검수 중·취소)와 결과가 무효인 시장을 적는다. 결과는 상태가 아니라 보이는 상태의 목록만으로는 VOID 제외를 말할 수 없다. 나머지 결정은 유효)
 
 이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #65를 기록한다. 오너 결정은 ADR-0061(결정 1의 18·19, 결정 3의 #65 행과 그 행이 답한 #172 3항)과 ADR-0067(오너가 화면 시안으로 승인한 상세 배치, 2026-10-17)에 있고, 여기에는 그것을 옮겨 적은 표와 오너가 이 PR의 관련 시장 화면을 보고 2026-10-17에 정한 여섯 가지(결정 1), 구현(결정 2\~4), 구현에서 정한 것(결정 5), 시험(결정 6)을 적는다. ADR-0067이 토론 뒤에 남겨 둔 자리와 ADR-0041의 그리드 칸 폭 한 줄을 대체한다(결과 1). 사건(Event) 단위(#172), 뉴스(#82), 관련 시장의 알림은 이 PR의 범위가 아니다.
 
@@ -10218,3 +10218,146 @@ Dependabot PR #244가 better-auth를 1.7.2에서 1.7.7로 올렸다. 1.7.7은 Ma
 - **되돌리기.** 0047을 적용한 DB에는 #244 이전의 이미지를 다시 배포할 수 없다. 그 API는 `issuer`를 찾아 계정의 모든 읽기와 쓰기가 실패한다. 앞으로 고친다(terraform/README.md '롤백' — 마이그레이션은 앞으로만 간다). 로컬의 개발 DB도 이 가지에서는 `pnpm db:migrate`를 거쳐야 가입이 된다(검사는 TS 스키마만 보므로 API는 뜬다).
 - **다음 업그레이드.** better-auth가 바뀐 스키마를 바라면 그 판을 배포한 API는 모든 인증 요청을 거절한다. ADR-0021대로 그 판의 `auth` 생성기 출력과 `schema/auth.ts`를 견주고, 손으로 고친 셋(timestamptz, relations, 이 유니크)은 남긴다.
 - 확인: 0046까지 적용하고 1.7.2 식의 계정 다섯 행(credential, google, kakao, naver, 그리고 google 행과 같은 `account_id`를 가진 kakao 행)을 넣은 DB에 0047을 적용했다. 컬럼과 인덱스가 바뀌었고 다섯 행이 그대로 남았다. 앱 롤이 같은 `(kakao, k-1)`로 둘째 행을 넣는 것은 새 유니크로 거절됐다. `drizzle-kit check`는 문제가 없고, 다시 `generate`해도 바뀐 것이 없다.
+
+---
+
+## ADR-0095 — 시장 생애주기 열한 상태와 결과 유형(#174): `MARKET_STATUSES`를 DRAFT·REVIEW·SCHEDULED·OPEN·PAUSED·CLOSED·PROVISIONAL·RESOLVED·SETTLING·SETTLED·CANCELLED로 바꾸고 결과 유형 YES/NO/VOID(`MARKET_RESULTS`, Postgres `market_result`)를 상태와 계약의 `OUTCOMES`에서 떼며, 허용 전이 표(`MARKET_LIFECYCLE_TRANSITIONS`)와 지금 관리자 동작이 쓰는 임시 전이 둘을 상태를 바꾸는 한 곳(`transitionMarket`)이 강제하고 전이마다 누가·언제·어디서·어디로를 `market_events`에 남기며, 워커가 RESOLVED → SETTLING → SETTLED로 지급하고, 마이그레이션 0048이 계정까지 모든 표를 비운다 (#174, 오너 결정 ADR-0093)
+
+- 날짜: 2026-10-31
+- 상태: 채택
+
+이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #174를 기록한다. 오너 결정은 모두 ADR-0093(결정 1의 #173 1·4·8·10·11·12항, 결정 2의 #172 6항, 결정 3의 #174 세 행)에 있고 결정 1의 표에 그 행을 옮겼다. 그 밖에 이 PR이 정한 것은 결정 8 '구현의 선택'에 있다. 이 PR은 상태 값과 허용 전이, 결과 유형, 전이 기록을 바꾼다. 각 전이를 일으키는 동작(검수 #78, 예약 개장 #21, 일시 중단 #114, 마감 #120, 판정 #152, 이의 #175, 정정 #176, 지급 #126, 거래 없는 취소 #20)은 그 이슈가 만든다.
+
+### 맥락
+
+- 기획: N03 §3 "DRAFT → REVIEW → SCHEDULED → OPEN → CLOSED → PROVISIONAL → RESOLVED → SETTLING → SETTLED." "OPEN ↔ PAUSED는 전체 거래의 일시 중단이다." "CLOSED 이후 거래를 재개하지 않는 것을 기본으로 한다." "결과 유형은 YES/NO/VOID로 상태와 별도 저장한다." "거래가 전혀 없던 시장은 CANCELLED로 종료할 수 있다." N03 §8 "수정·중단·판정·지급 작업의 담당자·시각·사유를 보존한다." N00 §3-02 개장·거래 마감·잠정 판정·확정·지급 완료의 구분. 오너 결정 D4(배포 환경은 초기화해도 된다).
+- 이 PR 전: 시장 상태는 `draft`·`open`·`closed`·`resolved`·`settled`·`voided`의 여섯이었고(`MARKET_STATUSES`), 결과는 계약의 `OUTCOMES`(YES·NO, Postgres `outcome`)를 그대로 썼다(`markets.resolved_result`). 무효는 상태(`voided`)와 열(`voided_at`)이었다. 상태를 바꾸는 곳은 API의 관리자 동작 셋(`open`·`close`·`resolve`)과 워커의 두 잡(`market.close`·`market.finalize`)으로, 저마다 `market_events`를 넣고 `markets`를 고쳤다. 전이를 거르는 공용 규칙은 없었다. 사건 유형에는 M5 이의 단계의 `resolve_proposed`·`result_changed`와 쓰지 않는 `voided`가 '옛 행을 읽으려고' 남아 있었다. 공개 라우트는 `status <> 'draft'`로 초안만 숨겼다.
+- 범위: #174 본문의 포함과 제외 그대로다. 정산 단계의 스코어 예약(`score`)은 코드에서 이미 지워졌다(ADR-0057 결과 1). 남은 글은 고치지 않는 기록 `docs/PLAN.md`뿐이다. 각 동작은 그 이슈가 바꿀 때까지 ADR-0046·ADR-0027대로 동작한다(ADR-0047 결과 3, ADR-0093 결과 2). 그래서 지금 관리자의 바로 열기·한 명의 마감·즉시 확정은 새 상태 위에서 그대로 남는다(결정 4).
+
+### 결정
+
+**1. 오너 결정 (다시 정하지 않는다).** ADR-0093의 그 행을 옮겼다.
+
+| 근거                      | 주제                    | 결정                                                                                                                                                                                                                      |
+| ------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ADR-0093 #173 1항         | 전이의 계기             | 시각이 정한 전이는 자동, 판단이 필요한 전이는 운영자다. 자동: SCHEDULED → OPEN, OPEN·PAUSED → CLOSED(사용자 체결 0건이면 CANCELLED), PROVISIONAL → RESOLVED, RESOLVED → SETTLING. 검수 반려는 REVIEW → DRAFT.             |
+| ADR-0093 #173 4·8·10항    | 없는 전이               | CLOSED 뒤 재개는 예외 없이 없다. 마감 전 VOID는 없다(판정에서 고른다). 정정은 PROVISIONAL에서만이라 RESOLVED → PROVISIONAL은 없다. CANCELLED의 결과 유형은 비워 두고 VOID로 적지 않는다.                                  |
+| ADR-0093 #172 6항, 결과 1 | 기획에 더한 전이        | REVIEW → DRAFT, SCHEDULED → DRAFT, SCHEDULED → CANCELLED, PAUSED → CLOSED, 거래 마감 때 사용자 체결이 없는 OPEN·PAUSED → CANCELLED.                                                                                       |
+| ADR-0093 #173 11항        | 판정 지연               | 별도 상태가 아니고 CLOSED(늦어지면 PROVISIONAL)의 표시다.                                                                                                                                                                 |
+| ADR-0093 #173 12항        | 사용자 라벨과 공개 범위 | 개장 예정·거래 중·거래 일시 중단·거래 마감·잠정 결과·결과 확정·지급 중·지급 완료·취소, VOID 결과는 '무효'. DRAFT·REVIEW는 사용자에게 보이지 않고, SCHEDULED 시장은 개장 전에도 상세를 공개한다.                           |
+| ADR-0093 결정 3 #174      | DB 초기화               | #174 마이그레이션이 처음에 0017처럼 모든 표를(계정 포함) 비우고, 시드가 새 형식의 시장을 채운다. ADR-0071 답 1의 '#70 배포 뒤 초기화'를 겸한다.                                                                           |
+| ADR-0093 결정 3 #174      | 상태를 받는 곳          | 토론 읽기·쓰기와 관심 등록은 사용자에게 공개하는 모든 상태(개장 예정·일시 중단·취소 포함)에서 받는다. 관련 시장은 무효(VOID 결과)와 취소를 뺀다. 테마 결과 목록은 결과 확정 뒤의 결과(VOID 포함)만 싣고 잠정 결과는 뺀다. |
+| ADR-0093 결정 3 #174      | 홈·검색                 | 홈은 거래 중(OPEN)만이다. 검색은 공개하는 모든 상태를 보이고 취소를 포함해 라벨마다 필터를 둔다.                                                                                                                          |
+
+**2. 저장(마이그레이션 0048, `0048_market_lifecycle`).** `drizzle-kit generate`의 출력에 머리 주석과 두 가지를 손으로 고쳤다.
+
+- 첫 문장은 0017과 같은 `WIPE_PUBLIC_TABLES_SQL`이다. 계정까지 `public`의 모든 표를 비운다(결정 1의 'DB 초기화'). `wipe.test.ts`가 0017과 0048의 첫 문장이 그 상수와 같은지 본다.
+- `market_status`를 열한 값으로 다시 만든다(열을 text로 바꾸고, 형을 지우고 만들고, 다시 바꾼다). 표가 비어 있어 바꾸기가 실패할 행이 없다. 기본값은 그대로 `draft`다.
+- `market_result`(YES·NO·VOID)를 새로 만들고 `markets.resolved_result`를 그 형으로 바꾼다. 계약의 `outcome`(주문·체결·포지션)은 YES·NO 그대로다. `markets.voided_at`을 지운다.
+- `market_events`에 `from_status`·`to_status`(`market_status`, NULL 가능)를 더한다. CHECK `market_events_status_change_check`: `from_status`가 있으면 `to_status`도 있고 둘이 다르다. drizzle-kit은 두 열을 만들기 전에 `market_status` 재생성 안에서 그 열들을 바꾸는 네 문장을 냈다. 그 네 문장을 지우고 열은 형을 만든 뒤에 더한다.
+- 0047까지 적용하고 `voided` 시장과 계정이 있는 DB에 0048을 적용해 보았다. 모든 표가 비고 형이 바뀌었다. 빈 DB에 처음부터 적용해도 된다. 다시 `generate`해도 바뀐 것이 없다.
+
+**3. 공유(`@buddha/shared`).**
+
+- `MARKET_STATUSES`는 N03 §3의 순서에 PAUSED를 OPEN 옆에, CANCELLED를 끝에 둔 열한 값이다(값은 지금처럼 소문자). 이 순서는 전이 키가 없는 행(시험 팩토리의 것)의 대비 순서(`statusRank`)일 뿐이고, 전이의 순서는 아니다(PAUSED → OPEN은 뒤로 간다).
+- `MARKET_RESULTS = ['YES', 'NO', 'VOID']`, `MarketResult`, `marketResultSchema`(OpenAPI 스키마 `MarketResult`). `MarketSummary`·`Market`·`Position`·`market:status`의 `resolvedResult`와 `ThemeResult.result`가 이것이다. 이름 `resolvedResult`는 그대로다(결정 8-2). `Market.voidedAt`은 없어졌다.
+- `market-lifecycle.ts`: `MARKET_LIFECYCLE_TRANSITIONS`(결정 1의 전이, 떠나는 상태마다 갈 수 있는 상태와 그 전이를 만드는 이슈의 주석), `INTERIM_MARKET_TRANSITIONS`(결정 4의 임시 전이 둘과 그것을 지우는 이슈), `canTransitionMarket(from, to)`, `PRE_CLOSE_MARKET_STATUSES`(draft·review·scheduled·open·paused — 아직 마감되지 않은 상태)와 `isPreCloseMarketStatus`.
+- `PUBLIC_MARKET_STATUSES`는 DRAFT·REVIEW를 뺀 아홉이고 `isPublicMarketStatus`가 있다. `RELATED_MARKET_STATUSES`는 그 가운데 취소를 뺀 여덟이고, VOID 결과를 빼는 `isRelatedMarketShown`이 함께 있다(결과는 상태가 아니라 상태 목록만으로는 말할 수 없다). `THEME_RESULT_STATUSES`는 `resolved`·`settling`·`settled`다.
+- `MARKET_EVENT_TYPES`에서 `resolve_proposed`·`result_changed`·`voided`를 지우고 `settling`(RESOLVED → SETTLING, 워커)을 더했다. 표가 비므로 옛 행을 읽으려고 남길 까닭이 없다(#174 본문). `MarketEvent`에 `fromStatus`·`toStatus`가 더해졌다.
+
+**4. 상태를 바꾸는 한 곳과 임시 전이.**
+
+- `transitionMarket(tx, { marketId, from, to, type, actorId, payload, at, set })`(`@buddha/db`)가 두 앱이 `markets.status`를 바꾸는 유일한 길이다. `canTransitionMarket`이 거절하는 쌍이면 `MarketTransitionError`를 던지고 아무것도 쓰지 않는다. 그렇지 않으면 사건 행(누가 `actor_id` — 워커는 NULL —, 언제 `created_at`, 어디서 `from_status`, 어디로 `to_status`)을 넣고, 시장 행을 `WHERE status = from`으로 고치며 그 사건의 id를 `status_event_id`로 적는다. 시장 잠금 뒤 `FOR UPDATE`로 읽은 상태와 잠금 뒤의 DB 시각으로 부른다. 새로 만드는 `created` 사건은 `to_status`(`draft`)만, 상태를 바꾸지 않는 `rules_edited`는 둘 다 없다.
+- 지금 관리자 동작 셋은 그 이슈가 바꿀 때까지 남는다(ADR-0047 결과 3, ADR-0093 결과 2). 오류 코드도 그대로다.
+
+  | 동작                                       | 전이                            | 지우는 이슈 | 표의 자리                  |
+  | ------------------------------------------ | ------------------------------- | ----------- | -------------------------- |
+  | 관리자 열기 `POST /admin/markets/:id/open` | draft → open                    | #21(#78)    | 임시 전이                  |
+  | 관리자 마감 `POST …/close`                 | open → closed(관리자 한 명)     | #114        | 수명주기 전이(계기만 임시) |
+  | 관리자 판정 `POST …/resolve`               | closed → resolved(YES·NO, 즉시) | #152        | 임시 전이                  |
+
+- 판정은 YES·NO만 받는다. VOID는 #152의 판정에서 고르고 50/50 지급은 #126이 한다(ADR-0093 #173 4·9항).
+
+**5. API.**
+
+- 공개 라우트는 `status <> 'draft'` 대신 공개 상태(`isPublicMarket()`, `inArray(status, PUBLIC_MARKET_STATUSES)`)로 거른다: 목록(`status=all`)·상세·체결·시세·관련 시장의 기준 시장·시장의 테마·토론 목록과 쓰기·관심 시장의 목록·상태·쓰기·테마의 시장 목록과 공개 수·시장 제안이 가리키는 시장. REVIEW도 초안처럼 NOT_FOUND다.
+- 관련 시장은 `RELATED_MARKET_STATUSES`이면서 `resolved_result IS DISTINCT FROM 'VOID'`이다. 테마 결과는 `THEME_RESULT_STATUSES`이고 결과가 있는 행이며 `decidedAt`은 `coalesce(resolved_at, close_at)`이다.
+- 마감 임박(`closing`): 마감 전 상태(`PRE_CLOSE_MARKET_STATUSES`, 공개 목록에서는 개장 예정·거래 중·거래 일시 중단)가 앞의 무리이고, 그 밖의 공개 상태가 마감이 최근인 순으로 뒤의 무리다(ADR-0066의 '진행 중 먼저'를 넓힌 것). 마감 전 상태 하나로 거른 목록은 홈과 같은 `(close_at, id)` 커서다.
+- 관리자 상세의 사건에 `fromStatus`·`toStatus`가 있다. 감사 스냅샷에서 `voidedAt`이 빠졌다. 컨트롤러 요약과 `surface/registry.ts`의 사유는 새 라벨로 적었다. `pnpm api:openapi`로 `openapi.json`·api-client·`docs/API.md`를 다시 만들었다(`scripts/generate-api-doc.mjs`의 `market:status`·`NOT_FOUND`·`MARKET_NOT_OPEN` 줄도).
+
+**6. 워커.**
+
+- `market.close`: open → closed를 `transitionMarket`으로(유형 `closed`, 행위자 NULL, payload `{closedAt, source: 'job'}`). PAUSED → CLOSED는 #114가 더한다.
+- `market.finalize`: 스캔은 `resolved`와 `settling`을 줍는다. `resolved` 시장은 먼저 제 트랜잭션에서 resolved → settling(유형 `settling`, 행위자 NULL)을 커밋하고 `market:status` `settling`을 발행한 뒤 단계를 돈다. 모든 단계가 끝나면 settling → settled(유형 `finalized`, `settled_at`). 단계가 실패하면 시장은 `settling`에 남고(ADR-0093 #173 14항) 실패는 그 단계에 적힌다. 결과가 VOID면 지급하기 전에 큰 소리로 실패한다 — 지금의 지급(`settle(won)`)은 50/50을 줄 수 없고, VOID 지급은 #126이다. 잡 이름과 스케줄러 id는 그대로다(ADR-0046 결정 6).
+
+**7. 웹.**
+
+- 라벨(`copy.ts`)은 결정 1의 열한 상태 그대로이고, 관리자만 보는 REVIEW는 '검수 중'이다(결정 8-1). 결과 라벨 `MARKET_RESULT_LABEL`이 VOID를 '무효'로 보인다. 상세의 결과·내 포지션·MY 정산 이력·관리자 상세와 사건 기록·테마 결과가 쓴다. 전에는 YES가 아니면 모두 NO로 그렸다.
+- 상세의 상태 안내(`statusNotice`): 개장 예정·거래 일시 중단·잠정 결과·결과 확정·지급 중·지급 완료·취소. '정산을 진행하고 있습니다'는 지급 중으로 옮겼고, 지급 완료의 'YES·NO 100 Coin' 줄은 VOID 결과에 보이지 않는다.
+- 카운트다운은 마감 전 상태(개장 예정·거래 중·거래 일시 중단)에서 돌아, 개장 예정·일시 중단 시장이 '마감됨'으로 보이지 않는다. 마감 임박은 거래 중과 거래 일시 중단이다.
+- 관리자: 상태 거름은 열한 값, '정산 대기'와 5초 다시 읽기는 결과 확정과 지급 중, 최근 체결은 DRAFT·REVIEW에서 묻지 않는다, 카드 미리보기는 공개 상태의 시장에서만 그 시장의 이력을 쓴다. 관련 시장 안내는 '초안·검수 중·취소인 시장과 결과가 무효인 시장은 상세에 보이지 않습니다.'다(목록에서 만든다).
+- 검색의 상태 필터는 `PUBLIC_MARKET_STATUSES`를 따라 '모든 상태'와 아홉 라벨(취소 포함)이다. 무효·판정 지연 필터는 없다(결정 8-6).
+- 관심 시장을 켠 홈의 빈 글과 관리자 마감의 거절 글의 상태 이름은 '진행 중'에서 '거래 중'이다(ADR-0065가 #174 때 맞추라고 한 것).
+
+**8. 구현의 선택.** 오너가 정하지 않은 것을 이 PR이 정했다. 되돌리기 쉬운 쪽을 골랐다.
+
+1. **REVIEW의 관리자 라벨은 '검수 중'.** 사용자에게 보이지 않는 상태라 ADR-0093의 사용자 라벨에 없다. 초안은 '초안' 그대로다.
+2. **결과 열과 필드 이름을 바꾸지 않았다.** `resolved_result`·`resolvedResult`의 형만 `market_result`로 바꿨다. 잠정 결과(#152)도 '판정된 결과'라 이름이 틀리지 않고, 화면·API·실시간을 모두 고치는 이름 바꾸기를 피했다.
+3. **전이 기록은 열 둘(`from_status`·`to_status`)과 CHECK다.** 사건 유형만으로는 같은 유형(예: `opened`가 draft → open과 #21의 scheduled → open)을 가를 수 없고, payload는 형을 보장하지 않는다. 행위자의 종류(운영자·시스템)는 지금처럼 `actor_id`가 NULL이면 워커다.
+4. **임시 전이를 표에 이름을 붙여 둔다(`INTERIM_MARKET_TRANSITIONS`).** 지금 동작을 지우면 #78·#21·#152가 머지될 때까지 배포 환경의 관리자가 시장을 열거나 판정할 수 없다. 표에 두되 수명주기와 따로 두어, 지우는 PR이 그 줄을 지우고 시험이 그 이슈를 이름으로 본다.
+5. **RESOLVED → SETTLING은 워커의 첫 트랜잭션이다.** 판정 트랜잭션에서 함께 하면 RESOLVED가 보이지 않고, 단계와 한 트랜잭션이면 실패한 지급이 '결과 확정'으로 보인다(#173 14항은 SETTLING에 머문다). 결과가 없거나 VOID인 시장도 settling으로 간 뒤 단계에서 실패해 그 단계에 이유가 남는다.
+6. **검색에 무효·판정 지연 필터가 없다.** 결정 1의 '라벨마다'는 상태 라벨이다. 무효는 결과이고, 판정 지연은 #22·#142의 시각과 기록이 있어야 정해지는 표시다.
+7. **관련 시장은 잠정 결과의 VOID도 뺀다.** '무효(VOID 결과)'를 결과가 VOID인 지금의 시장으로 읽었다. 잠정 결과가 정정(#176)되어 VOID가 아니게 되면 다시 보인다.
+8. **마감 임박의 앞 무리는 마감 전 상태다.** 거래 일시 중단도 예정대로 마감하고(#173 3항) 개장 예정도 마감 시각이 앞에 있어 '끝난 시장'이 아니다.
+9. **색.** 거래 중은 brand, 개장 예정·거래 일시 중단·거래 마감·잠정 결과·결과 확정·지급 중은 '기다리는' orange, 초안·검수 중·지급 완료·취소는 gray다. VOID의 붉은 색(`no`)은 상태에서 쓰지 않는다.
+10. **개장 예정 카드는 마감까지의 카운트다운을 보인다.** 아무것도 없는 것보다 덜 놀랍고, 개장 예정 시각은 #22가 더한다.
+11. **MY 보유 포지션에서 OPEN과 PAUSED.** 포지션 행에는 `statusEventId`가 없어 실시간의 상태와 키로 견줄 수 없다. 거래 중과 일시 중단을 한 단계로 보아 둘 사이에서는 실시간의 것을 받고, 그보다 앞선 상태는 받지 않는다. 지급 중은 보유 포지션에 남고(워커가 포지션을 SETTLED와 함께 정산한다), 지급 완료와 취소는 정산 이력이다.
+12. **테마 공개의 거절 글**은 'at least one public market (not a draft or under review) is required to publish'다(코드와 칸은 그대로).
+13. **시드는 그대로 초안 14개다.** 시드가 넣는 값(`draft`)은 새 상태다. 마감이 지난 시드 문안(4개)은 시드가 지금처럼 경고한다. 문안을 새로 쓰는 일은 Q-M3-4다.
+
+**9. 시험.**
+
+- shared: 전이 표가 기획의 순서·OPEN ↔ PAUSED·ADR-0093의 더한 전이·임시 전이 둘과 정확히 같고, 닫힌 시장의 재개와 확정 뒤의 되돌림이 없으며, DRAFT에서 모든 상태에 닿는다(`market-lifecycle.test.ts`). 공개·관련·테마 결과 상태, 결과 유형과 계약 쪽의 분리, 사라진 사건 유형, 실시간의 `paused`·VOID.
+- db: `transitionMarket`(누가·언제·어디서·어디로와 `status_event_id`, 워커의 NULL, 표가 거절하는 모든 쌍에서 아무것도 쓰지 않음, 상태가 바뀐 행에서 실패와 되돌림), `market_result`·`outcome`의 값과 `voided_at`이 없음, 사건의 CHECK, 팩토리의 정산 단계, 0017·0048의 비우는 문장.
+- API 통합: 관리자 열기·마감·판정의 사건 행과 상세의 `fromStatus`·`toStatus`·행위자, 각 동작이 다른 모든 상태를 지금의 코드로 거절함과 판정의 VOID 거절, REVIEW가 초안처럼 숨는 모든 공개 라우트, 개장 예정·일시 중단·취소에서 토론·관심 등록, 관련 시장의 취소와 VOID(잠정 포함) 제외, 테마 결과의 지급 중·VOID 포함과 잠정·취소 제외, 마감 임박의 무리와 커서, 포지션의 새 상태와 VOID.
+- 워커: resolved → settling이 단계 전에 커밋되고 발행됨, settling → settled, 실패한 단계 뒤 settling에 남음, VOID는 지급 없이 실패, 스캔이 resolved와 settling을 줍고 나머지를 남김, 이미 settling인 시장에 두 번째 사건이 없음.
+- web: 라벨과 색의 완전성, VOID의 '무효', 마감 임박의 일시 중단, 포지션 목록, 실시간의 PAUSED → OPEN, 상태 안내, 미리보기, 관련 시장 안내, 검색 필터.
+- 돌린 것(2026-10-31): `pnpm check`(`CI=true`, docker test 프로필) — shared 1,078, storage 24, web 2,126, db 326, worker 167, api 1,317(건너뜀 2 — 리눅스에서만 도는 메모리 시험). e2e는 CI처럼 세 샤드로, 샤드마다 템플릿에서 만든 DB와 제 Redis로 돌려 595건 통과, 3건은 설계대로 건너뜀, 실패 없음(샤드마다 인증번호 163·187·185건).
+
+### 결과
+
+**1. 상태 줄.** 이어 썼다(덮어쓰지 않는다, ADR-0047 결과 1).
+
+- ADR-0027: 일부 대체됨(ADR-0095: 상태 draft/open/closed/voided — 상태는 열한 값이고(ADR-0093 #173 12항), 무효는 결과 유형 VOID다. 초안에서 바로 여는 열기와 관리자 한 명의 마감은 #21·#114까지 임시 전이로 남는다. 공개 읽기는 초안과 검수 중을 404로 숨긴다. 나머지 결정은 유효).
+- ADR-0046: 일부 대체됨(ADR-0095: 결정 2의 상태 기계, `resolved` = 정산 진행 중, 결정 7·8의 `PUBLIC_MARKET_STATUSES`(open·closed·resolved·settled·voided)와 라벨 '판정 완료'·'정산 완료' — 판정은 closed → resolved(임시 전이, #152까지)이고 워커가 resolved → settling을 따로 커밋한 뒤 settling → settled로 지급하며, 단계가 실패하면 settling에 남는다. 공개 상태는 DRAFT·REVIEW를 뺀 아홉, 라벨은 ADR-0093 #173 12항. 정산 단계 표와 실패 기록, 매 분 다시 시도는 유효).
+- ADR-0068: 일부 대체됨(ADR-0095: 결정 5의 관리자 안내 '상세에는 {보이는 상태}인 시장만 보입니다' — 안내는 보이지 않는 상태(초안·검수 중·취소)와 결과가 무효인 시장을 적는다. 결과는 상태가 아니라 보이는 상태의 목록만으로는 VOID 제외를 말할 수 없다. 나머지 결정은 유효).
+- 고치지 않은 상태 줄: ADR-0093(결정만 적은 ADR이고 이 PR은 그대로 따랐다), ADR-0061·ADR-0064·ADR-0065·ADR-0066·ADR-0069·ADR-0075·ADR-0088(ADR-0093 결과 2가 '원칙은 그대로이고 #174가 상태 목록과 필터를 옮긴다'고 한 것들 — 관심 시장 빈 글의 '진행 중'도 ADR-0065가 #174 때 맞추라고 남긴 일이다), ADR-0048 결정 4(무효 값·`voided_at`을 #174까지 남긴다는 넘김을 했다), ADR-0071 답 1(초기화의 시점을 ADR-0093이 #174로 정했다).
+
+**2. 문서.** `docs/API.md`·`apps/api/openapi.json`·api-client는 생성했다(스키마 `MarketResult`가 더해지고 상태 열거와 라우트 요약이 바뀌었다). `docs/RESET.md`에 '#174 배포 때' 절을 더하고 #70 절이 그것을 가리키게 했다. README의 경로 표(검색·테마·상세·관리자 시장), `docs/GUARDS.md`의 런타임 검사 픽스처(결과 확정 시장)를 고쳤다. `docs/PLAN.md`(고치지 않는 M0\~M6 기록)는 그대로다.
+
+**3. 오너가 할 일.**
+
+- **#174를 머지하면 배포 DB가 계정까지 비워진다**(마이그레이션 0048, docs/RESET.md). 테스터에게 다시 가입해야 한다고 미리 알린다. 덤프가 필요하면 머지 전에 수동 `pg_dump`를 한다.
+- 0048은 Postgres만 비운다. 이미지 버킷(지운 글·프로필의 이미지)과 Redis의 지연 잡은 남는다. 초기화가 버킷까지 비운다는 결정(ADR-0073)대로 두려면 배포 직후, 테스터가 다시 가입하기 전에 `sudo bash /data/buddha/reset-db.sh --yes`를 한 번 돌린다(docs/RESET.md '#174 배포 때').
+- 시드 관리자 둘로 다시 로그인해 온보딩을 마친다(docs/RESET.md '확인').
+
+**4. 오너에게 물을 것.** 없다. 결정 8의 선택은 리뷰에서 바꿀 수 있다.
+
+**5. 알려진 한계와 다른 이슈에 넘긴 것.**
+
+- #78·#21: SCHEDULED → DRAFT가 생기면 개장 예정 때 쓴 토론 글·관심 등록이 숨은 시장을 가리킨다. 관심 시장 목록과 테마는 공개 상태로 걸러 빠지지만, 글 목록(`GET /posts`)·글 화면·프로필의 글과 댓글 목록은 시장의 상태를 보지 않아 초안의 제목과 배지를 보일 수 있다. 그 시장에 이미 쓴 글과 관심 등록을 어떻게 할지는 그 전이를 만드는 PR에서 묻는다. #174에서는 그 전이를 하는 길이 없다.
+- #114: PAUSED → CLOSED(조기 마감, 예정대로의 마감)와 워커 마감 잡의 `paused`, 마감 임박 배지·카운트다운의 일시 중단은 이 PR이 화면만 준비했다. 시드의 마감 경고는 초안과 거래 중만 본다(검수 중·개장 예정·일시 중단은 #78·#21·#114).
+- #152·#126: 판정은 YES·NO만, VOID 결과는 워커가 지급 전에 실패한다. 테마 결과의 '확정 시각'은 `resolved_at`이다.
+- #22·#142·#175: '판정 지연'·'이의 검토 중' 표시와 그 필터.
+- #137: 약관(`apps/web/src/legal/terms.ts`)의 '판정 즉시 확정·정산'과 '무효는 산 값을 돌려준다' 문장은 이 동작과 어긋난다. ADR-0093 결정 3의 #175 행대로 #137에서 한 번에 고친다(D4).
+- #119·#66: 개장 예정·일시 중단 시장의 주문 영역(`showsOrderArea`는 `open`만).
+- 포지션 행에 `statusEventId`가 없어 MY의 OPEN·PAUSED는 키로 견주지 못한다(결정 8-11). 실시간 포지션을 다시 짜는 #119에서 볼 일이다.
+
+**6. 파일.**
+
+- db: `drizzle/0048_market_lifecycle.sql`·`meta/0048_snapshot.json`·`_journal.json`, `src/schema/{enums,markets,market-events,market-settlement-steps,watchlist,themes}.ts`, `src/market-transitions.ts`(새)·`market-transitions.test.ts`(새), `src/index.ts`, `src/wipe.ts`·`wipe-cli.ts`·`wipe.test.ts`, `src/seed.ts`, `src/test/{factories,harness}.ts`, `src/schema.test.ts`.
+- shared: `src/enums.ts`, `src/market.ts`, `src/market-lifecycle.ts`(새)·`market-lifecycle.test.ts`(새), `src/related-markets.ts`, `src/themes.ts`, `src/realtime.ts`, `src/index.ts`, 주석(`authored.ts`·`profile.ts`·`proposals.ts`)과 시험.
+- api: `src/markets/*`(관리자·공개·정렬·관련 시장·컨트롤러), `src/posts`, `src/watchlist`, `src/themes`, `src/proposals/proposal-rows.ts`, `src/authored`, `src/profiles/profile-queries.ts`, `src/realtime/market-publisher.ts`(주석), `src/surface/registry.ts`, 시험, `openapi.json`.
+- worker: `src/jobs/market-close.ts`·`market-finalize.ts`·`scan.ts`와 시험.
+- web: `src/copy.ts`, `src/lib/{market-admin,market-detail,market-preview,related-markets,themes,market-live,market-search,admin-themes,posts,query-client}.ts`, `src/hooks/{use-portfolio,use-admin-markets,use-markets}.ts`, `src/components/market/{countdown-badge,my-position}.tsx`, 상세·MY·테마·관리자 화면, 시험, e2e(`search.spec.ts`와 주석).
+- 그 밖: `packages/api-client/src/generated/schema.ts`, `docs/API.md`, `scripts/generate-api-doc.mjs`, `deploy/reset-db.sh`(주석), `docs/RESET.md`, `docs/GUARDS.md`, `README.md`.

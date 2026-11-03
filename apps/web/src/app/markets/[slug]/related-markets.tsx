@@ -19,7 +19,8 @@ import { MarketGrid } from '../../market-list';
  * 더 보기 and the refresh notice), the home's cards with their titles one level down (`h3`), and
  * each card joining its market's room, so a `market:tick` or a `market:status` moves the card
  * without a request (realtime-provider.tsx writes every `['markets', …]` page). With nothing to
- * show — no link, or none in a shown status — the section stays and says so (item 19).
+ * show — no link, or none in a shown status or with a result other than 무효 — the section stays
+ * and says so (item 19).
  *
  * Public (item 18): the page reads the first page on the server, without a cookie, and dehydrates
  * it with the detail (page.tsx), so the cards are in the HTML every visitor gets. `now` is that

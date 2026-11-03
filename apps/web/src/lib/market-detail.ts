@@ -1,4 +1,4 @@
-import { type MarketStatus, type Outcome } from '@buddha/shared';
+import { type MarketResult, type MarketStatus, type Outcome } from '@buddha/shared';
 import { copy } from '@/copy';
 import { system } from '@/theme/system';
 import { formatNoPrice } from './market-admin';
@@ -212,10 +212,65 @@ export function personalAreaView(session: {
  * Whether the order area exists at all — the desktop column, the mobile YES·NO 매수 bar and its
  * sheet: on an open market only (ADR-0048 decision 5 and result 6). Any other status explains
  * itself with the status notice, and a `market:status` that closes the market takes the three
- * away with it. `undefined` is the row not loaded yet.
+ * away with it. `undefined` is the row not loaded yet. Whether a scheduled or a paused market
+ * shows one is asked with the orders themselves (#119·#66, ADR-0093 decision 5 '남은 것').
  */
 export function showsOrderArea(status: MarketStatus | undefined): boolean {
   return status === 'open';
+}
+
+/** One 상태별 안내 (PLAN 11.3): its tone, its sentence, and the settled payout's second line. */
+export interface StatusNotice {
+  tone: 'info' | 'warning' | 'success';
+  message: string;
+  detail?: string;
+}
+
+/**
+ * What a status other than 거래 중 leaves a reader able to do (PLAN 11.3), one notice per public
+ * status (ADR-0093 decision 1, item 12), each saying only what is so in that status — nothing
+ * about what a later issue brings (the scheduled open #21, a pause's reason #114, the dispute
+ * #175). `open`, `draft` and `review` are absent on purpose: an open market's state is its
+ * countdown, and a draft or a market in review never reaches the detail route — the API answers
+ * NOT_FOUND for both, so the page 404s before the detail renders.
+ *
+ * The tone is a second, redundant channel: every notice says in words what it is, so nothing
+ * here is carried by colour alone (PLAN 11.2, AC 6). `warning` where trading is stopped while the
+ * market has not ended (paused, closed), `success` once the payout has landed, `info` for the rest.
+ */
+const STATUS_NOTICE: Partial<Record<MarketStatus, Omit<StatusNotice, 'detail'>>> = {
+  scheduled: { tone: 'info', message: copy.marketScheduledNotice },
+  paused: { tone: 'warning', message: copy.marketPausedNotice },
+  closed: { tone: 'warning', message: copy.marketClosedNotice },
+  provisional: { tone: 'info', message: copy.marketProvisionalNotice },
+  // Confirmed, and the worker starts the payout at once (ADR-0093 decision 1, item 1): usually a
+  // moment before a `market:status` moves it on to settling.
+  resolved: { tone: 'info', message: copy.marketResolvedNotice },
+  // The worker's settlement is running (ADR-0046): usually a few seconds before settled.
+  settling: { tone: 'info', message: copy.marketSettlingNotice },
+  settled: { tone: 'success', message: copy.marketSettledNotice },
+  cancelled: { tone: 'info', message: copy.marketCancelledNotice },
+};
+
+/**
+ * The detail's 상태별 안내 for a market, or `undefined` for none (`STATUS_NOTICE`). A settled one
+ * adds the line that says where the Coin went: the payout is already in the balance (the worker's
+ * finalize wrote it, PLAN 5.5), and 내 손익 is the 내 포지션 card below, not this notice. 100 Coin
+ * per winning contract is a YES or NO result's alone; a 무효 one has no winning side, so its line
+ * names only where 내 손익 is (VOID's own payout, 50/50, is #126's to state).
+ */
+export function statusNotice(market: {
+  status: MarketStatus;
+  resolvedResult: MarketResult | null;
+}): StatusNotice | undefined {
+  const notice = STATUS_NOTICE[market.status];
+  if (notice === undefined) return undefined;
+  if (market.status !== 'settled' || market.resolvedResult === null) return notice;
+  return {
+    ...notice,
+    detail:
+      market.resolvedResult === 'VOID' ? copy.marketSettledPayoutVoid : copy.marketSettledPayout,
+  };
 }
 
 /**

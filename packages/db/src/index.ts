@@ -1,4 +1,9 @@
 export { closeDb, createDb, type CreateDbOptions, type Db } from './client.js';
+export {
+  MarketTransitionError,
+  transitionMarket,
+  type MarketTransition,
+} from './market-transitions.js';
 export { migrationsFolder, runMigrations } from './migrator.js';
 export {
   hasStandingConsent,

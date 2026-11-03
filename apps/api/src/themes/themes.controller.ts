@@ -38,9 +38,9 @@ const idOrSlugParamSchema = z
 
 /**
  * 테마 (#81) in public: no guard, signed out too (ADR-0069 decision 4, the #81 '들어오는 길' row).
- * Only published themes and markets that are not drafts. `cursorQuerySchema` carries a component
- * id, so the sub-lists declare its two parameters by hand (as `GET /markets/:id/related` does);
- * `themeListQuerySchema` has none and swagger expands it by itself.
+ * Only published themes and public markets (not DRAFT or REVIEW). `cursorQuerySchema` carries a
+ * component id, so the sub-lists declare its two parameters by hand (as `GET /markets/:id/related`
+ * does); `themeListQuerySchema` has none and swagger expands it by itself.
  */
 @ApiTags('themes')
 @Controller('themes')
@@ -81,8 +81,9 @@ export class ThemesController {
   @ApiOperation({
     operationId: 'listThemeMarkets',
     summary:
-      "The theme's markets in every public status, voided ones too (never drafts): open ones " +
-      'first, soonest close first, then the ended ones, latest close first',
+      "The theme's markets in every public status, cancelled ones too (never draft or in " +
+      'review): those not closed yet first, soonest close first, then the ended ones, latest ' +
+      'close first',
   })
   @ApiQuery(CURSOR_QUERY_PARAMS[0])
   @ApiQuery(CURSOR_QUERY_PARAMS[1])
@@ -100,8 +101,8 @@ export class ThemesController {
   @ApiOperation({
     operationId: 'listThemeResults',
     summary:
-      "The theme's resolved, settled and voided markets with their result (YES or NO; none when " +
-      'voided), the most recently decided first',
+      "The theme's markets whose result is confirmed (resolved, settling or settled; never " +
+      'provisional) with that result (YES, NO or VOID), the most recently confirmed first',
   })
   @ApiQuery(CURSOR_QUERY_PARAMS[0])
   @ApiQuery(CURSOR_QUERY_PARAMS[1])
@@ -130,8 +131,8 @@ export class MarketThemesController {
   @ApiOperation({
     operationId: 'listMarketThemes',
     summary:
-      'The published themes this market is in, any status, in the public list order; a draft ' +
-      'or unknown market is NOT_FOUND',
+      'The published themes this market is in, any status, in the public list order; a draft, ' +
+      'in-review or unknown market is NOT_FOUND',
   })
   @ApiData(themeSummarySchema.array())
   @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')

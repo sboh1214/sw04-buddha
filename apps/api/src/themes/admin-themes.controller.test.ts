@@ -21,6 +21,7 @@ import {
   createThemeNotice,
 } from '@buddha/db/test';
 import {
+  PUBLIC_MARKET_STATUSES,
   koreanDateAt,
   type AdminTheme,
   type AdminThemeMarket,
@@ -356,7 +357,7 @@ describe.skipIf(!hasTestInfra)('themes for admins (integration)', () => {
   it('publishes only a theme with a public market in it, and any admin may then empty it (owner decisions 2026-10-19)', async () => {
     const refusedFor = {
       path: ['markets'],
-      message: 'at least one market that is not a draft is required to publish',
+      message: 'at least one public market (not a draft or under review) is required to publish',
     };
     // Another theme holds a market: the count is this theme's own.
     const busy = await create();
@@ -366,10 +367,12 @@ describe.skipIf(!hasTestInfra)('themes for admins (integration)', () => {
     expect(empty.statusCode).toBe(400);
     expect(errorOf(empty)).toMatchObject({ code: 'VALIDATION_ERROR', details: [refusedFor] });
     expect(await publicStatus(theme.id)).toBe(404);
-    // A draft does not count (second round): it is on no public page, so the theme would go
-    // public as an empty page.
+    // A draft does not count (second round), nor a review (#174): neither is on a public page, so
+    // the theme would go public as an empty page.
     const draft = await market({ status: 'draft' });
+    const review = await market({ status: 'review' });
     await send('POST', `/admin/themes/${theme.id}/markets`, { marketId: draft.id });
+    await send('POST', `/admin/themes/${theme.id}/markets`, { marketId: review.id });
     const draftOnly = await send('POST', `/admin/themes/${theme.id}/publish`);
     expect(draftOnly.statusCode).toBe(400);
     expect(errorOf(draftOnly)).toMatchObject({ code: 'VALIDATION_ERROR', details: [refusedFor] });
@@ -388,6 +391,7 @@ describe.skipIf(!hasTestInfra)('themes for admins (integration)', () => {
       'theme_create',
       'theme_create',
       'theme_market_link',
+      'theme_market_link',
       'theme_publish',
       'theme_market_unlink',
     ]);
@@ -395,13 +399,14 @@ describe.skipIf(!hasTestInfra)('themes for admins (integration)', () => {
     expect((await send('POST', `/admin/themes/${theme.id}/publish`)).statusCode).toBe(200);
   });
 
-  it('counts every public status toward a publish, a voided or ended market too, and never a draft', async () => {
-    for (const status of ['open', 'closed', 'resolved', 'settled', 'voided'] as const) {
+  it('counts every public status toward a publish, a cancelled or ended market too, and never a draft or a review', async () => {
+    for (const status of PUBLIC_MARKET_STATUSES) {
       const theme = await create();
-      // A draft beside it changes nothing either way.
+      // A draft and a review beside it change nothing either way.
       const draft = await market({ status: 'draft' });
+      const review = await market({ status: 'review' });
       const shown = await market({ status });
-      for (const linked of [draft, shown]) {
+      for (const linked of [draft, review, shown]) {
         await createThemeMarket(t.db, {
           themeId: theme.id,
           marketId: linked.id,
@@ -512,16 +517,16 @@ describe.skipIf(!hasTestInfra)('themes for admins (integration)', () => {
     const theme = await create();
     const draft = await market({ status: 'draft' });
     const open = await market();
-    const voided = await market({ status: 'voided' });
-    for (const linked of [draft, open, voided]) {
+    const cancelled = await market({ status: 'cancelled' });
+    for (const linked of [draft, open, cancelled]) {
       const res = await send('POST', `/admin/themes/${theme.id}/markets`, { marketId: linked.id });
       expect(res.statusCode).toBe(200);
     }
     const rows = data<AdminThemeMarket[]>(await send('GET', `/admin/themes/${theme.id}/markets`));
     // The latest put in first, every status, who and when.
-    expect(rows.map((row) => row.id)).toEqual([voided.id, open.id, draft.id]);
+    expect(rows.map((row) => row.id)).toEqual([cancelled.id, open.id, draft.id]);
     expect(rows[0]).toMatchObject({
-      status: 'voided',
+      status: 'cancelled',
       linkedBy: { id: admin.id, nickname: await nicknameOf(admin.id) },
     });
     // Again, upper-cased: the same market, nothing written.
@@ -531,7 +536,10 @@ describe.skipIf(!hasTestInfra)('themes for admins (integration)', () => {
     expect(data<AdminThemeMarket[]>(again)).toHaveLength(3);
 
     const removed = await send('DELETE', `/admin/themes/${theme.id}/markets/${open.id}`);
-    expect(data<AdminThemeMarket[]>(removed).map((row) => row.id)).toEqual([voided.id, draft.id]);
+    expect(data<AdminThemeMarket[]>(removed).map((row) => row.id)).toEqual([
+      cancelled.id,
+      draft.id,
+    ]);
     expect((await send('DELETE', `/admin/themes/${theme.id}/markets/${open.id}`)).statusCode).toBe(
       200,
     );
@@ -552,7 +560,7 @@ describe.skipIf(!hasTestInfra)('themes for admins (integration)', () => {
     const stored = await t.db
       .select()
       .from(schema.themeMarkets)
-      .where(eq(schema.themeMarkets.marketId, voided.id));
+      .where(eq(schema.themeMarkets.marketId, cancelled.id));
     expect(rows[0]!.linkedAt).toBe(stored[0]!.createdAt.toISOString());
   });
 

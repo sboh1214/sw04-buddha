@@ -178,8 +178,9 @@ export function useMarketTicks(marketId: string, range: TickRange = DEFAULT_TICK
  * It delegates to the declaration the admin detail already uses rather than repeating it: the key
  * is SHARED between the two screens, and two declarations of one key mean two query functions, of
  * which whichever observer mounts last owns the fetch (the reason `useLinkedAccounts` lives in
- * use-me.ts). `enabled` defaults to true because a market that reached a public route has been
- * opened — a draft is NOT_FOUND there — while the admin caller still gates its own draft.
+ * use-me.ts). `enabled` defaults to true because a market that reached a public route is public
+ * — a draft or one in review is NOT_FOUND there (ADR-0093 decision 1, item 12) — while the admin
+ * caller still gates its own (`isPublicMarketStatus`).
  */
 export function usePublicMarketFills(marketId: string, enabled = true) {
   return useMarketFillsQuery(marketId, enabled);

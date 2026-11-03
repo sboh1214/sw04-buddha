@@ -1,9 +1,9 @@
 import {
+  type MarketResult,
   type MarketStatus,
   type MarketStatusEvent,
   type MarketTickEvent,
   type PositionStatus,
-  type Outcome,
   type UserBalanceEvent,
   type UserPositionEvent,
   statusSupersedes,
@@ -43,7 +43,8 @@ export interface LiveMarket {
   volumeCoin: string;
   tradeCount: number;
   traderCount: number;
-  resolvedResult: Outcome | null;
+  /** The result type (YES·NO·VOID, #174), or `null` before a judgement and on a cancelled market. */
+  resolvedResult: MarketResult | null;
   /**
    * The `market_events.id` of the transition that produced `status` — the ordering key of
    * `market:status` (A-M3-19, Q-M3-8(3), M5). Null only for a row written outside the
@@ -78,14 +79,15 @@ export type MarketTickPatch = Pick<
  * transition, drawn under the market row lock — and every market DTO carries the same key, so a
  * REST snapshot seeds the comparison the way `tradeCount` does for a tick. That is what keeps
  * the deliberate repeat an admin edit publishes (A-M4-36) a drop — same id, not newer — so only
- * the REST answer that repeat triggers carries the edit; and it is what leaves `settled` on screen
- * when the API's `resolved` and the worker's `settled`, published moments apart (ADR-0046),
- * arrive in the other order.
+ * the REST answer that repeat triggers carries the edit; it is what leaves `settled` on screen
+ * when the worker's `settling` and `settled`, published moments apart (ADR-0046, #174), arrive in
+ * the other order; and it is what lets PAUSED → OPEN through (#174), which goes back in rank.
  *
  * `statusRank` — position in `MARKET_STATUSES` — is re-exported for the one reader that holds NO
- * key: a position row (`liveMarketStatus`, use-portfolio.ts). `Position.marketStatus` is a join
- * with no event id beside it, and rank is the one order such a row can still join. It is the
- * FALLBACK inside `statusSupersedes` for the same reason, taken only when a side has no key.
+ * key: a position row (`liveMarketStatus`, use-portfolio.ts, which gives `paused` the step of
+ * `open`). `Position.marketStatus` is a join with no event id beside it, and rank is the one order
+ * such a row can still join. It is the FALLBACK inside `statusSupersedes` for the same reason,
+ * taken only when a side has no key.
  */
 export { statusRank } from '@buddha/shared';
 
@@ -236,7 +238,7 @@ export function joinMarket<T extends LiveMarket>(held: T | undefined, incoming: 
   // The status GROUP moves together: the result was written by the same transition as the
   // status and its key, so a snapshot older than what is held must not drag either back alone —
   // a `settled` kept by status but joined with a pre-판정 snapshot's null result would badge
-  // 정산 완료 over no answer at all.
+  // 지급 완료 over no answer at all.
   if (statusSupersedes(held, incoming)) {
     next = {
       ...next,

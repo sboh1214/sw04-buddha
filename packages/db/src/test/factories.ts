@@ -18,6 +18,7 @@ import {
   readPostDocument,
   relatedMarketPair,
   type ImageContentType,
+  type MarketResult,
   type MarketStatus,
   type ModerationActionType,
   type ModerationReason,
@@ -193,30 +194,29 @@ export interface CreateMarketInput {
   volumeCoin?: bigint;
   tradeCount?: number;
   /**
-   * The actual open time. Default: now for every status but `draft`, which has none (the admin
-   * open path stamps it). A list-order test sets it, or sets `null` for a public market with no
-   * open time, which 신규 puts after every opened market and 추천 after the opened markets of its
-   * own 24-hour volume (the open time is 추천's tie-break; ADR-0065).
+   * The actual open time. Default: now for every status that has opened, none for `draft`,
+   * `review` and `scheduled` (the open path stamps it). A list-order test sets it, or sets `null`
+   * for a public market with no open time, which 신규 puts after every opened market and 추천 after the
+   * opened markets of its own 24-hour volume (the open time is 추천's tie-break; ADR-0065).
    */
   openAt?: Date | null;
   closeAt?: Date;
   /**
    * Resolution columns, stored as given and null by default: a test that needs a market
-   * mid-settlement sets `status: 'resolved'` with a result. The factory writes no market event,
+   * mid-settlement sets `status: 'settling'` with a result. The factory writes no market event,
    * so `statusEventId` stays null unless given — the rank fallback of `statusSupersedes` is what
    * such a row orders by.
    */
-  resolvedResult?: Outcome | null;
+  resolvedResult?: MarketResult | null;
   resolvedAt?: Date | null;
   settledAt?: Date | null;
-  /** When it was voided; null by default, as the other resolution columns. */
-  voidedAt?: Date | null;
   statusEventId?: number | null;
   /**
-   * `market_settlement_steps` rows (ADR-0046) as the real paths leave them: for `resolved`, one
-   * `pending` row per SETTLEMENT_STEPS step (the judgement writes them); for `settled`, one `done`
-   * row each, completed at `settledAt` (or now). Default true; `false` writes none — the state a
-   * test of the worker's missing-row fallback starts from. Other statuses never get rows.
+   * `market_settlement_steps` rows (ADR-0046) as the real paths leave them: for `resolved` and
+   * `settling`, one `pending` row per SETTLEMENT_STEPS step (the transition to `resolved` writes
+   * them); for `settled`, one `done` row each, completed at `settledAt` (or now). Default true;
+   * `false` writes none — the state a test of the worker's missing-row fallback starts from.
+   * Other statuses never get rows.
    */
   settlementSteps?: boolean;
 }
@@ -251,18 +251,25 @@ export async function createMarket(db: Db, input: CreateMarketInput = {}) {
       lastPrice,
       volumeCoin: input.volumeCoin ?? 0n,
       tradeCount: input.tradeCount ?? 0,
-      openAt: input.openAt !== undefined ? input.openAt : status === 'draft' ? null : now,
+      openAt:
+        input.openAt !== undefined
+          ? input.openAt
+          : status === 'draft' || status === 'review' || status === 'scheduled'
+            ? null
+            : now,
       closeAt: input.closeAt ?? new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
       resolvedResult: input.resolvedResult ?? null,
       resolvedAt: input.resolvedAt ?? null,
       settledAt: input.settledAt ?? null,
-      voidedAt: input.voidedAt ?? null,
       statusEventId: input.statusEventId ?? null,
       createdBy,
     })
     .returning();
   const market = row!;
-  if (input.settlementSteps !== false && (status === 'resolved' || status === 'settled')) {
+  if (
+    input.settlementSteps !== false &&
+    (status === 'resolved' || status === 'settling' || status === 'settled')
+  ) {
     for (const step of SETTLEMENT_STEPS) {
       await createSettlementStep(db, {
         marketId: market.id,

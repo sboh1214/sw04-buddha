@@ -181,10 +181,10 @@ describe('labels and addresses', () => {
     expect(themeLinkLabel({ name: '노벨상 주간', status: 'ended' })).toBe('노벨상 주간 · 종료');
   });
 
-  it("writes a result as the contract's YES or NO, and 무효 for a voided market", () => {
+  it("writes a result as the contract's YES or NO, and a VOID result 무효 (#174)", () => {
     expect(themeResultLabel({ result: 'YES' })).toBe(copy.yes);
     expect(themeResultLabel({ result: 'NO' })).toBe(copy.no);
-    expect(themeResultLabel({ result: null })).toBe('무효');
+    expect(themeResultLabel({ result: 'VOID' })).toBe('무효');
   });
 
   it('addresses a theme by its slug and reads the segment back however it arrived', () => {

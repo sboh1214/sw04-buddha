@@ -3,10 +3,11 @@
  * and its markets and results (`GET /themes/:id`, `/markets`, `/results`), and the themes on a
  * market's detail (`GET /markets/:id/themes`). Owner decisions under test (ADR-0069 decision 4,
  * the #81 rows): only published themes, signed out too; 예정·진행 중·종료 by the period; every
- * public market status but a draft; the results list is 판정 완료·정산 완료·무효 with the result and
+ * public market status (not DRAFT or REVIEW); the results list is the confirmed results — 결과
+ * 확정·지급 중·지급 완료, YES·NO·무효, never a provisional one (ADR-0093 decision 3) — and
  * nothing about anyone's trades; the theme's own notices. And of 2026-10-19 (ADR-0088): the period
- * in Korean dates, both days in it; the list 진행 중 → 예정 → 종료; the page at its slug; voided
- * markets among the cards. Skips when TEST_* are unset.
+ * in Korean dates, both days in it; the list 진행 중 → 예정 → 종료; the page at its slug;
+ * cancelled and 무효 markets among the cards. Skips when TEST_* are unset.
  */
 import { clockTimestamp, schema } from '@buddha/db';
 import {
@@ -405,11 +406,15 @@ describe.skipIf(!hasTestInfra)('themes in public (integration)', () => {
     expect(links.json<{ data: ThemeSummary[] }>().data).toEqual([]);
   });
 
-  it('lists the theme’s markets in every public status but a draft, voided too: open ones first, then the ended', async () => {
+  it('lists the theme’s markets in every public status but a draft or a review, cancelled and VOID too: those not closed yet first, then the ended', async () => {
+    // ADR-0093 decision 3, the #174 row: every public status (CANCELLED included) on the cards;
+    // 마감 임박 over them puts SCHEDULED and PAUSED with the open ones (#174).
     const hub = await theme();
     const now = (await clockTimestamp(t.db)).getTime();
     const soon = await market({ closeAt: new Date(now + DAY_MS) });
+    const scheduled = await market({ status: 'scheduled', closeAt: new Date(now + 2 * DAY_MS) });
     const later = await market({ closeAt: new Date(now + 3 * DAY_MS) });
+    const paused = await market({ status: 'paused', closeAt: new Date(now + 4 * DAY_MS) });
     const closed = await market({ status: 'closed', closeAt: new Date(now - HOUR_MS) });
     const settled = await market({
       status: 'settled',
@@ -418,9 +423,27 @@ describe.skipIf(!hasTestInfra)('themes in public (integration)', () => {
       settledAt: new Date(now - DAY_MS),
       closeAt: new Date(now - 2 * DAY_MS),
     });
-    const voided = await market({ status: 'voided', closeAt: new Date(now - 3 * DAY_MS) });
+    const cancelled = await market({ status: 'cancelled', closeAt: new Date(now - 3 * DAY_MS) });
+    const voidResult = await market({
+      status: 'resolved',
+      resolvedResult: 'VOID',
+      resolvedAt: new Date(now - 3 * DAY_MS),
+      closeAt: new Date(now - 4 * DAY_MS),
+    });
     const draft = await market({ status: 'draft' });
-    for (const linked of [settled, draft, later, voided, closed, soon]) {
+    const review = await market({ status: 'review', closeAt: new Date(now + HOUR_MS) });
+    for (const linked of [
+      settled,
+      draft,
+      later,
+      voidResult,
+      paused,
+      cancelled,
+      review,
+      closed,
+      scheduled,
+      soon,
+    ]) {
       await put(hub.id, linked.id);
     }
     // Another published theme's market, closing soonest of all, and one in no theme: neither is
@@ -429,7 +452,16 @@ describe.skipIf(!hasTestInfra)('themes in public (integration)', () => {
     const othersOwn = await market({ closeAt: new Date(now + HOUR_MS) });
     await put(other.id, othersOwn.id);
     await market({ closeAt: new Date(now + 2 * HOUR_MS) });
-    const expected = [soon.id, later.id, closed.id, settled.id, voided.id];
+    const expected = [
+      soon.id,
+      scheduled.id,
+      later.id,
+      paused.id,
+      closed.id,
+      settled.id,
+      cancelled.id,
+      voidResult.id,
+    ];
     const first = await page<MarketSummary>(`/themes/${hub.id}/markets`);
     expect(first.data.map((row) => row.id)).toEqual(expected);
     expect(await walk(`/themes/${hub.id}/markets?limit=2`)).toEqual(expected);
@@ -439,7 +471,10 @@ describe.skipIf(!hasTestInfra)('themes in public (integration)', () => {
     expect(first.data[0]).toEqual(listRow);
   });
 
-  it('lists the results of the judged and voided markets only, the latest decided first', async () => {
+  it('lists the confirmed results only — VOID included, never a provisional one — the latest confirmed first', async () => {
+    // ADR-0093 decision 3, the #174 row: 결과 확정·지급 중·지급 완료 with their result, YES, NO
+    // or VOID, confirmed at `resolved_at`; a PROVISIONAL result may still be corrected and a
+    // CANCELLED market has none.
     const hub = await theme();
     const now = (await clockTimestamp(t.db)).getTime();
     const yes = await market({
@@ -453,13 +488,28 @@ describe.skipIf(!hasTestInfra)('themes in public (integration)', () => {
       resolvedAt: new Date(now - 2 * HOUR_MS),
       settledAt: new Date(now - HOUR_MS),
     });
-    const voided = await market({ status: 'voided', voidedAt: new Date(now - 3 * HOUR_MS) });
+    const settling = await market({
+      status: 'settling',
+      resolvedResult: 'YES',
+      resolvedAt: new Date(now - 150 * 60_000),
+    });
+    const voidResult = await market({
+      status: 'settled',
+      resolvedResult: 'VOID',
+      resolvedAt: new Date(now - 3 * HOUR_MS),
+      settledAt: new Date(now - 2 * HOUR_MS),
+    });
     for (const linked of [
-      voided,
+      voidResult,
       await market(),
       await market({ status: 'closed' }),
+      await market({ status: 'provisional', resolvedResult: 'YES' }),
+      await market({ status: 'provisional', resolvedResult: 'VOID' }),
+      await market({ status: 'cancelled' }),
       await market({ status: 'draft' }),
+      await market({ status: 'review' }),
       no,
+      settling,
       yes,
     ]) {
       await put(hub.id, linked.id);
@@ -473,7 +523,11 @@ describe.skipIf(!hasTestInfra)('themes in public (integration)', () => {
       resolvedAt: new Date(now - 60_000),
     });
     await put(other.id, othersOwn.id);
-    await market({ status: 'voided', voidedAt: new Date(now - 30_000) });
+    await market({
+      status: 'resolved',
+      resolvedResult: 'VOID',
+      resolvedAt: new Date(now - 30_000),
+    });
     const results = (await page<ThemeResult>(`/themes/${hub.id}/results`)).data;
     expect(results).toEqual([
       {
@@ -485,19 +539,21 @@ describe.skipIf(!hasTestInfra)('themes in public (integration)', () => {
         decidedAt: new Date(now - HOUR_MS).toISOString(),
       },
       expect.objectContaining({ marketId: no.id, status: 'settled', result: 'NO' }),
+      expect.objectContaining({ marketId: settling.id, status: 'settling', result: 'YES' }),
       {
-        marketId: voided.id,
-        slug: voided.slug,
-        title: voided.title,
-        status: 'voided',
-        result: null,
+        marketId: voidResult.id,
+        slug: voidResult.slug,
+        title: voidResult.title,
+        status: 'settled',
+        result: 'VOID',
         decidedAt: new Date(now - 3 * HOUR_MS).toISOString(),
       },
     ]);
     expect(await walk(`/themes/${hub.id}/results?limit=1`, 'marketId')).toEqual([
       yes.id,
       no.id,
-      voided.id,
+      settling.id,
+      voidResult.id,
     ]);
     expect(await walk(`/themes/${other.id}/results`, 'marketId')).toEqual([othersOwn.id]);
   });
@@ -520,10 +576,15 @@ describe.skipIf(!hasTestInfra)('themes in public (integration)', () => {
       [ended.id, 'ended'],
     ]);
     expect(rows.map((row) => row.id)).not.toContain(unrelated.id);
-    // A draft market has no detail, and so no themes either.
-    const draft = await market({ status: 'draft' });
-    await put(ongoing.id, draft.id);
-    expect((await get(`/markets/${draft.id}/themes`)).statusCode).toBe(404);
+    // A draft or review market has no detail, and so no themes either.
+    for (const status of ['draft', 'review'] as const) {
+      const hidden = await market({ status });
+      await put(ongoing.id, hidden.id);
+      expect({ status, code: (await get(`/markets/${hidden.id}/themes`)).statusCode }).toEqual({
+        status,
+        code: 404,
+      });
+    }
     expect((await get(`/markets/${randomUUID()}/themes`)).statusCode).toBe(404);
     expect((await get(`/markets/${linked.slug}/themes`)).statusCode).toBe(400);
   });

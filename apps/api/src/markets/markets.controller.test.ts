@@ -17,6 +17,7 @@ import {
   type Market,
   type MarketSummary,
   type Outcome,
+  PUBLIC_MARKET_STATUSES,
   marketSummarySchema,
   type PriceSeries,
 } from '@buddha/shared';
@@ -143,10 +144,11 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     return fill!;
   }
 
-  it('lists open markets by default, never drafts, and filters by status', async () => {
+  it('lists open markets by default, never a draft or a review, and filters by status', async () => {
     const open = await market({ title: '열린 시장' });
     const closed = await market({ title: '마감된 시장', status: 'closed', lastPrice: 62 });
     const draft = await market({ title: '초안', status: 'draft' });
+    const review = await market({ title: '검수 중', status: 'review' });
 
     const res = await get('/api/v1/markets');
     expect(res.statusCode).toBe(200);
@@ -174,13 +176,17 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     expect(closedPage.data.map((row) => row.id)).toEqual([closed.id]);
     expect(closedPage.data[0]).toMatchObject({ lastPrice: 62 });
 
-    // `draft` is not a public status at all: refused by the schema, not silently empty.
-    const draftPage = await get('/api/v1/markets?status=draft');
-    expect(draftPage.statusCode).toBe(400);
-    expect(draftPage.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
-    for (const status of ['open', 'closed', 'voided', 'settled']) {
+    // `draft` and `review` are no public status at all (ADR-0093 decision 1 item 12): refused by
+    // the schema, not silently empty.
+    for (const hidden of ['draft', 'review']) {
+      const hiddenPage = await get(`/api/v1/markets?status=${hidden}`);
+      expect({ hidden, status: hiddenPage.statusCode }).toEqual({ hidden, status: 400 });
+      expect(hiddenPage.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
+    }
+    for (const status of [...PUBLIC_MARKET_STATUSES, 'all']) {
       const ids = (await get(`/api/v1/markets?status=${status}`)).json<ListPage>().data;
       expect(ids.map((row) => row.id)).not.toContain(draft.id);
+      expect(ids.map((row) => row.id)).not.toContain(review.id);
     }
   });
 
@@ -250,23 +256,45 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     expect(tooLong.statusCode).toBe(400);
   });
 
-  it('searches every public status with status=all, never a draft, and filters within it (#15)', async () => {
+  it('searches every public status with status=all, never a draft or a review, and filters within it (#15)', async () => {
     // The search screen (ADR-0066): it starts on every public status (ADR-0061 decision 1, item
-    // 13), and a closed market is found through the status filter (N02 §3). One market per status,
-    // each titled with the word searched; a draft with the word, and an open market without it.
+    // 13), and a closed market is found through the status filter (N02 §3); one filter per public
+    // status, CANCELLED included (ADR-0093 decision 3). One market per status, each titled with the
+    // word searched; a draft and a review with the word, and an open market without it.
     const weather = await createCategory(t.db, { slug: 'weather', nameKo: '날씨' });
     const byStatus = {
+      scheduled: await market({ title: '금리 동결? (개장 예정)', status: 'scheduled' }),
       open: await market({ title: '금리 동결? (거래 중)', closeAt: new Date(Date.now() + DAY_MS) }),
+      paused: await market({ title: '금리 동결? (일시 중단)', status: 'paused' }),
       closed: await market({
         title: '금리 인하? (마감)',
         status: 'closed',
         categoryId: weather.id,
       }),
-      resolved: await market({ title: '금리 인상? (판정)', status: 'resolved' }),
-      settled: await market({ title: '금리 3%? (정산)', status: 'settled' }),
-      voided: await market({ title: '금리 2%? (무효)', status: 'voided' }),
-    };
+      provisional: await market({
+        title: '금리 인상? (잠정)',
+        status: 'provisional',
+        resolvedResult: 'YES',
+      }),
+      resolved: await market({
+        title: '금리 인상? (확정)',
+        status: 'resolved',
+        resolvedResult: 'NO',
+      }),
+      settling: await market({
+        title: '금리 3%? (지급 중)',
+        status: 'settling',
+        resolvedResult: 'YES',
+      }),
+      settled: await market({
+        title: '금리 3%? (지급 완료)',
+        status: 'settled',
+        resolvedResult: 'VOID',
+      }),
+      cancelled: await market({ title: '금리 2%? (취소)', status: 'cancelled' }),
+    } satisfies Record<(typeof PUBLIC_MARKET_STATUSES)[number], unknown>;
     const draft = await market({ title: '금리 초안', status: 'draft' });
+    const review = await market({ title: '금리 검수', status: 'review' });
     await market({ title: '코스피 3000 돌파?' });
     const ids = async (query: string) => {
       const res = await get(`/api/v1/markets?${query}`);
@@ -282,10 +310,12 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
         .sort(),
     );
     expect(all).not.toContain(draft.id);
+    expect(all).not.toContain(review.id);
     // Without a term too: every public market, the unmatched one included, and still no draft.
     const everything = await ids('status=all&limit=100');
-    expect(everything).toHaveLength(6);
+    expect(everything).toHaveLength(PUBLIC_MARKET_STATUSES.length + 1);
     expect(everything).not.toContain(draft.id);
+    expect(everything).not.toContain(review.id);
     // Each status on its own finds its market — the closed one by 거래 마감 as the screen asks.
     for (const [status, row] of Object.entries(byStatus)) {
       expect(await ids(`status=${status}&q=${term}`), status).toEqual([row.id]);
@@ -305,14 +335,14 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
 
   const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
-  it('orders 마감 임박 with ended markets listed: 진행 중 first, soonest first, then ended, latest close first (ADR-0066)', async () => {
-    // Owner decision 2026-10-16 (ADR-0066): "진행 중 먼저, 끝난 것은 최근 순". On a list that can
-    // hold ended markets — 모든 상태, or an ended status — the markets whose STATUS is open come
-    // first, by the close time, soonest first; every other public market after them, by the close
-    // time, the latest first. Ended is the status, not the clock: a market an admin closed early
-    // keeps its future close_at and is with the ended ones (first among them, by that close time),
-    // and an open market whose close time has passed is 진행 중 still. `open` alone is the home's
-    // order, as it was.
+  it('orders 마감 임박 with ended markets listed: not closed yet first, soonest first, then ended, latest close first (ADR-0066)', async () => {
+    // Owner decision 2026-10-16 (ADR-0066): "진행 중 먼저, 끝난 것은 최근 순", generalised by #174:
+    // on a list that can hold ended markets — 모든 상태, or an ended status — the markets whose
+    // STATUS has not closed yet (SCHEDULED, OPEN, PAUSED) come first, by the close time, soonest
+    // first; every other public market after them, by the close time, the latest first. Ended is
+    // the status, not the clock: a market an admin closed early keeps its future close_at and is
+    // with the ended ones (first among them, by that close time), and an open market whose close
+    // time has passed is not closed still. One such status alone is the home's order, as it was.
     const now = Date.now();
     const term = encodeURIComponent('환율');
     const rows = {
@@ -320,8 +350,18 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
         title: '환율 1420? (마감 시각 지남, 거래 중)',
         closeAt: new Date(now - HOUR_MS),
       }),
+      scheduledSoon: await market({
+        title: '환율 1440? (개장 예정)',
+        status: 'scheduled',
+        closeAt: new Date(now + 6 * HOUR_MS),
+      }),
       openTomorrow: await market({ title: '환율 1450? (내일)', closeAt: new Date(now + DAY_MS) }),
       openLater: await market({ title: '환율 1500? (모레)', closeAt: new Date(now + 2 * DAY_MS) }),
+      pausedLatest: await market({
+        title: '환율 1550? (일시 중단)',
+        status: 'paused',
+        closeAt: new Date(now + 3 * DAY_MS),
+      }),
       closedEarly: await market({
         title: '환율 1400? (일찍 마감)',
         status: 'closed',
@@ -330,6 +370,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       resolvedLastWeek: await market({
         title: '환율 1380? (판정)',
         status: 'resolved',
+        resolvedResult: 'YES',
         closeAt: new Date(now - 7 * DAY_MS),
       }),
       closedLastMonth: await market({
@@ -350,8 +391,8 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     ].sort(byId);
     const tiedEnded = [
       await market({
-        title: '환율 1360? (동점 무효)',
-        status: 'voided',
+        title: '환율 1360? (동점 취소)',
+        status: 'cancelled',
         closeAt: new Date(now - 10 * DAY_MS),
       }),
       await market({
@@ -361,6 +402,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       }),
     ].sort(byId);
     await market({ title: '환율 초안', status: 'draft', closeAt: new Date(now + HOUR_MS) });
+    await market({ title: '환율 검수', status: 'review', closeAt: new Date(now + HOUR_MS) });
     const ids = async (query: string) => {
       const res = await get(`/api/v1/markets?${query}`);
       expect(res.statusCode, query).toBe(200);
@@ -369,9 +411,11 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
 
     const expected = [
       rows.openPastClose.id,
+      rows.scheduledSoon.id,
       rows.openTomorrow.id,
       ...tiedOpen.map((row) => row.id),
       rows.openLater.id,
+      rows.pausedLatest.id,
       rows.closedEarly.id,
       rows.resolvedLastWeek.id,
       ...tiedEnded.map((row) => row.id),
@@ -380,8 +424,8 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     ];
     expect(await ids(`status=all&q=${term}&sort=closing&limit=100`)).toEqual(expected);
     // Paged, the same order with nothing repeated or skipped, whatever the page size: pages of one
-    // put a cursor on every row, the last 진행 중 one and the first ended one included, and the
-    // cursor says which group it is in.
+    // put a cursor on every row, the last one not closed yet and the first ended one included, and
+    // the cursor says which group it is in — SCHEDULED and PAUSED in the first (#174).
     for (const limit of [1, 2, 3, 4, 5]) {
       const { ids: paged, cursors } = await walkPages(
         `/api/v1/markets?status=all&q=${term}&sort=closing&limit=${limit}`,
@@ -389,7 +433,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       expect({ limit, paged }).toEqual({ limit, paged: expected });
       if (limit === 1) {
         expect(cursors.map((cursor) => cursor.split('_')[0])).toEqual([
-          ...Array.from({ length: 5 }, () => '0'),
+          ...Array.from({ length: 7 }, () => '0'),
           ...Array.from({ length: 5 }, () => '1'),
         ]);
       }
@@ -403,7 +447,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     expect(await walk(`/api/v1/markets?status=closed&q=${term}&sort=closing&limit=1`)).toEqual(
       await ids(`status=closed&q=${term}&sort=closing`),
     );
-    // 진행 중 alone is the home's order and the home's cursor, `<millis>_<uuid>`.
+    // 거래 중 (`open`) alone is the home's order and the home's cursor, `<millis>_<uuid>`.
     const openOnly = [
       rows.openPastClose.id,
       rows.openTomorrow.id,
@@ -416,6 +460,26 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     expect(home.cursors[0]).toBe(
       `${String(rows.openTomorrow.closeAt.getTime())}_${rows.openTomorrow.id}`,
     );
+    // So is any other one status not closed yet (#174): the search's 개장 예정 and 거래 일시
+    // 중단 page on the same `<millis>_<uuid>` keyset as the home.
+    for (const [status, row] of [
+      ['scheduled', rows.scheduledSoon],
+      ['paused', rows.pausedLatest],
+    ] as const) {
+      const later = await market({
+        title: `환율 1600? (${status} 나중)`,
+        status,
+        closeAt: new Date(now + 5 * DAY_MS),
+      });
+      const single = await walkPages(
+        `/api/v1/markets?status=${status}&q=${term}&sort=closing&limit=1`,
+      );
+      expect({ status, ids: single.ids }).toEqual({ status, ids: [row.id, later.id] });
+      expect({ status, cursors: single.cursors }).toEqual({
+        status,
+        cursors: [`${String(row.closeAt.getTime())}_${row.id}`],
+      });
+    }
   });
 
   /** 신규 in JS, for the expectations (ADR-0065): latest opening first, none last, then the id. */
@@ -796,9 +860,10 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     }
   });
 
-  it('finds a market by id, by slug and by a decomposed (NFD) slug; hides drafts', async () => {
+  it('finds a market by id, by slug and by a decomposed (NFD) slug; hides drafts and reviews', async () => {
     const open = await market({ slug: '한글-시장-2026', title: '한글 시장', description: '설명' });
     const draft = await market({ slug: 'draft-market', status: 'draft' });
+    const review = await market({ slug: 'review-market', status: 'review' });
 
     const byId = await get(`/api/v1/markets/${open.id}`);
     expect(byId.statusCode).toBe(200);
@@ -812,8 +877,8 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       resolutionSource: open.resolutionSource,
       status: 'open',
       resolvedAt: null,
-      voidedAt: null,
     });
+    expect(detail).not.toHaveProperty('voidedAt');
     // PLAN 7.1: no author on the public detail; and nothing of the direct AMM (#125).
     for (const field of ['createdBy', 'pYesBp', 'qYes', 'qNo', 'liquidityB', 'reserveCoin']) {
       expect(detail).not.toHaveProperty(field);
@@ -850,9 +915,32 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     expect((await get(`/api/v1/markets/${'a'.repeat(MAX_PARAM_LENGTH)}`)).statusCode).toBe(400);
     expect((await get(`/api/v1/markets/${'a'.repeat(MAX_PARAM_LENGTH + 1)}`)).statusCode).toBe(414);
 
+    // Every other status is public: a SCHEDULED market's detail before it opens (with no open
+    // time), and a PAUSED or CANCELLED one's (ADR-0093 decision 1 item 12).
+    for (const status of ['scheduled', 'paused', 'cancelled'] as const) {
+      const row = await market({ status });
+      for (const url of [
+        `/api/v1/markets/${row.id}`,
+        `/api/v1/markets/${row.id}/fills`,
+        `/api/v1/markets/${row.id}/ticks`,
+      ]) {
+        expect({ url, status: (await get(url)).statusCode }).toEqual({ url, status: 200 });
+      }
+      expect((await get(`/api/v1/markets/${row.id}`)).json<{ data: Market }>().data).toMatchObject({
+        status,
+        openAt: status === 'scheduled' ? null : row.openAt!.toISOString(),
+      });
+    }
+
+    // DRAFT and REVIEW are the admin's alone (ADR-0093 decision 1 item 12): NOT_FOUND, as for an
+    // id that does not exist, on the detail and every sub-resource.
     for (const url of [
       `/api/v1/markets/${draft.id}`,
       '/api/v1/markets/draft-market',
+      `/api/v1/markets/${review.id}`,
+      '/api/v1/markets/review-market',
+      `/api/v1/markets/${review.id}/fills`,
+      `/api/v1/markets/${review.id}/ticks`,
       `/api/v1/markets/${randomUUID()}`, // uuid-shaped: looked up as an id only
       '/api/v1/markets/no-such-slug',
       `/api/v1/markets/${draft.id}/fills`,

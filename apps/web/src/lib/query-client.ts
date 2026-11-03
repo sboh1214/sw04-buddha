@@ -310,7 +310,7 @@ export type ListView = 'pending' | 'failed' | 'stale' | 'ready';
  * false, isRefetchError true, rows kept`).
  *
  * That silence costs differently per screen and both are real. 보유 포지션 shows a holding whose
- * membership refresh failed — a void or a settlement asks for both lists (`applyPositionEvent`
+ * membership refresh failed — a settlement asks for both lists (`applyPositionEvent`
  * answers `refetch` when the row must MOVE), so a failed one leaves the row in 보유 포지션, out of
  * 정산 이력, and inside 총 평가 금액 where it no longer belongs. 체결 내역 shows a list one row
  * short, and there the refetch is the ONLY path a new fill can arrive by: `market:trade` carries

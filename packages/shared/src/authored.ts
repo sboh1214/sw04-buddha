@@ -8,9 +8,9 @@ import { postAuthorSchema, postMarketSchema, postSummarySchema } from './post.js
  * their own MY '내 글'. Owner decisions (ADR-0069):
  *
  * - The profile's lists (decision 3 #37-14): 글 (근거 글) and 댓글 (댓글 and 대댓글 together) on two
- *   tabs, newest first; what was deleted or hidden is left out, and what sits on an ended or
- *   voided market stays, as all of it does while the member is under a restriction (the owner's
- *   «제재 중인 사람의 글»). They show what the profile's counts count (ADR-0078): the same rule,
+ *   tabs, newest first; what was deleted or hidden is left out, and what sits on an ended,
+ *   cancelled or 무효 market stays, as all of it does while the member is under a restriction (the
+ * owner's   «제재 중인 사람의 글»). They show what the profile's counts count (ADR-0078): the same rule,
  *   so a tab never holds more or fewer items than its number.
  * - MY '내 글' (decision 4 #51, decision 2 #45-5): the same two tabs, newest first, no filter; a
  *   hidden one stays, its content and counts as they are, marked '숨김' with the reason — a report

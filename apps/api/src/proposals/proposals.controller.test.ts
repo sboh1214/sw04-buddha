@@ -693,13 +693,27 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/proposals (integration)', () => {
     });
     const beforeOpening = (await get('/api/v1/me/proposals')).body;
     for (const hidden of [draft.slug, draft.title]) expect(beforeOpening).not.toContain(hidden);
-    await t.db
-      .update(schema.markets)
-      .set({ status: 'open', openAt: new Date() })
-      .where(eq(schema.markets.id, draft.id));
+    const moveTo = (status: 'review' | 'scheduled' | 'open') =>
+      t.db
+        .update(schema.markets)
+        .set({ status, openAt: status === 'open' ? new Date() : null })
+        .where(eq(schema.markets.id, draft.id));
+    // In review it is the admin's alone still, as a draft is (ADR-0093 decision 1 item 12).
+    await moveTo('review');
+    expect((await one(adopted.id)).adoption).toEqual({ memo: '좋은 제안', market: null });
+    expect((await one(duplicateOfDraft.id)).rejection?.duplicateMarket).toBeNull();
+    const inReview = (await get('/api/v1/me/proposals')).body;
+    for (const hidden of [draft.slug, draft.title]) expect(inReview).not.toContain(hidden);
+    // Public from SCHEDULED on, before it opens, and still once open.
     const opened = { id: draft.id, slug: draft.slug, title: draft.title };
-    expect((await one(adopted.id)).adoption).toEqual({ memo: '좋은 제안', market: opened });
-    expect((await one(duplicateOfDraft.id)).rejection?.duplicateMarket).toEqual(opened);
+    for (const status of ['scheduled', 'open'] as const) {
+      await moveTo(status);
+      expect((await one(adopted.id)).adoption, status).toEqual({
+        memo: '좋은 제안',
+        market: opened,
+      });
+      expect((await one(duplicateOfDraft.id)).rejection?.duplicateMarket, status).toEqual(opened);
+    }
     // Nothing of the operators: who, the memo between them, the number's hash.
     const body = (await get('/api/v1/me/proposals')).body;
     for (const hidden of [admin.id, '운영자끼리만', phoneHash]) expect(body).not.toContain(hidden);

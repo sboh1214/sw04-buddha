@@ -3,6 +3,7 @@ import { schema, type Db } from '@buddha/db';
 import {
   ALL_MARKET_STATUSES,
   FILLS_RECENT_LIMIT,
+  PUBLIC_MARKET_STATUSES,
   TICKS_MAX_POINTS,
   TICKS_SCAN_MAX,
   serializeCoinAmount,
@@ -18,7 +19,7 @@ import {
   type TickBucketSeconds,
   type TicksQuery,
 } from '@buddha/shared';
-import { and, asc, desc, eq, gte, ilike, inArray, lte, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, ilike, inArray, lte, or, sql, type SQL } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { DB } from '../infra/db/db.provider.js';
 import { type Page } from '../wallet/wallet.service.js';
@@ -86,7 +87,6 @@ export function toMarket(row: MarketRow, category: CategoryRef): Market {
     resolutionSource: row.resolutionSource,
     resolvedAt: row.resolvedAt?.toISOString() ?? null,
     settledAt: row.settledAt?.toISOString() ?? null,
-    voidedAt: row.voidedAt?.toISOString() ?? null,
   };
 }
 
@@ -101,6 +101,16 @@ export function toFill(row: FillRow): Fill {
     priceAvgBp: row.priceAvgBp,
     createdAt: row.createdAt.toISOString(),
   };
+}
+
+/**
+ * The predicate of every public read of a market (ADR-0093 decision 1 item 12, #174): a status
+ * users see (`PUBLIC_MARKET_STATUSES`), so DRAFT and REVIEW — the admin's alone — are on no list
+ * and answer NOT_FOUND, the same as an id that does not exist. The detail, the list, the
+ * discussion, the watchlist, the themes, the related markets and the proposals all filter by it.
+ */
+export function isPublicMarket(): SQL {
+  return inArray(schema.markets.status, [...PUBLIC_MARKET_STATUSES]);
 }
 
 /**
@@ -136,9 +146,10 @@ export function inCategory(db: Db, slug: string) {
 }
 
 /**
- * Public market reads (PLAN 5.2, 7.1; M3). A draft is invisible on every public route — the
- * list never returns one and the detail, fills and ticks routes answer NOT_FOUND for one, the
- * same as for an id that does not exist: only admins know a draft exists.
+ * Public market reads (PLAN 5.2, 7.1; M3). A DRAFT or REVIEW market is invisible on every public
+ * route (`isPublicMarket`) — the list never returns one and the detail, fills and ticks routes
+ * answer NOT_FOUND for one, the same as for an id that does not exist: only admins know it
+ * exists. A SCHEDULED market is public before it opens (ADR-0093 decision 1 item 12).
  */
 @Injectable()
 export class MarketService {
@@ -147,22 +158,21 @@ export class MarketService {
   /**
    * Keyset-paginated per order (`marketOrder`, market-order.ts — the one place the market orders
    * live, ADR-0065): 추천 joins its 24-hour volume laterally and pages on (window end, volume,
-   * open time, id), 신규 on (open time, id), 마감 임박 on (close time, id) — or, when the status is
-   * not `open` and ended markets can be listed, on (진행 중 first, signed close time, id). A cursor
-   * that does not decode for the order serves the first page rather than a 500 (see decodeKeyset).
+   * open time, id), 신규 on (open time, id), 마감 임박 on (close time, id) — or, when the list can
+   * hold a closed market, on (not closed yet first, signed close time, id). A cursor that does not
+   * decode for the order serves the first page rather than a 500 (see decodeKeyset).
    *
-   * `status=all` is every public status (the search screen's '모든 상태', ADR-0066): a draft is
-   * still never listed. The title search is a plain `ILIKE` over the candidate rows, with no
-   * index of its own (ADR-0066 says why): the sort reads every candidate anyway.
+   * `status=all` is every public status (the search screen's '모든 상태', ADR-0066; CANCELLED
+   * included, ADR-0093 decision 3): DRAFT and REVIEW are still never listed. The title search is
+   * a plain `ILIKE` over the candidate rows, with no index of its own (ADR-0066 says why): the
+   * sort reads every candidate anyway.
    */
   async list(query: MarketListQuery): Promise<Page<MarketSummary>> {
     const { markets, categories } = schema;
     const { limit } = query;
     const order = marketOrder(this.db, query.sort, query.cursor, query.status);
     const filters = [
-      query.status === ALL_MARKET_STATUSES
-        ? ne(markets.status, 'draft')
-        : eq(markets.status, query.status),
+      query.status === ALL_MARKET_STATUSES ? isPublicMarket() : eq(markets.status, query.status),
       query.category ? inCategory(this.db, query.category) : undefined,
       query.q ? ilike(markets.title, likePattern(query.q)) : undefined,
     ];
@@ -208,7 +218,7 @@ export class MarketService {
           parsedId.success
             ? eq(markets.id, parsedId.data)
             : eq(markets.slug, idOrSlug.normalize('NFC')),
-          ne(markets.status, 'draft'),
+          isPublicMarket(),
         ),
       )
       .limit(1);
@@ -217,11 +227,11 @@ export class MarketService {
   }
 
   /**
-   * The market row for a public sub-resource (fills, ticks): NOT_FOUND for an unknown id and
-   * for a draft alike — with the database clock read in the same statement, so a window the
-   * caller left open ends on the clock ticks are stamped with and not the API host's, at no
-   * extra round trip (clock.ts, A-M3-16). Epoch millis as text, like `clockTimestamp`: no
-   * driver-side date parser is involved.
+   * The market row for a public sub-resource (fills, ticks, related markets, themes): NOT_FOUND
+   * for an unknown id and for a DRAFT or REVIEW market alike — with the database clock read in
+   * the same statement, so a window the caller left open ends on the clock ticks are stamped with
+   * and not the API host's, at no extra round trip (clock.ts, A-M3-16). Epoch millis as text, like
+   * `clockTimestamp`: no driver-side date parser is involved.
    */
   async requirePublicAt(marketId: string): Promise<{ market: MarketRow; now: Date }> {
     const [row] = await this.db
@@ -230,7 +240,7 @@ export class MarketService {
         nowMs: sql<string>`(extract(epoch FROM clock_timestamp()) * 1000)::bigint::text`,
       })
       .from(schema.markets)
-      .where(and(eq(schema.markets.id, marketId), ne(schema.markets.status, 'draft')))
+      .where(and(eq(schema.markets.id, marketId), isPublicMarket()))
       .limit(1);
     if (!row) throw new AppError('NOT_FOUND', { message: 'Market not found' });
     const ms = Number(row.nowMs);
@@ -308,9 +318,9 @@ export class MarketService {
     // `raw` (market.ts), which is the one value `tickBucketSeconds` answers 0 for.
     //
     // `market.openAt` deliberately stays OUT of the filter. No tick can predate a market's
-    // opening — ticks come from fills, and a draft takes no orders — so flooring there would
-    // only make the answer depend on a bound it cannot need, and the suite pins that reading
-    // outright ("`from` older than the bound is a filter, not a floor").
+    // opening — ticks come from fills, and a market not yet open takes no orders — so flooring
+    // there would only make the answer depend on a bound it cannot need, and the suite pins that
+    // reading outright ("`from` older than the bound is a filter, not a floor").
     const filterFrom =
       query.from !== undefined
         ? new Date(query.from)

@@ -1,7 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { schema, type Db } from '@buddha/db';
 import {
-  PUBLIC_MARKET_STATUSES,
   THEME_RESULT_STATUSES,
   decodeKeyset,
   encodeKeyset,
@@ -20,7 +19,12 @@ import { AppError } from '../common/errors/app-error.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
 import { marketOrder } from '../markets/market-order.js';
-import { MarketService, marketWithCategory, toMarketSummary } from '../markets/market.service.js';
+import {
+  MarketService,
+  isPublicMarket,
+  marketWithCategory,
+  toMarketSummary,
+} from '../markets/market.service.js';
 import { type Page } from '../wallet/wallet.service.js';
 import {
   themeListCursor,
@@ -32,19 +36,20 @@ import {
 } from './theme-rows.js';
 
 /**
- * When a result was decided: the voiding of a voided market, the judgement of a judged one. The
- * close time stands in for a row whose transition left neither (a test factory's; every product
+ * When a result was confirmed: `resolved_at`, stamped by the transition to RESOLVED (ADR-0093
+ * decision 3, the #174 row: the result after its confirmation, not the PROVISIONAL publish). The
+ * close time stands in for a row whose transition left none (a test factory's; every product
  * path stamps one), so the key is never NULL — a row comparison with a NULL in it is NULL, which
  * would end a page at that market. The results list orders and pages on it.
  */
-const decidedAt: SQL = sql`coalesce(${schema.markets.voidedAt}, ${schema.markets.resolvedAt}, ${schema.markets.closeAt})`;
+const decidedAt: SQL = sql`coalesce(${schema.markets.resolvedAt}, ${schema.markets.closeAt})`;
 
 /**
  * 테마 (#81) for everyone, signed in or not (ADR-0069 decision 4, the #81 '들어오는 길' row): the
  * list, a theme's page, its markets and results, and the themes a market is in. Only a published
- * theme is in any of these answers — an unpublished one is NOT_FOUND, as a draft market is — and
- * only a market that is not a draft. None of them names who made, edited or published a theme, or
- * carries anything about anyone's trades: the results are the markets' own.
+ * theme is in any of these answers — an unpublished one is NOT_FOUND, as a DRAFT or REVIEW market
+ * is — and only a public market (`isPublicMarket`). None of them names who made, edited or
+ * published a theme, or carries anything about anyone's trades: the results are the markets' own.
  *
  * A theme's status (예정·진행 중·종료) is read at the Korean date of the database clock, once per
  * request, and both filters and orders the rows (`themeStatusWhere`, `themeListOrder`) and labels
@@ -124,13 +129,13 @@ export class ThemesService {
   }
 
   /**
-   * `GET /themes/:id/markets`: the markets in a published theme, every public status — a draft is
-   * never shown (ADR-0069 decision 4, the #81 '편성 규칙' row) and a voided one is (owner decision
-   * 2026-10-19) — as the home's cards. The order is
-   * the one every list that can hold ended markets uses (`marketOrder`'s 마감 임박 over every
-   * public status, ADR-0066): the markets still 진행 중 first, the soonest to close first, then the
-   * ended ones, the most recently closed first — the markets a visitor can take part in come
-   * first.
+   * `GET /themes/:id/markets`: the markets in a published theme, every public status — a DRAFT or
+   * REVIEW one is never shown (ADR-0069 decision 4, the #81 '편성 규칙' row) and a CANCELLED one
+   * or one whose result is VOID is (owner decision 2026-10-19, moved onto the new statuses by
+   * ADR-0093 decision 3) — as the home's cards. The order is the one every list that can hold
+   * ended markets uses (`marketOrder`'s 마감 임박 over every public status, ADR-0066): the markets
+   * not closed yet first, the soonest to close first, then the ended ones, the most recently
+   * closed first — the markets a visitor can take part in come first.
    */
   async listMarkets(
     themeId: string,
@@ -144,13 +149,7 @@ export class ThemesService {
       .select({ ...marketWithCategory, order: order.fields })
       .from(markets)
       .innerJoin(categories, eq(categories.id, markets.categoryId))
-      .where(
-        and(
-          inTheme(this.db, themeId),
-          inArray(markets.status, [...PUBLIC_MARKET_STATUSES]),
-          order.after,
-        ),
-      )
+      .where(and(inTheme(this.db, themeId), isPublicMarket(), order.after))
       .orderBy(...order.orderBy)
       .limit(limit + 1);
     const hasMore = rows.length > limit;
@@ -163,9 +162,11 @@ export class ThemesService {
   }
 
   /**
-   * `GET /themes/:id/results`: the theme's markets that are 판정 완료·정산 완료·무효, each with its
-   * result (YES·NO, none for a voided one), the most recently decided first, keyset-paged on
-   * `(decided, id)`. The markets' own outcome only: nobody's trades, performance or PnL.
+   * `GET /themes/:id/results`: the theme's markets whose result is confirmed — 결과 확정·지급
+   * 중·지급 완료 (`THEME_RESULT_STATUSES`) — each with that result (YES·NO·VOID), the most
+   * recently confirmed first, keyset-paged on `(decided, id)`. A PROVISIONAL result, which may
+   * still be corrected, is not in it, and a CANCELLED market has no result (ADR-0093 decision 3,
+   * the #174 row). The markets' own outcome only: nobody's trades, performance or PnL.
    */
   async listResults(
     themeId: string,
@@ -189,6 +190,9 @@ export class ThemesService {
         and(
           inTheme(this.db, themeId),
           inArray(markets.status, [...THEME_RESULT_STATUSES]),
+          // Every path into these statuses writes the result; a row without one (a test
+          // factory's) has nothing to list.
+          isNotNull(markets.resolvedResult),
           keyset
             ? tupleKeysetPredicate([
                 { key: decidedAt, value: keyset.createdAt.toISOString(), cast: 'timestamptz' },
@@ -203,18 +207,15 @@ export class ThemesService {
     const kept = hasMore ? rows.slice(0, limit) : rows;
     const last = kept.at(-1);
     return {
-      items: kept.map((row) => {
-        const status = row.status as ThemeResultStatus;
-        return {
-          marketId: row.id,
-          slug: row.slug,
-          title: row.title,
-          status,
-          // A voided market has no result, whatever its row says.
-          result: status === 'voided' ? null : row.resolvedResult,
-          decidedAt: new Date(Number(row.decidedAtMs)).toISOString(),
-        };
-      }),
+      items: kept.map((row) => ({
+        marketId: row.id,
+        slug: row.slug,
+        title: row.title,
+        // Narrowed by the WHERE above: a status of THEME_RESULT_STATUSES, with a result.
+        status: row.status as ThemeResultStatus,
+        result: row.resolvedResult!,
+        decidedAt: new Date(Number(row.decidedAtMs)).toISOString(),
+      })),
       nextCursor:
         hasMore && last
           ? encodeKeyset({ createdAt: new Date(Number(last.decidedAtMs)), id: last.id })
@@ -225,8 +226,8 @@ export class ThemesService {
   /**
    * `GET /markets/:id/themes`: the published themes a public market is in, for the links on its
    * detail, in the public list's order (진행 중 → 예정 → 종료). Every status of theme: a 종료 theme
-   * is still where the market was gathered. A draft or unknown market is NOT_FOUND, as on every
-   * sub-resource of a detail.
+   * is still where the market was gathered. A DRAFT, REVIEW or unknown market is NOT_FOUND, as on
+   * every sub-resource of a detail.
    */
   async listForMarket(marketId: string): Promise<ThemeSummary[]> {
     await this.markets.requirePublic(marketId);

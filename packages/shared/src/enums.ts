@@ -132,18 +132,31 @@ export const paymentEventTypeSchema = z.enum(PAYMENT_EVENT_TYPES);
 
 // ---- markets (PLAN 5.2) -------------------------------------------------------------
 /**
- * Market lifecycle (GD 01-01 §8, O-5~O-7, ADR-0046): `closed` → `resolved` is the admin's
- * judgement, final at once (no dispute stage); `resolved` → `settled` is the worker finishing
- * every SETTLEMENT_STEPS step. The Postgres label `resolved` is M5's dispute-stage label renamed
- * in place (migration 0016), so the enum keeps this order.
+ * Market lifecycle (N03 §3, ADR-0093 decision 1, #174), in the order N03 §3 lists it with the
+ * two side states after the step they branch from (PAUSED beside OPEN) and CANCELLED last.
+ * The transitions are `MARKET_LIFECYCLE_TRANSITIONS` (market-lifecycle.ts); this order is only the
+ * rank `statusRank` falls back to for a row that carries no transition key (realtime.ts).
+ *
+ * - `draft` → `review` → `scheduled` → `open` (↔ `paused`) → `closed` → `provisional` →
+ *   `resolved` → `settling` → `settled`; `cancelled` ends a market that never had a user fill.
+ * - DRAFT and REVIEW are the admin's alone (ADR-0093 decision 1 item 12); every other status
+ *   is public (`PUBLIC_MARKET_STATUSES`, market.ts).
+ * - The judgement's result is not a status: `MARKET_RESULTS` below, stored beside it.
+ *
+ * Migration 0048 rebuilt the Postgres type on emptied tables (#174), so the order is free.
  */
 export const MARKET_STATUSES = [
   'draft',
+  'review',
+  'scheduled',
   'open',
+  'paused',
   'closed',
+  'provisional',
   'resolved',
+  'settling',
   'settled',
-  'voided',
+  'cancelled',
 ] as const;
 export type MarketStatus = (typeof MARKET_STATUSES)[number];
 export const marketStatusSchema = z.enum(MARKET_STATUSES);
@@ -152,25 +165,46 @@ export const MARKET_VISIBILITIES = ['public', 'group'] as const;
 export type MarketVisibility = (typeof MARKET_VISIBILITIES)[number];
 export const marketVisibilitySchema = z.enum(MARKET_VISIBILITIES);
 
-/** Binary markets only (PLAN 5.2). PLAN 16: swap this tuple when multi-outcome arrives. */
+/**
+ * A contract's side (PLAN 5.2): what an order buys, a fill trades and a position holds. Binary
+ * markets only; PLAN 16 swaps this tuple when multi-outcome arrives. Not a market's result,
+ * which can also be VOID (`MARKET_RESULTS`).
+ */
 export const OUTCOMES = ['YES', 'NO'] as const;
 export type Outcome = (typeof OUTCOMES)[number];
 export const outcomeSchema = z.enum(OUTCOMES);
 
-/** market_events.type (varchar(40), PLAN 6.2). */
+/**
+ * A market's result type (N03 §3 "결과 유형은 YES/NO/VOID로 상태와 별도 저장한다", #174):
+ * `markets.resolved_result`, null until a judgement publishes one and on a CANCELLED market
+ * (ADR-0093 decision 1 item 10). VOID is a judgement's result, never a status, and pays every
+ * contract 50 Coin (item 9, #126). Its own Postgres type (`market_result`), so a contract side
+ * can never be VOID.
+ */
+export const MARKET_RESULTS = ['YES', 'NO', 'VOID'] as const;
+export type MarketResult = (typeof MARKET_RESULTS)[number];
+export const marketResultSchema = z.enum(MARKET_RESULTS).meta({ id: 'MarketResult' });
+
+/**
+ * market_events.type (varchar(40), PLAN 6.2). A row with a status change also carries
+ * `from_status`/`to_status` (#174); each action issue adds the type of the transitions it
+ * makes (#78 review, #21 scheduled open, #114 pause, #152 judgement, #20 cancel).
+ */
 export const MARKET_EVENT_TYPES = [
+  /** → draft: the row is written (`to_status` only). */
   'created',
+  /** draft → open: the admin's direct open (ADR-0027, until #78·#21). */
   'opened',
+  /** open → closed: the admin's close (until #114) or the worker at `close_at`. */
   'closed',
-  /** Legacy (M5 dispute flow, before ADR-0046): no longer written, kept to read old rows. */
-  'resolve_proposed',
-  /** Legacy (M5 dispute flow, before ADR-0046): no longer written, kept to read old rows. */
-  'result_changed',
+  /** settling → settled: the worker finished every SETTLEMENT_STEPS step. */
   'finalized',
-  'voided',
+  /** No status change: a rules edit of an open market (`from_status`/`to_status` null). */
   'rules_edited',
-  /** closed → resolved: the admin's judgement, payload `{result, note, evidenceUrl}`. */
+  /** closed → resolved: the admin's judgement, payload `{result, note, evidenceUrl}` (until #152). */
   'resolved',
+  /** resolved → settling: the worker starts the settlement steps (ADR-0093 decision 1 item 1). */
+  'settling',
 ] as const;
 export type MarketEventType = (typeof MARKET_EVENT_TYPES)[number];
 export const marketEventTypeSchema = z.enum(MARKET_EVENT_TYPES);
@@ -219,18 +253,19 @@ export const priceTickTriggerSchema = z.enum(PRICE_TICK_TRIGGERS);
 // ---- settlement steps (O-6, ADR-0046) -----------------------------------------------
 /**
  * market_settlement_steps.step (varchar, not a Postgres enum): the steps that must ALL finish
- * before a `resolved` market becomes `settled` (O-6), run in this order. `coin` pays out the
- * positions. A step added later is appended here — a varchar column, so it needs no enum
- * migration.
+ * before a `settling` market becomes `settled` (O-6, ADR-0093 decision 1 item 14), run in this
+ * order. `coin` pays out the positions. A step added later is appended here — a varchar column,
+ * so it needs no enum migration.
  */
 export const SETTLEMENT_STEPS = ['coin'] as const;
 export type SettlementStep = (typeof SETTLEMENT_STEPS)[number];
 export const settlementStepSchema = z.enum(SETTLEMENT_STEPS).meta({ id: 'SettlementStep' });
 
 /**
- * market_settlement_steps.status (varchar). `pending` from the judgement until the step runs;
- * `done` once it committed (`completed_at` set); `failed` when its last attempt rolled back
- * (`last_error` says why) — the per-minute scan retries a failed step without a cap.
+ * market_settlement_steps.status (varchar). `pending` from the result's confirmation
+ * (`resolved`) until the step runs; `done` once it committed (`completed_at` set); `failed` when
+ * its last attempt rolled back (`last_error` says why) — the per-minute scan retries a failed
+ * step without a cap.
  */
 export const SETTLEMENT_STEP_STATUSES = ['pending', 'done', 'failed'] as const;
 export type SettlementStepStatus = (typeof SETTLEMENT_STEP_STATUSES)[number];

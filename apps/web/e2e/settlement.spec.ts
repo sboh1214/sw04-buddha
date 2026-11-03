@@ -16,7 +16,7 @@ import {
 
 /**
  * 마감 · 판정 · 정산 (PLAN 13 M5 AC 7, ADR-0046): 관리자 판정 → 워커 정산 → 시장을 보던 탭이
- * 소켓으로 정산 완료를 받는다.
+ * 소켓으로 지급 완료를 받는다(#174의 라벨).
  *
  * Nobody holds the market: there is no way to trade until the CLOB lands (#119; D13), so the
  * holder's half of AC 7 — 포트폴리오 정산 이력, 원장 정산 지급 — comes back with the order
@@ -24,10 +24,11 @@ import {
  * holders or not.
  *
  * There is no dispute window to wait out any more: the 판정 is final at once, the API queues the
- * worker's `market.finalize` with no delay, and the market reads `settled` moments later. That
- * makes `resolved` a state of a few seconds at most, so this spec waits for the FINAL `settled`
- * alone and never asserts the badge in between — a 판정 완료 the worker has already moved past
- * would be a flaky assertion, not a finding. The intermediate state is pinned by the API's and
+ * worker's `market.finalize` with no delay, and the market reads `settled` moments later — through
+ * `resolved` and `settling` (#174: the worker starts the payout, then finishes it). That makes
+ * both states of a few seconds at most, so this spec waits for the FINAL `settled` alone and never
+ * asserts the badge in between — a 결과 확정 or 지급 중 the worker has already moved past would be
+ * a flaky assertion, not a finding. The intermediate state is pinned by the API's and
  * the worker's integration tests.
  *
  * The worker itself is still a prerequisite: with its probe disabled (`WORKER_HEALTH_PORT=0`) the
@@ -89,9 +90,9 @@ test.describe('정산', () => {
       await expect(adminPage.getByTestId('market-resolve')).toHaveCount(0);
       await expect(adminPage.getByTestId('market-void')).toHaveCount(0);
 
-      // --- the reader's tab: 정산 완료 once the worker has settled — through the socket, on the
+      // --- the reader's tab: 지급 완료 once the worker has settled — through the socket, on the
       // document that was there before the admin pressed anything. Only the final state: the
-      // 판정 완료 in between lasts as long as the worker takes (see the file comment).
+      // 결과 확정 and 지급 중 in between last as long as the worker takes (see the file comment).
       await expect(badge).toHaveText(copy.marketStatusSettled, { timeout: SETTLEMENT_WAIT_MS });
       expect(await documentSurvived(page), page.url()).toBe(true);
       await expect(page.getByTestId('market-status-notice-detail')).toHaveText(

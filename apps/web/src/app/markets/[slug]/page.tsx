@@ -75,8 +75,9 @@ export async function generateMetadata({
 export default async function MarketPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   // `null` is every address that cannot name a public market: an unknown slug, a slug the route
-  // schema refuses, and a draft — which the API answers as NOT_FOUND because it is invisible
-  // outside the admin. All three are one 404 to a visitor.
+  // schema refuses, and a draft or a market in review — which the API answers as NOT_FOUND
+  // because it is invisible outside the admin (ADR-0093 decision 1, item 12). All are one 404 to
+  // a visitor.
   const market = await fetchMarketServer(slug);
   if (market === null) notFound();
 

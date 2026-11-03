@@ -12,11 +12,12 @@ import { profilePath } from '@/lib/profile';
 /**
  * A profile's 글·댓글 (#51, ADR-0080; ADR-0069 decision 3 #37-14): the member's posts and their 댓글
  * and 대댓글 on two tabs, newest first, what was deleted or hidden left out and what sits on an
- * ended or voided market kept, all of it while the member is under a restriction too (the owner's
- * «제재 중인 사람의 글») — the items the counts above count (ADR-0078), so a tab never holds more
- * or fewer than its number. Every reader gets the same lists, signed in or not (#37-1). Each item
- * opens its post and, by the market line, its market, an ended one too, and carries 신고 for every
- * reader but its author (owner decision 2026-10-21) — a visitor's press comes back to this tab.
+ * ended market kept (a cancelled one or one whose result is 무효 too, #174), all of it while the
+ * member is under a restriction too (the owner's «제재 중인 사람의 글») — the items the counts above count
+ * (ADR-0078), so a tab never holds more or fewer than its number. Every reader gets the same lists,
+ * signed in or not (#37-1). Each item opens its post and, by the market line, its market, an ended
+ * one too, and carries 신고 for every reader but its author (owner decision 2026-10-21) — a visitor's
+ * press comes back to this tab.
  *
  * Read in the browser, after the page the server drew (`useProfilePosts`), so the per-address
  * bucket applies to whoever reads them — as the owner decided for a post's comments (2026-10-21,

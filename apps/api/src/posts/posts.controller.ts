@@ -222,7 +222,7 @@ export class MarketPostsController {
     summary:
       'A market’s discussion: its posts as the community list’s cards, newest first, never a ' +
       'deleted or hidden one, and meta.total, how many the whole list holds; readable in every ' +
-      'public status, ended markets too. A draft or unknown market is NOT_FOUND',
+      'public status, ended markets too. A draft, in-review or unknown market is NOT_FOUND',
   })
   @ApiQuery(CURSOR_QUERY_PARAMS[0])
   @ApiQuery(CURSOR_QUERY_PARAMS[1])

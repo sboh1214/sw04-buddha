@@ -68,6 +68,40 @@ describe('toPreviewMarket', () => {
     expect(preview.openAt).toBeNull();
   });
 
+  it('keeps them for a market in review too: like a draft, no visitor sees it (#174)', () => {
+    // Its 검수 중 badge must not reach a card meant as the one visitors see.
+    const preview = toPreviewMarket(body, categories, {
+      ...traded,
+      status: 'review',
+      openAt: null,
+    });
+    expect(preview.status).toBe('open');
+    expect(preview.lastPrice).toBeNull();
+    expect(preview.traderCount).toBe(0);
+  });
+
+  it('previews a scheduled market as visitors see it: its 개장 예정 badge, no fill yet', () => {
+    const scheduled = {
+      ...traded,
+      status: 'scheduled' as const,
+      lastPrice: null,
+      traderCount: 0,
+      openAt: null,
+    };
+    const preview = toPreviewMarket(body, categories, scheduled);
+    expect(preview.status).toBe('scheduled');
+    expect(preview.lastPrice).toBeNull();
+    expect(preview.traderCount).toBe(0);
+  });
+
+  it('takes the history of every public market, a paused or cancelled one included', () => {
+    for (const status of ['paused', 'closed', 'provisional', 'settling', 'cancelled'] as const) {
+      const preview = toPreviewMarket(body, categories, { ...traded, status });
+      expect(preview.status, status).toBe(status);
+      expect(preview.lastPrice, status).toBe(70);
+    }
+  });
+
   it('carries no status ordering key, even over a base that has one', () => {
     // `statusEventId` orders `market:status` events for a live subscriber (A-M3-19); the preview
     // card subscribes to nothing, so the key is dropped rather than copied from the base.

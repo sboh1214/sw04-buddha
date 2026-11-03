@@ -7,7 +7,7 @@ import {
   type WatchState,
   type WatchlistQuery,
 } from '@buddha/shared';
-import { and, desc, eq, ne } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { closedAccountRefusal } from '../common/errors/closed-account.js';
 import { keysetPredicate } from '../common/keyset.js';
@@ -18,7 +18,12 @@ import {
   type MarketOrder,
   type MarketOrderRow,
 } from '../markets/market-order.js';
-import { inCategory, marketWithCategory, toMarketSummary } from '../markets/market.service.js';
+import {
+  inCategory,
+  isPublicMarket,
+  marketWithCategory,
+  toMarketSummary,
+} from '../markets/market.service.js';
 import { type Page } from '../wallet/wallet.service.js';
 
 /** A watchlist row: the market and its order fields, and when the caller watched it. */
@@ -53,9 +58,11 @@ function watchedOrder(cursor: string | undefined): MarketOrder<WatchRow> {
  * waits for the first and then conflicts, the second delete waits and then finds nothing, so the
  * history never records a change the state did not make.
  *
- * A market no public route serves — an unknown id or a draft — is NOT_FOUND on both routes that
- * name one market (the state read and the write), as on the public detail. A draft can never be watched and no market goes back to draft, so a
- * watched market is always public; the list says so again in its query.
+ * A market no public route serves — an unknown id, or a DRAFT or REVIEW one — is NOT_FOUND on both
+ * routes that name one market (the state read and the write), as on the public detail; every
+ * public status is watchable, SCHEDULED, PAUSED and CANCELLED included (ADR-0093 decision 3).
+ * A market can go back to DRAFT (SCHEDULED → DRAFT, #21), so the list filters by the public
+ * statuses too (`isPublicMarket`): the watch stays, off the list until the market is public again.
  */
 @Injectable()
 export class WatchlistService {
@@ -68,10 +75,10 @@ export class WatchlistService {
    * uses, or one of the public orders, from the same `marketOrder` as `GET /markets` so a watched
    * market sits where it sits on the home. Items are the `GET /markets` row, so the same card draws
    * them; an ended market stays with its status until the member unwatches it. The status filter
-   * goes to `marketOrder` too: without `status=open` (MY lists every status) 마감 임박 puts the
-   * 진행 중 markets first and the ended ones after them, most recently closed first, as the search
-   * does (ADR-0066, owner decision 2026-10-16). A cursor that does not decode for the order serves
-   * the first page.
+   * goes to `marketOrder` too: without one status (MY lists every status) 마감 임박 puts the
+   * markets not closed yet first and the ended ones after them, most recently closed first, as the
+   * search does (ADR-0066, owner decision 2026-10-16; #174). A cursor that does not decode for the
+   * order serves the first page.
    */
   async list(userId: string, query: WatchlistQuery): Promise<Page<MarketSummary>> {
     const { markets, categories, marketWatches } = schema;
@@ -90,7 +97,7 @@ export class WatchlistService {
       .where(
         and(
           eq(marketWatches.userId, userId),
-          ne(markets.status, 'draft'),
+          isPublicMarket(),
           query.status ? eq(markets.status, query.status) : undefined,
           query.category ? inCategory(this.db, query.category) : undefined,
           order.after,
@@ -118,7 +125,7 @@ export class WatchlistService {
         marketWatches,
         and(eq(marketWatches.marketId, markets.id), eq(marketWatches.userId, userId)),
       )
-      .where(and(eq(markets.id, marketId), ne(markets.status, 'draft')))
+      .where(and(eq(markets.id, marketId), isPublicMarket()))
       .limit(1);
     if (!row) throw new AppError('NOT_FOUND', { message: 'Market not found' });
     return { watched: row.watcher !== null };
@@ -137,7 +144,7 @@ export class WatchlistService {
       const [market] = await tx
         .select({ id: markets.id })
         .from(markets)
-        .where(and(eq(markets.id, marketId), ne(markets.status, 'draft')))
+        .where(and(eq(markets.id, marketId), isPublicMarket()))
         .limit(1);
       if (!market) throw new AppError('NOT_FOUND', { message: 'Market not found' });
 

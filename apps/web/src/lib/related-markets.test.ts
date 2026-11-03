@@ -151,20 +151,28 @@ describe('relatedSearchSection (the picker’s results, #65)', () => {
 });
 
 describe('relatedHint (the admin panel, #65)', () => {
-  it('names the statuses a detail shows by the labels the panel badges markets with', () => {
+  it('names the markets a detail does not show, by the labels the panel badges them with', () => {
     const hint = relatedHint();
-    // Review on #65: the hint said '거래 중' for `open`, whose badge right under it reads '진행 중'.
+    // ADR-0093 decision 3, the #174 row: a detail leaves out a cancelled market and one whose
+    // result is 무효 — the second is no status, so the hint names the hidden markets rather than
+    // the eight shown statuses — besides the drafts and reviews no public page shows.
     expect(hint).toBe(
-      `${copy.adminRelatedHint} ${copy.adminRelatedHintShownLead} ` +
-        `${copy.marketStatusOpen}·${copy.marketStatusClosed}·${copy.marketStatusResolved}·` +
-        `${copy.marketStatusSettled}${copy.adminRelatedHintShownTail} ${copy.adminRelatedHintNoEffect}`,
+      `${copy.adminRelatedHint} ` +
+        `${copy.marketStatusDraft}·${copy.marketStatusReview}·${copy.marketStatusCancelled}` +
+        `${copy.adminRelatedHintHiddenStatusTail} ${copy.marketResultVoid}` +
+        `${copy.adminRelatedHintHiddenResultTail} ${copy.adminRelatedHintNoEffect}`,
     );
-    expect(hint).not.toContain('거래 중');
-    // Every shown status by its label, and neither hidden one (ADR-0061 decision 1, item 19).
+    expect(hint).toBe(
+      '연결한 두 시장은 서로의 상세에 관련 시장으로 보입니다. 초안·검수 중·취소인 시장과 결과가 ' +
+        '무효인 시장은 상세에 보이지 않습니다. 연결은 두 시장의 규칙·거래·판정·정산을 바꾸지 않습니다.',
+    );
+    // Every status by its label exactly when a detail leaves it out — the shown ones are not
+    // named (no label of one is inside another's, so `includes` reads one label alone).
     for (const status of MARKET_STATUSES) {
       const label = MARKET_STATUS_LABEL[status];
-      expect(hint.includes(label), status).toBe(RELATED_MARKET_STATUSES.includes(status as never));
+      expect(hint.includes(label), status).toBe(!RELATED_MARKET_STATUSES.includes(status as never));
     }
+    expect(hint).toContain(copy.marketResultVoid);
   });
 });
 

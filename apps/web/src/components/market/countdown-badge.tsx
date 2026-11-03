@@ -1,7 +1,7 @@
 'use client';
 
 import { Badge, Text } from '@chakra-ui/react';
-import { type MarketStatus } from '@buddha/shared';
+import { type MarketStatus, isPreCloseMarketStatus } from '@buddha/shared';
 import { useEffect, useRef, useState } from 'react';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
@@ -35,7 +35,14 @@ import { isClosingSoon } from '@/lib/market-admin';
  * Colour never carries the state alone (PLAN 11.2): 마감 임박 and 마감됨 are written out beside
  * the orange and the grey.
  *
- * Two looks, one reading. The detail header and the admin screens draw the `badge` — the Chakra
+ * Which statuses count down (#174): every one not closed yet (`isPreCloseMarketStatus`) — 거래 중,
+ * 거래 일시 중단, which still closes on schedule (ADR-0093 decision 1, item 3), and 개장 예정,
+ * whose close time is fixed before it opens, so a card's line under the '개장 예정' badge says when
+ * trading will end rather than 마감됨 for a market that has not even started (#174's choice over
+ * showing nothing: the card keeps one line in every status). Only 거래 중 and 거래 일시 중단 turn to
+ * 마감 임박 (`isClosingSoon`). Every other status reads 마감됨, and its badge says the rest.
+ *
+ * Two looks, one reading. The detail header draws the `badge` — the Chakra
  * `Badge` this component always was — and the home card (ADR-0041's Kalshi tile) draws the
  * same words as a line of muted text under the question, which is `variant="text"`. The
  * anchoring and the ticking above are shared as they stand, and the strings go through one
@@ -105,7 +112,8 @@ export function CountdownBadge({
   const remaining = clock === undefined ? '' : formatRemaining(market.closeAt, clock);
   // A market whose close time has passed stays `open` until the close job runs (A-M3-31), so
   // "the countdown ran out" is an ordinary state and the badge, not the status, reports it.
-  const running = market.status === 'open' && (clock === undefined || remaining !== '');
+  const running =
+    isPreCloseMarketStatus(market.status) && (clock === undefined || remaining !== '');
   // The monotonic origin the elapsed is measured from. A ref and not state: it is written inside
   // the effect and read only there, so no render touches it (`react-hooks/refs` is an error).
   const originRef = useRef<number | undefined>(undefined);

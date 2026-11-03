@@ -13,6 +13,7 @@ import {
   MARKET_LIST_STATUSES,
   MARKET_SORTS,
   PUBLIC_MARKET_STATUSES,
+  isPublicMarketStatus,
   RECOMMENDED_VOLUME_HOURS,
   adminMarketListQuerySchema,
   adminMarketSchema,
@@ -66,9 +67,16 @@ const market = {
   resolutionSource: 'KRX',
   resolvedAt: null,
   settledAt: null,
-  voidedAt: null,
 };
-const event = { id: '1', type: 'opened', actorId: 'admin-1', payload: null, createdAt: at };
+const event = {
+  id: '1',
+  type: 'opened',
+  actorId: 'admin-1',
+  fromStatus: 'draft',
+  toStatus: 'open',
+  payload: null,
+  createdAt: at,
+};
 const order = {
   id: marketId,
   marketId,
@@ -290,9 +298,26 @@ describe('marketListQuerySchema', () => {
     expect(findExcludedIdentifier(ALL_MARKET_STATUSES, 'api')).toEqual([]);
   });
 
-  it('never lists drafts and only knows the three sorts', () => {
-    expect(PUBLIC_MARKET_STATUSES).not.toContain('draft');
-    expect(marketListQuerySchema.safeParse({ status: 'draft' }).success).toBe(false);
+  it('never lists a DRAFT or REVIEW market and only knows the three sorts', () => {
+    // ADR-0093 decision 1 item 12: the two are the admin's alone; every other status is public,
+    // a SCHEDULED market's before it opens and a CANCELLED one's included.
+    expect(PUBLIC_MARKET_STATUSES).toEqual([
+      'scheduled',
+      'open',
+      'paused',
+      'closed',
+      'provisional',
+      'resolved',
+      'settling',
+      'settled',
+      'cancelled',
+    ]);
+    for (const hidden of ['draft', 'review'] as const) {
+      expect(isPublicMarketStatus(hidden)).toBe(false);
+      expect(marketListQuerySchema.safeParse({ status: hidden }).success).toBe(false);
+    }
+    for (const status of PUBLIC_MARKET_STATUSES) expect(isPublicMarketStatus(status)).toBe(true);
+    expect(marketListQuerySchema.safeParse({ status: 'voided' }).success).toBe(false);
     expect(marketListQuerySchema.safeParse({ sort: 'price' }).success).toBe(false);
     // The volume order is gone until #132 brings it back with its exclusions (ADR-0061 decision
     // 1, item 11): no URL can ask for it.

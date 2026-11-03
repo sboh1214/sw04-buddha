@@ -216,7 +216,8 @@ describe('listEmptyMessage', () => {
 
   it('ends the 관심 시장 view’s on MY’s own hint, word for word (owner decision 2026-10-16)', () => {
     const hint = '시장 상세에서 관심 등록을 누르면 여기에 모입니다.';
-    expect(copy.watchlistViewEmpty).toBe(`진행 중인 관심 시장이 없습니다. ${hint}`);
+    // The status is named by the 거래 중 label since #174 (ADR-0093 decision 1 item 12).
+    expect(copy.watchlistViewEmpty).toBe(`거래 중인 관심 시장이 없습니다. ${hint}`);
     expect(copy.watchlistEmpty).toBe(`아직 관심 시장이 없습니다. ${hint}`);
   });
 });

@@ -78,10 +78,10 @@ import { ThemeFormFields } from '../theme-form-fields';
  * 테마 상세(관리) (#81, ADR-0088): one theme — its publication, the edit form, its markets and its
  * notices. Owner decisions (ADR-0069 decision 4, the #81 rows, and of 2026-10-19): every admin may
  * do all of it at any time; a theme is unpublished and never deleted, and a notice hidden and
- * never deleted; publishing needs a market in the theme that is not a draft (the second round's
- * answer); the address is fixed once published, through an unpublish too;
- * every change records the admin and the time and asks no reason (the API's). Times are in Korean
- * time (`formatKst`, ADR-0063); the period is Korean dates as they are.
+ * never deleted; publishing needs a market in the theme that is public — neither a draft nor in
+ * review since #174 (the second round's answer); the address is fixed once published, through an
+ * unpublish too; every change records the admin and the time and asks no reason (the API's). Times
+ * are in Korean time (`formatKst`, ADR-0063); the period is Korean dates as they are.
  */
 export function AdminThemeDetail({ id }: { id: string }) {
   // A malformed id is a wrong address, so it is 찾을 수 없습니다 without a request.
@@ -194,11 +194,12 @@ function Item({ label, children }: { label: string; children: React.ReactNode })
 /**
  * 공개하기 · 비공개로 돌리기, and the public page while it is published. Publishing asks nothing (it
  * is undone by unpublishing); unpublishing asks first, since every public entry loses the theme at
- * once. Beside 공개하기 a line says what a publish needs — a market in the theme that is not a
- * draft (owner decisions 2026-10-19) — and is the button's description (`aria-describedby`), so a
- * screen reader says the rule with the button rather than only after a refusal, as the period
- * hint is the date fields'. A publish without such a market is refused by the API, which the toast
- * says in the same words; the server alone decides, since a draft may open meanwhile.
+ * once. Beside 공개하기 a line says what a publish needs — a market in the theme that is neither a
+ * draft nor in review (owner decisions 2026-10-19, #174) — and is the button's description
+ * (`aria-describedby`), so a screen reader says the rule with the button rather than only after a
+ * refusal, as the period hint is the date fields'. A publish without such a market is refused by
+ * the API, which the toast says in the same words; the server alone decides, since a market may
+ * become public meanwhile.
  *
  * Both name the admin on screen (`useOperatorId`, ADR-0092 — as every write on this page), so
  * they wait for `GET /me`; the cookie of another account is refused (`copy.sessionChanged`) and

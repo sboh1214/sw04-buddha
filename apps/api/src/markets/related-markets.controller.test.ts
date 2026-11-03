@@ -2,10 +2,11 @@
  * 관련 시장 (#65, ADR-0068) against the docker `test` profile: an admin links and unlinks two
  * markets (`/admin/markets/:id/related`), and a detail lists its related markets in public
  * (`GET /markets/:id/related`). Owner decisions under test (ADR-0061 decision 1, item 19; decision
- * 3, the #65 rows): two-way; open, closed, resolved and settled shown, voided and draft not; the
- * home's 추천 order; no cap; any status may be linked; actor and time recorded, and only for a
- * change; admins only; and a link touches neither market. And ADR-0068's of 2026-10-17: the
- * admin's list names who linked each market by nickname. Skips when TEST_* are unset.
+ * 3, the #65 rows): two-way; every public status shown but cancelled, never a VOID result, a
+ * draft or a review (ADR-0093 decision 3); the home's 추천 order; no cap; any status may be linked;
+ * actor and time recorded, and only for a change; admins only; and a link touches neither market.
+ * And ADR-0068's of 2026-10-17: the admin's list names who linked each market by nickname. Skips
+ * when TEST_* are unset.
  */
 import { clockTimestamp, schema } from '@buddha/db';
 import {
@@ -347,51 +348,90 @@ describe.skipIf(!hasTestInfra)('related markets (integration)', () => {
     expect(await actions()).toHaveLength(0);
   });
 
-  it('links in any status; the detail shows open, closed, resolved and settled, never voided or drafts', async () => {
+  it('links in any status; the detail shows every public status but cancelled, never a VOID result or a draft', async () => {
+    // ADR-0093 decision 3, the #174 row: 관련 시장 leaves out 취소 and 무효 (a VOID result, in
+    // whatever status holds it — a PROVISIONAL VOID too); DRAFT and REVIEW are on no public route.
     const hub = await market();
     const byStatus = {
+      scheduled: await market({ status: 'scheduled' }),
       open: await market(),
+      paused: await market({ status: 'paused' }),
       closed: await market({ status: 'closed' }),
+      provisional: await market({ status: 'provisional', resolvedResult: 'NO' }),
       resolved: await market({ status: 'resolved', resolvedResult: 'YES', resolvedAt: new Date() }),
+      settling: await market({ status: 'settling', resolvedResult: 'NO', resolvedAt: new Date() }),
       settled: await market({
         status: 'settled',
         resolvedResult: 'NO',
         resolvedAt: new Date(),
         settledAt: new Date(),
       }),
-      voided: await market({ status: 'voided' }),
+      cancelled: await market({ status: 'cancelled' }),
+      provisionalVoid: await market({ status: 'provisional', resolvedResult: 'VOID' }),
+      settledVoid: await market({
+        status: 'settled',
+        resolvedResult: 'VOID',
+        resolvedAt: new Date(),
+        settledAt: new Date(),
+      }),
       draft: await market({ status: 'draft' }),
+      review: await market({ status: 'review' }),
     };
-    // Every status may be linked, a draft and a voided market included (ADR-0061 decision 3, #65).
+    // Every status may be linked, a draft, a cancelled and a VOID market included (ADR-0061
+    // decision 3, #65).
     for (const linked of Object.values(byStatus)) {
       expect((await link(hub.id, linked.id)).statusCode).toBe(200);
     }
-    const visible = [byStatus.open, byStatus.closed, byStatus.resolved, byStatus.settled];
+    const visible = [
+      byStatus.scheduled,
+      byStatus.open,
+      byStatus.paused,
+      byStatus.closed,
+      byStatus.provisional,
+      byStatus.resolved,
+      byStatus.settling,
+      byStatus.settled,
+    ];
     expect((await shown(hub.id)).sort()).toEqual(visible.map((row) => row.id).sort());
-    // The admin keeps every link, with its status.
+    // The admin keeps every link, with its status and result.
     const admins = data<AdminRelatedMarket[]>(
       await get(`/api/v1/admin/markets/${hub.id}/related`, admin.cookie),
     );
-    expect(admins.map((row) => row.status).sort()).toEqual(
-      ['closed', 'draft', 'open', 'resolved', 'settled', 'voided'].sort(),
+    expect(admins.map((row) => row.id).sort()).toEqual(
+      Object.values(byStatus)
+        .map((row) => row.id)
+        .sort(),
     );
+    expect(admins.find((row) => row.id === byStatus.provisionalVoid.id)).toMatchObject({
+      status: 'provisional',
+      resolvedResult: 'VOID',
+    });
 
-    // Seen from the other end, a hidden market lists the hub but has no public detail of its own:
-    // a draft is NOT_FOUND like the detail, a voided market lists what it is linked to.
+    // Seen from the other end, a market left out lists the hub but may have no public detail of
+    // its own: a draft or a review is NOT_FOUND like the detail, a cancelled or VOID market lists
+    // what it is linked to.
     expect(await shown(byStatus.closed.id)).toEqual([hub.id]);
-    expect(await shown(byStatus.voided.id)).toEqual([hub.id]);
-    expect((await get(`/api/v1/markets/${byStatus.draft.id}/related`)).statusCode).toBe(404);
-    // A hub that is itself hidden shows nowhere: a voided hub is not on its partner's detail.
-    const voidedHub = await market({ status: 'voided' });
-    await link(voidedHub.id, byStatus.open.id);
+    expect(await shown(byStatus.cancelled.id)).toEqual([hub.id]);
+    expect(await shown(byStatus.settledVoid.id)).toEqual([hub.id]);
+    for (const hidden of [byStatus.draft, byStatus.review]) {
+      expect((await get(`/api/v1/markets/${hidden.id}/related`)).statusCode).toBe(404);
+    }
+    // A hub that is itself left out shows nowhere: a cancelled or VOID hub is not on its
+    // partner's detail.
+    const cancelledHub = await market({ status: 'cancelled' });
+    await link(cancelledHub.id, byStatus.open.id);
+    const voidHub = await market({ status: 'resolved', resolvedResult: 'VOID' });
+    await link(voidHub.id, byStatus.open.id);
     expect(await shown(byStatus.open.id)).toEqual([hub.id]);
   });
 
-  it('answers NOT_FOUND for a draft or an unknown market, and 400 for a malformed id', async () => {
+  it('answers NOT_FOUND for a draft, a review or an unknown market, and 400 for a malformed id', async () => {
     const draft = await market({ status: 'draft' });
+    const review = await market({ status: 'review' });
     const open = await market();
     await createMarketLink(t.db, { marketId: draft.id, relatedMarketId: open.id });
-    for (const id of [draft.id, randomUUID()]) {
+    await createMarketLink(t.db, { marketId: review.id, relatedMarketId: open.id });
+    for (const id of [draft.id, review.id, randomUUID()]) {
       const res = await get(`/api/v1/markets/${id}/related`);
       expect(res.statusCode).toBe(404);
       expect(errorOf(res).code).toBe('NOT_FOUND');

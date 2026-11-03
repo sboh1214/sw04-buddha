@@ -224,15 +224,17 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/watchlist (integration)', () => {
     ]);
   });
 
-  it('watches every public status (ADR-0061 decision 3) and touches nothing but the watchlist', async () => {
+  it('watches every public status (ADR-0061 decision 3; ADR-0093 decision 3) and touches nothing but the watchlist', async () => {
     const before = {
       balances: await t.db.select().from(schema.balances),
       ledger: await t.db.select().from(schema.ledgerEntries),
     };
+    // SCHEDULED, PAUSED and CANCELLED included; the judged ones with their result.
+    const judged = new Set<string>(['provisional', 'resolved', 'settling', 'settled']);
     for (const status of PUBLIC_MARKET_STATUSES) {
       const m = await market({
         status,
-        ...(status === 'settled' ? { resolvedResult: 'YES' } : {}),
+        ...(judged.has(status) ? { resolvedResult: 'YES' } : {}),
       });
       const res = await watch(m.id);
       expect({ status, code: res.statusCode }).toEqual({ status, code: 200 });
@@ -257,9 +259,10 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/watchlist (integration)', () => {
     expect((await watch(m.id)).statusCode).toBe(200);
   });
 
-  it('answers NOT_FOUND for a draft and an unknown market on the state read, the watch and the unwatch, writing nothing', async () => {
+  it('answers NOT_FOUND for a draft, a review and an unknown market on the state read, the watch and the unwatch, writing nothing', async () => {
     const draft = await market({ status: 'draft' });
-    for (const id of [draft.id, randomUUID()]) {
+    const review = await market({ status: 'review' });
+    for (const id of [draft.id, review.id, randomUUID()]) {
       const read = await t.app.inject({
         method: 'GET',
         url: `/api/v1/me/watchlist/${id}`,
@@ -279,7 +282,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/watchlist (integration)', () => {
   // ---- the list -----------------------------------------------------------------------
 
   it('lists newest watch first across pages, ended markets kept with their status', async () => {
-    const statuses: MarketStatus[] = ['open', 'closed', 'resolved', 'settled', 'voided'];
+    const statuses: MarketStatus[] = ['scheduled', 'open', 'paused', 'closed', 'cancelled'];
     const ids: string[] = [];
     for (const [index, status] of statuses.entries()) {
       const m = await market({ status });
@@ -470,25 +473,49 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/watchlist (integration)', () => {
     }
   });
 
-  it('orders MY’s 마감 임박 as the search does: 진행 중 first, then ended by the latest close (ADR-0066)', async () => {
+  it('leaves a watched market off the list while it is a draft or a review (#174)', async () => {
+    // No path takes a watched market back to DRAFT today, but SCHEDULED → DRAFT is a lifecycle
+    // edge (#21): the list filters by the public statuses as the detail does, and the watch row
+    // stays for when the market is public again.
+    const shown = await market();
+    const hidden = [await market({ status: 'draft' }), await market({ status: 'review' })];
+    for (const m of [shown, ...hidden]) {
+      await createWatch(t.db, { userId: user.id, marketId: m.id });
+    }
+    for (const query of ['', 'sort=closing', 'sort=newest', 'sort=recommended']) {
+      expect({ query, ids: await listedIds(query) }).toEqual({ query, ids: [shown.id] });
+    }
+    expect(await watchRows()).toHaveLength(3);
+  });
+
+  it('orders MY’s 마감 임박 as the search does: not closed yet first, then ended by the latest close (ADR-0066)', async () => {
     // MY lists every status (no `status`), so ended markets are on it, and 마감 임박 there is the
-    // search's 모든 상태 order (owner decision 2026-10-16): open markets soonest first, then the
-    // ended ones — ended by the status, an early-closed market included — the latest close first.
-    // The home's view (`status=open`) keeps the home's order.
+    // search's 모든 상태 order (owner decision 2026-10-16): the markets not closed yet — SCHEDULED,
+    // OPEN and PAUSED (#174) — soonest first, then the ended ones — ended by the status, an
+    // early-closed market included — the latest close first. The home's view (`status=open`)
+    // keeps the home's order.
     const now = Date.now();
     const rows = {
       openSoon: await market({ closeAt: new Date(now + DAY_MS) }),
+      scheduled: await market({ status: 'scheduled', closeAt: new Date(now + 2 * DAY_MS) }),
       openLater: await market({ closeAt: new Date(now + 3 * DAY_MS) }),
+      paused: await market({ status: 'paused', closeAt: new Date(now + 4 * DAY_MS) }),
       closedEarly: await market({ status: 'closed', closeAt: new Date(now + 2 * DAY_MS) }),
-      settled: await market({ status: 'settled', closeAt: new Date(now - 5 * DAY_MS) }),
-      voided: await market({ status: 'voided', closeAt: new Date(now - DAY_MS) }),
+      settled: await market({
+        status: 'settled',
+        resolvedResult: 'NO',
+        closeAt: new Date(now - 5 * DAY_MS),
+      }),
+      cancelled: await market({ status: 'cancelled', closeAt: new Date(now - DAY_MS) }),
     };
     for (const m of Object.values(rows)) await watch(m.id);
     const expected = [
       rows.openSoon.id,
+      rows.scheduled.id,
       rows.openLater.id,
+      rows.paused.id,
       rows.closedEarly.id,
-      rows.voided.id,
+      rows.cancelled.id,
       rows.settled.id,
     ];
     expect(await listedIds('sort=closing')).toEqual(expected);

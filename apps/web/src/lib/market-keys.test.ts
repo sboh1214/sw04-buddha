@@ -1,4 +1,4 @@
-import { MARKET_SORTS } from '@buddha/shared';
+import { MARKET_LIST_STATUSES, MARKET_SORTS } from '@buddha/shared';
 import { QueryClient, hashKey, partialMatchKey } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { ADMIN_MARKETS_KEY } from '@/hooks/use-admin-markets';
@@ -150,7 +150,7 @@ describe('the search screen’s key and query (#15, ADR-0066)', () => {
     // The API's default status is the home's `open`: a search that lost its status would hide
     // every ended market and still answer. Its default order is 추천: a lost order would answer
     // in the wrong one. So both are always written out.
-    for (const status of ['all', 'open', 'closed', 'resolved', 'settled', 'voided'] as const) {
+    for (const status of MARKET_LIST_STATUSES) {
       for (const sort of MARKET_SORTS) {
         expect(searchListQuery({ ...search, status, sort })).toEqual({ status, sort, q: '금리' });
       }

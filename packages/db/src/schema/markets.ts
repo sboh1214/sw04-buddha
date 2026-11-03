@@ -13,7 +13,7 @@ import {
 import { user } from './auth.js';
 import { categories } from './categories.js';
 import { createdAt, timestampTz, updatedAt } from './columns.js';
-import { marketStatusEnum, marketVisibilityEnum, outcomeEnum } from './enums.js';
+import { marketResultEnum, marketStatusEnum, marketVisibilityEnum } from './enums.js';
 
 /**
  * Binary markets (PLAN 5.2, 6.2). A market holds no pricing-engine state: the direct AMM's
@@ -27,7 +27,7 @@ export const markets = pgTable(
     slug: varchar({ length: 80 }).notNull().unique(),
     title: varchar({ length: 120 }).notNull(),
     description: text(),
-    /** Resolution criteria. Required for draft -> open (PLAN 0.2). */
+    /** Resolution criteria. Required to open (PLAN 0.2). */
     rules: text().notNull(),
     resolutionSource: text(),
     categoryId: integer()
@@ -54,10 +54,15 @@ export const markets = pgTable(
     // schedule / resolution
     openAt: timestampTz(),
     closeAt: timestampTz().notNull(),
-    resolvedResult: outcomeEnum(),
+    /**
+     * The judgement's result type (YES·NO·VOID, #174): null before a judgement publishes one and
+     * on a CANCELLED market (ADR-0093 decision 1 item 10). Not the contract side `outcome`.
+     */
+    resolvedResult: marketResultEnum(),
+    /** When the result was confirmed (→ `resolved`). */
     resolvedAt: timestampTz(),
+    /** When the settlement steps all finished (→ `settled`). */
     settledAt: timestampTz(),
-    voidedAt: timestampTz(),
     /**
      * `market_events.id` of the transition that produced `status` (M5, A-M3-19): the ordering
      * key of `market:status` and of the market DTOs. Written by every transition in the same

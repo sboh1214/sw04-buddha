@@ -1,3 +1,4 @@
+import { isPublicMarketStatus } from '@buddha/shared';
 import { copy } from '@/copy';
 import { type Category, type CreateMarketFields, type MarketSummary } from '@/lib/api';
 import { isHttpUrl } from '@/lib/market-form';
@@ -17,15 +18,17 @@ export const PREVIEW_SLUG = 'preview';
  * trimming and the empty→null conversion, so the preview cannot disagree with what a save would
  * send; it is total, so a half-typed form is safe to hand it.
  *
- * The HISTORY — everything the form cannot express — comes from `base` whenever there is one
- * that has left draft, and only otherwise from the placeholders. A draft has never traded and
- * never reaches a visitor's grid (the public list excludes it), so every placeholder is TRUE for
- * a draft and for the unsaved market on 시장 만들기: no fill, so the price is `null` and the card
- * reads 체결 없음 (N02 §5) — there is no initial probability to show as one (#125). Anything past
- * draft has a history of its own, and the 수정 card must preview the card visitors see, not one
- * with 체결 없음 and '참여자 0'. Of that history the card draws the price, the status, the
- * countdown and the 참여자; `volumeCoin` and `tradeCount` come along only because a
- * `MarketSummary` carries them.
+ * The HISTORY — everything the form cannot express — comes from `base` whenever visitors can
+ * see it, and only otherwise from the placeholders. A DRAFT or REVIEW market has never traded and
+ * never reaches a visitor's grid (no public route serves it, ADR-0093 decision 1, item 12), so
+ * every placeholder is TRUE for one and for the unsaved market on 시장 만들기: no fill, so the price
+ * is `null` and the card reads 체결 없음 (N02 §5) — there is no initial probability to show as one
+ * (#125) — and the status is `open`, the card it is being made into, never the admin's 초안 or 검수
+ * 중 on a card meant as the one visitors see. A public market has the card visitors see — a
+ * SCHEDULED one its 개장 예정 badge before any fill, one that has traded its price and 참여자 — and
+ * the 수정 card must preview that card, not one with 체결 없음 and '참여자 0'. Of that history the card
+ * draws the price, the status, the countdown and the 참여자; `volumeCoin` and `tradeCount` come along
+ * only because a `MarketSummary` carries them.
  *
  * Written as two exhaustive objects rather than `base?.x ?? fallback`: `??` reads fine for
  * `lastPrice` but hides that `openAt` and `resolvedResult` are legitimately null on a live row,
@@ -45,7 +48,7 @@ export function toPreviewMarket(
   const category = categories.find((c) => c.id === body.categoryId);
   const imageUrl = body.imageUrl ?? null;
   const history =
-    base !== undefined && base.status !== 'draft'
+    base !== undefined && isPublicMarketStatus(base.status)
       ? {
           lastPrice: base.lastPrice,
           status: base.status,

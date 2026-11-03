@@ -1237,7 +1237,7 @@ export async function closeMarket(
 }
 
 /**
- * How long a spec waits for a judged market to read 정산 완료 (ADR-0046). There is no window to
+ * How long a spec waits for a judged market to read 지급 완료 (ADR-0046). There is no window to
  * wait out any more: the 판정 queues `market.finalize` with no delay and the worker settles in
  * well under a second, so this is room for a cold worker and a loaded CI box — not for the
  * per-minute safety-net scan, which only matters when the job could not be queued at all.

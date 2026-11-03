@@ -23,9 +23,11 @@ import {
  * the section stays with its empty notice. The cards are live like the home's: a status change of
  * a related market reaches the detail that lists it without a reload.
  *
- * Which statuses are shown (never voided, never a draft) and the 추천 order are the API's
- * integration tests' (related-markets.controller.test.ts): no product path voids a market today,
- * and the order needs fills, which no route makes until the CLOB (#119).
+ * Which statuses are shown (never a cancelled market or one whose result is 무효, never a draft
+ * or one in review — ADR-0093 decision 3, the #174 row) and the 추천 order are the API's
+ * integration tests' (related-markets.controller.test.ts): no product path cancels a market or
+ * judges one 무효 today (#20, #152), and the order needs fills, which no route makes until the
+ * CLOB (#119).
  */
 
 const related = (page: Page) => page.getByTestId('market-related');

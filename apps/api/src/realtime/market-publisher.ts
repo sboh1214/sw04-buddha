@@ -24,8 +24,8 @@ import { REDIS } from '../infra/redis/redis.provider.js';
  * stalled Redis costs one bound, not one per event. Two writes to one entity may publish out
  * of commit order (the lock is released at COMMIT, the publish happens after), so an event
  * whose entity can change again carries a strictly ordered key the client compares with
- * `supersedes` (`realtime.ts`); `ts` is for display, and `market:status` is ordered by
- * status rank instead.
+ * `supersedes` (`realtime.ts`); `ts` is for display, and `market:status` is ordered by its
+ * `statusEventId` the same way (`statusSupersedes`).
  */
 @Injectable()
 export class MarketPublisher {

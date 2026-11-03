@@ -69,7 +69,6 @@ const snapshot: Market = {
   resolutionSource: null,
   resolvedAt: null,
   settledAt: null,
-  voidedAt: null,
 };
 
 const card: MarketSummary = { ...summary };

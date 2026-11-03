@@ -7,7 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import { schema } from '@buddha/db';
 import { connectTestDb, createMarket, hasTestDb, type TestDb } from '@buddha/db/test';
-import { marketChannel } from '@buddha/shared';
+import { MARKET_STATUSES, marketChannel } from '@buddha/shared';
 import { asc, eq } from 'drizzle-orm';
 import { Redis } from 'ioredis';
 import { pino } from 'pino';
@@ -86,6 +86,9 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
         type: 'closed',
         // The worker acted, not an admin (market_events.actor_id is null for the worker).
         actorId: null,
+        // The transition it made (`transitionMarket`, #174).
+        fromStatus: 'open',
+        toStatus: 'closed',
         payload: { closedAt: result.closedAt.toISOString(), source: 'job' },
         createdAt: result.closedAt,
       });
@@ -141,7 +144,8 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
     }
   });
 
-  it.each(['draft', 'closed', 'resolved', 'settled', 'voided'] as const)(
+  // Every status but `open`, `paused` included: PAUSED → CLOSED at `close_at` is #114's.
+  it.each(MARKET_STATUSES.filter((status) => status !== 'open'))(
     'skips a %s market even when its close time has passed',
     async (status) => {
       const market = await createMarket(t.db, {
@@ -193,6 +197,15 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
       status: 'draft',
       closeAt: new Date(Date.now() - MINUTE_MS),
     });
+    const scheduled = await createMarket(t.db, {
+      status: 'scheduled',
+      closeAt: new Date(Date.now() - MINUTE_MS),
+    });
+    // Due as well, and left alone until #114 closes a paused market on schedule.
+    const paused = await createMarket(t.db, {
+      status: 'paused',
+      closeAt: new Date(Date.now() - MINUTE_MS),
+    });
 
     const subscribers = await Promise.all([later, earlier, future].map((m) => subscribeTo(m.id)));
     try {
@@ -208,13 +221,17 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
       expect(await marketRow(future.id)).toMatchObject({ status: 'open', statusEventId: null });
       expect((await marketRow(alreadyClosed.id)).statusEventId).toBeNull();
       expect((await marketRow(draft.id)).status).toBe('draft');
+      expect((await marketRow(scheduled.id)).status).toBe('scheduled');
+      expect((await marketRow(paused.id)).status).toBe('paused');
 
       // Each close is its own transaction, in deadline order: the earlier deadline's event
       // has the smaller id.
       const [earlierEvent] = await eventsOf(earlier.id);
       const [laterEvent] = await eventsOf(later.id);
       expect(earlierEvent!.id).toBeLessThan(laterEvent!.id);
-      expect(await eventsOf(alreadyClosed.id)).toEqual([]);
+      for (const left of [alreadyClosed, draft, scheduled, paused]) {
+        expect(await eventsOf(left.id)).toEqual([]);
+      }
 
       await waitForMessages(subscribers[0]!.received, 1, 'status of the later market');
       await waitForMessages(subscribers[1]!.received, 1, 'status of the earlier market');
