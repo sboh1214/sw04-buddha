@@ -114,14 +114,10 @@ export const TICKS_SCAN_MAX = 10_000;
  * step's last failed attempt (the worker cuts it; the column is text).
  */
 export const SETTLEMENT_STEP_ERROR_MAX = 1_000;
-/** `POST /admin/markets/:id/resolve` note — stored in the market event's payload, not a column. */
-export const MARKET_RESOLVE_NOTE_MAX = 1_000;
-/** `POST /admin/markets/:id/resolve` evidenceUrl, likewise. */
-export const MARKET_RESOLVE_EVIDENCE_URL_MAX = 500;
 /**
- * Markets one scan job opens, closes or finalizes per run (PLAN 9: `market.open` (#21),
- * `market.close` and `market.finalize` without a market id scan everything due). The scans repeat
- * every minute, so a backlog wider than this is drained over several runs instead of holding one
- * job for as long as it takes.
+ * Markets one scan job opens, closes, confirms or finalizes per run (PLAN 9: `market.open` (#21),
+ * `market.close`, `market.resolve` (#152) and `market.finalize` without a market id scan
+ * everything due). The scans repeat every minute, so a backlog wider than this is drained over
+ * several runs instead of holding one job for as long as it takes.
  */
 export const MARKET_SCAN_BATCH_MAX = 500;

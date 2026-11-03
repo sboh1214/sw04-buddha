@@ -8,6 +8,7 @@ import {
   NOTICE_PIN_LIMIT,
   LEDGER_ENTRY_TYPES,
   PUBLIC_ID_PATTERN,
+  MARKET_JUDGEMENT_APPROVAL_KIND,
   MARKET_PAUSE_DECISION_APPROVAL_KIND,
   MARKET_RESULTS,
   MARKET_REVIEW_APPROVAL_KIND,
@@ -57,6 +58,7 @@ import {
   linkFlags,
   linkUses,
   marketEvents,
+  marketJudgements,
   marketLinks,
   marketPauses,
   marketProposals,
@@ -195,6 +197,20 @@ async function refusal(write: Promise<unknown>) {
     (caught: unknown) => caught,
   );
   return { state: sqlState(error), constraint: sqlConstraint(error) };
+}
+
+/**
+ * ANALYZE as the owner (buddha_app may not), for a test that reads a plan: the planner then costs
+ * the rows the test wrote, not whatever an autoanalyze saw while an earlier file ran — on those
+ * statistics a plan test once read another index (a `type` estimated at one row).
+ */
+async function analyze(table: string) {
+  const owner = createDb(testDbUrls()!.migrateUrl, { max: 1 });
+  try {
+    await owner.execute(sql.raw(`ANALYZE ${table}`));
+  } finally {
+    await closeDb(owner);
+  }
 }
 
 describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () => {
@@ -1583,9 +1599,12 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       );
       // The editors (#172 item 5): every admin with a `market_update` record on the market, first
       // edit first — one range of the index, in its order. A table this small would be scanned
-      // whole, so the planner is told not to (buddha_app may not ANALYZE it).
+      // whole, or read through a bitmap and sorted, so the planner is told not to, on the
+      // statistics of these rows.
+      await analyze('admin_actions');
       const plan = await t.db.transaction(async (tx) => {
         await tx.execute(sql`SET LOCAL enable_seqscan = off`);
+        await tx.execute(sql`SET LOCAL enable_bitmapscan = off`);
         const result = await tx.execute<{ 'QUERY PLAN': string }>(sql`
           EXPLAIN SELECT admin_id FROM admin_actions
           WHERE target_type = 'market' AND target_id = ${marketId} AND type = 'market_update'
@@ -2672,6 +2691,496 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         { privilege: 'UPDATE', held: true },
         { privilege: 'DELETE', held: false },
       ]);
+    });
+  });
+
+  describe('market judgements (migration 0055, #152)', () => {
+    const MINUTE = 60_000;
+    const PUBLISHED_AT = new Date('2026-11-02T03:00:00.000Z');
+    const DAY_WINDOW = 1_440;
+
+    /** A market judged at PUBLISHED_AT, its registrant, approver and `provisional` event. */
+    async function judgedFixture() {
+      const market = await createMarket(t.db, {
+        status: 'provisional',
+        resolvedResult: 'YES',
+        disputeDeadline: new Date(PUBLISHED_AT.getTime() + DAY_WINDOW * MINUTE),
+      });
+      const { user: registrant } = await createUser(t.db, { role: 'admin' });
+      const { user: approver } = await createUser(t.db, { role: 'admin' });
+      const [event] = await t.db
+        .insert(marketEvents)
+        .values({
+          marketId: market.id,
+          type: 'provisional',
+          actorId: approver.id,
+          fromStatus: 'closed',
+          toStatus: 'provisional',
+          createdAt: PUBLISHED_AT,
+        })
+        .returning();
+      return { market, registrant, approver, event: event! };
+    }
+
+    /** A `market_judgement` request about `marketId` by `registrant`, approved by `approver`. */
+    async function approvedRequest(marketId: string, registrant: string, approver: string) {
+      return createApprovalRequest(t.db, {
+        kind: MARKET_JUDGEMENT_APPROVAL_KIND,
+        targetType: 'market',
+        targetId: marketId,
+        payload: { result: 'YES' },
+        requestedBy: registrant,
+        reason: '발표를 확인했다.',
+        decision: { status: 'approved', by: approver },
+      });
+    }
+
+    /** A judgement row of the fixture, every column as an approval of a YES writes it. */
+    async function judgementRow() {
+      const fixture = await judgedFixture();
+      const request = await approvedRequest(
+        fixture.market.id,
+        fixture.registrant.id,
+        fixture.approver.id,
+      );
+      const row = {
+        marketId: fixture.market.id,
+        version: 1,
+        result: 'YES' as string,
+        sourcePriority: 0 as number | null,
+        sourceName: '통계청' as string | null,
+        sourceUrl: 'https://example.com/source' as string | null,
+        fallbackReason: null as string | null,
+        voidReason: null as string | null,
+        evidenceLinks: ['https://example.com/evidence'] as (string | null)[],
+        evidenceDescription: '발표를 확인했다.',
+        collectedAt: new Date(PUBLISHED_AT.getTime() - MINUTE),
+        ruleVersion: 1 as number | null,
+        eventDeadlineConfirmed: false,
+        disputeWindowMinutes: DAY_WINDOW,
+        publishedAt: PUBLISHED_AT,
+        disputeDeadline: new Date(PUBLISHED_AT.getTime() + DAY_WINDOW * MINUTE),
+        approvalId: request.id,
+        registeredBy: fixture.registrant.id,
+        approvedBy: fixture.approver.id,
+        provisionalEventId: fixture.event.id,
+      };
+      return { ...fixture, request, row };
+    }
+
+    const insertJudgement = (values: Record<string, unknown>) =>
+      t.db
+        .insert(marketJudgements)
+        .values(values as typeof marketJudgements.$inferInsert)
+        .returning();
+
+    /** The refusal the guard raises: 23000 with its message. */
+    async function guarded(write: Promise<unknown>) {
+      const error = await write.then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      return { state: sqlState(error), message: errorMessage(error) };
+    }
+
+    it('adds market_judgements with its keys, CHECKs and references, and the market’s judgement columns', async () => {
+      const { rows: columns } = await t.db.execute<{
+        column: string;
+        type: string;
+        nullable: string;
+        default: string | null;
+      }>(sql`
+        SELECT column_name AS "column", data_type AS type, is_nullable AS nullable,
+          column_default AS "default"
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'market_judgements'
+        ORDER BY ordinal_position`);
+      const instant = 'timestamp with time zone';
+      expect(columns).toEqual([
+        { column: 'market_id', type: 'uuid', nullable: 'NO', default: null },
+        { column: 'version', type: 'integer', nullable: 'NO', default: null },
+        { column: 'result', type: 'USER-DEFINED', nullable: 'NO', default: null },
+        { column: 'source_priority', type: 'smallint', nullable: 'YES', default: null },
+        { column: 'source_name', type: 'character varying', nullable: 'YES', default: null },
+        { column: 'source_url', type: 'character varying', nullable: 'YES', default: null },
+        { column: 'fallback_reason', type: 'text', nullable: 'YES', default: null },
+        { column: 'void_reason', type: 'text', nullable: 'YES', default: null },
+        { column: 'evidence_links', type: 'ARRAY', nullable: 'NO', default: null },
+        { column: 'evidence_description', type: 'text', nullable: 'NO', default: null },
+        { column: 'collected_at', type: instant, nullable: 'NO', default: null },
+        { column: 'rule_version', type: 'integer', nullable: 'YES', default: null },
+        { column: 'event_deadline_confirmed', type: 'boolean', nullable: 'NO', default: null },
+        { column: 'dispute_window_minutes', type: 'integer', nullable: 'NO', default: null },
+        { column: 'published_at', type: instant, nullable: 'NO', default: null },
+        { column: 'dispute_deadline', type: instant, nullable: 'NO', default: null },
+        { column: 'approval_id', type: 'uuid', nullable: 'NO', default: null },
+        { column: 'registered_by', type: 'text', nullable: 'NO', default: null },
+        { column: 'approved_by', type: 'text', nullable: 'NO', default: null },
+        { column: 'provisional_event_id', type: 'bigint', nullable: 'NO', default: null },
+        { column: 'created_at', type: instant, nullable: 'NO', default: 'now()' },
+      ]);
+      const { rows: constraints } = await t.db.execute<{
+        name: string;
+        type: string;
+        action: string;
+      }>(sql`
+        SELECT conname AS name, contype AS type, confdeltype AS action FROM pg_constraint
+        WHERE conrelid = 'market_judgements'::regclass ORDER BY conname`);
+      // Every reference RESTRICTs (`r`): a market, a request, an event and an account outlive no
+      // judgement.
+      expect(constraints).toEqual([
+        {
+          name: 'market_judgements_approval_id_approval_requests_id_fk',
+          type: 'f',
+          action: 'r',
+        },
+        { name: 'market_judgements_approval_id_unique', type: 'u', action: ' ' },
+        { name: 'market_judgements_approved_by_user_id_fk', type: 'f', action: 'r' },
+        { name: 'market_judgements_approver_check', type: 'c', action: ' ' },
+        { name: 'market_judgements_dispute_check', type: 'c', action: ' ' },
+        { name: 'market_judgements_evidence_check', type: 'c', action: ' ' },
+        { name: 'market_judgements_fallback_reason_check', type: 'c', action: ' ' },
+        { name: 'market_judgements_market_id_markets_id_fk', type: 'f', action: 'r' },
+        { name: 'market_judgements_market_id_version_pk', type: 'p', action: ' ' },
+        {
+          name: 'market_judgements_provisional_event_id_market_events_id_fk',
+          type: 'f',
+          action: 'r',
+        },
+        { name: 'market_judgements_registered_by_user_id_fk', type: 'f', action: 'r' },
+        { name: 'market_judgements_source_check', type: 'c', action: ' ' },
+        { name: 'market_judgements_version_check', type: 'c', action: ' ' },
+        { name: 'market_judgements_void_reason_check', type: 'c', action: ' ' },
+      ]);
+
+      // The market's current version and deadline, null by default, and the CHECKs on them.
+      const { rows: marketColumns } = await t.db.execute<{
+        column: string;
+        type: string;
+        nullable: string;
+        default: string | null;
+      }>(sql`
+        SELECT column_name AS "column", data_type AS type, is_nullable AS nullable,
+          column_default AS "default"
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'markets'
+          AND column_name IN ('judgement_version', 'dispute_deadline', 'dispute_until')
+        ORDER BY ordinal_position`);
+      expect(marketColumns).toEqual([
+        { column: 'judgement_version', type: 'integer', nullable: 'YES', default: null },
+        { column: 'dispute_deadline', type: instant, nullable: 'YES', default: null },
+      ]);
+      const { rows: checks } = await t.db.execute<{ name: string; def: string }>(sql`
+        SELECT conname AS name, pg_get_constraintdef(oid) AS def FROM pg_constraint
+        WHERE conrelid = 'markets'::regclass
+          AND conname IN ('markets_judgement_version_check', 'markets_provisional_check')
+        ORDER BY conname`);
+      expect(checks).toEqual([
+        { name: 'markets_judgement_version_check', def: 'CHECK ((judgement_version >= 1))' },
+        {
+          name: 'markets_provisional_check',
+          def:
+            "CHECK (((status <> 'provisional'::market_status) OR ((judgement_version IS NOT NULL)" +
+            ' AND (dispute_deadline IS NOT NULL) AND (resolved_result IS NOT NULL))))',
+        },
+      ]);
+    });
+
+    it('holds each judgement to its source, reasons, evidence, deadline and approver', async () => {
+      const { market, registrant, approver, event, row } = await judgementRow();
+      const refused = (constraint: string) => ({ state: '23514', constraint });
+      const voidNone = {
+        result: 'VOID',
+        sourcePriority: null,
+        sourceName: null,
+        sourceUrl: null,
+        voidReason: '판정 불가로 조기 마감했다.',
+      };
+      const fallback = { sourcePriority: 1, fallbackReason: '1차 출처가 발표하지 않았다.' };
+      const cases: [Record<string, unknown>, string][] = [
+        // Versions from 1, the market's and the rules'.
+        [{ version: 0 }, 'market_judgements_version_check'],
+        [{ ruleVersion: 0 }, 'market_judgements_version_check'],
+        // The source: all three or none, a priority of the rules, none only for a VOID.
+        [{ sourceName: null }, 'market_judgements_source_check'],
+        [{ sourceUrl: null }, 'market_judgements_source_check'],
+        [{ ...voidNone, sourceName: '통계청' }, 'market_judgements_source_check'],
+        [{ sourcePriority: 4, fallbackReason: '이유' }, 'market_judgements_source_check'],
+        [{ sourcePriority: -1 }, 'market_judgements_source_check'],
+        [{ ...voidNone, result: 'NO', voidReason: null }, 'market_judgements_source_check'],
+        // A fallback's reason: exactly for a fallback source, trimmed non-blank, at most 500.
+        [{ ...fallback, fallbackReason: null }, 'market_judgements_fallback_reason_check'],
+        [{ fallbackReason: '이유' }, 'market_judgements_fallback_reason_check'],
+        [{ ...voidNone, fallbackReason: '이유' }, 'market_judgements_fallback_reason_check'],
+        [{ ...fallback, fallbackReason: '  ' }, 'market_judgements_fallback_reason_check'],
+        [
+          { ...fallback, fallbackReason: '가'.repeat(501) },
+          'market_judgements_fallback_reason_check',
+        ],
+        // A VOID's reason: exactly for a VOID, trimmed non-blank, at most 500.
+        [{ ...voidNone, voidReason: null }, 'market_judgements_void_reason_check'],
+        [{ voidReason: '이유' }, 'market_judgements_void_reason_check'],
+        [{ ...voidNone, voidReason: ' ' }, 'market_judgements_void_reason_check'],
+        [{ ...voidNone, voidReason: '가'.repeat(501) }, 'market_judgements_void_reason_check'],
+        // The evidence: 1..5 links with no null, a description, collected by the publication.
+        [{ evidenceLinks: [] }, 'market_judgements_evidence_check'],
+        [
+          { evidenceLinks: Array.from({ length: 6 }, (_, i) => `https://example.com/${i}`) },
+          'market_judgements_evidence_check',
+        ],
+        [{ evidenceLinks: ['https://example.com/a', null] }, 'market_judgements_evidence_check'],
+        [{ evidenceDescription: '' }, 'market_judgements_evidence_check'],
+        [{ evidenceDescription: '   ' }, 'market_judgements_evidence_check'],
+        [{ evidenceDescription: '가'.repeat(501) }, 'market_judgements_evidence_check'],
+        [{ collectedAt: new Date(PUBLISHED_AT.getTime() + 1) }, 'market_judgements_evidence_check'],
+        // The window 1..10,080 minutes and the deadline exactly the publication plus it.
+        [
+          { disputeWindowMinutes: 0, disputeDeadline: PUBLISHED_AT },
+          'market_judgements_dispute_check',
+        ],
+        [
+          {
+            disputeWindowMinutes: 10_081,
+            disputeDeadline: new Date(PUBLISHED_AT.getTime() + 10_081 * MINUTE),
+          },
+          'market_judgements_dispute_check',
+        ],
+        [
+          { disputeDeadline: new Date(PUBLISHED_AT.getTime() + DAY_WINDOW * MINUTE + 1) },
+          'market_judgements_dispute_check',
+        ],
+        [{ disputeWindowMinutes: 60 }, 'market_judgements_dispute_check'],
+        // Never approved by its registrant.
+        [{ approvedBy: registrant.id }, 'market_judgements_approver_check'],
+      ];
+      for (const [values, constraint] of cases) {
+        expect(
+          await refusal(insertJudgement({ ...row, ...values })),
+          JSON.stringify(values),
+        ).toEqual(refused(constraint));
+      }
+
+      // What each result and source takes: the fixture's YES on the primary source, a fallback
+      // with its reason, a VOID with no source and one naming a source, and the bounds.
+      const [primary] = await insertJudgement(row);
+      expect(primary).toMatchObject({ ...row, createdAt: expect.any(Date) as unknown });
+      const accepted = [
+        { ...fallback, sourcePriority: 3, result: 'NO' },
+        voidNone,
+        { result: 'VOID', voidReason: '규칙의 출처로 판정할 수 없다.' },
+        {
+          evidenceLinks: Array.from({ length: 5 }, (_, i) => `https://example.com/${i}`),
+          evidenceDescription: '가'.repeat(500),
+          collectedAt: PUBLISHED_AT,
+          ruleVersion: null,
+          eventDeadlineConfirmed: true,
+          disputeWindowMinutes: 1,
+          disputeDeadline: new Date(PUBLISHED_AT.getTime() + MINUTE),
+        },
+        {
+          disputeWindowMinutes: 10_080,
+          disputeDeadline: new Date(PUBLISHED_AT.getTime() + 10_080 * MINUTE),
+        },
+      ];
+      for (const [index, values] of accepted.entries()) {
+        const request = await approvedRequest(market.id, registrant.id, approver.id);
+        const [made] = await insertJudgement({
+          ...row,
+          ...values,
+          version: index + 2,
+          approvalId: request.id,
+        });
+        expect(made, JSON.stringify(values)).toMatchObject(values);
+      }
+
+      // One judgement per (market, version) and per request; a market, an event and accounts that
+      // exist.
+      const another = await approvedRequest(market.id, registrant.id, approver.id);
+      expect(await refusal(insertJudgement({ ...row, approvalId: another.id }))).toEqual({
+        state: '23505',
+        constraint: 'market_judgements_market_id_version_pk',
+      });
+      expect(await refusal(insertJudgement({ ...row, version: 99 }))).toEqual({
+        state: '23505',
+        constraint: 'market_judgements_approval_id_unique',
+      });
+      const fresh = { ...row, version: 99, approvalId: another.id };
+      expect(await refusal(insertJudgement({ ...fresh, marketId: randomUUID() }))).toEqual({
+        state: '23503',
+        constraint: 'market_judgements_market_id_markets_id_fk',
+      });
+      expect(
+        await refusal(insertJudgement({ ...fresh, provisionalEventId: event.id + 1_000_000 })),
+      ).toEqual({
+        state: '23503',
+        constraint: 'market_judgements_provisional_event_id_market_events_id_fk',
+      });
+      expect(await refusal(insertJudgement({ ...fresh, registeredBy: 'nobody' }))).toEqual({
+        state: '23503',
+        constraint: 'market_judgements_registered_by_user_id_fk',
+      });
+      expect(await refusal(insertJudgement({ ...fresh, approvalId: randomUUID() }))).toEqual({
+        state: '23503',
+        constraint: 'market_judgements_approval_id_approval_requests_id_fk',
+      });
+
+      // Relations: a market's judgements, a judgement's market, request, people and event.
+      const read = await t.db.query.marketJudgements.findFirst({
+        where: and(eq(marketJudgements.marketId, market.id), eq(marketJudgements.version, 1)),
+        with: {
+          market: true,
+          approval: true,
+          registeredByUser: true,
+          approvedByUser: true,
+          provisionalEvent: true,
+        },
+      });
+      expect(read).toMatchObject({
+        market: { id: market.id },
+        approval: { id: row.approvalId, kind: MARKET_JUDGEMENT_APPROVAL_KIND },
+        registeredByUser: { id: registrant.id },
+        approvedByUser: { id: approver.id },
+        provisionalEvent: { id: event.id, type: 'provisional' },
+      });
+      const withJudgements = await t.db.query.markets.findFirst({
+        where: eq(markets.id, market.id),
+        with: { judgements: true },
+      });
+      expect(withJudgements?.judgements).toHaveLength(accepted.length + 1);
+      const people = await t.db.query.user.findFirst({
+        where: eq(user.id, approver.id),
+        with: { judgementsApproved: true, judgementsRegistered: true },
+      });
+      expect(people?.judgementsApproved).toHaveLength(accepted.length + 1);
+      expect(people?.judgementsRegistered).toEqual([]);
+    });
+
+    it('keeps every judgement as it was approved: no UPDATE, no DELETE, whoever writes', async () => {
+      const { row } = await judgementRow();
+      const [made] = await insertJudgement(row);
+      const where = and(
+        eq(marketJudgements.marketId, row.marketId),
+        eq(marketJudgements.version, 1),
+      );
+      // buddha_app may neither UPDATE nor DELETE one (migration 0055's REVOKE)…
+      expect(
+        (await refusal(t.db.update(marketJudgements).set({ voidReason: '고친 이유' }).where(where)))
+          .state,
+      ).toBe('42501');
+      expect((await refusal(t.db.delete(marketJudgements).where(where))).state).toBe('42501');
+      // …and the owner neither: the trigger refuses both, a change of the deadline included.
+      const owner = createDb(testDbUrls()!.migrateUrl, { max: 1 });
+      try {
+        expect(
+          await guarded(
+            owner
+              .update(marketJudgements)
+              .set({ disputeDeadline: new Date(), disputeWindowMinutes: 1 })
+              .where(where),
+          ),
+        ).toEqual({
+          state: '23000',
+          message: expect.stringContaining('is a permanent record and takes no UPDATE') as unknown,
+        });
+        expect(await guarded(owner.delete(marketJudgements).where(where))).toEqual({
+          state: '23000',
+          message: expect.stringContaining('is a permanent record and takes no DELETE') as unknown,
+        });
+      } finally {
+        await closeDb(owner);
+      }
+      expect(await t.db.select().from(marketJudgements).where(where)).toEqual([made]);
+      const { rows: privileges } = await t.db.execute<{ privilege: string; held: boolean }>(sql`
+        SELECT p AS privilege, has_table_privilege('buddha_app', 'market_judgements', p) AS held
+        FROM unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) AS p`);
+      expect(privileges).toEqual([
+        { privilege: 'SELECT', held: true },
+        { privilege: 'INSERT', held: true },
+        { privilege: 'UPDATE', held: false },
+        { privilege: 'DELETE', held: false },
+      ]);
+    });
+
+    it('holds a PROVISIONAL market to its version, deadline and result, and no other status', async () => {
+      const deadline = new Date(Date.now() + DAY_WINDOW * MINUTE);
+      const provisional = { status: 'provisional' as const, resolvedResult: 'NO' as const };
+      for (const missing of [
+        { judgementVersion: null },
+        { disputeDeadline: null },
+        { resolvedResult: null },
+      ]) {
+        expect(
+          await refusal(createMarket(t.db, { ...provisional, ...missing })),
+          JSON.stringify(missing),
+        ).toEqual({ state: '23514', constraint: 'markets_provisional_check' });
+      }
+      expect(await refusal(createMarket(t.db, { ...provisional, judgementVersion: 0 }))).toEqual({
+        state: '23514',
+        constraint: 'markets_judgement_version_check',
+      });
+      // A PROVISIONAL row loses none of them by an UPDATE either.
+      const market = await createMarket(t.db, {
+        ...provisional,
+        judgementVersion: 2,
+        disputeDeadline: deadline,
+      });
+      expect(market).toMatchObject({ judgementVersion: 2, disputeDeadline: deadline });
+      expect(
+        await refusal(
+          t.db.update(markets).set({ disputeDeadline: null }).where(eq(markets.id, market.id)),
+        ),
+      ).toEqual({ state: '23514', constraint: 'markets_provisional_check' });
+      // Every other status takes none of them: a market judged by the interim route before #152
+      // (D4) has neither version nor deadline; one confirmed since keeps both.
+      const interim = await createMarket(t.db, { status: 'resolved', resolvedResult: 'YES' });
+      expect(interim).toMatchObject({ judgementVersion: null, disputeDeadline: null });
+      const confirmed = await createMarket(t.db, {
+        status: 'settled',
+        resolvedResult: 'NO',
+        judgementVersion: 1,
+        disputeDeadline: new Date(Date.now() - MINUTE),
+      });
+      expect(confirmed.judgementVersion).toBe(1);
+      // createMarket's PROVISIONAL default: version 1, a deadline a day ahead and a YES.
+      const made = await createMarket(t.db, { status: 'provisional' });
+      expect(made).toMatchObject({ judgementVersion: 1, resolvedResult: 'YES' });
+      expect(made.disputeDeadline!.getTime()).toBeGreaterThan(Date.now());
+    });
+
+    it('serves the confirmation scan from the PROVISIONAL markets’ deadlines (the partial index)', async () => {
+      const { rows: indexes } = await t.db.execute<{ definition: string }>(sql`
+        SELECT indexdef AS definition FROM pg_indexes
+        WHERE tablename = 'markets' AND indexname = 'markets_provisional_dispute_deadline_idx'`);
+      expect(indexes).toEqual([
+        {
+          definition: expect.stringMatching(
+            /\(dispute_deadline, id\) WHERE \(status = 'provisional'::market_status\)$/,
+          ) as unknown,
+        },
+      ]);
+      for (let index = 0; index < 20; index += 1) {
+        await createMarket(t.db, {
+          status: index % 2 === 0 ? 'provisional' : 'resolved',
+          resolvedResult: 'YES',
+          disputeDeadline: new Date(Date.now() + (index - 10) * MINUTE),
+          judgementVersion: 1,
+        });
+      }
+      // A table this small would be scanned whole, or read through a bitmap and sorted, so the
+      // planner is told not to, on the statistics of these rows; the scan's own query, ordered by
+      // the index.
+      await analyze('markets');
+      const plan = await t.db.transaction(async (tx) => {
+        await tx.execute(sql`SET LOCAL enable_seqscan = off`);
+        await tx.execute(sql`SET LOCAL enable_bitmapscan = off`);
+        const result = await tx.execute<{ 'QUERY PLAN': string }>(sql`
+          EXPLAIN SELECT id FROM markets
+          WHERE status = 'provisional' AND dispute_deadline <= now()
+          ORDER BY dispute_deadline, id LIMIT 500`);
+        return result.rows.map((planRow) => planRow['QUERY PLAN']).join('\n');
+      });
+      expect(plan).toMatch(/Index (Only )?Scan using markets_provisional_dispute_deadline_idx/);
+      expect(plan).not.toMatch(/Sort/);
     });
   });
 

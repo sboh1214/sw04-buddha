@@ -9,6 +9,7 @@ import {
 } from '@tanstack/react-query';
 import {
   type AdminMarket,
+  type AdminMarketJudgementQueueItem,
   type AdminMarketPauseDecisionItem,
   type AdminMarketReviewItem,
   type AdminMarketSupplementItem,
@@ -64,6 +65,15 @@ export const ADMIN_MARKET_SUPPLEMENTS_KEY = ['admin', 'market-supplements'] as c
  * a row shows of its market.
  */
 export const ADMIN_MARKET_PAUSE_DECISIONS_KEY = ['admin', 'market-pause-decisions'] as const;
+
+/**
+ * 판정 승인 대기 (#152, ADR-0103): `GET /admin/market-judgements`, the judgement registrations
+ * waiting for another admin, under the private `['admin']` root and a segment of its own, as the
+ * other queues: every admin write to a market asks it again (`invalidateMarket`) — a registration
+ * adds a row, an approval, a 반려 and a 철회 take one, and a write changes what a row shows of its
+ * market.
+ */
+export const ADMIN_MARKET_JUDGEMENTS_KEY = ['admin', 'market-judgements'] as const;
 
 /**
  * 관련 시장 (#65, ADR-0068) on the admin detail: one market's links, every status, under the
@@ -130,9 +140,11 @@ export function adminMarketQueryOptions(routeId: string) {
  * The admin detail, re-read every few seconds while the market is `resolved` or `settling` so the
  * 정산 단계 panel and the 정산 대기 badge follow the worker (`settlementPollInterval`, ADR-0046),
  * while it is 개장 예정 at its scheduled open, every few seconds after it until the worker opens it,
- * and at its close (`scheduledMarketPollDelay`, #21, ADR-0100), and while it is OPEN or PAUSED at
- * its close and every few seconds after it until the worker closes it (`tradingMarketPollDelay`,
- * #114, ADR-0102: a next-path request then turns moot) — all in `adminMarketPollInterval`.
+ * and at its close (`scheduledMarketPollDelay`, #21, ADR-0100), while it is OPEN or PAUSED at its
+ * close and every few seconds after it until the worker closes it (`tradingMarketPollDelay`, #114,
+ * ADR-0102: a next-path request then turns moot), and while it is 잠정 결과 at its dispute deadline
+ * and every few seconds after it until the worker confirms it (`provisionalMarketPollDelay`, #152,
+ * ADR-0103) — all in `adminMarketPollInterval`.
  */
 export function useAdminMarket(routeId: string) {
   return useQuery({
@@ -289,6 +301,40 @@ export function useAdminMarketPauseDecisions() {
   return useInfiniteQuery(adminMarketPauseDecisionsQueryOptions());
 }
 
+/** One page of the 판정 승인 대기 queue. */
+export interface AdminMarketJudgementPage {
+  items: AdminMarketJudgementQueueItem[];
+  nextCursor: string | null;
+}
+
+/**
+ * The 판정 승인 대기 queue (#152): the oldest registration first, 20 per page with 더 보기 (the API's
+ * default page), as the other queues page. No filter.
+ */
+export function adminMarketJudgementsQueryOptions() {
+  return {
+    queryKey: ADMIN_MARKET_JUDGEMENTS_KEY,
+    queryFn: async ({
+      pageParam,
+    }: {
+      pageParam: string | undefined;
+    }): Promise<AdminMarketJudgementPage> => {
+      const { data, meta } = unwrap(
+        await api.GET('/api/v1/admin/market-judgements', {
+          params: { query: pageParam === undefined ? {} : { cursor: pageParam } },
+        }),
+      );
+      return { items: data, nextCursor: meta.nextCursor };
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last: AdminMarketJudgementPage) => last.nextCursor ?? undefined,
+  };
+}
+
+export function useAdminMarketJudgements() {
+  return useInfiniteQuery(adminMarketJudgementsQueryOptions());
+}
+
 /**
  * After a link or an unlink: the answer is the market's links as the write committed them, so it
  * goes on screen now — a refetch that fails cannot leave the old list under a toast that says
@@ -329,8 +375,9 @@ export function useMarketFills(id: string, enabled: boolean) {
  * After any admin write: the detail, the fills, every filtered list page, the 검수 대기 queue (#78:
  * a submission, an approval, a 반려 and a 되돌리기 each change it), the 규칙 보충 대기 queue (#80: a
  * request, an approval, a 반려 and a 철회 each change it, and a market's title or status shows in
- * its rows), the 일시 중단 결정 대기 queue (#114, alike), every other market's 관련 시장 list, and
- * every public 관련 시장 list. Each row of an admin list badges the market at
+ * its rows), the 일시 중단 결정 대기 queue (#114, alike), the 판정 승인 대기 queue (#152: a
+ * registration, an approval, a 반려 and a 철회 each change it), every other market's 관련 시장
+ * list, and every public 관련 시장 list. Each row of an admin list badges the market at
  * its other end with its status and title, so a market linked to this one would otherwise go on
  * showing it as it was — a market just approved still '검수 중' under the hint that says one in
  * review is not shown, for as long as `staleTime` keeps that list fresh (review on #65). Which
@@ -362,6 +409,7 @@ function invalidateMarket(queryClient: QueryClient, id: string) {
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_REVIEWS_KEY }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_SUPPLEMENTS_KEY }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_PAUSE_DECISIONS_KEY }),
+    queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_JUDGEMENTS_KEY }),
     queryClient.invalidateQueries({
       queryKey: ADMIN_RELATED_MARKETS_KEY,
       predicate: (query) => query.queryHash !== ownLinks,

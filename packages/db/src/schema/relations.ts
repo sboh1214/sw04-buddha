@@ -19,6 +19,7 @@ import { ledgerEntries } from './ledger.js';
 import { commentLikes, postLikes } from './likes.js';
 import { linkFlags } from './link-review.js';
 import { marketEvents } from './market-events.js';
+import { marketJudgements } from './market-judgements.js';
 import { marketLinks } from './market-links.js';
 import { marketPauses } from './market-pauses.js';
 import { marketProposals } from './market-proposals.js';
@@ -170,6 +171,8 @@ export const marketsRelations = relations(markets, ({ one, many }) => ({
   ruleVersions: many(marketRuleVersions),
   // 거래 일시 중단 (#114): every pause, `paused_at` the order; at most one lasts.
   pauses: many(marketPauses),
+  // 판정 (#152): every approved judgement, `version` the order; `judgement_version` the current.
+  judgements: many(marketJudgements),
   posts: many(posts),
   // 시장 제안 (#77): the proposals adopted into this market, and the ones rejected as its
   // duplicates. Admin reads only: a market never shows who proposed it.
@@ -407,6 +410,32 @@ export const marketPausesRelations = relations(marketPauses, ({ one }) => ({
   }),
 }));
 
+// Two references to `user` (who registered, who approved), so both ends name theirs (as
+// `approval_requester` below).
+export const marketJudgementsRelations = relations(marketJudgements, ({ one }) => ({
+  market: one(markets, { fields: [marketJudgements.marketId], references: [markets.id] }),
+  /** The approved `market_judgement` request the judgement came in by. */
+  approval: one(approvalRequests, {
+    fields: [marketJudgements.approvalId],
+    references: [approvalRequests.id],
+  }),
+  registeredByUser: one(user, {
+    fields: [marketJudgements.registeredBy],
+    references: [user.id],
+    relationName: 'market_judgement_registered_by',
+  }),
+  approvedByUser: one(user, {
+    fields: [marketJudgements.approvedBy],
+    references: [user.id],
+    relationName: 'market_judgement_approved_by',
+  }),
+  /** Its CLOSED → PROVISIONAL `provisional` event. */
+  provisionalEvent: one(marketEvents, {
+    fields: [marketJudgements.provisionalEventId],
+    references: [marketEvents.id],
+  }),
+}));
+
 export const themeNoticesRelations = relations(themeNotices, ({ one }) => ({
   theme: one(themes, { fields: [themeNotices.themeId], references: [themes.id] }),
   creator: one(user, { fields: [themeNotices.createdBy], references: [user.id] }),
@@ -493,6 +522,10 @@ export const userRelations = relations(user, ({ one, many }) => ({
   ruleVersionsMade: many(marketRuleVersions, { relationName: 'rule_version_creator' }),
   marketPauses: many(marketPauses, { relationName: 'market_pause_paused_by' }),
   marketPauseEnds: many(marketPauses, { relationName: 'market_pause_ended_by' }),
+  judgementsRegistered: many(marketJudgements, {
+    relationName: 'market_judgement_registered_by',
+  }),
+  judgementsApproved: many(marketJudgements, { relationName: 'market_judgement_approved_by' }),
 }));
 
 export const sessionRelations = relations(session, ({ one }) => ({

@@ -94,6 +94,19 @@ export type AdminMarketPause = components['schemas']['AdminMarketPause'];
 export type MarketPauseDecisionPending = components['schemas']['MarketPauseDecisionPending'];
 export type MarketPauseDecisionLogEntry = components['schemas']['MarketPauseDecisionLogEntry'];
 export type AdminMarketPauseDecisionItem = components['schemas']['AdminMarketPauseDecisionItem'];
+/**
+ * 판정 등록과 별도 검토자 승인 (#152, ADR-0103): `AdminMarket.judgement` — the current judgement,
+ * the registration waiting on the market and every registration — one judgement, a registration
+ * waiting and one entry of the log, a source as a judgement names it, the registration's body and
+ * a row of the 판정 승인 대기 queue (`GET /admin/market-judgements`).
+ */
+export type AdminMarketJudgementState = components['schemas']['AdminMarketJudgementState'];
+export type AdminMarketJudgement = components['schemas']['AdminMarketJudgement'];
+export type MarketJudgementPending = components['schemas']['MarketJudgementPending'];
+export type MarketJudgementLogEntry = components['schemas']['MarketJudgementLogEntry'];
+export type JudgementSource = components['schemas']['JudgementSource'];
+export type RegisterJudgementBody = components['schemas']['RegisterJudgementBody'];
+export type AdminMarketJudgementQueueItem = components['schemas']['AdminMarketJudgementQueueItem'];
 /** One row of `AdminMarket.settlementSteps` (ADR-0046): a judged market's settlement step. */
 export type AdminSettlementStep = components['schemas']['AdminSettlementStep'];
 export type MarketEvent = components['schemas']['MarketEvent'];
@@ -290,8 +303,6 @@ export type UpdateMarketBody = components['schemas']['UpdateMarketBody'];
  */
 export type CreateMarketFields = Omit<CreateMarketBody, 'expectedAccountId'>;
 export type UpdateMarketFields = Omit<UpdateMarketBody, 'expectedAccountId'>;
-/** `POST /admin/markets/{id}/resolve`: judge a closed market — final at once (ADR-0046). */
-export type ResolveMarketBody = components['schemas']['ResolveMarketBody'];
 /** A release setting (#170): what the item is, its status and value, and who changed it last. */
 export type ReleaseSetting = components['schemas']['ReleaseSetting'];
 /** One `GET /admin/release-settings/changes` entry: before and after, reason, admin and time. */

@@ -6,9 +6,14 @@ import {
   closeMarket,
   createDraftMarket,
   createOpenMarket,
+  documentSurvived,
   expect,
   freshTag,
+  judgeMarket,
+  markDocument,
+  resolveWaitMs,
   signIn,
+  skipUnlessResolvable,
   subscribed,
   test,
 } from './helpers';
@@ -23,21 +28,24 @@ import {
  * status — each in the server's HTML too — and opens its page at the slug, 시장 탐색 lit: the
  * period in Korean dates and its status, the introduction and the notice with their addresses
  * linked, and the two open markets as the home's cards (the draft has none). One market is judged
- * while the visitor is on the page:
- * its result appears there without a reload, YES and a link to the market. The address cannot
- * change after the publish, and an unsaved one typed before it is dropped. The admin renames the
- * theme, edits the notice (수정됨), hides it and shows it again, and takes the judged market out;
- * the page follows each. Unpublishing takes the theme off every one of those places, and its page
- * is a 404.
+ * while the visitor is on the page: its card says 잠정 결과 without a reload, and the results list
+ * still leaves it out — it lists confirmed results alone (ADR-0093 decision 3, the #174 row). The
+ * address cannot change after the publish, and an unsaved one typed before it is dropped. The admin
+ * renames the theme, edits the notice (수정됨), hides it and shows it again, and takes the judged
+ * market out; the page follows each. Unpublishing takes the theme off every one of those places,
+ * and its page is a 404. A market whose 잠정 결과 the worker confirms at its dispute deadline (#152,
+ * ADR-0103) appears in the results without a reload, YES and a link to the market — a test of its
+ * own, which waits the dispute window out.
  *
  * The admin's theme list keeps its rows when a 더 보기 fails and says so above the button (owner
  * decision 2026-10-20 7, ADR-0075 5-14 — as every 더 보기 list), its pages shaped here.
  *
  * The status boundaries, the list's order and the cancelled and 무효 markets are the API's
- * integration tests' (themes.controller.test.ts): no product path cancels a market or judges one
- * 무효 yet (#20, #152), and the order is
- * checked against themes of chosen dates where no other spec's themes share the list, which the
- * e2e database — shared by every spec and kept between runs — cannot promise.
+ * integration tests' (themes.controller.test.ts): no product path cancels a market yet (#20), a
+ * confirmed 무효 stays 지급 중 until #126 pays it (ADR-0103) — on an e2e database kept between runs,
+ * so no spec confirms one — and the order is checked against themes of chosen dates where no other
+ * spec's themes share the list, which the e2e database — shared by every spec and kept between
+ * runs — cannot promise.
  */
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -310,28 +318,24 @@ test.describe('테마', () => {
       expect(pageHtml).toContain(name);
       expect(pageHtml).toContain(`data-testid="market-card-${a.id}"`);
 
-      // --- b is judged YES while the visitor is on the page: its result appears without a
-      // reload (the card's `market:status` restarts the results list), linked to the market.
+      // --- b is judged YES while the visitor is on the page — one admin registers the judgement
+      // and another approves it (#152, helpers.ts `judgeMarket`): its card says 잠정 결과 without a
+      // reload (the card's `market:status`, which restarts the results list too), and the results
+      // list still leaves it out: a 잠정 결과 is no confirmed result (ADR-0093 decision 3, the #174
+      // row). Its confirmation at the dispute deadline is the next test's.
       const live = subscribed(page, b.id);
       await page.goto(`/themes/${slug}`);
       await live;
       await closeMarket(admin, b.id);
-      const judged = await admin.post(`/api/v1/admin/markets/${b.id}/resolve`, {
-        data: { result: 'YES', expectedAccountId: await accountIdOf(admin) },
-      });
-      expect(judged.status(), await judged.text()).toBe(200);
+      await judgeMarket(admin, b.id, 'YES');
+      await expect(grid.getByTestId(`market-card-${b.id}`)).toContainText(
+        copy.marketStatusProvisional,
+      );
       const results = page.getByTestId('theme-results');
-      await expect(results.getByTestId(`theme-result-outcome-${b.id}`)).toHaveText(copy.yes);
-      await expect(
-        results.getByTestId(`theme-result-${b.id}`).getByRole('link', { name: b.title }),
-      ).toHaveAttribute('href', `/markets/${b.slug}`);
-      await expect(results.getByTestId(`theme-result-${a.id}`)).toHaveCount(0);
-      await expect(results.getByTestId('theme-results-empty')).toHaveCount(0);
-      // A judged market keeps its card (결과 확정 is worked off through 지급 중 to 지급 완료 by the
-      // worker meanwhile, so the status label is left unasserted), and the server's HTML has the
-      // row too.
-      await expect(grid.getByTestId(`market-card-${b.id}`)).toBeVisible();
-      expect(await (await request.get(`/themes/${slug}`)).text()).toContain(
+      await expect(results.getByTestId(`theme-result-${b.id}`)).toHaveCount(0);
+      await expect(results.getByTestId('theme-results-empty')).toHaveText(copy.themeResultsEmpty);
+      // …and the server's HTML has no row either.
+      expect(await (await request.get(`/themes/${slug}`)).text()).not.toContain(
         `data-testid="theme-result-${b.id}"`,
       );
 
@@ -413,8 +417,9 @@ test.describe('테마', () => {
       await expect(notice).toHaveCount(1);
       await expect(notice).toContainText('고친 일정은');
 
-      // --- b taken out behind its confirmation: its card and its result leave the page, a's
-      // card stays (and keeps the theme publishable — it stays published either way).
+      // --- b taken out behind its confirmation: its card leaves the page (and its result with
+      // it, had the worker confirmed it meanwhile), a's card stays (and keeps the theme
+      // publishable — it stays published either way).
       await letToastsGo(adminPage);
       await markets.getByTestId(`admin-theme-market-unlink-${b.id}`).click();
       await adminPage.getByTestId('admin-theme-market-unlink-confirm').click();
@@ -452,6 +457,78 @@ test.describe('테마', () => {
     await page.goto(`/markets/${a.slug}`);
     await expect(page.getByTestId('market-detail')).toBeVisible();
     await expect(page.getByTestId('market-themes')).toHaveCount(0);
+  });
+
+  test('잠정 결과인 시장은 테마의 결과 목록에 없다가, 이의 기한이 지나 워커가 결과를 확정하면 리프레시 없이 YES와 시장 링크로 나타난다', async ({
+    admin,
+    page,
+    request,
+  }) => {
+    // The dispute window — the global setup's minute (global-setup.ts) — is waited out.
+    test.slow();
+    await skipUnlessResolvable(admin);
+    const group = freshTag();
+    const market = await createOpenMarket(admin, { group });
+    const expectedAccountId = await accountIdOf(admin);
+    const slug = `e2e-theme-result-${group}`;
+    // On from today for a week: 진행 중, and never the ongoing theme that ends soonest, which the
+    // test above puts on the home's few cards.
+    const created = await admin.post(ADMIN_THEMES, {
+      data: {
+        slug,
+        name: `E2E 테마 결과 ${group}`,
+        intro: `결과 확정 ${group}`,
+        startDate: koreanDate(0),
+        endDate: koreanDate(7),
+        expectedAccountId,
+      },
+    });
+    expect(created.ok(), await created.text()).toBe(true);
+    const theme = ((await created.json()) as { data: { id: string } }).data;
+    try {
+      const linked = await admin.post(`${ADMIN_THEMES}/${theme.id}/markets`, {
+        data: { marketId: market.id, expectedAccountId },
+      });
+      expect(linked.ok(), await linked.text()).toBe(true);
+      const published = await admin.post(`${ADMIN_THEMES}/${theme.id}/publish`, {
+        data: { expectedAccountId },
+      });
+      expect(published.ok(), await published.text()).toBe(true);
+
+      // --- the visitor, in the market's room before the page loads: no result yet.
+      const live = subscribed(page, market.id);
+      await page.goto(`/themes/${slug}`);
+      await live;
+      await markDocument(page);
+      const results = page.getByTestId('theme-results');
+      await expect(results.getByTestId('theme-results-empty')).toHaveText(copy.themeResultsEmpty);
+
+      // --- 마감 and 판정 (#152): 잠정 결과 on the card, and still no result.
+      await closeMarket(admin, market.id);
+      const judged = await judgeMarket(admin, market.id, 'YES');
+      const card = page.getByTestId('theme-markets').getByTestId(`market-card-${market.id}`);
+      await expect(card).toContainText(copy.marketStatusProvisional);
+      await expect(results.getByTestId(`theme-result-${market.id}`)).toHaveCount(0);
+
+      // --- the worker confirms it at its dispute deadline (`market:status`, which restarts the
+      // results list): YES and a link to the market, on the same document — and in the server's
+      // HTML. The status after 결과 확정 (지급 중, 지급 완료) moves on meanwhile, so it is left
+      // unasserted.
+      await expect(results.getByTestId(`theme-result-outcome-${market.id}`)).toHaveText(copy.yes, {
+        timeout: resolveWaitMs(judged),
+      });
+      await expect(
+        results.getByTestId(`theme-result-${market.id}`).getByRole('link', { name: market.title }),
+      ).toHaveAttribute('href', `/markets/${market.slug}`);
+      await expect(results.getByTestId('theme-results-empty')).toHaveCount(0);
+      expect(await documentSurvived(page)).toBe(true);
+      expect(await (await request.get(`/themes/${slug}`)).text()).toContain(
+        `data-testid="theme-result-${market.id}"`,
+      );
+    } finally {
+      // Off every public place again, so the e2e database's home holds no theme of a past run.
+      await admin.post(`${ADMIN_THEMES}/${theme.id}/unpublish`, { data: { expectedAccountId } });
+    }
   });
 
   test('관리자 테마 목록의 더 보기가 실패하면 읽은 테마는 남고 그 버튼 위에 오류를 보인다', async ({

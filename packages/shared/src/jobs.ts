@@ -2,10 +2,10 @@ import * as z from 'zod';
 import { uuidSchema } from './api/uuid.js';
 
 /**
- * BullMQ queue and job names (PLAN 9), shared by the producer (apps/api enqueues a market's
- * delayed open, close and finalize jobs after the write that sets their instant commits) and the
- * consumer (apps/worker). One module, so a renamed job cannot leave the API adding work that no
- * worker handles.
+ * BullMQ queue and job names (PLAN 9), shared by the producers (apps/api enqueues a market's
+ * delayed open, close and resolve jobs after the write that sets their instant commits; the
+ * worker enqueues the finalize after its own confirmation, #152) and the consumer (apps/worker).
+ * One module, so a renamed job cannot leave the API adding work that no worker handles.
  */
 export const QUEUE_NAMES = [
   'markets',
@@ -28,6 +28,15 @@ export const JOB_NAMES = {
    */
   marketOpen: 'market.open',
   marketClose: 'market.close',
+  /**
+   * Confirms a PROVISIONAL market's result once its 이의 기한 has passed with nothing held (#152,
+   * ADR-0103; ADR-0093 decision 1 #173 item 1): PROVISIONAL → RESOLVED, actor NULL (the worker),
+   * with the settlement steps, then `market.finalize` at once. The delayed job the API registers
+   * when an approval publishes the provisional result, and the worker's per-minute scan
+   * (`market-resolve-scan`) as the backstop — which also confirms a market whose hold (#175's
+   * disputes, #176's corrections) cleared after its deadline.
+   */
+  marketResolve: 'market.resolve',
   marketFinalize: 'market.finalize',
   ledgerAudit: 'ledger.audit',
   marketTraderCount: 'market.trader_count',
@@ -61,13 +70,14 @@ export const JOB_NAMES = {
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
 
 /**
- * Payload of `market.open`, `market.close` and `market.finalize`. With a `marketId` the job is
- * the trigger the API registered for one market (#21: delayed to `scheduled_open_at`; PLAN 5.5:
- * delayed to `close_at`, or immediate after the judgement — ADR-0046); without one it is the
+ * Payload of `market.open`, `market.close`, `market.resolve` and `market.finalize`. With a
+ * `marketId` the job is the trigger registered for one market (#21: delayed to
+ * `scheduled_open_at`; PLAN 5.5: delayed to `close_at`; #152: delayed to the dispute deadline, and
+ * the finalize immediate after the confirmation — ADR-0046, ADR-0103); without one it is the
  * per-minute safety-net scan the worker schedules for itself, which handles every market that is
  * due. Both paths run the same per-market transaction and re-verify the status and the instant
- * under the market lock, so a stale or duplicated job is a no-op, never a second open, close or
- * settlement.
+ * under the market lock, so a stale or duplicated job is a no-op, never a second open, close,
+ * confirmation or settlement.
  */
 export const marketJobDataSchema = z.object({ marketId: uuidSchema.optional() });
 export type MarketJobData = z.infer<typeof marketJobDataSchema>;
@@ -96,9 +106,20 @@ export function marketCloseJobId(marketId: string, closeAt: Date): string {
 }
 
 /**
- * `resolvedAt` is the judgement's instant (ADR-0046): the job runs at once. A market is judged
- * once, but the instant stays in the id under the rule above, so a later re-judgement (#26)
- * would register a new job rather than collide with a failed one kept by `removeOnFail`.
+ * `disputeDeadline` is the provisional result's 이의 기한 (#152, ADR-0103), fixed by the approval
+ * that published it: the API registers the job delayed to it. A correction (#176) gives the market
+ * a new deadline, and so a new job under the rule above.
+ */
+export function marketResolveJobId(marketId: string, disputeDeadline: Date): string {
+  return `${JOB_NAMES.marketResolve}.${marketId}.${String(disputeDeadline.getTime())}`;
+}
+
+/**
+ * `resolvedAt` is the instant the result was confirmed (`markets.resolved_at`, → RESOLVED): the
+ * worker's confirmation at the dispute deadline (#152, ADR-0103; before it, ADR-0046's interim
+ * judgement) registers the job at once. A market is confirmed once, but the instant stays in the
+ * id under the rule above, so a later confirmation would register a new job rather than collide
+ * with a failed one kept by `removeOnFail`.
  */
 export function marketFinalizeJobId(marketId: string, resolvedAt: Date): string {
   return `${JOB_NAMES.marketFinalize}.${marketId}.${String(resolvedAt.getTime())}`;

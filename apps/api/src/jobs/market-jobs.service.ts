@@ -2,8 +2,8 @@ import { Inject, Injectable, Logger, type OnApplicationShutdown } from '@nestjs/
 import {
   JOB_NAMES,
   marketCloseJobId,
-  marketFinalizeJobId,
   marketOpenJobId,
+  marketResolveJobId,
   type JobName,
   type MarketJobData,
   type QueueName,
@@ -12,7 +12,7 @@ import { Queue, type JobsOptions } from 'bullmq';
 import { type Redis } from 'ioredis';
 import { REDIS_COMMAND_TIMEOUT_MS, REDIS_QUEUE } from '../infra/redis/redis.provider.js';
 
-/** The queue the worker consumes `market.open`, `.close` and `.finalize` from (PLAN 9). */
+/** The queue the worker consumes `market.open`, `.close`, `.resolve` and `.finalize` from. */
 export const MARKETS_QUEUE: QueueName = 'markets';
 
 /**
@@ -78,22 +78,25 @@ function bounded<T>(promise: Promise<T>, what: string): Promise<T> {
 }
 
 /**
- * PLAN 9's producer side (M5, ADR-0046; #21, ADR-0100): the `market.open`, `market.close` and
- * `market.finalize` jobs the worker consumes, registered by MarketAdminService (and
- * MarketSupplementService, #80, and MarketPauseService, #114) AFTER its transaction commits. An
- * open job is delayed to `scheduledOpenAt` — registered by an approval or a reschedule that leaves
- * the market SCHEDULED, moved by a reschedule, cancelled by a 되돌리기 from SCHEDULED. A close job
- * is delayed to `closeAt` — registered at the approval (the close is locked from then on but for a
- * supplement, and the worker's close only acts on an open or paused market — a pause keeps the
- * job, #173 item 3) and cancelled the same way when that instant stops being true (an approved
- * supplement's later close, which registers the new one, an approved early close, a 되돌리기 from
- * SCHEDULED); a finalize job is due at once after the judgement and never cancelled.
+ * PLAN 9's producer side (M5, ADR-0046; #21, ADR-0100; #152, ADR-0103): the `market.open`,
+ * `market.close` and `market.resolve` jobs the worker consumes, registered by MarketAdminService
+ * (and MarketSupplementService, #80, MarketPauseService, #114, and MarketJudgementService, #152)
+ * AFTER its transaction commits. An open job is delayed to `scheduledOpenAt` — registered by an
+ * approval or a reschedule that leaves the market SCHEDULED, moved by a reschedule, cancelled by a
+ * 되돌리기 from SCHEDULED. A close job is delayed to `closeAt` — registered at the approval (the
+ * close is locked from then on but for a supplement, and the worker's close only acts on an open
+ * or paused market — a pause keeps the job, #173 item 3) and cancelled the same way when that
+ * instant stops being true (an approved supplement's later close, which registers the new one, an
+ * approved early close, a 되돌리기 from SCHEDULED). A resolve job is delayed to the dispute deadline
+ * the judgement's approval fixed (CLOSED → PROVISIONAL) and never cancelled: nothing moves that
+ * deadline in #152 (#176's correction gives a new one, so a new job). `market.finalize` is not the
+ * API's since #152: the worker registers it after its own confirmation (PROVISIONAL → RESOLVED).
  *
  * Best effort by design, like MarketPublisher: the transition has COMMITted when this runs,
  * so a failure here is logged and swallowed, never turned into an error response — and never
- * lost either, because the worker's per-minute scans (PLAN 5.5 "안전망") open, close and finalize
- * whatever is due whether or not its job exists. That scan is also why a cancel that finds
- * nothing (the job already ran, or was never added) needs no retry: the job it would have
+ * lost either, because the worker's per-minute scans (PLAN 5.5 "안전망") open, close, confirm
+ * and finalize whatever is due whether or not its job exists. That scan is also why a cancel that
+ * finds nothing (the job already ran, or was never added) needs no retry: the job it would have
  * removed re-verifies status and instant under the market lock and is a no-op.
  *
  * The delay is computed from the instant the transaction read on the database clock, not
@@ -163,17 +166,19 @@ export class MarketJobs implements OnApplicationShutdown {
   }
 
   /**
-   * `market.finalize` for one market judged at `resolvedAt` (ADR-0046): due at once — the
-   * delay is `resolvedAt - now`, which is 0 when the judgement passes its own instant — under
-   * an id fixed by market and judgement instant. Nothing cancels it: a judgement is final, and
-   * a duplicate run finds the market `settled` under the lock and skips.
+   * `market.resolve` for one PROVISIONAL market at its `disputeDeadline` (#152, ADR-0103; job id
+   * fixed by market and deadline): registered by the judgement's approval, which fixed the deadline
+   * at its instant `now` plus the release setting `market.dispute_window`, so the worker confirms
+   * the result (PROVISIONAL → RESOLVED) once the deadline has passed with nothing held. Nothing
+   * cancels it: a run before the deadline, or on a market confirmed already, skips under the market
+   * lock, and the worker's per-minute scan confirms a market whose job never reached Redis.
    */
-  scheduleFinalize(marketId: string, resolvedAt: Date, now: Date): Promise<void> {
+  scheduleResolve(marketId: string, disputeDeadline: Date, now: Date): Promise<void> {
     return this.schedule(
-      JOB_NAMES.marketFinalize,
-      marketFinalizeJobId(marketId, resolvedAt),
+      JOB_NAMES.marketResolve,
+      marketResolveJobId(marketId, disputeDeadline),
       marketId,
-      resolvedAt,
+      disputeDeadline,
       now,
     );
   }

@@ -323,7 +323,7 @@ function ChangeDialog({ item, onClose }: { item: ReleaseSetting; onClose: () => 
                     control={control}
                     render={({ field }) => (
                       // The group's accessible name is its own Label part (zag's radiogroup
-                      // `aria-labelledby`), as in the 판정 dialog.
+                      // `aria-labelledby`), as in the 판정 form.
                       <RadioGroup.Root
                         name={field.name}
                         value={field.value}

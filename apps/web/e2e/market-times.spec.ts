@@ -50,8 +50,9 @@ import {
  * holds one KST line per time, with no marker (ADR-0063). A closed market whose scheduled
  * judgement has passed reads '판정 지연' in place of '거래 마감' (#173 item 11).
  *
- * No spec writes the release setting: a value would stay in the e2e database and change
- * release-settings.spec.ts's counts (docs/SETTINGS.md). The lead close is read off the setting the
+ * No spec writes the lead-close gap's release setting: a value would stay in the e2e database and
+ * change release-settings.spec.ts's counts (docs/SETTINGS.md; the suite's one write is the dispute
+ * window's, before any test — global-setup.ts). The lead close is read off the setting the
  * database holds, 미정 on a fresh one; its decided-gap cases are the API's integration tests
  * (admin-markets-times.controller.test.ts, and admin-markets-supplement.controller.test.ts for an
  * open market's), as are every refusal's details, the minute precision and the records. The

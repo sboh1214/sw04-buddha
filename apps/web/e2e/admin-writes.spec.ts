@@ -1027,11 +1027,12 @@ test.describe('탭의 세션이 아직 앞 관리자를 말하는데 `GET /me`�
   // `['me']` turns from A to B in place, before the session does, so SessionCacheGuard resets
   // nothing, and the screen's writes now name B — the admin drawn — with B's cookie: the server's
   // check (ADR-0092) takes them. What A opened or typed on the screen would go with them: the
-  // judgement A picked and the note A wrote, the reason A gave a setting, A's mark of a link, the
-  // market, theme, notice, rejection, memo, coupon or package A typed. The owner's «적용함»: an open
-  // dialog is held for the admin who opened it and closes (`useHeldForOperator`, ADR-0091 결정
-  // 3·5-5), and a form on the screen is drawn again for each admin, empty (`key`). One of each per
-  // area here; the rest are pinned in the sources (lib/admin-writes.test.ts).
+  // result A picked for a judgement and what A wrote it confirmed, the reason A gave a setting, A's
+  // mark of a link, the market, theme, notice, rejection, memo, coupon or package A typed. The
+  // owner's «적용함»: an open dialog — or a form opened from a button, as the 판정 등록 (#152) — is
+  // held for the admin who opened it and closes (`useHeldForOperator`, ADR-0091 결정 3·5-5), and a
+  // form on the screen is drawn again for each admin, empty (`key`). One of each per area here;
+  // the rest are pinned in the sources (lib/admin-writes.test.ts).
 
   test('시장 만들기 양식에 앞 관리자가 적던 것은 다른 관리자의 것으로 비어 다시 그려지고, 아무것도 보내지 않는다', async ({
     browser,
@@ -1059,7 +1060,7 @@ test.describe('탭의 세션이 아직 앞 관리자를 말하는데 `GET /me`�
     }
   });
 
-  test('시장 상세에서 앞 관리자가 열어 결과를 고르고 메모를 적은 판정 창은 닫히고, 시장은 판정을 기다리는 그대로다', async ({
+  test('시장 상세에서 앞 관리자가 열어 결과를 고르고 확인한 내용을 적은 판정 등록 양식은 닫히고, 시장은 판정을 기다리는 그대로다', async ({
     browser,
     page,
     admin,
@@ -1072,23 +1073,27 @@ test.describe('탭의 세션이 아직 앞 관리자를 말하는데 `GET /me`�
       page,
       secondAdmin,
       `/admin/markets/${market.id}`,
-      () => expect(page.getByTestId('market-resolve')).toBeEnabled(),
+      () => expect(page.getByTestId('market-judgement-register')).toBeEnabled(),
     );
     try {
-      await page.getByTestId('market-resolve').click();
-      await page.getByTestId('market-resolve-yes').click();
-      const note = page.getByTestId('market-resolve-note');
-      await note.fill('앞 관리자가 적던 판정 메모');
+      // 판정 등록 (#152): the form opens in the panel, held for A like a dialog.
+      await page.getByTestId('market-judgement-register').click();
+      const form = page.getByTestId('market-judgement-form');
+      await form.getByTestId('market-judgement-result-yes').click();
+      const description = form.getByTestId('market-judgement-description');
+      await description.fill('앞 관리자가 적던 확인한 내용');
       const writes = adminWrites(page);
 
       await toB();
-      await expect(note).toHaveCount(0);
-      await expect(page.getByTestId('market-resolve-confirm')).toHaveCount(0);
-      await expect(page.getByTestId('market-resolve')).toBeEnabled();
+      await expect(form).toHaveCount(0);
+      await expect(description).toHaveCount(0);
+      await expect(page.getByTestId('market-judgement-register')).toBeEnabled();
       expect(writes).toEqual([]);
-      expect(
-        (await dataOf<AdminMarket>(await admin.get(`/api/v1/admin/markets/${market.id}`))).status,
-      ).toBe('closed');
+      const after = await dataOf<AdminMarket>(
+        await admin.get(`/api/v1/admin/markets/${market.id}`),
+      );
+      expect(after.status).toBe('closed');
+      expect(after.judgement.pending).toBeNull();
     } finally {
       await close();
     }

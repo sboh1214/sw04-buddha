@@ -4,10 +4,11 @@
  * The individual suites already prove that each admin write leaves the RIGHT `admin_actions`
  * row — `admin.controller.test.ts` for the balance adjustment, `charge-package.controller.test`
  * and `coupon.controller.test` for the catalogue, `admin-markets.controller.test` and
- * `admin-markets-resolve.controller.test` for the market transitions,
+ * `admin-markets-lifecycle.controller.test` for the market transitions,
  * `admin-markets-review.controller.test` for the market review (#78),
  * `admin-markets-supplement.controller.test` for the rule supplements (#80),
  * `admin-market-pauses.controller.test` for the pauses and their next paths (#114),
+ * `admin-market-judgements.controller.test` for the judgements (#152),
  * `related-markets.controller.test` for the links between markets,
  * `moderation.controller.test` for the moderation actions and the dismissals of reports (#50),
  * `restrictions.controller.test` for the writing restrictions and their shortenings and lifts
@@ -73,7 +74,12 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'POST /admin/markets/:id/pause-decisions/:requestId/approve': 'market_pause_decision_approve',
   'POST /admin/markets/:id/pause-decisions/:requestId/reject': 'market_pause_decision_reject',
   'POST /admin/markets/:id/pause-decisions/:requestId/retract': 'market_pause_decision_retract',
-  'POST /admin/markets/:id/resolve': 'market_resolve',
+  // #152: a judgement is a registration, then another admin's decision or its registrant's
+  // retraction; only the approval also writes the market's event (`provisional`).
+  'POST /admin/markets/:id/judgements': 'market_judgement_request',
+  'POST /admin/markets/:id/judgements/:requestId/approve': 'market_judgement_approve',
+  'POST /admin/markets/:id/judgements/:requestId/reject': 'market_judgement_reject',
+  'POST /admin/markets/:id/judgements/:requestId/retract': 'market_judgement_retract',
   'POST /admin/markets/:id/related': 'market_link',
   'DELETE /admin/markets/:id/related/:relatedMarketId': 'market_unlink',
   'POST /admin/themes': 'theme_create',
@@ -145,6 +151,10 @@ const RETIRED: Readonly<Partial<Record<AdminActionType, string>>> = {
   // The interim one-admin open → closed, `POST /admin/markets/:id/close`, gone with #114
   // (ADR-0102): a market closes at its close, or early from PAUSED by another admin's approval.
   market_close: 'POST /admin/markets/:id/close',
+  // The interim one-admin closed → resolved, `POST /admin/markets/:id/resolve`, gone with #152
+  // (ADR-0103): a judgement is registered by one admin and approved by another (PROVISIONAL), and
+  // the worker confirms it at its dispute deadline.
+  market_resolve: 'POST /admin/markets/:id/resolve',
 };
 
 const adminRoutes = discoverRoutes().filter((route) => isAdminPath(route.path));
@@ -155,7 +165,9 @@ describe('admin audit log completeness', () => {
     // A guard on the discovery itself: if the walk broke, every assertion below would pass
     // vacuously and this test would go on reporting success while checking nothing.
     expect(adminRoutes.length).toBeGreaterThanOrEqual(15);
-    expect(adminRoutes.map((route) => route.key)).toContain('POST /admin/markets/:id/resolve');
+    expect(adminRoutes.map((route) => route.key)).toContain(
+      'POST /admin/markets/:id/judgements/:requestId/approve',
+    );
   });
 
   it('records an admin_actions row for every state-changing admin route', () => {

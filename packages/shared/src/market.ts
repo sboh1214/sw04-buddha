@@ -6,8 +6,6 @@ import {
   BP_MAX,
   INT4_MAX,
   MARKET_IMAGE_URL_MAX,
-  MARKET_RESOLVE_EVIDENCE_URL_MAX,
-  MARKET_RESOLVE_NOTE_MAX,
   MARKET_SEARCH_TERM_MAX,
   MARKET_SLUG_PATTERN,
   MARKET_SLUG_STEM_MAX,
@@ -17,6 +15,7 @@ import {
 } from './constants.js';
 import { expectedAccountIdSchema, namesAFieldBesideAccount } from './expected-account.js';
 import { marketTitleSchema, ruleItemFields, timeItemFields } from './market-fields.js';
+import { adminMarketJudgementStateSchema, judgementVersionSchema } from './market-judgement.js';
 import { openItemSchema } from './market-open-items.js';
 import { adminMarketPauseStateSchema } from './market-pause.js';
 import { adminMarketReviewSchema } from './market-review.js';
@@ -112,7 +111,9 @@ const marketSummaryFields = {
   openAt: z.iso.datetime().nullable(),
   /**
    * The judgement's result type (YES·NO·VOID, #174): null before a judgement publishes one and
-   * on a CANCELLED market (ADR-0093 decision 1 item 10).
+   * on a CANCELLED market (ADR-0093 decision 1 item 10). Set when another admin approves the
+   * judgement (CLOSED → PROVISIONAL, #152) — the provisional result is the judged one too
+   * (ADR-0095 8-2) — and kept through its confirmation.
    */
   resolvedResult: marketResultSchema.nullable(),
   /**
@@ -157,6 +158,10 @@ export const marketSchema = z
      * inserted without them.
      */
     tags: z.array(z.string()),
+    /**
+     * When the result was confirmed (→ RESOLVED): the worker's, once the dispute deadline passed
+     * (#152) — not the provisional result's publication. Null before it.
+     */
     resolvedAt: z.iso.datetime().nullable(),
     settledAt: z.iso.datetime().nullable(),
     /**
@@ -559,6 +564,30 @@ export const adminMarketSchema = marketSchema
      * reason and the times, #173 item 13).
      */
     pause: adminMarketPauseStateSchema,
+    /**
+     * The current judgement's version (#152, ADR-0103; `markets.judgement_version`): 1 from the
+     * first approved judgement, one more per correction (#176) — the one the settlement follows
+     * (#126). Null until a judgement is approved, and on a market the interim one-admin judgement
+     * resolved before #152 (D4: no judgement was recorded for those).
+     */
+    judgementVersion: judgementVersionSchema.nullable(),
+    /**
+     * 이의 기한 of the current judgement (#152; ADR-0093 decision 1 #173 item 5): fixed when the
+     * approval published the provisional result — its instant plus the release setting
+     * `market.dispute_window` read then — and never moved by a later change of the value. The
+     * worker confirms the result (PROVISIONAL → RESOLVED) once it has passed with nothing held
+     * (#175, #176). Null until a judgement is approved. Admins only: the public deadline and its
+     * link are #24's and #175's.
+     */
+    disputeDeadline: z.iso.datetime().nullable(),
+    /**
+     * 판정 (#152, ADR-0103), in every status: the current judgement, the registration waiting for
+     * another admin's approval and every registration with how it ended — one still waiting once
+     * the market left CLOSED is shown for its 반려 or 철회 — and whether the dispute window is
+     * undecided. The public `Market` carries none of it (#24 shows the record without the names,
+     * #173 item 13).
+     */
+    judgement: adminMarketJudgementStateSchema,
   })
   .meta({ id: 'AdminMarket' });
 export type AdminMarket = z.infer<typeof adminMarketSchema>;
@@ -645,29 +674,6 @@ export const updateMarketBodySchema = z
   .refine(namesAFieldBesideAccount, 'at least one field is required')
   .meta({ id: 'UpdateMarketBody' });
 export type UpdateMarketBody = z.infer<typeof updateMarketBodySchema>;
-
-/**
- * `POST /admin/markets/:id/resolve` (PLAN 5.5, 7.3; ADR-0046): judge a closed market. The
- * result is final at once — the market becomes `resolved` and the worker starts the payout
- * (`settling`); there is no way to change it. An interim path until #152 replaces it with a
- * judgement another admin approves (CLOSED → PROVISIONAL), which is also where VOID can be
- * chosen (ADR-0093 decision 1 item 4): until then the result is YES or NO, the two the payout
- * can pay (VOID's 50/50 is #126). The note and the evidence are kept on the `market_events`
- * payload and the admin action, not on the market row: they are the audit trail of the
- * judgement.
- */
-export const resolveMarketBodySchema = z
-  .object({
-    result: outcomeSchema,
-    note: z.string().trim().max(MARKET_RESOLVE_NOTE_MAX).nullish(),
-    evidenceUrl: z
-      .url({ protocol: /^https?$/ })
-      .max(MARKET_RESOLVE_EVIDENCE_URL_MAX)
-      .nullish(),
-    expectedAccountId: expectedAccountIdSchema,
-  })
-  .meta({ id: 'ResolveMarketBody' });
-export type ResolveMarketBody = z.infer<typeof resolveMarketBodySchema>;
 
 /**
  * `GET /admin/markets` (no `.meta`: query DTO). Any status, DRAFT and REVIEW included; omitted =

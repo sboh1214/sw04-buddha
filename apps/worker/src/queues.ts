@@ -11,9 +11,9 @@ import { type RedisOptions } from 'ioredis';
 
 /**
  * Queue and job names live in @buddha/shared (jobs.ts) since M5: the API is the producer of
- * `market.open` (#21) / `market.close` / `market.finalize` and one module keeps a renamed job from
- * leaving it adding work no worker handles. Re-exported so the worker's own modules keep one import
- * site.
+ * `market.open` (#21) / `market.close` / `market.resolve` (#152), the worker of `market.finalize`
+ * after its confirmation (market-jobs.ts), and one module keeps a renamed job from leaving either
+ * adding work no worker handles. Re-exported so the worker's own modules keep one import site.
  */
 export { JOB_NAMES, QUEUE_NAMES, type JobName, type QueueName };
 
@@ -41,7 +41,12 @@ export const BULLMQ_REDIS_OPTIONS = {
 
 /** Which jobs belong to which queue. */
 export const QUEUE_JOBS: Record<QueueName, readonly JobName[]> = {
-  markets: [JOB_NAMES.marketOpen, JOB_NAMES.marketClose, JOB_NAMES.marketFinalize],
+  markets: [
+    JOB_NAMES.marketOpen,
+    JOB_NAMES.marketClose,
+    JOB_NAMES.marketResolve,
+    JOB_NAMES.marketFinalize,
+  ],
   audit: [JOB_NAMES.ledgerAudit],
   stats: [JOB_NAMES.marketTraderCount],
   wallet: [JOB_NAMES.startGrantPay],
@@ -63,12 +68,13 @@ export const DEFAULT_JOB_OPTIONS = {
 } as const satisfies JobsOptions;
 
 /**
- * The per-minute safety-net scans of PLAN 5.5 and #21: the job the API registers per market
- * (delayed to `scheduled_open_at` or `close_at`, or immediate after the judgement — ADR-0046) is
- * the fast path, and a market whose job was lost (Redis restarted, the API's best-effort add
- * failed after COMMIT) is still opened, closed or settled within a minute. Each runs the same
- * per-market transaction as that job, so a scan and the job for one market are one open, close or
- * settlement, never two (market-open.ts, market-close.ts, market-finalize.ts).
+ * The per-minute safety-net scans of PLAN 5.5, #21 and #152: the job registered per market
+ * (by the API, delayed to `scheduled_open_at`, `close_at` or the dispute deadline; by the worker,
+ * immediate after its confirmation — ADR-0046, ADR-0103) is the fast path, and a market whose job
+ * was lost (Redis restarted, a best-effort add failed after COMMIT) is still opened, closed,
+ * confirmed or settled within a minute. Each runs the same per-market transaction as that job, so
+ * a scan and the job for one market are one open, close, confirmation or settlement, never two
+ * (market-open.ts, market-close.ts, market-resolve.ts, market-finalize.ts).
  */
 const EVERY_MINUTE = { pattern: '* * * * *', tz: 'Asia/Seoul' } as const;
 
@@ -89,6 +95,14 @@ export const JOB_SCHEDULES = [
   // the job: the scheduler persists in Redis under it, and the old one would be left running.
   { id: 'market-open-scan', queue: 'markets', name: JOB_NAMES.marketOpen, repeat: EVERY_MINUTE },
   { id: 'market-close-scan', queue: 'markets', name: JOB_NAMES.marketClose, repeat: EVERY_MINUTE },
+  // #152 (ADR-0103): the PROVISIONAL markets whose dispute deadline has passed with nothing held —
+  // also one whose hold (#175, #176) cleared after its deadline, which no delayed job would see.
+  {
+    id: 'market-resolve-scan',
+    queue: 'markets',
+    name: JOB_NAMES.marketResolve,
+    repeat: EVERY_MINUTE,
+  },
   {
     id: 'market-finalize-scan',
     queue: 'markets',

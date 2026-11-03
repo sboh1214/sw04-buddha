@@ -202,8 +202,9 @@ async function runCoinStep(
  * Marks one step `done` in the transaction that ran it (ADR-0046): `completed_at` is the step's
  * instant and `attempts` counts this run; `last_error` is left as it was, so the reason of an
  * earlier failed attempt stays readable after the retry succeeded. An upsert because a missing
- * row counts as pending — the judgement writes one per step, but a market judged before the
- * table existed, or a row lost to a bug, must not block the settlement for good.
+ * row counts as pending — the confirmation writes one per step (`resolveProvisionalMarket`, #152;
+ * the interim judgement before it), but a market judged before the table existed, or a row lost
+ * to a bug, must not block the settlement for good.
  */
 async function completeStep(
   tx: Tx,
@@ -351,10 +352,11 @@ async function startSettling(db: Db, marketId: string): Promise<MarketStatusEven
 
 /**
  * resolved → settling → settled for one market (ADR-0046, ADR-0093 decision 1 items 1 and 14;
- * PLAN 5.5 정산): the admin's judgement made the result final and wrote one `pending` row per
- * SETTLEMENT_STEPS step. A `resolved` market first goes to `settling` in a committed
- * transaction of its own (`startSettling`, published at once); then one transaction runs every
- * step that is not `done` yet on the `settling` market and, once all of them are, settles it
+ * PLAN 5.5 정산): the worker's confirmation at the dispute deadline (`market.resolve`, #152,
+ * ADR-0103; ADR-0046's interim judgement by one admin before it) made the result final and wrote
+ * one `pending` row per SETTLEMENT_STEPS step. A `resolved` market first goes to `settling` in a
+ * committed transaction of its own (`startSettling`, published at once); then one transaction runs
+ * every step that is not `done` yet on the `settling` market and, once all of them are, settles it
  * (O-6: settled means every step finished — `coin`, the only one). The step transaction is all
  * rows or nothing: PLAN 5.5 allows committing per hundred accounts, but at MVP scale a single
  * transaction is the simpler invariant, and whether a step added later gets a transaction of
@@ -374,9 +376,11 @@ async function startSettling(db: Db, marketId: string): Promise<MarketStatusEven
  * (item 14) — and the attempt is then recorded on the step (`recordStepFailure`) and the error
  * rethrown, so the job fails and the next run (the job's retry, or the per-minute scan) does the
  * steps again from the start. Two results throw before any step runs, so the job fails loudly
- * instead of settling every holder as a loser: none (the API's judgement writes the result with
- * the status), and VOID — its 50/50 payout (ADR-0093 decision 1 item 9) is not `settle(won)`'s
- * and belongs to #126; the interim judgement takes YES or NO only.
+ * instead of settling every holder as a loser: none (the approval writes the result with the
+ * PROVISIONAL status, and the confirmation keeps it), and VOID — its 50/50 payout (ADR-0093
+ * decision 1 item 9) is not `settle(won)`'s and belongs to #126. #152's judgement may be VOID,
+ * which reaches here after its dispute window and stays `settling` with its step failed until #126
+ * pays it (ADR-0095 8-5, ADR-0103).
  *
  * Every transition goes through `transitionMarket`, whose event row carries its id to the
  * market row as `statusEventId` (A-M3-19); `actorId` is null: the worker acted. Everything is
@@ -572,9 +576,10 @@ export async function finalizeMarket(
 
 /**
  * The per-minute safety net for settlement (ADR-0046: every `resolved` or `settling` market,
- * judged longest ago first): the API runs the job the moment it judges, so this picks up a
- * market whose job was lost or failed — one still `resolved` (its resolved → settling never
- * committed) as well as one left `settling` by a failed step (ADR-0093 decision 1 item 14).
+ * confirmed longest ago first): the confirmation registers the job the moment it commits
+ * (`market.resolve`, #152), so this picks up a market whose job was lost or failed — one still
+ * `resolved` (its resolved → settling never committed) as well as one left `settling` by a failed
+ * step (ADR-0093 decision 1 item 14).
  * One market at a time and each rejection caught (`runScan`), so a settlement that fails — the
  * "no balance row", "no result" and VOID throws above, a transient DB error — rolls back that
  * market's steps alone (its step recorded `failed`) and the markets after it are still settled

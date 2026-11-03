@@ -163,10 +163,10 @@ export function tickRestartsMarket(
 
 /**
  * `market:status` — ordered by `statusEventId` through `statusSupersedes`, rank as the fallback
- * for a side with no key. The result is REPLACED, not merged, so the 판정 writes it and a later
- * event never keeps a result its own transition did not carry. The key is written with the
- * status, so the next event and the next REST answer are both compared against the transition
- * this one delivered.
+ * for a side with no key. The result is REPLACED, not merged, so a judgement's approval writes it
+ * (잠정 결과, #152) and a later event never keeps a result its own transition did not carry. The
+ * key is written with the status, so the next event and the next REST answer are both compared
+ * against the transition this one delivered.
  *
  * `undefined` for an event that is not NEWER covers two senders: a late or duplicate
  * transition, and the deliberate repeat an admin edit publishes (A-M4-36) — the same id the row

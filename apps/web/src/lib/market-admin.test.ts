@@ -39,7 +39,6 @@ import {
   SETTLEMENT_STEP_STATUS_LABEL,
   SETTLEMENT_STEP_STATUS_PALETTE,
   auditFailureKindLabel,
-  canResolve,
   compactJson,
   deltaLabel,
   deltaMoveKey,
@@ -62,10 +61,13 @@ import {
   ruleVersionItemList,
   ruleVersionItemText,
   MAX_TIMEOUT_MS,
+  PROVISIONAL_DEADLINE_POLL_MS,
   SCHEDULED_OPEN_POLL_MS,
   SETTLEMENT_POLL_INTERVAL_MS,
   TRADING_CLOSE_POLL_MS,
   adminMarketPollInterval,
+  judgementVersionName,
+  provisionalMarketPollDelay,
   scheduledMarketPollDelay,
   settlementPollInterval,
   settlementStepViews,
@@ -127,10 +129,11 @@ describe('status and event labels', () => {
       '지급 완료',
       '취소',
     ]);
-    // The judgement is its own event; the worker's start and end of the payout follow the labels
-    // of the statuses they lead to.
-    expect(MARKET_EVENT_LABEL.resolved).toBe(copy.eventResolved);
-    expect(copy.eventResolved).toBe('판정');
+    // Since #152 (ADR-0103) the approved judgement publishes 잠정 결과 and the worker confirms it at
+    // the dispute deadline: each event is named, as the worker's start and end of the payout are,
+    // by the status it leads to — the one-admin 판정 of old rows was a confirmation too.
+    expect(MARKET_EVENT_LABEL.provisional).toBe('잠정 결과 공개');
+    expect(MARKET_EVENT_LABEL.resolved).toBe(MARKET_STATUS_LABEL.resolved);
     expect(MARKET_EVENT_LABEL.settling).toBe('지급 시작');
     expect(MARKET_EVENT_LABEL.finalized).toBe(MARKET_STATUS_LABEL.settled);
   });
@@ -216,9 +219,10 @@ describe('isClosingSoon', () => {
 
 describe('status predicates', () => {
   it('badges a closed market 판정 대기 and a resolved or settling one 정산 대기, nothing else', () => {
-    // Two different waits (ADR-0046): closed waits for the admin's 판정, resolved and settling
-    // for the worker's payout (ADR-0093 decision 1, item 1) — a settling row that keeps its badge
-    // is a failing step (item 14).
+    // Two different waits (ADR-0046): closed waits for the admins' 판정 (registered and approved,
+    // #152), resolved and settling for the worker's payout (ADR-0093 decision 1, item 1) — a
+    // settling row that keeps its badge is a failing step (item 14). A provisional one waits for
+    // its dispute deadline, which the detail's 판정 panel shows, not a badge.
     expect(MARKET_STATUSES.filter(isAwaitingResolution)).toEqual(['closed']);
     expect(MARKET_STATUSES.filter(isAwaitingSettlement)).toEqual(['resolved', 'settling']);
     expect(copy.adminMarketAwaitingResolution).toBe('판정 대기');
@@ -243,8 +247,13 @@ describe('status predicates', () => {
     expect(MARKET_STATUSES.filter(editsAfterOpen)).toEqual(['open', 'paused']);
   });
 
-  it('judges a closed market only', () => {
-    expect(MARKET_STATUSES.filter(canResolve)).toEqual(['closed']);
+  it('offers no one-admin 판정 any more (#152, ADR-0103)', async () => {
+    // The interim closed → resolved by one admin went with #152: a judgement is registered and
+    // another admin approves it (the 판정 panel, lib/market-judgement.ts).
+    expect(Object.keys(await import('./market-admin'))).not.toContain('canResolve');
+    for (const key of ['adminMarketResolve', 'adminMarketResolveBody', 'adminMarketResolved']) {
+      expect(Object.keys(copy), key).not.toContain(key);
+    }
   });
 });
 
@@ -608,10 +617,50 @@ describe('marketEventRows', () => {
     });
   });
 
-  it('reads the 판정 as its result, note and evidence; blanks are left out', () => {
-    // ADR-0046's `resolved` event: `{result, note, evidenceUrl}`. The API nulls a blank note /
-    // evidence (market-admin.service.ts `detail`): a row saying "메모 null" would be worse than
-    // no row.
+  it('reads the 잠정 결과 공개 as its version, result and dispute deadline, never an id (#152)', () => {
+    // The approval's `provisional` event (ADR-0103): the request and its registrant are ids, which
+    // no row prints (ADR-0101 9-11's way) — the 판정 panel shows them by nickname.
+    const deadline = '2026-12-02T01:00:00.000Z';
+    const rows = marketEventRows('provisional', {
+      version: 1,
+      result: 'NO',
+      approvalId: '3f2504e0-4f89-11d3-9a0c-0305e82c3302',
+      requestedBy: 'registrant-id',
+      disputeDeadline: deadline,
+    });
+    expect(rows).toEqual([
+      { label: copy.eventJudgementVersion, value: 'v1' },
+      { label: copy.marketResolvedResult, value: copy.no },
+      { label: copy.eventDisputeDeadline, value: formatKst(deadline) },
+    ]);
+    expect(JSON.stringify(rows)).not.toContain('registrant-id');
+    expect(judgementVersionName(2)).toBe('v2');
+    // A VOID too goes through the 잠정 결과 (#173 item 9).
+    expect(
+      marketEventRows('provisional', { version: 1, result: 'VOID', disputeDeadline: deadline }),
+    ).toContainEqual({ label: copy.marketResolvedResult, value: copy.marketResultVoid });
+    for (const bad of [
+      { version: 0, result: 'YES', disputeDeadline: deadline },
+      { version: 1, result: 'MAYBE', disputeDeadline: deadline },
+      { version: 1, result: 'YES', disputeDeadline: 'nope' },
+      { version: 1, result: 'YES' },
+      null,
+    ]) {
+      expect(marketEventRows('provisional', bad)).toBeUndefined();
+    }
+  });
+
+  it('reads the worker’s 결과 확정 at the deadline as its version and result (#152)', () => {
+    // `{version, result, source: 'deadline'}`: the source is what the 시스템 actor already says.
+    expect(marketEventRows('resolved', { version: 1, result: 'YES', source: 'deadline' })).toEqual([
+      { label: copy.eventJudgementVersion, value: 'v1' },
+      { label: copy.marketResolvedResult, value: copy.yes },
+    ]);
+  });
+
+  it('reads a 결과 확정 written before #152 as its result, note and evidence; blanks are left out', () => {
+    // ADR-0046's one-admin 판정 wrote `resolved` as `{result, note, evidenceUrl}`. The API nulled a
+    // blank note / evidence: a row saying "메모 null" would be worse than no row.
     expect(
       marketEventRows('resolved', {
         result: 'YES',
@@ -620,8 +669,8 @@ describe('marketEventRows', () => {
       }),
     ).toEqual([
       { label: copy.marketResolvedResult, value: copy.yes },
-      { label: copy.adminMarketResolveNote, value: '공식 발표 확인' },
-      { label: copy.adminMarketResolveEvidence, value: 'https://example.com/a' },
+      { label: copy.eventResolveNote, value: '공식 발표 확인' },
+      { label: copy.eventResolveEvidence, value: 'https://example.com/a' },
     ]);
     expect(marketEventRows('resolved', { result: 'NO', note: null, evidenceUrl: null })).toEqual([
       { label: copy.marketResolvedResult, value: copy.no },
@@ -633,8 +682,8 @@ describe('marketEventRows', () => {
   });
 
   it('reads a VOID result as 무효, not as NO or raw JSON (the result type, #174)', () => {
-    // The interim 판정 writes YES or NO alone until #152, which is where VOID is chosen; the
-    // payload's result is the stored result type, so a row that carries VOID reads in words.
+    // VOID is chosen in the judgement since #152 (#173 item 4); the payload's result is the stored
+    // result type, so a row that carries VOID reads in words, old or new.
     expect(marketEventRows('resolved', { result: 'VOID', note: null })).toEqual([
       { label: copy.marketResolvedResult, value: copy.marketResultVoid },
     ]);
@@ -1074,9 +1123,8 @@ describe('transitionErrorMessage', () => {
     expect(Object.keys(copy)).not.toContain('errMarketScheduledOpenNotReached');
   });
 
-  it('names the refusal of a second 판정 as a stale screen', () => {
-    // A market is judged once (ADR-0046): a second 판정 is refused naming `status` — the screen
-    // showed a state another admin has already moved on.
+  it('names no 판정 field: the judgement’s refusals are its own since #152', () => {
+    // A transition refused naming `status` is a stale screen, whatever the state named.
     for (const message of ['market is resolved', 'market is settled']) {
       expect(
         transitionErrorMessage(
@@ -1085,18 +1133,22 @@ describe('transitionErrorMessage', () => {
         message,
       ).toBe(copy.errMarketStatus);
     }
-    // No "same result" refusal exists any more: a `result` issue is an ordinary invalid body.
-    expect(
-      transitionErrorMessage(
-        apiError(400, 'VALIDATION_ERROR', 'x', [{ path: ['result'], message: 'bad' }]),
-      ),
-    ).toBe(copy.errMarketInvalid);
+    // The one-admin 판정's note and evidence went with its route (ADR-0103): an issue naming them,
+    // or a result, is an ordinary invalid body — the judgement's are `judgementFailure`'s.
     const named = (path: string) =>
       transitionErrorMessage(
         apiError(400, 'VALIDATION_ERROR', 'x', [{ path: [path], message: 'bad' }]),
       );
-    expect(named('note')).toBe(copy.errMarketResolveNote);
-    expect(named('evidenceUrl')).toBe(copy.errMarketResolveEvidence);
+    for (const path of ['result', 'note', 'evidenceUrl']) {
+      expect(named(path), path).toBe(copy.errMarketInvalid);
+    }
+    for (const key of [
+      'errMarketResolveNote',
+      'errMarketResolveEvidence',
+      'errMarketResultRequired',
+    ]) {
+      expect(Object.keys(copy), key).not.toContain(key);
+    }
   });
 
   it('names every item the open-items check found missing, in OPEN_ITEMS order (#17)', () => {
@@ -1573,18 +1625,74 @@ describe('tradingMarketPollDelay (#114, ADR-0102)', () => {
   });
 });
 
+describe('provisionalMarketPollDelay (#152, ADR-0103)', () => {
+  const disputeDeadline = '2026-12-02T01:00:00.000Z';
+  const at = (iso: string) => new Date(iso).getTime();
+
+  it('reads a 잠정 결과 market again at its dispute deadline', () => {
+    expect(
+      provisionalMarketPollDelay(
+        { status: 'provisional', disputeDeadline },
+        at('2026-12-02T00:59:00.000Z'),
+      ),
+    ).toBe(60_000);
+    expect(
+      provisionalMarketPollDelay(
+        { status: 'provisional', disputeDeadline },
+        at('2026-12-02T00:59:59.999Z'),
+      ),
+    ).toBe(1);
+  });
+
+  it('then every few seconds until the worker confirmed it, never at once', () => {
+    // The job confirms it at the deadline, the per-minute scan within a minute: the detail follows
+    // it without a reload. A failed read refires at the poll, not at once.
+    expect(PROVISIONAL_DEADLINE_POLL_MS).toBe(5_000);
+    for (const now of [disputeDeadline, '2026-12-02T01:00:00.001Z', '2026-12-03T00:00:00.000Z']) {
+      expect(
+        provisionalMarketPollDelay({ status: 'provisional', disputeDeadline }, at(now)),
+        now,
+      ).toBe(PROVISIONAL_DEADLINE_POLL_MS);
+    }
+  });
+
+  it('is nothing for any other status or a missing or unreadable deadline, and caps a far one', () => {
+    for (const status of MARKET_STATUSES.filter((value) => value !== 'provisional')) {
+      expect(
+        provisionalMarketPollDelay({ status, disputeDeadline }, at(disputeDeadline)),
+        status,
+      ).toBe(false);
+    }
+    expect(provisionalMarketPollDelay(undefined)).toBe(false);
+    expect(provisionalMarketPollDelay({ status: 'provisional', disputeDeadline: null })).toBe(
+      false,
+    );
+    expect(provisionalMarketPollDelay({ status: 'provisional', disputeDeadline: 'nope' })).toBe(
+      false,
+    );
+    expect(
+      provisionalMarketPollDelay(
+        { status: 'provisional', disputeDeadline: '2027-07-01T00:00:00.000Z' },
+        at(disputeDeadline),
+      ),
+    ).toBe(MAX_TIMEOUT_MS);
+  });
+});
+
 describe('adminMarketPollInterval', () => {
   const market = (status: MarketStatus) => ({
     status,
     scheduledOpenAt: '2000-01-01T00:00:00.000Z',
     closeAt: '2999-01-01T00:00:00.000Z',
+    disputeDeadline: status === 'provisional' ? '2000-01-01T00:00:00.000Z' : null,
   });
 
-  it('is the settlement poll for a judged market, the 개장 예정 re-read for a scheduled one', () => {
+  it('is the settlement poll for a confirmed market, the 개장 예정 re-read for a scheduled one', () => {
     const readAt = Date.now();
     for (const status of MARKET_STATUSES) {
       const interval = adminMarketPollInterval({ data: market(status), dataUpdatedAt: readAt });
-      // A trading market's close is centuries off here: the longest timer, then again (#114).
+      // A trading market's close is centuries off here: the longest timer, then again (#114). A
+      // 잠정 결과 market's deadline has passed: the poll until the worker confirms it (#152).
       const expected =
         status === 'resolved' || status === 'settling'
           ? SETTLEMENT_POLL_INTERVAL_MS
@@ -1592,7 +1700,9 @@ describe('adminMarketPollInterval', () => {
             ? SCHEDULED_OPEN_POLL_MS
             : status === 'open' || status === 'paused'
               ? MAX_TIMEOUT_MS
-              : false;
+              : status === 'provisional'
+                ? PROVISIONAL_DEADLINE_POLL_MS
+                : false;
       expect(interval, status).toBe(expected);
     }
     expect(adminMarketPollInterval({ data: undefined, dataUpdatedAt: 0 })).toBe(false);

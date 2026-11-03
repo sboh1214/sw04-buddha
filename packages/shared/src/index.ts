@@ -30,6 +30,7 @@ export * from './link-review.js';
 export * from './lmsr.js';
 export * from './market.js';
 export * from './market-edits.js';
+export * from './market-judgement.js';
 export * from './market-lifecycle.js';
 export * from './market-open-items.js';
 export * from './market-pause.js';

@@ -11,17 +11,14 @@ import {
   Heading,
   Input,
   Link as ChakraLink,
-  RadioGroup,
   Skeleton,
   Stack,
   Table,
   Text,
-  Textarea,
 } from '@chakra-ui/react';
 import {
   type MarketEventType,
   type MarketSource,
-  OUTCOMES,
   formatCoin,
   isPublicMarketStatus,
   longDelayDeadline,
@@ -31,7 +28,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import NextLink from 'next/link';
 import { type ReactNode, useMemo, useState } from 'react';
-import { Controller, useForm } from 'react-hook-form';
+import { useForm } from 'react-hook-form';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { OperatorFieldset } from '@/components/ui/operator-fieldset';
@@ -68,7 +65,6 @@ import {
   MARKET_RESULT_LABEL,
   MARKET_STATUS_LABEL,
   MARKET_STATUS_PALETTE,
-  canResolve,
   compactJson,
   editsAfterOpen,
   formatBp,
@@ -78,6 +74,7 @@ import {
   isClosingSoon,
   isEditable,
   marketIdParam,
+  judgementVersionName,
   marketEventLabel,
   marketEventRows,
   marketFormError,
@@ -89,14 +86,10 @@ import {
   AFTER_SAVE_RESET,
   FOLLOW_SERVER_RESET,
   type MarketFormValues,
-  type ResolveMarketFormOutput,
-  type ResolveMarketFormValues,
   isHttpUrl,
   judgementTimeZoneUnconfirmed,
   marketFormSchema,
   marketToFormValues,
-  resolveMarketFormSchema,
-  toResolveMarketBody,
   toUpdateMarketBody,
   withJudgementTimeZonePrefilled,
 } from '@/lib/market-form';
@@ -110,6 +103,7 @@ import {
 import { LONG_DELAY_SEPARATOR, longDelayText } from '@/lib/market-detail';
 import { timeZoneLabel } from '@/lib/time-zone';
 import { MarketFormFields } from '../market-form-fields';
+import { MarketJudgementPanel } from './market-judgement-panel';
 import { MarketPausePanel } from './market-pause-panel';
 import { MarketReviewPanel, SubmitReviewButton } from './market-review-panel';
 import { MarketSupplementPanel } from './market-supplement-panel';
@@ -204,6 +198,17 @@ export function AdminMarketDetail({ id }: { id: string }) {
 
       <TransitionButtons market={data} />
       <OpenItemsNotice market={data} />
+      {/* 판정 (#152, ADR-0103): keyed and prefixed as the review panel is — its form and dialogs name
+          the market and the registration they were opened on. First of the panels: from the close
+          on, the judgement is what the market waits for. `readAt` judges 'before the scheduled
+          judgement' on the row as read; the detail re-reads a 잠정 결과 market at its dispute
+          deadline (`provisionalMarketPollDelay`), so its confirmation comes on screen by
+          itself. */}
+      <MarketJudgementPanel
+        key={`judgement-${data.id}`}
+        market={data}
+        readAt={market.dataUpdatedAt}
+      />
       {/* 검수 (#78, ADR-0099): keyed by the market, so a dialog held on one market's detail never
           names the next one a same-condition link opens on this route. Prefixed: a sibling below
           (RelatedMarketsPanel) is keyed by the id too, and two equal keys in one list leave the
@@ -243,12 +248,34 @@ export function AdminMarketDetail({ id }: { id: string }) {
               {data.openAt ? formatKst(data.openAt) : '—'}
             </Item>
             {/* YES·NO·무효, or '—' before a judgement and on a cancelled market (ADR-0093 decision 1,
-                item 10: a cancelled market has no result, never VOID). */}
+                item 10: a cancelled market has no result, never VOID) — from the 잠정 결과 on (#152:
+                the approved judgement's, ADR-0095 8-2). */}
             <Item label={copy.marketResolvedResult}>
               {data.resolvedResult === null ? '—' : MARKET_RESULT_LABEL[data.resolvedResult]}
             </Item>
+            {/* The current judgement's version and dispute deadline, fixed at its approval (#152,
+                #173 item 5); none for a market judged before #152. */}
+            {data.judgementVersion !== null && (
+              <Item
+                label={copy.adminMarketJudgementVersion}
+                testId="market-detail-judgement-version"
+              >
+                {judgementVersionName(data.judgementVersion)}
+              </Item>
+            )}
+            {data.disputeDeadline !== null && (
+              <Item
+                label={copy.adminMarketJudgementDeadline}
+                testId="market-detail-dispute-deadline"
+              >
+                {formatKst(data.disputeDeadline)}
+              </Item>
+            )}
+            {/* When the result was confirmed: the worker's at the dispute deadline since #152. */}
             {data.resolvedAt && (
-              <Item label={copy.marketResolvedAt}>{formatKst(data.resolvedAt)}</Item>
+              <Item label={copy.marketResolvedAt} testId="market-detail-resolved-at">
+                {formatKst(data.resolvedAt)}
+              </Item>
             )}
             {data.settledAt && (
               <Item label={copy.marketSettledAt}>{formatKst(data.settledAt)}</Item>
@@ -495,174 +522,22 @@ function SourceLine({ source }: { source: MarketSource }) {
 
 /**
  * 검수 제출 (#78, ADR-0099: `SubmitReviewButton`, the way a draft leaves for review and then, approved
- * by another admin, for 개장 예정), then 판정 (PLAN 12, design 3.4, ADR-0046). There is no 열기: a
- * market opens only from 개장 예정, by itself at its scheduled open, or at once when its approval or a
- * reschedule finds that time come (#21, ADR-0100; ADR-0093 decision 1 #173 item 1, decision 2 #172
- * item 6) — to open sooner an admin moves the scheduled open earlier (decision 3 '#21 앞당긴 개장').
- * There is no 마감: a market closes by itself at its close, or early once another admin approves a
- * paused market's early close (#114, ADR-0102; ADR-0093 decision 1 #173 items 2·4, decision 2 #172
- * item 14) — the 거래 일시 중단 panel below. There is no 무효: the admin void and its cost refund went
- * with #125 (N03 §6); VOID as a 판정 is #152's. The 판정 is a Dialog whose form lives in its own
- * component, mounted only while its dialog is open, so every opening starts from an empty form. A
- * judged market offers none: the 판정 is final. It is the interim action #174 keeps on the new
- * statuses (ADR-0047 result 3, ADR-0093 result 2) until #152, so a market in any status but 거래
- * 마감 offers none.
- *
- * It names the admin on screen (`useOperatorId`, ADR-0092), so the button that opens the dialog and
- * its confirmation wait for `GET /me`; the cookie of another account is refused
- * (`copy.sessionChanged`), the dialog closes and the session is asked again (`useSessionChanged`).
- * The open dialog is held for the admin who opened it (`useHeldForOperator`, ADR-0091 결정 3): once
- * `['me']` turns from A to B in place, before the session does (ADR-0090 결정 4-2), it closes with
- * the result picked and the note typed for A, which would otherwise be judged as B (ADR-0092,
- * owner decision 2026-10-26 17:21 answer 1).
+ * by another admin, for 개장 예정). There is no 열기: a market opens only from 개장 예정, by itself at its
+ * scheduled open, or at once when its approval or a reschedule finds that time come (#21, ADR-0100;
+ * ADR-0093 decision 1 #173 item 1, decision 2 #172 item 6) — to open sooner an admin moves the
+ * scheduled open earlier (decision 3 '#21 앞당긴 개장'). There is no 마감: a market closes by itself at
+ * its close, or early once another admin approves a paused market's early close (#114, ADR-0102;
+ * ADR-0093 decision 1 #173 items 2·4, decision 2 #172 item 14) — the 거래 일시 중단 panel below. There is
+ * no 판정 here: a closed market's judgement is registered by one admin and approved by another, and
+ * its result is confirmed by itself at the dispute deadline (#152, ADR-0103; #173 items 1·5) — the
+ * 판정 panel below. There is no 무효 either: the admin void and its cost refund went with #125 (N03
+ * §6), and a VOID is a judgement's result.
  */
 function TransitionButtons({ market }: { market: AdminMarket }) {
-  const operatorId = useOperatorId();
-  const [confirm, setConfirm] = useHeldForOperator<'resolve'>();
-  const closeDialog = () => {
-    setConfirm(null);
-  };
-
   return (
     <HStack gap="2" flexWrap="wrap">
       <SubmitReviewButton market={market} />
-      {canResolve(market.status) && (
-        <Button
-          size="sm"
-          disabled={operatorId === undefined}
-          onClick={() => setConfirm('resolve')}
-          data-testid="market-resolve"
-        >
-          {copy.adminMarketResolve}
-        </Button>
-      )}
-
-      {confirm === 'resolve' && <ResolveDialog market={market} onClose={closeDialog} />}
     </HStack>
-  );
-}
-
-/**
- * 판정 (PLAN 12 정산 화면, ADR-0046): result by radio, note, evidence URL, and the confirmation
- * that says what the click does — the result is final at once, settlement starts right away,
- * and no change is possible afterwards (VOID is #152's judgement, not this dialog's). A stale
- * screen (another admin judged it first) meets the API's `status` refusal, which
- * `transitionErrorMessage` names. The answer is applied like every other transition
- * (`useApplyMarket`), so the status, the result and the 정산 단계 rows above are the server's the
- * moment the toast shows, whatever the refetch does.
- */
-function ResolveDialog({ market, onClose }: { market: AdminMarket; onClose: () => void }) {
-  const apply = useApplyMarket(market.id);
-  const operatorId = useOperatorId();
-  const sessionChanged = useSessionChanged();
-  const {
-    control,
-    register,
-    handleSubmit,
-    formState: { errors },
-  } = useForm<ResolveMarketFormValues, unknown, ResolveMarketFormOutput>({
-    resolver: zodResolver(resolveMarketFormSchema),
-    defaultValues: { note: '', evidenceUrl: '' },
-  });
-
-  const resolve = useMutation({
-    mutationFn: async ({ values, by }: { values: ResolveMarketFormOutput; by: string }) =>
-      unwrap(
-        await api.POST('/api/v1/admin/markets/{id}/resolve', {
-          params: { path: { id: market.id } },
-          body: toResolveMarketBody(values, by),
-        }),
-      ).data,
-    onSuccess: async (resolved) => {
-      toaster.create({ type: 'success', title: copy.adminMarketResolved });
-      onClose();
-      await apply(resolved);
-    },
-    onError: (error) => {
-      // Another account's cookie judged nothing: the dialog closes with the toast (ADR-0092).
-      if (sessionChanged(error)) onClose();
-      toaster.create({ type: 'error', title: transitionErrorMessage(error) });
-    },
-  });
-
-  const submit = handleSubmit((values) => {
-    if (operatorId !== undefined) resolve.mutate({ values, by: operatorId });
-  });
-
-  return (
-    <ConfirmDialog
-      testId="market-resolve"
-      open
-      onClose={onClose}
-      title={copy.adminMarketResolveTitle}
-      confirmLabel={copy.adminMarketResolve}
-      loading={resolve.isPending}
-      confirmDisabled={operatorId === undefined}
-      onConfirm={() => void submit()}
-    >
-      <Stack gap="3">
-        <Text>{copy.adminMarketResolveBody}</Text>
-        <Field.Root invalid={!!errors.result} required>
-          <Controller
-            name="result"
-            control={control}
-            render={({ field }) => (
-              // The group's accessible name is its own Label part: zag emits `role="radiogroup"`
-              // with `aria-labelledby` pointing at that id, so a `Field.Label` here would leave
-              // the group unnamed.
-              <RadioGroup.Root
-                name={field.name}
-                value={field.value ?? null}
-                onValueChange={(details) => {
-                  if (details.value === 'YES' || details.value === 'NO')
-                    field.onChange(details.value);
-                }}
-                colorPalette="brand"
-              >
-                <RadioGroup.Label fontWeight="medium" mb="1">
-                  {copy.adminMarketResolveResult}
-                </RadioGroup.Label>
-                <HStack gap="6">
-                  {/* The test id rides on the Item — the label element that carries the hidden
-                      input — so a click on it is the click that selects. */}
-                  {OUTCOMES.map((outcome) => (
-                    <RadioGroup.Item
-                      key={outcome}
-                      value={outcome}
-                      data-testid={`market-resolve-${outcome.toLowerCase()}`}
-                    >
-                      <RadioGroup.ItemHiddenInput onBlur={field.onBlur} />
-                      <RadioGroup.ItemIndicator />
-                      <RadioGroup.ItemText>
-                        {outcome === 'YES' ? copy.yes : copy.no}
-                      </RadioGroup.ItemText>
-                    </RadioGroup.Item>
-                  ))}
-                </HStack>
-              </RadioGroup.Root>
-            )}
-          />
-          <Field.ErrorText>{errors.result?.message}</Field.ErrorText>
-        </Field.Root>
-        <Field.Root invalid={!!errors.note}>
-          <Field.Label>{copy.adminMarketResolveNote}</Field.Label>
-          <Textarea rows={3} data-testid="market-resolve-note" {...register('note')} />
-          <Field.ErrorText>{errors.note?.message}</Field.ErrorText>
-        </Field.Root>
-        <Field.Root invalid={!!errors.evidenceUrl}>
-          <Field.Label>{copy.adminMarketResolveEvidence}</Field.Label>
-          <Input
-            type="url"
-            inputMode="url"
-            autoComplete="off"
-            placeholder={copy.adminMarketResolveEvidencePlaceholder}
-            data-testid="market-resolve-evidence"
-            {...register('evidenceUrl')}
-          />
-          <Field.ErrorText>{errors.evidenceUrl?.message}</Field.ErrorText>
-        </Field.Root>
-      </Stack>
-    </ConfirmDialog>
   );
 }
 

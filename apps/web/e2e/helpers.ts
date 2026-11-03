@@ -18,11 +18,13 @@ import type {
   MarketPausePath,
   MarketPauseReason,
   MarketPauseReviewResult,
+  MarketResult,
   MarketReviewChecklistItem,
   MarketRuleItems,
   MarketSupplementChanges,
   MarketTimes,
   Me,
+  ReleaseSetting,
 } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { E2E_CONSENT_VERSIONS } from './consent-versions';
@@ -43,7 +45,10 @@ import { E2E_CONSENT_VERSIONS } from './consent-versions';
  * it for review and the second approves it (`openThroughReview`). So in every rule supplement
  * since #80: the first asks for it and the second approves it (`approveSupplementAsReviewer`). And
  * in every early close since #114, the one way to close a market before its close: the first
- * pauses it and asks for the 조기 마감, the second approves it (`closeMarket`).
+ * pauses it and asks for the 조기 마감, the second approves it (`closeMarket`). And in every
+ * judgement since #152: the first registers it and the second approves it, which publishes the
+ * 잠정 결과 (`judgeMarket`); the worker confirms it once its dispute window — the release setting
+ * the suite's global setup enters while it is 미정 (global-setup.ts) — has passed.
  *
  * Everything here is re-runnable against a persistent local database: a fresh email per
  * sign-up, a random tag in every market title and slug.
@@ -194,6 +199,14 @@ async function signInSeedAdmin(context: APIRequestContext, admin: SeedAdmin): Pr
 }
 
 /**
+ * Signs `context` in as the first seed admin, onboarded (`signInSeedAdmin`): the `admin` fixture's
+ * account, for the suite's global setup (global-setup.ts), which runs before any fixture does.
+ */
+export function signInFirstSeedAdmin(context: APIRequestContext): Promise<void> {
+  return signInSeedAdmin(context, FIRST_ADMIN);
+}
+
+/**
  * Takes a seed admin through whatever is left of its onboarding (#58): the consent, the 본인확인 and
  * the nickname step (`chooseSeedAdminNickname`). Workers running in parallel share the two admins,
  * and every step but the 본인확인 is safe to repeat (the same consent answers are not written again,
@@ -291,7 +304,8 @@ async function chooseSeedAdminNickname(
 
 /**
  * The reviewer each `admin` context goes with (`test`'s fixtures), for `approveAsReviewer`,
- * `approveSupplementAsReviewer` and `approvePauseDecisionAsReviewer`.
+ * `approveSupplementAsReviewer`, `approvePauseDecisionAsReviewer` and
+ * `approveJudgementAsReviewer`.
  */
 const reviewers = new WeakMap<APIRequestContext, APIRequestContext>();
 
@@ -305,10 +319,12 @@ const reviewers = new WeakMap<APIRequestContext, APIRequestContext>();
  * `admin` submits, so `createOpenMarket(admin)` can open a market without every test that wants
  * one asking for a second admin (#21 — a market opens only through the review, which its creator
  * and its submitter never decide, #172 item 5), what `admin` asks to supplement (#80 — its
- * requester never decides a supplement, #172 item 15) and the next path `admin` asks for a paused
- * market (#114 — its requester never decides it, #173 item 2). `admin` depends on it and is paired
- * with it here (`reviewers`); a spec that acts as the second admin itself asks for `secondAdmin`.
- * Worker-scoped fixtures see no test-scoped `baseURL`, so it reads the project's.
+ * requester never decides a supplement, #172 item 15), the next path `admin` asks for a paused
+ * market (#114 — its requester never decides it, #173 item 2) and the judgement `admin` registers
+ * (#152 — its registrant neither approves nor rejects it, ADR-0093 decision 3 '역할'). `admin`
+ * depends on it and is paired with it here (`reviewers`); a spec that acts as the second admin
+ * itself asks for `secondAdmin`. Worker-scoped fixtures see no test-scoped `baseURL`, so it reads
+ * the project's.
  */
 export const test = base.extend<
   { admin: APIRequestContext; secondAdmin: APIRequestContext },
@@ -2018,6 +2034,374 @@ async function closedOnSchedule(
   return market;
 }
 
+// ---- 이의 기간 (#152, 출시 설정) ----------------------------------------------------------
+
+/**
+ * The release setting a judgement's approval reads its dispute window from (#152, ADR-0103;
+ * `DISPUTE_WINDOW_SETTING`, restated: these specs import only types from `@buddha/shared`) — whole
+ * minutes, one value for every market, fixed on each market as its 잠정 결과 is published (ADR-0093
+ * decision 1 #173 item 5).
+ */
+export const DISPUTE_WINDOW_KEY = 'market.dispute_window';
+
+/**
+ * The dispute window the suite enters while the setting is 미정 (`ensureDisputeWindow`): the
+ * shortest the setting takes, so a spec that waits for the worker's confirmation waits a minute.
+ */
+export const E2E_DISPUTE_WINDOW_MINUTES = 1;
+
+/** Why the suite entered it, as the change record keeps it (1..500 characters). */
+const E2E_DISPUTE_WINDOW_REASON = 'e2e: 짧은 이의 기간';
+
+/**
+ * The longest dispute window a spec waits out (`skipUnlessResolvable`): a database where someone
+ * entered a longer one — the design proposal's 1,440, say — has its confirmations left to the API's
+ * and the worker's integration tests rather than holding a test for hours.
+ */
+const QUICK_DISPUTE_WINDOW_MAX_MINUTES = 2;
+
+/** The skip a spec that needs the worker gives when the config has no worker probe to wait on. */
+const NO_WORKER_PROBE = 'WORKER_HEALTH_PORT=0: no worker probe; the suite cannot wait for a worker';
+
+/**
+ * The dispute window as `context`'s admin reads it through `GET /admin/release-settings`: its
+ * minutes whatever the status (설계 제안, 시험값 and 승인됨 alike are used, ADR-0103), or null while
+ * it is 미정 — when a judgement can be neither registered nor approved.
+ */
+export async function disputeWindowMinutes(context: APIRequestContext): Promise<number | null> {
+  const items = await unwrap<ReleaseSetting[]>(await context.get('/api/v1/admin/release-settings'));
+  const item = items.find((entry) => entry.key === DISPUTE_WINDOW_KEY);
+  if (item === undefined) throw new Error(`no release setting ${DISPUTE_WINDOW_KEY} is registered`);
+  return item.status === 'undecided' || typeof item.value !== 'number' ? null : item.value;
+}
+
+/**
+ * Makes sure the dispute window has a value, for the suite's global setup (global-setup.ts):
+ * while it is 미정, `context`'s admin enters E2E_DISPUTE_WINDOW_MINUTES as a 시험값 with its reason;
+ * a value already there — a run before this one, or a developer's — is left as it is. Safe to run
+ * twice at once: the second change of the same status and value is refused as unchanged
+ * (docs/SETTINGS.md), so any refusal is read again before it fails the run. Returns the minutes in
+ * force.
+ */
+export async function ensureDisputeWindow(context: APIRequestContext): Promise<number> {
+  const before = await disputeWindowMinutes(context);
+  if (before !== null) return before;
+  const entered = await context.patch(`/api/v1/admin/release-settings/${DISPUTE_WINDOW_KEY}`, {
+    data: {
+      status: 'test',
+      value: E2E_DISPUTE_WINDOW_MINUTES,
+      reason: E2E_DISPUTE_WINDOW_REASON,
+      expectedAccountId: await accountIdOf(context),
+    },
+  });
+  if (entered.ok()) return E2E_DISPUTE_WINDOW_MINUTES;
+  const after = await disputeWindowMinutes(context);
+  if (after !== null) return after;
+  throw new Error(
+    `entering ${DISPUTE_WINDOW_KEY} failed (${String(entered.status())}): ${await entered.text()}`,
+  );
+}
+
+/**
+ * Skips the test, before it makes anything, unless it can wait for the worker to confirm a 잠정 결과
+ * (#152): a worker probe to wait on (`workerProbeDisabled`), and a dispute window of at most
+ * QUICK_DISPUTE_WINDOW_MAX_MINUTES — the one the global setup enters, unless the database holds
+ * another.
+ */
+export async function skipUnlessResolvable(admin: APIRequestContext): Promise<void> {
+  test.skip(workerProbeDisabled(), NO_WORKER_PROBE);
+  const minutes = await disputeWindowMinutes(admin);
+  test.skip(
+    minutes === null || minutes > QUICK_DISPUTE_WINDOW_MAX_MINUTES,
+    `${DISPUTE_WINDOW_KEY} is ${minutes === null ? '미정' : `${String(minutes)}분`}: a spec waits ` +
+      `out ${String(QUICK_DISPUTE_WINDOW_MAX_MINUTES)}분 at most (global-setup.ts enters ` +
+      `${String(E2E_DISPUTE_WINDOW_MINUTES)}분 while it is 미정)`,
+  );
+}
+
+// ---- 판정 (#152) ---------------------------------------------------------------------------
+
+/**
+ * What every helper registration says was confirmed (1..500 characters) — the request's reason,
+ * the admins' alone until #24's public record.
+ */
+export const HELPER_JUDGEMENT_DESCRIPTION =
+  '자동화 테스트의 판정입니다. 1차 출처의 발표를 확인했습니다.';
+
+/** The 무효 사유 a helper registration of 무효 gives unless told otherwise (1..500 characters). */
+export const HELPER_JUDGEMENT_VOID_REASON =
+  '자동화 테스트의 무효 판정입니다. 규칙의 무효 처리를 따릅니다.';
+
+/** The reason every helper approval of a judgement gives (1..500 characters). */
+const HELPER_JUDGEMENT_APPROVAL_REASON = '등록한 출처와 증거, NO 조건의 사건 기한을 확인했습니다.';
+
+/**
+ * How long past a 잠정 결과's dispute deadline a spec waits for the worker to confirm it: the
+ * delayed `market.resolve` job at the deadline, or the per-minute `market-resolve-scan` behind it
+ * should the job be lost — a whole minute — with room for a loaded box.
+ */
+const RESOLVE_AFTER_DEADLINE_MS = 90_000;
+
+export interface JudgementOptions {
+  /** The result: YES unless given. */
+  result?: MarketResult;
+  /**
+   * The source by its priority (0 the 1차 출처, 1.. the 대체 출처): the 1차 출처 unless given, and
+   * none (`null`) for 무효 — which alone may name none (ADR-0093 decision 3 '판정 출처').
+   */
+  source?: { priority: number } | null;
+  /** Why the 1차 출처 could not be used, which a 대체 출처 needs: null unless given. */
+  fallbackReason?: string | null;
+  /** The 무효 사유, which 무효 needs: HELPER_JUDGEMENT_VOID_REASON for 무효 unless given, else null. */
+  voidReason?: string | null;
+  /** The evidence links (1..5): `judgementEvidenceLink(marketId)` alone unless given. */
+  links?: string[];
+  /** When the evidence was collected (ISO): five minutes ago unless given. */
+  collectedAt?: string;
+  /** What was confirmed: HELPER_JUDGEMENT_DESCRIPTION unless given. */
+  description?: string;
+}
+
+/** An evidence link of a spec's judgement: https, under the market's own path, `n` apart. */
+export function judgementEvidenceLink(marketId: string, n = 1): string {
+  return `https://example.com/e2e/evidence/${marketId}/${String(n)}`;
+}
+
+/**
+ * 판정 등록 (#152, ADR-0103; ADR-0093 decision 3 the #152 rows) through
+ * `POST /admin/markets/:id/judgements` as the admin `context` is signed in as (ADR-0092): the
+ * answer as it came, for a spec that reads a refusal. The body is `options` over a YES on the 1차
+ * 출처 with one evidence link — no market price, volume or majority goes in it (#152 AC 8).
+ */
+export async function sendJudgementRegistration(
+  context: APIRequestContext,
+  marketId: string,
+  options: JudgementOptions = {},
+): Promise<APIResponse> {
+  const result = options.result ?? 'YES';
+  const isVoid = result === 'VOID';
+  return context.post(`/api/v1/admin/markets/${marketId}/judgements`, {
+    data: {
+      result,
+      source: options.source !== undefined ? options.source : isVoid ? null : { priority: 0 },
+      fallbackReason: options.fallbackReason ?? null,
+      voidReason:
+        options.voidReason !== undefined
+          ? options.voidReason
+          : isVoid
+            ? HELPER_JUDGEMENT_VOID_REASON
+            : null,
+      evidence: {
+        links: options.links ?? [judgementEvidenceLink(marketId)],
+        collectedAt: options.collectedAt ?? new Date(Date.now() - 5 * MINUTE_MS).toISOString(),
+      },
+      description: options.description ?? HELPER_JUDGEMENT_DESCRIPTION,
+      expectedAccountId: await accountIdOf(context),
+    },
+  });
+}
+
+/**
+ * `sendJudgementRegistration` as `admin`, which must be taken: the market as the registration
+ * left it — still CLOSED, nothing published (#173 item 1) — with the registration in
+ * `judgement.pending`, what `approveJudgementAsReviewer` decides. The market must be CLOSED, the
+ * dispute window decided and no other registration waiting.
+ */
+export async function registerJudgement(
+  admin: APIRequestContext,
+  marketId: string,
+  options: JudgementOptions = {},
+): Promise<AdminMarket> {
+  const registered = await unwrap<AdminMarket>(
+    await sendJudgementRegistration(admin, marketId, options),
+  );
+  if (registered.judgement.pending === null) {
+    throw new Error(`market ${marketId} has no waiting judgement after its registration`);
+  }
+  return registered;
+}
+
+/**
+ * `POST /admin/markets/:id/judgements/:requestId/<decision>` as the admin `context` is signed in
+ * as (ADR-0092), the answer as it came: 승인 takes `{reason, eventDeadlineConfirmed}`, 반려
+ * `{reason}`, 철회 nothing.
+ */
+export async function sendJudgementDecision(
+  context: APIRequestContext,
+  marketId: string,
+  requestId: string,
+  decision: 'approve' | 'reject' | 'retract',
+  body: Record<string, unknown> = {},
+): Promise<APIResponse> {
+  return context.post(`/api/v1/admin/markets/${marketId}/judgements/${requestId}/${decision}`, {
+    data: { ...body, expectedAccountId: await accountIdOf(context) },
+  });
+}
+
+/** The id of the registration waiting on a market as `context` reads it; throws when none waits. */
+async function pendingJudgementOf(context: APIRequestContext, marketId: string): Promise<string> {
+  const market = await unwrap<AdminMarket>(await context.get(`/api/v1/admin/markets/${marketId}`));
+  const pending = market.judgement.pending?.requestId;
+  if (pending === undefined) throw new Error(`no judgement waits on market ${marketId}`);
+  return pending;
+}
+
+/**
+ * 승인 (#152; #173 item 1) of the registration waiting on a market, as the second seed admin
+ * `admin` was handed with (`test`'s `reviewer`) — any admin but its registrant decides it — with a
+ * reason and the confirmation of the NO condition's event deadline, which an approval before the
+ * scheduled judgement needs (decision 3 '등록 시점') and every spec market's comes before (its
+ * scheduled judgement is days out, `timesFor`), naming the waiting registration (`requestId`, read
+ * when not given). The answer is the market PROVISIONAL with its result, judgement v1 and the
+ * dispute deadline the window fixed; the approval publishes `market:status`.
+ */
+export async function approveJudgementAsReviewer(
+  admin: APIRequestContext,
+  marketId: string,
+  requestId?: string,
+): Promise<AdminMarket> {
+  const reviewer = reviewerOf(admin);
+  const pending = requestId ?? (await pendingJudgementOf(reviewer, marketId));
+  return unwrap<AdminMarket>(
+    await sendJudgementDecision(reviewer, marketId, pending, 'approve', {
+      reason: HELPER_JUDGEMENT_APPROVAL_REASON,
+      eventDeadlineConfirmed: true,
+    }),
+  );
+}
+
+/**
+ * 철회 (#152) of the registration waiting on a market by its registrant `admin`, in any status. The
+ * answer is the market with no registration waiting and its status as it was.
+ */
+export async function retractJudgement(
+  admin: APIRequestContext,
+  marketId: string,
+  requestId?: string,
+): Promise<AdminMarket> {
+  const pending = requestId ?? (await pendingJudgementOf(admin, marketId));
+  return unwrap<AdminMarket>(await sendJudgementDecision(admin, marketId, pending, 'retract'));
+}
+
+/**
+ * Retracts the registration `context`'s admin left waiting on a market, so a run that failed
+ * halfway leaves the 판정 승인 대기 list of a persistent database no longer (a waiting registration
+ * never expires). Best effort, for a `finally`: nothing when none waits, or when another admin
+ * registered it.
+ */
+export async function leaveNoJudgement(
+  context: APIRequestContext,
+  marketId: string,
+): Promise<void> {
+  await retractJudgement(context, marketId).catch(() => undefined);
+}
+
+/**
+ * 판정 of a CLOSED market, the one way there is since #152 (ADR-0103; ADR-0093 decision 1 #173
+ * items 1·9 — the interim one-admin `POST /admin/markets/:id/resolve` is gone): `admin` registers
+ * `result` on the 1차 출처 (무효 on none, with its reason) and the second seed admin approves it
+ * (`approveJudgementAsReviewer`). The answer is the market PROVISIONAL — its 잠정 결과 public at once
+ * — and the worker confirms it once its dispute deadline passes (`waitForResolved`). The API, not
+ * the UI: judgement.spec.ts walks the screens. A 무효 judged here goes on, once confirmed, to stay
+ * 지급 중 with a failed step until #126 pays 무효 (ADR-0103) — on a database kept between runs, so
+ * the specs leave a 무효 judgement at its registration. Retracts what it left waiting on a failure.
+ */
+export async function judgeMarket(
+  admin: APIRequestContext,
+  marketId: string,
+  result: MarketResult = 'YES',
+): Promise<AdminMarket> {
+  try {
+    const registered = await registerJudgement(admin, marketId, { result });
+    const judged = await approveJudgementAsReviewer(
+      admin,
+      marketId,
+      registered.judgement.pending?.requestId,
+    );
+    expect(judged.status).toBe('provisional');
+    return judged;
+  } catch (error) {
+    await leaveNoJudgement(admin, marketId);
+    throw error;
+  }
+}
+
+/**
+ * How long a spec waits, from now, for the worker to confirm `market`'s 잠정 결과: until its
+ * dispute deadline (`AdminMarket.disputeDeadline`, fixed at the approval) and
+ * RESOLVE_AFTER_DEADLINE_MS past it. Throws for a market with no deadline: none is PROVISIONAL.
+ */
+export function resolveWaitMs(
+  market: Pick<AdminMarket, 'id' | 'disputeDeadline'>,
+  now: number = Date.now(),
+): number {
+  if (market.disputeDeadline === null) {
+    throw new Error(`market ${market.id} has no dispute deadline: it is no 잠정 결과`);
+  }
+  return Math.max(0, Date.parse(market.disputeDeadline) - now) + RESOLVE_AFTER_DEADLINE_MS;
+}
+
+/**
+ * Waits, polling the admin detail through the API, until the worker has confirmed the 잠정 결과
+ * of a market (`judgeMarket`) — PROVISIONAL → RESOLVED at its dispute deadline (#173 item 1), and
+ * from there on to 지급 중 and 지급 완료 at once — and answers the market as it then reads. Skips
+ * the test when that cannot be waited for (`skipUnlessResolvable`): a spec calls that before it
+ * makes anything, so this is a backstop.
+ */
+export async function waitForResolved(
+  admin: APIRequestContext,
+  marketId: string,
+): Promise<AdminMarket> {
+  await skipUnlessResolvable(admin);
+  const read = async () =>
+    unwrap<AdminMarket>(await admin.get(`/api/v1/admin/markets/${marketId}`));
+  let market = await read();
+  if (market.status === 'provisional') {
+    await expect
+      .poll(
+        async () => {
+          market = await read();
+          return market.status;
+        },
+        {
+          message: `market ${marketId} is not confirmed after ${String(market.disputeDeadline)}`,
+          timeout: resolveWaitMs(market),
+          intervals: [1_000],
+        },
+      )
+      .not.toBe('provisional');
+  }
+  expect(['resolved', 'settling', 'settled']).toContain(market.status);
+  return market;
+}
+
+/**
+ * `waitForResolved`, then the worker's payout (ADR-0046): the market as it reads 지급 완료. Only
+ * for a YES or NO result — a 무효 one stays 지급 중 until #126.
+ */
+export async function waitForSettled(
+  admin: APIRequestContext,
+  marketId: string,
+): Promise<AdminMarket> {
+  let market = await waitForResolved(admin, marketId);
+  if (market.status !== 'settled') {
+    await expect
+      .poll(
+        async () => {
+          market = await unwrap<AdminMarket>(await admin.get(`/api/v1/admin/markets/${marketId}`));
+          return market.status;
+        },
+        {
+          message: `market ${marketId} is not settled`,
+          timeout: SETTLEMENT_WAIT_MS,
+          intervals: [1_000],
+        },
+      )
+      .toBe('settled');
+  }
+  return market;
+}
+
 /**
  * The category a spec's market is filed under for `topLevelCategory` (`CreateOpenMarketOptions`):
  * that top-level category's first sub-category in display order, or the category itself when it
@@ -2148,19 +2532,22 @@ export function detailCopyTestId(page: Page, testId: string): string {
 }
 
 /**
- * How long a spec waits for a judged market to read 지급 완료 (ADR-0046). There is no window to
- * wait out any more: the 판정 queues `market.finalize` with no delay and the worker settles in
- * well under a second, so this is room for a cold worker and a loaded CI box — not for the
- * per-minute safety-net scan, which only matters when the job could not be queued at all.
+ * How long a spec waits for a confirmed market to read 지급 완료 (ADR-0046), counted from its
+ * confirmation: the worker that confirms the 잠정 결과 at its dispute deadline queues
+ * `market.finalize` with no delay (#152, ADR-0103) and settles in well under a second, so this is
+ * room for a cold worker and a loaded CI box — not for the per-minute safety-net scan, which only
+ * matters when the job could not be queued at all. The dispute window itself is waited out first
+ * (`resolveWaitMs`).
  */
 export const SETTLEMENT_WAIT_MS = 30_000;
 
 /**
  * True when the worker's health listener is switched off (`WORKER_HEALTH_PORT=0`, worker env.ts),
- * which is when playwright.config.ts lists no worker to wait for. A spec that needs the
- * `market.finalize` job then has nothing to tell it a worker is up, so it skips rather than wait
- * for a job nobody may be running. Read from `process.env` here, not in the config: the config
- * loaded the root `.env` into the runner, and Playwright passes that environment to its workers.
+ * which is when playwright.config.ts lists no worker to wait for. A spec that needs a worker's job
+ * — `market.open`, `market.close`, `market.resolve` or `market.finalize` — then has nothing to tell
+ * it a worker is up, so it skips rather than wait for a job nobody may be running. Read from
+ * `process.env` here, not in the config: the config loaded the root `.env` into the runner, and
+ * Playwright passes that environment to its workers.
  */
 export function workerProbeDisabled(): boolean {
   return process.env.WORKER_HEALTH_PORT === '0';

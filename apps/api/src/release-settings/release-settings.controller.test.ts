@@ -11,6 +11,7 @@ import { schema } from '@buddha/db';
 import { completeOnboarding } from '@buddha/db/test';
 import {
   CONSENT_RECORDS_RETENTION_SETTING,
+  DISPUTE_WINDOW_SETTING,
   JSONB_LONE_SURROGATE_MESSAGE,
   JSONB_NUL_MESSAGE,
   LEAD_CLOSE_GAP_SETTING,
@@ -625,11 +626,12 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
     await t.app.get(AdminGuard).invalidate(admin.id);
   });
 
-  it('lists the start grant amount (#70), the lead-close gap (#22) and the retention periods (#184), undecided until an admin enters a value', async () => {
+  it('lists the start grant amount (#70), the lead-close gap (#22), the dispute window (#152) and the retention periods (#184), undecided until an admin enters a value', async () => {
     const retention = Object.values(RETENTION_PERIOD_SETTINGS);
     expect([...RELEASE_SETTINGS.keys()]).toEqual([
       START_COIN_SETTING.key,
       LEAD_CLOSE_GAP_SETTING.key,
+      DISPUTE_WINDOW_SETTING.key,
       ...retention.map((definition) => definition.key),
     ]);
     const res = await t.app.inject({
@@ -663,6 +665,22 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
         valueSchema: expect.objectContaining({
           type: 'integer',
           minimum: 0,
+          maximum: 10_080,
+        }) as unknown,
+        status: 'undecided',
+        value: null,
+        updatedAt: null,
+        updatedBy: null,
+      },
+      {
+        key: 'market.dispute_window',
+        label: '이의 기간',
+        unit: '분',
+        description: DISPUTE_WINDOW_SETTING.description,
+        // Whole minutes, one (never confirmed at its publication) to a week (ADR-0103).
+        valueSchema: expect.objectContaining({
+          type: 'integer',
+          minimum: 1,
           maximum: 10_080,
         }) as unknown,
         status: 'undecided',

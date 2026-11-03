@@ -96,8 +96,9 @@ export const MARKET_STATUS_LABEL: Record<MarketStatus, string> = {
  * 11.2). ADR-0093 sets no colours, so these keep the old meanings (#174's choice):
  * - `brand` while it trades: OPEN alone.
  * - `orange` while it waits for something to happen to it — a time (SCHEDULED opens, PAUSED still
- *   closes on schedule), the admin (CLOSED waits for the 판정, PROVISIONAL for its confirmation)
- *   or the worker (RESOLVED and SETTLING for the payout).
+ *   closes on schedule, PROVISIONAL is confirmed at its dispute deadline, #152), the admins (CLOSED
+ *   waits for the 판정 and another admin's approval) or the worker (RESOLVED and SETTLING for the
+ *   payout).
  * - `gray` when nothing is coming: over (SETTLED, CANCELLED), or not public yet (DRAFT, REVIEW),
  *   which is where a draft always was.
  *
@@ -136,6 +137,9 @@ export const MARKET_RESULT_LABEL: Record<MarketResult, string> = {
  * 검수 기록's names too (lib/market-review.ts). 규칙 수정 is a draft's since #80; after the open the
  * rules change by an approved supplement alone, which writes 규칙 보충 (ADR-0101). 일시 중단 and 재개
  * are #114's (ADR-0102); its approved early close is a `closed` event, named by `marketEventLabel`.
+ * 잠정 결과 공개 and 결과 확정 are #152's (ADR-0103): the approved judgement's CLOSED → PROVISIONAL, and
+ * the worker's PROVISIONAL → RESOLVED at the dispute deadline — named, as the payout's two, by the
+ * status each leads to; a `resolved` row written before #152 is the one-admin 판정, final at once.
  */
 export const MARKET_EVENT_LABEL: Record<MarketEventType, string> = {
   created: copy.eventCreated,
@@ -146,6 +150,7 @@ export const MARKET_EVENT_LABEL: Record<MarketEventType, string> = {
   open_rescheduled: copy.eventOpenRescheduled,
   opened: copy.eventOpened,
   closed: copy.eventClosed,
+  provisional: copy.eventProvisional,
   resolved: copy.eventResolved,
   settling: copy.eventSettling,
   finalized: copy.eventFinalized,
@@ -261,7 +266,11 @@ export function isClosingSoon(
   return closeAt > now && closeAt - now <= CLOSING_SOON_MS;
 }
 
-/** 판정 대기 (ADR-0046): trading has stopped and the market waits for the admin's 판정. */
+/**
+ * 판정 대기 (ADR-0046): trading has stopped and the market waits for its 판정 — registered by one
+ * admin and approved by another since #152 (ADR-0103); the detail's 판정 panel says which step it
+ * waits for. A PROVISIONAL market waits for its dispute deadline instead, which that panel shows.
+ */
 export function isAwaitingResolution(status: MarketStatus): boolean {
   return status === 'closed';
 }
@@ -269,7 +278,8 @@ export function isAwaitingResolution(status: MarketStatus): boolean {
 /**
  * 정산 대기 (ADR-0046): the result is confirmed and the worker's settlement steps have not all
  * finished — `resolved` until the worker starts the payout, `settling` while it runs (ADR-0093
- * decision 1, items 1 and 14). The worker runs them right after the 판정, so this lasts seconds;
+ * decision 1, items 1 and 14). The worker runs them right after it confirms the result at the
+ * dispute deadline (#152), so this lasts seconds;
  * a market that keeps the badge is the operational signal that a step is failing (the detail's
  * 정산 단계 panel says which), which leaves it in `settling`.
  */
@@ -284,7 +294,7 @@ export const SETTLEMENT_POLL_INTERVAL_MS = 5_000;
  * `refetchInterval` of the admin detail: every 5 s while the market is `resolved` or `settling`
  * (`isAwaitingSettlement`). Nothing else tells this screen that the worker finished or failed a
  * step — the admin query joins no realtime room, and a failed attempt publishes nothing at all —
- * so without it the 정산 단계 panel keeps the `pending` row the 판정 answered with until a
+ * so without it the 정산 단계 panel keeps the `pending` row the confirmation wrote until a
  * reload. Not budgeted like the 결제 내역 poll (payments.ts): a failing step is retried by the
  * worker's per-minute scan, and this panel is where an operator watches those attempts.
  * query-core pauses the interval while the tab is hidden, and it stops by itself at `settled`.
@@ -362,20 +372,54 @@ export function tradingMarketPollDelay(
   return Math.max(1, Math.min(untilClose, MAX_TIMEOUT_MS));
 }
 
+/** How often the admin detail re-reads a 잠정 결과 market past its dispute deadline until confirmed. */
+export const PROVISIONAL_DEADLINE_POLL_MS = 5_000;
+
+/**
+ * The admin detail's re-read of a 잠정 결과 market (#152, ADR-0103), from the clock `now`. Nothing
+ * else tells this screen that the worker confirmed it — PROVISIONAL → RESOLVED at its dispute
+ * deadline (`AdminMarket.disputeDeadline`, fixed at the approval, ADR-0093 decision 1 #173 items
+ * 1·5) — the admin query joins no realtime room, so the detail reads it again at the deadline and
+ * every PROVISIONAL_DEADLINE_POLL_MS after it until it is no longer PROVISIONAL (the job confirms
+ * it at once, the per-minute scan within a minute, a stopped worker when it is back; #175's
+ * disputes and #176's corrections will hold it). Past the deadline the delay is the poll, never 0
+ * — which query-core takes for no interval — so a failed read does not refire at once. False for
+ * any other status or a missing or unreadable deadline; capped at MAX_TIMEOUT_MS, the next read
+ * waiting again.
+ */
+export function provisionalMarketPollDelay(
+  market: { status: MarketStatus; disputeDeadline: string | null } | undefined,
+  now: number = Date.now(),
+): number | false {
+  if (market?.status !== 'provisional' || market.disputeDeadline === null) return false;
+  const deadline = new Date(market.disputeDeadline).getTime();
+  if (Number.isNaN(deadline)) return false;
+  const untilDeadline = deadline - now;
+  if (untilDeadline <= 0) return PROVISIONAL_DEADLINE_POLL_MS;
+  return Math.max(1, Math.min(untilDeadline, MAX_TIMEOUT_MS));
+}
+
 /**
  * `refetchInterval` of the admin detail (`useAdminMarket`), from the query's state: the settlement
- * poll for a judged market (`settlementPollInterval`), the 개장 예정 re-reads
- * (`scheduledMarketPollDelay` at the row's `dataUpdatedAt`), and the close's re-read of a market
- * OPEN or PAUSED (`tradingMarketPollDelay`, #114).
+ * poll for a market whose result is confirmed (`settlementPollInterval`), the 개장 예정 re-reads
+ * (`scheduledMarketPollDelay` at the row's `dataUpdatedAt`), the close's re-read of a market OPEN
+ * or PAUSED (`tradingMarketPollDelay`, #114) and the dispute deadline's of a 잠정 결과 market
+ * (`provisionalMarketPollDelay`, #152).
  */
 export function adminMarketPollInterval(state: {
-  data?: { status: MarketStatus; scheduledOpenAt: string | null; closeAt: string };
+  data?: {
+    status: MarketStatus;
+    scheduledOpenAt: string | null;
+    closeAt: string;
+    disputeDeadline: string | null;
+  };
   dataUpdatedAt: number;
 }): number | false {
   return (
     settlementPollInterval(state.data) ||
     scheduledMarketPollDelay(state.data, state.dataUpdatedAt) ||
-    tradingMarketPollDelay(state.data)
+    tradingMarketPollDelay(state.data) ||
+    provisionalMarketPollDelay(state.data)
   );
 }
 
@@ -397,15 +441,6 @@ export function editsAfterOpen(status: MarketStatus): boolean {
  */
 export function isEditable(status: MarketStatus): boolean {
   return status === 'draft' || editsAfterOpen(status);
-}
-
-/**
- * 판정 (PLAN 12, ADR-0046): a closed market only, once. The result is final at once; there is no
- * way to change it afterwards. The interim edge closed → resolved until #152 replaces it with a
- * judgement another admin approves (ADR-0093 result 2).
- */
-export function canResolve(status: MarketStatus): boolean {
-  return status === 'closed';
 }
 
 /** One row of the admin's 정산 단계 panel, every cell already in words. */
@@ -559,9 +594,9 @@ export interface EventRow {
 const kstInstant = z.string().refine((iso) => formatKst(iso) !== '');
 
 /**
- * The payloads `market-admin.service` (and the worker's `market-finalize`) write for each
+ * The payloads the API (and the worker's `market-resolve` and `market-finalize`) write for each
  * event, as the web reads them. `.nullish()` where the writer may omit or null a field: the
- * 판정 detail nulls a blank note.
+ * one-admin 판정 before #152 nulled a blank note.
  */
 // The rules text a `rules_edited` row written before #23 holds, before and after the edit.
 const LEGACY_RULES_EDITED_PAYLOAD = z.object({ before: z.string(), after: z.string() });
@@ -653,16 +688,35 @@ function reviewResultRows(reviewResult: MarketPauseReviewResult | null): EventRo
 }
 /** The worker's resolved → settling (#174): `{source: 'job'}`, which the 시스템 actor already says. */
 const SETTLING_PAYLOAD = z.object({ source: z.string() });
-const RESOLVE_DETAIL = {
+/**
+ * 잠정 결과 공개 (#152, ADR-0103: closed → provisional, the actor the approver): the judgement
+ * version the approval published, its result and the dispute deadline it fixed. The approved
+ * request and its registrant are ids, which no row of this log prints: the detail's 판정 panel
+ * shows them, the registrant by nickname (ADR-0101 9-11's way).
+ */
+const PROVISIONAL_PAYLOAD = z.object({
+  version: z.number().int().min(1),
+  result: marketResultSchema,
+  disputeDeadline: kstInstant,
+});
+/**
+ * 결과 확정 since #152 (provisional → resolved, the worker at the dispute deadline): the version
+ * confirmed and its result; its `source` ('deadline') is what the 시스템 actor already says.
+ */
+const RESOLVED_BY_DEADLINE_PAYLOAD = z.object({
+  version: z.number().int().min(1),
+  result: marketResultSchema,
+});
+/**
+ * 결과 확정 before #152 (ADR-0046: the one-admin 판정, closed → resolved at once): `{result, note,
+ * evidenceUrl}`, YES or NO — read as the stored result type, so a VOID reads 무효 rather than
+ * falling back to JSON. Nothing writes it now; old rows keep it.
+ */
+const INTERIM_RESOLVED_PAYLOAD = z.object({
+  result: marketResultSchema,
   note: z.string().nullish(),
   evidenceUrl: z.string().nullish(),
-};
-/**
- * The 판정 (ADR-0046): `{result, note, evidenceUrl}`. The result is the stored result type
- * (YES·NO·VOID, #174), so a row that carries VOID reads 무효 rather than falling back to JSON —
- * though the interim 판정 writes YES or NO alone until #152.
- */
-const RESOLVED_PAYLOAD = z.object({ result: marketResultSchema, ...RESOLVE_DETAIL });
+});
 // The counts and the total are what the worker writes today; optional so an older row (or a
 // leaner writer) still reads as "지급 완료 · 결과 YES" rather than falling back to JSON.
 const FINALIZED_PAYLOAD = z.object({
@@ -672,15 +726,20 @@ const FINALIZED_PAYLOAD = z.object({
   paidCoin: coinAmountSchema.optional(),
 });
 
-/** The note / evidence rows the resolve events share; blanks are left out. */
-function resolveDetailRows(detail: {
+/** A judgement version as the rows name it ('v1', the rule versions' way). */
+export function judgementVersionName(version: number): string {
+  return ruleVersionName(version);
+}
+
+/** The one-admin 판정's note and evidence rows (before #152); blanks are left out. */
+function interimResolveRows(detail: {
   note?: string | null;
   evidenceUrl?: string | null;
 }): EventRow[] {
   return [
-    ...(detail.note ? [{ label: copy.adminMarketResolveNote, value: detail.note }] : []),
+    ...(detail.note ? [{ label: copy.eventResolveNote, value: detail.note }] : []),
     ...(detail.evidenceUrl
-      ? [{ label: copy.adminMarketResolveEvidence, value: detail.evidenceUrl }]
+      ? [{ label: copy.eventResolveEvidence, value: detail.evidenceUrl }]
       : []),
   ];
 }
@@ -691,7 +750,9 @@ function resolveDetailRows(detail: {
  * rules text before it), a supplement's approval (#80: the version, the items and the reason), the
  * open and close instants — an early close's with its review result (#114) —, a pause's reason and
  * early result's publication instant, a resume's review result (#114, ADR-0102: no account id,
- * ADR-0101 9-11), the 판정 with its note and evidence, the finalize summary, the 개설 검수's records
+ * ADR-0101 9-11), the 잠정 결과 공개 with its version, result and dispute deadline and the 결과 확정
+ * with its version and result (#152) — a 결과 확정 before #152 with its note and evidence — the
+ * finalize summary, the 개설 검수's records
  * (#78, `reviewDetailRows`) — and no row at all for the start of the payout, whose only field is
  * the `source` the 시스템 actor beside it already says, nor for a resume without a review result.
  * The payload is `unknown` on the wire (jsonb), so each shape is checked before it is read;
@@ -700,12 +761,31 @@ function resolveDetailRows(detail: {
  */
 export function marketEventRows(type: MarketEventType, payload: unknown): EventRow[] | undefined {
   switch (type) {
-    case 'resolved': {
-      const parsed = RESOLVED_PAYLOAD.safeParse(payload);
+    case 'provisional': {
+      const parsed = PROVISIONAL_PAYLOAD.safeParse(payload);
       if (!parsed.success) return undefined;
+      const { version, result, disputeDeadline } = parsed.data;
       return [
-        { label: copy.marketResolvedResult, value: MARKET_RESULT_LABEL[parsed.data.result] },
-        ...resolveDetailRows(parsed.data),
+        { label: copy.eventJudgementVersion, value: judgementVersionName(version) },
+        { label: copy.marketResolvedResult, value: MARKET_RESULT_LABEL[result] },
+        { label: copy.eventDisputeDeadline, value: formatKst(disputeDeadline) },
+      ];
+    }
+    case 'resolved': {
+      const confirmed = RESOLVED_BY_DEADLINE_PAYLOAD.safeParse(payload);
+      if (confirmed.success) {
+        const { version, result } = confirmed.data;
+        return [
+          { label: copy.eventJudgementVersion, value: judgementVersionName(version) },
+          { label: copy.marketResolvedResult, value: MARKET_RESULT_LABEL[result] },
+        ];
+      }
+      // A row written before #152: the one-admin 판정.
+      const interim = INTERIM_RESOLVED_PAYLOAD.safeParse(payload);
+      if (!interim.success) return undefined;
+      return [
+        { label: copy.marketResolvedResult, value: MARKET_RESULT_LABEL[interim.data.result] },
+        ...interimResolveRows(interim.data),
       ];
     }
     case 'settling':
@@ -1185,12 +1265,13 @@ export function openItemsRefused(error: ApiError): string {
  * submission (#17, #78 — '검수 제출 전에 채우거나 고칠 항목이 있습니다: …' naming what the refusal
  * names, or the line alone when it names nothing this screen knows), a close already passed naming
  * `closeAt`, VALIDATION_ERROR naming `status` for any other state-machine violation — the "refresh
- * the screen" message, since the state on screen is what is stale (a second 판정 of a market another
- * admin has already judged lands here). There is no admin close to refuse since #114 (ADR-0102: an
- * early end is a pause and another admin's approved early close, whose refusals are the pause's —
- * `pauseFailure`, lib/market-pause.ts), nor an admin open since #21 (ADR-0100): a market opens from
- * 개장 예정 by itself, or by its approval or a reschedule, whose refusals are the review's
- * (`reviewFailure`, lib/market-review.ts).
+ * the screen" message, since the state on screen is what is stale. There is no one-admin 판정 to
+ * refuse since #152 (ADR-0103: a judgement is registered and another admin approves it, whose
+ * refusals are its own — `judgementFailure`, lib/market-judgement.ts), no admin close since #114
+ * (ADR-0102: an early end is a pause and another admin's approved early close, whose refusals are
+ * the pause's — `pauseFailure`, lib/market-pause.ts), nor an admin open since #21 (ADR-0100): a
+ * market opens from 개장 예정 by itself, or by its approval or a reschedule, whose refusals are the
+ * review's (`reviewFailure`, lib/market-review.ts).
  * RULES_REQUIRED is no transition's: it is the supplement that leaves an open market without a rule
  * item it had (#23, #80), which `marketFormError` puts on that item's field.
  * NOT_FOUND is the market itself (every admin write answers 404 for an unknown id): not a "try
@@ -1212,8 +1293,6 @@ export function transitionErrorMessage(error: unknown): string {
     const field = validationField(error);
     if (field === 'status') return copy.errMarketStatus;
     if (field === 'closeAt') return copy.errMarketCloseAt;
-    if (field === 'note') return copy.errMarketResolveNote;
-    if (field === 'evidenceUrl') return copy.errMarketResolveEvidence;
     return copy.errMarketInvalid;
   }
   return copy.errUnknown;

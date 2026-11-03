@@ -4,22 +4,26 @@ import { copy } from '../src/copy';
 import { accountIdOf, adminAccount, expect, freshEmail, signIn, signUp, test } from './helpers';
 
 /**
- * 출시 설정 (#170, ADR-0055) as the shipped build has it: eight registered items — 시작 지급액
+ * 출시 설정 (#170, ADR-0055) as the shipped build has it: nine registered items — 시작 지급액
  * (`grant.start_coin`, #70, ADR-0071), 선행 마감 최소 간격 (`market.lead_close_gap`, #22,
- * ADR-0098) and the six retention periods (`retention.*` — #184's five, ADR-0087, and #77's
- * market proposals, ADR-0089) — which the screen and the API list alike, in the registry's order.
- * Changing and recording an item are fixed by the API suite with injected test items
- * (`createTestApp({ releaseSettings })`), paying the start Coin once a value is entered by the API
- * and worker suites, deleting what a retention period has kept by the worker's suite, and the
- * lead-close gap's use by the API suite (admin-markets-times.controller.test.ts); a browser
- * cannot register one.
+ * ADR-0098), 이의 기간 (`market.dispute_window`, #152, ADR-0103) and the six retention periods
+ * (`retention.*` — #184's five, ADR-0087, and #77's market proposals, ADR-0089) — which the screen
+ * and the API list alike, in the registry's order. Changing and recording an item are fixed by
+ * the API suite with injected test items (`createTestApp({ releaseSettings })`), paying the start
+ * Coin once a value is entered by the API and worker suites, deleting what a retention period has
+ * kept by the worker's suite, the lead-close gap's use by the API suite
+ * (admin-markets-times.controller.test.ts) and the dispute window's by the API and worker suites
+ * (admin-market-judgements.controller.test.ts, market-resolve.test.ts); a browser cannot register
+ * one.
  *
  * Nothing here changes an item. A value entered in a run would be paid by the worker to every
  * waiting grant — or, for an approved retention period, delete the records older than it at the
  * worker's next daily run; for the lead-close gap, decide which markets with an announcement time
  * may open — and stay for the runs after it, so the spec reads the status the database holds —
- * 미정 on a fresh one, as nothing writes a value (docs/SETTINGS.md) — and checks the screen
- * against it. The change dialogs are opened and cancelled only.
+ * 미정 on a fresh one, as no migration or seed writes a value (docs/SETTINGS.md) — and checks the
+ * screen against it. The one value the suite writes is the dispute window's, by its global setup
+ * before any test (global-setup.ts: 1분 as a 시험값 while it is 미정), so it is never 미정 here and
+ * never changes while this spec reads the list. The change dialogs are opened and cancelled only.
  */
 
 const LIST = '/api/v1/admin/release-settings';
@@ -33,6 +37,12 @@ const START_COIN_KEY = 'grant.start_coin';
  * announcement time, in whole minutes.
  */
 const LEAD_CLOSE_GAP_KEY = 'market.lead_close_gap';
+
+/**
+ * The dispute window's key (`DISPUTE_WINDOW_SETTING`, #152): how long after a 잠정 결과 is
+ * published disputes are taken before the worker confirms it, in whole minutes.
+ */
+const DISPUTE_WINDOW_KEY = 'market.dispute_window';
 
 /**
  * The retention periods (`RETENTION_PERIOD_SETTINGS`, #184 and #77) with their names, restated:
@@ -53,7 +63,12 @@ const RETENTION_ITEMS = [
  * Every key the shipped registry holds, in its order (`RELEASE_SETTINGS`): the operating values
  * first, then the retention periods.
  */
-const SHIPPED_KEYS = [START_COIN_KEY, LEAD_CLOSE_GAP_KEY, ...RETENTION_ITEMS.map(([key]) => key)];
+const SHIPPED_KEYS = [
+  START_COIN_KEY,
+  LEAD_CLOSE_GAP_KEY,
+  DISPUTE_WINDOW_KEY,
+  ...RETENTION_ITEMS.map(([key]) => key),
+];
 
 /**
  * The badge names (`RELEASE_SETTING_STATUS_LABELS`), restated: these specs import only types from
@@ -81,12 +96,12 @@ async function expectForbidden(response: APIResponse): Promise<void> {
 }
 
 test.describe('출시 설정 (#170)', () => {
-  test('관리자 메뉴에서 열면 시작 지급액·선행 마감 최소 간격과 여섯 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
+  test('관리자 메뉴에서 열면 시작 지급액·선행 마감 최소 간격·이의 기간과 여섯 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
     page,
     admin,
   }) => {
-    // The API: the eight items, as #70, #22, #184 and #77 registered them — whole numbers of Coin,
-    // of minutes and of days.
+    // The API: the nine items, as #70, #22, #152, #184 and #77 registered them — whole numbers of
+    // Coin, of minutes and of days.
     const items = await dataOf<ReleaseSetting[]>(await admin.get(LIST));
     expect(items.map((item) => item.key)).toEqual(SHIPPED_KEYS);
     const startCoin = items.find((item) => item.key === START_COIN_KEY);
@@ -96,6 +111,12 @@ test.describe('출시 설정 (#170)', () => {
     const leadCloseGap = items.find((item) => item.key === LEAD_CLOSE_GAP_KEY);
     expect(leadCloseGap).toMatchObject({ label: '선행 마감 최소 간격', unit: '분' });
     expect(leadCloseGap?.valueSchema.type).toBe('integer');
+    // The dispute window has a value whatever the database: the global setup entered one while it
+    // was 미정 (global-setup.ts), or an earlier run or a developer did.
+    const disputeWindow = items.find((item) => item.key === DISPUTE_WINDOW_KEY);
+    expect(disputeWindow).toMatchObject({ label: '이의 기간', unit: '분' });
+    expect(disputeWindow?.valueSchema.type).toBe('integer');
+    expect(disputeWindow?.status).not.toBe('undecided');
     for (const [key, label] of RETENTION_ITEMS) {
       const item = items.find((entry) => entry.key === key);
       expect(item, key).toMatchObject({ key, label, unit: '일' });

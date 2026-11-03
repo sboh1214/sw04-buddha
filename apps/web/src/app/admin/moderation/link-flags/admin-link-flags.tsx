@@ -522,7 +522,7 @@ function ReviewDialog({
                   }}
                   colorPalette="brand"
                 >
-                  {/* The group's accessible name is its own Label part (as the 판정 dialog's). */}
+                  {/* The group's accessible name is its own Label part (as the 판정 form's). */}
                   <RadioGroup.Label fontWeight="medium" mb="1">
                     {copy.adminLinkFlagOutcome}
                   </RadioGroup.Label>

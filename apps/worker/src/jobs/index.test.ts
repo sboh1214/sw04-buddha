@@ -13,11 +13,13 @@ import {
   createMedia,
   createPost,
   createPosition,
+  createProvisionalMarket,
   createScheduledMarket,
   createStartGrant,
   createUser,
   createWriteLimitEvent,
   hasTestDb,
+  resolveMarketNow,
   setReleaseSetting,
   type TestDb,
 } from '@buddha/db/test';
@@ -35,6 +37,7 @@ import { eq } from 'drizzle-orm';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { MemoryObjectStorage } from '@buddha/storage';
+import { type EnqueueFinalize } from '../market-jobs.js';
 import { type Publish } from '../realtime.js';
 import { createProcessor } from './index.js';
 
@@ -56,6 +59,7 @@ function job(input: JobStub): Job {
 describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
   let t: TestDb;
   let published: { channel: string; event: MarketRealtimeEvent | UserRealtimeEvent }[];
+  let enqueued: { marketId: string; resolvedAt: Date }[];
   let logs: Record<string, unknown>[];
   let run: (input: JobStub) => Promise<unknown>;
   let storage: MemoryObjectStorage;
@@ -70,6 +74,7 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
   beforeEach(async () => {
     await t.reset();
     published = [];
+    enqueued = [];
     logs = [];
     const publish: Publish = (channel, event) => {
       published.push({ channel, event });
@@ -81,7 +86,11 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
       { write: (line: string) => logs.push(JSON.parse(line) as Record<string, unknown>) },
     );
     storage = new MemoryObjectStorage();
-    deps = { db: t.db, auditDb: t.db, publish, storage, logger };
+    const enqueueFinalize: EnqueueFinalize = (marketId, resolvedAt) => {
+      enqueued.push({ marketId, resolvedAt });
+      return Promise.resolve();
+    };
+    deps = { db: t.db, auditDb: t.db, publish, enqueueFinalize, storage, logger };
     const processor = createProcessor(deps);
     run = (input) => processor(job(input)) as Promise<unknown>;
   });
@@ -92,17 +101,25 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
   }
 
   /**
-   * A market judged YES a minute ago, as the judgement leaves it: `resolved`, with the pending
-   * step row it writes. The finalize takes it to `settling`, then `settled`.
+   * A market judged YES and confirmed now, as the worker's confirmation leaves it (#152): its
+   * judgement approved two minutes ago under a one-minute window, then `resolved` with the pending
+   * step row the confirmation writes. The finalize takes it to `settling`, then `settled`.
    */
   async function judged() {
-    const resolvedAt = new Date(Date.now() - MINUTE_MS);
-    return createMarket(t.db, {
-      status: 'resolved',
-      closeAt: new Date(resolvedAt.getTime() - MINUTE_MS),
-      resolvedResult: 'YES',
-      resolvedAt,
+    const { market } = await createProvisionalMarket(t.db, {
+      publishedAt: new Date(Date.now() - 2 * MINUTE_MS),
+      disputeWindowMinutes: 1,
     });
+    return (await resolveMarketNow(t.db, market.id)).market;
+  }
+
+  /** A PROVISIONAL market (#152) whose deadline passed `ago` ms ago (or is ahead, negative). */
+  async function provisional(ago = MINUTE_MS) {
+    const { market } = await createProvisionalMarket(t.db, {
+      publishedAt: new Date(Date.now() - ago - MINUTE_MS),
+      disputeWindowMinutes: 1,
+    });
+    return market;
   }
 
   async function stepOf(marketId: string) {
@@ -245,6 +262,70 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
         `No handler registered for job "${name}" on queue "markets"`,
       );
     }
+  });
+
+  it('market.resolve without a market id is the scan: confirms what is due, registers its finalize and returns the counts (#152)', async () => {
+    const due = await provisional();
+    const future = await provisional(-60 * MINUTE_MS);
+
+    await expect(run({ name: JOB_NAMES.marketResolve, data: {} })).resolves.toEqual({
+      resolved: 1,
+      skipped: 0,
+      failed: 0,
+      failures: [],
+    });
+    const row = await marketRow(due.id);
+    expect(row.status).toBe('resolved');
+    expect((await marketRow(future.id)).status).toBe('provisional');
+    expect(published).toEqual([
+      {
+        channel: marketChannel(due.id),
+        event: expect.objectContaining({
+          type: 'market:status',
+          status: 'resolved',
+          resolvedResult: 'YES',
+        }) as unknown,
+      },
+    ]);
+    expect(enqueued).toEqual([{ marketId: due.id, resolvedAt: row.resolvedAt }]);
+    expect(logs.at(-1)).toMatchObject({ level: 30, msg: 'market resolve scan', resolved: 1 });
+
+    // The scheduler job of queues.ts carries no data at all; that is the scan too, and with
+    // nothing left to do it reports zeros (at debug — it runs every minute).
+    await expect(run({ name: JOB_NAMES.marketResolve })).resolves.toEqual({
+      resolved: 0,
+      skipped: 0,
+      failed: 0,
+      failures: [],
+    });
+    expect(logs.at(-1)).toMatchObject({ level: 20, msg: 'market resolve scan', resolved: 0 });
+  });
+
+  it('market.resolve with a market id confirms that market only, JSON-safe (#152)', async () => {
+    const target = await provisional();
+    const other = await provisional();
+
+    const result = await run({ name: JOB_NAMES.marketResolve, data: { marketId: target.id } });
+    expect(result).toMatchObject({
+      outcome: 'resolved',
+      marketId: target.id,
+      resolvedResult: 'YES',
+    });
+    expect(() => JSON.stringify(result)).not.toThrow();
+    expect((await marketRow(target.id)).status).toBe('resolved');
+    expect((await marketRow(other.id)).status).toBe('provisional');
+    expect(published.map((p) => p.channel)).toEqual([marketChannel(target.id)]);
+    expect(enqueued.map((entry) => entry.marketId)).toEqual([target.id]);
+    expect(logs.at(-1)).toMatchObject({ level: 30, msg: 'market resolve', outcome: 'resolved' });
+
+    // The delayed job's retry, or a duplicate: skipped, and the skip is JSON too.
+    await expect(
+      run({ name: JOB_NAMES.marketResolve, data: { marketId: target.id } }),
+    ).resolves.toEqual({ outcome: 'skipped', marketId: target.id, reason: 'not_provisional' });
+    // A payload the schema refuses is a producer bug, not a retry.
+    const attempt = run({ name: JOB_NAMES.marketResolve, data: { marketId: 'nope' } });
+    await expect(attempt).rejects.toBeInstanceOf(UnrecoverableError);
+    await expect(attempt).rejects.toThrow(/Invalid market\.resolve payload \(job job-1\)/);
   });
 
   it('market.finalize with a market id returns a JSON-safe result: paidCoin a decimal string, settledAt ISO', async () => {

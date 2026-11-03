@@ -105,10 +105,10 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
   });
 
   /**
-   * A market judged `result` at `resolvedAt` (default a minute ago), as the judgement leaves it:
-   * `resolved`, and one `pending` row per settlement step (the factory writes them, unless
-   * `settlementSteps: false`). `status: 'settling'` is the same market once the worker's
-   * resolved → settling committed (a run whose steps then failed).
+   * A market confirmed `result` at `resolvedAt` (default a minute ago), as the worker's
+   * confirmation leaves it (#152): `resolved`, and one `pending` row per settlement step (the
+   * factory writes them, unless `settlementSteps: false`). `status: 'settling'` is the same market
+   * once the worker's resolved → settling committed (a run whose steps then failed).
    */
   async function resolved(
     result: MarketResult = 'YES',
@@ -770,9 +770,10 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
   it.each(MARKET_STATUSES.filter((status) => status !== 'resolved' && status !== 'settling'))(
     'skips a %s market: only a judged (resolved or settling) market is settled',
     async (status) => {
+      // A PROVISIONAL market has its published result (migration 0055, #152), a settled one too.
       const market = await createMarket(t.db, {
         status,
-        resolvedResult: status === 'settled' ? 'YES' : null,
+        resolvedResult: status === 'settled' || status === 'provisional' ? 'YES' : null,
       });
       const alice = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
       await hold({
@@ -837,8 +838,8 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
 
   it('a VOID result throws before anything is paid: the market stays settling, the step records why (#126 pays it)', async () => {
     // `settle(won)` pays winners only, so a VOID run that got through would close every holder
-    // out as a loser. The interim judgement takes YES or NO only; this keeps a VOID that got in
-    // some other way from ever reaching the payout.
+    // out as a loser. #152's judgement may be VOID, confirmed after its dispute window like any
+    // other (#173 item 9): this keeps it from the payout until #126 pays it 50/50 (ADR-0095 8-5).
     const market = await resolved('VOID');
     const alice = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
     await hold({
@@ -1052,8 +1053,9 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
   });
 
   it('settles a resolved market with no step row, and writes the coin row done', async () => {
-    // The judgement writes the rows, so this is a market judged outside that path (a row lost
-    // to a bug, a hand fix): a missing row counts as pending rather than blocking for good.
+    // The confirmation writes the rows (#152), so this is a market confirmed outside that path (a
+    // row lost to a bug, a hand fix): a missing row counts as pending rather than blocking for
+    // good.
     const market = await resolved('YES', undefined, { settlementSteps: false });
     expect(await stepsOf(market.id)).toEqual([]);
     const alice = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;

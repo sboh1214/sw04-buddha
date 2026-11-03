@@ -24,10 +24,12 @@ import { relatedSearchSection } from '@/lib/related-markets';
 import { relatedMarketsInfiniteQueryOptions } from './use-markets';
 import {
   ADMIN_MARKETS_KEY,
+  ADMIN_MARKET_JUDGEMENTS_KEY,
   ADMIN_MARKET_PAUSE_DECISIONS_KEY,
   ADMIN_MARKET_REVIEWS_KEY,
   ADMIN_MARKET_SUPPLEMENTS_KEY,
   ADMIN_RELATED_MARKETS_KEY,
+  adminMarketJudgementsQueryOptions,
   adminMarketKey,
   adminMarketPauseDecisionsQueryOptions,
   adminMarketReviewsQueryOptions,
@@ -88,6 +90,10 @@ const draft: AdminMarket = {
   ruleVersions: [],
   supplement: { pending: null, log: [] },
   pause: { history: [], pending: null, log: [] },
+  // Not judged (#152): no judgement, none waiting, the dispute window decided.
+  judgementVersion: null,
+  disputeDeadline: null,
+  judgement: { current: null, pending: null, log: [], disputeWindowUndecided: false },
   missingOpenItems: [],
   leadCloseGapMinutes: null,
   // Never submitted (#78): no request, no editor, no record.
@@ -182,35 +188,29 @@ describe('applyMarket', () => {
     }
   });
 
-  it('puts the judgement on screen with its settlement steps, whatever the refetch does', async () => {
-    // The 판정 answer is the market as the transaction committed it (ADR-0046): `resolved`, the
-    // result, and one `pending` row per settlement step. The 정산 단계 panel reads that row, so
-    // the admin sees the step the worker is about to run even when the refetch after it fails.
+  it('puts an approved judgement on screen — 잠정 결과 with its deadline — whatever the refetch does', async () => {
+    // The approval answers the market as its transaction committed it (#152, ADR-0103):
+    // PROVISIONAL, the result, the version and the dispute deadline fixed then — and no settlement
+    // step, which the worker's confirmation at the deadline writes. The 판정 panel and the
+    // deadline's re-read (`provisionalMarketPollDelay`) read that row even when the refetch after
+    // it fails.
     const { queryClient, observer, unsubscribe } = await loadedDetail();
-    const at = '2026-10-01T00:05:00.000Z';
+    const deadline = '2026-10-02T00:05:00.000Z';
     const judged: AdminMarket = {
       ...opened,
-      status: 'resolved',
+      status: 'provisional',
       resolvedResult: 'YES',
-      resolvedAt: at,
+      judgementVersion: 1,
+      disputeDeadline: deadline,
       statusEventId: '4',
-      settlementSteps: [
-        {
-          step: 'coin',
-          status: 'pending',
-          attempts: 0,
-          completedAt: null,
-          lastError: null,
-          updatedAt: at,
-        },
-      ],
     };
     try {
       await applyMarket(queryClient, ID, judged);
 
       const result = observer.getCurrentResult();
-      expect(result.data?.status).toBe('resolved');
-      expect(result.data?.settlementSteps).toEqual(judged.settlementSteps);
+      expect(result.data?.status).toBe('provisional');
+      expect(result.data?.disputeDeadline).toBe(deadline);
+      expect(result.data?.settlementSteps).toEqual([]);
       expect(result.isRefetchError).toBe(true);
     } finally {
       unsubscribe();
@@ -762,6 +762,58 @@ describe('the 일시 중단 결정 대기 queue (#114, ADR-0102)', () => {
       await applyMarket(queryClient, ID, { ...draft, status: 'paused' });
       expect(queryClient.getQueryState(ADMIN_MARKET_PAUSE_DECISIONS_KEY)?.isInvalidated).toBe(true);
       expect(queryClient.getQueryData(ADMIN_MARKET_PAUSE_DECISIONS_KEY)).toEqual({
+        pages: [],
+        pageParams: [],
+      });
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+});
+
+describe('the 판정 승인 대기 queue (#152, ADR-0103)', () => {
+  it('asks `GET /admin/market-judgements` a page per cursor, under the private admin root', async () => {
+    const get = vi.spyOn(api, 'GET').mockResolvedValue({
+      data: { data: [], meta: { nextCursor: 'c2' } },
+      response: new Response(null, { status: 200 }),
+    } as never);
+    try {
+      const options = adminMarketJudgementsQueryOptions();
+      expect(options.queryKey).toEqual(['admin', 'market-judgements']);
+      expect(await options.queryFn({ pageParam: undefined })).toEqual({
+        items: [],
+        nextCursor: 'c2',
+      });
+      expect(get).toHaveBeenLastCalledWith('/api/v1/admin/market-judgements', {
+        params: { query: {} },
+      });
+      await options.queryFn({ pageParam: 'c2' });
+      expect(get).toHaveBeenLastCalledWith('/api/v1/admin/market-judgements', {
+        params: { query: { cursor: 'c2' } },
+      });
+      expect(options.getNextPageParam({ items: [], nextCursor: null })).toBeUndefined();
+      // Its own root segment: neither a status filter of the admin list nor another queue.
+      for (const other of [
+        ADMIN_MARKETS_KEY,
+        ADMIN_MARKET_REVIEWS_KEY,
+        ADMIN_MARKET_SUPPLEMENTS_KEY,
+        ADMIN_MARKET_PAUSE_DECISIONS_KEY,
+      ]) {
+        expect(partialMatchKey(ADMIN_MARKET_JUDGEMENTS_KEY, other)).toBe(false);
+      }
+    } finally {
+      get.mockRestore();
+    }
+  });
+
+  it('is asked again by every admin write to a market: a registration adds a row, a decision takes one', async () => {
+    const { queryClient, unsubscribe } = await loadedDetail();
+    try {
+      queryClient.setQueryData(ADMIN_MARKET_JUDGEMENTS_KEY, { pages: [], pageParams: [] });
+      await applyMarket(queryClient, ID, { ...draft, status: 'closed' });
+      expect(queryClient.getQueryState(ADMIN_MARKET_JUDGEMENTS_KEY)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryData(ADMIN_MARKET_JUDGEMENTS_KEY)).toEqual({
         pages: [],
         pageParams: [],
       });

@@ -39,13 +39,14 @@ import {
  * reopened); its requester may not decide it — 승인·반려 are off under a note, and the API refuses
  * them — and alone may retract it. The request waits in 일시 중단 결정 대기, under 검수 대기. A
  * 실질 기준 변경 pause is asked for with its review result: 판정 불가 leaves 조기 마감 alone, its
- * VOID being the judgement's after the close (#152). A request names the pause it was asked on,
- * and one naming a pause since resumed is refused (`stale`). The close still comes on schedule
- * while PAUSED: the worker closes the market and ends its pause as 예정 마감, and a request still
- * waiting is then ended by a 반려 or a 철회 alone. A paused market's category and tags are edited
- * as an open one's, its rule version items by a supplement alone. There is no one-admin 마감 any
- * more: its button is gone and its route answers 404. A supplement rejected as 의미 변경 leaves the
- * market open, and the admin detail offers the pause it calls for, filled in.
+ * VOID being the judgement's after the close (#152, judgement.spec.ts — the market is judged 무효
+ * alone). A request names the pause it was asked on, and one naming a pause since resumed is
+ * refused (`stale`). The close still comes on schedule while PAUSED: the worker closes the market
+ * and ends its pause as 예정 마감, and a request still waiting is then ended by a 반려 or a 철회
+ * alone. A paused market's category and tags are edited as an open one's, its rule version items
+ * by a supplement alone. There is no one-admin 마감 any more: its button is gone and its route
+ * answers 404. A supplement rejected as 의미 변경 leaves the market open, and the admin detail
+ * offers the pause it calls for, filled in.
  *
  * Admin 1 (`admin`) makes, pauses and asks for every next path here, so admin 2 — `secondAdmin`,
  * or the reviewer `admin` is paired with (helpers.ts `approvePauseDecisionAsReviewer`) — is the

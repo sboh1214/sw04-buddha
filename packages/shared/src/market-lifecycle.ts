@@ -41,9 +41,11 @@ export const MARKET_LIFECYCLE_TRANSITIONS: Readonly<Record<MarketStatus, readonl
     // #114: resumed (재개) or closed early (조기 마감), each asked for by one admin and approved by
     // another (#173 items 2·4); at `close_at` as above, on schedule and never later (#173 item 3).
     paused: ['open', 'closed', 'cancelled'],
-    // #152: the judgement published once another admin approves it.
+    // #152: the judgement published once an admin other than its registrant approves it (#173
+    // item 1, ADR-0103); a rejected one leaves the market CLOSED to be judged again.
     closed: ['provisional'],
-    // #152·#175·#176: confirmed when the dispute window ends with nothing pending.
+    // #152: confirmed by the worker (actor NULL) once the dispute deadline has passed with nothing
+    // held — #175's disputes and #176's corrections add the holds (#173 item 1).
     provisional: ['resolved'],
     // #126: the payout starts at once (item 1).
     resolved: ['settling'],
@@ -60,16 +62,17 @@ export const MARKET_LIFECYCLE_TRANSITIONS: Readonly<Record<MarketStatus, readonl
  * open, ADR-0093 result 2; ADR-0100), so a market opens only from SCHEDULED or, by #114's approved
  * resume, from PAUSED. #114 deleted the one-admin close (ADR-0102), which took the lasting open →
  * closed edge and so was never listed here: an early end is a pause and an approved early close.
+ * #152 deleted ADR-0046's immediate judgement by one admin (closed → resolved, ADR-0103), which
+ * skipped PROVISIONAL and the dispute window: a judgement is registered, another admin approves it
+ * (CLOSED → PROVISIONAL) and the worker confirms it at its deadline (PROVISIONAL → RESOLVED). None
+ * is left; the list stays for the next interim edge, if one is ever needed.
  */
 export const INTERIM_MARKET_TRANSITIONS: readonly {
   from: MarketStatus;
   to: MarketStatus;
   /** The issue whose PR removes the edge. */
   until: string;
-}[] = [
-  // ADR-0046's immediate judgement by one admin, skipping PROVISIONAL and the dispute window.
-  { from: 'closed', to: 'resolved', until: '#152' },
-];
+}[] = [];
 
 /** Whether the server lets a market go from `from` to `to` (#174 acceptance criterion 3). */
 export function canTransitionMarket(from: MarketStatus, to: MarketStatus): boolean {

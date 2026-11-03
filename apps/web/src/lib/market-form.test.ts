@@ -31,14 +31,12 @@ import {
   formRuleContent,
   marketFormSchema,
   marketToFormValues,
-  resolveMarketFormSchema,
   restoreFixedClose,
   toCreateMarketBody,
   sameTags,
   supplementCloseFixed,
   supplementFormSchema,
   timeRuleDeps,
-  toResolveMarketBody,
   toSupplementChanges,
   toUpdateMarketBody,
   withJudgementTimeZonePrefilled,
@@ -897,6 +895,10 @@ const market: AdminMarket = {
   ruleVersions: [],
   supplement: { pending: null, log: [] },
   pause: { history: [], pending: null, log: [] },
+  // Not judged (#152): no judgement, none waiting, the dispute window decided.
+  judgementVersion: null,
+  disputeDeadline: null,
+  judgement: { current: null, pending: null, log: [], disputeWindowUndecided: false },
   missingOpenItems: [],
   leadCloseGapMinutes: null,
   // Never submitted (#78): no request, no editor, no record.
@@ -1583,67 +1585,11 @@ describe('marketToFormValues', () => {
   });
 });
 
-describe('resolveMarketFormSchema', () => {
-  const chosen = { result: 'YES' as const, note: '', evidenceUrl: '' };
-
-  it('requires a result, which an untouched form does not hold at all', () => {
-    // The radio group starts unselected, so `result` is `undefined` rather than a sentinel.
-    expect(messages(resolveMarketFormSchema.safeParse({ note: '', evidenceUrl: '' }))).toEqual([
-      copy.errMarketResultRequired,
-    ]);
-    expect(messages(resolveMarketFormSchema.safeParse({ ...chosen, result: 'MAYBE' }))).toEqual([
-      copy.errMarketResultRequired,
-    ]);
-    expect(resolveMarketFormSchema.safeParse(chosen).success).toBe(true);
-    expect(resolveMarketFormSchema.safeParse({ ...chosen, result: 'NO' }).success).toBe(true);
-  });
-
-  it('bounds the note to 1,000 characters and trims it', () => {
-    expect(resolveMarketFormSchema.safeParse({ ...chosen, note: '  근거 확인  ' }).data?.note).toBe(
-      '근거 확인',
-    );
-    expect(resolveMarketFormSchema.safeParse({ ...chosen, note: 'a'.repeat(1000) }).success).toBe(
-      true,
-    );
-    expect(
-      messages(resolveMarketFormSchema.safeParse({ ...chosen, note: 'a'.repeat(1001) })),
-    ).toEqual([copy.errMarketResolveNote]);
-  });
-
-  it('accepts a blank or an http(s) evidence URL of at most 500 characters', () => {
-    expect(resolveMarketFormSchema.safeParse(chosen).success).toBe(true);
-    expect(
-      resolveMarketFormSchema.safeParse({ ...chosen, evidenceUrl: ' https://example.com/x ' }).data
-        ?.evidenceUrl,
-    ).toBe('https://example.com/x');
-    for (const bad of ['javascript:alert(1)', 'example.com', `https://e.com/${'a'.repeat(500)}`]) {
-      expect(
-        messages(resolveMarketFormSchema.safeParse({ ...chosen, evidenceUrl: bad })),
-        bad,
-      ).toEqual([copy.errMarketResolveEvidence]);
+describe('the one-admin 판정 (#152, ADR-0103)', () => {
+  it('has no form any more: a judgement is registered in the 판정 panel and approved by another', async () => {
+    const exported = Object.keys(await import('./market-form'));
+    for (const name of ['resolveMarketFormSchema', 'toResolveMarketBody']) {
+      expect(exported, name).not.toContain(name);
     }
-  });
-});
-
-describe('toResolveMarketBody', () => {
-  it('sends the result with blanks as null and text trimmed, as the admin on screen', () => {
-    expect(toResolveMarketBody({ result: 'NO', note: '', evidenceUrl: '  ' }, 'admin-1')).toEqual({
-      result: 'NO',
-      note: null,
-      evidenceUrl: null,
-      // ADR-0092: the server refuses a 판정 made under another account's cookie.
-      expectedAccountId: 'admin-1',
-    });
-    expect(
-      toResolveMarketBody(
-        { result: 'YES', note: ' 공식 발표 ', evidenceUrl: 'https://e.com/a ' },
-        'admin-1',
-      ),
-    ).toEqual({
-      result: 'YES',
-      note: '공식 발표',
-      evidenceUrl: 'https://e.com/a',
-      expectedAccountId: 'admin-1',
-    });
   });
 });

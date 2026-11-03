@@ -24,7 +24,9 @@ import * as z from 'zod';
  * A market's rule supplement (#80, `market_supplement`, market-supplement.ts) excludes the
  * requester alone; its requester may retract it, and it is refused when asked if no admin but the
  * requester could decide it (`no_decider`, as #139 refuses its own). So does a paused market's
- * next path, 재개 or 조기 마감 (#114, `market_pause_decision`, market-pause.ts).
+ * next path, 재개 or 조기 마감 (#114, `market_pause_decision`, market-pause.ts), and a closed
+ * market's judgement (#152, `market_judgement`, market-judgement.ts): the admin who registered it
+ * may not approve or reject it (ADR-0093 decision 3 '역할'), and may retract it.
  */
 
 /** Lower-case words joined by `_` (`market_open`); approval_requests.kind is varchar(40). */
@@ -45,9 +47,9 @@ export const approvalReasonSchema = z.string().trim().min(1).max(APPROVAL_REASON
  * - `creator`: a market review's decider created the market (#78, #172 item 5);
  * - `editor`: a market review's decider edited the market's content before (#78, #172 item 5);
  * - `no_decider`: a request no admin could decide, asked when there is none but its requester — a
- *   market's rule supplement (#80) or a paused market's next path (#114), so no request waits for
- *   a decider who does not exist (#139's account restriction requests say the same with
- *   MODERATION_NOT_ALLOWED, moderation.ts).
+ *   market's rule supplement (#80), a paused market's next path (#114) or a judgement (#152), so
+ *   no request waits for a decider who does not exist (#139's account restriction requests say the
+ *   same with MODERATION_NOT_ALLOWED, moderation.ts).
  * A market review refuses its own exclusions before the rule's, in MARKET_REVIEW_EXCLUSIONS'
  * order (market-review.ts), so its submitter gets `requester` only when neither of the two holds.
  * A decider (or a retracting requester) who is not an admin now gets FORBIDDEN.

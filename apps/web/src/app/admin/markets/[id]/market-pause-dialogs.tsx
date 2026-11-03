@@ -228,7 +228,7 @@ export function PauseFields({
   return (
     <Stack gap="4">
       <Field.Root invalid={reasonError !== null} required>
-        {/* The group's accessible name is its own Label part (as the 판정 dialog's): zag emits
+        {/* The group's accessible name is its own Label part (as the 판정 form's): zag emits
             `role="radiogroup"` with `aria-labelledby` pointing at that id. */}
         <RadioGroup.Root
           name="pause-reason"

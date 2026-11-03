@@ -1,5 +1,18 @@
 export { closeDb, createDb, type CreateDbOptions, type Db } from './client.js';
 export {
+  approveMarketJudgement,
+  currentMarketJudgement,
+  readMarketJudgements,
+  resolveProvisionalMarket,
+  type ApproveMarketJudgementInput,
+  type ApproveMarketJudgementResult,
+  type JudgementPublishSkipReason,
+  type MarketJudgementRow,
+  type ResolveProvisionalMarketInput,
+  type ResolveProvisionalMarketResult,
+  type ResolveSkipReason,
+} from './market-judgement.js';
+export {
   openScheduledMarket,
   type OpenScheduledMarketInput,
   type OpenScheduledMarketResult,

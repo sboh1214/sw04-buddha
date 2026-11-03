@@ -23,7 +23,6 @@ import {
   marketSummarySchema,
   rejectMarketReviewBodySchema,
   rescheduleMarketOpenBodySchema,
-  resolveMarketBodySchema,
   revertMarketBodySchema,
   updateMarketBodySchema,
   uuidParamSchema,
@@ -38,7 +37,6 @@ import {
   type MarketSummary,
   type RejectMarketReviewBody,
   type RescheduleMarketOpenBody,
-  type ResolveMarketBody,
   type RevertMarketBody,
   type UpdateMarketBody,
 } from '@buddha/shared';
@@ -63,8 +61,8 @@ import { RelatedMarketsService } from './related-markets.service.js';
  * Every write names the admin the screen shows (`expectedAccountId` — in the body, or the query
  * of an unlink, whose DELETE has no body; assertExpectedAccount, ADR-0092): a mismatch with the
  * cookie is refused (403 FORBIDDEN naming the field) before anything is read, locked or written,
- * so a market is never created, edited, submitted, approved, rejected, sent back, rescheduled,
- * judged or linked as an admin the user is not looking at. The services are handed the
+ * so a market is never created, edited, submitted, approved, rejected, sent back, rescheduled
+ * or linked as an admin the user is not looking at. The services are handed the
  * rest of the body: the account is never stored.
  *
  * 개설 검수 (#78, ADR-0099): submit (draft → review), approve (→ scheduled) and reject (→ draft) by
@@ -77,7 +75,10 @@ import { RelatedMarketsService } from './related-markets.service.js';
  * change by a supplement (#80, ADR-0101, AdminMarketSupplementsController). No route closes a
  * market directly either (#114, ADR-0102): the worker closes it at its close, and an early close is
  * a paused market's next path another admin approves (AdminMarketPausesController) — the interim
- * one-admin `POST …/close` is gone.
+ * one-admin `POST …/close` is gone. Nor does any route judge a market at once (#152, ADR-0103): one
+ * admin registers a CLOSED market's judgement and another approves it, publishing the provisional
+ * result (AdminMarketJudgementsController), and the worker confirms it at its dispute deadline —
+ * the interim one-admin `POST …/resolve` is gone.
  */
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -401,28 +402,5 @@ export class AdminMarketsController {
     const { expectedAccountId, ...reschedule } = body;
     assertExpectedAccount(admin.id, expectedAccountId);
     return this.markets.reschedule(admin.id, id, reschedule);
-  }
-
-  @Post(':id/resolve')
-  @HttpCode(200)
-  @ApiOperation({
-    operationId: 'adminResolveMarket',
-    summary:
-      'closed → resolved (interim, until the approved provisional judgement): record the final ' +
-      'result, YES or NO; the payout starts immediately',
-  })
-  @ApiData(adminMarketSchema)
-  // VALIDATION_ERROR names `status` for anything but a closed market — a provisional or resolved
-  // one included: a judgement is final here, so neither the same result again nor another is
-  // accepted.
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
-  adminResolveMarket(
-    @CurrentUser() admin: SessionUser,
-    @Param('id', { schema: uuidParamSchema }) id: string,
-    @Body({ schema: resolveMarketBodySchema }) body: ResolveMarketBody,
-  ): Promise<AdminMarket> {
-    const { expectedAccountId, ...judgement } = body;
-    assertExpectedAccount(admin.id, expectedAccountId);
-    return this.markets.resolve(admin.id, id, judgement);
   }
 }

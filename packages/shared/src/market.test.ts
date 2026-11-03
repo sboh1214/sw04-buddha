@@ -33,7 +33,6 @@ import {
   positionsQuerySchema,
   priceSeriesSchema,
   priceTickSchema,
-  resolveMarketBodySchema,
   slugify,
   ticksQuerySchema,
   updateMarketBodySchema,
@@ -239,8 +238,33 @@ describe('read DTOs', () => {
       ],
       supplement: { pending: null, log: [] },
       pause: { history: [], pending: null, log: [] },
+      judgementVersion: null,
+      disputeDeadline: null,
+      judgement: { current: null, pending: null, log: [], disputeWindowUndecided: true },
     };
     expect(adminMarketSchema.parse(admin)).toEqual(admin);
+    // So is the judgement (#152): the version, the deadline and the registrations are the admin's,
+    // in every status; the public shape keeps the status and the result alone.
+    for (const field of ['judgement', 'judgementVersion', 'disputeDeadline'] as const) {
+      expect(marketSchema.parse(admin)).not.toHaveProperty(field);
+      const { [field]: _gone, ...without } = admin;
+      expect(issuePaths(adminMarketSchema.safeParse(without)), field).toEqual([field]);
+    }
+    const provisional = {
+      ...admin,
+      status: 'provisional',
+      resolvedResult: 'VOID',
+      judgementVersion: 1,
+      disputeDeadline: '2026-09-06T00:00:00.000Z',
+    };
+    expect(adminMarketSchema.parse(provisional)).toEqual(provisional);
+    expect(marketSchema.parse(provisional).resolvedResult).toBe('VOID');
+    for (const judgementVersion of [0, 1.5, '1']) {
+      expect(
+        issuePaths(adminMarketSchema.safeParse({ ...provisional, judgementVersion })),
+        String(judgementVersion),
+      ).toEqual(['judgementVersion']);
+    }
     // So is the pause (#114): the public shape carries none of it, the admin one always.
     expect(marketSchema.parse(admin)).not.toHaveProperty('pause');
     const { pause: _pause, ...withoutPause } = admin;
@@ -1032,42 +1056,6 @@ describe('the time items of the create and update bodies (#22)', () => {
         const parsed = createMarketBodySchema.safeParse({ ...body, [field]: value });
         expect(issuePaths(parsed), `${field} ${value}`).toEqual([field]);
       }
-    }
-  });
-});
-
-describe('resolveMarketBodySchema', () => {
-  it('requires a result and accepts an optional note and http(s) evidence url', () => {
-    expect(resolveMarketBodySchema.parse({ result: 'YES', ...account })).toEqual({
-      result: 'YES',
-      ...account,
-    });
-    expect(
-      resolveMarketBodySchema.parse({
-        result: 'NO',
-        note: ' 발표 없음 ',
-        evidenceUrl: 'https://www.bok.or.kr/press/1',
-        ...account,
-      }),
-    ).toEqual({
-      result: 'NO',
-      note: '발표 없음',
-      evidenceUrl: 'https://www.bok.or.kr/press/1',
-      ...account,
-    });
-    expect(
-      resolveMarketBodySchema.parse({ result: 'YES', note: null, evidenceUrl: null, ...account }),
-    ).toEqual({ result: 'YES', note: null, evidenceUrl: null, ...account });
-    for (const body of [
-      { ...account },
-      { result: 'MAYBE', ...account },
-      { result: 'YES', note: 'x'.repeat(1001), ...account },
-      { result: 'YES', evidenceUrl: 'javascript:alert(1)', ...account },
-      { result: 'YES', evidenceUrl: `https://a.b/${'c'.repeat(500)}`, ...account },
-      // The admin on screen (ADR-0092).
-      { result: 'YES' },
-    ]) {
-      expect(resolveMarketBodySchema.safeParse(body).success, JSON.stringify(body)).toBe(false);
     }
   });
 });

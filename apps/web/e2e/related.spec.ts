@@ -25,9 +25,10 @@ import {
  *
  * Which statuses are shown (never a cancelled market or one whose result is 무효, never a draft
  * or one in review — ADR-0093 decision 3, the #174 row) and the 추천 order are the API's
- * integration tests' (related-markets.controller.test.ts): no product path cancels a market or
- * judges one 무효 today (#20, #152), and the order needs fills, which no route makes until the
- * CLOB (#119).
+ * integration tests' (related-markets.controller.test.ts): no product path cancels a market yet
+ * (#20), a 무효 judgement (#152) is never approved here — a confirmed 무효 stays 지급 중 until #126
+ * pays it (ADR-0103), on an e2e database kept between runs — and the order needs fills, which no
+ * route makes until the CLOB (#119).
  */
 
 const related = (page: Page) => page.getByTestId('market-related');

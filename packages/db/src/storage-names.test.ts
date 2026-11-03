@@ -8,6 +8,7 @@ import {
   LEDGER_REF_TYPES,
   LINK_FLAG_REASONS,
   MARKET_EVENT_TYPES,
+  MARKET_JUDGEMENT_APPROVAL_KIND,
   MARKET_PAUSE_DECISION_APPROVAL_KIND,
   MARKET_PAUSE_END_KINDS,
   MARKET_PAUSE_REASONS,
@@ -106,13 +107,14 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   'write_limit_events.action': WRITE_LIMIT_ACTIONS,
   'link_flags.reason': LINK_FLAG_REASONS,
   // #171's two-person rule: each consumer's kinds — the account restriction's four (#139) the
-  // first, the market review (#78), the rule supplement (#80), a paused market's next path (#114);
-  // #130's bot control and the rest add theirs here.
+  // first, the market review (#78), the rule supplement (#80), a paused market's next path (#114),
+  // a CLOSED market's judgement (#152); #130's bot control and the rest add theirs here.
   'approval_requests.kind': [
     ...Object.values(ACCOUNT_RESTRICTION_APPROVAL_KINDS),
     MARKET_REVIEW_APPROVAL_KIND,
     MARKET_SUPPLEMENT_APPROVAL_KIND,
     MARKET_PAUSE_DECISION_APPROVAL_KIND,
+    MARKET_JUDGEMENT_APPROVAL_KIND,
   ],
   // #80: the items a rule version changed (a text[] of the version items' keys, held by a CHECK).
   'market_rule_versions.changed_items': RULE_VERSION_ITEMS,
@@ -420,6 +422,74 @@ describe('excluded features in stored data (#113)', () => {
           name,
         })),
         ...MARKET_PAUSE_END_KINDS.map((name) => ({ where: 'market_pauses.end_kind value', name })),
+      ]),
+    );
+  });
+
+  it('names the judgements, their CHECKs and the judgement’s stored values, each read above (#152)', () => {
+    // ADR-0103, migration 0055: the table of a market's approved judgements, the current version
+    // and deadline on the market, the CHECKs and the scan's index under the names the schema test
+    // spells, and the judgement's approval kind, market event type, admin action types and release
+    // setting key, which the test above reads for an excluded feature ('judgement', 'provisional',
+    // 'dispute', 'evidence', 'void' name none). Not `dispute_until`: that M5 column stays dropped
+    // (schema.test.ts).
+    const judgements = TABLES.find((table) => table.name === 'market_judgements');
+    expect(judgements?.columns.map((column) => column.name)).toEqual([
+      'marketId',
+      'version',
+      'result',
+      'sourcePriority',
+      'sourceName',
+      'sourceUrl',
+      'fallbackReason',
+      'voidReason',
+      'evidenceLinks',
+      'evidenceDescription',
+      'collectedAt',
+      'ruleVersion',
+      'eventDeadlineConfirmed',
+      'disputeWindowMinutes',
+      'publishedAt',
+      'disputeDeadline',
+      'approvalId',
+      'registeredBy',
+      'approvedBy',
+      'provisionalEventId',
+      'createdAt',
+    ]);
+    const marketColumns = TABLES.find((table) => table.name === 'markets')?.columns;
+    expect(marketColumns?.map((column) => column.name)).toEqual(
+      expect.arrayContaining(['judgementVersion', 'disputeDeadline']),
+    );
+    expect(marketColumns?.map((column) => column.name)).not.toContain('disputeUntil');
+    expect(storageNames()).toEqual(
+      expect.arrayContaining([
+        { where: 'table', name: 'market_judgements' },
+        ...[
+          // The primary key as the schema object names it (the migration's is snake_case).
+          'market_judgements_marketId_version_pk',
+          'market_judgements_version_check',
+          'market_judgements_source_check',
+          'market_judgements_fallback_reason_check',
+          'market_judgements_void_reason_check',
+          'market_judgements_evidence_check',
+          'market_judgements_dispute_check',
+          'market_judgements_approver_check',
+        ].map((name) => ({ where: 'market_judgements constraint', name })),
+        ...[
+          'markets_judgement_version_check',
+          'markets_provisional_check',
+          'markets_provisional_dispute_deadline_idx',
+        ].map((name) => ({ where: 'markets constraint', name })),
+        { where: 'approval_requests.kind value', name: 'market_judgement' },
+        ...['provisional', 'resolved'].map((name) => ({ where: 'market_events.type value', name })),
+        ...[
+          'market_judgement_request',
+          'market_judgement_approve',
+          'market_judgement_reject',
+          'market_judgement_retract',
+        ].map((name) => ({ where: 'admin_actions.type value', name })),
+        { where: 'release_settings.key value', name: 'market.dispute_window' },
       ]),
     );
   });
