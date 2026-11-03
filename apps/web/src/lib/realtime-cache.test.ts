@@ -51,6 +51,7 @@ const summary: MarketSummary = {
   imageUrl: null,
   status: 'open',
   judgementDelayed: false,
+  disputeUnderReview: false,
   lastPrice: 50,
   volumeCoin: '120000',
   tradeCount: 10,
@@ -58,6 +59,9 @@ const summary: MarketSummary = {
   closeAt: '2026-10-01T00:00:00.000Z',
   openAt: '2026-09-01T00:00:00.000Z',
   resolvedResult: null,
+  judgementVersion: null,
+  disputeDeadline: null,
+  disputeOpen: false,
   // The `opened` event: the key `joinMarket` orders the status group by (M5).
   statusEventId: '2',
   createdAt: '2026-08-30T00:00:00.000Z',

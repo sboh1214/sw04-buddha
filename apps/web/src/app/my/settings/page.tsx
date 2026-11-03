@@ -6,6 +6,7 @@ import { requireMySession } from '@/lib/my.server';
 import { AccountSection } from './account-section';
 import { BioSection } from './bio-section';
 import { ClosureSection } from './closure-section';
+import { DisputesSection } from './disputes-section';
 import { InterestsSection } from './interests-section';
 import { LinkedAccounts } from './linked-accounts';
 import { MarketingSection } from './marketing-section';
@@ -25,7 +26,8 @@ export const metadata: Metadata = { title: `${copy.settingsTitle} | ${copy.appNa
  * MY's 설정 (`/my/settings`, #16). The public profile's items come first — the nickname (#58), the
  * image (#141), the 소개 and the interest categories (#41, ADR-0069 decision 4 #41: «MY 설정») —
  * then the account's own settings, the way to 조치·신고 내역 (#50, ADR-0081 — a MY page of its own,
- * linked from here, ADR-0069 decision 4 #50), and last the way to 탈퇴 (#140, ADR-0086 — its
+ * linked from here, ADR-0069 decision 4 #50), the ways to 내 제안 (#77) and MY '판정 이의' (#175,
+ * ADR-0104), and last the way to 탈퇴 (#140, ADR-0086 — its
  * confirmation screen under this one, `/my/settings/closure`). Above them all, while a writing or an
  * account restriction stands, its banner (`SanctionBanner`, #185, ADR-0082; #139, ADR-0085 — the
  * restriction state ADR-0078 결과 5 left to #185 and #139 for MY 설정: each end and the way to
@@ -61,6 +63,8 @@ export default async function SettingsPage({
       <ModerationSection />
       {/* 내 제안 (#77): linked from 설정 as from the summary, since it has no tab. */}
       <ProposalsSection />
+      {/* MY '판정 이의' (#175, ADR-0104): linked from 설정 and the submission screen, no tab. */}
+      <DisputesSection />
       <ClosureSection />
     </Stack>
   );

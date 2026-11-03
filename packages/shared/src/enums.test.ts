@@ -263,6 +263,21 @@ describe('enums', () => {
     expect(new Set(enums.ADMIN_ACTION_TYPES).size).toBe(enums.ADMIN_ACTION_TYPES.length);
   });
 
+  it('records a dispute decision as an admin action and no market event (#175)', () => {
+    // Dismiss and accept, right after #152's judgement records; the submission and the
+    // retraction are the member's own rows, and the confirmation stays `resolved`.
+    const disputes = enums.ADMIN_ACTION_TYPES.filter((type) => type.startsWith('market_dispute_'));
+    expect(disputes).toEqual(['market_dispute_dismiss', 'market_dispute_accept']);
+    expect(enums.ADMIN_ACTION_TYPES.indexOf('market_dispute_dismiss')).toBe(
+      enums.ADMIN_ACTION_TYPES.indexOf('market_judgement_retract') + 1,
+    );
+    expect(enums.MARKET_EVENT_TYPES.at(-1)).toBe('provisional');
+    expect(enums.MARKET_EVENT_TYPES.filter((type) => type.includes('dispute'))).toEqual([]);
+    // The M5 review type stays gone; admin_actions.type is varchar(40).
+    expect(enums.ADMIN_ACTION_TYPES).not.toContain('dispute_review');
+    for (const type of disputes) expect(type.length).toBeLessThanOrEqual(40);
+  });
+
   it('lists the settlement steps and their statuses (O-6, ADR-0046)', () => {
     // Coin settlement is the only step: Forecast scoring left with Forecast (N02 §1, N04 §4).
     expect(enums.SETTLEMENT_STEPS).toEqual(['coin']);

@@ -24,11 +24,14 @@ import { relatedSearchSection } from '@/lib/related-markets';
 import { relatedMarketsInfiniteQueryOptions } from './use-markets';
 import {
   ADMIN_MARKETS_KEY,
+  ADMIN_MARKET_DISPUTES_KEY,
   ADMIN_MARKET_JUDGEMENTS_KEY,
   ADMIN_MARKET_PAUSE_DECISIONS_KEY,
   ADMIN_MARKET_REVIEWS_KEY,
   ADMIN_MARKET_SUPPLEMENTS_KEY,
   ADMIN_RELATED_MARKETS_KEY,
+  adminMarketDisputesKey,
+  adminMarketDisputesQueryOptions,
   adminMarketJudgementsQueryOptions,
   adminMarketKey,
   adminMarketPauseDecisionsQueryOptions,
@@ -63,6 +66,7 @@ const draft: AdminMarket = {
   imageUrl: null,
   status: 'draft',
   judgementDelayed: false,
+  disputeUnderReview: false,
   lastPrice: null,
   volumeCoin: '0',
   tradeCount: 0,
@@ -93,6 +97,8 @@ const draft: AdminMarket = {
   // Not judged (#152): no judgement, none waiting, the dispute window decided.
   judgementVersion: null,
   disputeDeadline: null,
+  disputeOpen: false,
+  disputes: { holding: 0, items: [] },
   judgement: { current: null, pending: null, log: [], disputeWindowUndecided: false },
   missingOpenItems: [],
   leadCloseGapMinutes: null,
@@ -262,6 +268,7 @@ const linkedOther: AdminRelatedMarket = {
   imageUrl: null,
   status: 'open',
   judgementDelayed: false,
+  disputeUnderReview: false,
   lastPrice: null,
   volumeCoin: '0',
   tradeCount: 0,
@@ -269,6 +276,9 @@ const linkedOther: AdminRelatedMarket = {
   closeAt: '2026-10-01T00:00:00.000Z',
   openAt: '2026-09-07T00:00:00.000Z',
   resolvedResult: null,
+  judgementVersion: null,
+  disputeDeadline: null,
+  disputeOpen: false,
   statusEventId: '2',
   createdAt: '2026-09-01T00:00:00.000Z',
   linkedBy: { id: 'admin', nickname: '관리자' },
@@ -546,6 +556,7 @@ const found = (id: string, title: string): MarketSummary => ({
   imageUrl: null,
   status: 'open',
   judgementDelayed: false,
+  disputeUnderReview: false,
   lastPrice: null,
   volumeCoin: '0',
   tradeCount: 0,
@@ -553,6 +564,9 @@ const found = (id: string, title: string): MarketSummary => ({
   closeAt: '2026-10-01T00:00:00.000Z',
   openAt: '2026-09-07T00:00:00.000Z',
   resolvedResult: null,
+  judgementVersion: null,
+  disputeDeadline: null,
+  disputeOpen: false,
   statusEventId: '2',
   createdAt: '2026-09-01T00:00:00.000Z',
 });
@@ -817,6 +831,65 @@ describe('the 판정 승인 대기 queue (#152, ADR-0103)', () => {
         pages: [],
         pageParams: [],
       });
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+});
+
+describe('이의 접수 (#175, ADR-0104)', () => {
+  it('asks `GET /admin/market-disputes` per half, a page per cursor, under the private admin root', async () => {
+    const get = vi.spyOn(api, 'GET').mockResolvedValue({
+      data: { data: [], meta: { nextCursor: 'c2' } },
+      response: new Response(null, { status: 200 }),
+    } as never);
+    try {
+      for (const status of ['pending', 'decided'] as const) {
+        const options = adminMarketDisputesQueryOptions(status);
+        expect(options.queryKey).toEqual(['admin', 'market-disputes', status]);
+        expect(await options.queryFn({ pageParam: undefined })).toEqual({
+          items: [],
+          nextCursor: 'c2',
+        });
+        expect(get).toHaveBeenLastCalledWith('/api/v1/admin/market-disputes', {
+          params: { query: { status } },
+        });
+        await options.queryFn({ pageParam: 'c2' });
+        expect(get).toHaveBeenLastCalledWith('/api/v1/admin/market-disputes', {
+          params: { query: { status, cursor: 'c2' } },
+        });
+        expect(options.getNextPageParam({ items: [], nextCursor: null })).toBeUndefined();
+        // Under one prefix, so one invalidation asks both halves again.
+        expect(partialMatchKey(adminMarketDisputesKey(status), ADMIN_MARKET_DISPUTES_KEY)).toBe(
+          true,
+        );
+      }
+      // Its own root segment: neither a status filter of the admin list nor another queue.
+      for (const other of [
+        ADMIN_MARKETS_KEY,
+        ADMIN_MARKET_REVIEWS_KEY,
+        ADMIN_MARKET_SUPPLEMENTS_KEY,
+        ADMIN_MARKET_PAUSE_DECISIONS_KEY,
+        ADMIN_MARKET_JUDGEMENTS_KEY,
+      ]) {
+        expect(partialMatchKey(ADMIN_MARKET_DISPUTES_KEY, other)).toBe(false);
+      }
+    } finally {
+      get.mockRestore();
+    }
+  });
+
+  it('is asked again by every admin write to a market: a 기각 or a 수용 moves a row between halves', async () => {
+    const { queryClient, unsubscribe } = await loadedDetail();
+    try {
+      for (const status of ['pending', 'decided'] as const) {
+        queryClient.setQueryData(adminMarketDisputesKey(status), { pages: [], pageParams: [] });
+      }
+      await applyMarket(queryClient, ID, { ...draft, status: 'provisional' });
+      for (const status of ['pending', 'decided'] as const) {
+        expect(queryClient.getQueryState(adminMarketDisputesKey(status))?.isInvalidated).toBe(true);
+      }
     } finally {
       unsubscribe();
       queryClient.clear();

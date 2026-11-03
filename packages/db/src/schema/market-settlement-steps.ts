@@ -9,14 +9,14 @@ import { markets } from './markets.js';
  * (@buddha/shared) is `done`.
  *
  * The transition to `resolved` inserts one `pending` row per step in its own transaction — since
- * #152 the worker's confirmation at the dispute deadline (`resolveProvisionalMarket`, ADR-0103),
- * before it ADR-0046's interim judgement in the API — so the table never lags the status; the
- * worker moves the market on to `settling` and `finalizeMarket` runs the steps that are not
- * `done` under the market lock and marks each `done` with `completed_at`. A step that throws
- * rolls its transaction back, and the worker then records the attempt in a separate one —
- * `attempts` + 1, `failed`, `last_error` — so the reason a market stays `settling` is readable
- * without the worker's logs; the per-minute scan retries it with no cap. `last_error` is kept
- * after a later success.
+ * #152 the worker's confirmation past the dispute deadline, once no 판정 이의 holds it
+ * (`resolveProvisionalMarket`, ADR-0103, ADR-0104), before it ADR-0046's interim judgement in the
+ * API — so the table never lags the status; the worker moves the market on to `settling` and
+ * `finalizeMarket` runs the steps that are not `done` under the market lock and marks each `done`
+ * with `completed_at`. A step that throws rolls its transaction back, and the worker then records
+ * the attempt in a separate one — `attempts` + 1, `failed`, `last_error` — so the reason a market
+ * stays `settling` is readable without the worker's logs; the per-minute scan retries it with no
+ * cap. `last_error` is kept after a later success.
  *
  * `step` and `status` are varchar validated by zod (the `market_events.type` convention), so a
  * step added later needs no enum migration. Not append-only: the worker updates rows.

@@ -7,6 +7,7 @@ import {
 } from '@buddha/shared';
 import { MY_CLOSURE_PATH } from './account-closure';
 import type { Me } from './api';
+import { MY_DISPUTES_PATH } from './disputes';
 import { safeNextPath } from './next-path';
 import { MY_PROPOSALS_PATH } from './proposals';
 
@@ -67,7 +68,12 @@ export const ONBOARDING_PATH = '/onboarding';
  *   탈퇴 screen it is here, for every step left, not among the pages a re-consent alone opens. Its
  *   '시장 제안하기' still leads to the form, /proposals/new, which stays gated (a new proposal is an
  *   action #57-8 keeps for after the onboarding).
- *   These two screens only, for every account with a step left: the rest of MY stays gated — its
+ * - MY '판정 이의', /my/disputes (#175, ADR-0104): the same for a 판정 이의 — its 철회 within the
+ *   deadline is taken with sign-in only (the API's retraction is `SessionGuard` alone), so an
+ *   account with a step left may still open its disputes and take a pending one back. The
+ *   submission screen, /markets/[slug]/dispute, stays gated: a new dispute is an action #57-8
+ *   keeps for after the onboarding (`OnboardedGuard`).
+ *   These three screens only, for every account with a step left: the rest of MY stays gated — its
  *   설정 tab too, but for an account facing a re-consent alone, which ONBOARDING_EXEMPT_PAGES opens
  *   it to (#41), so that one also reaches the 탈퇴 screen from MY 설정's card (and the re-consent
  *   step's link to MY 설정, `settingsLinkOnStep`) and 내 제안 from its card there.
@@ -90,6 +96,7 @@ export const ONBOARDING_EXEMPT_PATHS: readonly string[] = [
   ...(PAID_COIN_SALES_ENABLED ? ['/charge'] : []),
   MY_CLOSURE_PATH,
   MY_PROPOSALS_PATH,
+  MY_DISPUTES_PATH,
   '/api',
 ];
 

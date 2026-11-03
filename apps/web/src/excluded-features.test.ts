@@ -532,6 +532,9 @@ describe('excluded features on screens (#113)', () => {
       // 판정's (#152): the evidence, the reasons, the instants and the registrant and approver
       // likewise (#24 decides what the public judging record shows, never who judged: #173 13).
       at('lib', 'market-judgement.ts'),
+      // 판정 이의's operator side (#175): the submitter, the body and the decider are no member's
+      // (#173 13) — 이의 접수 and the 판정 panel's block alone read it.
+      at('lib', 'admin-disputes.ts'),
     ]) {
       expect(ADMIN.has(file), file).toBe(true);
     }
@@ -546,6 +549,13 @@ describe('excluded features on screens (#113)', () => {
       // 규칙 버전 on the public detail (#80), whose names the admin's 이벤트 로그 says too.
       at('lib', 'rule-versions.ts'),
       at('components', 'market', 'rule-versions-section.tsx'),
+      // 판정 이의's member side (#175): the detail's deadline and link, the discussion's and the
+      // write screen's note, the submission screen and MY — whose statuses' words the operators'
+      // screens read too, so they are held to the member's rules.
+      at('lib', 'disputes.ts'),
+      at('hooks', 'use-disputes.ts'),
+      at('components', 'market', 'dispute-discussion-note.tsx'),
+      at('components', 'disputes', 'dispute-item.tsx'),
     ]) {
       expect(ADMIN.has(file), file).toBe(false);
     }

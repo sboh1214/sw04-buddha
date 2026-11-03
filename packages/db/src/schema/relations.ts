@@ -18,6 +18,7 @@ import { profileInterestCategories } from './interest-categories.js';
 import { ledgerEntries } from './ledger.js';
 import { commentLikes, postLikes } from './likes.js';
 import { linkFlags } from './link-review.js';
+import { marketDisputes } from './market-disputes.js';
 import { marketEvents } from './market-events.js';
 import { marketJudgements } from './market-judgements.js';
 import { marketLinks } from './market-links.js';
@@ -173,6 +174,8 @@ export const marketsRelations = relations(markets, ({ one, many }) => ({
   pauses: many(marketPauses),
   // 판정 (#152): every approved judgement, `version` the order; `judgement_version` the current.
   judgements: many(marketJudgements),
+  // 판정 이의 (#175): every dispute of every version, `submitted_at` the order.
+  disputes: many(marketDisputes),
   posts: many(posts),
   // 시장 제안 (#77): the proposals adopted into this market, and the ones rejected as its
   // duplicates. Admin reads only: a market never shows who proposed it.
@@ -412,7 +415,7 @@ export const marketPausesRelations = relations(marketPauses, ({ one }) => ({
 
 // Two references to `user` (who registered, who approved), so both ends name theirs (as
 // `approval_requester` below).
-export const marketJudgementsRelations = relations(marketJudgements, ({ one }) => ({
+export const marketJudgementsRelations = relations(marketJudgements, ({ one, many }) => ({
   market: one(markets, { fields: [marketJudgements.marketId], references: [markets.id] }),
   /** The approved `market_judgement` request the judgement came in by. */
   approval: one(approvalRequests, {
@@ -433,6 +436,28 @@ export const marketJudgementsRelations = relations(marketJudgements, ({ one }) =
   provisionalEvent: one(marketEvents, {
     fields: [marketJudgements.provisionalEventId],
     references: [marketEvents.id],
+  }),
+  /** The 판정 이의 against it (#175). */
+  disputes: many(marketDisputes),
+}));
+
+// Two references to `user` (who submitted, who decided), so both ends name theirs.
+export const marketDisputesRelations = relations(marketDisputes, ({ one }) => ({
+  market: one(markets, { fields: [marketDisputes.marketId], references: [markets.id] }),
+  /** The judgement disputed: the composite `market_disputes_judgement_fk`. */
+  judgement: one(marketJudgements, {
+    fields: [marketDisputes.marketId, marketDisputes.judgementVersion],
+    references: [marketJudgements.marketId, marketJudgements.version],
+  }),
+  submitter: one(user, {
+    fields: [marketDisputes.userId],
+    references: [user.id],
+    relationName: 'market_dispute_submitter',
+  }),
+  decider: one(user, {
+    fields: [marketDisputes.decidedBy],
+    references: [user.id],
+    relationName: 'market_dispute_decider',
   }),
 }));
 
@@ -526,6 +551,8 @@ export const userRelations = relations(user, ({ one, many }) => ({
     relationName: 'market_judgement_registered_by',
   }),
   judgementsApproved: many(marketJudgements, { relationName: 'market_judgement_approved_by' }),
+  disputesSubmitted: many(marketDisputes, { relationName: 'market_dispute_submitter' }),
+  disputesDecided: many(marketDisputes, { relationName: 'market_dispute_decider' }),
 }));
 
 export const sessionRelations = relations(session, ({ one }) => ({

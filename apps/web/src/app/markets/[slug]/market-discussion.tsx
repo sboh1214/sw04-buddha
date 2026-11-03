@@ -4,6 +4,7 @@ import { Alert, Button, HStack, Heading, Skeleton, Stack, Text } from '@chakra-u
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { usePathname } from 'next/navigation';
+import { MarketDisputeDiscussionNote } from '@/components/market/dispute-discussion-note';
 import { PostCard } from '@/components/post/post-card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
@@ -51,6 +52,11 @@ const SKELETON_ROWS = [0, 1];
  * everyone keeps the HTML free of who is reading, as the rest of the detail is
  * (`personalAreaView`).
  *
+ * On a 잠정 결과 while its 이의 기한 is ahead, one line above the list says a post is no 판정 이의, with
+ * the link to the submission screen (decision 3 '#175 토론의 이의 안내', ADR-0104); it goes at the
+ * deadline without a reload (`DisputeDiscussionNote`, timed from the detail's `now`). Public market
+ * data, the same for every visitor, so it may be in the HTML.
+ *
  * No section card around it, as 관련 시장 has none (owner decision 2026-10-20 5; ADR-0068's '바깥
  * 카드 없이'): the cards are boxes already. The rungs are the community list's: skeletons while the
  * first page loads, a first read that failed (said apart from an unreachable server) with 다시 시도,
@@ -58,7 +64,7 @@ const SKELETON_ROWS = [0, 1];
  * 4) — the cards with 더 보기, a notice above them when a later refresh failed, and one above 더
  * 보기 when it failed, the button left to ask again (`LoadMoreFailed`, as every 더 보기 list).
  */
-export function MarketDiscussion({ marketId }: { marketId: string }) {
+export function MarketDiscussion({ marketId, now }: { marketId: string; now?: number }) {
   const list = useMarketPosts(marketId);
   const view = discussionView(list);
   // The market's detail, where a visitor's 신고 comes back to after the login it sends them to.
@@ -92,6 +98,12 @@ export function MarketDiscussion({ marketId }: { marketId: string }) {
           </NextLink>
         </Button>
       </HStack>
+      {/* Above the list, while 판정 이의 are taken (decision 3 '#175 토론의 이의 안내'). */}
+      <MarketDisputeDiscussionNote
+        marketId={marketId}
+        now={now}
+        testId="market-discussion-dispute-note"
+      />
       {view.stale && (
         <Alert.Root status="warning" role="status" data-testid="market-discussion-refresh-failed">
           <Alert.Indicator />

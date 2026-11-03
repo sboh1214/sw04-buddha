@@ -10,7 +10,7 @@ import { copy } from '@/copy';
 import { system } from '@/theme/system';
 import { type Market, isApiError } from './api';
 import { formatNoPrice } from './market-admin';
-import { readsJudgementDelayed } from './market-status';
+import { readsDisputeUnderReview, readsJudgementDelayed } from './market-status';
 import { BOTTOM_TABS_HEIGHT_PX, ORDER_ENTRY_BAR_HEIGHT_PX } from './nav';
 
 /**
@@ -256,7 +256,7 @@ export interface StatusNotice {
  * What a status other than 거래 중 leaves a reader able to do (PLAN 11.3), one notice per public
  * status (ADR-0093 decision 1, item 12), each saying only what is so in that status — nothing
  * about what a later issue brings (a pause's reason and times #24 — #114 keeps them admin-only —,
- * the dispute #175). 개장 예정 promises no
+ * a correction #176). 개장 예정 promises no
  * open even since the scheduled open opens it (#21, ADR-0100): the time can move, and a close
  * passed first keeps it shut. `open`, `draft` and `review` are absent on purpose: an open market's
  * state is its countdown, and a draft or a market in review never reaches the detail route — the
@@ -290,17 +290,32 @@ const STATUS_NOTICE: Partial<Record<MarketStatus, Omit<StatusNotice, 'detail'>>>
  * A closed market whose scheduled judgement has passed (`judgementDelayed`, #22, ADR-0098) says
  * so, as its badge reads '판정 지연' (`marketStatusLabel`): still no trading, and no result yet —
  * never that a late result means NO. The delay's reason and next review time are #142's.
+ *
+ * A 잠정 결과 keeps its own sentence and adds why it is not confirmed yet while a 판정 이의 holds it
+ * (#175, ADR-0104; #173 item 12): under review before its 이의 기한 ('이의 검토 중'), and past it
+ * still not confirmed ('판정 지연', owner answer 2026-11-03) — never what the review will decide,
+ * nor any payout. The deadline row and the submission link are the detail's (`StatusNotice`).
  */
 export function statusNotice(market: {
   status: MarketStatus;
   judgementDelayed: boolean;
+  disputeUnderReview: boolean;
   resolvedResult: MarketResult | null;
 }): StatusNotice | undefined {
-  if (readsJudgementDelayed(market)) {
+  if (market.status === 'closed' && readsJudgementDelayed(market)) {
     return { tone: 'warning', message: copy.marketJudgementDelayedNotice };
   }
   const notice = STATUS_NOTICE[market.status];
   if (notice === undefined) return undefined;
+  if (market.status === 'provisional') {
+    if (readsJudgementDelayed(market)) {
+      return { ...notice, tone: 'warning', detail: copy.marketProvisionalDelayed };
+    }
+    if (readsDisputeUnderReview(market)) {
+      return { ...notice, detail: copy.marketProvisionalUnderReview };
+    }
+    return notice;
+  }
   if (market.status !== 'settled' || market.resolvedResult === null) return notice;
   return {
     ...notice,

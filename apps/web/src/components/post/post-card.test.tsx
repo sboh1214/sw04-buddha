@@ -10,6 +10,7 @@ const MARKET: PostMarket = {
   title: '기준금리 인하?',
   status: 'scheduled',
   judgementDelayed: false,
+  disputeUnderReview: false,
   category: { slug: 'economy', nameKo: '경제' },
 };
 

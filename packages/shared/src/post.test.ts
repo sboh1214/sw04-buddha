@@ -138,6 +138,7 @@ describe('the public shapes', () => {
     status: 'closed',
     // Past its scheduled judgement: its badge reads '판정 지연' (#22, ADR-0098).
     judgementDelayed: true,
+    disputeUnderReview: false,
     category: { slug: 'economy', nameKo: '경제' },
   } as const;
 
@@ -151,6 +152,22 @@ describe('the public shapes', () => {
     expect(postMarketSchema.parse(market)).toEqual(market);
     const { judgementDelayed: _, ...unsaid } = market;
     expect(postMarketSchema.safeParse(unsaid).success).toBe(false);
+  });
+
+  it("says of a post's market whether its badge reads '이의 검토 중', as the cards do (#175)", () => {
+    const held = {
+      ...market,
+      status: 'provisional',
+      judgementDelayed: false,
+      disputeUnderReview: true,
+    };
+    expect(postMarketSchema.parse(held)).toEqual(held);
+    const { disputeUnderReview: _, ...unsaid } = held;
+    expect(postMarketSchema.safeParse(unsaid).success).toBe(false);
+    // The badge alone: no deadline, version or count rides on a post's market.
+    expect(
+      postMarketSchema.parse({ ...held, disputeDeadline: '2026-11-04T00:00:00.000Z' }),
+    ).toEqual(held);
   });
 
   it('carries no market while it is not public (#78 되돌리기, ADR-0099)', () => {

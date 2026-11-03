@@ -83,7 +83,8 @@ const HANDLERS: Partial<Record<string, Handler>> = {
     return reportScan({ closed, skipped, failed }, failures, 'market close', closed, logger);
   },
   // #152 (ADR-0103): the delayed job the API registers at a provisional result's dispute
-  // deadline, or the scan; a confirmation registers its `market.finalize`.
+  // deadline (and again, with no delay, after the last holding dispute's dismissal past it — #175,
+  // ADR-0104), or the scan; a confirmation registers its `market.finalize`.
   [JOB_NAMES.marketResolve]: async (job, { db, publish, enqueueFinalize, logger }) => {
     const { marketId } = parseMarketJob(job);
     if (marketId) {

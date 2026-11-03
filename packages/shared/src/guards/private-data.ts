@@ -18,7 +18,7 @@ import { identifierWords } from './excluded.js';
  * operators' actions are operators' (N04 §6, #45-13), the reporter's own reports and the member's
  * own actions theirs (#50, ADR-0081).
  * A market proposal and its proposer are the proposer's and the operators' alone (#77, ADR-0069
- * decision 4).
+ * decision 4), and so are a 판정 이의's submitter and body (#175, ADR-0093 decision 1 #173 item 13).
  * Items nothing stores yet
  * are named ahead (`pending`), so the route or event that brings one is refused from its first
  * day.
@@ -48,6 +48,7 @@ export const PRIVATE_DATA_IDS = [
   'consent',
   'former-nickname',
   'proposal',
+  'dispute',
   'auth-secret',
   'risk-flag',
   'author-holding',
@@ -369,6 +370,39 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
     // of the form itself (a YES condition, sources) are a market's too and are not listed. The
     // proposer's own `GET /me/proposals` is an owner-only route, which this list does not read.
     fields: [['proposal'], ['proposals'], ['proposer'], ['proposers'], ['proposed']],
+  },
+  {
+    id: 'dispute',
+    name: '판정 이의의 제출자와 제출 본문(근거 링크·사유)',
+    basis: 'ADR-0093 결정 1(#173 13항: 이의 제출자와 제출 본문은 비공개), ADR-0104',
+    // A 판정 이의 (#175) is its submitter's and the operators': the submitter reads their own on
+    // MY (`GET /me/disputes`, `links` and `reason`), the admin screens name the `submitter`. A
+    // public shape never names who disputed (`submitter`, `submittedBy`, `disputer`,
+    // `disputedBy`), carries a dispute's body (`disputeReason`, `disputeLinks`, `disputeText`) or
+    // says a dispute is somebody's (`myDispute`, `userDisputes`, `viewerDispute`) — not even the
+    // reader's own, which would make a public answer differ by who asks. The market's own dispute
+    // fields are public (`disputeDeadline`, `disputeOpen`, `disputeUnderReview`, #173 items 6·12),
+    // and so are the count, the statuses and the decision reasons #24 publishes under names of
+    // their own (#173 item 13); the body's bare `links` and `reason` are a judgement's and a
+    // refusal's words too.
+    fields: [
+      ['submitter'],
+      ['submitters'],
+      ['submitted', 'by'],
+      ['disputer'],
+      ['disputers'],
+      ['disputant'],
+      ['disputants'],
+      ['disputed', 'by'],
+      ['dispute', 'reason'],
+      ['dispute', 'reasons'],
+      ['dispute', 'link'],
+      ['dispute', 'links'],
+      ['dispute', 'body'],
+      ['dispute', 'text'],
+      ['dispute', 'content'],
+    ],
+    owned: { words: ['dispute', 'disputes'], whose: WHOSE_OR_VIEWER },
   },
   {
     id: 'auth-secret',

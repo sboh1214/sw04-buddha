@@ -43,6 +43,7 @@ const market = {
   title: '금리 인하?',
   status: 'resolved' as const,
   judgementDelayed: false,
+  disputeUnderReview: false,
   category: { slug: 'economy', nameKo: '경제' },
 };
 

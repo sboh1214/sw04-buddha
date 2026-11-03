@@ -947,6 +947,48 @@ const linkFlags: Step = async (tx, { cutoff, limit }) => {
 };
 
 /**
+ * A withdrawn account's 판정 이의 (#175, ADR-0104; ADR-0087 (6), ADR-0069 #57-18 — 신고·제재 기록),
+ * emptied in place once the period has passed since the later of the withdrawal and the dispute's
+ * end — its dismissal, its acceptance or its 철회: the links and the reason go ('{}', ''), the row
+ * stays with `purged_at` the run's instant, so #24's public count and statuses survive. Never one
+ * that still holds its market (pending, or accepted for the market's current version, waiting for
+ * its correction — #176 may send it back to pending, owner answer 2026-11-02): it is still being
+ * processed, and is reviewed all the same (ADR-0069 decision 4 #140); an accepted one whose version
+ * a correction replaced holds nothing and goes. Never twice: an emptied one is not selected again.
+ * A live account's are kept. Locked SKIP LOCKED, as the reports: a decision or a retraction in
+ * flight (FOR UPDATE under the market lock) is left to the next run. The UPDATE is migration
+ * 0056's retention branch: `purged_at` set, the two emptied, nothing else changed.
+ */
+const marketDisputes: Step = async (tx, { cutoff, now, limit }) => {
+  const { marketDisputes: table, markets, profiles } = schema;
+  const due = await tx
+    .select({ id: table.id })
+    .from(table)
+    .innerJoin(profiles, eq(profiles.userId, table.userId))
+    .innerJoin(markets, eq(markets.id, table.marketId))
+    .where(
+      and(
+        ne(table.status, 'pending'),
+        isNull(table.purgedAt),
+        lte(profiles.closedAt, cutoff),
+        sql`GREATEST(${table.decidedAt}, ${table.retractedAt}) <= ${ts(cutoff)}`,
+        sql`NOT (${table.status} = 'accepted' AND ${table.judgementVersion} = ${markets.judgementVersion})`,
+      ),
+    )
+    .orderBy(asc(profiles.closedAt), asc(table.id))
+    .limit(limit)
+    .for('update', { of: table, skipLocked: true });
+  const ids = due.map((row) => row.id);
+  if (ids.length > 0) {
+    await tx
+      .update(table)
+      .set({ links: [], reason: '', purgedAt: now })
+      .where(inArray(table.id, ids));
+  }
+  return { selected: ids.length, deleted: { market_disputes: ids.length }, storageKeys: [] };
+};
+
+/**
  * A withdrawn account's consent records (#57-18 «동의 기록»), once the period has passed since the
  * withdrawal. A live account's are its standing consent: never. No row lock (no UPDATE of the
  * table for buddha_app, and nothing changes a record).
@@ -1042,8 +1084,8 @@ const marketProposals: Step = async (tx, { cutoff, limit }) => {
  * a report before its action (a hiding's among them, which goes with its hidden item and that
  * item's versions), a removed profile item and an ended hold before theirs, an action before its
  * requests — and the versions before the originals, so an original's images are judged against the
- * versions still kept. #187's review list names nothing the run deletes and nothing names it: it
- * closes the 신고·제재 kinds.
+ * versions still kept. #187's review list names nothing the run deletes and nothing names it, nor
+ * do #175's 판정 이의, emptied in place: they close the 신고·제재 kinds.
  */
 const STEPS: readonly { kind: RetentionPurgeKind; step: Step }[] = [
   { kind: 'nickname_holds', step: nicknameHolds },
@@ -1058,6 +1100,7 @@ const STEPS: readonly { kind: RetentionPurgeKind; step: Step }[] = [
   { kind: 'moderation_actions', step: moderationActions },
   { kind: 'approval_requests', step: approvalRequests },
   { kind: 'link_flags', step: linkFlags },
+  { kind: 'market_disputes', step: marketDisputes },
   { kind: 'consent_records', step: consentRecords },
   { kind: 'phone_verification_records', step: phoneVerificationRecords },
   { kind: 'market_proposals', step: marketProposals },

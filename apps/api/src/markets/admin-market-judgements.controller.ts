@@ -34,8 +34,9 @@ import { MarketJudgementService } from './market-judgement.service.js';
  * the #152 rows): one admin registers a CLOSED market's judgement — the result (YES, NO or VOID),
  * the rule's source, the evidence and the description — and another approves it, which publishes
  * the provisional result (CLOSED → PROVISIONAL) and fixes the dispute deadline; the worker
- * confirms it once that has passed (PROVISIONAL → RESOLVED). A 반려 leaves the market CLOSED to be
- * registered again. The interim one-admin `POST …/resolve` is gone. The decisions name the
+ * confirms it once that has passed with no 판정 이의 holding it (PROVISIONAL → RESOLVED; #175). A
+ * 반려 leaves the market CLOSED to be registered again. The interim one-admin `POST …/resolve` is
+ * gone. The decisions name the
  * registration in the path (`:requestId`), as #80's and #114's do: a market has many over its
  * life, one waiting at a time. Each write answers the admin detail (`AdminMarket`, its `judgement`
  * among it). Guards run in order: SessionGuard (401 without a session, 403 for a foreign Origin on
@@ -98,7 +99,8 @@ export class AdminMarketJudgementsController {
       'Approve a waiting judgement (승인) by an admin other than its registrant, with a reason ' +
       '— before the scheduled judgement time also confirming the NO condition’s event deadline: ' +
       'the provisional result is published (closed → provisional) and the dispute deadline ' +
-      'fixed (now plus the dispute window); the worker confirms the result once it has passed',
+      'fixed (now plus the dispute window); the worker confirms the result once it has passed ' +
+      'with no judgement dispute pending or accepted',
   })
   @ApiData(adminMarketSchema)
   // VALIDATION_ERROR names `reason` or `eventDeadlineConfirmed` from the body, then `requestId`

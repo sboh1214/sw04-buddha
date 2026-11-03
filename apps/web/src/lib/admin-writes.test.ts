@@ -77,6 +77,12 @@ const SCREENS: Readonly<Record<string, readonly string[]>> = {
     'body: { reason, expectedAccountId: by },',
     'body: { expectedAccountId: by },',
   ],
+  // 판정 이의 (#175, ADR-0104), new since and written the same way: 기각 · 수용 from their dialog
+  // (each naming the dispute in its path), the block holding it for the admin who opened it
+  '../app/admin/markets/[id]/market-dispute-dialogs.tsx': [
+    "await api.POST('/api/v1/admin/markets/{id}/disputes/{disputeId}/dismiss', {\n            params: { path: { id: market.id, disputeId } },\n            body: { reason, expectedAccountId: by },",
+    "await api.POST('/api/v1/admin/markets/{id}/disputes/{disputeId}/accept', {\n            params: { path: { id: market.id, disputeId } },\n            body: { reason, expectedAccountId: by },",
+  ],
   '../app/admin/themes/admin-themes.tsx': [
     '.mutateAsync({ ...toCreateThemeBody(values), expectedAccountId: operatorId })',
   ],
@@ -189,6 +195,10 @@ describe('the admin the admin writes name (ADR-0092)', () => {
       '../app/admin/markets/[id]/market-judgement-panel.tsx': 6,
       // the confirms of 승인, 반려 and 철회 (#152)
       '../app/admin/markets/[id]/market-judgement-dialogs.tsx': 3,
+      // the buttons opening 기각 and 수용 (#175)
+      '../app/admin/markets/[id]/market-dispute-panel.tsx': 2,
+      // the confirm of 기각 or 수용 (#175: one dialog, its kind's route)
+      '../app/admin/markets/[id]/market-dispute-dialogs.tsx': 1,
       // 만들기, and the form's fields
       '../app/admin/themes/admin-themes.tsx': 2,
       // 공개, 비공개의 confirm, 저장, 넣기, 빼기의 confirm, 공지 쓰기·고치기, 보이기, 숨기기의 confirm;
@@ -293,6 +303,10 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
     // event-deadline confirmation
     '../app/admin/markets/[id]/market-judgement-panel.tsx': [
       'const [action, setAction] = useHeldForOperator<JudgementAction>();',
+    ],
+    // 판정 이의 (#175): the 기각 or 수용 dialog, with the dispute it was opened on and the reason
+    '../app/admin/markets/[id]/market-dispute-panel.tsx': [
+      'const [action, setAction] = useHeldForOperator<DisputeAction>();',
     ],
     // 비공개로 돌리기, a market's 빼기, the notice opened for editing and a notice's 숨기기
     '../app/admin/themes/[id]/admin-theme-detail.tsx': [
@@ -425,6 +439,11 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
       "{action !== null && action !== 'register' && (\n        <JudgementDialog kind={action} market={market} onClose={close} />",
     );
     expect(judgement).toContain("action === 'register' ? (");
+    // And the 판정 이의 block's 기각 or 수용 dialog (#175), drawn in the judgement panel.
+    expect(source('../app/admin/markets/[id]/market-dispute-panel.tsx')).toContain(
+      '{action !== null && (\n        <DisputeDecisionDialog\n          action={action}\n          market={market}',
+    );
+    expect(judgement).toContain('disputes={<MarketDisputes market={market} />}');
     expect(source('../app/admin/settings/admin-release-settings.tsx')).toContain(
       '{editing !== null && <ChangeDialog item={editing} onClose={() => setEditing(null)} />}',
     );

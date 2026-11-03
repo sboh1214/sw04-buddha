@@ -513,15 +513,17 @@ test.describe('판정', () => {
       await expect(notice.getByTestId('market-detail-result')).toHaveText(copy.no);
       await expect(page.getByTestId('order-area')).toHaveCount(0);
       expect(await documentSurvived(page)).toBe(true);
-      // The public market says 잠정 결과 and its result and nothing of the judgement (#24 shows the
-      // record later, without the admins; the deadline is #175's): no evidence, no description, no
-      // reason, no request, no admin — in the answer, and in the server's HTML.
+      // The public market says 잠정 결과 and its result, and — since #175 (ADR-0104; #173 item 6:
+      // 기한과 접수 링크는 비로그인에게도 보인다) — the judgement version and the 이의 기한 the
+      // approval fixed, the link's (dispute.spec.ts walks it), and nothing else of the judgement
+      // (#24 shows the record later, without the admins): no evidence, no description, no reason,
+      // no request, no admin — in the answer, and in the server's HTML.
       const publicMarket = await publicMarketOf(request, market.id);
       expect(publicMarket.status).toBe('provisional');
       expect(publicMarket.resolvedResult).toBe('NO');
-      for (const key of ['judgement', 'judgementVersion', 'disputeDeadline']) {
-        expect(Object.keys(publicMarket)).not.toContain(key);
-      }
+      expect(publicMarket.judgementVersion).toBe(1);
+      expect(publicMarket.disputeDeadline).toBe(current.disputeDeadline);
+      expect(Object.keys(publicMarket)).not.toContain('judgement');
       const publicBody = await (await request.get(`/api/v1/markets/${market.id}`)).text();
       const html = await (await request.get(`/markets/${market.slug}`)).text();
       for (const hidden of [

@@ -52,7 +52,33 @@ export interface LiveMarket {
    * transition paths (a test factory), which falls back to rank in `statusSupersedes`.
    */
   statusEventId: string | null;
+  /**
+   * The status displays the server computed for `status` at the read (ADR-0098, ADR-0104):
+   * '판정 지연' (`judgementDelayed`), '이의 검토 중' (`disputeUnderReview`) and whether 판정 이의 are
+   * taken (`disputeOpen`, the detail's submission link). Each holds for the status it was read
+   * with only, so a status the row did not read them with carries them false (`applyStatus`), and
+   * they move with the status group (`joinMarket`).
+   */
+  judgementDelayed: boolean;
+  disputeUnderReview: boolean;
+  disputeOpen: boolean;
+  /**
+   * The judgement version on view and its 이의 기한 (#152, #175): written by the same transition
+   * as the status (`provisional`), so they move with the status group too (`joinMarket`).
+   */
+  judgementVersion: number | null;
+  disputeDeadline: string | null;
 }
+
+/**
+ * The display flags a status of its own read sets: none, for a status the row moved to by an
+ * event (`applyStatus`) — the REST refetch the event fires beside it fills them in.
+ */
+const NO_STATUS_DISPLAY = {
+  judgementDelayed: false,
+  disputeUnderReview: false,
+  disputeOpen: false,
+} as const satisfies Pick<LiveMarket, 'judgementDelayed' | 'disputeUnderReview' | 'disputeOpen'>;
 
 /** One page of `GET /markets` as the list hook keeps it. */
 export interface MarketPage {
@@ -168,6 +194,12 @@ export function tickRestartsMarket(
  * key is written with the status, so the next event and the next REST answer are both compared
  * against the transition this one delivered.
  *
+ * The display flags are RESET (`NO_STATUS_DISPLAY`, #175, ADR-0104): `judgementDelayed`,
+ * `disputeUnderReview` and `disputeOpen` were read for the old status — a CLOSED market's delay,
+ * a PROVISIONAL one's hold or open deadline — and none of them may label the status the event
+ * brings (ADR-0098 8-11's reason, now that PROVISIONAL reads flags too). The REST refetch the
+ * handler fires beside the event (realtime-provider.tsx) fills them in for the new status.
+ *
  * `undefined` for an event that is not NEWER covers two senders: a late or duplicate
  * transition, and the deliberate repeat an admin edit publishes (A-M4-36) — the same id the row
  * already holds. Both must write nothing — the event carries no `closeAt`, `title` or rule item
@@ -191,6 +223,7 @@ export function applyStatus<T extends LiveMarket>(
     status: event.status,
     resolvedResult: event.resolvedResult ?? null,
     statusEventId: event.statusEventId,
+    ...NO_STATUS_DISPLAY,
   };
 }
 
@@ -245,13 +278,22 @@ export function joinMarket<T extends LiveMarket>(held: T | undefined, incoming: 
   // The status GROUP moves together: the result was written by the same transition as the
   // status and its key, so a snapshot older than what is held must not drag either back alone —
   // a `settled` kept by status but joined with a pre-판정 snapshot's null result would badge
-  // 지급 완료 over no answer at all.
+  // 지급 완료 over no answer at all. The display flags ride with it (#175, ADR-0104): an older
+  // snapshot's were read for its own status — a CLOSED market's '판정 지연' joined to the 잠정 결과
+  // held would read 판정 지연 on PROVISIONAL, which a held market past its deadline now means. So
+  // do the version and the 이의 기한: a pre-판정 snapshot's nulls would take the detail's deadline
+  // row and link away, and hold the dispute screen on its skeleton, while `disputeOpen` says open.
   if (statusSupersedes(held, incoming)) {
     next = {
       ...next,
       status: held.status,
       resolvedResult: held.resolvedResult,
       statusEventId: held.statusEventId,
+      judgementDelayed: held.judgementDelayed,
+      disputeUnderReview: held.disputeUnderReview,
+      disputeOpen: held.disputeOpen,
+      judgementVersion: held.judgementVersion,
+      disputeDeadline: held.disputeDeadline,
     };
   }
   return next;

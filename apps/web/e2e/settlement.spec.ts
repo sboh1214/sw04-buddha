@@ -231,8 +231,9 @@ test.describe('정산', () => {
       await secondContext.close();
     }
 
-    // 정산된 시장은 결과만 남긴다. 공개 상세에는 이의 섹션도, 이의 기한(#175가 보인다)·정산 예정 행도
-    // 없다. 문구 키는 함께 지워졌으므로 화면에 남은 글자를 직접 확인한다.
+    // 정산된 시장은 결과만 남긴다. 공개 상세에는 이의 섹션도, 이의 기한(#175 — 잠정 결과 동안만
+    // 보인다)·판정 이의 제출 링크·정산 예정 행도 없다. 옛 문구 키는 함께 지워졌으므로 화면에 남은 글자를
+    // 직접 확인한다.
     const notice = page.getByTestId('market-status-notice');
     await expect(notice.getByTestId('market-detail-result')).toHaveText(copy.yes);
     await expect(page.getByTestId('dispute-section')).toHaveCount(0);

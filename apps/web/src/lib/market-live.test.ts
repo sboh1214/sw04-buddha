@@ -41,6 +41,7 @@ const summary: MarketSummary = {
   imageUrl: null,
   status: 'open',
   judgementDelayed: false,
+  disputeUnderReview: false,
   lastPrice: 50,
   volumeCoin: '120000',
   tradeCount: 10,
@@ -48,6 +49,9 @@ const summary: MarketSummary = {
   closeAt: '2026-10-01T00:00:00.000Z',
   openAt: '2026-09-01T00:00:00.000Z',
   resolvedResult: null,
+  judgementVersion: null,
+  disputeDeadline: null,
+  disputeOpen: false,
   // The `opened` event (`created` is 1): the key every transition below is compared against.
   statusEventId: '2',
   createdAt: '2026-08-30T00:00:00.000Z',
@@ -239,8 +243,8 @@ describe('applyStatus', () => {
     // #152 (ADR-0103): the approved judgement publishes 잠정 결과 with its result (`provisional`,
     // published by the API), the worker confirms it at the dispute deadline (`resolved`) and its
     // settlement follows moments later (`settled`). Every row on screen holds exactly the status
-    // group the latest transition delivered — nothing else (the public detail carries no dispute
-    // deadline: #175's and #24's).
+    // group the latest transition delivered — nothing else: the 이의 기한 and the judgement version
+    // (public since #175, ADR-0104) are no event's, and come with the REST refetch beside it.
     const closed = applyStatus(detail, statusEvent({ status: 'closed', statusEventId: '3' }));
     expect(closed).toEqual({ ...detail, status: 'closed', statusEventId: '3' });
     const provisional = applyStatus(
@@ -259,6 +263,55 @@ describe('applyStatus', () => {
     );
     expect(settled).toEqual({ ...resolved, status: 'settled', statusEventId: '6' });
     expect(settled).not.toHaveProperty('disputeUntil');
+  });
+
+  it('resets the display flags read for the old status, so none labels the new one (#175)', () => {
+    // ADR-0104: a held PROVISIONAL market reads '이의 검토 중' and, past its deadline, '판정 지연';
+    // a CLOSED one past its scheduled judgement reads '판정 지연' too. A flag the row read for one
+    // status says nothing of the next — the refetch the handler fires beside the event fills them.
+    const late: Market = {
+      ...detail,
+      status: 'closed',
+      statusEventId: '3',
+      judgementDelayed: true,
+    };
+    const provisional = applyStatus(
+      late,
+      statusEvent({ status: 'provisional', resolvedResult: 'NO', statusEventId: '4' }),
+    );
+    expect(provisional?.status).toBe('provisional');
+    expect(provisional?.judgementDelayed).toBe(false);
+    const held: Market = {
+      ...detail,
+      status: 'provisional',
+      resolvedResult: 'NO',
+      statusEventId: '4',
+      judgementVersion: 1,
+      disputeDeadline: '2026-10-02T00:00:00.000Z',
+      judgementDelayed: true,
+      disputeUnderReview: true,
+      disputeOpen: true,
+    };
+    const confirmed = applyStatus(
+      held,
+      statusEvent({ status: 'resolved', resolvedResult: 'NO', statusEventId: '5' }),
+    );
+    expect(confirmed).toEqual({
+      ...held,
+      status: 'resolved',
+      statusEventId: '5',
+      judgementDelayed: false,
+      disputeUnderReview: false,
+      disputeOpen: false,
+    });
+    // A repeat on the same key (a dispute's submission republishes it, A-M4-36) writes nothing:
+    // the refetch beside it brings the new flags.
+    expect(
+      applyStatus(
+        held,
+        statusEvent({ status: 'provisional', resolvedResult: 'NO', statusEventId: '4' }),
+      ),
+    ).toBeUndefined();
   });
 
   it('writes nothing for a status no member sees: a scheduled market sent back (#78)', () => {
@@ -456,6 +509,45 @@ describe('joinMarket', () => {
     const closed: Market = { ...detail, status: 'closed', statusEventId: '3' };
     expect(joinMarket(closed, detail).status).toBe('closed');
     expect(joinMarket(detail, closed).status).toBe('closed');
+  });
+
+  it('keeps the display flags with the status they were read for (#175)', () => {
+    // A `GET` that left while the market was CLOSED past its scheduled judgement lands after the
+    // approval's `provisional` (flags reset): its '판정 지연' was the CLOSED market's, and joined
+    // to the 잠정 결과 held it would read 판정 지연 — which a held PROVISIONAL market past its
+    // deadline means now (ADR-0104).
+    const late: Market = {
+      ...detail,
+      status: 'closed',
+      statusEventId: '3',
+      judgementDelayed: true,
+    };
+    const provisional: Market = {
+      ...detail,
+      status: 'provisional',
+      resolvedResult: 'NO',
+      statusEventId: '4',
+      judgementVersion: 1,
+      disputeDeadline: '2026-11-04T05:00:00.000Z',
+      disputeOpen: true,
+    };
+    for (const joined of [joinMarket(provisional, late), joinMarket(late, provisional)]) {
+      expect(joined.status).toBe('provisional');
+      expect(joined.judgementDelayed).toBe(false);
+      // The version and the 이의 기한 the same transition wrote, never the snapshot's nulls.
+      expect(joined).toMatchObject({
+        judgementVersion: 1,
+        disputeDeadline: '2026-11-04T05:00:00.000Z',
+        disputeOpen: true,
+      });
+    }
+    // The same key: the REST answer's flags, read for that very status, win (the refetch a
+    // dispute's republish fires delivers '이의 검토 중' this way).
+    const held: Market = { ...provisional, disputeUnderReview: true, disputeOpen: true };
+    expect(joinMarket(provisional, held)).toMatchObject({
+      disputeUnderReview: true,
+      disputeOpen: true,
+    });
   });
 
   it('keeps the higher key with its result, whatever the status says', () => {

@@ -123,7 +123,8 @@ function collectedAfterNow(): AppError {
  *   and dispute deadline — the instant plus the setting read in the transaction, fixed then (#173
  *   item 5) — and the append-only `market_judgements` row. After COMMIT `market:status` and the
  *   `market.resolve` job at the deadline: the worker confirms the result then (PROVISIONAL →
- *   RESOLVED, the settlement steps, `market.finalize`), never an admin.
+ *   RESOLVED, the settlement steps, `market.finalize`), never an admin — unless a 판정 이의 holds
+ *   it, when the last dismissal registers the job again (#175, MarketDisputeService).
  * - 반려 (an admin other than the registrant, with a reason) and 철회 (the registrant), in any
  *   status: the record alone, the market as it was — a CLOSED one stays CLOSED and is registered
  *   again (#173 item 1), by any admin, the rejecting one included: only a judgement's registrant

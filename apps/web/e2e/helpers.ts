@@ -48,7 +48,8 @@ import { E2E_CONSENT_VERSIONS } from './consent-versions';
  * pauses it and asks for the 조기 마감, the second approves it (`closeMarket`). And in every
  * judgement since #152: the first registers it and the second approves it, which publishes the
  * 잠정 결과 (`judgeMarket`); the worker confirms it once its dispute window — the release setting
- * the suite's global setup enters while it is 미정 (global-setup.ts) — has passed.
+ * the suite's global setup enters while it is 미정 (global-setup.ts) — has passed, no 판정 이의
+ * holding it (#175: only a member with a fill submits one, and nobody can trade until #119).
  *
  * Everything here is re-runnable against a persistent local database: a fresh email per
  * sign-up, a random tag in every market title and slug.
@@ -2301,10 +2302,12 @@ export async function leaveNoJudgement(
  * items 1·9 — the interim one-admin `POST /admin/markets/:id/resolve` is gone): `admin` registers
  * `result` on the 1차 출처 (무효 on none, with its reason) and the second seed admin approves it
  * (`approveJudgementAsReviewer`). The answer is the market PROVISIONAL — its 잠정 결과 public at once
- * — and the worker confirms it once its dispute deadline passes (`waitForResolved`). The API, not
- * the UI: judgement.spec.ts walks the screens. A 무효 judged here goes on, once confirmed, to stay
- * 지급 중 with a failed step until #126 pays 무효 (ADR-0103) — on a database kept between runs, so
- * the specs leave a 무효 judgement at its registration. Retracts what it left waiting on a failure.
+ * — and the worker confirms it once its dispute deadline passes (`waitForResolved`): no spec
+ * holds it with a 판정 이의 (#175, ADR-0104 — none can submit one without a fill, #119). The API,
+ * not the UI: judgement.spec.ts walks the screens. A 무효 judged here goes on, once confirmed, to
+ * stay 지급 중 with a failed step until #126 pays 무효 (ADR-0103) — on a database kept between runs,
+ * so the specs leave a 무효 judgement at its registration. Retracts what it left waiting on a
+ * failure.
  */
 export async function judgeMarket(
   admin: APIRequestContext,
@@ -2343,8 +2346,9 @@ export function resolveWaitMs(
 
 /**
  * Waits, polling the admin detail through the API, until the worker has confirmed the 잠정 결과
- * of a market (`judgeMarket`) — PROVISIONAL → RESOLVED at its dispute deadline (#173 item 1), and
- * from there on to 지급 중 and 지급 완료 at once — and answers the market as it then reads. Skips
+ * of a market (`judgeMarket`) — PROVISIONAL → RESOLVED at its dispute deadline (#173 item 1), no
+ * 판정 이의 holding it (#175, none here can), and from there on to 지급 중 and 지급 완료 at once —
+ * and answers the market as it then reads. Skips
  * the test when that cannot be waited for (`skipUnlessResolvable`): a spec calls that before it
  * makes anything, so this is a backstop.
  */

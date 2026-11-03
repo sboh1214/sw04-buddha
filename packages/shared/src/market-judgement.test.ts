@@ -256,7 +256,15 @@ describe('the judgement helpers', () => {
     expect(isBeforeScheduledJudgement(new Date(ms), ms + 1)).toBe(false);
     for (const nowMs of [ms - 1, ms, ms + 1]) {
       expect(isBeforeScheduledJudgement(scheduled, nowMs)).toBe(
-        !isJudgementDelayed({ status: 'closed', scheduledJudgementAt: scheduled }, nowMs),
+        !isJudgementDelayed(
+          {
+            status: 'closed',
+            scheduledJudgementAt: scheduled,
+            disputeDeadline: null,
+            disputeHoldCount: 0,
+          },
+          nowMs,
+        ),
       );
     }
     // A market opened before #22 has no scheduled judgement: no warning, no confirmation.

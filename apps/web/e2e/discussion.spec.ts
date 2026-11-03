@@ -239,6 +239,9 @@ test.describe('시장 상세 · 토론', () => {
       'href',
       writeHref(market.id),
     );
+    // No line about 판정 이의 above the list: that is a 잠정 결과's while its 이의 기한 is ahead
+    // (decision 3 '#175 토론의 이의 안내', dispute.spec.ts).
+    await expect(page.getByTestId('market-discussion-dispute-note')).toHaveCount(0);
     await card.getByTestId('post-card-link').click();
     await expect(page).toHaveURL(`/community/posts/${id}`);
     await expect(page.getByTestId('post-body')).toContainText(tag);

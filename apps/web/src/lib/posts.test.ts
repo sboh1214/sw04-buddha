@@ -355,6 +355,7 @@ describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 20
       title: '금리 인하',
       status: 'open',
       judgementDelayed: false,
+      disputeUnderReview: false,
       category: { slug: 'economy', nameKo: '경제' },
     } as const;
     const id = POST.toLowerCase();
@@ -567,6 +568,7 @@ describe('an edit screen whose post an operator hides (postEditHidden, 오너 �
     title: '금리 인하',
     status: 'open',
     judgementDelayed: false,
+    disputeUnderReview: false,
     category: { slug: 'economy', nameKo: '경제' },
   } as const;
   const id = POST.toLowerCase();
@@ -743,6 +745,7 @@ describe('a post taken from under an open screen: one rule for its page and its 
     title: '금리 인하',
     status: 'open',
     judgementDelayed: false,
+    disputeUnderReview: false,
     category: { slug: 'economy', nameKo: '경제' },
   } as const;
   const id = POST.toLowerCase();
@@ -946,6 +949,7 @@ describe('a post page’s metadata', () => {
     title: '금리 인하',
     status: 'open',
     judgementDelayed: false,
+    disputeUnderReview: false,
     category: { slug: 'economy', nameKo: '경제' },
   } as const;
   const id = '0b6f6a3e-2c1d-4c8e-9f0a-1b2c3d4e5f60';
@@ -1136,15 +1140,23 @@ describe('a refused write', () => {
 describe('the market the write screen’s form shows (writeMarketAfter)', () => {
   const shown: WriteMarket = {
     id: market,
+    slug: 'rate-cut',
     title: '기준금리 인하?',
     status: 'open',
     judgementDelayed: false,
+    disputeUnderReview: false,
+    disputeOpen: false,
+    disputeDeadline: null,
   };
   const other: WriteMarket = {
     id: POST.toLowerCase(),
+    slug: 'won-1400',
     title: '환율 1,400원?',
     status: 'closed',
     judgementDelayed: true,
+    disputeUnderReview: false,
+    disputeOpen: false,
+    disputeDeadline: null,
   };
 
   it('is the market found, or none when the API says there is no such market', () => {
@@ -1165,15 +1177,23 @@ describe('the market the write screen’s form shows (writeMarketAfter)', () => 
 describe('the write screen’s market (writeScreenMarket, writeScreenView)', () => {
   const a: WriteMarket = {
     id: market,
+    slug: 'rate-cut',
     title: '기준금리 인하?',
     status: 'open',
     judgementDelayed: false,
+    disputeUnderReview: false,
+    disputeOpen: false,
+    disputeDeadline: null,
   };
   const b: WriteMarket = {
     id: POST.toLowerCase(),
+    slug: 'won-1400',
     title: '환율 1,400원?',
     status: 'closed',
     judgementDelayed: true,
+    disputeUnderReview: false,
+    disputeOpen: false,
+    disputeDeadline: null,
   };
   const found = (shown: WriteMarket): WriteMarketLookup => ({ kind: 'found', market: shown });
   const none = (): WriteMarketLookup => ({ kind: 'none' });
@@ -1219,9 +1239,24 @@ describe('the write screen’s market (writeScreenMarket, writeScreenView)', () 
   });
 
   it('holds of a market picked its title and what its status badge reads, 판정 지연 included (#22)', () => {
-    // The picker hands over the search's whole card; the screen keeps the write screen's share.
-    const card = { ...b, slug: 'krw-usd', lastPrice: 63, closeAt: '2026-10-01T00:00:00.000Z' };
+    // The picker hands over the search's whole card; the screen keeps the write screen's share —
+    // since #175 its address and its 판정 이의 deadline too, for the note under it.
+    const card = { ...b, lastPrice: 63, traderCount: 4, closeAt: '2026-10-01T00:00:00.000Z' };
     expect(after(found(a), picked(card)).shown).toEqual(b);
+    const open = {
+      ...card,
+      status: 'provisional' as const,
+      disputeOpen: true,
+      disputeDeadline: '2026-10-02T00:00:00.000Z',
+      disputeUnderReview: true,
+    };
+    expect(after(found(a), picked(open)).shown).toEqual({
+      ...b,
+      status: 'provisional',
+      disputeOpen: true,
+      disputeDeadline: open.disputeDeadline,
+      disputeUnderReview: true,
+    });
   });
 
   it('takes the form away only when the API says the market picked is none', () => {

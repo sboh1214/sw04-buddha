@@ -79,6 +79,10 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   // A limit of the proposals (#77), refused like PHONE_VERIFICATION_LIMITED: the same request
   // passes later — once a waiting proposal is decided, or once the day's oldest leaves the window.
   PROPOSAL_LIMITED: HttpStatus.TOO_MANY_REQUESTS,
+  // The market's, the dispute's or the account's state refuses a 판정 이의 write (#175, ADR-0104):
+  // past the deadline, no fill, a dispute decided or retracted, the version's registrant or the
+  // dispute's submitter deciding — a conflict with that state, `details.reason` naming which.
+  DISPUTE_NOT_ALLOWED: HttpStatus.CONFLICT,
   INTERNAL: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 

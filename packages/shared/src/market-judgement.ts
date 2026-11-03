@@ -43,15 +43,17 @@ import { ruleVersionNumberSchema } from './market-supplement.js';
  * - 반려 (an admin other than the registrant, with a reason) and 철회 (the registrant), in any
  *   status: the market stays CLOSED and a judgement is registered again (#173 item 1) — by any
  *   admin, the rejecting one included; only a judgement's registrant may not decide that one.
- * - 확정: once the deadline has passed with nothing held (#175's disputes and #176's corrections
- *   add the holds), the worker moves PROVISIONAL → RESOLVED (`resolved`, actor NULL; the job
- *   `market.resolve`, jobs.ts) and the payout follows (`market.finalize`; a VOID's is #126's).
+ * - 확정: once the deadline has passed with nothing held — no 판정 이의 of the version pending or
+ *   accepted (#175, market-dispute.ts), and from #176 no correction waiting — the worker moves
+ *   PROVISIONAL → RESOLVED (`resolved`, actor NULL; the job `market.resolve`, jobs.ts) and the
+ *   payout follows (`market.finalize`; a VOID's is #126's).
  *
  * The registration, the 반려 and the 철회 are admin actions alone (`market_judgement_request` …,
  * enums.ts); the approval also writes the `provisional` event. Admins alone read the registrations
  * and the judgements for now: the public judging record (#24) shows the source, the evidence, the
- * collection instant and a VOID's reason, never who registered or approved it (#173 item 13), and
- * the public `Market` carries the status and `resolvedResult` alone.
+ * collection instant and a VOID's reason, never who registered or approved it (#173 item 13). The
+ * public `Market` carries the status, `resolvedResult`, and since #175 the current version and its
+ * 이의 기한 (`judgementVersion`, `disputeDeadline`; #173 items 6·13).
  */
 
 /** `approval_requests.kind` of a judgement's registration (#171: lower-case words, `_`). */
@@ -264,10 +266,14 @@ export function disputeDeadlineOf(publishedAt: Date, windowMinutes: number): Dat
 }
 
 // ---- bodies ---------------------------------------------------------------------------
-const httpUrlSchema = z.url({ protocol: /^https?$/ });
+/** An http or https address, as an evidence link takes one. */
+export const httpUrlSchema = z.url({ protocol: /^https?$/ });
 
-/** An evidence link: trimmed, http or https, at most JUDGEMENT_EVIDENCE_LINK_MAX characters. */
-const evidenceLinkSchema = z
+/**
+ * An evidence link: trimmed, http or https, at most JUDGEMENT_EVIDENCE_LINK_MAX characters. A
+ * judgement's evidence and a 판정 이의's 근거 링크 (#175, market-dispute.ts) take the same one.
+ */
+export const evidenceLinkSchema = z
   .string()
   .trim()
   .max(JUDGEMENT_EVIDENCE_LINK_MAX)
@@ -393,8 +399,10 @@ export interface MarketProvisionalPayload {
 
 /**
  * `resolved`'s payload since #152: the judgement version confirmed, its result and why it was
- * confirmed — its dispute deadline passed with nothing held (`deadline`; #175 adds its own). The
- * event's actor is null, the worker.
+ * confirmed — its dispute deadline passed with nothing held (`deadline`). The confirmation after
+ * the last holding 판정 이의 is dismissed past the deadline is the worker's too, so it is
+ * `deadline` as well (#175, ADR-0104: the dismissal only enqueues `market.resolve`). The event's
+ * actor is null, the worker.
  */
 export interface MarketResolvedByDeadlinePayload {
   version: number;

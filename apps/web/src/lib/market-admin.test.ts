@@ -1628,17 +1628,19 @@ describe('tradingMarketPollDelay (#114, ADR-0102)', () => {
 describe('provisionalMarketPollDelay (#152, ADR-0103)', () => {
   const disputeDeadline = '2026-12-02T01:00:00.000Z';
   const at = (iso: string) => new Date(iso).getTime();
+  /** No 판정 이의 holds it (#175). */
+  const FREE = { holding: 0 };
 
   it('reads a 잠정 결과 market again at its dispute deadline', () => {
     expect(
       provisionalMarketPollDelay(
-        { status: 'provisional', disputeDeadline },
+        { status: 'provisional', disputeDeadline, disputes: FREE },
         at('2026-12-02T00:59:00.000Z'),
       ),
     ).toBe(60_000);
     expect(
       provisionalMarketPollDelay(
-        { status: 'provisional', disputeDeadline },
+        { status: 'provisional', disputeDeadline, disputes: FREE },
         at('2026-12-02T00:59:59.999Z'),
       ),
     ).toBe(1);
@@ -1650,29 +1652,53 @@ describe('provisionalMarketPollDelay (#152, ADR-0103)', () => {
     expect(PROVISIONAL_DEADLINE_POLL_MS).toBe(5_000);
     for (const now of [disputeDeadline, '2026-12-02T01:00:00.001Z', '2026-12-03T00:00:00.000Z']) {
       expect(
-        provisionalMarketPollDelay({ status: 'provisional', disputeDeadline }, at(now)),
+        provisionalMarketPollDelay(
+          { status: 'provisional', disputeDeadline, disputes: FREE },
+          at(now),
+        ),
         now,
       ).toBe(PROVISIONAL_DEADLINE_POLL_MS);
     }
   });
 
+  it('stops past the deadline while a 판정 이의 holds it, and resumes once none does (#175)', () => {
+    // ADR-0104: a pending or accepted dispute keeps the market PROVISIONAL past its deadline, and
+    // nothing confirms it then; the read at the deadline still comes (its 판정 지연 note).
+    const held = { status: 'provisional' as const, disputeDeadline, disputes: { holding: 2 } };
+    expect(provisionalMarketPollDelay(held, at('2026-12-02T00:59:00.000Z'))).toBe(60_000);
+    for (const now of [disputeDeadline, '2026-12-03T00:00:00.000Z']) {
+      expect(provisionalMarketPollDelay(held, at(now)), now).toBe(false);
+    }
+    // The last 기각's answer holds none: the API's `market.resolve` confirms it within seconds.
+    expect(
+      provisionalMarketPollDelay({ ...held, disputes: FREE }, at('2026-12-03T00:00:00.000Z')),
+    ).toBe(PROVISIONAL_DEADLINE_POLL_MS);
+  });
+
   it('is nothing for any other status or a missing or unreadable deadline, and caps a far one', () => {
     for (const status of MARKET_STATUSES.filter((value) => value !== 'provisional')) {
       expect(
-        provisionalMarketPollDelay({ status, disputeDeadline }, at(disputeDeadline)),
+        provisionalMarketPollDelay(
+          { status, disputeDeadline, disputes: FREE },
+          at(disputeDeadline),
+        ),
         status,
       ).toBe(false);
     }
     expect(provisionalMarketPollDelay(undefined)).toBe(false);
-    expect(provisionalMarketPollDelay({ status: 'provisional', disputeDeadline: null })).toBe(
-      false,
-    );
-    expect(provisionalMarketPollDelay({ status: 'provisional', disputeDeadline: 'nope' })).toBe(
-      false,
-    );
+    expect(
+      provisionalMarketPollDelay({ status: 'provisional', disputeDeadline: null, disputes: FREE }),
+    ).toBe(false);
+    expect(
+      provisionalMarketPollDelay({
+        status: 'provisional',
+        disputeDeadline: 'nope',
+        disputes: FREE,
+      }),
+    ).toBe(false);
     expect(
       provisionalMarketPollDelay(
-        { status: 'provisional', disputeDeadline: '2027-07-01T00:00:00.000Z' },
+        { status: 'provisional', disputeDeadline: '2027-07-01T00:00:00.000Z', disputes: FREE },
         at(disputeDeadline),
       ),
     ).toBe(MAX_TIMEOUT_MS);
@@ -1685,6 +1711,7 @@ describe('adminMarketPollInterval', () => {
     scheduledOpenAt: '2000-01-01T00:00:00.000Z',
     closeAt: '2999-01-01T00:00:00.000Z',
     disputeDeadline: status === 'provisional' ? '2000-01-01T00:00:00.000Z' : null,
+    disputes: { holding: 0 },
   });
 
   it('is the settlement poll for a confirmed market, the 개장 예정 re-read for a scheduled one', () => {

@@ -12,6 +12,7 @@ const CLOSED: MarketSummary = {
   imageUrl: null,
   status: 'closed',
   judgementDelayed: false,
+  disputeUnderReview: false,
   lastPrice: 63,
   volumeCoin: '130000',
   tradeCount: 11,
@@ -19,6 +20,9 @@ const CLOSED: MarketSummary = {
   closeAt: '2026-10-01T00:00:00.000Z',
   openAt: '2026-09-01T00:00:00.000Z',
   resolvedResult: null,
+  judgementVersion: null,
+  disputeDeadline: null,
+  disputeOpen: false,
   statusEventId: '3',
   createdAt: '2026-08-30T00:00:00.000Z',
 };

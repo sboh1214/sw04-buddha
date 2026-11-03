@@ -24,6 +24,7 @@ const traded: MarketSummary = {
   imageUrl: null,
   status: 'open',
   judgementDelayed: false,
+  disputeUnderReview: false,
   lastPrice: 70,
   volumeCoin: '1250000',
   tradeCount: 42,
@@ -32,6 +33,9 @@ const traded: MarketSummary = {
   openAt: '2026-09-01T00:00:00.000Z',
   createdAt: '2026-08-31T00:00:00.000Z',
   resolvedResult: null,
+  judgementVersion: null,
+  disputeDeadline: null,
+  disputeOpen: false,
   statusEventId: '42',
 };
 
@@ -112,6 +116,31 @@ describe('toPreviewMarket', () => {
       false,
     );
     expect(toPreviewMarket(body, categories).judgementDelayed).toBe(false);
+  });
+
+  it('previews a provisional market a 판정 이의 holds as visitors see it: 이의 검토 중 (#175)', () => {
+    const held = {
+      ...traded,
+      status: 'provisional' as const,
+      resolvedResult: 'NO' as const,
+      judgementVersion: 1,
+      disputeDeadline: '2026-12-01T00:00:00.000Z',
+      disputeOpen: true,
+      disputeUnderReview: true,
+    };
+    expect(toPreviewMarket(body, categories, held)).toMatchObject({
+      disputeUnderReview: true,
+      judgementVersion: 1,
+      disputeDeadline: held.disputeDeadline,
+      disputeOpen: true,
+    });
+    // A draft, and 시장 만들기, have no judgement and take no dispute.
+    expect(toPreviewMarket(body, categories, { ...held, status: 'draft' })).toMatchObject({
+      disputeUnderReview: false,
+      judgementVersion: null,
+      disputeDeadline: null,
+      disputeOpen: false,
+    });
   });
 
   it('carries no status ordering key, even over a base that has one', () => {

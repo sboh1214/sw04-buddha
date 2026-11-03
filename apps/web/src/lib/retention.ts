@@ -28,6 +28,7 @@ const KIND_LABELS: Readonly<Record<RetentionPurgeKind, string>> = {
   moderation_actions: copy.adminRetentionKindModerationActions,
   approval_requests: copy.adminRetentionKindApprovalRequests,
   link_flags: copy.adminRetentionKindLinkFlags,
+  market_disputes: copy.adminRetentionKindMarketDisputes,
   consent_records: copy.adminRetentionKindConsentRecords,
   phone_verification_records: copy.adminRetentionKindPhoneVerificationRecords,
   market_proposals: copy.adminRetentionKindMarketProposals,

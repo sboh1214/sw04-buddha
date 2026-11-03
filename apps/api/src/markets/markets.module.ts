@@ -7,6 +7,10 @@ import { JobsModule } from '../jobs/jobs.module.js';
 import { RealtimeModule } from '../realtime/realtime.module.js';
 import { ReleaseSettingsModule } from '../release-settings/release-settings.module.js';
 import {
+  AdminMarketDisputeQueueController,
+  AdminMarketDisputesController,
+} from './admin-market-disputes.controller.js';
+import {
   AdminMarketJudgementQueueController,
   AdminMarketJudgementsController,
 } from './admin-market-judgements.controller.js';
@@ -21,6 +25,8 @@ import {
 } from './admin-market-supplements.controller.js';
 import { AdminMarketsController } from './admin-markets.controller.js';
 import { MarketAdminService } from './market-admin.service.js';
+import { MarketDisputeService } from './market-dispute.service.js';
+import { MarketDisputesController, MeDisputesController } from './market-disputes.controller.js';
 import { MarketJudgementService } from './market-judgement.service.js';
 import { MarketPauseService } from './market-pause.service.js';
 import { MarketSupplementService } from './market-supplement.service.js';
@@ -44,7 +50,9 @@ import { RelatedMarketsService } from './related-markets.service.js';
  * `market_pause_decision` requests — 재개 and 조기 마감 of a paused market (MarketPauseService) —
  * with its routes and its 일시 중단 결정 대기 queue, and the judgement (#152, ADR-0103) its
  * `market_judgement` registrations (MarketJudgementService) with its routes and its 판정 승인 대기
- * queue.
+ * queue. 판정 이의 (#175, ADR-0104; MarketDisputeService) are no approval kind: a member's
+ * submission (MarketDisputesController) and own reads and 철회 (MeDisputesController,
+ * `/me/disputes`), one admin's 기각·수용 (AdminMarketDisputesController) and the 이의 접수 list.
  */
 @Module({
   imports: [
@@ -67,6 +75,10 @@ import { RelatedMarketsService } from './related-markets.service.js';
     AdminMarketPauseDecisionQueueController,
     AdminMarketJudgementsController,
     AdminMarketJudgementQueueController,
+    MarketDisputesController,
+    MeDisputesController,
+    AdminMarketDisputesController,
+    AdminMarketDisputeQueueController,
   ],
   providers: [
     MarketService,
@@ -74,6 +86,7 @@ import { RelatedMarketsService } from './related-markets.service.js';
     MarketSupplementService,
     MarketPauseService,
     MarketJudgementService,
+    MarketDisputeService,
     RelatedMarketsService,
   ],
   // MarketAdminService for the proposals (#77): a 채택 makes its draft through `createIn`.

@@ -57,8 +57,9 @@ export const RETENTION_PERIOD_MAX_DAYS = 7_300;
  *   changes and their two-person approval requests), and the content of a withdrawn member's post
  *   or comment an operator still hides, emptied as its hiding goes (owner decision 2026-10-24 3) —
  *   its edit history and the images only that used deleted with it (owner decision 2026-10-24
- *   (2차) 2); and #187's repeated-link review list, whoever wrote the items it names (owner
- *   decision 2026-10-24 13); later the judgement objections (#175) join it.
+ *   (2차) 2); #187's repeated-link review list, whoever wrote the items it names (owner
+ *   decision 2026-10-24 13); and a withdrawn account's 판정 이의 once decided or retracted (#175,
+ *   ADR-0087 (6), ADR-0069 #57-18), emptied in place so #24's count stays.
  * - `removed_profile_items`: 운영자가 지운 프로필 항목 — the nickname, 소개 or image an operator took
  *   away (#37-10, `profile_item_removals`).
  * - `market_proposals`: 시장 제안 기록 — a withdrawn account's market proposals (#77,
@@ -98,6 +99,12 @@ export type RetentionPeriod = (typeof RETENTION_PERIODS)[number];
  *   has passed since the later of its flagging and the operator's '확인함' mark that covered it
  *   (owner decision 2026-10-24 13) — an entry nothing names; the mark, with the link, stays in
  *   `admin_actions` (owner decision 2026-10-22 (2차) 3).
+ * - `market_disputes`: a withdrawn account's 판정 이의 (#175, ADR-0104) decided or retracted —
+ *   never one that holds its market: pending, still reviewed (ADR-0069 decision 4 #140), or
+ *   accepted for the current version, waiting for its correction (#176) —
+ *   once the 신고·제재 period has passed since the later of the withdrawal and the decision or the
+ *   retraction (ADR-0087 (6)), emptied in place: the links and the reason go, the row stays
+ *   (`purged_at`), so #24's public count and statuses survive.
  * - `consent_records`, `phone_verification_records`: as their periods.
  * - `market_proposals`: a withdrawn account's proposals whose processing has ended (#77) — nothing
  *   names a proposal, so last.
@@ -115,6 +122,7 @@ export const RETENTION_PURGE_KINDS = [
   'moderation_actions',
   'approval_requests',
   'link_flags',
+  'market_disputes',
   'consent_records',
   'phone_verification_records',
   'market_proposals',
@@ -146,6 +154,7 @@ export const RETENTION_PURGE_KIND_PERIODS: Readonly<
   moderation_actions: 'moderation_records',
   approval_requests: 'moderation_records',
   link_flags: 'moderation_records',
+  market_disputes: 'moderation_records',
   consent_records: 'consent_records',
   phone_verification_records: 'phone_verification_records',
   market_proposals: 'market_proposals',

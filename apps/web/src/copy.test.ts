@@ -63,6 +63,9 @@ describe('copy', () => {
     // A display, not a status (#173 item 11, #22): what a closed market late for its judgement
     // reads in place of 거래 마감.
     expect(copy.marketStatusJudgementDelayed).toBe('판정 지연');
+    // Another display (#173 item 12, #175): a provisional market a 판정 이의 holds, before its
+    // deadline — past it the same market reads 판정 지연 (owner answer 2026-11-03).
+    expect(copy.marketStatusDisputeUnderReview).toBe('이의 검토 중');
   });
 
   it("names the rules area's time rows apart from the status badges (#22)", () => {

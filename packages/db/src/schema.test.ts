@@ -57,6 +57,7 @@ import {
   ledgerEntries,
   linkFlags,
   linkUses,
+  marketDisputes,
   marketEvents,
   marketJudgements,
   marketLinks,
@@ -111,6 +112,7 @@ import {
   writeLimitEvents,
 } from './schema/index.js';
 import { closeDb, createDb } from './client.js';
+import { dueProvisionalMarkets } from './market-judgement.js';
 import { openScheduledMarket } from './market-open.js';
 import { allowRuleSupplement } from './market-rules-content.js';
 import { storedReleaseSettingValue } from './release-settings.js';
@@ -120,6 +122,7 @@ import {
   createApprovalRequest,
   createCategory,
   createConsents,
+  createDispute,
   createMarket,
   createMarketInReview,
   createMarketLink,
@@ -137,6 +140,7 @@ import {
   createPosition,
   createProfileImage,
   createProposal,
+  createProvisionalMarket,
   createReport,
   createScheduledMarket,
   createSearch,
@@ -3147,7 +3151,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(made.disputeDeadline!.getTime()).toBeGreaterThan(Date.now());
     });
 
-    it('serves the confirmation scan from the PROVISIONAL markets’ deadlines (the partial index)', async () => {
+    it('serves the confirmation scan from the PROVISIONAL markets’ deadlines and the holds (the partial indexes)', async () => {
       const { rows: indexes } = await t.db.execute<{ definition: string }>(sql`
         SELECT indexdef AS definition FROM pg_indexes
         WHERE tablename = 'markets' AND indexname = 'markets_provisional_dispute_deadline_idx'`);
@@ -3166,21 +3170,491 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           judgementVersion: 1,
         });
       }
-      // A table this small would be scanned whole, or read through a bitmap and sorted, so the
-      // planner is told not to, on the statistics of these rows; the scan's own query, ordered by
-      // the index.
+      // Markets past their deadline with a dispute of each status (#175): the pending and the
+      // accepted one hold theirs, in the disputes' partial index.
+      const disputed: Record<string, string> = {};
+      for (const status of ['pending', 'accepted', 'dismissed', 'retracted'] as const) {
+        disputed[status] = (
+          await createDispute(t.db, {
+            status,
+            market: { publishedAt: new Date(Date.now() - 2 * DAY_WINDOW * MINUTE) },
+          })
+        ).market.id;
+      }
+      // A table this small would be scanned whole, or read through a bitmap, or through any index
+      // and sorted — with the anti-join, sorting these few rows costs the planner less than reading
+      // them in order — so it is told not to, on the statistics of these rows: the worker's own
+      // query (`dueProvisionalMarkets`, its NOT EXISTS included) is then read in the order of the
+      // deadline index, and the holds from the disputes' partial index.
       await analyze('markets');
+      await analyze('market_disputes');
       const plan = await t.db.transaction(async (tx) => {
         await tx.execute(sql`SET LOCAL enable_seqscan = off`);
         await tx.execute(sql`SET LOCAL enable_bitmapscan = off`);
-        const result = await tx.execute<{ 'QUERY PLAN': string }>(sql`
-          EXPLAIN SELECT id FROM markets
-          WHERE status = 'provisional' AND dispute_deadline <= now()
-          ORDER BY dispute_deadline, id LIMIT 500`);
+        await tx.execute(sql`SET LOCAL enable_sort = off`);
+        const result = await tx.execute<{ 'QUERY PLAN': string }>(
+          sql`EXPLAIN ${dueProvisionalMarkets(tx).getSQL()}`,
+        );
         return result.rows.map((planRow) => planRow['QUERY PLAN']).join('\n');
       });
       expect(plan).toMatch(/Index (Only )?Scan using markets_provisional_dispute_deadline_idx/);
+      expect(plan).toMatch(/Index (Only )?Scan using market_disputes_holding_idx/);
       expect(plan).not.toMatch(/Sort/);
+      const { rows: disputeIndexes } = await t.db.execute<{ definition: string }>(sql`
+        SELECT indexdef AS definition FROM pg_indexes
+        WHERE tablename = 'market_disputes' AND indexname = 'market_disputes_holding_idx'`);
+      expect(disputeIndexes).toEqual([
+        {
+          definition: expect.stringMatching(
+            /\(market_id, judgement_version\) WHERE \(\(status\)::text = ANY \(.*'pending'.*'accepted'.*\)\)$/,
+          ) as unknown,
+        },
+      ]);
+      // And it returns what the scan confirms: the due markets nothing holds, the earliest first.
+      const due = (await dueProvisionalMarkets(t.db)).map((row) => row.id);
+      expect(due.slice(0, 2).sort()).toEqual([disputed.dismissed, disputed.retracted].sort());
+      expect(due).not.toContain(disputed.pending);
+      expect(due).not.toContain(disputed.accepted);
+    });
+  });
+
+  describe('market disputes (migration 0056, #175)', () => {
+    const LINK = 'https://example.com/evidence';
+
+    /** The refusal the guard raises: 23000 with its message. */
+    async function guarded(write: Promise<unknown>) {
+      const error = await write.then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      return { state: sqlState(error), message: errorMessage(error) };
+    }
+
+    /** A PROVISIONAL market with its judgement, a member, an admin and a pending dispute's row. */
+    async function disputeFixture() {
+      const { market, judgement } = await createProvisionalMarket(t.db);
+      const { user: member } = await createUser(t.db);
+      const { user: decider } = await createUser(t.db, { role: 'admin' });
+      const submittedAt = new Date(judgement.publishedAt.getTime() + 1);
+      const row = {
+        marketId: market.id,
+        judgementVersion: 1,
+        userId: member.id,
+        links: [LINK] as (string | null)[],
+        reason: '발표 원문과 다르다.',
+        status: 'pending' as string,
+        submittedAt,
+        decidedBy: null as string | null,
+        decidedAt: null as Date | null,
+        decisionReason: null as string | null,
+        retractedAt: null as Date | null,
+        purgedAt: null as Date | null,
+      };
+      return { market, judgement, member, decider, row };
+    }
+
+    const insertDispute = (values: Record<string, unknown>) =>
+      t.db
+        .insert(marketDisputes)
+        .values(values as typeof marketDisputes.$inferInsert)
+        .returning();
+
+    it('adds market_disputes with its keys, CHECKs, indexes and references, and the market’s hold count', async () => {
+      const { rows: columns } = await t.db.execute<{
+        column: string;
+        type: string;
+        nullable: string;
+        default: string | null;
+      }>(sql`
+        SELECT column_name AS "column", data_type AS type, is_nullable AS nullable,
+          column_default AS "default"
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'market_disputes'
+        ORDER BY ordinal_position`);
+      const instant = 'timestamp with time zone';
+      expect(columns).toEqual([
+        { column: 'id', type: 'uuid', nullable: 'NO', default: 'gen_random_uuid()' },
+        { column: 'market_id', type: 'uuid', nullable: 'NO', default: null },
+        { column: 'judgement_version', type: 'integer', nullable: 'NO', default: null },
+        { column: 'user_id', type: 'text', nullable: 'NO', default: null },
+        { column: 'links', type: 'ARRAY', nullable: 'NO', default: null },
+        { column: 'reason', type: 'text', nullable: 'NO', default: null },
+        {
+          column: 'status',
+          type: 'character varying',
+          nullable: 'NO',
+          default: "'pending'::character varying",
+        },
+        { column: 'submitted_at', type: instant, nullable: 'NO', default: null },
+        { column: 'decided_by', type: 'text', nullable: 'YES', default: null },
+        { column: 'decided_at', type: instant, nullable: 'YES', default: null },
+        { column: 'decision_reason', type: 'text', nullable: 'YES', default: null },
+        { column: 'retracted_at', type: instant, nullable: 'YES', default: null },
+        { column: 'purged_at', type: instant, nullable: 'YES', default: null },
+      ]);
+      const { rows: constraints } = await t.db.execute<{
+        name: string;
+        type: string;
+        action: string;
+      }>(sql`
+        SELECT conname AS name, contype AS type, confdeltype AS action FROM pg_constraint
+        WHERE conrelid = 'market_disputes'::regclass ORDER BY conname`);
+      expect(constraints).toEqual([
+        { name: 'market_disputes_decided_by_user_id_fk', type: 'f', action: 'r' },
+        { name: 'market_disputes_decision_check', type: 'c', action: ' ' },
+        { name: 'market_disputes_judgement_fk', type: 'f', action: 'r' },
+        { name: 'market_disputes_links_check', type: 'c', action: ' ' },
+        {
+          name: 'market_disputes_market_id_judgement_version_user_id_unique',
+          type: 'u',
+          action: ' ',
+        },
+        { name: 'market_disputes_pkey', type: 'p', action: ' ' },
+        { name: 'market_disputes_purged_check', type: 'c', action: ' ' },
+        { name: 'market_disputes_reason_check', type: 'c', action: ' ' },
+        { name: 'market_disputes_retracted_check', type: 'c', action: ' ' },
+        { name: 'market_disputes_status_check', type: 'c', action: ' ' },
+        { name: 'market_disputes_user_id_user_id_fk', type: 'f', action: 'r' },
+      ]);
+      const { rows: indexes } = await t.db.execute<{ name: string; definition: string }>(sql`
+        SELECT indexname AS name, indexdef AS definition FROM pg_indexes
+        WHERE tablename = 'market_disputes' ORDER BY indexname`);
+      expect(indexes.map((index) => index.name)).toEqual([
+        'market_disputes_ended_at_idx',
+        'market_disputes_holding_idx',
+        'market_disputes_market_id_judgement_version_user_id_unique',
+        'market_disputes_pending_submitted_at_idx',
+        'market_disputes_pkey',
+        'market_disputes_user_id_submitted_at_idx',
+      ]);
+      const definition = (name: string) => indexes.find((index) => index.name === name)?.definition;
+      expect(definition('market_disputes_ended_at_idx')).toMatch(
+        /\(COALESCE\(decided_at, retracted_at\), id\) WHERE \(\(status\)::text <> 'pending'::text\)$/,
+      );
+      expect(definition('market_disputes_pending_submitted_at_idx')).toMatch(
+        /\(submitted_at, id\) WHERE \(\(status\)::text = 'pending'::text\)$/,
+      );
+      expect(definition('market_disputes_user_id_submitted_at_idx')).toMatch(
+        /\(user_id, submitted_at, id\)$/,
+      );
+      // The market's mirror: an integer, 0 unless written, with its two CHECKs.
+      const { rows: hold } = await t.db.execute<{
+        type: string;
+        nullable: string;
+        default: string;
+      }>(
+        sql`
+          SELECT data_type AS type, is_nullable AS nullable, column_default AS "default"
+          FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'markets'
+            AND column_name = 'dispute_hold_count'`,
+      );
+      expect(hold).toEqual([{ type: 'integer', nullable: 'NO', default: '0' }]);
+      const { rows: marketChecks } = await t.db.execute<{ name: string }>(sql`
+        SELECT conname AS name FROM pg_constraint
+        WHERE conrelid = 'markets'::regclass AND conname LIKE 'markets_dispute_hold%'
+        ORDER BY conname`);
+      expect(marketChecks.map((check) => check.name)).toEqual([
+        'markets_dispute_hold_count_check',
+        'markets_dispute_hold_status_check',
+      ]);
+    });
+
+    it('holds a dispute to its CHECKs, its judgement and accounts, and one per member per version', async () => {
+      const { market, member, decider, row } = await disputeFixture();
+      const later = new Date(row.submittedAt.getTime() + 1_000);
+      const decided = {
+        status: 'dismissed',
+        decidedBy: decider.id,
+        decidedAt: new Date(row.submittedAt.getTime() + 1),
+        decisionReason: '바꿀 것이 없다.',
+      };
+      const refused = (constraint: string) => ({ state: '23514', constraint });
+      const cases: [Record<string, unknown>, string][] = [
+        [{ status: 'withdrawn' }, 'market_disputes_status_check'],
+        [{ status: 'closed_by_correction' }, 'market_disputes_status_check'],
+        [{ links: [] }, 'market_disputes_links_check'],
+        [
+          { links: Array.from({ length: 6 }, (_, i) => `${LINK}/${i}`) },
+          'market_disputes_links_check',
+        ],
+        [{ links: [LINK, null] }, 'market_disputes_links_check'],
+        [{ links: sql`ARRAY[ARRAY['a'], ARRAY['b']]` }, 'market_disputes_links_check'],
+        [{ reason: '' }, 'market_disputes_reason_check'],
+        [{ reason: '   ' }, 'market_disputes_reason_check'],
+        [{ reason: '가'.repeat(2_001) }, 'market_disputes_reason_check'],
+        // The decision: all three exactly for dismissed or accepted, its reason 1..500, not before
+        // the submission.
+        [{ status: 'dismissed' }, 'market_disputes_decision_check'],
+        [{ ...decided, decidedBy: null }, 'market_disputes_decision_check'],
+        [{ ...decided, decidedAt: null }, 'market_disputes_decision_check'],
+        [{ ...decided, decisionReason: null }, 'market_disputes_decision_check'],
+        [{ ...decided, decisionReason: ' ' }, 'market_disputes_decision_check'],
+        [{ ...decided, decisionReason: '가'.repeat(501) }, 'market_disputes_decision_check'],
+        [
+          { ...decided, decidedAt: new Date(row.submittedAt.getTime() - 1) },
+          'market_disputes_decision_check',
+        ],
+        [{ ...decided, status: 'pending' }, 'market_disputes_decision_check'],
+        [{ ...decided, status: 'retracted', retractedAt: later }, 'market_disputes_decision_check'],
+        // The retraction: its instant exactly for retracted, not before the submission.
+        [{ status: 'retracted' }, 'market_disputes_retracted_check'],
+        [{ retractedAt: later }, 'market_disputes_retracted_check'],
+        [
+          { status: 'retracted', retractedAt: new Date(row.submittedAt.getTime() - 1) },
+          'market_disputes_retracted_check',
+        ],
+        // Emptied: decided or retracted, at or after its end, the two empty.
+        [{ purgedAt: later, links: [], reason: '' }, 'market_disputes_purged_check'],
+        [{ ...decided, purgedAt: later }, 'market_disputes_links_check'],
+        [{ ...decided, purgedAt: later, links: [] }, 'market_disputes_reason_check'],
+        [
+          { ...decided, purgedAt: row.submittedAt, links: [], reason: '' },
+          'market_disputes_purged_check',
+        ],
+      ];
+      for (const [values, constraint] of cases) {
+        expect(await refusal(insertDispute({ ...row, ...values })), JSON.stringify(values)).toEqual(
+          refused(constraint),
+        );
+      }
+      // What each status takes, and the bounds.
+      const accepted = [
+        { links: Array.from({ length: 5 }, (_, i) => `${LINK}/${i}`), reason: '가'.repeat(2_000) },
+        { ...decided, decisionReason: '가'.repeat(500) },
+        { ...decided, status: 'accepted' },
+        { status: 'retracted', retractedAt: row.submittedAt },
+        { ...decided, purgedAt: decided.decidedAt, links: [], reason: '' },
+      ];
+      for (const values of accepted) {
+        const { user: other } = await createUser(t.db);
+        const [made] = await insertDispute({ ...row, ...values, userId: other.id });
+        expect(made, JSON.stringify(values)).toMatchObject(values);
+      }
+      // One per member per version, whatever its status; a judgement and accounts that exist.
+      const [first] = await insertDispute(row);
+      expect(
+        await refusal(insertDispute({ ...row, status: 'retracted', retractedAt: later })),
+      ).toEqual({
+        state: '23505',
+        constraint: 'market_disputes_market_id_judgement_version_user_id_unique',
+      });
+      expect(await refusal(insertDispute({ ...row, judgementVersion: 2 }))).toEqual({
+        state: '23503',
+        constraint: 'market_disputes_judgement_fk',
+      });
+      const unjudged = await createMarket(t.db, { status: 'provisional' });
+      expect(await refusal(insertDispute({ ...row, marketId: unjudged.id }))).toEqual({
+        state: '23503',
+        constraint: 'market_disputes_judgement_fk',
+      });
+      expect(await refusal(insertDispute({ ...row, userId: 'nobody' }))).toEqual({
+        state: '23503',
+        constraint: 'market_disputes_user_id_user_id_fk',
+      });
+      expect(
+        await refusal(
+          insertDispute({ ...row, ...decided, userId: decider.id, decidedBy: 'nobody' }),
+        ),
+      ).toEqual({ state: '23503', constraint: 'market_disputes_decided_by_user_id_fk' });
+
+      // Relations: a dispute's market, judgement and two accounts, and back.
+      const read = await t.db.query.marketDisputes.findFirst({
+        where: eq(marketDisputes.id, first!.id),
+        with: { market: true, judgement: true, submitter: true, decider: true },
+      });
+      expect(read).toMatchObject({
+        market: { id: market.id },
+        judgement: { marketId: market.id, version: 1 },
+        submitter: { id: member.id },
+        decider: null,
+      });
+      const withDisputes = await t.db.query.markets.findFirst({
+        where: eq(markets.id, market.id),
+        with: { disputes: true, judgements: { with: { disputes: true } } },
+      });
+      expect(withDisputes?.disputes).toHaveLength(accepted.length + 1);
+      expect(withDisputes?.judgements[0]?.disputes).toHaveLength(accepted.length + 1);
+      const people = await t.db.query.user.findFirst({
+        where: eq(user.id, decider.id),
+        with: { disputesDecided: true, disputesSubmitted: true },
+      });
+      expect(people?.disputesDecided).toHaveLength(3);
+      expect(people?.disputesSubmitted).toEqual([]);
+    });
+
+    it('lets an UPDATE only decide or retract a pending dispute once, or the retention empty an ended one once; no DELETE, whoever writes', async () => {
+      const { member, decider, row } = await disputeFixture();
+      const later = new Date(row.submittedAt.getTime() + 1_000);
+      const [pending] = await insertDispute(row);
+      const where = eq(marketDisputes.id, pending!.id);
+      const decision = {
+        status: 'dismissed' as const,
+        decidedBy: decider.id,
+        decidedAt: new Date(row.submittedAt.getTime() + 1),
+        decisionReason: '바꿀 것이 없다.',
+      };
+      const changesOnce = {
+        state: '23000',
+        message: expect.stringContaining(
+          'changes once, from pending to dismissed, accepted or retracted',
+        ) as unknown,
+      };
+      const keepsItsSubmission = {
+        state: '23000',
+        message: expect.stringContaining('keeps what its submission recorded') as unknown,
+      };
+      const emptiedAlone = {
+        state: '23000',
+        message: expect.stringContaining('is emptied by its retention alone') as unknown,
+      };
+      // A pending dispute takes no change but its decision or retraction, and that changes nothing
+      // its submission recorded.
+      expect(
+        await guarded(t.db.update(marketDisputes).set({ reason: '고친 사유' }).where(where)),
+      ).toEqual(changesOnce);
+      expect(
+        await guarded(t.db.update(marketDisputes).set({ status: 'pending' }).where(where)),
+      ).toEqual(changesOnce);
+      for (const change of [
+        { reason: '고친 사유' },
+        { links: ['https://example.com/other'] },
+        { submittedAt: later },
+        { userId: decider.id },
+        { judgementVersion: 2 },
+      ]) {
+        expect(
+          await guarded(
+            t.db
+              .update(marketDisputes)
+              .set({ ...decision, ...change })
+              .where(where),
+          ),
+          JSON.stringify(change),
+        ).toEqual(keepsItsSubmission);
+      }
+      // Not emptied while pending: the purge branch passes, the CHECK refuses.
+      expect(
+        await refusal(
+          t.db.update(marketDisputes).set({ purgedAt: later, links: [], reason: '' }).where(where),
+        ),
+      ).toEqual({ state: '23514', constraint: 'market_disputes_purged_check' });
+      const [dismissed] = await t.db.update(marketDisputes).set(decision).where(where).returning();
+      expect(dismissed).toEqual({ ...pending, ...decision });
+      // A decided dispute takes no other move, nor a second decision, nor a 철회.
+      for (const change of [
+        { status: 'accepted' as const },
+        { decisionReason: '다른 사유' },
+        { status: 'retracted' as const, retractedAt: later },
+      ]) {
+        expect(
+          await guarded(t.db.update(marketDisputes).set(change).where(where)),
+          JSON.stringify(change),
+        ).toEqual(changesOnce);
+      }
+      // The retention empties it once: the links and the reason, nothing else.
+      const purgedAt = new Date(decision.decidedAt.getTime() + 1);
+      for (const change of [
+        { links: [LINK] },
+        { reason: '남긴 사유' },
+        { links: [], reason: '', status: 'accepted' as const },
+        { links: [], reason: '', decisionReason: '다른 사유' },
+      ]) {
+        expect(
+          await guarded(
+            t.db
+              .update(marketDisputes)
+              .set({ purgedAt, links: [], reason: '', ...change })
+              .where(where),
+          ),
+          JSON.stringify(change),
+        ).toEqual(emptiedAlone);
+      }
+      const [purged] = await t.db
+        .update(marketDisputes)
+        .set({ purgedAt, links: [], reason: '' })
+        .where(where)
+        .returning();
+      expect(purged).toEqual({ ...dismissed, purgedAt, links: [], reason: '' });
+      expect(
+        await guarded(t.db.update(marketDisputes).set({ purgedAt: later }).where(where)),
+      ).toEqual(changesOnce);
+      // A retraction is the other move from pending.
+      const { user: other } = await createUser(t.db);
+      const [second] = await insertDispute({ ...row, userId: other.id });
+      const retractedAt = new Date(row.submittedAt.getTime() + 5);
+      const [retracted] = await t.db
+        .update(marketDisputes)
+        .set({ status: 'retracted', retractedAt })
+        .where(eq(marketDisputes.id, second!.id))
+        .returning();
+      expect(retracted).toEqual({ ...second, status: 'retracted', retractedAt });
+
+      // buddha_app may not DELETE one (migration 0056's REVOKE), and the owner neither; nor does
+      // the owner rewrite one.
+      expect((await refusal(t.db.delete(marketDisputes).where(where))).state).toBe('42501');
+      const owner = createDb(testDbUrls()!.migrateUrl, { max: 1 });
+      try {
+        expect(await guarded(owner.delete(marketDisputes).where(where))).toEqual({
+          state: '23000',
+          message: expect.stringContaining('is a permanent record and takes no DELETE') as unknown,
+        });
+        expect(
+          await guarded(owner.update(marketDisputes).set({ reason: '고친 사유' }).where(where)),
+        ).toEqual(changesOnce);
+        expect(
+          await guarded(
+            owner
+              .update(marketDisputes)
+              .set({
+                status: 'dismissed',
+                decidedBy: member.id,
+                decidedAt: later,
+                decisionReason: '사유',
+              })
+              .where(eq(marketDisputes.id, second!.id)),
+          ),
+        ).toEqual(changesOnce);
+      } finally {
+        await closeDb(owner);
+      }
+      expect(await t.db.select().from(marketDisputes).where(where)).toEqual([purged]);
+      const { rows: privileges } = await t.db.execute<{ privilege: string; held: boolean }>(sql`
+        SELECT p AS privilege, has_table_privilege('buddha_app', 'market_disputes', p) AS held
+        FROM unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) AS p`);
+      expect(privileges).toEqual([
+        { privilege: 'SELECT', held: true },
+        { privilege: 'INSERT', held: true },
+        { privilege: 'UPDATE', held: true },
+        { privilege: 'DELETE', held: false },
+      ]);
+    });
+
+    it('holds the mirror at 0 or more, and above 0 on a PROVISIONAL market alone', async () => {
+      const provisional = await createMarket(t.db, { status: 'provisional', disputeHoldCount: 2 });
+      expect(provisional.disputeHoldCount).toBe(2);
+      expect((await createMarket(t.db)).disputeHoldCount).toBe(0);
+      expect(
+        await refusal(createMarket(t.db, { status: 'provisional', disputeHoldCount: -1 })),
+      ).toEqual({ state: '23514', constraint: 'markets_dispute_hold_count_check' });
+      for (const status of MARKET_STATUSES.filter((value) => value !== 'provisional')) {
+        expect(
+          await refusal(createMarket(t.db, { status, resolvedResult: 'YES', disputeHoldCount: 1 })),
+          status,
+        ).toEqual({ state: '23514', constraint: 'markets_dispute_hold_status_check' });
+      }
+      // A PROVISIONAL market that still counts one cannot leave PROVISIONAL.
+      expect(
+        await refusal(
+          t.db.update(markets).set({ status: 'resolved' }).where(eq(markets.id, provisional.id)),
+        ),
+      ).toEqual({ state: '23514', constraint: 'markets_dispute_hold_status_check' });
+      // The purge records take the new kind (retention_purges_kind_check, 0056).
+      const [purge] = await t.db
+        .insert(retentionPurges)
+        .values({ kind: 'market_disputes', count: 1, periodDays: 30, ranAt: new Date() })
+        .returning();
+      expect(purge).toMatchObject({ kind: 'market_disputes', outcome: 'done' });
     });
   });
 

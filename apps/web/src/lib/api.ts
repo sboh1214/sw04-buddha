@@ -387,6 +387,22 @@ export type AdoptProposalBody = components['schemas']['AdoptProposalBody'];
 export type LinkProposalMarketBody = components['schemas']['LinkProposalMarketBody'];
 /** `POST /admin/proposals/{id}/reject`: the reason, the explanation and a duplicate's market. */
 export type RejectProposalBody = components['schemas']['RejectProposalBody'];
+/**
+ * 판정 이의 (#175, ADR-0104): one of the caller's disputes as MY and the submission screen show it —
+ * never who decided it (#173 item 13) — the caller's standing on a market's current judgement
+ * version, and the submission's body (`POST /markets/{id}/disputes`; the 철회's is
+ * `expectedAccountId` alone).
+ */
+export type MyDispute = components['schemas']['MyDispute'];
+export type MyMarketDispute = components['schemas']['MyMarketDispute'];
+export type SubmitDisputeBody = components['schemas']['SubmitDisputeBody'];
+/**
+ * A dispute on the admin screens — its submitter, how it ended and who decided it — the current
+ * version's on the admin detail (`AdminMarket.disputes`), and a row of 이의 접수
+ * (`GET /admin/market-disputes`) with its market.
+ */
+export type AdminMarketDispute = components['schemas']['AdminMarketDispute'];
+export type AdminDisputeQueueItem = components['schemas']['AdminDisputeQueueItem'];
 export type ErrorEnvelope = components['schemas']['ErrorEnvelope'];
 
 /** A non-2xx API response, carrying the `{ error: { code, message, details? } }` envelope. */

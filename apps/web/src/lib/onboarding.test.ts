@@ -32,6 +32,7 @@ import {
   withInterest,
   type Onboarding,
 } from './onboarding';
+import { MY_DISPUTES_PATH } from './disputes';
 import { MY_PROPOSALS_PATH } from './proposals';
 
 /** A consent answer as `GET /me` lists it. */
@@ -75,7 +76,7 @@ const DONE: Onboarding = { ...COMPLETED, interests: true };
 const RECONSENT: Onboarding = { ...DONE, consent: false, completed: false, nextStep: 'consent' };
 
 describe('isOnboardingExempt', () => {
-  it('lists exactly the routes ADR-0043 names, the 탈퇴 screen, 내 제안, plus /api', () => {
+  it('lists exactly the routes ADR-0043 names, the 탈퇴 screen, 내 제안, 판정 이의, plus /api', () => {
     expect([...ONBOARDING_EXEMPT_PATHS].sort()).toEqual(
       [
         '/api',
@@ -85,6 +86,8 @@ describe('isOnboardingExempt', () => {
         '/my/settings/closure',
         // 내 제안 (#77, owner decision 2026-10-20): such an account takes its 접수 proposal back.
         '/my/proposals',
+        // MY '판정 이의' (#175, ADR-0104): and its pending 판정 이의 back, with sign-in only.
+        '/my/disputes',
         '/login',
         '/onboarding',
         '/privacy',
@@ -110,6 +113,7 @@ describe('isOnboardingExempt', () => {
       '/terms/',
       '/my/settings/closure',
       '/my/proposals',
+      '/my/disputes',
       '/reset-password/confirm',
       '/api/auth/callback/kakao',
       '/api/auth/sign-out',
@@ -132,8 +136,11 @@ describe('isOnboardingExempt', () => {
       '/my/settings',
       '/my/settings/closurex',
       '/my/proposalsx',
+      '/my/disputesx',
       // The form '시장 제안하기' leads to stays gated: a new proposal waits for the onboarding.
       '/proposals/new',
+      // So does a market's submission screen: a new 판정 이의 waits for it too (#175).
+      '/markets/btc-100k/dispute',
       '/my/moderation',
       '/community',
       '/markets/btc-100k',
@@ -390,6 +397,17 @@ describe('needsOnboarding', () => {
     // Every such account's, as the 탈퇴 screen — never a page only a re-consent opens (ADR-0089).
     expect(ONBOARDING_EXEMPT_PATHS).toContain(MY_PROPOSALS_PATH);
     expect(ONBOARDING_EXEMPT_PAGES.map((page) => page.route)).not.toContain(MY_PROPOSALS_PATH);
+  });
+
+  it('leaves MY 판정 이의 to an account with any step left, and not the submission screen (#175)', () => {
+    for (const onboarding of [FRESH, CONSENTED, VERIFIED, RECONSENT]) {
+      // A pending dispute is taken back with sign-in only (the API's retraction, ADR-0104).
+      expect(needsOnboarding('/my/disputes', onboarding), String(onboarding.nextStep)).toBe(false);
+      // A new one waits for the onboarding (#57-8, `OnboardedGuard`).
+      expect(needsOnboarding('/markets/btc-100k/dispute', onboarding)).toBe(true);
+    }
+    expect(ONBOARDING_EXEMPT_PATHS).toContain(MY_DISPUTES_PATH);
+    expect(ONBOARDING_EXEMPT_PAGES.map((page) => page.route)).not.toContain(MY_DISPUTES_PATH);
   });
 
   it('never redirects while the answer is unknown, or once nothing is left', () => {

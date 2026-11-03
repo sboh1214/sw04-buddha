@@ -17,9 +17,12 @@ import {
   ceilToMinute,
   changedTimeItems,
   floorToMinute,
+  isDisputeOpen,
+  isDisputeUnderReview,
   isJudgementDelayed,
   longDelayDeadline,
   marketTimesSchema,
+  type MarketDisplayState,
   minuteOf,
   missingTimeItems,
   sameTimeItem,
@@ -418,10 +421,15 @@ describe('longDelayDeadline (#172 item 10)', () => {
   });
 });
 
-describe('isJudgementDelayed (#173 item 11)', () => {
+describe('isJudgementDelayed (#173 items 11·12)', () => {
   const judgement = '2026-11-30T01:00:00.000Z';
   const at = Date.parse(judgement);
-  const closed = { status: 'closed', scheduledJudgementAt: judgement } as const;
+  const closed: MarketDisplayState = {
+    status: 'closed',
+    scheduledJudgementAt: judgement,
+    disputeDeadline: null,
+    disputeHoldCount: 0,
+  };
 
   it('reads a CLOSED market delayed from its scheduled judgement on', () => {
     expect(isJudgementDelayed(closed, at - 1)).toBe(false);
@@ -429,10 +437,76 @@ describe('isJudgementDelayed (#173 item 11)', () => {
     expect(isJudgementDelayed(closed, at + 86_400_000)).toBe(true);
   });
 
-  it('reads no other status delayed, nor a market with no scheduled judgement', () => {
+  it('reads no other status delayed by its scheduled judgement, nor a market with none', () => {
     for (const status of MARKET_STATUSES) {
       expect(isJudgementDelayed({ ...closed, status }, at + 1), status).toBe(status === 'closed');
     }
-    expect(isJudgementDelayed({ status: 'closed', scheduledJudgementAt: null }, at)).toBe(false);
+    expect(isJudgementDelayed({ ...closed, scheduledJudgementAt: null }, at)).toBe(false);
+  });
+
+  // Owner answer 2026-11-03 (#175, ADR-0104): a PROVISIONAL market a 판정 이의 holds reads '이의
+  // 검토 중' before its deadline and '판정 지연' from it — the instant the submission closes.
+  const deadline = '2026-12-01T01:00:00.123Z';
+  const due = Date.parse(deadline);
+  const held: MarketDisplayState = {
+    status: 'provisional',
+    scheduledJudgementAt: judgement,
+    disputeDeadline: deadline,
+    disputeHoldCount: 1,
+  };
+
+  it('reads a held PROVISIONAL market delayed from its dispute deadline on, to the ms', () => {
+    expect(isJudgementDelayed(held, due - 1)).toBe(false);
+    expect(isJudgementDelayed(held, due)).toBe(true);
+    expect(isJudgementDelayed({ ...held, disputeHoldCount: 3 }, due + 86_400_000)).toBe(true);
+    // Its scheduled judgement long passed decides nothing once it is PROVISIONAL.
+    expect(isJudgementDelayed(held, at + 1)).toBe(false);
+    // Nothing holds it: the worker confirms it at the deadline, no delay to read.
+    expect(isJudgementDelayed({ ...held, disputeHoldCount: 0 }, due + 1)).toBe(false);
+    expect(isJudgementDelayed({ ...held, disputeDeadline: null }, due + 1)).toBe(false);
+    // A count on another status reads nothing (the database allows none there).
+    for (const status of MARKET_STATUSES.filter((s) => s !== 'closed' && s !== 'provisional')) {
+      expect(isJudgementDelayed({ ...held, status }, due + 1), status).toBe(false);
+    }
+  });
+
+  it('splits a held market at its deadline: under review before it, delayed from it', () => {
+    for (const nowMs of [due - 1, due, due + 1]) {
+      expect(isDisputeUnderReview(held), String(nowMs)).toBe(true);
+      expect(isJudgementDelayed(held, nowMs), String(nowMs)).toBe(!isDisputeOpen(held, nowMs));
+    }
+  });
+});
+
+describe('isDisputeOpen (#175, #173 items 5·6)', () => {
+  const deadline = '2026-12-01T01:00:00.123Z';
+  const due = Date.parse(deadline);
+  const provisional = { status: 'provisional', disputeDeadline: deadline } as const;
+
+  it('takes disputes on a PROVISIONAL market before its deadline, never at it', () => {
+    expect(isDisputeOpen(provisional, due - 86_400_000)).toBe(true);
+    expect(isDisputeOpen(provisional, due - 1)).toBe(true);
+    expect(isDisputeOpen(provisional, due)).toBe(false);
+    expect(isDisputeOpen(provisional, due + 1)).toBe(false);
+  });
+
+  it('takes none in another status, the deadline kept after the confirmation, or with none', () => {
+    for (const status of MARKET_STATUSES) {
+      expect(isDisputeOpen({ ...provisional, status }, due - 1), status).toBe(
+        status === 'provisional',
+      );
+    }
+    expect(isDisputeOpen({ status: 'provisional', disputeDeadline: null }, 0)).toBe(false);
+  });
+});
+
+describe('isDisputeUnderReview (#173 item 12)', () => {
+  it('reads a PROVISIONAL market under review while a dispute holds it, whatever the clock', () => {
+    expect(isDisputeUnderReview({ status: 'provisional', disputeHoldCount: 1 })).toBe(true);
+    expect(isDisputeUnderReview({ status: 'provisional', disputeHoldCount: 2 })).toBe(true);
+    expect(isDisputeUnderReview({ status: 'provisional', disputeHoldCount: 0 })).toBe(false);
+    for (const status of MARKET_STATUSES.filter((s) => s !== 'provisional')) {
+      expect(isDisputeUnderReview({ status, disputeHoldCount: 1 }), status).toBe(false);
+    }
   });
 });

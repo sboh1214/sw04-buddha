@@ -63,8 +63,8 @@ const reasonText = (column: AnyPgColumn): SQL =>
  *   the approval read it, `published_at`, the approval's instant (the `provisional` event's), and
  *   `dispute_deadline`, exactly the one plus the other — fixed then, never moved by a later change
  *   of the setting; #176 reuses the length for a correction's deadline.
- * - `approval_id` (one judgement per request), `registered_by` (its requester — #175 excludes them
- *   from the dispute decisions), `approved_by` (never the registrant, ADR-0056 1-1) and
+ * - `approval_id` (one judgement per request), `registered_by` (its requester — never a decider of
+ *   its 판정 이의, `decideMarketDispute`, #175), `approved_by` (never the registrant, ADR-0056 1-1) and
  *   `provisional_event_id`. Admins only, with every reason, until #24 publishes the record without
  *   the two accounts.
  *

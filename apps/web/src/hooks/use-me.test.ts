@@ -1012,6 +1012,7 @@ describe('the member’s faces the tab holds, after a profile image change (#141
     title: '금리 인하?',
     status: 'open',
     judgementDelayed: false,
+    disputeUnderReview: false,
     category: { slug: 'economy', nameKo: '경제' },
   } as const;
 

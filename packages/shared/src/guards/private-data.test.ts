@@ -142,6 +142,12 @@ describe('findPrivateField', () => {
     ['proposer', 'proposal'],
     ['proposerNickname', 'proposal'],
     ['proposedBy', 'proposal'],
+    ['submitter', 'dispute'],
+    ['submittedBy', 'dispute'],
+    ['disputeReason', 'dispute'],
+    ['dispute_links', 'dispute'],
+    ['myDispute', 'dispute'],
+    ['userDisputes', 'dispute'],
     ['passwordHash', 'auth-secret'],
     ['sessionToken', 'auth-secret'],
     ['riskFlags', 'risk-flag'],
@@ -285,6 +291,16 @@ describe('findPrivateField', () => {
     'delayHandling',
     'name',
     'url',
+    // A market's own dispute fields are public (#175, #173 items 6·12·13): the version a dispute
+    // names, its deadline, whether disputes are taken and whether one is under review; so are a
+    // decision's reason (#24) and a judgement's evidence links, with no dispute word beside them.
+    'judgementVersion',
+    'disputeDeadline',
+    'disputeOpen',
+    'disputeUnderReview',
+    'disputeWindowMinutes',
+    'decisionReason',
+    'links',
   ])('lets %s through', (name) => {
     expect(findPrivateField(name)).toEqual([]);
   });
@@ -351,6 +367,49 @@ describe('findPrivateField', () => {
     expect(watchlist.fields.map((run) => run.join(' ')).sort()).toEqual(
       WATCHLIST_RUNS.map(([, words]) => words).sort(),
     );
+  });
+
+  // The dispute item, by a name only that run catches (#175, ADR-0093 decision 1 #173 item 13), and
+  // each word it takes beside a whose-word. A run or a word without an example here fails the test
+  // below.
+  const DISPUTE_RUNS: readonly [string, string][] = [
+    ['submitter', 'submitter'],
+    ['submitters', 'submitters'],
+    ['submittedBy', 'submitted by'],
+    ['disputerNickname', 'disputer'],
+    ['disputers', 'disputers'],
+    ['disputantId', 'disputant'],
+    ['disputants', 'disputants'],
+    ['disputed_by', 'disputed by'],
+    ['disputeReason', 'dispute reason'],
+    ['disputeReasons', 'dispute reasons'],
+    ['disputeLink', 'dispute link'],
+    ['disputeLinks', 'dispute links'],
+    ['disputeBody', 'dispute body'],
+    ['disputeText', 'dispute text'],
+    ['disputeContent', 'dispute content'],
+    ['viewerDispute', 'viewer dispute'],
+    ['accountDisputes', 'account disputes'],
+  ];
+  const disputeHits = (name: string) =>
+    findPrivateField(name)
+      .filter((hit) => hit.item === 'dispute')
+      .map((hit) => hit.words);
+
+  it.each(DISPUTE_RUNS)('keeps %s private as a dispute field (%s)', (name, words) => {
+    expect(disputeHits(name)).toEqual([words]);
+  });
+
+  it('has an example above for every run and every word of the dispute item', () => {
+    const dispute = PRIVATE_DATA.find((item) => item.id === 'dispute')!;
+    const examples = DISPUTE_RUNS.map(([, words]) => words);
+    for (const run of dispute.fields) expect(examples, run.join(' ')).toContain(run.join(' '));
+    for (const word of dispute.owned!.words) {
+      expect(
+        examples.some((words) => words.split(' ').includes(word)),
+        word,
+      ).toBe(true);
+    }
   });
 
   // The search-history item, by a name only that run catches (#15, ADR-0061 decision 3,

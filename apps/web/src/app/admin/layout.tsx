@@ -16,7 +16,8 @@ export const metadata: Metadata = { title: `${copy.adminTitle} | ${copy.appName}
  * PLAN 12: everything under /admin is admin-only. The check runs on the server so a member
  * never receives the page at all; the API enforces the same rule on every call (AdminGuard).
  * M3 adds markets, payments and audit failures. 판정 and its settlement steps live on the market
- * detail (ADR-0046); M5's dispute list went with the dispute stage.
+ * detail (ADR-0046); M5's dispute list went with the dispute stage, and #175's 이의 접수 (ADR-0104)
+ * is the members' 판정 이의, decided on the market detail's 판정 panel.
  */
 /**
  * Next 16 types `href`, so the list is declared as routes rather than plain strings. 충전 상품,
@@ -29,12 +30,16 @@ export const metadata: Metadata = { title: `${copy.adminTitle} | ${copy.appName}
  * 반복 링크, ADR-0083), 테마 #81's (ADR-0088 — next to 시장, whose markets it groups), 카테고리
  * #17's (ADR-0093 — after 테마: the tree markets are filed under, added to, renamed, ordered and
  * hidden, never deleted), 검수 대기 #78's (ADR-0099 — right after 시장: the markets waiting for
- * another admin's approval). The row wraps rather than scrolling sideways at phone width.
+ * another admin's approval), 이의 접수 #175's (ADR-0104 — right after 테마, so the first three stay
+ * the markets' own: the members' 판정 이의, pending and decided). The row wraps rather than
+ * scrolling sideways at phone width.
  */
 const NAV: { href: Route; label: string }[] = [
   { href: '/admin/markets', label: copy.adminMarkets },
   { href: '/admin/markets/reviews', label: copy.adminMarketReviews },
   { href: '/admin/themes', label: copy.adminThemes },
+  // 이의 접수 (#175, ADR-0104): the members' 판정 이의, 검토 대기 and 처리됨.
+  { href: '/admin/disputes', label: copy.adminDisputes },
   { href: '/admin/categories', label: copy.adminCategories },
   // 시장 제안 (#77, ADR-0089): the members' proposals and their review.
   { href: '/admin/proposals', label: copy.adminProposals },

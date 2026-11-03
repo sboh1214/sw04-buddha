@@ -345,20 +345,67 @@ export function longDelayDeadline(judgementIso: string | null, days: number | nu
 }
 
 /**
- * Whether a market reads '판정 지연' (ADR-0093 decision 1 #173 item 11, ADR-0098): a CLOSED market
- * whose scheduled judgement has passed by `nowMs` — an instant on the reader's clock, which for a
- * DTO is the server's at the read (`judgementDelayed`). It is a display, not a status: nothing
- * changes at the judgement time, and no list filters by it (ADR-0095 8-6). A PROVISIONAL market
- * whose objection review is late (#175) and the delay record's reason and next review time (#142)
- * are their issues'.
+ * What a market's status displays read of it (`isJudgementDelayed`, `isDisputeOpen`,
+ * `isDisputeUnderReview`): its status, its scheduled judgement (#22), the current judgement's 이의
+ * 기한 (#152: `markets.dispute_deadline`, null before a judgement) and how many 판정 이의 of that
+ * version hold its confirmation (#175: `markets.dispute_hold_count` — pending or accepted,
+ * HOLDING_DISPUTE_STATUSES in market-dispute.ts), each instant as ISO.
  */
-export function isJudgementDelayed(
-  market: { status: MarketStatus; scheduledJudgementAt: string | null },
+export interface MarketDisplayState {
+  status: MarketStatus;
+  scheduledJudgementAt: string | null;
+  disputeDeadline: string | null;
+  disputeHoldCount: number;
+}
+
+/**
+ * Whether a market reads '판정 지연' (ADR-0093 decision 1 #173 items 11·12, ADR-0098, ADR-0104) by
+ * `nowMs` — an instant on the reader's clock, which for a DTO is the server's at the read
+ * (`judgementDelayed`):
+ * - a CLOSED market whose scheduled judgement has passed (#22), no operator record needed;
+ * - a PROVISIONAL market a 판정 이의 still holds once its 이의 기한 has come (owner answer
+ *   2026-11-03: '이의 검토 중' before the deadline, '판정 지연' from it while not confirmed) — the
+ *   instant the submission closes (`isDisputeOpen` false) and the confirmation could come.
+ * It is a display, not a status: nothing changes at either instant, and no list filters by it
+ * (ADR-0095 8-6). The delay record's reason and next review time are #142's.
+ */
+export function isJudgementDelayed(market: MarketDisplayState, nowMs: number): boolean {
+  if (market.status === 'closed') {
+    return market.scheduledJudgementAt !== null && nowMs >= Date.parse(market.scheduledJudgementAt);
+  }
+  return (
+    isDisputeUnderReview(market) &&
+    market.disputeDeadline !== null &&
+    nowMs >= Date.parse(market.disputeDeadline)
+  );
+}
+
+/**
+ * Whether a market takes 판정 이의 at `nowMs` (#175, ADR-0104; #173 items 5·6): PROVISIONAL and
+ * before its 이의 기한 — the submission's own rule (`now < deadline`; the confirmation needs
+ * `deadline <= now`, so the two never overlap). The public detail shows the submission link while
+ * it holds, and so do the discussion and the write screen (decision 3 '#175 토론의 이의 안내'); a
+ * DTO's `disputeOpen` is it on the server's clock at the read, and a screen's one-shot timer at
+ * the deadline takes the link away without a reload.
+ */
+export function isDisputeOpen(
+  market: Pick<MarketDisplayState, 'status' | 'disputeDeadline'>,
   nowMs: number,
 ): boolean {
   return (
-    market.status === 'closed' &&
-    market.scheduledJudgementAt !== null &&
-    nowMs >= Date.parse(market.scheduledJudgementAt)
+    market.status === 'provisional' &&
+    market.disputeDeadline !== null &&
+    nowMs < Date.parse(market.disputeDeadline)
   );
+}
+
+/**
+ * Whether a market reads '이의 검토 중' (#173 item 12, ADR-0104): PROVISIONAL with a 판정 이의 of its
+ * current version holding it (`disputeHoldCount` > 0), before its deadline or after it — past it
+ * `isJudgementDelayed` holds too and its '판정 지연' is the label. A DTO's `disputeUnderReview`.
+ */
+export function isDisputeUnderReview(
+  market: Pick<MarketDisplayState, 'status' | 'disputeHoldCount'>,
+): boolean {
+  return market.status === 'provisional' && market.disputeHoldCount > 0;
 }

@@ -64,6 +64,7 @@ import {
   scheduledJudgementWait,
   showsJudgementPanel,
 } from '@/lib/market-judgement';
+import { MarketDisputes } from './market-dispute-panel';
 import { type JudgementDialogKind, JudgementDialog } from './market-judgement-dialogs';
 import { ReasonField } from './market-review-dialogs';
 
@@ -101,6 +102,7 @@ export function MarketJudgementPanel({ market, readAt }: { market: AdminMarket; 
             <JudgementRegisterForm key={operatorId ?? ''} market={market} onClose={close} />
           ) : null
         }
+        disputes={<MarketDisputes market={market} />}
         targets={refocus.targets}
       />
       {action !== null && action !== 'register' && (
@@ -166,6 +168,7 @@ function useJudgementRefocus(market: AdminMarket, action: JudgementAction | null
  *   a refetch reads: it says itself why it cannot be sent now;
  * - the current judgement from its 잠정 결과 on — its version, what it says, who registered and
  *   approved it, the publication, the window and the dispute deadline — read-only;
+ * - its version's 판정 이의 (`disputes`, market-dispute-panel.tsx, #175): their 기각 and 수용;
  * - the 판정 기록, newest first.
  * No market price, volume or count is drawn (#152 AC 8). No button is live until the admin on
  * screen is known. `targets` are what focus comes back to (`useJudgementRefocus`).
@@ -176,6 +179,7 @@ export function JudgementPanelBody({
   operatorId,
   onOpen,
   registerForm,
+  disputes,
   targets,
 }: {
   market: AdminMarket;
@@ -183,6 +187,8 @@ export function JudgementPanelBody({
   operatorId: string | undefined;
   onOpen: (action: JudgementAction) => void;
   registerForm: ReactNode;
+  /** The current version's 판정 이의 (`MarketDisputes`, #175), after the current judgement. */
+  disputes?: ReactNode;
   targets?: JudgementFocusTargets;
 }) {
   const unavailable = judgementUnavailable(market);
@@ -233,6 +239,7 @@ export function JudgementPanelBody({
           {current !== null && (
             <CurrentJudgement market={market} judgement={current} headingRef={targets?.current} />
           )}
+          {disputes}
           <JudgementLog market={market} />
         </Stack>
       </Card.Body>
@@ -538,7 +545,8 @@ function PendingJudgement({
  * The current judgement (`judgement.current`, from its 잠정 결과 on): its version, what it says, who
  * registered and who approved it, when its 잠정 결과 was published, the dispute window read then and
  * the deadline it fixed (#173 item 5) — and, while PROVISIONAL, that the result is confirmed by
- * itself once that deadline passes. Read-only in every status.
+ * itself once that deadline passes with no 판정 이의 holding it (the block below says how many do,
+ * #175). Read-only in every status.
  */
 function CurrentJudgement({
   market,
