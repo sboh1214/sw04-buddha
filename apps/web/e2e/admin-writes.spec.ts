@@ -353,7 +353,7 @@ test.describe('탭의 계정이 바뀌는 틈의 관리자 쓰기 (ADR-0092)', (
     try {
       const title = `E2E 다른 관리자 ${freshTag()}`;
       await page.getByTestId('market-title').fill(title);
-      await page.getByTestId('market-rules').fill('자동화 테스트의 규칙');
+      await page.getByTestId('market-yes-condition').fill('자동화 테스트의 YES 조건');
       const category = page.getByTestId('market-category');
       const choices = await category
         .locator('option:not([disabled])')
@@ -1020,15 +1020,15 @@ test.describe('탭의 세션이 아직 앞 관리자를 말하는데 `GET /me`�
     );
     try {
       const title = page.getByTestId('market-title');
-      const rules = page.getByTestId('market-rules');
+      const yesCondition = page.getByTestId('market-yes-condition');
       await title.fill(`E2E 앞 관리자가 적던 시장 ${freshTag()}`);
-      await rules.fill('앞 관리자가 적던 규칙');
+      await yesCondition.fill('앞 관리자가 적던 YES 조건');
       const writes = adminWrites(page);
 
       await toB();
       // B's form: empty, and on — B is known.
       await expect(title).toHaveValue('');
-      await expect(rules).toHaveValue('');
+      await expect(yesCondition).toHaveValue('');
       await expect(title).toBeEnabled();
       expect(writes).toEqual([]);
     } finally {

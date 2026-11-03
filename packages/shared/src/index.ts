@@ -31,6 +31,7 @@ export * from './lmsr.js';
 export * from './market.js';
 export * from './market-lifecycle.js';
 export * from './market-open-items.js';
+export * from './market-rules.js';
 export * from './market-maker/ladder.js';
 export * from './market-maker/risk.js';
 export * from './market-maker/terms.js';

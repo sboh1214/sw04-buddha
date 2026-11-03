@@ -23,6 +23,7 @@ import { marketLinks } from './market-links.js';
 import { marketProposals } from './market-proposals.js';
 import { marketSearches } from './market-searches.js';
 import { marketSettlementSteps } from './market-settlement-steps.js';
+import { marketSources } from './market-sources.js';
 import { markets } from './markets.js';
 import { mediaObjects } from './media-objects.js';
 import { nicknameHolds } from './nickname-holds.js';
@@ -161,6 +162,8 @@ export const marketsRelations = relations(markets, ({ one, many }) => ({
   themeMarkets: many(themeMarkets),
   // 태그 (#17): its tags, `position` the order.
   tags: many(marketTags),
+  // 출처 (#23): its 1차 출처 (priority 0) and 대체 출처 (1..3), `priority` the order.
+  sources: many(marketSources),
   posts: many(posts),
   // 시장 제안 (#77): the proposals adopted into this market, and the ones rejected as its
   // duplicates. Admin reads only: a market never shows who proposed it.
@@ -339,6 +342,10 @@ export const tagsRelations = relations(tags, ({ many }) => ({
 export const marketTagsRelations = relations(marketTags, ({ one }) => ({
   market: one(markets, { fields: [marketTags.marketId], references: [markets.id] }),
   tag: one(tags, { fields: [marketTags.tagId], references: [tags.id] }),
+}));
+
+export const marketSourcesRelations = relations(marketSources, ({ one }) => ({
+  market: one(markets, { fields: [marketSources.marketId], references: [markets.id] }),
 }));
 
 export const themeNoticesRelations = relations(themeNotices, ({ one }) => ({

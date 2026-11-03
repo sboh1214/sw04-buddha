@@ -19,7 +19,7 @@ import {
   type LinkFlagReviewPayload,
   type WithoutExpectedAccount,
 } from '@buddha/shared';
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, ne, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
@@ -123,11 +123,14 @@ export class LinkReviewService {
     links: readonly string[],
   ): Promise<void> {
     if (writer.isAdmin || links.length === 0) return;
-    const [market] = await tx
-      .select({ resolutionSource: schema.markets.resolutionSource })
-      .from(schema.markets)
-      .where(eq(schema.markets.id, marketId));
-    const sources = officialSourceLinks(market?.resolutionSource ?? null);
+    // The market's official sources: the addresses of its rules' primary and fallback sources,
+    // every priority (#23, ADR-0093 decision 3 '#23 공식 출처'); a source with none yet gives none.
+    const sourceRows = await tx
+      .select({ url: schema.marketSources.url })
+      .from(schema.marketSources)
+      .where(and(eq(schema.marketSources.marketId, marketId), ne(schema.marketSources.url, '')))
+      .orderBy(asc(schema.marketSources.priority));
+    const sources = officialSourceLinks(sourceRows.map((row) => row.url));
     const counted = links.filter((link) => !isOfficialSourceLink(link, sources));
     if (counted.length === 0) return;
     // One parameter for all the links, however many.

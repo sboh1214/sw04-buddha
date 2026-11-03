@@ -21,6 +21,7 @@ import {
   MARKET_RESULT_LABEL,
   MARKET_STATUS_LABEL,
   MARKET_STATUS_PALETTE,
+  type MarketSourceInputs,
   OPEN_ITEM_LABEL,
   SETTLEMENT_STEP_LABEL,
   SETTLEMENT_STEP_STATUS_LABEL,
@@ -355,10 +356,75 @@ describe('marketEventRows', () => {
   const openAt = '2026-09-06T00:00:00.000Z';
   const closeAt = '2026-10-01T00:00:00.000Z';
 
-  it('reads the rules diff as before and after, with a blank as a dash', () => {
+  it('reads a rules diff written before #23 as the one text before and after', () => {
     expect(marketEventRows('rules_edited', { before: '', after: '한국은행 발표 기준' })).toEqual([
       { label: copy.eventRulesBefore, value: '—' },
       { label: copy.eventRulesAfter, value: '한국은행 발표 기준' },
+    ]);
+  });
+
+  it('reads a rules diff since #23 as the items changed, then each one before and after', () => {
+    // rulesEditedPayload (@buddha/shared): the changed items in RULE_ITEMS order, and their values.
+    expect(
+      marketEventRows('rules_edited', {
+        items: ['yesCondition', 'primarySource'],
+        before: { yesCondition: '', primarySource: null },
+        after: {
+          yesCondition: '한국은행이 내리면 YES',
+          primarySource: { name: '한국은행', url: 'https://www.bok.or.kr' },
+        },
+      }),
+    ).toEqual([
+      { label: copy.eventRulesItems, value: 'YES 조건 · 1차 출처' },
+      { label: 'YES 조건 이전', value: '—' },
+      { label: 'YES 조건 이후', value: '한국은행이 내리면 YES' },
+      { label: '1차 출처 이전', value: '—' },
+      { label: '1차 출처 이후', value: '한국은행 (https://www.bok.or.kr)' },
+    ]);
+  });
+
+  it('words every rule item: KST, sources, numbered fallbacks or 없음, days', () => {
+    const at = '2026-10-31T14:59:00.000Z';
+    const rows = marketEventRows('rules_edited', {
+      // Listed out of order: the rows keep RULE_ITEMS'.
+      items: ['longDelayDays', 'description', 'fallbackSources', 'eventDeadline', 'delayHandling'],
+      before: {
+        description: null,
+        eventDeadline: null,
+        fallbackSources: [],
+        longDelayDays: null,
+        delayHandling: '무효',
+      },
+      after: {
+        description: '배경',
+        eventDeadline: at,
+        fallbackSources: [
+          { name: '연합뉴스', url: 'https://yna.co.kr' },
+          { name: '', url: 'https://kosis.kr' },
+          { name: '통계청', url: '' },
+        ],
+        longDelayDays: 14,
+        delayHandling: '  ',
+      },
+    });
+    expect(rows).toEqual([
+      {
+        label: copy.eventRulesItems,
+        value: '배경 · 사건 기한 · 대체 출처 · 장기 지연 기한 · 지연·취소·무효 처리',
+      },
+      { label: '배경 이전', value: '—' },
+      { label: '배경 이후', value: '배경' },
+      { label: '사건 기한 이전', value: '—' },
+      { label: '사건 기한 이후', value: formatKst(at) },
+      { label: '대체 출처 이전', value: copy.adminMarketFallbackNone },
+      {
+        label: '대체 출처 이후',
+        value: '1. 연합뉴스 (https://yna.co.kr)\n2. https://kosis.kr\n3. 통계청',
+      },
+      { label: '장기 지연 기한 이전', value: '—' },
+      { label: '장기 지연 기한 이후', value: '예정 판정 시각에서 14일 뒤' },
+      { label: '지연·취소·무효 처리 이전', value: '무효' },
+      { label: '지연·취소·무효 처리 이후', value: '—' },
     ]);
   });
 
@@ -450,6 +516,21 @@ describe('marketEventRows', () => {
     // A half-read row ("이전 undefined", "정산 지급 합계 NaN") is worse than the raw JSON.
     expect(marketEventRows('rules_edited', { before: 'a' })).toBeUndefined();
     expect(marketEventRows('rules_edited', 'a → b')).toBeUndefined();
+    // Since #23: an unknown item, none at all, a value missing or of another item's shape.
+    const rulesEdited = (items: unknown, before: unknown, after: unknown) =>
+      marketEventRows('rules_edited', { items, before, after });
+    expect(rulesEdited(['rules'], { rules: 'a' }, { rules: 'b' })).toBeUndefined();
+    expect(rulesEdited([], {}, {})).toBeUndefined();
+    expect(rulesEdited(['yesCondition'], {}, { yesCondition: 'b' })).toBeUndefined();
+    expect(
+      rulesEdited(['primarySource'], { primarySource: 'a' }, { primarySource: null }),
+    ).toBeUndefined();
+    expect(
+      rulesEdited(['eventDeadline'], { eventDeadline: 'soon' }, { eventDeadline: null }),
+    ).toBeUndefined();
+    expect(
+      rulesEdited(['longDelayDays'], { longDelayDays: 1.5 }, { longDelayDays: 2 }),
+    ).toBeUndefined();
     expect(marketEventRows('opened', { openAt, closeAt: 'not-a-date' })).toBeUndefined();
     expect(marketEventRows('closed', { closedAt: 1 })).toBeUndefined();
     expect(marketEventRows('closed', null)).toBeUndefined();
@@ -458,23 +539,41 @@ describe('marketEventRows', () => {
 });
 
 describe('openItemsNotice', () => {
-  it('names the open-items labels the brief gives, one per item (#17)', () => {
+  it('names every open item, in OPEN_ITEMS order (#17, #23 ADR-0097)', () => {
     expect(OPEN_ITEMS.map((item) => OPEN_ITEM_LABEL[item])).toEqual([
-      '정산 규칙',
+      '질문',
+      '배경',
+      'YES 조건',
+      'NO 조건',
+      '사건 기한',
+      '1차 출처',
+      '대체 출처',
+      '전환 조건',
+      '장기 지연 기한',
+      '지연·취소·무효 처리',
       '카테고리',
       '태그 1~5개',
     ]);
+    // '정산' is Coin's payout (ADR-0052): no item is named with it any more.
+    for (const item of OPEN_ITEMS) expect(OPEN_ITEM_LABEL[item], item).not.toContain('정산');
   });
 
   it("says what a draft still lacks, joined with ' · ' in OPEN_ITEMS order", () => {
-    expect(
-      openItemsNotice({ status: 'draft', missingOpenItems: ['rules', 'category', 'tags'] }),
-    ).toBe('열기 전에 채울 항목: 정산 규칙 · 카테고리 · 태그 1~5개');
+    expect(openItemsNotice({ status: 'draft', missingOpenItems: [...OPEN_ITEMS] })).toBe(
+      '열기 전에 채울 항목: 질문 · 배경 · YES 조건 · NO 조건 · 사건 기한 · 1차 출처 · 대체 출처 · ' +
+        '전환 조건 · 장기 지연 기한 · 지연·취소·무효 처리 · 카테고리 · 태그 1~5개',
+    );
     expect(openItemsNotice({ status: 'draft', missingOpenItems: ['tags'] })).toBe(
       '열기 전에 채울 항목: 태그 1~5개',
     );
-    expect(openItemsNotice({ status: 'draft', missingOpenItems: ['tags', 'rules'] })).toBe(
-      `${copy.adminMarketOpenItems}: ${copy.openItemRules} · ${copy.openItemTags}`,
+    expect(
+      openItemsNotice({
+        status: 'draft',
+        missingOpenItems: ['tags', 'primarySource', 'yesCondition'],
+      }),
+    ).toBe(
+      `${copy.adminMarketOpenItems}: ` +
+        [copy.openItemYesCondition, copy.openItemPrimarySource, copy.openItemTags].join(' · '),
     );
   });
 
@@ -489,14 +588,87 @@ describe('openItemsNotice', () => {
 });
 
 describe('marketFormError for RULES_REQUIRED', () => {
-  it('puts the refusal of blank rules on an open market under the rules field', () => {
-    const error = apiError(
+  const refusal = (items: string[]) =>
+    apiError(
       422,
       'RULES_REQUIRED',
-      'Rules cannot be blank while the market is open',
-      [{ path: ['rules'], message: 'required' }],
+      `Rule items cannot be left missing while the market is open: ${items.join(', ')}`,
+      items.map((item) => ({ path: [item], message: 'required while open' })),
     );
-    expect(marketFormError(error)).toEqual({ field: 'rules', message: copy.errMarketRulesOpen });
+  const refused = (...items: string[]) => marketFormError(refusal(items));
+
+  it('puts the refusal on the field of the first item it names (#23)', () => {
+    expect(refused('yesCondition', 'delayHandling')).toEqual({
+      field: 'yesCondition',
+      message: copy.errMarketRulesOpen,
+    });
+    for (const item of [
+      'description',
+      'noCondition',
+      'eventDeadline',
+      'fallbackCondition',
+      'longDelayDays',
+      'delayHandling',
+    ]) {
+      expect(refused(item), item).toEqual({ field: item, message: copy.errMarketRulesOpen });
+    }
+  });
+
+  it("puts a source's, with no form values, on the primary's name or the fallback list", () => {
+    expect(refused('primarySource')).toEqual({
+      field: 'primarySourceName',
+      message: copy.errMarketRulesOpen,
+    });
+    expect(refused('fallbackSources')).toEqual({
+      field: 'fallbackSources',
+      message: copy.errMarketRulesOpen,
+    });
+  });
+
+  it("puts a source's on the blank input the form's values show, as the form's rule does", () => {
+    const complete = { name: '통계청', url: 'https://kostat.go.kr' };
+    const filled: MarketSourceInputs = {
+      primarySourceName: complete.name,
+      primarySourceUrl: complete.url,
+      fallbackSources: [],
+    };
+    const fieldOf = (item: string, values: MarketSourceInputs) =>
+      marketFormError(refusal([item]), values);
+    // The primary: its address when that alone is blank, its name when the name is or both are.
+    expect(fieldOf('primarySource', { ...filled, primarySourceUrl: '  ' })).toEqual({
+      field: 'primarySourceUrl',
+      message: copy.errMarketRulesOpen,
+    });
+    expect(fieldOf('primarySource', { ...filled, primarySourceName: '' })?.field).toBe(
+      'primarySourceName',
+    );
+    expect(
+      fieldOf('primarySource', { ...filled, primarySourceName: '', primarySourceUrl: '' })?.field,
+    ).toBe('primarySourceName');
+    // The first fallback that is not complete, on its blank input: a complete one is passed over.
+    const nameless = { name: '', url: complete.url };
+    const fallbacks = [complete, { name: '연합뉴스', url: ' ' }, nameless];
+    expect(fieldOf('fallbackSources', { ...filled, fallbackSources: fallbacks })).toEqual({
+      field: 'fallbackSources.1.url',
+      message: copy.errMarketRulesOpen,
+    });
+    expect(
+      fieldOf('fallbackSources', { ...filled, fallbackSources: [complete, nameless] })?.field,
+    ).toBe('fallbackSources.1.name');
+    // Values with no such blank input (the API judged other ones): placed as with none.
+    expect(fieldOf('primarySource', filled)?.field).toBe('primarySourceName');
+    expect(fieldOf('fallbackSources', { ...filled, fallbackSources: [complete] })?.field).toBe(
+      'fallbackSources',
+    );
+    // Any other item is its own field, whatever the sources hold.
+    expect(fieldOf('yesCondition', { ...filled, primarySourceName: '' })?.field).toBe(
+      'yesCondition',
+    );
+  });
+
+  it('leaves one naming nothing it knows to the toast', () => {
+    expect(refused('rules')).toBeUndefined();
+    expect(refused()).toBeUndefined();
   });
 });
 
@@ -584,11 +756,12 @@ describe('transitionErrorMessage', () => {
       );
     expect(
       refused([
-        { path: ['rules'], message: 'required' },
+        { path: ['yesCondition'], message: 'required' },
+        { path: ['fallbackCondition'], message: 'required' },
         { path: ['category'], message: 'subcategories' },
         { path: ['tags'], message: 'required' },
       ]),
-    ).toBe('열기 전에 채울 항목이 있습니다: 정산 규칙 · 카테고리 · 태그 1~5개');
+    ).toBe('열기 전에 채울 항목이 있습니다: YES 조건 · 전환 조건 · 카테고리 · 태그 1~5개');
     expect(refused([{ path: ['tags'], message: 'required' }])).toBe(
       `${copy.errMarketOpenItemsMissing}: ${copy.openItemTags}`,
     );
@@ -596,10 +769,18 @@ describe('transitionErrorMessage', () => {
     expect(
       refused([
         { path: ['tags'], message: 'required' },
-        { path: ['rules'], message: 'required' },
+        { path: ['primarySource'], message: 'required' },
+        { path: ['title'], message: 'required' },
         { path: ['tags'], message: 'required' },
       ]),
-    ).toBe(`${copy.errMarketOpenItemsMissing}: ${copy.openItemRules} · ${copy.openItemTags}`);
+    ).toBe(
+      `${copy.errMarketOpenItemsMissing}: ` +
+        [copy.openItemTitle, copy.openItemPrimarySource, copy.openItemTags].join(' · '),
+    );
+    // The label '정산 규칙' and the item `rules` are gone (#23): an old answer naming it is unknown.
+    expect(refused([{ path: ['rules'], message: 'required' }])).toBe(
+      `${copy.errMarketOpenItemsMissing}.`,
+    );
     // No details, or none this screen knows: the line alone.
     expect(refused()).toBe('열기 전에 채울 항목이 있습니다.');
     expect(refused([{ path: ['times'], message: 'required' }])).toBe(
@@ -609,14 +790,14 @@ describe('transitionErrorMessage', () => {
     // Not a field refusal: the form leaves it to this toast.
     expect(
       marketFormError(
-        apiError(422, 'OPEN_ITEMS_MISSING', 'x', [{ path: ['rules'], message: 'required' }]),
+        apiError(422, 'OPEN_ITEMS_MISSING', 'x', [{ path: ['yesCondition'], message: 'required' }]),
       ),
     ).toBeUndefined();
   });
 
   it('no longer reads RULES_REQUIRED as a refused open: only an open market PATCH answers it', () => {
-    // Open answers OPEN_ITEMS_MISSING since #17; the PATCH's RULES_REQUIRED lands on the rules
-    // field (`marketFormError`), so a stray one here is the generic toast.
+    // Open answers OPEN_ITEMS_MISSING since #17; the PATCH's RULES_REQUIRED lands on the rule
+    // item it names (`marketFormError`), so a stray one here is the generic toast.
     expect(transitionErrorMessage(apiError(422, 'RULES_REQUIRED'))).toBe(copy.errUnknown);
   });
 
@@ -724,11 +905,71 @@ describe('marketFormError', () => {
     expect(named('initialProbBp')).toBeUndefined();
     expect(named('liquidityB')).toBeUndefined();
     expect(named('title')).toEqual({ field: 'title', message: copy.errMarketTitle });
-    expect(named('rules')).toEqual({ field: 'rules', message: copy.errMarketText });
     expect(named('imageUrl')).toEqual({ field: 'imageUrl', message: copy.errMarketImageUrl });
-    expect(named('resolutionSource')).toEqual({
-      field: 'resolutionSource',
-      message: copy.errMarketSource,
+    // The rule items (#23): the texts by their length, the deadline and the days by their rule.
+    for (const field of ['description', 'yesCondition', 'noCondition', 'delayHandling']) {
+      expect(named(field), field).toEqual({ field, message: copy.errMarketText });
+    }
+    expect(named('eventDeadline')).toEqual({
+      field: 'eventDeadline',
+      message: copy.errMarketEventDeadline,
+    });
+    expect(named('longDelayDays')).toEqual({
+      field: 'longDelayDays',
+      message: copy.errMarketLongDelayDays,
+    });
+    // The fields #23 replaced have nothing to land on any more.
+    expect(named('rules')).toBeUndefined();
+    expect(named('resolutionSource')).toBeUndefined();
+    // Nor does a name that is no form field, an inherited one included.
+    expect(named('toString')).toBeUndefined();
+  });
+
+  it('lands a refused source on the input its path names (#23)', () => {
+    const refused = (path: (string | number)[], message = 'Invalid URL') =>
+      marketFormError(apiError(422, 'VALIDATION_ERROR', 'Validation failed', [{ path, message }]));
+    expect(refused(['primarySource', 'url'])).toEqual({
+      field: 'primarySourceUrl',
+      message: copy.errMarketSourceUrl,
+    });
+    expect(refused(['primarySource', 'name'], 'Too big')).toEqual({
+      field: 'primarySourceName',
+      message: copy.errMarketSourceName,
+    });
+    expect(refused(['fallbackSources', 1, 'url'])).toEqual({
+      field: 'fallbackSources.1.url',
+      message: copy.errMarketSourceUrl,
+    });
+    expect(refused(['fallbackSources', 2, 'name'], 'Too big')).toEqual({
+      field: 'fallbackSources.2.name',
+      message: copy.errMarketSourceName,
+    });
+    // Both blank: the fallback's row. The form never sends such a primary (it sends null).
+    expect(refused(['fallbackSources', 0], 'empty source')).toEqual({
+      field: 'fallbackSources.0',
+      message: copy.errMarketSourceEmpty,
+    });
+    expect(refused(['primarySource'], 'empty source')).toBeUndefined();
+    // The list over MARKET_FALLBACK_SOURCES_MAX.
+    expect(refused(['fallbackSources'], 'Too big: expected array to have <=3 items')).toEqual({
+      field: 'fallbackSources',
+      message: copy.errMarketFallbackSourcesMax,
+    });
+    expect(refused(['fallbackSources', 'x', 'url'])).toBeUndefined();
+  });
+
+  it('says a switch condition with no fallback as that, and a long one by its length', () => {
+    const refused = (message: string) =>
+      marketFormError(
+        apiError(422, 'VALIDATION_ERROR', 'x', [{ path: ['fallbackCondition'], message }]),
+      );
+    expect(refused('no fallback source')).toEqual({
+      field: 'fallbackCondition',
+      message: copy.errMarketFallbackConditionNoSource,
+    });
+    expect(refused('Too big: expected string to have <=5000 characters')).toEqual({
+      field: 'fallbackCondition',
+      message: copy.errMarketText,
     });
   });
 

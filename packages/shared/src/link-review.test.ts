@@ -261,19 +261,33 @@ describe('the first 20 links in body order (owner decision 2026-10-22)', () => {
 
   it('does not cap a market’s official sources', () => {
     const many = Array.from({ length: 25 }, (_, index) => `https://s.example/${String(index)}`);
-    expect(officialSourceLinks(many.join(' '))).toHaveLength(25);
+    expect(officialSourceLinks(many)).toHaveLength(25);
   });
 });
 
 describe('the official sources of a market (decision 4 #187: 예외)', () => {
-  const sources = officialSourceLinks(
-    '한국은행 보도자료(통화정책방향) https://www.bok.or.kr 및 https://ecos.bok.or.kr/api/?key=1',
-  );
+  // The primary source's address and a fallback's (`market_sources`, #23).
+  const sources = officialSourceLinks([
+    'https://www.bok.or.kr/',
+    'https://ecos.bok.or.kr/api/?key=1',
+  ]);
 
-  it('reads the addresses its source names, normalised', () => {
+  it('reads the addresses of its rules’ sources, normalised and each once', () => {
     expect(sources).toEqual(['https://www.bok.or.kr', 'https://ecos.bok.or.kr/api?key=1']);
-    expect(officialSourceLinks(null)).toEqual([]);
-    expect(officialSourceLinks('통계청 보도자료')).toEqual([]);
+    expect(officialSourceLinks([])).toEqual([]);
+    // A source whose address is not filled in yet gives none.
+    expect(officialSourceLinks(['', ''])).toEqual([]);
+    expect(officialSourceLinks(['', 'HTTPS://Kostat.GO.kr/News/?utm_source=x'])).toEqual([
+      'https://kostat.go.kr/News',
+    ]);
+    // A fallback with the primary's address, as written another way, counts once.
+    expect(
+      officialSourceLinks([
+        'https://www.bok.or.kr',
+        'HTTPS://WWW.BOK.OR.KR/',
+        'http://www.bok.or.kr',
+      ]),
+    ).toEqual(['https://www.bok.or.kr', 'http://www.bok.or.kr']);
   });
 
   it('covers a source and the pages under it, nothing else', () => {
@@ -288,7 +302,7 @@ describe('the official sources of a market (decision 4 #187: 예외)', () => {
     expect(isOfficialSourceLink('https://ecos.bok.or.kr/api?key=2', sources)).toBe(false);
     expect(isOfficialSourceLink('https://ecos.bok.or.kr/api/v2?key=1', sources)).toBe(false);
     // A path covers what continues it after a slash, not a longer name.
-    const news = officialSourceLinks('https://kostat.go.kr/news');
+    const news = officialSourceLinks(['https://kostat.go.kr/news']);
     expect(isOfficialSourceLink('https://kostat.go.kr/news/1', news)).toBe(true);
     expect(isOfficialSourceLink('https://kostat.go.kr/newsletter', news)).toBe(false);
     expect(isOfficialSourceLink('https://kostat.go.kr/News/1', news)).toBe(false);

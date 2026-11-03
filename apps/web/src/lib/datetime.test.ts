@@ -60,6 +60,11 @@ describe('isoToKstLocal', () => {
     expect(isoToKstLocal('2026-01-02T00:03:00.000Z')).toBe('2026-01-02T09:03');
   });
 
+  it('pads a year below 1000 to four digits, so the control shows it and it reads back (#23)', () => {
+    expect(isoToKstLocal('0500-01-01T00:00:00.000Z')).toBe('0500-01-01T09:00');
+    expect(kstLocalToIso('0500-01-01T09:00')).toBe('0500-01-01T00:00:00.000Z');
+  });
+
   it('returns an empty field for an unparseable instant', () => {
     expect(isoToKstLocal('')).toBe('');
     expect(isoToKstLocal('not-a-date')).toBe('');

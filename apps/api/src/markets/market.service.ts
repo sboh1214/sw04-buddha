@@ -14,6 +14,7 @@ import {
   type Fill,
   type Market,
   type MarketListQuery,
+  type MarketRuleItems,
   type MarketSummary,
   type PriceSeries,
   type PriceTick,
@@ -38,6 +39,7 @@ import { AppError } from '../common/errors/app-error.js';
 import { DB } from '../infra/db/db.provider.js';
 import { type Page } from '../wallet/wallet.service.js';
 import { marketOrder } from './market-order.js';
+import { readMarketSources, type MarketSources } from './market-sources.js';
 
 export type MarketRow = typeof schema.markets.$inferSelect;
 type FillRow = typeof schema.fills.$inferSelect;
@@ -95,15 +97,38 @@ export function toMarketSummary(row: MarketRow, category: CategoryRef): MarketSu
 }
 
 /**
- * Public detail (PLAN 7.1): no author, exposure or settlement steps. `tags` are the market's
- * (`marketTagNames`) — the detail's alone, never a card's (#17).
+ * A market's rule items (#23, ADR-0097) in RULE_ITEMS order, from its row and its `market_sources`
+ * (`readMarketSources`): the DTO's, the open-items check's and the `rules_edited` record's one
+ * reading of them. The event deadline is an ISO instant, as every instant on the wire.
  */
-export function toMarket(row: MarketRow, category: CategoryRef, tags: string[]): Market {
+export function ruleItemsOf(row: MarketRow, sources: MarketSources): MarketRuleItems {
+  return {
+    description: row.description,
+    yesCondition: row.yesCondition,
+    noCondition: row.noCondition,
+    eventDeadline: row.eventDeadline?.toISOString() ?? null,
+    primarySource: sources.primarySource,
+    fallbackSources: sources.fallbackSources,
+    fallbackCondition: row.fallbackCondition,
+    longDelayDays: row.longDelayDays,
+    delayHandling: row.delayHandling,
+  };
+}
+
+/**
+ * Public detail (PLAN 7.1): no author, exposure or settlement steps. `tags` are the market's
+ * (`marketTagNames`) and `sources` its sources (`readMarketSources`) — the detail's alone, never a
+ * card's (#17, #23): the rule items are public in every public status, signed in or not (N02 §2).
+ */
+export function toMarket(
+  row: MarketRow,
+  category: CategoryRef,
+  tags: string[],
+  sources: MarketSources,
+): Market {
   return {
     ...toMarketSummary(row, category),
-    description: row.description,
-    rules: row.rules,
-    resolutionSource: row.resolutionSource,
+    ...ruleItemsOf(row, sources),
     tags,
     resolvedAt: row.resolvedAt?.toISOString() ?? null,
     settledAt: row.settledAt?.toISOString() ?? null,
@@ -258,8 +283,8 @@ export class MarketService {
   /**
    * `GET /markets/:idOrSlug`: a uuid-shaped parameter is an id, anything else a slug (which
    * `marketSlugSchema` keeps from ever looking like a uuid). The slug is NFC-normalised like
-   * the stored one, so a decomposed Korean URL still finds the market. The tags are a second
-   * statement (#17): the detail alone carries them.
+   * the stored one, so a decomposed Korean URL still finds the market. The tags and the sources
+   * are a statement each (#17, #23): the detail alone carries them.
    */
   async getPublic(idOrSlug: string): Promise<Market> {
     const { markets, categories } = schema;
@@ -282,7 +307,9 @@ export class MarketService {
       )
       .limit(1);
     if (!row) throw new AppError('NOT_FOUND', { message: 'Market not found' });
-    return toMarket(row.market, row.category, await marketTagNames(this.db, row.market.id));
+    const tags = await marketTagNames(this.db, row.market.id);
+    const sources = await readMarketSources(this.db, row.market.id);
+    return toMarket(row.market, row.category, tags, sources);
   }
 
   /**

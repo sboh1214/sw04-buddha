@@ -1,6 +1,14 @@
-import { type MarketResult, type MarketStatus, type Outcome } from '@buddha/shared';
+import {
+  type ContractTerms,
+  type MarketResult,
+  type MarketStatus,
+  type Outcome,
+  PROPOSED_CONTRACT_TERMS,
+  formatCoin,
+} from '@buddha/shared';
 import { copy } from '@/copy';
 import { system } from '@/theme/system';
+import { type Market } from './api';
 import { formatNoPrice } from './market-admin';
 import { BOTTOM_TABS_HEIGHT_PX, ORDER_ENTRY_BAR_HEIGHT_PX } from './nav';
 
@@ -50,7 +58,9 @@ export type SharedSection =
  * - `summary`: the header — category trail, status, countdown, 관심 등록, the question, YES·NO,
  *   거래량, 참여자 and the status notice. It is the mobile first screen's '요약' as well.
  * - `background`: 배경 (`Market.description`), only when the market has one.
- * - `rules`: 규칙·출처·마감. 예정 판정일 has no data before #22 and so no slot.
+ * - `rules`: 규칙 — every rule item but 배경 (#23: YES·NO 조건, 사건 기한, 1차·대체 출처 and 전환
+ *   조건, 장기 지연 기한, 지연·취소·무효 처리), the fixed VOID payout line and 마감. 예정 판정일 has
+ *   no data before #22 and so no slot.
  * - `judging`: 공개 판정 기록 (#24), right after the rules it applies, on every public status
  *   (owner decision 2026-10-17).
  * - `chart`: 가격 차트.
@@ -364,6 +374,77 @@ export function closeOrderSheet(state: OrderSheetState): OrderSheetState {
  */
 export function backgroundText(description: string | null): string | null {
   return description === null || description.trim() === '' ? null : description;
+}
+
+/**
+ * A rule text of 규칙 (#23: YES·NO 조건, 전환 조건, 지연·취소·무효 처리) as written, or `null` while
+ * it is blank — a draft's, or a market's opened before #23 — which the section shows as '—'.
+ */
+export function ruleText(text: string): string | null {
+  return text.trim() === '' ? null : text;
+}
+
+/** One source of a market's rules (#23), `Market.primarySource` and each of `fallbackSources`. */
+export type RuleSource = Market['fallbackSources'][number];
+
+/** How 규칙 draws a source: its text, a link to `href` when it has one. */
+export interface SourceView {
+  text: string;
+  href: string | null;
+}
+
+/**
+ * Whether `url` is an http(s) address — the API's own check on a source (`marketSourceSchema`),
+ * restated as a second lock before it becomes an `href`. Not the admin form's `isHttpUrl`: that
+ * file is admin code (excluded-features.test.ts), and this one is the public detail's.
+ */
+function isHttpAddress(url: string): boolean {
+  try {
+    const { protocol } = new URL(url);
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A source as 규칙 draws it (#23, ADR-0093 decision 3 '#23 출처 주소': the name opens the address):
+ * the name, linked to the address when that is an http(s) one; the name alone when the address is
+ * blank or not one; the address alone, as text, when the name is blank. `null` for no source, or
+ * one with neither — the section shows '—'. A half-filled source is a draft's, or one an admin set
+ * on a market opened before #23: the open-items check names it, and the reader still sees it.
+ */
+export function sourceView(source: RuleSource | null): SourceView | null {
+  if (source === null) return null;
+  const name = source.name.trim();
+  const url = source.url.trim();
+  if (name !== '') return { text: name, href: isHttpAddress(url) ? url : null };
+  return url === '' ? null : { text: url, href: null };
+}
+
+/**
+ * 장기 지연 기한 as 규칙 words it: '예정 판정 시각에서 N일 뒤' (#172 item 10), or `null` while it is
+ * not set ('—'). The instant itself needs #22's scheduled judgement time.
+ */
+export function longDelayText(days: number | null): string | null {
+  return days === null
+    ? null
+    : `${copy.rulesLongDelayBefore} ${String(days)}${copy.rulesLongDelayTail}`;
+}
+
+/**
+ * The fixed 무효 지급 line under 지연·취소·무효 처리 (#23 AC 6, #173 item 9): what one YES and one NO
+ * contract each pay on VOID. One rule for every market, so no market enters it (ADR-0093 result 1);
+ * the amounts are `PROPOSED_CONTRACT_TERMS`', the terms the market maker prices with, so the rule a
+ * reader is shown and the bot's prices cannot disagree. It is a rule, never a refund (N03 §6).
+ */
+export function voidPayoutText(
+  terms: Pick<ContractTerms, 'voidPayoutYesCoin' | 'voidPayoutNoCoin'> = PROPOSED_CONTRACT_TERMS,
+): string {
+  return (
+    `${copy.rulesVoidPayoutYes} ${formatCoin(terms.voidPayoutYesCoin)}, ` +
+    `${copy.rulesVoidPayoutNo} ${formatCoin(terms.voidPayoutNoCoin)}${copy.rulesVoidPayoutTail}`
+  );
 }
 
 /**

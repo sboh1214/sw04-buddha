@@ -361,7 +361,7 @@ const ERROR_NOTES = {
     '이미 쓴 멱등 키를 다른 조건으로 다시 썼거나(키는 소모된다), 한 번만 할 수 있는 일을 두 번 했다(쿠폰 재사용). 환불 재시도는 앞선 시도가 아직 PG 의 답을 기다리는 동안 이것으로 답한다(`details[0].message` 가 `in progress`).',
   RATE_LIMITED: '레이트 리밋 초과. `details.retryAfterSeconds` 와 `Retry-After` 헤더에 대기 초.',
   RULES_REQUIRED:
-    '열린 시장의 정산 규칙(`rules`)을 비워 저장할 수 없다. 초안을 여는 때의 검사는 `OPEN_ITEMS_MISSING` 이다.',
+    '거래 중(`open`)인 시장을 고쳐, 채워 두었던 규칙 항목(#23)을 빠진 것으로 만들 수 없다. `details` 가 그렇게 빠질 항목마다 하나씩 규칙 항목의 순서로 온다 — `path` 가 그 항목 하나(`yesCondition` 처럼), `message` 가 `required while open`. 빠졌다고 보는 기준은 `OPEN_ITEMS_MISSING` 과 같고, 이미 빠져 있던 항목(#23 전에 연 시장은 모두)은 다른 수정을 막지 않는다. 초안을 여는 때의 검사는 `OPEN_ITEMS_MISSING` 이다.',
   VERIFICATION_REQUIRED:
     '본인확인(휴대전화 SMS 인증번호)을 마치지 않은 계정이다. `POST /api/v1/me/phone-verification/code` 로 인증번호를 받아 `POST /api/v1/me/phone-verification/confirm` 으로 확인한 뒤 다시 시도한다(ADR-0070).',
   REFUND_NOT_ALLOWED:
@@ -419,7 +419,7 @@ const ERROR_NOTES = {
   PROPOSAL_LIMITED:
     '시장 제안을 받지 않았다(#77). 한도는 계정이 아니라 본인확인한 번호(키 있는 해시)로 센다. 운영자 계정에는 한도가 없다. `details.reason` 이 걸린 한도를, `details.limit` 이 그 수를 말한다 — `pending`(처리 대기(접수·검토) 제안이 5건이다. 하나가 채택·반려·철회되면 다시 낼 수 있어 `details.retryAfterSeconds` 는 `null`), `daily`(직전 24시간에 3건을 냈다. 그 뒤 철회·반려된 것도 센다. `details.retryAfterSeconds` 가 가장 오래된 것이 24시간을 벗어나기까지의 초를 분 단위로 올린 값).',
   OPEN_ITEMS_MISSING:
-    "시장이 개설 항목 검사를 통과하지 못해 초안을 벗어날 수 없다(#17, 지금은 임시 열기). `details` 가 빠진 항목마다 하나씩 검사의 순서로 온다 — `path` 가 `['rules']`(정산 규칙이 비었다), `['category']`(새 시장을 둘 수 없는 카테고리다 — 숨겼거나, 부모를 숨겼거나, 하위 분류가 있는 상위다), `['tags']`(태그가 1개 이상 5개 이하가 아니다).",
+    "시장이 개설 항목 검사를 통과하지 못해 초안을 벗어날 수 없다(#17, #23, 지금은 임시 열기). `details` 가 빠진 항목마다 하나씩 검사의 순서로 온다 — `path` 가 `['title']`(질문이 비었다), 규칙 항목인 `['description']`(배경이 비었다)·`['yesCondition']`·`['noCondition']`·`['eventDeadline']`(사건 기한이 없다)·`['primarySource']`(1차 출처가 없거나 이름·주소 가운데 하나가 비었다)·`['fallbackSources']`(적은 대체 출처의 이름·주소 가운데 하나가 비었다 — 대체 출처가 없는 것은 빠진 것이 아니다)·`['fallbackCondition']`(대체 출처가 있는데 전환 조건이 비었다)·`['longDelayDays']`(장기 지연 기한이 없다)·`['delayHandling']`(지연·취소·무효 처리가 비었다), `['category']`(새 시장을 둘 수 없는 카테고리다 — 숨겼거나, 부모를 숨겼거나, 하위 분류가 있는 상위다. `message` 가 그 까닭이다), `['tags']`(태그가 1개 이상 5개 이하가 아니다).",
   INTERNAL: '그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다.',
 };
 

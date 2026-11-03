@@ -248,7 +248,7 @@ test.describe('작성자별 글·댓글', () => {
     await expect(page).toHaveURL(`/markets/${ended.slug}`);
     await expect(page.getByRole('heading', { level: 2, name: ended.title })).toBeVisible();
     await expect(page.getByTestId(detailCopyTestId(page, 'market-rules'))).toContainText(
-      ended.rules,
+      ended.yesCondition,
     );
 
     // --- the own public profile: the same items on the same two tabs, which the counts count.

@@ -426,6 +426,23 @@ export function validationField(error: ApiError): string | undefined {
 }
 
 /**
+ * The first issue's whole `path`, where `validationField` keeps only its head: a nested body field
+ * such as a market's fallback source (`['fallbackSources', 1, 'url']`, #23), which a form names as
+ * `fallbackSources.1.url`. Undefined when no issue carries a path of strings and indexes.
+ */
+export function validationPath(error: ApiError): (string | number)[] | undefined {
+  if (!Array.isArray(error.details)) return undefined;
+  const path: unknown = (error.details as Partial<ValidationIssue>[])[0]?.path;
+  if (!Array.isArray(path) || path.length === 0) return undefined;
+  const parts: unknown[] = path;
+  return parts.every(
+    (part): part is string | number => typeof part === 'string' || typeof part === 'number',
+  )
+    ? parts
+    : undefined;
+}
+
+/**
  * The first issue's `message`, when `details` is a `ValidationIssue[]`: how the API tells apart
  * refusals that share a code and a field — a taken market slug (`already exists`), a release
  * setting change to the current state (RELEASE_SETTING_UNCHANGED_MESSAGE). Undefined otherwise.

@@ -21,6 +21,7 @@ import {
   tagKey,
   type ImageContentType,
   type MarketResult,
+  type MarketSource,
   type MarketStatus,
   type ModerationActionType,
   type ModerationReason,
@@ -55,6 +56,7 @@ import {
   marketProposals,
   marketSearches,
   marketSettlementSteps,
+  marketSources,
   marketTags,
   marketWatchEvents,
   marketWatches,
@@ -185,9 +187,32 @@ export interface CreateMarketInput {
   categoryId?: number;
   slug?: string;
   title?: string;
-  description?: string;
-  rules?: string;
-  resolutionSource?: string;
+  /**
+   * The rule items (#23, ADR-0097), RULE_ITEMS of @buddha/shared. By default every one is filled
+   * in — texts naming the market, an event deadline a day after `closeAt`, a 1차 출처 at
+   * https://example.com/source, no 대체 출처 ('없음') and a 14-day long delay — so a market made here
+   * misses no rule item of the open-items check, and a draft opens through the route once it has
+   * tags. A test of a missing item blanks it: '' for a text (or `null` for 배경), `null` for the
+   * deadline, the primary source or the days, or a source with a blank name or address. A switch
+   * condition is written by default only when fallbacks are given. Stored as given: untrimmed,
+   * and checked by the database alone.
+   */
+  description?: string | null;
+  yesCondition?: string;
+  noCondition?: string;
+  eventDeadline?: Date | null;
+  /** `market_sources` priority 0; null writes no row. */
+  primarySource?: MarketSource | null;
+  /** `market_sources` priorities 1..n, in this order. Default none. */
+  fallbackSources?: MarketSource[];
+  fallbackCondition?: string;
+  longDelayDays?: number | null;
+  delayHandling?: string;
+  /**
+   * Every rule item blank, 배경 included, but those given above: a market made before #23 as
+   * migration 0050 left it (which kept its 배경, if it had one). Default false.
+   */
+  blankRuleItems?: boolean;
   status?: MarketStatus;
   /**
    * YES price of the last fill, 1..99. Default null: a market nobody traded has no price
@@ -232,9 +257,47 @@ export interface CreateMarketInput {
   tags?: string[];
 }
 
+/** The rule items `createMarket` writes (#23): complete, blank or as given. */
+function ruleItemsOf(input: CreateMarketInput, t: string, closeAt: Date) {
+  const blank = input.blankRuleItems === true;
+  const pick = <T>(given: T | undefined, filled: T, empty: T): T =>
+    given !== undefined ? given : blank ? empty : filled;
+  const fallbackSources = input.fallbackSources ?? [];
+  return {
+    description: pick<string | null>(input.description, `테스트 시장 ${t}의 배경.`, null),
+    yesCondition: pick(input.yesCondition, `사건 기한까지 테스트 사건 ${t}이 일어나면 YES.`, ''),
+    noCondition: pick(input.noCondition, '사건 기한까지 YES 조건이 충족되지 않으면 NO.', ''),
+    eventDeadline: pick<Date | null>(
+      input.eventDeadline,
+      new Date(closeAt.getTime() + 24 * 60 * 60 * 1000),
+      null,
+    ),
+    // The URL a market's source had before #23, so the link review exempts what it did.
+    primarySource: pick<MarketSource | null>(
+      input.primarySource,
+      { name: `테스트 출처 ${t}`, url: 'https://example.com/source' },
+      null,
+    ),
+    fallbackSources,
+    fallbackCondition: pick(
+      input.fallbackCondition,
+      fallbackSources.length > 0 ? '1차 출처에 발표가 없으면 대체 출처를 순서대로 확인한다.' : '',
+      '',
+    ),
+    longDelayDays: pick<number | null>(input.longDelayDays, 14, null),
+    delayHandling: pick(
+      input.delayHandling,
+      '장기 지연 기한까지 발표가 없으면 무효로 판정한다. 늦게 발표된 것만으로 NO로 판정하지 않는다.',
+      '',
+    ),
+  };
+}
+
 /**
  * Inserts a market as the admin create path leaves it, in the given status: no price until a
- * fill (`lastPrice` null) and statistics at 0 unless given. Writes no tick and no event.
+ * fill (`lastPrice` null) and statistics at 0 unless given, and its rule items complete unless
+ * blanked (`CreateMarketInput.blankRuleItems`, or an item given blank), the sources as
+ * `market_sources` rows. Writes no tick and no event.
  */
 export async function createMarket(db: Db, input: CreateMarketInput = {}) {
   const lastPrice = input.lastPrice ?? null;
@@ -248,15 +311,21 @@ export async function createMarket(db: Db, input: CreateMarketInput = {}) {
   const categoryId = input.categoryId ?? (await createCategory(db)).id;
   const status = input.status ?? 'open';
   const now = new Date();
+  const closeAt = input.closeAt ?? new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const items = ruleItemsOf(input, t, closeAt);
 
   const [row] = await db
     .insert(markets)
     .values({
       slug: input.slug ?? `market-${t}`,
       title: input.title ?? `테스트 시장 ${t}`,
-      description: input.description ?? null,
-      rules: input.rules ?? '테스트용 규칙. 기한까지 사건이 일어나지 않으면 NO로 판정한다.',
-      resolutionSource: input.resolutionSource ?? 'https://example.com/source',
+      description: items.description,
+      yesCondition: items.yesCondition,
+      noCondition: items.noCondition,
+      eventDeadline: items.eventDeadline,
+      fallbackCondition: items.fallbackCondition,
+      longDelayDays: items.longDelayDays,
+      delayHandling: items.delayHandling,
       categoryId,
       status,
       lastPrice,
@@ -268,7 +337,7 @@ export async function createMarket(db: Db, input: CreateMarketInput = {}) {
           : status === 'draft' || status === 'review' || status === 'scheduled'
             ? null
             : now,
-      closeAt: input.closeAt ?? new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+      closeAt,
       resolvedResult: input.resolvedResult ?? null,
       resolvedAt: input.resolvedAt ?? null,
       settledAt: input.settledAt ?? null,
@@ -277,6 +346,15 @@ export async function createMarket(db: Db, input: CreateMarketInput = {}) {
     })
     .returning();
   const market = row!;
+  const sources = [
+    ...(items.primarySource === null ? [] : [{ ...items.primarySource, priority: 0 }]),
+    ...items.fallbackSources.map((source, index) => ({ ...source, priority: index + 1 })),
+  ];
+  if (sources.length > 0) {
+    await db
+      .insert(marketSources)
+      .values(sources.map((source) => ({ marketId: market.id, ...source })));
+  }
   if (input.tags && input.tags.length > 0) {
     // `tags` takes no UPDATE (migration 0049): insert what is new, then read every id by its key
     // (`name_key` is `lower(name)`, the API's `tagKey` on a normalised name).

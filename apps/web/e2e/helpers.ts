@@ -12,7 +12,7 @@ import {
   type Response,
   type Route,
 } from '@playwright/test';
-import type { AdminMarket, Category, Me } from '@buddha/shared';
+import type { AdminMarket, Category, MarketRuleItems, Me } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { E2E_CONSENT_VERSIONS } from './consent-versions';
 
@@ -124,6 +124,15 @@ const REALTIME_READY_MS = 10_000;
 
 /** Far enough out that no spec races the close, close enough to stay obviously synthetic. */
 const CLOSE_IN_MS = 24 * 60 * 60 * 1_000;
+
+/**
+ * A spec market's 사건 기한 (#23): a day after its close. #23 checks no order between the two
+ * (ADR-0097; #22 decides one), so this only keeps the default plausible.
+ */
+const EVENT_DEADLINE_IN_MS = 2 * CLOSE_IN_MS;
+
+/** Korea's fixed UTC offset: the admin's `datetime-local` inputs are KST wall-clock minutes. */
+const KST_OFFSET_MS = 9 * 60 * 60 * 1_000;
 
 // ---- fixtures -----------------------------------------------------------------------
 
@@ -1062,7 +1071,16 @@ export interface TestMarket {
   /** What `/markets/[slug]` is opened with. */
   slug: string;
   title: string;
-  rules: string;
+  /**
+   * Its YES 조건 as sent (`ruleItems.yesCondition`, #23): the rules snippet a spec finds in the
+   * detail's 규칙 and in the server's HTML (AC 2). It holds the `tag`, never the word 규칙.
+   */
+  yesCondition: string;
+  /**
+   * Every rule item as sent (#23, ADR-0097): `ruleItemsFor(tag)` with `description` and
+   * `ruleItems` (`CreateOpenMarketOptions`) over it.
+   */
+  ruleItems: MarketRuleItems;
   /**
    * The random part of the title and the slug — and the market's one tag unless `tags` named
    * others (#17). Unique per run, so `/search?q=<tag>` is a search screen holding exactly this
@@ -1106,8 +1124,9 @@ export interface CreateOpenMarketOptions {
    */
   group?: string;
   /**
-   * The market's 배경 (`description`), which the detail draws as its own section only when there
-   * is one (#122). None, the default: the detail has no 배경 section.
+   * The market's 배경 (`description`), which the detail draws as its own section before 규칙
+   * (#122). The default is `ruleItemsFor`'s sentence: 배경 is a rule item opening asks for (#23),
+   * so an open market always has the section — only one opened before #23 can lack it.
    */
   description?: string;
   /**
@@ -1116,6 +1135,73 @@ export interface CreateOpenMarketOptions {
    * this market alone. `[]` makes a draft without tags, which `createOpenMarket` cannot open.
    */
   tags?: string[];
+  /**
+   * Rule items over `ruleItemsFor(tag)`'s complete set (#23, ADR-0097), `description` included
+   * (it wins over the option above): fallbacks and their switch condition, say, or a blank (`''`,
+   * `null`, `[]`) for a draft the open-items check finds incomplete — which `createOpenMarket`
+   * cannot open.
+   */
+  ruleItems?: Partial<MarketRuleItems>;
+}
+
+/**
+ * A complete set of rule items for the market of `tag` (#23, ADR-0097), as the create body and the
+ * public `Market` carry them: every text holds the tag and none the word 규칙 (AC 2 looks for the
+ * heading and the YES condition apart), and none says 환불 or 원금, or that a late result alone is
+ * NO (N03 §4·§6). The 1차 출처 has an https address under `https://example.com/e2e/<tag>`, which
+ * the link review then exempts for this market alone (ADR-0083 7-9); there is no fallback, so no
+ * switch condition, and the detail's 대체 출처 reads 없음. The 사건 기한 is a day after the
+ * `createOpenMarket` close. With a title, a category and a tag, the open-items check passes.
+ */
+export function ruleItemsFor(tag: string): MarketRuleItems {
+  return {
+    description: `자동화 테스트가 만든 시장의 배경입니다. 확인 코드 ${tag}.`,
+    yesCondition: `사건 기한까지 확인 코드가 발표되면 YES입니다. 확인 코드 ${tag}.`,
+    noCondition: `사건 기한까지 확인 코드가 발표되지 않으면 NO입니다. 확인 코드 ${tag}.`,
+    eventDeadline: new Date(Date.now() + EVENT_DEADLINE_IN_MS).toISOString(),
+    primarySource: { name: `테스트 1차 출처 ${tag}`, url: `https://example.com/e2e/${tag}` },
+    fallbackSources: [],
+    fallbackCondition: '',
+    longDelayDays: 14,
+    delayHandling:
+      '장기 지연 기한까지 판정하지 못하면 무효로 판정합니다. ' +
+      '사건이 취소되거나 연기되어도 무효입니다. ' +
+      `발표가 늦어진 것만으로 NO로 판정하지 않습니다. 확인 코드 ${tag}.`,
+  };
+}
+
+/** An ISO instant as the admin's `datetime-local` holds it: KST wall-clock minutes. */
+export function kstLocalOf(iso: string): string {
+  return new Date(Date.parse(iso) + KST_OFFSET_MS).toISOString().slice(0, 16);
+}
+
+/**
+ * Types `items` into the admin market form's 규칙 항목 (#23, the create card's or the detail's):
+ * each text, the event deadline in KST, the 1차 출처's name and address, the long-delay days. A
+ * fallback is added with 대체 출처 추가 and filled row by row, so the form must have none yet; the
+ * switch condition is typed once its input shows. A null or blank item is typed as blank.
+ */
+export async function fillRuleItemInputs(page: Page, items: MarketRuleItems): Promise<void> {
+  await page.getByTestId('market-description').fill(items.description ?? '');
+  await page.getByTestId('market-yes-condition').fill(items.yesCondition);
+  await page.getByTestId('market-no-condition').fill(items.noCondition);
+  await page
+    .getByTestId('market-event-deadline')
+    .fill(items.eventDeadline === null ? '' : kstLocalOf(items.eventDeadline));
+  await page.getByTestId('market-primary-source-name').fill(items.primarySource?.name ?? '');
+  await page.getByTestId('market-primary-source-url').fill(items.primarySource?.url ?? '');
+  for (const [index, source] of items.fallbackSources.entries()) {
+    await page.getByTestId('market-fallback-add').click();
+    await page.getByTestId(`market-fallback-${String(index)}-name`).fill(source.name);
+    await page.getByTestId(`market-fallback-${String(index)}-url`).fill(source.url);
+  }
+  if (items.fallbackSources.length > 0) {
+    await page.getByTestId('market-fallback-condition').fill(items.fallbackCondition);
+  }
+  await page
+    .getByTestId('market-long-delay-days')
+    .fill(items.longDelayDays === null ? '' : String(items.longDelayDays));
+  await page.getByTestId('market-delay-handling').fill(items.delayHandling);
 }
 
 /**
@@ -1177,29 +1263,31 @@ export async function marketCategoryOf(
 /**
  * A draft through `POST /admin/markets`, left a draft: on no public page, for a spec that checks
  * what a draft does not do (a theme of drafts alone is not published, ADR-0088). The options and
- * the title are `createOpenMarket`'s, which opens one of these: it has rules, a category a market
- * may be filed under and its tags, so the open-items check passes (#17).
+ * the title are `createOpenMarket`'s, which opens one of these: it has every rule item
+ * (`ruleItemsFor`, #23), a category a market may be filed under and its tags, so the open-items
+ * check passes (#17) — unless `ruleItems` or `tags` blanked some. Its address is ASCII
+ * (`e2e-<tag>`): `/markets/[slug]` does not reach a slug with Hangul in it yet.
  */
 export async function createDraftMarket(
   admin: APIRequestContext,
-  { topLevelCategory = 0, group, description, tags }: CreateOpenMarketOptions = {},
+  { topLevelCategory = 0, group, description, tags, ruleItems }: CreateOpenMarketOptions = {},
 ): Promise<TestMarket> {
   const { top, leaf } = await marketCategoryOf(admin, topLevelCategory);
 
   const tag = freshTag();
   const marketTags = tags ?? [tag];
   const title = group === undefined ? `E2E 시장 ${tag}` : `E2E 시장 ${group} ${tag}`;
-  // Deliberately does NOT contain 규칙: AC 2 looks for the section heading and for this
-  // text separately, and a rules body carrying the heading would satisfy both on its own.
-  const rules = `이 시장은 자동화 테스트가 만들었습니다. 확인 코드 ${tag}.`;
+  const items: MarketRuleItems = {
+    ...ruleItemsFor(tag),
+    ...(description === undefined ? {} : { description }),
+    ...ruleItems,
+  };
 
   const draft = await unwrap<AdminMarket>(
     await admin.post('/api/v1/admin/markets', {
       data: {
         title,
-        description: description ?? null,
-        rules,
-        resolutionSource: `테스트 출처 ${tag}`,
+        ...items,
         categoryId: leaf.id,
         tags: marketTags,
         imageUrl: null,
@@ -1213,7 +1301,8 @@ export async function createDraftMarket(
     id: draft.id,
     slug: draft.slug,
     title,
-    rules,
+    yesCondition: items.yesCondition,
+    ruleItems: items,
     tag,
     tags: marketTags,
     categorySlug: top.slug,

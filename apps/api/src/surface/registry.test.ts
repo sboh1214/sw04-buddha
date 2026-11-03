@@ -479,7 +479,7 @@ describe('the public API document (static)', () => {
   it('reads the document at all', () => {
     expect(operations.length).toBeGreaterThanOrEqual(30);
     expect(fieldNames(document.paths['/api/v1/markets/{idOrSlug}'])).toEqual(
-      expect.arrayContaining(['slug', 'rules', 'lastPrice']),
+      expect.arrayContaining(['slug', 'yesCondition', 'primarySource', 'lastPrice']),
     );
   });
 

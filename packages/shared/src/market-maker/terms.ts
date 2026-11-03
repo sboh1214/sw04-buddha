@@ -21,7 +21,9 @@ export interface ContractTerms {
 
 /**
  * The plan's design proposals: whole contracts paying 100 Coin, a 1 Coin tick, prices 1–99
- * (N01 §3) and VOID paying 50/50 (N03 §6). None of them is approved yet (NR 설계 상태).
+ * (N01 §3) and VOID paying 50/50 (N03 §6). Only VOID 50/50 is approved (ADR-0093 #173 item 9,
+ * one value for every market — the rules area shows it from here, #23 ADR-0097); the rest are
+ * still the NR 설계 상태.
  */
 export const PROPOSED_CONTRACT_TERMS: ContractTerms = {
   payoutCoin: Number(PAYOUT_PER_CONTRACT_COIN),

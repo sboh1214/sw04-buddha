@@ -49,7 +49,7 @@ export function isoToKstLocal(iso: string): string {
   const shifted = new Date(parsed.getTime() + KST_OFFSET_MS);
   const pad = (n: number) => String(n).padStart(2, '0');
   return (
-    `${String(shifted.getUTCFullYear())}-${pad(shifted.getUTCMonth() + 1)}-` +
+    `${String(shifted.getUTCFullYear()).padStart(4, '0')}-${pad(shifted.getUTCMonth() + 1)}-` +
     `${pad(shifted.getUTCDate())}T${pad(shifted.getUTCHours())}:${pad(shifted.getUTCMinutes())}`
   );
 }

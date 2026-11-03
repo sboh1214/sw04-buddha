@@ -226,6 +226,28 @@ describe('excluded features in stored data (#113)', () => {
     expect(named.sort()).toEqual(Object.keys(BONUS_NAMES).sort());
   });
 
+  it('orders a market’s sources by `priority`, a word that names no ranking (#23)', () => {
+    // ADR-0097: 1차 출처 at 0, 대체 출처 at 1..3. `rank` is a scoring token, so a column, key or
+    // CHECK named for it would fail the test above.
+    const sources = TABLES.find((table) => table.name === 'market_sources');
+    expect(sources?.columns.map((column) => column.name)).toEqual([
+      'marketId',
+      'priority',
+      'name',
+      'url',
+    ]);
+    expect(storageNames().filter(({ where }) => where === 'market_sources constraint')).toEqual(
+      expect.arrayContaining([
+        { where: 'market_sources constraint', name: 'market_sources_priority_check' },
+        { where: 'market_sources constraint', name: 'market_sources_url_check' },
+        { where: 'market_sources constraint', name: 'market_sources_not_empty_check' },
+      ]),
+    );
+    expect(findExcludedIdentifier('rank', 'storage').map((hit) => hit.feature)).toEqual([
+      'scoring',
+    ]);
+  });
+
   it('passes with the payment and coupon structures kept for paid Coin (D9)', () => {
     const tables = TABLES.map((table) => table.name);
     expect(tables).toEqual(

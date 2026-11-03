@@ -169,9 +169,9 @@ export function tickRestartsMarket(
  *
  * `undefined` for an event that is not NEWER covers two senders: a late or duplicate
  * transition, and the deliberate repeat an admin edit publishes (A-M4-36) — the same id the row
- * already holds. Both must write nothing — the event carries no `closeAt`, `title` or `rules`,
- * so applying it could only restate what is held; the refetch the handler fires beside it is
- * what delivers the edit.
+ * already holds. Both must write nothing — the event carries no `closeAt`, `title` or rule item
+ * (#23), so applying it could only restate what is held; the refetch the handler fires beside it
+ * is what delivers the edit.
  */
 export function applyStatus<T extends LiveMarket>(
   held: T | undefined,
@@ -215,11 +215,11 @@ export function applyToPages(
 
 /**
  * Take the newer of two snapshots of the same market, per ordering group. Descriptive fields
- * (title, rules, closeAt, category) always come from `incoming`: only a REST answer has them,
- * and only a REST answer can change them. `traderCount` is NOT one of them — a trade moves it,
- * so it rides with the price under `tradeCount`, or an older snapshot would drag the
- * participant count back while the probability beside it stayed new. Monotone, idempotent and — apart
- * from a tie, where `incoming` wins because `supersedes` is strict — order-independent.
+ * (title, the rule items of #23, closeAt, category) always come from `incoming`: only a REST
+ * answer has them, and only a REST answer can change them. `traderCount` is NOT one of them — a
+ * trade moves it, so it rides with the price under `tradeCount`, or an older snapshot would drag
+ * the participant count back while the probability beside it stayed new. Monotone, idempotent
+ * and — apart from a tie, where `incoming` wins because `supersedes` is strict — order-independent.
  */
 export function joinMarket<T extends LiveMarket>(held: T | undefined, incoming: T): T {
   if (held === undefined || held.id !== incoming.id) return incoming;

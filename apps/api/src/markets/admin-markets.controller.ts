@@ -166,13 +166,16 @@ export class AdminMarketsController {
     operationId: 'adminCreateMarket',
     summary:
       'Create a draft market (no price until its first fill) with up to 5 tags in order; a new ' +
-      'tag name makes the tag, one differing only in case or spaces links the existing tag',
+      'tag name makes the tag, one differing only in case or spaces links the existing tag; ' +
+      'rule items not sent start blank',
   })
   @ApiData(adminMarketSchema, 201)
-  // NOT_FOUND names `categoryId`; VALIDATION_ERROR names `slug` (taken), `categoryId` (one no new
-  // market may be filed under: the reason — inactive, parent_inactive, subcategories — is the
+  // NOT_FOUND names `categoryId`; VALIDATION_ERROR names `fallbackCondition` (a switch condition
+  // with no fallback source: 'no fallback source', first), `slug` (taken), `categoryId` (one no
+  // new market may be filed under: the reason — inactive, parent_inactive, subcategories — is the
   // message) or `closeAt` (not in the future) besides the body schema's own issues, `tags.N`
-  // among them (a duplicate ignoring case and spaces, a bad name).
+  // among them (a duplicate ignoring case and spaces, a bad name) and the sources' nested paths
+  // (`primarySource.url`, `fallbackSources.N.url`; 'empty source' at the source itself).
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminCreateMarket(
     @CurrentUser() admin: SessionUser,
@@ -188,13 +191,19 @@ export class AdminMarketsController {
   @ApiOperation({
     operationId: 'adminUpdateMarket',
     summary:
-      'Edit a draft (any field) or an open market (text, close time, category, tags; slug ' +
-      'refused naming the field, blank rules refused with RULES_REQUIRED, no tags refused ' +
-      'naming tags); tags replace the whole ordered set; other statuses refuse naming status',
+      'Edit a draft (any field) or an open market (text, rule items, close time, category, ' +
+      'tags; slug refused naming the field, a rule item it had filled left missing refused with ' +
+      'RULES_REQUIRED naming each, no tags refused naming tags); tags and fallbackSources ' +
+      'replace the whole ordered list; other statuses refuse naming status',
   })
   @ApiData(adminMarketSchema)
   // VALIDATION_ERROR names `categoryId` as on create unless it is the market's current one (no
-  // change, not checked: a market keeps a category hidden after it was filed).
+  // change, not checked: a market keeps a category hidden after it was filed), and
+  // `fallbackCondition` when an edit of the sources or the condition leaves a switch condition
+  // with no fallback source. RULES_REQUIRED (#23) has one detail per rule item an edit of an open
+  // market would leave missing that it had filled, `[item]` 'required while open'; an item missing
+  // already blocks nothing. Order: status, slug, fallbackCondition, RULES_REQUIRED, tags,
+  // category, closeAt.
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
@@ -219,8 +228,8 @@ export class AdminMarketsController {
     operationId: 'adminOpenMarket',
     summary:
       'draft → open (interim, until review and the scheduled open); refused with ' +
-      'OPEN_ITEMS_MISSING when the open-items check finds rules, category or tags missing, ' +
-      'then with a past closeAt',
+      'OPEN_ITEMS_MISSING when the open-items check finds the title, a rule item, the category ' +
+      'or the tags missing, then with a past closeAt',
   })
   @ApiData(adminMarketSchema)
   // VALIDATION_ERROR names `status` (not a draft) or `closeAt` (already past); OPEN_ITEMS_MISSING

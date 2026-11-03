@@ -20,6 +20,7 @@ import {
 } from '@chakra-ui/react';
 import {
   type MarketEventType,
+  type MarketSource,
   OUTCOMES,
   formatCoin,
   isPublicMarketStatus,
@@ -89,6 +90,7 @@ import {
   type MarketFormValues,
   type ResolveMarketFormOutput,
   type ResolveMarketFormValues,
+  isHttpUrl,
   marketFormSchema,
   marketToFormValues,
   resolveMarketFormSchema,
@@ -102,6 +104,7 @@ import {
   relatedSearchSection,
   relatedSearchSubmit,
 } from '@/lib/related-markets';
+import { longDelayText } from '@/lib/market-detail';
 import { MarketFormFields } from '../market-form-fields';
 
 export function AdminMarketDetail({ id }: { id: string }) {
@@ -205,9 +208,7 @@ export function AdminMarketDetail({ id }: { id: string }) {
                 {data.tags.length === 0 ? '—' : data.tags.join(', ')}
               </Text>
             </Item>
-            <Item label={copy.adminMarketDescription}>{data.description ?? '—'}</Item>
-            <Item label={copy.adminMarketRules}>{data.rules || '—'}</Item>
-            <Item label={copy.adminMarketSource}>{data.resolutionSource ?? '—'}</Item>
+            <RuleItemRows market={data} />
             <Item label={copy.adminMarketImageUrl}>{data.imageUrl ?? '—'}</Item>
             <Item label={copy.adminMarketCloseAt}>{formatKst(data.closeAt)}</Item>
             <Item label={copy.marketOpenAt}>{data.openAt ? formatKst(data.openAt) : '—'}</Item>
@@ -254,11 +255,11 @@ export function AdminMarketDetail({ id }: { id: string }) {
 }
 
 /**
- * What the draft still needs before 열기 (#17, the open-items check): '열기 전에 채울 항목: 정산 규칙 ·
- * 태그 1~5개', from the server's `missingOpenItems` (`openItemsNotice`) — so a category hidden after
- * it was picked shows here too. Nothing once nothing is missing, and nothing on any other status.
- * Beside 열기 rather than in the form: it is what 열기 will refuse, and the form below is where each
- * item is filled in.
+ * What the draft still needs before 열기 (#17, the open-items check): '열기 전에 채울 항목: YES 조건 ·
+ * 1차 출처 · 태그 1~5개', from the server's `missingOpenItems` (`openItemsNotice`) — so a category
+ * hidden after it was picked shows here too. Nothing once nothing is missing, and nothing on any
+ * other status. Beside 열기 rather than in the form: it is what 열기 will refuse, and the form below
+ * is where each item is filled in.
  */
 function OpenItemsNotice({ market }: { market: AdminMarket }) {
   const notice = openItemsNotice(market);
@@ -287,9 +288,17 @@ function BackLink() {
   );
 }
 
-function Item({ label, children }: { label: string; children: ReactNode }) {
+function Item({
+  label,
+  children,
+  testId,
+}: {
+  label: string;
+  children: ReactNode;
+  testId?: string;
+}) {
   return (
-    <DataList.Item>
+    <DataList.Item data-testid={testId}>
       <DataList.ItemLabel>{label}</DataList.ItemLabel>
       <DataList.ItemValue whiteSpace="pre-wrap" wordBreak="break-word">
         {children}
@@ -298,15 +307,102 @@ function Item({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+/** A rule text as written, or '—' while it is blank. */
+const textOrDash = (text: string | null) => (text === null || text.trim() === '' ? '—' : text);
+
+/**
+ * The market's rule items (#23, ADR-0097), one row each in the form's order, '—' for one not filled
+ * in — a draft's, or any of a market opened before #23. The admin reads them in KST like every
+ * admin time; the sources as their name, linked to the address when it is http(s), and the address
+ * itself, so a half-filled one shows what it has; the fallbacks numbered, or 없음.
+ */
+function RuleItemRows({ market }: { market: AdminMarket }) {
+  return (
+    <>
+      <Item label={copy.adminMarketDescription} testId="market-detail-description">
+        {textOrDash(market.description)}
+      </Item>
+      <Item label={copy.adminMarketYesCondition} testId="market-detail-yes-condition">
+        {textOrDash(market.yesCondition)}
+      </Item>
+      <Item label={copy.adminMarketNoCondition} testId="market-detail-no-condition">
+        {textOrDash(market.noCondition)}
+      </Item>
+      <Item label={copy.adminMarketEventDeadline} testId="market-detail-event-deadline">
+        {market.eventDeadline === null ? '—' : formatKst(market.eventDeadline)}
+      </Item>
+      <Item label={copy.adminMarketPrimarySource} testId="market-detail-primary-source">
+        {market.primarySource === null ? '—' : <SourceLine source={market.primarySource} />}
+      </Item>
+      <Item label={copy.openItemFallbackSources} testId="market-detail-fallback-sources">
+        {market.fallbackSources.length === 0 ? (
+          copy.adminMarketFallbackNone
+        ) : (
+          <Stack as="ol" gap="1" listStyleType="decimal" ps="5">
+            {market.fallbackSources.map((source, index) => (
+              <li key={index}>
+                <SourceLine source={source} />
+              </li>
+            ))}
+          </Stack>
+        )}
+      </Item>
+      <Item label={copy.adminMarketFallbackCondition} testId="market-detail-fallback-condition">
+        {textOrDash(market.fallbackCondition)}
+      </Item>
+      <Item label={copy.adminMarketLongDelayDays} testId="market-detail-long-delay-days">
+        {longDelayText(market.longDelayDays) ?? '—'}
+      </Item>
+      <Item label={copy.adminMarketDelayHandling} testId="market-detail-delay-handling">
+        {textOrDash(market.delayHandling)}
+      </Item>
+    </>
+  );
+}
+
+/**
+ * One source: the name, a link to the address in a new tab when that is an http(s) one, then the
+ * address as text. '—' for one with neither (`market_sources` refuses that, but a row is history).
+ */
+function SourceLine({ source }: { source: MarketSource }) {
+  const name = source.name.trim();
+  const url = source.url.trim();
+  if (name === '' && url === '') return <>—</>;
+  return (
+    <Stack as="span" gap="0" display="inline-flex">
+      {name !== '' &&
+        (isHttpUrl(url) ? (
+          <ChakraLink
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            colorPalette="brand"
+            color="colorPalette.fg"
+          >
+            {name}
+          </ChakraLink>
+        ) : (
+          <Text as="span">{name}</Text>
+        ))}
+      {url !== '' && (
+        <Text as="span" fontFamily="mono" fontSize="xs" color="fg.muted" wordBreak="break-all">
+          {url}
+        </Text>
+      )}
+    </Stack>
+  );
+}
+
 /**
  * 열기 / 마감 / 판정 (PLAN 12, design 3.4, ADR-0046). Each is a Dialog except 열기, whose refusal —
- * the open-items check (#17: 정산 규칙, 카테고리, 태그 1~5개), which the draft's notice says
- * beforehand — is reversible from the form below and is named in its toast; the detail is read
- * again then, so the notice names what the server found, a category hidden meanwhile included. 열기
- * stays while there is no way to trade (owner decision #125 (a)): the market is listed, and its
- * detail says 거래 준비 중 in place of the order panel. There is no 무효: the admin void and its
- * cost refund went with #125 (N03 §6); VOID as a 판정 is #152's. The 판정 form lives in its own
- * component, mounted only while its dialog is open, so every opening starts from an empty form.
+ * the open-items check (#17, #23: 질문, the rule items, 카테고리, 태그 1~5개), which the draft's
+ * notice says beforehand — is reversible from the form below and is named in its toast; the detail
+ * is read again then, so the notice names what the server found, a category hidden meanwhile
+ * included. 열기 stays while there is no way to trade (owner decision #125 (a)): the market is
+ * listed, and its detail says 거래 준비 중 in place of the order panel. There is no 무효: the admin
+ * void and its cost refund went with #125 (N03 §6); VOID as a 판정 is #152's. The 판정 form lives
+ * in its own component, mounted only while its dialog is open, so every opening starts from an
+ * empty form.
  * A judged market offers none of these: the 판정 is final. All three are the interim actions
  * #174 keeps on the new statuses (ADR-0047 result 3, ADR-0093 result 2) — 열기 until #21, 마감
  * until #114, 판정 until #152 — so a market in any other status (검수 중, 개장 예정, 거래 일시 중단,
@@ -557,10 +653,10 @@ function ResolveDialog({ market, onClose }: { market: AdminMarket; onClose: () =
 /**
  * 수정 (design 3.4). The categories are only the select's options, so their load is gated
  * here (as 시장 만들기 does) and the rest of the page does not depend on it. Inputs follow the
- * status: everything while draft, the text fields, close time and category while open, nothing
- * otherwise. Saving an open market first shows PLAN 12's "경고 후 허용" dialog. The body is the
- * diff against the loaded values, so an untouched field — a past close time on a draft
- * included — is never sent.
+ * status: every field while draft or open (the slug is chosen at creation only), nothing
+ * otherwise; an open market's rule items stay editable until #80 (ADR-0097). Saving an open market
+ * first shows PLAN 12's "경고 후 허용" dialog. The body is the diff against the loaded values, so an
+ * untouched field — a past close time on a draft included — is never sent.
  */
 function EditMarketCard({ market }: { market: AdminMarket }) {
   const categories = useCategories();
@@ -609,13 +705,11 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
   const sessionChanged = useSessionChanged();
   const original = useMemo(() => marketToFormValues(market, categories), [market, categories]);
   const editable = isEditable(market.status);
-  // An open market may not be edited down to no rules, nor to no tags (#17): the API refuses both.
-  // One opened before #17 with no tags keeps its other fields editable (`marketFormSchema`).
+  // An open market may not lose a rule item it had (#23), nor be edited down to no tags (#17): the
+  // API refuses both. One opened before #23 with blank items, or before #17 with no tags, keeps its
+  // other fields editable (`marketFormSchema`).
   const openMarket = market.status === 'open';
-  const schema = useMemo(
-    () => marketFormSchema({ original, rulesRequired: openMarket, tagsRequired: openMarket }),
-    [original, openMarket],
-  );
+  const schema = useMemo(() => marketFormSchema({ original, openMarket }), [original, openMarket]);
   // The open market's confirmation goes with the form, which EditMarketCard draws again for each
   // admin on screen (`key`): a confirmation A opened never names B (ADR-0092 answer 1).
   const [pending, setPending] = useState<UpdateMarketFields | null>(null);
@@ -658,8 +752,9 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
     onError: (error) => {
       setPending(null);
       sessionChanged(error);
-      // A refused category also reads the select's list again (#17).
-      const fieldError = marketFormError(error);
+      // A refused category also reads the select's list again (#17). RULES_REQUIRED for a
+      // source lands on the input the values sent left blank (#23).
+      const fieldError = marketFormError(error, form.getValues());
       if (fieldError) {
         setError(fieldError.field, { message: fieldError.message });
         void refreshAfterMarketFormRefusal(queryClient, fieldError.field);

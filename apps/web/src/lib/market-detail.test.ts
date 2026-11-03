@@ -1,6 +1,11 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { MARKET_STATUSES, PUBLIC_MARKET_STATUSES } from '@buddha/shared';
+import {
+  MARKET_STATUSES,
+  PROPOSED_CONTRACT_TERMS,
+  PUBLIC_MARKET_STATUSES,
+  formatCoin,
+} from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { SRC } from '../test/screen-text';
@@ -22,14 +27,18 @@ import {
   copyTestId,
   detailViewOf,
   drawnOrder,
+  longDelayText,
   openOrderSheet,
   orderEntryLabel,
   orderSheetBody,
   perWidth,
   personalAreaView,
+  ruleText,
   showsOrderArea,
+  sourceView,
   statusNotice,
   viewDisplay,
+  voidPayoutText,
 } from './market-detail';
 
 const WIDTHS: readonly DetailWidth[] = ['md', 'base'];
@@ -358,6 +367,72 @@ describe('backgroundText (배경)', () => {
     for (const description of [null, '', ' ', '\n\t ']) {
       expect(backgroundText(description), JSON.stringify(description)).toBeNull();
     }
+  });
+});
+
+describe('ruleText (규칙 항목, #23)', () => {
+  it('is the text as written, line breaks kept, and nothing while it is blank', () => {
+    expect(ruleText('첫 줄\n둘째 줄')).toBe('첫 줄\n둘째 줄');
+    for (const text of ['', ' ', '\n\t ']) {
+      expect(ruleText(text), JSON.stringify(text)).toBeNull();
+    }
+  });
+});
+
+describe('sourceView (ADR-0093 decision 3 #23 출처 주소)', () => {
+  it('links the name to an http(s) address, trimmed', () => {
+    expect(sourceView({ name: '한국은행', url: 'https://www.bok.or.kr' })).toEqual({
+      text: '한국은행',
+      href: 'https://www.bok.or.kr',
+    });
+    expect(sourceView({ name: ' 통계청 ', url: ' http://kostat.go.kr/a?b=1 ' })).toEqual({
+      text: '통계청',
+      href: 'http://kostat.go.kr/a?b=1',
+    });
+    // The API's own scheme check is case-blind (`market_sources`' CHECK as well).
+    expect(sourceView({ name: '기상청', url: 'HTTPS://WWW.KMA.GO.KR' })?.href).toBe(
+      'HTTPS://WWW.KMA.GO.KR',
+    );
+  });
+
+  it('keeps the name as text with no address, or one that is not http(s)', () => {
+    for (const url of ['', '   ', 'ftp://example.com', 'javascript:alert(1)', 'www.example.com']) {
+      expect(sourceView({ name: '출처', url }), url).toEqual({ text: '출처', href: null });
+    }
+  });
+
+  it('shows the address as text when there is no name, and nothing for no source', () => {
+    expect(sourceView({ name: '', url: 'https://example.com' })).toEqual({
+      text: 'https://example.com',
+      href: null,
+    });
+    expect(sourceView({ name: ' ', url: ' ' })).toBeNull();
+    expect(sourceView(null)).toBeNull();
+  });
+});
+
+describe('longDelayText (장기 지연 기한, #172 item 10)', () => {
+  it('counts the days from the scheduled judgement, and is nothing while unset', () => {
+    expect(longDelayText(14)).toBe('예정 판정 시각에서 14일 뒤');
+    expect(longDelayText(1)).toBe('예정 판정 시각에서 1일 뒤');
+    expect(longDelayText(365)).toBe('예정 판정 시각에서 365일 뒤');
+    expect(longDelayText(null)).toBeNull();
+  });
+});
+
+describe('voidPayoutText (무효 지급, #173 item 9)', () => {
+  it('reads the amounts from the contract terms, 50/50 today', () => {
+    expect(voidPayoutText()).toBe(
+      `무효로 판정되면 YES 계약은 계약마다 ${formatCoin(PROPOSED_CONTRACT_TERMS.voidPayoutYesCoin)}, NO 계약은 계약마다 ${formatCoin(PROPOSED_CONTRACT_TERMS.voidPayoutNoCoin)}을 지급합니다. 모든 시장에 같은 규칙입니다.`,
+    );
+    expect(voidPayoutText()).toContain('YES 계약은 계약마다 50 Coin, NO 계약은 계약마다 50 Coin을');
+    // Other terms, other line: the amounts are never written into the copy.
+    const other = voidPayoutText({ voidPayoutYesCoin: 40, voidPayoutNoCoin: 60 });
+    expect(other).toContain('YES 계약은 계약마다 40 Coin, NO 계약은 계약마다 60 Coin을');
+  });
+
+  it('promises no refund (N03 §6)', () => {
+    for (const word of ['환불', '원금', '돌려']) expect(voidPayoutText()).not.toContain(word);
   });
 });
 

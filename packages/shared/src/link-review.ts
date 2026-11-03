@@ -247,13 +247,13 @@ export function commentLinks(body: string): string[] {
 }
 
 /**
- * The official sources of a market as links, from what the market names as its source of
- * judgement (`resolutionSource`, free text today: «한국은행 보도자료 https://www.bok.or.kr»), each
- * address in it normalised. Empty when it names none. When the rules gain their primary and
- * fallback sources as fields (N03 §2, M8), they are read here instead.
+ * The official sources of a market as links: the addresses of its rules' primary and fallback
+ * sources (`market_sources`, every priority; ADR-0093 decision 3 '#23 공식 출처', ADR-0061 decision 1
+ * item 19), normalised and each once, in the order given. A source with no address yet (`''`)
+ * gives none, so a market whose sources name no address has no official source.
  */
-export function officialSourceLinks(resolutionSource: string | null): string[] {
-  return resolutionSource === null ? [] : normalisedSet(textLinks(resolutionSource));
+export function officialSourceLinks(urls: readonly string[]): string[] {
+  return normalisedSet(urls);
 }
 
 /**

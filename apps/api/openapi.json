@@ -3540,7 +3540,7 @@
             "session": []
           }
         ],
-        "summary": "Create a draft market (no price until its first fill) with up to 5 tags in order; a new tag name makes the tag, one differing only in case or spaces links the existing tag",
+        "summary": "Create a draft market (no price until its first fill) with up to 5 tags in order; a new tag name makes the tag, one differing only in case or spaces links the existing tag; rule items not sent start blank",
         "tags": [
           "admin"
         ]
@@ -4130,7 +4130,7 @@
             "session": []
           }
         ],
-        "summary": "Edit a draft (any field) or an open market (text, close time, category, tags; slug refused naming the field, blank rules refused with RULES_REQUIRED, no tags refused naming tags); tags replace the whole ordered set; other statuses refuse naming status",
+        "summary": "Edit a draft (any field) or an open market (text, rule items, close time, category, tags; slug refused naming the field, a rule item it had filled left missing refused with RULES_REQUIRED naming each, no tags refused naming tags); tags and fallbackSources replace the whole ordered list; other statuses refuse naming status",
         "tags": [
           "admin"
         ]
@@ -4257,7 +4257,7 @@
             "session": []
           }
         ],
-        "summary": "draft → open (interim, until review and the scheduled open); refused with OPEN_ITEMS_MISSING when the open-items check finds rules, category or tags missing, then with a past closeAt",
+        "summary": "draft → open (interim, until review and the scheduled open); refused with OPEN_ITEMS_MISSING when the open-items check finds the title, a rule item, the category or the tags missing, then with a past closeAt",
         "tags": [
           "admin"
         ]
@@ -20227,11 +20227,43 @@
             "nullable": true,
             "type": "string"
           },
-          "rules": {
+          "yesCondition": {
             "type": "string"
           },
-          "resolutionSource": {
+          "noCondition": {
+            "type": "string"
+          },
+          "eventDeadline": {
             "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "primarySource": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketSource"
+              }
+            ]
+          },
+          "fallbackSources": {
+            "maxItems": 3,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MarketSource"
+            }
+          },
+          "fallbackCondition": {
+            "type": "string"
+          },
+          "longDelayDays": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365
+          },
+          "delayHandling": {
             "type": "string"
           },
           "tags": {
@@ -20270,11 +20302,35 @@
           "statusEventId",
           "createdAt",
           "description",
-          "rules",
-          "resolutionSource",
+          "yesCondition",
+          "noCondition",
+          "eventDeadline",
+          "primarySource",
+          "fallbackSources",
+          "fallbackCondition",
+          "longDelayDays",
+          "delayHandling",
           "tags",
           "resolvedAt",
           "settledAt"
+        ],
+        "additionalProperties": false
+      },
+      "MarketSource": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "name",
+          "url"
         ],
         "additionalProperties": false
       },
@@ -20708,11 +20764,43 @@
             "nullable": true,
             "type": "string"
           },
-          "rules": {
+          "yesCondition": {
             "type": "string"
           },
-          "resolutionSource": {
+          "noCondition": {
+            "type": "string"
+          },
+          "eventDeadline": {
             "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "primarySource": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketSource"
+              }
+            ]
+          },
+          "fallbackSources": {
+            "maxItems": 3,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MarketSource"
+            }
+          },
+          "fallbackCondition": {
+            "type": "string"
+          },
+          "longDelayDays": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365
+          },
+          "delayHandling": {
             "type": "string"
           },
           "tags": {
@@ -20800,8 +20888,14 @@
           "statusEventId",
           "createdAt",
           "description",
-          "rules",
-          "resolutionSource",
+          "yesCondition",
+          "noCondition",
+          "eventDeadline",
+          "primarySource",
+          "fallbackSources",
+          "fallbackCondition",
+          "longDelayDays",
+          "delayHandling",
           "tags",
           "resolvedAt",
           "settledAt",
@@ -20948,7 +21042,16 @@
       "OpenItem": {
         "type": "string",
         "enum": [
-          "rules",
+          "title",
+          "description",
+          "yesCondition",
+          "noCondition",
+          "eventDeadline",
+          "primarySource",
+          "fallbackSources",
+          "fallbackCondition",
+          "longDelayDays",
+          "delayHandling",
           "category",
           "tags"
         ]
@@ -20966,14 +21069,48 @@
             "type": "string",
             "maxLength": 5000
           },
-          "rules": {
+          "yesCondition": {
             "type": "string",
             "maxLength": 5000
           },
-          "resolutionSource": {
+          "noCondition": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "eventDeadline": {
             "nullable": true,
             "type": "string",
-            "maxLength": 500
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "primarySource": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketSource"
+              }
+            ]
+          },
+          "fallbackSources": {
+            "maxItems": 3,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MarketSource"
+            }
+          },
+          "fallbackCondition": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "longDelayDays": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365
+          },
+          "delayHandling": {
+            "type": "string",
+            "maxLength": 5000
           },
           "categoryId": {
             "type": "integer",
@@ -21011,7 +21148,6 @@
         },
         "required": [
           "title",
-          "rules",
           "categoryId",
           "closeAt",
           "expectedAccountId"
@@ -21030,14 +21166,48 @@
             "type": "string",
             "maxLength": 5000
           },
-          "rules": {
+          "yesCondition": {
             "type": "string",
             "maxLength": 5000
           },
-          "resolutionSource": {
+          "noCondition": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "eventDeadline": {
             "nullable": true,
             "type": "string",
-            "maxLength": 500
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "primarySource": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketSource"
+              }
+            ]
+          },
+          "fallbackSources": {
+            "maxItems": 3,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MarketSource"
+            }
+          },
+          "fallbackCondition": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "longDelayDays": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365
+          },
+          "delayHandling": {
+            "type": "string",
+            "maxLength": 5000
           },
           "categoryId": {
             "type": "integer",

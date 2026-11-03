@@ -406,11 +406,40 @@ export const copy = {
     '최신 정보를 불러오지 못했습니다. 표시된 값은 마지막으로 불러온 것입니다.',
   adminBackToMarkets: '시장 목록으로',
   adminMarketTitle: '질문',
-  adminMarketDescription: '설명',
-  // 시장 규칙 영역의 이름(N02 §4, N03 §8, 오너 결정 #14). 출처는 adminMarketSource다.
-  adminMarketRules: '규칙',
-  adminMarketRulesHint: '비워 두면 초안으로만 저장됩니다. 시장을 열려면 채워야 합니다.',
-  adminMarketSource: '출처',
+  // 규칙 항목 (#23, ADR-0097; ADR-0093 결정 2 #172 7~10항): 질문 다음의 묶음 하나에 개설 항목 순서
+  // (OPEN_ITEMS)대로 놓인다. 배경은 시장의 description이고 공개 상세의 '배경'(marketBackground)과 같은
+  // 이름이다. 초안은 어느 항목이 비어도 저장되고, 열기 전에 모두 채운다(대체 출처는 없어도 된다).
+  adminMarketRuleItems: '규칙 항목',
+  adminMarketRuleItemsHint:
+    '비워 둔 항목이 있어도 초안으로 저장됩니다. 시장을 열려면 모두 채워야 합니다. 대체 출처는 없어도 됩니다.',
+  adminMarketDescription: '배경',
+  adminMarketYesCondition: 'YES 조건',
+  adminMarketNoCondition: 'NO 조건',
+  // 사건 기한까지 일어나지 않은 것만 NO다. 발표가 늦은 것은 판정 지연이지 NO가 아니다(#173 11항, N03 §4).
+  adminMarketNoConditionHint:
+    '사건 기한까지 YES 조건이 충족되지 않으면 NO입니다. 그 경계를 적어 주세요.',
+  adminMarketEventDeadline: '사건 기한 (KST)',
+  // 출처는 이름과 http(s) 주소의 짝이다(ADR-0093 결정 3 '#23 출처 주소'). 상세에서 이름을 누르면 주소로
+  // 간다. 대체 출처는 0~3개, 우선순위 순이고, 있으면 넘어가는 조건을 따로 적는다(#172 9항).
+  adminMarketPrimarySource: '1차 출처',
+  adminMarketSourceName: '이름',
+  adminMarketSourceUrl: '주소',
+  adminMarketSourceUrlPlaceholder: 'https://',
+  adminMarketFallbackSources: '대체 출처 (우선순위 순, 최대 3개)',
+  adminMarketFallbackAdd: '대체 출처 추가',
+  adminMarketFallbackUp: '위로',
+  adminMarketFallbackDown: '아래로',
+  adminMarketFallbackRemove: '빼기',
+  adminMarketFallbackNone: '없음',
+  adminMarketFallbackCondition: '대체 출처로 넘어가는 조건',
+  // 장기 지연 기한은 예정 판정 시각부터 센 날수다(#172 10항). 예정 판정 시각은 #22가 넣는다.
+  adminMarketLongDelayDays: '장기 지연 기한',
+  adminMarketLongDelayDaysSuffix: '일 (예정 판정 시각부터)',
+  // '취소'는 사건의 취소·연기이지 시장 상태 '취소'가 아니다(#172 10항). 무효 지급은 시장마다 적지 않고 칸
+  // 아래에 rulesVoidPayout…의 한 줄(voidPayoutText)로 고정해 보인다(#173 9항, ADR-0093 결과 1).
+  adminMarketDelayHandling: '지연·취소·무효 처리',
+  adminMarketDelayHandlingHint:
+    '장기 지연 기한에 이르면 어떻게 하는지, 무효로 바꾸는 기준, 사건이 취소·연기되면 어떻게 하는지 적어 주세요. 늦어진 것만으로 NO로 판정하지 않습니다.',
   adminMarketCategory: '카테고리',
   adminMarketCategoryPlaceholder: '카테고리 선택',
   // 태그 (#17, ADR-0093 결정 2 #172 2항): 카테고리 다음 칸. 이름을 치고 Enter나 넣기로 넣고(쉼표로 나눈
@@ -424,8 +453,18 @@ export const copy = {
     '시장을 열려면 1~5개가 있어야 합니다. Enter나 넣기로 넣고, 쉼표로 나눈 목록은 한 번에 들어갑니다. 대소문자만 다른 이름은 같은 태그입니다.',
   // 개설 항목 검사 (#17): 초안을 열기 전에 채울 항목의 이름. 초안 상세의 안내(빠진 것이 없으면 안내도
   // 없다)와 열기를 거절한 알림이 같은 이름을 OPEN_ITEMS 순서로 ' · '로 잇는다. 초안이 아닌 시장에는 안내가
-  // 없다(검사는 초안을 떠날 때의 것이다).
-  openItemRules: '정산 규칙',
+  // 없다(검사는 초안을 떠날 때의 것이다). 규칙 항목의 이름은 #23(ADR-0097)의 것이고, '정산'은 Coin 지급의
+  // 말이라(ADR-0052) 쓰지 않는다.
+  openItemTitle: '질문',
+  openItemDescription: '배경',
+  openItemYesCondition: 'YES 조건',
+  openItemNoCondition: 'NO 조건',
+  openItemEventDeadline: '사건 기한',
+  openItemPrimarySource: '1차 출처',
+  openItemFallbackSources: '대체 출처',
+  openItemFallbackCondition: '전환 조건',
+  openItemLongDelayDays: '장기 지연 기한',
+  openItemDelayHandling: '지연·취소·무효 처리',
   openItemCategory: '카테고리',
   openItemTags: '태그 1~5개',
   adminMarketOpenItems: '열기 전에 채울 항목',
@@ -475,6 +514,9 @@ export const copy = {
   eventFinalized: '지급 완료',
   eventRulesEdited: '규칙 수정',
   eventSystem: '시스템',
+  // 규칙 수정 기록(#23): 바뀐 항목의 이름(openItem…)을 ' · '로 잇고, 항목마다 이전·이후를 보인다. #23
+  // 전의 기록은 규칙 글 하나의 이전·이후다.
+  eventRulesItems: '바뀐 항목',
   eventRulesBefore: '이전',
   eventRulesAfter: '이후',
   payloadUnreadable: '표시할 수 없는 내용',
@@ -661,7 +703,15 @@ export const copy = {
   fillAvgPrice: '평균가',
   errMarketTitle: '질문은 1~120자로 입력해 주세요.',
   errMarketText: '5,000자 이하로 입력해 주세요.',
-  errMarketSource: '출처는 500자 이하로 입력해 주세요.',
+  // 출처 한 개의 규칙(@buddha/shared marketSourceSchema): 이름과 주소는 각각 500자까지, 주소는 비우거나
+  // http(s)로. 둘 다 빈 대체 출처는 저장하지 않는다(빈 1차 출처는 없는 것으로 보낸다).
+  errMarketSourceName: '출처 이름은 500자 이하로 입력해 주세요.',
+  errMarketSourceUrl: 'http 또는 https로 시작하는 500자 이하의 주소를 입력하거나 비워 두세요.',
+  errMarketSourceEmpty: '비어 있는 대체 출처를 지우거나 채워 주세요.',
+  errMarketFallbackSourcesMax: '대체 출처는 3개까지 넣을 수 있습니다.',
+  errMarketFallbackConditionNoSource: '대체 출처가 없으면 넘어가는 조건을 비워 두세요.',
+  errMarketEventDeadline: '사건 기한을 날짜와 시각으로 입력하거나 비워 두세요.',
+  errMarketLongDelayDays: '장기 지연 기한은 1~365일 사이의 정수로 입력하거나 비워 두세요.',
   errMarketCategory: '카테고리를 선택해 주세요.',
   errMarketCategoryUnavailable: '선택할 수 없는 카테고리입니다.',
   // 새 시장을 넣을 수 없는 카테고리(#17, ADR-0093 결정 2 #172 1항): 숨긴 것, 숨긴 상위 아래의 것, 하위
@@ -1166,12 +1216,32 @@ export const copy = {
   // 원금 환불을 약속하지 않는다(N03 §6). 결과를 정하지 않고 끝난 시장이다(ADR-0093 결정 1의 10).
   marketCancelledNotice: '취소된 시장입니다. 결과를 정하지 않고 끝났습니다.',
 
-  // 규칙 섹션 (PLAN 11.1의 Kalshi 원칙: 상세에서 접지 않는다). 이름은 기획의 '규칙'·'출처'
-  // (N02 §4, N03 §8, 오너 결정 #14).
+  // 규칙 섹션 (PLAN 11.1의 Kalshi 원칙: 상세에서 접지 않는다, ADR-0093 결정 3 '#23 문장 길이와 표시').
+  // 이름은 기획의 '규칙'(N02 §4, N03 §8, 오너 결정 #14). 줄은 규칙 항목(#23, ADR-0097)의 순서이고 배경은
+  // 앞의 따로 된 섹션(marketBackground)이다. 빈 항목은 '—', 대체 출처가 없으면 '없음'(#172 9항)이다.
   rulesSectionTitle: '규칙',
-  rulesSource: '출처',
+  rulesYes: 'YES 조건',
+  rulesNo: 'NO 조건',
+  rulesEventDeadline: '사건 기한',
+  rulesPrimarySource: '1차 출처',
+  rulesFallbackSources: '대체 출처',
+  rulesFallbackNone: '없음',
+  rulesFallbackCondition: '대체 출처로 넘어가는 조건',
+  rulesLongDelay: '장기 지연 기한',
+  // '예정 판정 시각에서 14일 뒤': 앞과 뒤 사이에 longDelayDays(정수)가 들어간다. 예정 판정 시각은 #22가
+  // 넣는다. '{{…}}' 자리표시는 사업자 정보의 것이라(legal/template.ts) 쓰지 않는다.
+  rulesLongDelayBefore: '예정 판정 시각에서',
+  rulesLongDelayTail: '일 뒤',
+  rulesDelayHandling: '지연·취소·무효 처리',
+  // 무효 지급은 모든 시장에 같은 한 줄이다(#173 9항, ADR-0093 결과 1): 'YES 계약은 계약마다 50 Coin, NO
+  // 계약은 계약마다 50 Coin을 지급합니다.' 두 금액은 PROPOSED_CONTRACT_TERMS의 voidPayoutYesCoin·
+  // voidPayoutNoCoin을 formatCoin한 값이고, 조각 사이에 들어간다(금액은 늘 'Coin'으로 끝나 '을'이 맞다).
+  // 원금 환불을 약속하지 않는다(N03 §6). 지급 자체는 #126의 것이다.
+  rulesVoidPayout: '무효 지급',
+  rulesVoidPayoutYes: '무효로 판정되면 YES 계약은 계약마다',
+  rulesVoidPayoutNo: 'NO 계약은 계약마다',
+  rulesVoidPayoutTail: '을 지급합니다. 모든 시장에 같은 규칙입니다.',
   rulesCloseAt: '마감',
-  rulesNone: '따로 지정된 출처가 없습니다.',
 
   // 시장가격 추이 차트. 값의 이름은 '확률'이 아니라 시장가격이다(N02 §5). 표기 단위 %는 #60.
   chartLabel: '시장가격 추이',
