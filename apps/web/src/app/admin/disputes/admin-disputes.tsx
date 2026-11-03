@@ -23,8 +23,8 @@ import { DisputeRecord } from './dispute-record';
 
 /**
  * 이의 접수 (#175, ADR-0104; ADR-0093 decision 1 #173 items 2·7·13, N03 §8): the members' 판정 이의
- * in two halves — 검토 대기, the one waiting longest first, and 처리됨 (기각·수용·철회), the latest
- * decision or 철회 first — 20 per page with 더 보기, every admin's (ADR-0056 1-2). Each row is its
+ * in two halves — 검토 대기, the one waiting longest first, and 처리됨 (기각·수용·철회·정정으로 종결,
+ * #176), the latest decision, 철회 or closure first — 20 per page with 더 보기, every admin's (ADR-0056 1-2). Each row is its
  * market (the question, to its admin detail, with the market's status), the judgement version, who
  * submitted it and when, its links and reason, and how it ended (`DisputeRecord`). The 기각 and the
  * 수용 are on each market's detail, in its 판정 panel, where the judgement disputed is — and no market

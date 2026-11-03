@@ -48,6 +48,7 @@ const marketColumns = {
   scheduledJudgementAt: schema.markets.scheduledJudgementAt,
   disputeDeadline: schema.markets.disputeDeadline,
   disputeHoldCount: schema.markets.disputeHoldCount,
+  correctionPending: schema.markets.correctionPending,
   categorySlug: schema.categories.slug,
   categoryNameKo: schema.categories.nameKo,
 };
@@ -60,6 +61,7 @@ interface MarketRow {
   scheduledJudgementAt: Date | null;
   disputeDeadline: Date | null;
   disputeHoldCount: number;
+  correctionPending: boolean;
   categorySlug: string;
   categoryNameKo: string;
 }

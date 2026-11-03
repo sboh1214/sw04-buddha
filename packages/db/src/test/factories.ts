@@ -70,7 +70,9 @@ import type { Db } from '../client.js';
 import { confirmationHold, type MarketDisputeRow } from '../market-dispute.js';
 import {
   approveMarketJudgement,
+  correctMarketJudgement,
   resolveProvisionalMarket,
+  setCorrectionPending,
   type MarketJudgementRow,
 } from '../market-judgement.js';
 import { openScheduledMarket } from '../market-open.js';
@@ -351,6 +353,13 @@ export interface CreateMarketInput {
    */
   disputeHoldCount?: number;
   /**
+   * The 판정 정정 mirror (#176, ADR-0105: `markets.correction_pending`), stored as given — a
+   * PROVISIONAL market's label test ('판정 지연' while a correction waits) sets it with no request,
+   * as `disputeHoldCount`. Default false; any other status refuses true
+   * (`markets_correction_pending_status_check`).
+   */
+  correctionPending?: boolean;
+  /**
    * `market_settlement_steps` rows (ADR-0046) as the real paths leave them: for `resolved` and
    * `settling`, one `pending` row per SETTLEMENT_STEPS step (the transition to `resolved` writes
    * them); for `settled`, one `done` row each, completed at `settledAt` (or now). Default true;
@@ -500,6 +509,7 @@ export async function createMarket(db: Db, input: CreateMarketInput = {}) {
             ? new Date(now.getTime() + DAY_MS)
             : null,
       disputeHoldCount: input.disputeHoldCount ?? 0,
+      correctionPending: input.correctionPending ?? false,
       createdBy,
     })
     .returning();
@@ -2368,6 +2378,9 @@ const JUDGEMENT_EVIDENCE_LINK = 'https://example.com/evidence';
 /** The approval's reason a judgement factory writes unless given (the decision reason). */
 const JUDGEMENT_APPROVAL_REASON = '증거와 출처가 규칙에 맞다.';
 
+/** The 정정 사유 a correction factory writes unless given (#176). */
+const JUDGEMENT_CORRECTION_REASON = '1차 출처가 발표를 정정해 결과를 바로잡는다.';
+
 /**
  * The dispute window a judgement factory publishes with unless given: the design proposal the
  * owner approved, 1,440 minutes (ADR-0093 decision 1 #173 item 5).
@@ -2396,6 +2409,12 @@ export interface CreateJudgementRequestInput {
   description?: string;
   /** The rule version the judgement follows. Default: the market's `rule_version` now. */
   ruleVersion?: number | null;
+  /**
+   * A 판정 정정's part of the payload (#176, ADR-0105): the version it corrects, the 정정 사유
+   * (default a sentence) and the accepted disputes it answers (default none), stored as given —
+   * `createCorrectionRequest` fills them as the route does. Default null: a first judgement.
+   */
+  correction?: { baseVersion: number; reason?: string; disputeIds?: string[] } | null;
   /** The registering admin. Default: a fresh admin. */
   by?: string;
   /** The registration's instant. Default: the database clock. */
@@ -2412,13 +2431,15 @@ export interface CreateJudgementRequestInput {
 /**
  * A judgement's registration (#152, ADR-0103) as `POST /admin/markets/:id/judgements` leaves it:
  * a `market_judgement` approval request about the market (target `market`, payload `{result,
- * source, fallbackReason, voidReason, evidence, ruleVersion}` — MarketJudgementRequestPayload,
- * the source's name and address copied from the rules — and the description as its reason),
- * pending, or rejected or retracted as asked. Changes nothing of the market and writes no event,
- * as the route; nor its `market_judgement_request` record. The route's checks are not made (the
- * status, one waiting per market, the setting, the result and source rules, the evidence's
- * instant): a test gives what the route would take, or tests the approval's refusal of it. Stored
- * as given otherwise. `createProvisionalMarket` approves one.
+ * source, fallbackReason, voidReason, evidence, ruleVersion, correction}` —
+ * MarketJudgementRequestPayload, the source's name and address copied from the rules, `correction`
+ * null unless given (#176) — and the description as its reason), pending, or rejected or retracted
+ * as asked. Changes nothing of the market and writes no event, as a first judgement's route; nor
+ * its `market_judgement_request` record — a correction's mirror is `createCorrectionRequest`'s.
+ * The route's checks are not made (the status, one waiting per market, the setting, the result and
+ * source rules, the evidence's instant, a correction's base version and change): a test gives what
+ * the route would take, or tests the approval's refusal of it. Stored as given otherwise.
+ * `createProvisionalMarket` approves one.
  */
 export async function createJudgementRequest(db: Db, input: CreateJudgementRequestInput) {
   const [market] = await db
@@ -2469,6 +2490,14 @@ export async function createJudgementRequest(db: Db, input: CreateJudgementReque
       ).toISOString(),
     },
     ruleVersion: input.ruleVersion !== undefined ? input.ruleVersion : market.ruleVersion,
+    correction:
+      input.correction == null
+        ? null
+        : {
+            baseVersion: input.correction.baseVersion,
+            reason: input.correction.reason ?? JUDGEMENT_CORRECTION_REASON,
+            disputeIds: input.correction.disputeIds ?? [],
+          },
   };
   const by = input.by ?? (await createUser(db, { role: 'admin' })).user.id;
   return createApprovalRequest(db, {
@@ -2622,6 +2651,208 @@ export async function createProvisionalMarket(
   });
 }
 
+export interface CreateCorrectionRequestInput extends Omit<
+  CreateJudgementRequestInput,
+  'correction' | 'rejected' | 'retracted'
+> {
+  /**
+   * A PROVISIONAL market with its judgement — `createProvisionalMarket`'s, or
+   * `createCorrectedMarket`'s for a second correction.
+   */
+  marketId: string;
+  /** The version corrected. Default: the market's current `judgement_version`. */
+  baseVersion?: number;
+  /** 정정 사유. Default: a sentence. */
+  reason?: string;
+  /**
+   * The accepted disputes it answers. Default: every `accepted` dispute of the base version, the
+   * oldest submission first, as the route lists them.
+   */
+  disputeIds?: string[];
+}
+
+/**
+ * A 판정 정정's registration (#176, ADR-0105) as `POST /admin/markets/:id/judgements` with its
+ * `correction` leaves it: a pending `market_judgement` request about the market whose payload's
+ * `correction` is `{baseVersion, reason, disputeIds}` — the base version the market's current one
+ * and the disputes its accepted ones unless given (`createJudgementRequest` writes the rest, its
+ * defaults included: a YES on the primary source unless told) — and then, in one transaction under
+ * the market lock, `markets.correction_pending` true at the registration's instant
+ * (`setCorrectionPending`), so the market reads '판정 지연' past its deadline. No admin record.
+ * The route's checks are not made (the status, one waiting per market, the base version, the
+ * change): a market that is not PROVISIONAL fails on the mirror
+ * (`markets_correction_pending_status_check`) after the request is written — a test of an
+ * approval's refusal there writes one with `createJudgementRequest`'s `correction` instead.
+ */
+export async function createCorrectionRequest(db: Db, input: CreateCorrectionRequestInput) {
+  const { baseVersion, reason, disputeIds, ...registration } = input;
+  const [market] = await db
+    .select({ judgementVersion: markets.judgementVersion })
+    .from(markets)
+    .where(eq(markets.id, input.marketId));
+  const base = baseVersion ?? market?.judgementVersion;
+  if (base == null) {
+    throw new Error(`createCorrectionRequest: market ${input.marketId} has no judgement`);
+  }
+  const answered =
+    disputeIds ??
+    (
+      await db
+        .select({ id: marketDisputes.id })
+        .from(marketDisputes)
+        .where(
+          and(
+            eq(marketDisputes.marketId, input.marketId),
+            eq(marketDisputes.judgementVersion, base),
+            eq(marketDisputes.status, 'accepted'),
+          ),
+        )
+        .orderBy(marketDisputes.submittedAt, marketDisputes.id)
+    ).map((row) => row.id);
+  const request = await createJudgementRequest(db, {
+    ...registration,
+    correction: { baseVersion: base, disputeIds: answered, ...(reason ? { reason } : {}) },
+  });
+  await db.transaction(async (tx) => {
+    await lockMarket(tx, input.marketId);
+    await setCorrectionPending(tx, {
+      marketId: input.marketId,
+      pending: true,
+      now: request.requestedAt,
+    });
+  });
+  return request;
+}
+
+export interface CreateCorrectedMarketInput extends Omit<
+  CreateCorrectionRequestInput,
+  'marketId' | 'baseVersion' | 'by' | 'requestedAt'
+> {
+  /**
+   * A PROVISIONAL market to correct, its current version the base — `createProvisionalMarket`'s,
+   * or this factory's for a second correction. Default: a fresh `createProvisionalMarket` one made
+   * with `provisional`.
+   */
+  marketId?: string;
+  /** createProvisionalMarket's input for the default market. Ignored with `marketId`. */
+  provisional?: CreateProvisionalMarketInput;
+  /**
+   * The new version's result. Default: the base version's other one — YES for a NO and NO for a
+   * YES — and VOID for a VOID (its grounds then differ by the evidence's instant).
+   */
+  result?: MarketResult;
+  /** The correction's registrant. Default: a fresh admin. */
+  registeredBy?: string;
+  /** The approving admin, never the registrant (the factory throws). Default: a fresh admin. */
+  approvedBy?: string;
+  /** The approval's reason. Default: a sentence. */
+  approvalReason?: string;
+  /**
+   * The approval's instant — the new version's publication, its event's and its deadline's start.
+   * The registration is a millisecond before it. Default: the database clock.
+   */
+  correctedAt?: Date;
+  /** Default: true before the market's scheduled judgement (as the route needs), false after. */
+  eventDeadlineConfirmed?: boolean;
+}
+
+/** A correction a factory approved: the market, both versions, the request, the event. */
+export interface CorrectedMarket {
+  /** The market the correction left: PROVISIONAL, the new result, version and deadline. */
+  market: typeof markets.$inferSelect;
+  /** The new version's `market_judgements` row, the market's current one. */
+  judgement: MarketJudgementRow;
+  /** The version it replaced, as it was published. */
+  previous: MarketJudgementRow;
+  /** The correction's `market_judgement` request, approved. */
+  request: typeof approvalRequests.$inferSelect;
+  /** The `judgement_corrected` event's id, the market's `status_event_id`. */
+  eventId: number;
+  /** The base version's pending disputes closed as 정정으로 종결. */
+  closedDisputes: MarketDisputeRow[];
+}
+
+/**
+ * A corrected PROVISIONAL market (#176, ADR-0105) as the routes leave it: a PROVISIONAL market
+ * (`marketId`, or a fresh `createProvisionalMarket` one), a correction of its current version
+ * registered by one admin (`createCorrectionRequest`, a millisecond before the approval, its
+ * accepted disputes answered), then in one transaction under the market lock with the row FOR
+ * UPDATE that request approved by another admin with a reason, and `correctMarketJudgement` at the
+ * approval's instant — the base version's pending disputes closed, the `judgement_corrected`
+ * event, the next `market_judgements` row (the base version's window, the deadline from the
+ * approval), and the market at the new version with its mirrors reset. No admin records and no job
+ * (the API's). `correctMarketJudgement`'s checks are made: a market not PROVISIONAL throws.
+ */
+export async function createCorrectedMarket(
+  db: Db,
+  input: CreateCorrectedMarketInput = {},
+): Promise<CorrectedMarket> {
+  const {
+    marketId,
+    provisional,
+    registeredBy,
+    approvedBy,
+    approvalReason,
+    correctedAt,
+    eventDeadlineConfirmed,
+    ...registration
+  } = input;
+  const registrant = registeredBy ?? (await createUser(db, { role: 'admin' })).user.id;
+  const approver = approvedBy ?? (await createUser(db, { role: 'admin' })).user.id;
+  if (approver === registrant) {
+    throw new Error('createCorrectedMarket: the registrant never approves the correction');
+  }
+  const id = marketId ?? (await createProvisionalMarket(db, provisional)).market.id;
+  const at = correctedAt ?? (await clockTimestamp(db));
+  const [base] = await db
+    .select({ resolvedResult: markets.resolvedResult })
+    .from(markets)
+    .where(eq(markets.id, id));
+  const flipped: Record<MarketResult, MarketResult> = { YES: 'NO', NO: 'YES', VOID: 'VOID' };
+  const request = await createCorrectionRequest(db, {
+    ...registration,
+    result: registration.result ?? flipped[base?.resolvedResult ?? 'NO'],
+    marketId: id,
+    by: registrant,
+    requestedAt: new Date(at.getTime() - 1),
+  });
+  return db.transaction(async (tx) => {
+    await lockMarket(tx, id);
+    const [current] = await tx.select().from(markets).where(eq(markets.id, id)).for('update');
+    if (!current) throw new Error(`createCorrectedMarket: market ${id} not found`);
+    const [approved] = await tx
+      .update(approvalRequests)
+      .set({
+        status: 'approved',
+        decidedBy: approver,
+        decisionReason: approvalReason ?? JUDGEMENT_APPROVAL_REASON,
+        decidedAt: at,
+      })
+      .where(eq(approvalRequests.id, request.id))
+      .returning();
+    const result = await correctMarketJudgement(tx, {
+      market: current,
+      request: approved!,
+      now: at,
+      approverId: approver,
+      eventDeadlineConfirmed:
+        eventDeadlineConfirmed ??
+        isBeforeScheduledJudgement(current.scheduledJudgementAt, at.getTime()),
+    });
+    if (!result.corrected) {
+      throw new Error(`createCorrectedMarket: the correction was not made (${result.reason})`);
+    }
+    return {
+      market: result.market,
+      judgement: result.judgement,
+      previous: result.previous,
+      request: approved!,
+      eventId: result.eventId,
+      closedDisputes: result.closedDisputes,
+    };
+  });
+}
+
 /**
  * The worker's confirmation (#152, ADR-0103) of a PROVISIONAL market, now: in one transaction
  * under the market lock, `resolveProvisionalMarket` at the database clock (or `at`) — the
@@ -2633,9 +2864,9 @@ export async function createProvisionalMarket(
  * UPDATE — so a test that wants the two to agree publishes early enough that the deadline has
  * passed (`createProvisionalMarket`'s `publishedAt`), and then nothing moves. No job, no publish
  * (the worker's): `market.finalize` is the test's to run. A market not PROVISIONAL throws, and so
- * does one a 판정 이의 holds (#175: pending or accepted, `confirmationHold`) — before anything
- * moves: a test decides or retracts its disputes first (`decideMarketDispute`, `createDispute`'s
- * `status`).
+ * does one that is held (`confirmationHold`): a 판정 이의 pending or accepted (#175), or a waiting
+ * correction (#176) — before anything moves: a test decides or retracts them first
+ * (`decideMarketDispute`, `createDispute`'s `status`, the request's 반려).
  */
 export async function resolveMarketNow(
   db: Db,
@@ -2648,8 +2879,8 @@ export async function resolveMarketNow(
     const [current] = await tx.select().from(markets).where(eq(markets.id, marketId));
     if (current && (await confirmationHold(tx, current))) {
       throw new Error(
-        `resolveMarketNow: market ${marketId} is held by a 판정 이의 pending or accepted ` +
-          '(decide or retract its disputes first)',
+        `resolveMarketNow: market ${marketId} is held by a 판정 이의 pending or accepted, or by ` +
+          'a correction waiting (decide or retract them first)',
       );
     }
     await tx
@@ -2711,6 +2942,12 @@ export interface CreateDisputeInput {
   decisionReason?: string;
   /** For `retracted`: when. Default a millisecond after the submission. */
   retractedAt?: Date;
+  /**
+   * For `closed_by_correction` (#176): when the correction's approval closed it. Default a
+   * millisecond after the submission. The version is left as it is: a test of one closed by a real
+   * correction uses `createCorrectedMarket`.
+   */
+  closedAt?: Date;
 }
 
 /** A dispute a factory wrote: the row, its market read back, and the submitter's fill. */
@@ -2727,12 +2964,13 @@ export interface DisputeMade {
  * judgement (`marketId`, or a fresh `createProvisionalMarket` one), by a member with a fill on it
  * (`createFill` unless `fill: false`), and in one transaction under the market lock the
  * `market_disputes` row — pending, or dismissed or accepted by an admin with a reason, or
- * retracted, as asked — and `markets.dispute_hold_count` one more for a pending or accepted
- * dispute of the market's current version, as the dispute writers keep it. The routes' checks are
- * not made (the status, the deadline, the role, the one per version; the decider's not being the
- * registrant): a test gives what a route would take — a dispute submitted before a deadline that
- * has since passed included — or tests the helpers' refusals with `submitMarketDispute`. The
- * database's are (the CHECKs, the keys, the foreign key to the judgement).
+ * retracted, or closed by a correction (#176), as asked — and `markets.dispute_hold_count` one
+ * more for a pending or accepted dispute of the market's current version, as the dispute writers
+ * keep it. The routes' checks are not made (the status, the deadline, the role, the one per
+ * version; the decider's not being the registrant): a test gives what a route would take — a
+ * dispute submitted before a deadline that has since passed included — or tests the helpers'
+ * refusals with `submitMarketDispute`. The database's are (the CHECKs, the keys, the foreign key
+ * to the judgement).
  */
 export async function createDispute(db: Db, input: CreateDisputeInput = {}): Promise<DisputeMade> {
   const marketId = input.marketId ?? (await createProvisionalMarket(db, input.market)).market.id;
@@ -2766,6 +3004,7 @@ export async function createDispute(db: Db, input: CreateDisputeInput = {}): Pro
         decidedAt: decided ? (input.decidedAt ?? later) : null,
         decisionReason: decided ? (input.decisionReason ?? DISPUTE_DECISION_REASON) : null,
         retractedAt: status === 'retracted' ? (input.retractedAt ?? later) : null,
+        closedAt: status === 'closed_by_correction' ? (input.closedAt ?? later) : null,
       })
       .returning();
     const holds = isHoldingDisputeStatus(status) && version === market.judgementVersion;

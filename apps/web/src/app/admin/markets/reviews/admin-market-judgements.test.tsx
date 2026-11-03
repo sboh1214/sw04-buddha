@@ -27,6 +27,7 @@ const row = (
   result: 'NO',
   requestedBy: { id: 'registrant', nickname: '등록한이' },
   requestedAt: '2026-11-30T02:00:00.000Z',
+  correction: null,
   ...fields,
 });
 
@@ -110,6 +111,30 @@ describe('AdminMarketJudgements', () => {
       copy.adminMarketJudgementsEarly,
     );
     expect(byTestId(html, `admin-market-judgement-early-${SECOND}`)).toBeUndefined();
+  });
+
+  it('marks a 판정 정정 with the version it moves from and to (#176, ADR-0105)', () => {
+    const html = drawn([
+      {
+        items: [
+          row(FIRST, {
+            status: 'provisional',
+            correction: { baseVersion: 2, reason: '출처가 정정 발표를 냈습니다.', disputeIds: [] },
+          }),
+          row(SECOND),
+        ],
+        nextCursor: null,
+      },
+    ]);
+    expect(byTestId(html, `admin-market-judgement-correction-${FIRST}`)?.text).toBe(
+      `${copy.adminMarketJudgementsCorrection} v2 → v3`,
+    );
+    expect(byTestId(html, `admin-market-judgement-${FIRST}`)?.text).toContain(
+      copy.marketStatusProvisional,
+    );
+    // The reason is the detail's to show; a first judgement has no marker.
+    expect(byTestId(html, `admin-market-judgement-${FIRST}`)?.text).not.toContain('정정 발표');
+    expect(byTestId(html, `admin-market-judgement-correction-${SECOND}`)).toBeUndefined();
   });
 
   it('offers 더 보기 while another page follows', () => {

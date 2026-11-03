@@ -53,14 +53,18 @@ import { approvalStatusEnum } from './enums.js';
  * it, in any status; once the market left that pause (closed at its close) its approval is refused.
  *
  * A CLOSED market's judgement (#152, ADR-0103; ADR-0093 decision 1 #173 item 1, decision 3 the
- * #152 rows) — `kind` `market_judgement` (target `market`, the market's id as text; payload
- * `{result, source, fallbackReason, voidReason, evidence, ruleVersion}`, the registration with the
- * source's name and address copied from the rules; the request's reason the description of what
- * was confirmed): at most one waiting per market, which the API holds under the market lock. An
- * admin other than its registrant approves it — CLOSED → PROVISIONAL and the market's next
- * judgement, whose row references it (`market_judgements.approval_id`, migration 0055) — or
- * rejects it, and its registrant may retract it, in any status; a market no longer CLOSED refuses
- * its approval.
+ * #152 rows), or a PROVISIONAL one's 판정 정정 (#176, ADR-0105; #173 items 2·8) — `kind`
+ * `market_judgement` (target `market`, the market's id as text; payload `{result, source,
+ * fallbackReason, voidReason, evidence, ruleVersion, correction}`, the registration with the
+ * source's name and address copied from the rules, `correction` null for a first judgement and
+ * `{baseVersion, reason, disputeIds}` for a correction — a row before #176 has no key; the
+ * request's reason the description of what was confirmed): at most one waiting per market, which
+ * the API holds under the market lock, and while one waits the market's confirmation is held
+ * (`confirmationHold`, by the two indexes below). An admin other than its registrant
+ * approves it — CLOSED → PROVISIONAL, or the next version of a PROVISIONAL market, and the
+ * market's next judgement, whose row references it (`market_judgements.approval_id`, migration
+ * 0055) — or rejects it, and its registrant may retract it, in any status; a market that left the
+ * status it needs refuses its approval.
  *
  * #184's retention deletes none of the market kinds (migration 0044 names the account
  * restriction's kinds alone).
@@ -118,10 +122,14 @@ export const approvalRequests = pgTable(
     /**
      * A target's requests (#139, migration 0042): a member's account restriction requests on their
      * moderation page, and a restriction's own — `target_id` is text, the member's account id or
-     * the action's uuid.
+     * the action's uuid — and a market's waiting `market_judgement` request, the confirmation's
+     * hold (#176, `marketConfirmationHeld`).
      */
     index('approval_requests_target_idx').on(t.targetType, t.targetId),
-    /** The requests waiting for a decision, the oldest first (#139's queue of requests). */
+    /**
+     * The requests waiting for a decision, the oldest first (#139's queue of requests) — and the
+     * waiting `market_judgement` ones the worker's confirmation scan hashes (#176).
+     */
     index('approval_requests_pending_requested_at_idx')
       .on(t.requestedAt, t.id)
       .where(sql`${t.status} = 'pending'`),

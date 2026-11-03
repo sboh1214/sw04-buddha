@@ -78,7 +78,8 @@ describe('jobs (PLAN 9)', () => {
     const id = marketResolveJobId(marketId, disputeDeadline);
     expect(id).toBe(`market.resolve.${marketId}.${String(disputeDeadline.getTime())}`);
     expect(id).not.toContain(':');
-    // A correction's new deadline (#176) is a new job; no other market job shares the id.
+    // A correction's later deadline (#176, ADR-0105) is a new job, the old one left to run
+    // `not_due`; no other market job shares the id.
     expect(marketResolveJobId(marketId, new Date(disputeDeadline.getTime() + 1))).not.toBe(id);
     for (const other of [marketOpenJobId, marketCloseJobId, marketFinalizeJobId]) {
       expect(other(marketId, disputeDeadline)).not.toBe(id);

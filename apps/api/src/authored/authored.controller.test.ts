@@ -27,12 +27,14 @@ import {
   createCategory,
   createComment,
   createCommentLike,
+  createCorrectionRequest,
   createMarket,
   createMedia,
   createModerationAction,
   createNotice,
   createPost,
   createPostLike,
+  createProvisionalMarket,
   createUser,
 } from '@buddha/db/test';
 import {
@@ -311,6 +313,30 @@ describe.skipIf(!hasTestInfra)('/api/v1 authored lists (integration)', () => {
   });
 
   // ---- the profile's 댓글 tab --------------------------------------------------------------------
+
+  it("says '판정 지연' and no '이의 검토 중' of an item's PROVISIONAL market a waiting correction alone holds past its deadline (#176)", async () => {
+    // Judged two days ago with a day's window, then a 판정 정정 registered: no dispute holds it
+    // (ADR-0105 decision 2 '표시', the `correction_pending` mirror).
+    const { market: held } = await createProvisionalMarket(t.db, {
+      publishedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+    });
+    await createCorrectionRequest(t.db, { marketId: held.id, result: 'NO' });
+    const post = await createPost(t.db, { marketId: held.id, authorId: member.id });
+    const comment = await createComment(t.db, { postId: post.id, authorId: member.id });
+    const flags = {
+      id: held.id,
+      status: 'provisional',
+      judgementDelayed: true,
+      disputeUnderReview: false,
+    };
+    expect((await profilePosts()).data.find((item) => item.id === post.id)?.market).toMatchObject(
+      flags,
+    );
+    expect(
+      (await profileComments()).data.find((item) => item.id === comment.id)?.market,
+    ).toMatchObject(flags);
+    expect((await myPosts()).data.find((item) => item.id === post.id)?.market).toMatchObject(flags);
+  });
 
   it('names no market on an item whose market went back to a draft (#78 되돌리기, ADR-0099)', async () => {
     const sentBack = await createMarket(t.db, { title: '개장 예정 시장', status: 'scheduled' });

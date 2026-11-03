@@ -302,7 +302,14 @@ describe.skipIf(!hasTestInfra)('market disputes (integration)', () => {
         decidedAt: null,
         decisionReason: null,
         retractedAt: null,
-        market: { id: market.id, slug: market.slug, title: market.title, status: 'provisional' },
+        closedAt: null,
+        market: {
+          id: market.id,
+          slug: market.slug,
+          title: market.title,
+          status: 'provisional',
+          judgementVersion: 1,
+        },
         retractable: true,
       });
       expect(row).toMatchObject({ userId: member.id, links: dispute.links, reason: REASON });
@@ -630,7 +637,14 @@ describe.skipIf(!hasTestInfra)('market disputes (integration)', () => {
         decidedAt: new Date(at + MINUTE_MS).toISOString(),
         decisionReason: DECISION,
         retractedAt: null,
-        market: { id: first.id, slug: first.slug, title: first.title, status: 'provisional' },
+        closedAt: null,
+        market: {
+          id: first.id,
+          slug: first.slug,
+          title: first.title,
+          status: 'provisional',
+          judgementVersion: 1,
+        },
         retractable: false,
       },
     ]);
@@ -673,6 +687,7 @@ describe.skipIf(!hasTestInfra)('market disputes (integration)', () => {
             decidedAt: row!.decidedAt!.toISOString(),
             decisionReason: DECISION,
             retractedAt: null,
+            closedAt: null,
             submitter: await actorOf(member),
             decidedBy: await actorOf(approver),
             purgedAt: null,
@@ -715,7 +730,7 @@ describe.skipIf(!hasTestInfra)('market disputes (integration)', () => {
     expect(await disputeActionsOf(market.id)).toHaveLength(1);
   });
 
-  it('accepts a dispute, which keeps holding the market past its deadline until a correction (#176), registering no confirmation', async () => {
+  it('accepts a dispute, which keeps holding the market past its deadline until a correction, registering no confirmation', async () => {
     // Submitted before the deadline, which has passed with it pending: '판정 지연' (owner answer
     // 2026-11-03).
     const market = await provisional(new Date(Date.now() - MINUTE_MS));
@@ -1016,10 +1031,17 @@ describe.skipIf(!hasTestInfra)('market disputes (integration)', () => {
       decidedAt: null,
       decisionReason: null,
       retractedAt: null,
+      closedAt: null,
       submitter: await actorOf(submitters[0]!),
       decidedBy: null,
       purgedAt: null,
-      market: { id: first.id, slug: first.slug, title: first.title, status: 'provisional' },
+      market: {
+        id: first.id,
+        slug: first.slug,
+        title: first.title,
+        status: 'provisional',
+        judgementVersion: 1,
+      },
     });
     const rest = (
       await list(`?status=pending&limit=2&cursor=${encodeURIComponent(page.meta.nextCursor!)}`)
@@ -1040,8 +1062,15 @@ describe.skipIf(!hasTestInfra)('market disputes (integration)', () => {
         decisionReason: DECISION,
       }),
     ]);
-    // No price, majority or position on the list (N03 §5): the market is its reference alone.
-    expect(Object.keys(older.data[0]!.market).sort()).toEqual(['id', 'slug', 'status', 'title']);
+    // No price, majority or position on the list (N03 §5): the market is its reference alone,
+    // with its current judgement version (public; #176).
+    expect(Object.keys(older.data[0]!.market).sort()).toEqual([
+      'id',
+      'judgementVersion',
+      'slug',
+      'status',
+      'title',
+    ]);
     expectError(await list('?status=everything'), 400, 'VALIDATION_ERROR');
     expectError(await get('/admin/market-disputes', member), 403, 'FORBIDDEN');
   });

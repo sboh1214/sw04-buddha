@@ -191,9 +191,17 @@ describe('ordering keys', () => {
 
   it('orders market:status by the transition event id, and by rank only without one', () => {
     const resolvedYes = { status: 'resolved', statusEventId: '10' } as const;
-    // The same status with a newer event id is a later transition (a correction in PROVISIONAL,
-    // #176) — the case rank order could not express, and the reason the key exists (A-M3-19).
+    // The same status with a newer event id is a later write (a correction's approval in
+    // PROVISIONAL, its `judgement_corrected` event; #176, ADR-0105) — the case rank order could
+    // not express, and the reason the key exists (A-M3-19).
     expect(statusSupersedes({ status: 'resolved', statusEventId: '11' }, resolvedYes)).toBe(true);
+    const provisionalYes = { status: 'provisional', statusEventId: '7' } as const;
+    expect(statusSupersedes({ status: 'provisional', statusEventId: '8' }, provisionalYes)).toBe(
+      true,
+    );
+    expect(statusSupersedes(provisionalYes, { status: 'provisional', statusEventId: '8' })).toBe(
+      false,
+    );
     // The admin edit's repeat (A-M4-36) and a duplicate carry the SAME id: dropped.
     expect(statusSupersedes({ status: 'resolved', statusEventId: '10' }, resolvedYes)).toBe(false);
     // A late event with a lower id loses even when its status ranks higher: the key, not the

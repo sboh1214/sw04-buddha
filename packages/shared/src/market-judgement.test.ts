@@ -7,7 +7,7 @@ import {
   APPROVAL_REFUSALS,
 } from './approvals.js';
 import { MARKET_FALLBACK_SOURCES_MAX, MARKET_SOURCE_URL_MAX } from './constants.js';
-import { MARKET_RESULTS } from './enums.js';
+import { MARKET_RESULTS, MARKET_STATUSES } from './enums.js';
 import { expectedAccountBodySchema } from './expected-account.js';
 import { findExcludedIdentifier } from './guards/excluded.js';
 import * as shared from './index.js';
@@ -23,6 +23,11 @@ import {
   adminMarketJudgementStateSchema,
   approveJudgementBodySchema,
   disputeDeadlineOf,
+  type JudgementGrounds,
+  judgementCorrectionBodySchema,
+  judgementStatusRefusal,
+  marketJudgementCorrectionSchema,
+  sameJudgementGrounds,
   disputeWindowMinutesSchema,
   duplicateLinkIndexes,
   isBeforeScheduledJudgement,
@@ -46,6 +51,7 @@ const account = 'admin-1';
 const requestId = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 const marketId = '9b2e1f4c-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
 const approvalId = '6c1d2e3f-4a5b-4c6d-9e7f-8091a2b3c4d5';
+const disputeId = '0f8e7d6c-5b4a-4392-8170-6f5e4d3c2b1a';
 const registrant = { id: 'admin-1', nickname: '운영자1' };
 const reviewer = { id: 'admin-2', nickname: null };
 const link = 'https://www.bok.or.kr/press/1';
@@ -92,7 +98,8 @@ describe('the judgement and its approval (#152, ADR-0093 decision 1 #173, decisi
 
   it('names its refusals apart under each path, each a message a client maps', () => {
     expect(MARKET_JUDGEMENT_REFUSALS).toEqual({
-      status: { notClosed: 'not closed' },
+      status: { notClosed: 'not closed', notProvisional: 'not provisional' },
+      correction: { stale: 'stale', unchanged: 'unchanged' },
       judgement: { pending: 'pending' },
       disputeWindow: { undecided: 'undecided' },
       source: { required: 'required', unknown: 'unknown' },
@@ -141,6 +148,21 @@ describe('the judgement and its approval (#152, ADR-0093 decision 1 #173, decisi
       'approved_by',
       'approvedBy',
       'provisional_event_id',
+      // #176 (ADR-0105): the correction's names.
+      'correction',
+      'correction_reason',
+      'correctionReason',
+      'correction_pending',
+      'correctionPending',
+      'baseVersion',
+      'disputeIds',
+      'closedDisputeIds',
+      'reopenedDisputeIds',
+      'previousVersion',
+      'previousResult',
+      'closedDisputes',
+      'history',
+      'judgement_corrected',
       MARKET_JUDGEMENT_APPROVAL_KIND,
       'provisional',
       'market_judgement_request',
@@ -262,6 +284,7 @@ describe('the judgement helpers', () => {
             scheduledJudgementAt: scheduled,
             disputeDeadline: null,
             disputeHoldCount: 0,
+            correctionPending: false,
           },
           nowMs,
         ),
@@ -269,6 +292,68 @@ describe('the judgement helpers', () => {
     }
     // A market opened before #22 has no scheduled judgement: no warning, no confirmation.
     expect(isBeforeScheduledJudgement(null, 0)).toBe(false);
+  });
+
+  it('tells a correction that changes neither the result nor its grounds (#176)', () => {
+    const base = {
+      version: 1,
+      result: 'NO',
+      source: { priority: 1, name: '통계청', url: 'https://kostat.go.kr' },
+      fallbackReason: '1차 출처의 발표가 늦어졌다',
+      voidReason: null,
+      evidence: { links: [link, `${link}/2`], collectedAt: '2026-11-02T00:00:00Z' },
+      description: '대체 출처의 발표로 확인했다.',
+    } as const;
+    // The registration's spelling: the priority alone, reasons left out or trimmed, the instant
+    // by its moment.
+    const same: JudgementGrounds = {
+      result: 'NO',
+      source: { priority: 1 },
+      fallbackReason: ' 1차 출처의 발표가 늦어졌다 ',
+      evidence: {
+        links: [` ${link}`, `${link}/2`],
+        collectedAt: new Date('2026-11-02T00:00:00.000Z'),
+      },
+      description: '대체 출처의 발표로 확인했다. ',
+    };
+    expect(sameJudgementGrounds(base, base)).toBe(true);
+    expect(sameJudgementGrounds(base, same)).toBe(true);
+    expect(sameJudgementGrounds(same, base)).toBe(true);
+    // Each ground changed on its own is a correction — the result kept or not ("결과나 근거").
+    const changes: JudgementGrounds[] = [
+      { ...same, result: 'YES' },
+      { ...same, result: 'VOID', voidReason: '취소' },
+      { ...same, source: { priority: 2 } },
+      { ...same, source: null },
+      { ...same, fallbackReason: '다른 이유' },
+      { ...same, fallbackReason: null },
+      { ...same, voidReason: '취소' },
+      { ...same, evidence: { ...same.evidence, links: [`${link}/2`, link] } },
+      { ...same, evidence: { ...same.evidence, links: [link] } },
+      { ...same, evidence: { ...same.evidence, links: [link, `${link}/2`, `${link}/3`] } },
+      { ...same, evidence: { ...same.evidence, collectedAt: '2026-11-02T00:00:00.001Z' } },
+      { ...same, description: '다른 설명' },
+    ];
+    for (const next of changes) {
+      expect(sameJudgementGrounds(base, next), JSON.stringify(next)).toBe(false);
+    }
+    // A VOID with no source against one with none: the same.
+    const voided: JudgementGrounds = { ...same, result: 'VOID', source: null, voidReason: '취소' };
+    expect(
+      sameJudgementGrounds(voided, { ...voided, fallbackReason: ' 1차 출처의 발표가 늦어졌다' }),
+    ).toBe(true);
+  });
+
+  it('takes a first judgement on a CLOSED market and a correction on a PROVISIONAL one', () => {
+    for (const status of MARKET_STATUSES) {
+      expect(judgementStatusRefusal(status, false), status).toBe(
+        status === 'closed' ? null : 'not closed',
+      );
+      // #173 item 8: a correction only before the confirmation — never RESOLVED or later (#144).
+      expect(judgementStatusRefusal(status, true), status).toBe(
+        status === 'provisional' ? null : 'not provisional',
+      );
+    }
   });
 
   it('fixes the deadline at the publication plus the window, to the millisecond', () => {
@@ -288,7 +373,7 @@ describe('the registration body', () => {
   };
 
   it('takes each result with its source, reasons and evidence, trimmed', () => {
-    expect(registerJudgementBodySchema.parse(body)).toEqual(body);
+    expect(registerJudgementBodySchema.parse(body)).toEqual({ ...body, correction: null });
     const fallback = {
       ...body,
       result: 'NO',
@@ -306,10 +391,11 @@ describe('the registration body', () => {
       fallbackReason: '1차 출처가 닫혔다',
       evidence: { ...fallback.evidence, links: [link, ...fallback.evidence.links.slice(1)] },
       description: '설명',
+      correction: null,
     });
     // VOID needs no source — a source outside the rules, a 판정 불가 early close — but its reason.
     const voided = { ...body, result: 'VOID', source: null, voidReason: '판정 불가로 조기 마감' };
-    expect(registerJudgementBodySchema.parse(voided)).toEqual(voided);
+    expect(registerJudgementBodySchema.parse(voided)).toEqual({ ...voided, correction: null });
     // The source is its priority: the server copies its name and address.
     expect(
       registerJudgementBodySchema.parse({
@@ -322,6 +408,49 @@ describe('the registration body', () => {
       expect(registerJudgementBodySchema.safeParse({ ...body, result, ...choice }).success).toBe(
         true,
       );
+    }
+  });
+
+  it('takes a 판정 정정 of a version with its reason, and none for a first judgement (#176)', () => {
+    // Left out or null: a first judgement, as every caller before #176 sends it.
+    expect(registerJudgementBodySchema.parse(body).correction).toBeNull();
+    expect(registerJudgementBodySchema.parse({ ...body, correction: null }).correction).toBeNull();
+    // The version it corrects and the 정정 사유, trimmed; the other fields are the new version's.
+    const corrected = registerJudgementBodySchema.parse({
+      ...body,
+      result: 'NO',
+      correction: { baseVersion: 1, reason: ' 1차 출처가 발표를 고쳤다 ' },
+    });
+    expect(corrected).toEqual({
+      ...body,
+      result: 'NO',
+      correction: { baseVersion: 1, reason: '1차 출처가 발표를 고쳤다' },
+    });
+    expect(judgementCorrectionBodySchema.parse({ baseVersion: 3, reason: '정정' })).toEqual({
+      baseVersion: 3,
+      reason: '정정',
+    });
+    // The server lists the disputes it answers: a client's list is no field.
+    expect(
+      registerJudgementBodySchema.parse({
+        ...body,
+        correction: { baseVersion: 2, reason: '정정', disputeIds: [disputeId] },
+      }).correction,
+    ).toEqual({ baseVersion: 2, reason: '정정' });
+    for (const [correction, path] of [
+      [{ baseVersion: 0, reason: '정정' }, 'correction.baseVersion'],
+      [{ baseVersion: 1.5, reason: '정정' }, 'correction.baseVersion'],
+      [{ baseVersion: '1', reason: '정정' }, 'correction.baseVersion'],
+      [{ reason: '정정' }, 'correction.baseVersion'],
+      [{ baseVersion: 1 }, 'correction.reason'],
+      [{ baseVersion: 1, reason: '  ' }, 'correction.reason'],
+      [{ baseVersion: 1, reason: 'x'.repeat(APPROVAL_REASON_MAX_LENGTH + 1) }, 'correction.reason'],
+      ['정정', 'correction'],
+    ] as const) {
+      expect(
+        paths(registerJudgementBodySchema.safeParse({ ...body, correction })),
+        JSON.stringify(correction),
+      ).toEqual([path]);
     }
   });
 
@@ -469,9 +598,11 @@ describe('the judgement records and read models', () => {
   const pending = {
     requestId,
     ...registration,
+    correction: null,
     requestedBy: registrant,
     requestedAt: at,
   };
+  const correction = { baseVersion: 1, reason: '1차 출처가 정정 발표를 냈다', disputeIds: [] };
   const undecided = {
     decidedBy: null,
     decidedAt: null,
@@ -482,6 +613,7 @@ describe('the judgement records and read models', () => {
   const current = {
     version: 1,
     ...registration,
+    correctionReason: null,
     eventDeadlineConfirmed: false,
     disputeWindowMinutes: 1_440,
     publishedAt: '2026-11-02T01:00:00.000Z',
@@ -493,7 +625,11 @@ describe('the judgement records and read models', () => {
 
   it('store the request payload frozen at the insert, its source copied', () => {
     const { description: _description, ...payload } = registration;
-    expect(marketJudgementRequestPayloadSchema.parse(payload)).toEqual(payload);
+    // A row written before #176 has no `correction`: a first judgement's, read as null.
+    expect(marketJudgementRequestPayloadSchema.parse(payload)).toEqual({
+      ...payload,
+      correction: null,
+    });
     // A VOID with no source, on a market opened before #80 (no rule version).
     const voided = {
       ...payload,
@@ -503,7 +639,32 @@ describe('the judgement records and read models', () => {
       voidReason: '판정 불가',
       ruleVersion: null,
     };
-    expect(marketJudgementRequestPayloadSchema.parse(voided)).toEqual(voided);
+    expect(marketJudgementRequestPayloadSchema.parse(voided)).toEqual({
+      ...voided,
+      correction: null,
+    });
+    // A 판정 정정 (#176): the version it corrects, its reason and the accepted disputes it answers.
+    const correction = {
+      baseVersion: 1,
+      reason: '1차 출처가 정정 발표를 냈다',
+      disputeIds: [disputeId],
+    };
+    const corrected = { ...payload, correction };
+    expect(marketJudgementRequestPayloadSchema.parse(corrected)).toEqual(corrected);
+    const unanswered = { ...payload, correction: { ...correction, disputeIds: [] } };
+    expect(marketJudgementRequestPayloadSchema.parse(unanswered)).toEqual(unanswered);
+    expect(marketJudgementCorrectionSchema.parse(correction)).toEqual(correction);
+    for (const [bad, path] of [
+      [{ ...correction, baseVersion: 0 }, 'correction.baseVersion'],
+      [{ ...correction, disputeIds: ['dispute-1'] }, 'correction.disputeIds.0'],
+      [{ baseVersion: 1, reason: '정정' }, 'correction.disputeIds'],
+      [{ baseVersion: 1, disputeIds: [] }, 'correction.reason'],
+    ] as const) {
+      expect(
+        paths(marketJudgementRequestPayloadSchema.safeParse({ ...payload, correction: bad })),
+        path,
+      ).toEqual([path]);
+    }
     for (const field of Object.keys(payload)) {
       const { [field as keyof typeof payload]: _gone, ...without } = payload;
       expect(paths(marketJudgementRequestPayloadSchema.safeParse(without)), field).toEqual([field]);
@@ -527,6 +688,16 @@ describe('the judgement records and read models', () => {
     // An account closed since keeps its id with no nickname.
     const closed = { ...current, registeredBy: { id: 'gone', nickname: null } };
     expect(adminMarketJudgementSchema.parse(closed)).toEqual(closed);
+    // A correction's version (#176): its 정정 사유, and its base version's window length.
+    const corrected = {
+      ...current,
+      version: 2,
+      result: 'YES',
+      correctionReason: correction.reason,
+      publishedAt: '2026-11-02T12:00:00.000Z',
+      disputeDeadline: '2026-11-03T12:00:00.000Z',
+    };
+    expect(adminMarketJudgementSchema.parse(corrected)).toEqual(corrected);
   });
 
   it('show the waiting registration, every registration with how it ended, and the queue', () => {
@@ -548,24 +719,49 @@ describe('the judgement records and read models', () => {
       version: null,
     };
     const retracted = { ...pending, status: 'retracted', ...undecided, retractedAt: at };
-    for (const entry of [waiting, approved, rejected, retracted]) {
+    // A 판정 정정 (#176) waits and ends as a first judgement does, its correction shown.
+    const correcting = { ...pending, correction };
+    expect(marketJudgementPendingSchema.parse(correcting)).toEqual(correcting);
+    const corrected = { ...approved, correction, version: 2 };
+    for (const entry of [waiting, approved, rejected, retracted, corrected]) {
       expect(marketJudgementLogEntrySchema.parse(entry)).toEqual(entry);
     }
+    const { correction: _correction, ...withoutCorrection } = pending;
+    expect(paths(marketJudgementPendingSchema.safeParse(withoutCorrection))).toEqual([
+      'correction',
+    ]);
     const { version: _version, ...withoutVersion } = approved;
     expect(paths(marketJudgementLogEntrySchema.safeParse(withoutVersion))).toEqual(['version']);
     const state = {
       current,
+      history: [],
       pending,
       log: [waiting, approved],
       disputeWindowUndecided: false,
     };
     expect(adminMarketJudgementStateSchema.parse(state)).toEqual(state);
-    const none = { current: null, pending: null, log: [], disputeWindowUndecided: true };
+    const none = {
+      current: null,
+      history: [],
+      pending: null,
+      log: [],
+      disputeWindowUndecided: true,
+    };
     expect(adminMarketJudgementStateSchema.parse(none)).toEqual(none);
     const { disputeWindowUndecided: _undecided, ...withoutWindow } = none;
     expect(paths(adminMarketJudgementStateSchema.safeParse(withoutWindow))).toEqual([
       'disputeWindowUndecided',
     ]);
+    // 판정 버전 이력 (#176): the versions a correction replaced, the newest first, each in full.
+    const v2 = { ...current, version: 2, correctionReason: '정정', approvalId: requestId };
+    const v3 = { ...current, version: 3, correctionReason: '다시 정정' };
+    const twice = { ...state, current: v3, history: [v2, current], pending: correcting };
+    expect(adminMarketJudgementStateSchema.parse(twice)).toEqual(twice);
+    const { history: _history, ...withoutHistory } = state;
+    expect(paths(adminMarketJudgementStateSchema.safeParse(withoutHistory))).toEqual(['history']);
+    expect(
+      paths(adminMarketJudgementStateSchema.safeParse({ ...state, history: [{ version: 1 }] }))[0],
+    ).toMatch(/^history\.0\./);
     const item = {
       requestId,
       marketId,
@@ -575,10 +771,14 @@ describe('the judgement records and read models', () => {
       closeAt: at,
       scheduledJudgementAt: null,
       result: 'VOID',
+      correction: null,
       requestedBy: registrant,
       requestedAt: at,
     };
     expect(adminMarketJudgementQueueItemSchema.parse(item)).toEqual(item);
+    // The queue marks a correction (#176): a PROVISIONAL market's.
+    const queued = { ...item, status: 'provisional', result: 'NO', correction };
+    expect(adminMarketJudgementQueueItemSchema.parse(queued)).toEqual(queued);
     expect(
       paths(adminMarketJudgementQueueItemSchema.safeParse({ ...item, result: 'MAYBE' })),
     ).toEqual(['result']);
@@ -604,6 +804,7 @@ describe('the OpenAPI component ids of the judgement', () => {
       'MarketJudgementLogEntry',
       'AdminMarketJudgementState',
       'AdminMarketJudgementQueueItem',
+      'MarketJudgementCorrection',
     ]) {
       expect(ids.has(id), id).toBe(true);
     }

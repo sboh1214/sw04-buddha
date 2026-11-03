@@ -50,7 +50,9 @@ import {
  * the judgement's record (#24 shows it, without the admins). A 반려 leaves the market CLOSED for
  * the next registration — by any admin, the one who rejected included, and the first registrant
  * may approve that one. A market closed early as 판정 불가 (#114) is judged 무효 alone. The one-admin
- * 판정 is gone: no button, and its route answers 404.
+ * 판정 is gone: no button, and its route answers 404. Once PROVISIONAL the panel offers 판정 정정
+ * instead, the same registration for the next judgement version (#176), which correction.spec.ts
+ * walks.
  *
  * Admin 1 (`admin`) registers the judgements here and admin 2 — `secondAdmin`, or the reviewer
  * `admin` is paired with — decides them, the other way round where a test says so, as on any
@@ -323,6 +325,8 @@ test.describe('판정', () => {
         voidReason: null,
         evidence: { links: [link, secondLink], collectedAt },
         description,
+        // A first judgement (#176: a 판정 정정 names the version it replaces, correction.spec.ts).
+        correction: null,
         expectedAccountId: first.id,
       });
       await expect(firstPage.getByText(copy.adminMarketJudgementRegistered)).toBeVisible();
@@ -481,6 +485,10 @@ test.describe('판정', () => {
       );
       await expect(secondPage.getByTestId('market-judgement-pending')).toHaveCount(0);
       await expect(secondPage.getByTestId('market-judgement-register')).toHaveCount(0);
+      // 판정 정정 in its place, while nothing waits (#176 — correction.spec.ts walks it).
+      await expect(secondPage.getByTestId('market-judgement-correct')).toHaveText(
+        copy.adminMarketJudgementCorrect,
+      );
       await expect(secondPage.getByTestId('market-judgement-current-badge')).toHaveText(copy.no);
       await expect(secondPage.getByTestId('market-judgement-current-deadline')).toHaveText(
         formatKst(current.disputeDeadline),
@@ -776,6 +784,7 @@ test.describe('판정', () => {
         voidReason,
         evidence: { links: [link], collectedAt },
         description,
+        correction: null,
         expectedAccountId: me.id,
       });
       await expect(page.getByText(copy.adminMarketJudgementRegistered)).toBeVisible();

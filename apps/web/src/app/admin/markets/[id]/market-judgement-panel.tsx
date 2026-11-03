@@ -35,10 +35,15 @@ import {
   unwrap,
 } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
-import { type EventRow, MARKET_RESULT_LABEL, PAUSE_REVIEW_RESULT_LABEL } from '@/lib/market-admin';
+import {
+  type EventRow,
+  MARKET_RESULT_LABEL,
+  PAUSE_REVIEW_RESULT_LABEL,
+  judgementVersionMove,
+  judgementVersionName,
+} from '@/lib/market-admin';
 import { isHttpUrl } from '@/lib/market-form';
 import {
-  JUDGEMENT_FORM_UNAVAILABLE_NOTE,
   JUDGEMENT_SOURCE_NONE,
   JUDGEMENT_STATUS_LABEL,
   type JudgementField,
@@ -48,17 +53,21 @@ import {
   collectedAtWait,
   isJudgementRegistrant,
   judgementActorName,
+  judgementCorrectionBase,
+  judgementCorrectionDefaults,
   judgementCurrentRows,
   judgementDraft,
   judgementEarly,
   judgementFailure,
   judgementFormDefaults,
+  judgementFormUnavailableNote,
   judgementLogRows,
   judgementRuleVersionText,
   judgementSourceChoices,
   judgementSourceLabel,
   judgementSourceText,
   judgementUnapprovable,
+  judgementUnapprovableNote,
   judgementUnavailable,
   marketJudgementVoidOnly,
   scheduledJudgementWait,
@@ -68,26 +77,43 @@ import { MarketDisputes } from './market-dispute-panel';
 import { type JudgementDialogKind, JudgementDialog } from './market-judgement-dialogs';
 import { ReasonField } from './market-review-dialogs';
 
-/** What the panel opened: the registration form, or one of the waiting registration's dialogs. */
-export type JudgementAction = 'register' | JudgementDialogKind;
+/**
+ * What the panel opened: the registration form — a first judgement's (`register`) or a 판정 정정's
+ * (`correct`, #176) — or one of the waiting registration's dialogs.
+ */
+export type JudgementAction = 'register' | 'correct' | JudgementDialogKind;
+
+/** Whether the action is one of the registration form's: a first judgement's or a correction's. */
+function isFormAction(action: JudgementAction | null): action is 'register' | 'correct' {
+  return action === 'register' || action === 'correct';
+}
 
 /**
- * 판정 (#152, ADR-0103; ADR-0093 decision 1 #173 items 1·4·5·9·11–13, decision 3 the #152 rows), on
- * a market CLOSED or PROVISIONAL and on any that has a judgement or a registration
- * (`showsJudgementPanel`): what it asks of the admin on screen (`JudgementPanelBody`) and what it
- * opened — the registration form or a dialog — held for that admin (`useHeldForOperator`,
- * ADR-0092 answer 1): once `['me']` turns from A to B in place, it closes with what A picked and
- * typed. The form is drawn again for each admin on screen (`key`), its fields off until that
- * admin is known (`OperatorFieldset`). Held, the form stays until the admin closes it, and focus
- * comes back to the panel then — and after a decision went through (`useJudgementRefocus`).
+ * 판정 (#152, ADR-0103; ADR-0093 decision 1 #173 items 1·4·5·9·11–13, decision 3 the #152 rows) and
+ * its 판정 정정 (#176, ADR-0105), on a market CLOSED or PROVISIONAL and on any that has a judgement
+ * or a registration (`showsJudgementPanel`): what it asks of the admin on screen
+ * (`JudgementPanelBody`) and what it opened — the registration form (a first judgement's, or a
+ * correction's from the panel's 판정 정정 or an accepted dispute's 정정 등록) or a dialog — held for
+ * that admin (`useHeldForOperator`, ADR-0092 answer 1): once `['me']` turns from A to B in place,
+ * it closes with what A picked and typed. The form is drawn again for each admin on screen and for
+ * each of its two kinds (`key`), its fields off until that admin is known (`OperatorFieldset`).
+ * Held, the form stays until the admin closes it, and focus comes back to the panel then — to
+ * what opened it, an accepted dispute's 정정 등록 included — and after a decision went through
+ * (`useJudgementRefocus`). While the form is open the disputes' 정정 등록 are hidden (`formOpen`):
+ * they would open nothing more, and would name the form's own submit a second time. The dialogs
+ * judge a correction's deadline at `readAt`.
  */
 export function MarketJudgementPanel({ market, readAt }: { market: AdminMarket; readAt: number }) {
   const operatorId = useOperatorId();
   const [action, setAction] = useHeldForOperator<JudgementAction>();
   const refocus = useJudgementRefocus(market, action);
   if (!showsJudgementPanel(market)) return null;
+  const open = (next: JudgementAction) => {
+    if (isFormAction(next)) refocus.opened();
+    setAction(next);
+  };
   const close = (sent: boolean) => {
-    refocus.closed(sent || action === 'register', sent);
+    refocus.closed(sent || isFormAction(action), sent);
     setAction(null);
   };
   return (
@@ -96,17 +122,28 @@ export function MarketJudgementPanel({ market, readAt }: { market: AdminMarket; 
         market={market}
         readAt={readAt}
         operatorId={operatorId}
-        onOpen={setAction}
+        onOpen={open}
         registerForm={
-          action === 'register' ? (
-            <JudgementRegisterForm key={operatorId ?? ''} market={market} onClose={close} />
+          isFormAction(action) ? (
+            <JudgementRegisterForm
+              key={`${action}:${operatorId ?? ''}`}
+              market={market}
+              correct={action === 'correct'}
+              onClose={close}
+            />
           ) : null
         }
-        disputes={<MarketDisputes market={market} />}
+        disputes={
+          <MarketDisputes
+            market={market}
+            formOpen={isFormAction(action)}
+            onCorrect={() => open('correct')}
+          />
+        }
         targets={refocus.targets}
       />
-      {action !== null && action !== 'register' && (
-        <JudgementDialog kind={action} market={market} onClose={close} />
+      {action !== null && !isFormAction(action) && (
+        <JudgementDialog kind={action} market={market} readAt={readAt} onClose={close} />
       )}
     </>
   );
@@ -125,8 +162,12 @@ export interface JudgementFocusTargets {
  * opens and a write takes away the button that opened its dialog (a registration its 판정 등록, a
  * decision the waiting registration's), so the next draw — of the market the write answered, after
  * a write — puts focus on the waiting registration's heading, else the current judgement's, else
- * 판정 등록, else the panel's own. Only when focus went with the form or the dialog: an admin who has
- * moved on keeps it where it is. A dialog closed unsent hands focus back itself.
+ * 판정 등록 (or 판정 정정), else the panel's own. A form closed unsent puts it back on what had focus
+ * as it opened (`opened`) while that is still drawn and on — an accepted dispute's 정정 등록, kept
+ * drawn (hidden) while the form was open — else, in the same order, with 판정 등록 or 판정 정정
+ * (drawn anew where the form was) before the current judgement's heading. Only when focus went
+ * with the form or the dialog: an admin who has moved on keeps it where it is. A dialog closed
+ * unsent hands focus back itself.
  */
 function useJudgementRefocus(market: AdminMarket, action: JudgementAction | null) {
   const title = useRef<HTMLParagraphElement>(null);
@@ -134,19 +175,43 @@ function useJudgementRefocus(market: AdminMarket, action: JudgementAction | null
   const current = useRef<HTMLParagraphElement>(null);
   const pending = useRef<HTMLParagraphElement>(null);
   const closed = useRef<{ sent: boolean; market: AdminMarket } | null>(null);
+  // What had focus as the form opened: 판정 등록, 판정 정정 or an accepted dispute's 정정 등록.
+  const opener = useRef<Element | null>(null);
   useEffect(() => {
     const from = closed.current;
     if (from === null || action !== null) return;
     if (from.sent && from.market === market) return;
     closed.current = null;
+    const back = opener.current;
+    opener.current = null;
     const active = document.activeElement;
     if (active !== null && active !== document.body) return;
+    // 판정 등록 and 판정 정정 gave their place to the form, so `back` is no longer drawn for them: the
+    // ref below finds the one drawn anew. A 정정 등록 whose row went, or that turned off, is passed
+    // over the same way.
+    if (
+      !from.sent &&
+      back instanceof HTMLElement &&
+      back.isConnected &&
+      !back.matches(':disabled')
+    ) {
+      back.focus();
+      return;
+    }
     // 판정 등록 is skipped while it is off (the dispute window 미정): a disabled button takes no focus.
+    // On a PROVISIONAL market the same ref is 판정 정정's, which a form closed unsent goes back to
+    // before the current judgement's heading.
     const registerOn = register.current?.disabled === false ? register.current : null;
-    (pending.current ?? current.current ?? registerOn ?? title.current)?.focus();
+    const unsent = from.sent ? null : registerOn;
+    (pending.current ?? unsent ?? current.current ?? registerOn ?? title.current)?.focus();
   }, [action, market]);
   return {
     targets: { title, register, current, pending } satisfies JudgementFocusTargets,
+    /** Marks a form opening: what has focus then is where a close unsent puts it back. */
+    opened: () => {
+      const active = document.activeElement;
+      opener.current = active === document.body ? null : active;
+    },
     /** Marks a close to refocus after (`track`): the form's, or a write that went through. */
     closed: (track: boolean, sent: boolean) => {
       if (track) closed.current = { sent, market };
@@ -163,12 +228,16 @@ function useJudgementRefocus(market: AdminMarket, action: JudgementAction | null
  *   for any other admin (승인 only while it can be approved, `judgementUnapprovable`, with the note
  *   why not), off for its registrant with the note why, and 철회 for the registrant alone — and,
  *   before the scheduled judgement, the warning that the approver confirms the event deadline;
- * - 판정 등록 on a CLOSED market with none waiting (off while the window is undecided), which opens
- *   the form in its place (`registerForm`); the form, once open, stays while it is held, whatever
- *   a refetch reads: it says itself why it cannot be sent now;
+ * - 판정 등록 on a CLOSED market with none waiting (off while the window is undecided), and 판정 정정
+ *   on a PROVISIONAL one with none waiting (`judgementCorrectionBase`, #176), which open the form
+ *   in their place (`registerForm`); the form, once open, stays while it is held, whatever a
+ *   refetch reads: it says itself why it cannot be sent now;
  * - the current judgement from its 잠정 결과 on — its version, what it says, who registered and
- *   approved it, the publication, the window and the dispute deadline — read-only;
- * - its version's 판정 이의 (`disputes`, market-dispute-panel.tsx, #175): their 기각 and 수용;
+ *   approved it, the publication, the window, the dispute deadline and a correction's reason —
+ *   read-only;
+ * - its version's 판정 이의 (`disputes`, market-dispute-panel.tsx, #175): their 기각 and 수용, and an
+ *   accepted one's 정정 등록 (#176);
+ * - the 판정 버전 이력 (`judgement.history`, #176), newest first, once a correction replaced one;
  * - the 판정 기록, newest first.
  * No market price, volume or count is drawn (#152 AC 8). No button is live until the admin on
  * screen is known. `targets` are what focus comes back to (`useJudgementRefocus`).
@@ -192,6 +261,7 @@ export function JudgementPanelBody({
   targets?: JudgementFocusTargets;
 }) {
   const unavailable = judgementUnavailable(market);
+  const correctable = judgementCorrectionBase(market) !== null;
   const { current } = market.judgement;
   return (
     <Card.Root data-testid="market-judgement" data-status={market.status}>
@@ -224,22 +294,38 @@ export function JudgementPanelBody({
           />
           {/* The form held open stays, unavailable or not: it says why itself. */}
           {registerForm ??
-            (unavailable !== 'status' && unavailable !== 'pending' && (
+            (correctable ? (
               <Button
                 ref={targets?.register}
                 size="sm"
+                variant="outline"
                 alignSelf="flex-start"
-                disabled={operatorId === undefined || unavailable !== null}
-                onClick={() => onOpen('register')}
-                data-testid="market-judgement-register"
+                disabled={operatorId === undefined}
+                onClick={() => onOpen('correct')}
+                data-testid="market-judgement-correct"
               >
-                {copy.adminMarketJudgementRegister}
+                {copy.adminMarketJudgementCorrect}
               </Button>
+            ) : (
+              unavailable !== 'status' &&
+              unavailable !== 'pending' && (
+                <Button
+                  ref={targets?.register}
+                  size="sm"
+                  alignSelf="flex-start"
+                  disabled={operatorId === undefined || unavailable !== null}
+                  onClick={() => onOpen('register')}
+                  data-testid="market-judgement-register"
+                >
+                  {copy.adminMarketJudgementRegister}
+                </Button>
+              )
             ))}
           {current !== null && (
             <CurrentJudgement market={market} judgement={current} headingRef={targets?.current} />
           )}
           {disputes}
+          <JudgementHistory market={market} />
           <JudgementLog market={market} />
         </Stack>
       </Card.Body>
@@ -336,8 +422,8 @@ function Line({ label, children, testId }: { label: string; children: ReactNode;
 function Rows({ rows, testId }: { rows: readonly EventRow[]; testId: string }) {
   return (
     <Stack gap="0" fontSize="sm" color="fg.muted" data-testid={testId}>
-      {rows.map((row) => (
-        <Text key={row.label} whiteSpace="pre-wrap" wordBreak="break-word">
+      {rows.map((row, index) => (
+        <Text key={`${String(index)}:${row.label}`} whiteSpace="pre-wrap" wordBreak="break-word">
           <Text as="span" fontWeight="medium">
             {row.label}
           </Text>{' '}
@@ -436,8 +522,11 @@ function RegistrationLines({
 /**
  * The waiting registration (`judgement.pending`), in any status, and what may be done with it:
  * the reviewer reads the result, the source, the evidence and what was confirmed before deciding
- * — never a market price (#152 AC 8). 승인 is off with the note why while it cannot be approved
- * (`judgementUnapprovable`).
+ * — never a market price (#152 AC 8). A correction (#176) says so in its heading and adds the
+ * version it replaces and the one its approval makes ('v1 → v2') and its reason. 승인 is off with
+ * the note why while it cannot be approved (`judgementUnapprovable`). The scheduled judgement's
+ * warning is a first judgement's on a CLOSED market and a correction's on a PROVISIONAL one (its
+ * approver confirms the event deadline as a first judgement's does, decision 3 '등록 시점').
  */
 function PendingJudgement({
   market,
@@ -456,8 +545,10 @@ function PendingJudgement({
   // detail is not polled, so it draws again once that time has come and judges it at the clock.
   const [clock, setClock] = useState(readAt);
   const { scheduledJudgementAt } = market;
-  const early =
-    market.status === 'closed' && judgementEarly({ scheduledJudgementAt }, Math.max(readAt, clock));
+  const correction = market.judgement.pending?.correction ?? null;
+  const decidable =
+    correction === null ? market.status === 'closed' : market.status === 'provisional';
+  const early = decidable && judgementEarly({ scheduledJudgementAt }, Math.max(readAt, clock));
   useEffect(() => {
     if (!early) return;
     const wait = scheduledJudgementWait({ scheduledJudgementAt }, Date.now()) ?? 0;
@@ -469,11 +560,45 @@ function PendingJudgement({
   const requester = isJudgementRegistrant(pending, operatorId);
   const unapprovable = judgementUnapprovable(market);
   const approvable = unapprovable === null;
+  const unapprovableNote =
+    unapprovable === null ? null : judgementUnapprovableNote(unapprovable, correction !== null);
   return (
-    <Stack gap="3" borderWidth="1px" borderRadius="l2" p="3" data-testid="market-judgement-pending">
+    <Stack
+      gap="3"
+      borderWidth="1px"
+      borderRadius="l2"
+      p="3"
+      data-testid="market-judgement-pending"
+      data-correction={correction !== null}
+    >
       <PanelHeading headingRef={headingRef} testId="market-judgement-pending-title">
-        {copy.adminMarketJudgementPending}
+        {correction === null
+          ? copy.adminMarketJudgementPending
+          : copy.adminMarketJudgementPendingCorrection}
       </PanelHeading>
+      {correction !== null && (
+        <Stack gap="1">
+          <Line
+            label={copy.adminMarketJudgementCorrectionVersion}
+            testId="market-judgement-pending-correction"
+          >
+            {judgementVersionMove(correction.baseVersion)}
+          </Line>
+          <Line
+            label={copy.adminMarketJudgementCorrectionReason}
+            testId="market-judgement-pending-correction-reason"
+          >
+            {correction.reason}
+          </Line>
+          {correction.disputeIds.length > 0 && (
+            <CorrectionDisputes
+              label={copy.adminMarketJudgementCorrectionDisputesRegistered}
+              count={correction.disputeIds.length}
+              testId="market-judgement-pending-disputes"
+            />
+          )}
+        </Stack>
+      )}
       <Text fontSize="sm">
         {copy.adminMarketJudgementRegisteredBy}{' '}
         <Text as="span" fontWeight="medium" data-testid="market-judgement-pending-by">
@@ -499,11 +624,16 @@ function PendingJudgement({
           </Alert.Content>
         </Alert.Root>
       )}
-      {unapprovable === 'status' && (
-        <Alert.Root status="warning" role="status" data-testid="market-judgement-pending-status">
+      {unapprovableNote !== null && (
+        <Alert.Root
+          status="warning"
+          role="status"
+          data-testid="market-judgement-pending-status"
+          data-reason={unapprovable}
+        >
           <Alert.Indicator />
           <Alert.Content>
-            <Alert.Description>{copy.adminMarketJudgementPendingStatus}</Alert.Description>
+            <Alert.Description>{unapprovableNote}</Alert.Description>
           </Alert.Content>
         </Alert.Root>
       )}
@@ -586,6 +716,86 @@ function CurrentJudgement({
 }
 
 /**
+ * The accepted disputes a correction answers (#176) — '이 정정과 함께 등록되는 수용한 판정 이의 2건'
+ * in the form, '… 등록된 …' once it waits (`label`) — and on its own line that they go back to 검토
+ * 중 if it is rejected or retracted.
+ */
+function CorrectionDisputes({
+  label,
+  count,
+  testId,
+}: {
+  label: string;
+  count: number;
+  testId: string;
+}) {
+  return (
+    <Stack gap="0" fontSize="sm" data-testid={testId}>
+      <Text fontWeight="medium">
+        {`${label} ${count.toLocaleString('ko-KR')}${copy.adminMarketDisputesHoldingUnit}`}
+      </Text>
+      <Text color="fg.muted">{copy.adminMarketJudgementCorrectionDisputesNote}</Text>
+    </Stack>
+  );
+}
+
+/**
+ * 판정 버전 이력 (`judgement.history`, #176, ADR-0105; #173 item 13 — kept, never wiped or
+ * rewritten): every version a correction replaced, newest first, each as the current one reads —
+ * what it says (the result, the source, the evidence, the collection instant), its version, who
+ * registered and approved it, its publication, its window and deadline, and its correction
+ * reason when a correction made it. Not drawn before a first correction. `market-judgement-history-
+ * <n>` counts from the newest and carries the version in `data-version`.
+ */
+function JudgementHistory({ market }: { market: AdminMarket }) {
+  const { history } = market.judgement;
+  if (history.length === 0) return null;
+  return (
+    <Stack gap="2" data-testid="market-judgement-history">
+      <PanelHeading testId="market-judgement-history-title">
+        {copy.adminMarketJudgementHistory}
+      </PanelHeading>
+      <Text fontSize="sm" color="fg.muted">
+        {copy.adminMarketJudgementHistoryIntro}
+      </Text>
+      <Stack gap="3">
+        {history.map((version, index) => {
+          const at = `market-judgement-history-${String(index)}`;
+          return (
+            <Stack
+              key={version.version}
+              gap="2"
+              borderWidth="1px"
+              borderRadius="l2"
+              p="3"
+              data-testid={at}
+              data-version={version.version}
+            >
+              <HStack gap="2" flexWrap="wrap" align="baseline">
+                <Text fontSize="sm" fontWeight="medium" data-testid={`${at}-version`}>
+                  {copy.adminMarketJudgementVersion} {judgementVersionName(version.version)}
+                </Text>
+                <Badge variant="subtle" data-testid={`${at}-badge`}>
+                  {MARKET_RESULT_LABEL[version.result]}
+                </Badge>
+              </HStack>
+              <RegistrationLines registration={version} prefix={at} />
+              {/* The heading names the version: its rows leave it out. */}
+              <Rows
+                rows={judgementCurrentRows(version, formatKst).filter(
+                  (row) => row.label !== copy.adminMarketJudgementVersion,
+                )}
+                testId={`${at}-rows`}
+              />
+            </Stack>
+          );
+        })}
+      </Stack>
+    </Stack>
+  );
+}
+
+/**
  * 판정 기록 (`judgement.log`, newest first, the waiting registration included): each its status,
  * who registered it (by nickname) and when in KST, then its rows (`judgementLogRows`).
  * `market-judgement-log-<n>` counts from the newest and carries the status in `data-status`.
@@ -654,12 +864,23 @@ interface FieldRefusal {
  * says why and sends nothing, until the admin closes it. Sent, it closes and the market with its
  * waiting registration goes on screen (`useApplyMarket`). Focus moves to its heading as it opens;
  * `onClose` says whether it was sent.
+ *
+ * With `correct` it is 판정 정정's (#176, ADR-0105; #173 items 2·5·7·8): opened on the current
+ * judgement as the form first drew (`base`, kept — another correction approved meanwhile makes it
+ * `stale`), prefilled with it (`judgementCorrectionDefaults`), it says the move it would make
+ * ('v1 → v2') and how many of that version's accepted disputes it answers (the server registers
+ * every one of them with it), asks a 정정 사유 and refuses — as the API does — a correction that
+ * changes neither the result nor its grounds. It reads no dispute window: the approval gives the
+ * first deadline's length again. Its registration is sent with `correction` set; a first
+ * judgement's with `correction: null`.
  */
 export function JudgementRegisterForm({
   market,
+  correct = false,
   onClose,
 }: {
   market: AdminMarket;
+  correct?: boolean;
   onClose: (sent: boolean) => void;
 }) {
   const apply = useApplyMarket(market.id);
@@ -668,15 +889,32 @@ export function JudgementRegisterForm({
   const operatorId = useOperatorId();
   const sessionChanged = useSessionChanged();
   const voidOnly = marketJudgementVoidOnly(market);
-  const [values, setValues] = useState<JudgementFormValues>(() => judgementFormDefaults(voidOnly));
+  // The version a correction replaces, as the form opened: what it prefills and sends.
+  const [base] = useState(() => (correct ? market.judgement.current : null));
+  const [values, setValues] = useState<JudgementFormValues>(() =>
+    base === null ? judgementFormDefaults(voidOnly) : judgementCorrectionDefaults(base),
+  );
   const set = (patch: Partial<JudgementFormValues>) => setValues((held) => ({ ...held, ...patch }));
   const [tried, setTried] = useState(false);
   const [fieldError, setFieldError] = useState<FieldRefusal | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [sentLocal, setSentLocal] = useState<string | null>(null);
-  const draft = judgementDraft(values, voidOnly);
-  const unavailable = judgementUnavailable(market);
+  // The clock is the draft's own default, read in render as `pauseDraft`'s is.
+  const draft = judgementDraft(values, voidOnly, undefined, base);
+  // A correction opened with no current judgement (none can: PROVISIONAL has one) takes none.
+  const unavailable = !correct
+    ? judgementUnavailable(market)
+    : base === null
+      ? 'status'
+      : judgementUnavailable(market, base.version);
   const early = judgementEarly(market);
+  // The base version's accepted disputes, which the server registers with the correction.
+  const answered =
+    base === null
+      ? 0
+      : market.disputes.items.filter(
+          (dispute) => dispute.status === 'accepted' && dispute.judgementVersion === base.version,
+        ).length;
   // `judgementDraft` reads the clock as the form draws: while 'after now' is said, draw again once
   // the minute typed has come, so the sentence goes by itself (as the pause dialog's instant).
   const [drawn, setDrawn] = useState(0);
@@ -706,7 +944,12 @@ export function JudgementRegisterForm({
       setRefusal(null);
     },
     onSuccess: async (fresh) => {
-      toaster.create({ type: 'success', title: copy.adminMarketJudgementRegistered });
+      toaster.create({
+        type: 'success',
+        title: correct
+          ? copy.adminMarketJudgementCorrectionRegistered
+          : copy.adminMarketJudgementRegistered,
+      });
       onClose(true);
       await apply(fresh);
     },
@@ -756,6 +999,7 @@ export function JudgementRegisterForm({
   };
   const linksError =
     fieldError?.field === 'links' && fieldError.index === undefined ? fieldError.message : null;
+  const unchanged = errorOf('correction');
 
   return (
     <form
@@ -765,6 +1009,7 @@ export function JudgementRegisterForm({
       }}
       noValidate
       data-testid="market-judgement-form"
+      data-correction={correct}
     >
       <OperatorFieldset disabled={operatorId === undefined}>
         <Stack gap="4" borderWidth="1px" borderRadius="l2" p="3">
@@ -775,12 +1020,33 @@ export function JudgementRegisterForm({
               fontWeight="medium"
               data-testid="market-judgement-form-title"
             >
-              {copy.adminMarketJudgementFormTitle}
+              {correct
+                ? copy.adminMarketJudgementCorrectionFormTitle
+                : copy.adminMarketJudgementFormTitle}
             </Text>
             <Text fontSize="sm" color="fg.muted">
-              {copy.adminMarketJudgementFormHint}
+              {correct
+                ? copy.adminMarketJudgementCorrectionFormHint
+                : copy.adminMarketJudgementFormHint}
             </Text>
           </Stack>
+          {base !== null && (
+            <Stack gap="1">
+              <Line
+                label={copy.adminMarketJudgementCorrectionVersion}
+                testId="market-judgement-form-correction"
+              >
+                {judgementVersionMove(base.version)}
+              </Line>
+              {answered > 0 && (
+                <CorrectionDisputes
+                  label={copy.adminMarketJudgementCorrectionDisputes}
+                  count={answered}
+                  testId="market-judgement-form-disputes"
+                />
+              )}
+            </Stack>
+          )}
           {early && market.scheduledJudgementAt !== null && (
             <EarlyWarning
               scheduledJudgementAt={market.scheduledJudgementAt}
@@ -798,7 +1064,7 @@ export function JudgementRegisterForm({
               <Alert.Indicator />
               <Alert.Content>
                 <Alert.Description>
-                  {JUDGEMENT_FORM_UNAVAILABLE_NOTE[unavailable]}
+                  {judgementFormUnavailableNote(unavailable, correct)}
                   {unavailable === 'undecided' && (
                     <>
                       {' '}
@@ -821,6 +1087,27 @@ export function JudgementRegisterForm({
             linksError={linksError}
             disabled={register.isPending}
           />
+          {correct && (
+            <ReasonField
+              testId="market-judgement-correction-reason"
+              label={copy.adminMarketJudgementCorrectionReason}
+              hint={copy.adminMarketJudgementCorrectionReasonHint}
+              value={values.correctionReason}
+              onChange={(correctionReason) => set({ correctionReason })}
+              error={errorOf('correctionReason')}
+              disabled={register.isPending}
+            />
+          )}
+          {unchanged !== null && (
+            <Text
+              fontSize="sm"
+              color="fg.error"
+              role="alert"
+              data-testid="market-judgement-unchanged"
+            >
+              {unchanged}
+            </Text>
+          )}
           {refusal !== null && (
             <Alert.Root status="error" role="alert" data-testid="market-judgement-form-refusal">
               <Alert.Indicator />
@@ -837,7 +1124,9 @@ export function JudgementRegisterForm({
               disabled={operatorId === undefined || unavailable !== null}
               data-testid="market-judgement-submit"
             >
-              {copy.adminMarketJudgementRegister}
+              {correct
+                ? copy.adminMarketJudgementCorrectionRegister
+                : copy.adminMarketJudgementRegister}
             </Button>
             <Button
               size="sm"

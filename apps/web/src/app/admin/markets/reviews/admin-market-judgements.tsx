@@ -22,6 +22,7 @@ import {
   MARKET_RESULT_LABEL,
   MARKET_STATUS_LABEL,
   MARKET_STATUS_PALETTE,
+  judgementVersionMove,
 } from '@/lib/market-admin';
 import { judgementEarly } from '@/lib/market-judgement';
 
@@ -31,7 +32,8 @@ import { judgementEarly } from '@/lib/market-judgement';
  * with 더 보기 — on a market in any status, since one still waiting once the market moved on ends
  * only by its 반려 or 철회. The 승인·반려 is on each market's detail, where the source, the evidence
  * and what was confirmed are — and no market price (#152 AC 8). One row per registration: the
- * question (to its admin detail), the market's status, the result registered, who registered it
+ * question (to its admin detail), the market's status — and, for a 판정 정정 (#176, ADR-0105: the
+ * same approval kind), '판정 정정 v1 → v2' beside it — the result registered, who registered it
  * and when, the scheduled judgement (marked 예정 판정 전 while it is still ahead: the approver then
  * confirms the event deadline, decision 3 '등록 시점') and the close, every time in KST. In a
  * ScrollArea as the other queues' tables are. A refresh that failed after rows exist keeps them
@@ -117,9 +119,21 @@ export function AdminMarketJudgements() {
                       </ChakraLink>
                     </Table.Cell>
                     <Table.Cell whiteSpace="nowrap">
-                      <Badge colorPalette={MARKET_STATUS_PALETTE[row.status]} variant="subtle">
-                        {MARKET_STATUS_LABEL[row.status]}
-                      </Badge>
+                      <HStack gap="2">
+                        <Badge colorPalette={MARKET_STATUS_PALETTE[row.status]} variant="subtle">
+                          {MARKET_STATUS_LABEL[row.status]}
+                        </Badge>
+                        {row.correction !== null && (
+                          <Badge
+                            colorPalette="orange"
+                            variant="outline"
+                            data-testid={`admin-market-judgement-correction-${row.requestId}`}
+                          >
+                            {copy.adminMarketJudgementsCorrection}{' '}
+                            {judgementVersionMove(row.correction.baseVersion)}
+                          </Badge>
+                        )}
+                      </HStack>
                     </Table.Cell>
                     <Table.Cell
                       whiteSpace="nowrap"

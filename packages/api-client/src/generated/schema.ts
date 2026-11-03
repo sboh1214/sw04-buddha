@@ -287,7 +287,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Judgement disputes (이의 접수): pending ones the oldest first (status=pending, the default), or those dismissed, accepted or retracted the latest first (status=decided), each with its market, judgement version, submitter, links, reason and decision */
+        /** Judgement disputes (이의 접수): pending ones the oldest first (status=pending, the default), or those dismissed, accepted, retracted or closed by a correction the latest first (status=decided), each with its market (and its current judgement version), judgement version, submitter, links, reason and decision */
         get: operations["adminListMarketDisputes"];
         put?: never;
         post?: never;
@@ -304,7 +304,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** The judgement registrations waiting for approval, the oldest first, with their market (its status, close and scheduled judgement time too: one still waiting once the market left closed is shown for its 반려 or 철회), the result registered, and who registered it and when */
+        /** The judgement registrations waiting for approval, the oldest first, with their market (its status, close and scheduled judgement time too: one still waiting once the market left the status it needs is shown for its 반려 or 철회), the result registered, whether it is a correction (its base version, reason and the accepted disputes it answers), and who registered it and when */
         get: operations["adminListMarketJudgements"];
         put?: never;
         post?: never;
@@ -427,7 +427,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Accept a pending judgement dispute (수용) by an admin who did not register its judgement version, with a reason the submitter reads: accepting is a correction (#176), and the market stays provisional — the accepted dispute holding it — until one is approved */
+        /** Accept a pending judgement dispute (수용) by an admin who did not register its judgement version, with a reason the submitter reads: accepting is a correction, and the market stays provisional — the accepted dispute holding it — until a correction is registered and approved; if another admin rejects that correction or its registrant retracts it, the dispute goes back to pending */
         post: operations["adminAcceptMarketDispute"];
         delete?: never;
         options?: never;
@@ -461,7 +461,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Register a closed market’s judgement (판정 등록) for another admin’s approval: the result (YES, NO or VOID), the rules’ source by its priority (0 the primary, 1–3 a fallback with the reason the primary could not be used; none for a VOID alone, with its reason), 1–5 evidence links, when the evidence was collected (not after now) and what was confirmed. Nothing changes until the approval; one registration waits per market at a time */
+        /** Register a closed market’s judgement (판정 등록) for another admin’s approval: the result (YES, NO or VOID), the rules’ source by its priority (0 the primary, 1–3 a fallback with the reason the primary could not be used; none for a VOID alone, with its reason), 1–5 evidence links, when the evidence was collected (not after now) and what was confirmed. With `correction` — the current judgement version and the correction reason — it registers a provisional market’s correction (판정 정정) the same way, the whole new judgement in the body: refused when it changes neither the result nor its grounds, and while it waits the result is not confirmed. Nothing else changes until the approval; one registration waits per market at a time */
         post: operations["adminRegisterMarketJudgement"];
         delete?: never;
         options?: never;
@@ -478,7 +478,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Approve a waiting judgement (승인) by an admin other than its registrant, with a reason — before the scheduled judgement time also confirming the NO condition’s event deadline: the provisional result is published (closed → provisional) and the dispute deadline fixed (now plus the dispute window); the worker confirms the result once it has passed with no judgement dispute pending or accepted */
+        /** Approve a waiting judgement (승인) by an admin other than its registrant, with a reason — before the scheduled judgement time also confirming the NO condition’s event deadline: the provisional result is published (closed → provisional) and the dispute deadline fixed (now plus the dispute window); the worker confirms the result once it has passed with no judgement dispute pending or accepted and no correction waiting for its approval. A correction’s approval makes the next judgement version instead — the market stays provisional with the new result, a new dispute deadline of the first one’s length from now, and the replaced version’s pending disputes closed */
         post: operations["adminApproveMarketJudgement"];
         delete?: never;
         options?: never;
@@ -495,7 +495,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Reject a waiting judgement (반려) by an admin other than its registrant, in any status, with a reason; the market stays as it is — a closed one is registered again, by any admin */
+        /** Reject a waiting judgement (반려) by an admin other than its registrant, in any status, with a reason; the market stays as it is — a closed one is registered again, by any admin. A rejected correction leaves the judgement version, its dispute deadline and its disputes’ results as they were, sends the accepted disputes it answered back to pending, and once that deadline has passed with nothing holding the market the worker confirms the original result within seconds */
         post: operations["adminRejectMarketJudgement"];
         delete?: never;
         options?: never;
@@ -512,7 +512,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Retract a waiting judgement the acting admin registered (철회), in any status, before anyone decides it; nothing changes */
+        /** Retract a waiting judgement the acting admin registered (철회), in any status, before anyone decides it; a first judgement’s retraction changes nothing else, and a correction’s ends as its rejection does: the accepted disputes it answered go back to pending, and once the dispute deadline has passed with nothing holding the market the worker confirms the original result within seconds */
         post: operations["adminRetractMarketJudgement"];
         delete?: never;
         options?: never;
@@ -2184,7 +2184,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** The account's judgement disputes (판정 이의), newest first, each with its market, the links and reason it submitted, its status, the decision’s reason and time, and whether it may still be retracted */
+        /** The account's judgement disputes (판정 이의), newest first, each with its market (and its current judgement version: a dispute of an older one was answered by a correction), the links and reason it submitted, its status, the decision’s reason and time — or when a correction closed it — and whether it may still be retracted */
         get: operations["getMyDisputes"];
         put?: never;
         post?: never;
@@ -3209,6 +3209,8 @@ export type components = {
         };
         AdminDisputeQueueItem: {
             /** Format: date-time */
+            closedAt: string | null;
+            /** Format: date-time */
             decidedAt: string | null;
             decidedBy: components["schemas"]["AdminAccountActor"] | null;
             decisionReason: string | null;
@@ -3376,6 +3378,8 @@ export type components = {
         };
         AdminMarketDispute: {
             /** Format: date-time */
+            closedAt: string | null;
+            /** Format: date-time */
             decidedAt: string | null;
             decidedBy: components["schemas"]["AdminAccountActor"] | null;
             decisionReason: string | null;
@@ -3401,6 +3405,7 @@ export type components = {
             /** Format: uuid */
             approvalId: string;
             approvedBy: components["schemas"]["AdminAccountActor"];
+            correctionReason: string | null;
             description: string;
             /** Format: date-time */
             disputeDeadline: string;
@@ -3420,6 +3425,7 @@ export type components = {
         AdminMarketJudgementQueueItem: {
             /** Format: date-time */
             closeAt: string;
+            correction: components["schemas"]["MarketJudgementCorrection"] | null;
             /** Format: uuid */
             marketId: string;
             /** Format: date-time */
@@ -3438,6 +3444,7 @@ export type components = {
         AdminMarketJudgementState: {
             current: components["schemas"]["AdminMarketJudgement"] | null;
             disputeWindowUndecided: boolean;
+            history: components["schemas"]["AdminMarketJudgement"][];
             log: components["schemas"]["MarketJudgementLogEntry"][];
             pending: components["schemas"]["MarketJudgementPending"] | null;
         };
@@ -4287,6 +4294,7 @@ export type components = {
         DisputeMarket: {
             /** Format: uuid */
             id: string;
+            judgementVersion: number;
             slug: string;
             /** @enum {string} */
             status: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
@@ -4445,7 +4453,7 @@ export type components = {
             yesCondition: string;
         };
         /** @enum {string} */
-        MarketDisputeStatus: "pending" | "dismissed" | "accepted" | "retracted";
+        MarketDisputeStatus: "pending" | "dismissed" | "accepted" | "retracted" | "closed_by_correction";
         MarketEvent: {
             actorId: string | null;
             /** Format: date-time */
@@ -4457,9 +4465,15 @@ export type components = {
             /** @enum {string|null} */
             toStatus: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled" | null;
             /** @enum {string} */
-            type: "created" | "submitted" | "approved" | "rejected" | "reverted" | "open_rescheduled" | "opened" | "closed" | "finalized" | "rules_edited" | "resolved" | "settling" | "rules_supplemented" | "paused" | "resumed" | "provisional";
+            type: "created" | "submitted" | "approved" | "rejected" | "reverted" | "open_rescheduled" | "opened" | "closed" | "finalized" | "rules_edited" | "resolved" | "settling" | "rules_supplemented" | "paused" | "resumed" | "provisional" | "judgement_corrected";
+        };
+        MarketJudgementCorrection: {
+            baseVersion: number;
+            disputeIds: string[];
+            reason: string;
         };
         MarketJudgementLogEntry: {
+            correction: components["schemas"]["MarketJudgementCorrection"] | null;
             /** Format: date-time */
             decidedAt: string | null;
             decidedBy: components["schemas"]["AdminAccountActor"] | null;
@@ -4482,6 +4496,7 @@ export type components = {
             voidReason: string | null;
         };
         MarketJudgementPending: {
+            correction: components["schemas"]["MarketJudgementCorrection"] | null;
             description: string;
             evidence: components["schemas"]["JudgementEvidence"];
             fallbackReason: string | null;
@@ -4806,6 +4821,8 @@ export type components = {
             post: components["schemas"]["CommentedPost"];
         };
         MyDispute: {
+            /** Format: date-time */
+            closedAt: string | null;
             /** Format: date-time */
             decidedAt: string | null;
             decisionReason: string | null;
@@ -5358,6 +5375,11 @@ export type components = {
             next?: components["schemas"]["NextPath"];
         };
         RegisterJudgementBody: {
+            /** @default null */
+            correction: {
+                baseVersion: number;
+                reason: string;
+            } | null;
             description: string;
             evidence: {
                 /** Format: date-time */

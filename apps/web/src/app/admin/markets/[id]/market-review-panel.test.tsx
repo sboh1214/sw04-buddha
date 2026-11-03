@@ -68,7 +68,7 @@ const base: AdminMarket = {
   disputeDeadline: null,
   disputeOpen: false,
   disputes: { holding: 0, items: [] },
-  judgement: { current: null, pending: null, log: [], disputeWindowUndecided: false },
+  judgement: { current: null, history: [], pending: null, log: [], disputeWindowUndecided: false },
   missingOpenItems: [],
   leadCloseGapMinutes: 60,
   review: { pending: null, createdBy: CREATOR, editors: [EDITOR], sameCondition: [], log: [] },

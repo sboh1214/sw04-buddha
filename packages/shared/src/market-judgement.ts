@@ -4,6 +4,7 @@ import { approvalReasonSchema } from './approvals.js';
 import { INT4_MAX, MARKET_FALLBACK_SOURCES_MAX, MARKET_SOURCE_URL_MAX } from './constants.js';
 import {
   type MarketResult,
+  type MarketStatus,
   approvalStatusSchema,
   marketResultSchema,
   marketStatusSchema,
@@ -43,17 +44,31 @@ import { ruleVersionNumberSchema } from './market-supplement.js';
  * - 반려 (an admin other than the registrant, with a reason) and 철회 (the registrant), in any
  *   status: the market stays CLOSED and a judgement is registered again (#173 item 1) — by any
  *   admin, the rejecting one included; only a judgement's registrant may not decide that one.
+ * - 판정 정정 (#176, ADR-0105; #173 items 2·5·7·8, decision 3 '#176 정정 대기', owner answer
+ *   2026-11-02): while the market is PROVISIONAL — never once confirmed (#173 item 8: #144's) —
+ *   any admin registers a correction by the same route and approval kind, against the current
+ *   version (`correction.baseVersion`) and with a 정정 사유; one that changes neither the result
+ *   nor its grounds is refused (`sameJudgementGrounds`: nothing to change is a dismissal, #173
+ *   item 7). The request's `correction` (null for a first judgement) tells the two apart, never
+ *   the market's status, and lists the base version's accepted disputes it answers (`disputeIds`,
+ *   the server's). While it waits the confirmation is held past the deadline. Approved by an
+ *   admin other than its registrant, it makes the next version: the result replaced, a new 이의
+ *   기한 of the base version's length from the approval (#173 item 5), the base version's pending
+ *   disputes closed as 정정으로 종결 (market-dispute.ts), the status unchanged (the
+ *   `judgement_corrected` event). Rejected or retracted, the base version, its deadline and its
+ *   disputes' results carry on, and the accepted disputes it answered go back to pending.
  * - 확정: once the deadline has passed with nothing held — no 판정 이의 of the version pending or
- *   accepted (#175, market-dispute.ts), and from #176 no correction waiting — the worker moves
- *   PROVISIONAL → RESOLVED (`resolved`, actor NULL; the job `market.resolve`, jobs.ts) and the
- *   payout follows (`market.finalize`; a VOID's is #126's).
+ *   accepted (#175, market-dispute.ts) and no `market_judgement` request waiting (a correction,
+ *   #176) — the worker moves PROVISIONAL → RESOLVED (`resolved`, actor NULL; the job
+ *   `market.resolve`, jobs.ts) and the payout follows (`market.finalize`; a VOID's is #126's).
  *
  * The registration, the 반려 and the 철회 are admin actions alone (`market_judgement_request` …,
- * enums.ts); the approval also writes the `provisional` event. Admins alone read the registrations
- * and the judgements for now: the public judging record (#24) shows the source, the evidence, the
- * collection instant and a VOID's reason, never who registered or approved it (#173 item 13). The
- * public `Market` carries the status, `resolvedResult`, and since #175 the current version and its
- * 이의 기한 (`judgementVersion`, `disputeDeadline`; #173 items 6·13).
+ * enums.ts); the approval also writes the `provisional` event, a correction's the
+ * `judgement_corrected` one. Admins alone read the registrations and the judgements for now: the
+ * public judging record (#24) shows the source, the evidence, the collection instant, a VOID's
+ * reason, the earlier versions and the correction reasons, never who registered or approved one
+ * (#173 item 13). The public `Market` carries the status, `resolvedResult`, and since #175 the
+ * current version and its 이의 기한 (`judgementVersion`, `disputeDeadline`; #173 items 6·13).
  */
 
 /** `approval_requests.kind` of a judgement's registration (#171: lower-case words, `_`). */
@@ -83,7 +98,8 @@ export const disputeWindowMinutesSchema = z
 
 /**
  * A judgement's version: 1 for a market's first approved judgement — a rejected or retracted
- * registration takes none — and one more per correction (#176). int4, as `market_judgements`.
+ * registration takes none — and one more per approved correction (#176, ADR-0105). int4, as
+ * `market_judgements`.
  */
 export const judgementVersionSchema = z.number().int().min(1).max(INT4_MAX);
 
@@ -125,12 +141,22 @@ export type JudgementEvidence = z.infer<typeof judgementEvidenceSchema>;
 // ---- refusals -------------------------------------------------------------------------
 /**
  * The refusal details of a registration and of a decision (VALIDATION_ERROR, the API's), each
- * message under the head of the path it names:
- * - `status`: a registration or an approval on a market that is not CLOSED (`notClosed` — not
- *   closed yet, or PROVISIONAL since another approval); a 반려 and a 철회 take any status;
- * - `judgement`: another registration of the market is waiting (`pending` — one at a time);
- * - `disputeWindow`: the release setting `market.dispute_window` is undecided (`undecided`), at
- *   the registration and at the approval: no deadline can be fixed from no value;
+ * message under the head of the path it names — a registration in this order: the body, `status`,
+ * `correction` 'stale', `judgement`, `no_decider` (approvals.ts), `disputeWindow`, `correction`
+ * 'unchanged', `source` 'unknown', `result`, `evidence` 'after now' (#176, ADR-0105):
+ * - `status` (`judgementStatusRefusal`): a first judgement's registration or approval on a market
+ *   that is not CLOSED (`notClosed` — not closed yet, or PROVISIONAL since another approval), a
+ *   correction's on one that is not PROVISIONAL (`notProvisional` — confirmed, #173 item 8); a 반려
+ *   and a 철회 take any status;
+ * - `correction`: a correction's `baseVersion` that is not the market's current version, at the
+ *   registration and at the approval (`stale`, on `correction.baseVersion`); a correction that
+ *   changes neither the result nor its grounds (`unchanged`, `sameJudgementGrounds` — #173 item 7:
+ *   with nothing to change the dispute is dismissed);
+ * - `judgement`: another registration of the market is waiting (`pending` — one at a time, a
+ *   first judgement and a correction alike);
+ * - `disputeWindow`: the release setting `market.dispute_window` is undecided (`undecided`), at a
+ *   first judgement's registration and approval: no deadline can be fixed from no value. A
+ *   correction reads no setting — its deadline takes the base version's length (#173 item 5);
  * - `source`: a YES or NO with none (`required`, the body's); a priority the market has no source
  *   for (`unknown`);
  * - `fallbackReason`: a fallback source without one (`required`), any other with one
@@ -145,7 +171,8 @@ export type JudgementEvidence = z.infer<typeof judgementEvidenceSchema>;
  * - `requestId`: the path's request is no `market_judgement` request of the market (`unknown`).
  */
 export const MARKET_JUDGEMENT_REFUSALS = {
-  status: { notClosed: 'not closed' },
+  status: { notClosed: 'not closed', notProvisional: 'not provisional' },
+  correction: { stale: 'stale', unchanged: 'unchanged' },
   judgement: { pending: 'pending' },
   disputeWindow: { undecided: 'undecided' },
   source: { required: 'required', unknown: 'unknown' },
@@ -207,6 +234,60 @@ export function judgementChoiceRefusals(choice: JudgementChoice): JudgementChoic
     refusals.push({ path: 'voidReason', message: MARKET_JUDGEMENT_REFUSALS.voidReason.voidOnly });
   }
   return refusals;
+}
+
+/**
+ * Why a market's status refuses a registration or its approval, or null when it takes it (#173
+ * item 8): a first judgement (`correction` false) is CLOSED's, a correction (true — the request's
+ * `correction` is not null, never read off the status) PROVISIONAL's alone, so a confirmed result
+ * is never corrected here (#144). A 반려 and a 철회 ask no status.
+ */
+export function judgementStatusRefusal(
+  status: MarketStatus,
+  correction: boolean,
+): RefusalMessage<'status'> | null {
+  if (correction) {
+    return status === 'provisional' ? null : MARKET_JUDGEMENT_REFUSALS.status.notProvisional;
+  }
+  return status === 'closed' ? null : MARKET_JUDGEMENT_REFUSALS.status.notClosed;
+}
+
+/**
+ * What `sameJudgementGrounds` compares of a judgement or a registration: the result, the source
+ * by its priority, the fallback and VOID reasons (left out reads as null), the evidence links in
+ * order and the collection instant, and the description of what was confirmed.
+ */
+export interface JudgementGrounds {
+  result: MarketResult;
+  source: { priority: number } | null;
+  fallbackReason?: string | null;
+  voidReason?: string | null;
+  evidence: { links: readonly string[]; collectedAt: string | Date };
+  description: string;
+}
+
+/**
+ * Whether a correction leaves its base version as it was — the same result and the same grounds:
+ * the source, both reasons, the links in order, the collection instant (by its moment) and the
+ * description, each text compared trimmed (#173 item 7: "결과나 근거를 바꿀 것이 없으면" the
+ * dispute is dismissed, not corrected). The registration refuses such a correction (`correction`
+ * 'unchanged'); one that keeps the result with new grounds is a correction. The correction's own
+ * reason is no ground.
+ */
+export function sameJudgementGrounds(base: JudgementGrounds, next: JudgementGrounds): boolean {
+  const text = (value: string | null | undefined) => value?.trim() ?? null;
+  const instant = (at: string | Date) => (typeof at === 'string' ? Date.parse(at) : at.getTime());
+  const [baseLinks, nextLinks] = [base.evidence.links, next.evidence.links];
+  return (
+    base.result === next.result &&
+    (base.source?.priority ?? null) === (next.source?.priority ?? null) &&
+    text(base.fallbackReason) === text(next.fallbackReason) &&
+    text(base.voidReason) === text(next.voidReason) &&
+    baseLinks.length === nextLinks.length &&
+    baseLinks.every((link, index) => link.trim() === nextLinks[index]?.trim()) &&
+    instant(base.evidence.collectedAt) === instant(next.evidence.collectedAt) &&
+    base.description.trim() === next.description.trim()
+  );
 }
 
 /**
@@ -280,7 +361,21 @@ export const evidenceLinkSchema = z
   .refine((url) => httpUrlSchema.safeParse(url).success, 'Invalid URL');
 
 /**
- * `POST /admin/markets/:id/judgements` (판정 등록, CLOSED; decision 3 the #152 rows):
+ * A registration's 판정 정정 part (#176, ADR-0105; #173 items 2·8): the current version the
+ * correction was written against (`baseVersion` — refused as `correction.stale` once the market
+ * has moved past it, as #80's supplement) and the 정정 사유, trimmed, 1..500 characters
+ * (approvals.ts) — kept on the version it makes (`market_judgements.correction_reason`) and
+ * public with the record (#24, #173 item 13).
+ */
+export const judgementCorrectionBodySchema = z.object({
+  baseVersion: judgementVersionSchema,
+  reason: approvalReasonSchema,
+});
+export type JudgementCorrectionBody = z.infer<typeof judgementCorrectionBodySchema>;
+
+/**
+ * `POST /admin/markets/:id/judgements` (판정 등록 — CLOSED, or PROVISIONAL for a correction;
+ * decision 3 the #152 rows):
  * - `result`: YES, NO or VOID;
  * - `source`: the rule's source by its priority (`{priority}` — the server copies its name and
  *   address), or null for none, which a VOID alone may name (`source` 'required' otherwise);
@@ -292,9 +387,13 @@ export const evidenceLinkSchema = z
  *   instant, from STORABLE_INSTANT_MIN on, not after the registration (the service's) and with no
  *   lower bound — an early result can predate the close;
  * - `description`: what was confirmed — the request's reason;
+ * - `correction`: null or left out for a first judgement (a CLOSED market's); for a 판정 정정 of a
+ *   PROVISIONAL market's current version, `judgementCorrectionBodySchema` — the other fields are
+ *   then the new version's in full (#176, ADR-0105);
  * - and the admin on screen (ADR-0092).
  * Each text trimmed, 1..500 characters (approvals.ts). Whether the market has the source, accepts
- * a YES or NO (`judgementVoidOnly`) and may be judged at all are the service's.
+ * a YES or NO (`judgementVoidOnly`, a correction too), may be judged at all and whether a
+ * correction changes anything (`sameJudgementGrounds`) are the service's.
  */
 export const registerJudgementBodySchema = z
   .object({
@@ -319,6 +418,7 @@ export const registerJudgementBodySchema = z
       collectedAt: storableInstantSchema,
     }),
     description: approvalReasonSchema,
+    correction: judgementCorrectionBodySchema.nullable().default(null),
     expectedAccountId: expectedAccountIdSchema,
   })
   .superRefine(
@@ -336,10 +436,11 @@ export type RegisterJudgementBody = z.infer<typeof registerJudgementBodySchema>;
 
 /**
  * `POST /admin/markets/:id/judgements/:requestId/approve` (an admin other than the registrant,
- * CLOSED): the approver's reason (the decision reason, required and trimmed), whether the approver
- * confirmed the NO condition's event deadline — required true when the approval comes before the
- * scheduled judgement (`eventDeadlineConfirmed` 'required', the service's), kept on the judgement
- * either way — and the admin on screen.
+ * CLOSED — PROVISIONAL at the request's base version for a correction, #176): the approver's
+ * reason (the decision reason, required and trimmed), whether the approver confirmed the NO
+ * condition's event deadline — required true when the approval comes before the scheduled
+ * judgement (`eventDeadlineConfirmed` 'required', the service's; a correction's too), kept on the
+ * judgement either way — and the admin on screen.
  */
 export const approveJudgementBodySchema = z
   .object({
@@ -368,11 +469,31 @@ export type RetractJudgementBody = ExpectedAccountBody;
 
 // ---- records --------------------------------------------------------------------------
 /**
+ * A 판정 정정 as its request froze it and the admin screens show it (#176, ADR-0105): the version
+ * it corrects (`baseVersion`), the 정정 사유, and the base version's disputes it answers — every
+ * one `accepted` when it was registered, listed by the server (`disputeIds`, the client chooses
+ * none: an approval answers every accepted dispute of the version). A 반려 or 철회 of the
+ * correction sends those still accepted on the current version back to pending (owner answer
+ * 2026-11-02); a dispute accepted after the registration is not among them.
+ */
+export const marketJudgementCorrectionSchema = z
+  .object({
+    baseVersion: judgementVersionSchema,
+    reason: z.string(),
+    disputeIds: z.array(z.uuid()),
+  })
+  .meta({ id: 'MarketJudgementCorrection' });
+export type MarketJudgementCorrection = z.infer<typeof marketJudgementCorrectionSchema>;
+
+/**
  * `approval_requests.payload` of a registration (frozen at the insert, migration 0021): the
  * result, the source with its name and address copied from `market_sources` (null for none), the
- * fallback and VOID reasons (null where none), the evidence and the rule version the market had
- * (`markets.rule_version`, null for a market opened before #80) — the approval copies it all to
- * the judgement. The description is the request's reason. No `.meta`: no route answers it as is.
+ * fallback and VOID reasons (null where none), the evidence, the rule version the market had
+ * (`markets.rule_version`, null for a market opened before #80) and, for a 판정 정정, the
+ * correction (null for a first judgement — the discriminator, #176; a row written before #176
+ * has no key and reads null) — the approval copies the registration and the correction's reason
+ * to the judgement. The description is the request's reason. No `.meta`: no route answers it as
+ * is.
  */
 export const marketJudgementRequestPayloadSchema = z.object({
   result: marketResultSchema,
@@ -381,6 +502,7 @@ export const marketJudgementRequestPayloadSchema = z.object({
   voidReason: z.string().nullable(),
   evidence: judgementEvidenceSchema,
   ruleVersion: ruleVersionNumberSchema.nullable(),
+  correction: marketJudgementCorrectionSchema.nullable().default(null),
 });
 export type MarketJudgementRequestPayload = z.infer<typeof marketJudgementRequestPayloadSchema>;
 
@@ -395,6 +517,24 @@ export interface MarketProvisionalPayload {
   approvalId: string;
   requestedBy: string;
   disputeDeadline: string;
+}
+
+/**
+ * `judgement_corrected`'s payload (enums.ts; #176, ADR-0105): the version the correction's
+ * approval made and the one it replaced, their results, the approved request, its registrant's
+ * id, the new 이의 기한 (ISO) and how many of the replaced version's pending disputes it closed
+ * as 정정으로 종결. The event's actor is the approver; it changes no status (both null) but is the
+ * market's `status_event_id` from then on, the key `market:status` republishes under.
+ */
+export interface MarketJudgementCorrectedPayload {
+  version: number;
+  previousVersion: number;
+  result: MarketResult;
+  previousResult: MarketResult;
+  approvalId: string;
+  requestedBy: string;
+  disputeDeadline: string;
+  closedDisputes: number;
 }
 
 /**
@@ -425,7 +565,8 @@ export type MarketResolvedPayload = MarketResolvedByDeadlinePayload | MarketInte
 
 /**
  * `market_judgement_request`'s payload (admin_actions, target `market`): the request it opened,
- * the registration as its payload froze it, and the description.
+ * the registration as its payload froze it — a correction's `correction` among it (#176) — and
+ * the description.
  */
 export interface MarketJudgementRequestActionPayload extends MarketJudgementRequestPayload {
   approvalId: string;
@@ -433,9 +574,22 @@ export interface MarketJudgementRequestActionPayload extends MarketJudgementRequ
 }
 
 /**
+ * The version a correction's approval replaced, as `market_judgement_approve` records it (#176):
+ * its number, its result and its 이의 기한 (ISO) — `market_update`'s snapshot shows none of them.
+ */
+export interface MarketJudgementPreviousVersion {
+  version: number;
+  result: MarketResult;
+  disputeDeadline: string;
+}
+
+/**
  * `market_judgement_approve`'s payload: the request, the version it made and its result, the
- * approver's reason and event-deadline confirmation, the window read and the deadline it fixed
- * (ISO), and `market_update`'s snapshot before and after.
+ * approver's reason and event-deadline confirmation, the window used and the deadline it fixed
+ * (ISO), and `market_update`'s snapshot before and after. For a correction (#176, ADR-0105) also
+ * the version it replaced (`previous`), the request's `correction` and the replaced version's
+ * pending disputes it closed as 정정으로 종결 (`closedDisputeIds`); null, null and empty for a
+ * first judgement (rows written before #176 have none of the three).
  */
 export interface MarketJudgementApproveActionPayload {
   approvalId: string;
@@ -445,21 +599,33 @@ export interface MarketJudgementApproveActionPayload {
   eventDeadlineConfirmed: boolean;
   disputeWindowMinutes: number;
   disputeDeadline: string;
+  previous: MarketJudgementPreviousVersion | null;
+  correction: MarketJudgementCorrection | null;
+  closedDisputeIds: string[];
   before: unknown;
   after: unknown;
 }
 
-/** `market_judgement_reject`'s payload: the request, its result and the rejecting reason. */
+/**
+ * `market_judgement_reject`'s payload: the request, its result and the rejecting reason — for a
+ * correction (#176) also the disputes of its `disputeIds` it sent back from accepted to pending
+ * (`reopenedDisputeIds`, empty when none was still accepted; absent for a first judgement).
+ */
 export interface MarketJudgementRejectActionPayload {
   approvalId: string;
   result: MarketResult;
   reason: string;
+  reopenedDisputeIds?: string[];
 }
 
-/** `market_judgement_retract`'s payload: the request its registrant retracted and its result. */
+/**
+ * `market_judgement_retract`'s payload: the request its registrant retracted and its result — for
+ * a correction (#176) also `reopenedDisputeIds`, as a 반려's (a retraction reopens them alike).
+ */
 export interface MarketJudgementRetractActionPayload {
   approvalId: string;
   result: MarketResult;
+  reopenedDisputeIds?: string[];
 }
 
 // ---- read models ----------------------------------------------------------------------
@@ -480,16 +646,20 @@ const registrationFields = {
 };
 
 /**
- * The market's current judgement (`AdminMarket.judgement.current`; `market_judgements`): its
- * version, what it says, whether the approver confirmed the event deadline, the window read at
- * the approval and the instants it fixed (`publishedAt`, the approval's; `disputeDeadline`), the
- * approved request, and who registered and who approved it. An account closed since keeps its id
- * with a null nickname. Admins only: #24 publishes the record without the two names.
+ * A judgement version of the market (`AdminMarket.judgement.current` and `.history`;
+ * `market_judgements`): its version, what it says, the 정정 사유 that made it (null for version
+ * 1; #176), whether the approver confirmed the event deadline, the window read at the approval —
+ * a correction's is its base version's (#173 item 5) — and the instants it fixed (`publishedAt`,
+ * the approval's; `disputeDeadline`), the approved request, and who registered and who approved
+ * it. An account closed since keeps its id with a null nickname. Admins only: #24 publishes the
+ * record without the two names.
  */
 export const adminMarketJudgementSchema = z
   .object({
     version: judgementVersionSchema,
     ...registrationFields,
+    /** The 정정 사유 (#176, `market_judgements.correction_reason`): null for version 1 alone. */
+    correctionReason: z.string().nullable(),
     eventDeadlineConfirmed: z.boolean(),
     disputeWindowMinutes: disputeWindowMinutesSchema,
     publishedAt: z.iso.datetime(),
@@ -503,12 +673,14 @@ export type AdminMarketJudgement = z.infer<typeof adminMarketJudgementSchema>;
 
 /**
  * The registration waiting on a market (`AdminMarket.judgement.pending`): the request, what it
- * says, who registered it and when. Its registrant may not decide it (approvals.ts).
+ * says, whether it is a 판정 정정 (`correction`, null for a first judgement; #176), who registered
+ * it and when. Its registrant may not decide it (approvals.ts).
  */
 export const marketJudgementPendingSchema = z
   .object({
     requestId: z.uuid(),
     ...registrationFields,
+    correction: marketJudgementCorrectionSchema.nullable(),
     requestedBy: adminAccountActorSchema,
     requestedAt: z.iso.datetime(),
   })
@@ -533,18 +705,28 @@ export const marketJudgementLogEntrySchema = marketJudgementPendingSchema
   .meta({ id: 'MarketJudgementLogEntry' });
 export type MarketJudgementLogEntry = z.infer<typeof marketJudgementLogEntrySchema>;
 
-/** `AdminMarket.judgement`, in every status (#152): the judgement, the waiting one, every one. */
+/**
+ * `AdminMarket.judgement`, in every status (#152): the judgement, the versions a correction
+ * replaced (#176), the waiting registration, every registration.
+ */
 export const adminMarketJudgementStateSchema = z
   .object({
     /** The current judgement; null until one is approved (and for an interim one, before #152). */
     current: adminMarketJudgementSchema.nullable(),
+    /**
+     * 판정 버전 이력 (#176, ADR-0105; #173 item 13): every version before the current one, the
+     * newest first — each as it was published, kept unchanged (`market_judgements` is append-only).
+     * Empty until a correction is approved.
+     */
+    history: z.array(adminMarketJudgementSchema),
     /** The waiting `market_judgement` request; null when none waits (at most one does). */
     pending: marketJudgementPendingSchema.nullable(),
     /** Every registration of the market, the newest first, the waiting one included. */
     log: z.array(marketJudgementLogEntrySchema),
     /**
      * Whether the release setting `market.dispute_window` is undecided now, read in the detail's
-     * snapshot: a registration and an approval are refused while it is (`disputeWindow`).
+     * snapshot: a first judgement's registration and approval are refused while it is
+     * (`disputeWindow`); a correction reads no setting (#176).
      */
     disputeWindowUndecided: z.boolean(),
   })
@@ -555,8 +737,9 @@ export type AdminMarketJudgementState = z.infer<typeof adminMarketJudgementState
 /**
  * One row of `GET /admin/market-judgements` (판정 승인 대기, #152; query `cursorQuerySchema`): a
  * waiting registration and its market, the oldest request first, in any status — one on a market
- * no longer CLOSED only a 반려 or a 철회 ends. The scheduled judgement (null before #22) lets the
- * queue say an approval would come before it.
+ * that left the status it needs (`judgementStatusRefusal`) only a 반려 or a 철회 ends — and
+ * whether it is a 판정 정정 (`correction`, null for a first judgement; #176). The scheduled
+ * judgement (null before #22) lets the queue say an approval would come before it.
  */
 export const adminMarketJudgementQueueItemSchema = z
   .object({
@@ -568,6 +751,7 @@ export const adminMarketJudgementQueueItemSchema = z
     closeAt: z.iso.datetime(),
     scheduledJudgementAt: z.iso.datetime().nullable(),
     result: marketResultSchema,
+    correction: marketJudgementCorrectionSchema.nullable(),
     requestedBy: adminAccountActorSchema,
     requestedAt: z.iso.datetime(),
   })

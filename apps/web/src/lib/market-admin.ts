@@ -141,6 +141,7 @@ export const MARKET_RESULT_LABEL: Record<MarketResult, string> = {
  * 잠정 결과 공개 and 결과 확정 are #152's (ADR-0103): the approved judgement's CLOSED → PROVISIONAL, and
  * the worker's PROVISIONAL → RESOLVED at the dispute deadline — named, as the payout's two, by the
  * status each leads to; a `resolved` row written before #152 is the one-admin 판정, final at once.
+ * 판정 정정 is #176's (ADR-0105): an approved correction, which changes no status.
  */
 export const MARKET_EVENT_LABEL: Record<MarketEventType, string> = {
   created: copy.eventCreated,
@@ -159,6 +160,7 @@ export const MARKET_EVENT_LABEL: Record<MarketEventType, string> = {
   rules_supplemented: copy.eventRulesSupplemented,
   paused: copy.eventPaused,
   resumed: copy.eventResumed,
+  judgement_corrected: copy.eventJudgementCorrected,
 };
 
 /**
@@ -373,6 +375,22 @@ export function tradingMarketPollDelay(
   return Math.max(1, Math.min(untilClose, MAX_TIMEOUT_MS));
 }
 
+/**
+ * The admin detail's 판정 지연 note (#173 item 11): a CLOSED market's scheduled judgement has passed
+ * (#22); a 잠정 결과 past its 이의 기한 is held (#175, ADR-0104) — by a correction waiting for its
+ * approval (#176, ADR-0105, decision 3 '#176 정정 대기': on PROVISIONAL the registration waiting is
+ * one), which is what decides it next, or else by a 판정 이의 pending or accepted.
+ */
+export function judgementDelayedNote(market: {
+  status: MarketStatus;
+  judgement: { pending: object | null };
+}): string {
+  if (market.status !== 'provisional') return copy.adminMarketJudgementDelayedNote;
+  return market.judgement.pending !== null
+    ? copy.adminMarketCorrectionDelayedNote
+    : copy.adminMarketDisputeDelayedNote;
+}
+
 /** How often the admin detail re-reads a 잠정 결과 market past its dispute deadline until confirmed. */
 export const PROVISIONAL_DEADLINE_POLL_MS = 5_000;
 
@@ -387,15 +405,24 @@ export const PROVISIONAL_DEADLINE_POLL_MS = 5_000;
  * read does not refire at once.
  *
  * A 판정 이의 holding it (`disputes.holding` > 0, #175, ADR-0104 — pending, or accepted and waiting
- * for its correction, #176) keeps it PROVISIONAL past the deadline: nothing confirms it then, so
- * the poll stops — one read at the deadline still comes, for its 판정 지연 note. The last 기각's
- * answer reads 0 again, and the poll resumes: the API's `market.resolve` confirms within seconds
- * (the per-minute scan the backstop), and the detail shows it. False for any other status or a
- * missing or unreadable deadline; capped at MAX_TIMEOUT_MS, the next read waiting again.
+ * for its correction) or a correction waiting for its approval (`judgement.pending`, #176,
+ * ADR-0105 — on a PROVISIONAL market the waiting registration is a correction; decision 3 '#176 정정
+ * 대기') keeps it PROVISIONAL past the deadline: nothing confirms it then, so the poll stops — one
+ * read at the deadline still comes, for its 판정 지연 note. The last 기각's answer, or a rejected or
+ * retracted correction's that leaves nothing holding, reads neither again and the poll resumes: the
+ * API's `market.resolve` confirms within seconds (the per-minute scan the backstop), and the
+ * detail shows it. An approved correction gives a new deadline, which the poll waits for. False
+ * for any other status or a missing or unreadable deadline; capped at MAX_TIMEOUT_MS, the next
+ * read waiting again.
  */
 export function provisionalMarketPollDelay(
   market:
-    | { status: MarketStatus; disputeDeadline: string | null; disputes: { holding: number } }
+    | {
+        status: MarketStatus;
+        disputeDeadline: string | null;
+        disputes: { holding: number };
+        judgement: { pending: object | null };
+      }
     | undefined,
   now: number = Date.now(),
 ): number | false {
@@ -403,7 +430,10 @@ export function provisionalMarketPollDelay(
   const deadline = new Date(market.disputeDeadline).getTime();
   if (Number.isNaN(deadline)) return false;
   const untilDeadline = deadline - now;
-  if (untilDeadline <= 0) return market.disputes.holding > 0 ? false : PROVISIONAL_DEADLINE_POLL_MS;
+  if (untilDeadline <= 0) {
+    const held = market.disputes.holding > 0 || market.judgement.pending !== null;
+    return held ? false : PROVISIONAL_DEADLINE_POLL_MS;
+  }
   return Math.max(1, Math.min(untilDeadline, MAX_TIMEOUT_MS));
 }
 
@@ -412,7 +442,8 @@ export function provisionalMarketPollDelay(
  * poll for a market whose result is confirmed (`settlementPollInterval`), the 개장 예정 re-reads
  * (`scheduledMarketPollDelay` at the row's `dataUpdatedAt`), the close's re-read of a market OPEN
  * or PAUSED (`tradingMarketPollDelay`, #114) and the dispute deadline's of a 잠정 결과 market
- * (`provisionalMarketPollDelay`, #152; none past it while a 판정 이의 holds it, #175).
+ * (`provisionalMarketPollDelay`, #152; none past it while a 판정 이의 holds it, #175, or a
+ * correction waits, #176).
  */
 export function adminMarketPollInterval(state: {
   data?: {
@@ -421,6 +452,7 @@ export function adminMarketPollInterval(state: {
     closeAt: string;
     disputeDeadline: string | null;
     disputes: { holding: number };
+    judgement: { pending: object | null };
   };
   dataUpdatedAt: number;
 }): number | false {
@@ -709,6 +741,20 @@ const PROVISIONAL_PAYLOAD = z.object({
   disputeDeadline: kstInstant,
 });
 /**
+ * 판정 정정 (#176, ADR-0105: no status change, the actor the approver): the version the correction
+ * made and the one it replaced, the result before and after it, the new dispute deadline and how
+ * many of the replaced version's pending disputes it closed as 정정으로 종결. The approved request
+ * and its registrant are ids, which no row prints (the 판정 panel's version history shows them).
+ */
+const JUDGEMENT_CORRECTED_PAYLOAD = z.object({
+  version: z.number().int().min(2),
+  previousVersion: z.number().int().min(1),
+  result: marketResultSchema,
+  previousResult: marketResultSchema,
+  disputeDeadline: kstInstant,
+  closedDisputes: z.number().int().nonnegative(),
+});
+/**
  * 결과 확정 since #152 (provisional → resolved, the worker at the dispute deadline): the version
  * confirmed and its result; its `source` ('deadline') is what the 시스템 actor already says.
  */
@@ -740,6 +786,11 @@ export function judgementVersionName(version: number): string {
   return ruleVersionName(version);
 }
 
+/** A correction's move from one judgement version to the next, as 'v1 → v2' (#176). */
+export function judgementVersionMove(from: number, to: number = from + 1): string {
+  return `${judgementVersionName(from)} → ${judgementVersionName(to)}`;
+}
+
 /** The one-admin 판정's note and evidence rows (before #152); blanks are left out. */
 function interimResolveRows(detail: {
   note?: string | null;
@@ -760,7 +811,9 @@ function interimResolveRows(detail: {
  * open and close instants — an early close's with its review result (#114) —, a pause's reason and
  * early result's publication instant, a resume's review result (#114, ADR-0102: no account id,
  * ADR-0101 9-11), the 잠정 결과 공개 with its version, result and dispute deadline and the 결과 확정
- * with its version and result (#152) — a 결과 확정 before #152 with its note and evidence — the
+ * with its version and result (#152) — a 결과 확정 before #152 with its note and evidence — a 판정
+ * 정정 with the version and result before and after it, the new deadline and the disputes it
+ * closed (#176) — the
  * finalize summary, the 개설 검수's records
  * (#78, `reviewDetailRows`) — and no row at all for the start of the payout, whose only field is
  * the `source` the 시스템 actor beside it already says, nor for a resume without a review result.
@@ -778,6 +831,27 @@ export function marketEventRows(type: MarketEventType, payload: unknown): EventR
         { label: copy.eventJudgementVersion, value: judgementVersionName(version) },
         { label: copy.marketResolvedResult, value: MARKET_RESULT_LABEL[result] },
         { label: copy.eventDisputeDeadline, value: formatKst(disputeDeadline) },
+      ];
+    }
+    case 'judgement_corrected': {
+      const parsed = JUDGEMENT_CORRECTED_PAYLOAD.safeParse(payload);
+      if (!parsed.success) return undefined;
+      const { version, previousVersion, result, previousResult, disputeDeadline } = parsed.data;
+      const closed = parsed.data.closedDisputes.toLocaleString('ko-KR');
+      return [
+        {
+          label: copy.eventJudgementVersion,
+          value: judgementVersionMove(previousVersion, version),
+        },
+        {
+          label: copy.marketResolvedResult,
+          value: `${MARKET_RESULT_LABEL[previousResult]} → ${MARKET_RESULT_LABEL[result]}`,
+        },
+        { label: copy.eventDisputeDeadline, value: formatKst(disputeDeadline) },
+        {
+          label: copy.eventClosedDisputes,
+          value: `${closed}${copy.adminMarketDisputesHoldingUnit}`,
+        },
       ];
     }
     case 'resolved': {

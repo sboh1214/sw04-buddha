@@ -71,6 +71,7 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO buddha_app;
 -- and lets an UPDATE only end a lasting pause, once), 0055 (market_judgements: UPDATE, DELETE —
 -- a judgement is a permanent fact, #152; a trigger refuses both to every role) and 0056
 -- (market_disputes: DELETE — a 판정 이의 is a permanent fact, #175; a trigger refuses it to every
--- role and lets an UPDATE only decide or retract a pending dispute, or the retention empty a
--- decided or retracted one in place, each once).
+-- role and lets an UPDATE only end a pending dispute — decided, retracted or, since 0057 (#176, no
+-- REVOKE of its own), closed by a correction — or send an accepted one back to pending (0057), or
+-- the retention empty an ended one in place, once).
 -- Default privileges are applied at CREATE time, so a REVOKE afterwards sticks.

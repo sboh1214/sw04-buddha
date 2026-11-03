@@ -14,6 +14,7 @@ import {
   isFallbackSourcePriority,
   judgementChoiceRefusals,
   judgementVoidOnly,
+  sameJudgementGrounds,
 } from '@buddha/shared';
 import { copy } from '@/copy';
 import { nicknameShown } from './account-closure';
@@ -21,6 +22,7 @@ import {
   type AdminMarket,
   type AdminMarketJudgement,
   type JudgementSource,
+  type MarketJudgementCorrection,
   type MarketJudgementLogEntry,
   type MarketJudgementPending,
   type RegisterJudgementBody,
@@ -31,8 +33,13 @@ import {
   validationMessage,
   validationPath,
 } from './api';
-import { kstLocalToIso } from './datetime';
-import { type EventRow, MARKET_RESULT_LABEL, judgementVersionName } from './market-admin';
+import { isoToKstLocal, kstLocalToIso } from './datetime';
+import {
+  type EventRow,
+  MARKET_RESULT_LABEL,
+  judgementVersionMove,
+  judgementVersionName,
+} from './market-admin';
 import { isHttpUrl } from './market-form';
 import { publishedAtWait } from './market-pause';
 import { reviewReasonDraft } from './market-review';
@@ -40,15 +47,19 @@ import { ruleVersionName } from './rule-versions';
 
 /**
  * The pure half of the 판정 screens (#152, ADR-0103; ADR-0093 decision 1 #173 items 1·4·5·9·11–13,
- * decision 3 the #152 rows '역할'·'판정 출처'·'증거'·'등록 시점'): whether the admin detail draws the
- * 판정 panel and offers a registration and why not, the sources a judgement may name, who on screen
- * may decide the registration waiting and whether it can be approved, what the panel and its 판정
- * 기록 read, what each write may send and what a refusal says. The panel, its form and dialogs
- * (app/admin/markets/[id]/market-judgement-*.tsx) and the 판정 승인 대기 queue draw them. Admin-only
- * (excluded-features.test.ts): the evidence, the reasons, the instants and the admins are never a
- * member's — the public judging record (#24) decides what of it is shown, never who registered or
- * approved it (#173 item 13). The event rows' names (`judgementVersionName`, the results) are
- * lib/market-admin.ts', which the 이벤트 로그 reads too.
+ * decision 3 the #152 rows '역할'·'판정 출처'·'증거'·'등록 시점') and of the 판정 정정 (#176, ADR-0105;
+ * #173 items 2·5·7·8, decision 3 '#176 정정 대기'): whether the admin detail draws the 판정 panel and
+ * offers a registration or a correction and why not, the sources a judgement may name, who on
+ * screen may decide the registration waiting and whether it can be approved, what the panel, its
+ * 판정 기록 and its 판정 버전 이력 read, what each write may send and what a refusal says. A correction
+ * is a registration too — the same approval kind and routes — told apart by its `correction`
+ * (the version it replaces and its reason), never by the market's status. The panel, its form and
+ * dialogs (app/admin/markets/[id]/market-judgement-*.tsx) and the 판정 승인 대기 queue draw them.
+ * Admin-only (excluded-features.test.ts): the evidence, the reasons, the instants and the admins
+ * are never a member's — the public judging record (#24) decides what of it is shown (a
+ * correction's previous versions and reason included, #173 item 13), never who registered or
+ * approved it. The event rows' names (`judgementVersionName`, `judgementVersionMove`, the results)
+ * are lib/market-admin.ts', which the 이벤트 로그 reads too.
  */
 
 /** How a registration ended, its badge in the 판정 기록 (`approval_requests.status`). */
@@ -76,48 +87,115 @@ export function showsJudgementPanel(market: Pick<AdminMarket, 'status' | 'judgem
 }
 
 /**
- * Why 판정 등록 is not offered, in the order the API checks it (MARKET_JUDGEMENT_REFUSALS): `status`
- * — the market is not CLOSED (#173 item 1: a registration any time after the close, until one is
- * approved); `pending` — one waits already (one at a time), which the panel shows instead;
- * `undecided` — the release setting `market.dispute_window` is undecided, and no deadline can be
- * fixed from no value (ADR-0103: the registration and the approval are both refused then). The
- * server's `no_decider` (no admin but the registrant could decide it) is not knowable here: its
- * refusal says it. `null` when it is offered.
+ * Why 판정 등록 — or, given the version it replaces (`baseVersion`), 판정 정정 (#176) — is not
+ * offered, in the order the API checks it (MARKET_JUDGEMENT_REFUSALS, `judgementStatusRefusal`):
+ * `status` — a first judgement's market is not CLOSED (#173 item 1: a registration any time after
+ * the close, until one is approved), a correction's not PROVISIONAL (#173 item 8: corrections
+ * before the confirmation alone); `stale` — the correction's version is no longer the current one
+ * (another correction was approved meanwhile); `pending` — one waits already (one at a time, a
+ * first judgement and a correction alike), which the panel shows instead; `undecided` — for a first
+ * judgement, the release setting `market.dispute_window` is undecided and no deadline can be fixed
+ * from no value (ADR-0103: the registration and the approval are both refused then; a correction
+ * reads no setting, its deadline taking the first one's length, #173 item 5). The server's
+ * `no_decider` (no admin but the registrant could decide it) is not knowable here: its refusal says
+ * it. `null` when it is offered.
  */
-export type JudgementUnavailable = 'status' | 'pending' | 'undecided';
+export type JudgementUnavailable = 'status' | 'stale' | 'pending' | 'undecided';
 
 export function judgementUnavailable(
   market: Pick<AdminMarket, 'status' | 'judgement'>,
+  baseVersion: number | null = null,
 ): JudgementUnavailable | null {
-  if (market.status !== 'closed') return 'status';
-  if (market.judgement.pending !== null) return 'pending';
-  return market.judgement.disputeWindowUndecided ? 'undecided' : null;
+  if (baseVersion === null) {
+    if (market.status !== 'closed') return 'status';
+    if (market.judgement.pending !== null) return 'pending';
+    return market.judgement.disputeWindowUndecided ? 'undecided' : null;
+  }
+  if (market.status !== 'provisional') return 'status';
+  if (market.judgement.current?.version !== baseVersion) return 'stale';
+  return market.judgement.pending !== null ? 'pending' : null;
+}
+
+/**
+ * The current judgement a 판정 정정 would replace (#176, ADR-0105), or `null` when none is offered
+ * (`judgementUnavailable` for it): a PROVISIONAL market with none waiting. The panel's 판정 정정
+ * and an accepted dispute's 정정 등록 open the form on it, prefilled
+ * (`judgementCorrectionDefaults`). Any admin may register it — the base version's registrant and
+ * approver, and the admin who accepted the dispute, included (ADR-0105: as #152's registration).
+ */
+export function judgementCorrectionBase(
+  market: Pick<AdminMarket, 'status' | 'judgement'>,
+): AdminMarketJudgement | null {
+  const { current } = market.judgement;
+  if (current === null) return null;
+  return judgementUnavailable(market, current.version) === null ? current : null;
 }
 
 /**
  * What the registration form says once the market read takes no registration
- * (`judgementUnavailable`): the form stays with what was typed, says why and sends nothing.
+ * (`judgementUnavailable`): the form stays with what was typed, says why and sends nothing — a
+ * correction's form (`correction`) in its own words for `status` and `stale`.
  */
-export const JUDGEMENT_FORM_UNAVAILABLE_NOTE: Record<JudgementUnavailable, string> = {
-  status: copy.adminMarketJudgementFormStatus,
-  pending: copy.adminMarketJudgementFormPending,
-  undecided: copy.adminMarketJudgementWindowUndecided,
-};
+export function judgementFormUnavailableNote(
+  reason: JudgementUnavailable,
+  correction: boolean,
+): string {
+  switch (reason) {
+    case 'status':
+      return correction
+        ? copy.adminMarketJudgementCorrectionFormStatus
+        : copy.adminMarketJudgementFormStatus;
+    case 'stale':
+      return copy.adminMarketJudgementCorrectionFormStale;
+    case 'pending':
+      return copy.adminMarketJudgementFormPending;
+    case 'undecided':
+      return copy.adminMarketJudgementWindowUndecided;
+  }
+}
 
 /**
  * Why the waiting registration cannot be approved as the row read stands, or `null` when it can
- * (the approval checks each again at its own instant): `status` — the market is no longer CLOSED
- * (another approval published a result, which nothing does while one waits, but a 반려 or 철회
- * still ends it in any status); `undecided` — the dispute window is undecided, which the panel's
- * warning says. Either way its 반려 or its 철회 ends it.
+ * (the approval checks each again at its own instant): `status` — a first judgement's market is no
+ * longer CLOSED, a correction's no longer PROVISIONAL (nothing moves either while one waits —
+ * a waiting correction holds the confirmation — but a 반려 or 철회 still ends it in any status);
+ * `stale` — a correction's version is no longer the current one (one waits at a time, so none can
+ * be approved meanwhile; the API refuses it all the same); `undecided` — for a first judgement, the
+ * dispute window is undecided, which the panel's warning says. Either way its 반려 or its 철회 ends
+ * it.
  */
-export type JudgementUnapprovable = 'status' | 'undecided';
+export type JudgementUnapprovable = 'status' | 'stale' | 'undecided';
 
 export function judgementUnapprovable(
   market: Pick<AdminMarket, 'status' | 'judgement'>,
 ): JudgementUnapprovable | null {
-  if (market.status !== 'closed') return 'status';
-  return market.judgement.disputeWindowUndecided ? 'undecided' : null;
+  const correction = market.judgement.pending?.correction ?? null;
+  if (correction === null) {
+    if (market.status !== 'closed') return 'status';
+    return market.judgement.disputeWindowUndecided ? 'undecided' : null;
+  }
+  if (market.status !== 'provisional') return 'status';
+  return market.judgement.current?.version === correction.baseVersion ? null : 'stale';
+}
+
+/**
+ * What the waiting registration says while it cannot be approved (`judgementUnapprovable`), or
+ * `null` where the panel says it otherwise (the undecided window's own warning).
+ */
+export function judgementUnapprovableNote(
+  reason: JudgementUnapprovable,
+  correction: boolean,
+): string | null {
+  switch (reason) {
+    case 'status':
+      return correction
+        ? copy.adminMarketJudgementCorrectionPendingStatus
+        : copy.adminMarketJudgementPendingStatus;
+    case 'stale':
+      return copy.adminMarketJudgementCorrectionPendingStale;
+    case 'undecided':
+      return null;
+  }
 }
 
 /**
@@ -272,10 +350,12 @@ export function judgementRegistrationRows(
 }
 
 /**
- * What the current judgement adds to its registration: its version, who registered and who
- * approved it, the instant its 잠정 결과 was published, the dispute window read then and the
- * deadline it fixed (#173 item 5), and — when the approval came before the scheduled judgement —
- * that the approver confirmed the event deadline.
+ * What a judgement adds to its registration — the current one, and each of the 판정 버전 이력
+ * (`judgement.history`, #176): its version, who registered and who approved it, the instant its
+ * 잠정 결과 was published, the dispute window and the deadline it fixed (#173 item 5: a correction's
+ * the first one's length, from its approval), when the approval came before the scheduled judgement
+ * that the approver confirmed the event deadline, and — for a version a correction made — its
+ * correction reason.
  */
 export function judgementCurrentRows(
   current: AdminMarketJudgement,
@@ -301,21 +381,32 @@ export function judgementCurrentRows(
       value: copy.adminMarketJudgementDeadlineConfirmedDone,
     });
   }
+  if (current.correctionReason !== null) {
+    rows.push({
+      label: copy.adminMarketJudgementCorrectionReason,
+      value: current.correctionReason,
+    });
+  }
   return rows;
 }
 
 /**
  * One registration of the 판정 기록 (`AdminMarket.judgement.log`) as rows below its status,
- * registrant and time: what it says (`judgementRegistrationRows`), then how it ended — the version
- * an approval made, the decider, the decision's instant and reason, the 철회's instant. Each absent
- * where it has none.
+ * registrant and time: a correction's move ('v1 → v2') and reason first (#176), what it says
+ * (`judgementRegistrationRows`), then how it ended — the version an approval made, the decider, the
+ * decision's instant and reason, the 철회's instant. Each absent where it has none, and a
+ * correction's made version too, which its move names.
  */
 export function judgementLogRows(
   entry: MarketJudgementLogEntry,
   time: (iso: string) => string,
 ): EventRow[] {
-  const rows = judgementRegistrationRows(entry, time);
-  if (entry.version !== null) {
+  const rows = [
+    ...judgementCorrectionRows(entry.correction),
+    ...judgementRegistrationRows(entry, time),
+  ];
+  // A correction's move already names the version its approval made.
+  if (entry.version !== null && entry.correction === null) {
     rows.push({
       label: copy.adminMarketJudgementVersion,
       value: judgementVersionName(entry.version),
@@ -336,6 +427,23 @@ export function judgementLogRows(
   return rows;
 }
 
+/**
+ * A correction's own rows (#176): the version it replaces and the one its approval would make
+ * ('v1 → v2'), and its reason; none for a first judgement.
+ */
+export function judgementCorrectionRows(
+  correction: Pick<MarketJudgementCorrection, 'baseVersion' | 'reason'> | null,
+): EventRow[] {
+  if (correction === null) return [];
+  return [
+    {
+      label: copy.adminMarketJudgementCorrectionVersion,
+      value: judgementVersionMove(correction.baseVersion),
+    },
+    { label: copy.adminMarketJudgementCorrectionReason, value: correction.reason },
+  ];
+}
+
 // ---- what each write may send ----------------------------------------------------------------
 
 /** 판정 출처's value for none ('규칙의 출처 없음'), which a VOID alone may pick. */
@@ -354,6 +462,8 @@ export interface JudgementFormValues {
   /** The collection instant as a KST `datetime-local`. */
   collectedLocal: string;
   description: string;
+  /** A correction's reason (#176); a first judgement's form has no such field and keeps ''. */
+  correctionReason: string;
 }
 
 /** The form a registration opens with: 무효 picked on a market that takes it alone. */
@@ -366,6 +476,27 @@ export function judgementFormDefaults(voidOnly: boolean): JudgementFormValues {
     links: [''],
     collectedLocal: '',
     description: '',
+    correctionReason: '',
+  };
+}
+
+/**
+ * The form a correction opens with (#176): the version it replaces as the form holds a
+ * registration — its result, its source by priority (규칙의 출처 없음 for a VOID with none), both
+ * reasons, its links, its collection instant in KST and its description — so the admin changes
+ * what is wrong and leaves the rest; the correction reason empty. A market that takes 무효 alone
+ * was judged 무효, so the prefill keeps it.
+ */
+export function judgementCorrectionDefaults(base: AdminMarketJudgement): JudgementFormValues {
+  return {
+    result: base.result,
+    source: base.source === null ? JUDGEMENT_SOURCE_NONE : String(base.source.priority),
+    fallbackReason: base.fallbackReason ?? '',
+    voidReason: base.voidReason ?? '',
+    links: base.evidence.links.length > 0 ? [...base.evidence.links] : [''],
+    collectedLocal: isoToKstLocal(base.evidence.collectedAt),
+    description: base.description,
+    correctionReason: '',
   };
 }
 
@@ -378,6 +509,10 @@ export interface JudgementFormErrors {
   links: (string | null)[];
   collectedAt: string | null;
   description: string | null;
+  /** A correction's reason (#176): none, or over 500 characters. */
+  correctionReason: string | null;
+  /** A correction that changes nothing of its base version (#176, the API's 'unchanged'). */
+  correction: string | null;
 }
 
 /** The registration's fields without the admin it names (ADR-0092). */
@@ -394,16 +529,22 @@ export type JudgementRegistration = Omit<RegisterJudgementBody, 'expectedAccount
  * - the collection instant: a KST `datetime-local` (ADR-0093 decision 3: entered in KST, sent in
  *   UTC), from STORABLE_INSTANT_MIN on and not after `now` (the API refuses one after its clock,
  *   'after now'; no lower bound — an early result can predate the close);
- * - the description of what was confirmed: 1..500 trimmed.
- * `registration` is what is sent once `ready`; `errors` what each field says (the caller shows them
- * once the form was sent once, the instant's 'after now' at once). `now` is read in render through
- * the default, as `pauseDraft` does; the form draws again as the minute typed comes
- * (`collectedAtWait`).
+ * - the description of what was confirmed: 1..500 trimmed;
+ * - a correction's (`base`, the version it replaces, #176): its reason, 1..500 trimmed, and a
+ *   change — the result or its grounds (`sameJudgementGrounds`, the API's 'unchanged': #173 item
+ *   7, with nothing to change the dispute is dismissed). The collection instant left as prefilled
+ *   sends the base version's own, to the millisecond (the control holds minutes), so leaving it
+ *   alone changes nothing.
+ * `registration` is what is sent once `ready` — `correction` null for a first judgement; `errors`
+ * what each field says (the caller shows them once the form was sent once, the instant's 'after
+ * now' at once). `now` is read in render through the default, as `pauseDraft` does; the form draws
+ * again as the minute typed comes (`collectedAtWait`).
  */
 export function judgementDraft(
   values: JudgementFormValues,
   voidOnly: boolean,
   now: number = Date.now(),
+  base: AdminMarketJudgement | null = null,
 ): {
   ready: boolean;
   registration: JudgementRegistration | null;
@@ -442,7 +583,9 @@ export function judgementDraft(
   });
   const linksCounted = links.length >= 1 && links.length <= JUDGEMENT_EVIDENCE_LINKS_MAX;
 
-  const collectedAt = kstLocalToIso(values.collectedLocal);
+  const untouched =
+    base !== null && values.collectedLocal === isoToKstLocal(base.evidence.collectedAt);
+  const collectedAt = untouched ? base.evidence.collectedAt : kstLocalToIso(values.collectedLocal);
   let collectedAtError: string | null = null;
   if (values.collectedLocal === '') collectedAtError = copy.errMarketJudgementCollectedAtRequired;
   else if (collectedAt === null || Date.parse(collectedAt) < Date.parse(STORABLE_INSTANT_MIN)) {
@@ -452,6 +595,7 @@ export function judgementDraft(
   }
 
   const description = reasonOf(values.description);
+  const correctionReason = base === null ? null : reasonOf(values.correctionReason);
   const errors: JudgementFormErrors = {
     result: resultError,
     source: sourceError,
@@ -460,8 +604,11 @@ export function judgementDraft(
     links: linksCounted ? linkErrors : linkErrors.map(() => copy.errMarketJudgementLinks),
     collectedAt: collectedAtError,
     description: description.ok ? null : copy.errMarketJudgementDescription,
+    correctionReason:
+      correctionReason?.ok === false ? copy.errMarketJudgementCorrectionReason : null,
+    correction: null,
   };
-  const ready =
+  const grounded =
     errors.result === null &&
     errors.source === null &&
     errors.fallbackReason === null &&
@@ -470,17 +617,32 @@ export function judgementDraft(
     errors.links.every((error) => error === null) &&
     errors.collectedAt === null &&
     errors.description === null;
+  const grounds =
+    grounded && result !== null && collectedAt !== null
+      ? {
+          result,
+          source: priority === null ? null : { priority },
+          fallbackReason: fallback?.reason ?? null,
+          voidReason: voidReason?.reason ?? null,
+          evidence: { links, collectedAt },
+          description: description.reason,
+        }
+      : null;
+  // Only grounds that could be sent are compared: until then each field says what it lacks.
+  if (base !== null && grounds !== null && sameJudgementGrounds(base, grounds)) {
+    errors.correction = copy.errMarketJudgementCorrectionUnchanged;
+  }
+  const ready = grounds !== null && errors.correctionReason === null && errors.correction === null;
   return {
     ready,
     registration:
-      ready && result !== null && collectedAt !== null
+      ready && grounds !== null
         ? {
-            result,
-            source: priority === null ? null : { priority },
-            fallbackReason: fallback?.reason ?? null,
-            voidReason: voidReason?.reason ?? null,
-            evidence: { links, collectedAt },
-            description: description.reason,
+            ...grounds,
+            correction:
+              base === null || correctionReason === null
+                ? null
+                : { baseVersion: base.version, reason: correctionReason.reason },
           }
         : null,
     errors,
@@ -525,6 +687,139 @@ export function judgementApproveDraft(
   };
 }
 
+/** A decision on the waiting registration: its 승인, its 반려, or its registrant's 철회. */
+export type JudgementDecision = 'approve' | 'reject' | 'retract';
+
+/** What a decision's dialog is called, says and toasts once it went through. */
+export interface JudgementDecisionTexts {
+  title: string;
+  body: string;
+  done: string;
+}
+
+/**
+ * What a waiting 판정 정정's 반려 or 철회 leaves (#176, ADR-0105), as its dialog says it:
+ * `reopened` — how many accepted disputes were registered with it (`correction.disputeIds`), which
+ * go back to 검토 중 (owner answer 2026-11-02, the 철회 as the 반려); `deadlinePassed` — the market's
+ * 이의 기한 had passed as the detail was read (`judgementDeadlinePassed`), so once nothing holds it
+ * any more the API queues the confirmation at once and the worker confirms the current version
+ * within seconds, after which it takes no correction (#173 item 8).
+ */
+export interface CorrectionEnd {
+  reopened: number;
+  deadlinePassed: boolean;
+}
+
+/**
+ * Whether a 잠정 결과 market's 이의 기한 had passed at `readAt` (the detail query's
+ * `dataUpdatedAt`, as the panels judge the close and the scheduled judgement): never a clock read
+ * in render. The detail reads a 잠정 결과 market again at its deadline
+ * (`provisionalMarketPollDelay`), so a dialog opened before it says so once that read lands. False
+ * for any other status, and for a missing or unreadable deadline.
+ */
+export function judgementDeadlinePassed(
+  market: Pick<AdminMarket, 'status' | 'disputeDeadline'>,
+  readAt: number,
+): boolean {
+  if (market.status !== 'provisional' || market.disputeDeadline === null) return false;
+  const deadline = Date.parse(market.disputeDeadline);
+  return !Number.isNaN(deadline) && deadline <= readAt;
+}
+
+/**
+ * What the registration a dialog decides leaves if it is rejected or retracted (`CorrectionEnd`),
+ * read at `readAt`; `null` for a first judgement's (or none).
+ */
+export function judgementCorrectionEnd(
+  request: Pick<MarketJudgementPending, 'correction'> | null,
+  market: Pick<AdminMarket, 'status' | 'disputeDeadline'>,
+  readAt: number,
+): CorrectionEnd | null {
+  const correction = request?.correction ?? null;
+  if (correction === null) return null;
+  return {
+    reopened: correction.disputeIds.length,
+    deadlinePassed: judgementDeadlinePassed(market, readAt),
+  };
+}
+
+/**
+ * The three dialogs' words by whether the registration decided is a correction (#176, ADR-0105):
+ * a first judgement's 승인 publishes the 잠정 결과 and starts the window (출시 설정); a correction's
+ * moves the version on, publishes its result at once, gives the first deadline's length again
+ * from the approval and closes the replaced version's pending disputes as 정정으로 종결 (#173 items
+ * 5·8). A first judgement's 반려 leaves the market CLOSED; a correction's 반려 and 철회 leave the
+ * version, its deadline and its disputes' results as they were (decision 3 '#176 정정 대기') and
+ * — only when it carried any (`reopened`) — send the accepted disputes registered with it back to
+ * 검토 중 (owner answer 2026-11-02 — the 철회 as the 반려, ADR-0105); past the deadline
+ * (`deadlinePassed`) they say the current version is then confirmed within seconds once nothing
+ * holds it, and is no longer correctable (the API queues the confirmation at once, as the #175
+ * dismissal's dialog says). `correction` is `null` for a first judgement; a correction's 승인 reads
+ * nothing of it.
+ */
+export function judgementDecisionTexts(
+  kind: JudgementDecision,
+  correction: CorrectionEnd | null,
+): JudgementDecisionTexts {
+  switch (kind) {
+    case 'approve':
+      return correction !== null
+        ? {
+            title: copy.adminMarketJudgementCorrectionApproveTitle,
+            body: copy.adminMarketJudgementCorrectionApproveBody,
+            done: copy.adminMarketJudgementCorrectionApproved,
+          }
+        : {
+            title: copy.adminMarketJudgementApproveTitle,
+            body: copy.adminMarketJudgementApproveBody,
+            done: copy.adminMarketJudgementApproved,
+          };
+    case 'reject':
+      return correction !== null
+        ? {
+            title: copy.adminMarketJudgementCorrectionRejectTitle,
+            body: correctionEndBody(copy.adminMarketJudgementCorrectionRejectBody, correction),
+            done: copy.adminMarketJudgementCorrectionRejected,
+          }
+        : {
+            title: copy.adminMarketJudgementRejectTitle,
+            body: copy.adminMarketJudgementRejectBody,
+            done: copy.adminMarketJudgementRejected,
+          };
+    case 'retract':
+      return correction !== null
+        ? {
+            title: copy.adminMarketJudgementCorrectionRetractTitle,
+            body: correctionEndBody(
+              copy.adminMarketJudgementCorrectionRetractBody,
+              correction,
+              copy.adminMarketJudgementCorrectionRetractConfirm,
+            ),
+            done: copy.adminMarketJudgementCorrectionRetracted,
+          }
+        : {
+            title: copy.adminMarketJudgementRetractTitle,
+            body: copy.adminMarketJudgementRetractBody,
+            done: copy.adminMarketJudgementRetracted,
+          };
+  }
+}
+
+/**
+ * A correction's 반려 or 철회 body: its first sentence, the reopened disputes' when it carried any,
+ * the confirmation's past the deadline, then the question a 철회 asks.
+ */
+function correctionEndBody(first: string, end: CorrectionEnd, question?: string): string {
+  return [
+    first,
+    end.reopened > 0 ? copy.adminMarketJudgementCorrectionReopen : null,
+    end.deadlinePassed ? copy.adminMarketJudgementCorrectionEndConfirms : null,
+    question ?? null,
+  ]
+    .filter((sentence) => sentence !== null)
+    .join(' ');
+}
+
 // ---- what a refusal says ---------------------------------------------------------------------
 
 /**
@@ -543,15 +838,17 @@ const JUDGEMENT_REFUSAL_MESSAGES: Readonly<Record<ApprovalRefusal, string>> = {
 };
 
 /**
- * The write a refusal answers: the registration (`POST …/judgements`) or a decision of the one
- * waiting (its approval, 반려 or 철회) — whose `status` refusal says different things.
+ * The write a refusal answers: the registration (`POST …/judgements`, a first judgement's or a
+ * correction's) or a decision of the one waiting (its approval, 반려 or 철회) — whose `status` and
+ * `stale` refusals say different things.
  */
 export type JudgementWrite = 'register' | 'decision';
 
 /**
  * The fields a refusal can land under: the registration form's — the result, the source, the two
  * reasons, a link (`index`, or every link for their count), the collection instant, the
- * description — and the decision dialogs' reason and the approval's event-deadline confirmation.
+ * description, a correction's reason and the correction as a whole (nothing changed, #176) — and
+ * the decision dialogs' reason and the approval's event-deadline confirmation.
  */
 export type JudgementField =
   | 'result'
@@ -561,6 +858,8 @@ export type JudgementField =
   | 'links'
   | 'collectedAt'
   | 'description'
+  | 'correctionReason'
+  | 'correction'
   | 'reason'
   | 'eventDeadlineConfirmed';
 
@@ -570,10 +869,13 @@ export type JudgementField =
  *   판정 불가), the source (none for a YES or NO), the fallback and VOID reasons (missing, too long,
  *   or one the choice takes none of), a link (`index`: not http(s), too long, given twice — or,
  *   without one, their count), the collection instant (unreadable, after now), the description, a
- *   decision's reason, the approval's event-deadline confirmation (needed before the scheduled
- *   judgement — the dialog then asks for it);
- * - `alert`: in the form or the dialog, which stays — the market not CLOSED, another registration
- *   waiting, the dispute window undecided, a source the rules no longer have, an unknown request,
+ *   correction's reason and a correction that changes nothing (`correction`, #176), a decision's
+ *   reason, the approval's event-deadline confirmation (needed before the scheduled judgement — the
+ *   dialog then asks for it);
+ * - `alert`: in the form or the dialog, which stays — the market not CLOSED (a first judgement's)
+ *   or not PROVISIONAL (a correction's, `notProvisional`), the version a correction replaces no
+ *   longer the current one (`stale`), another registration waiting, the dispute window undecided,
+ *   a source the rules no longer have, an unknown request,
  *   APPROVAL_NOT_ALLOWED by its reason (the registrant, decided, retracted, no other admin to
  *   decide), the market gone, a session ended or a role revoked, a request that never reached the
  *   API or an internal error. `refresh` when the screen behind is out of date: the caller reads the
@@ -616,13 +918,38 @@ export function judgementFailure(error: unknown, write: JudgementWrite): Judgeme
   const path = validationPath(error) ?? [];
   const refused = MARKET_JUDGEMENT_REFUSALS;
   switch (validationField(error)) {
-    case 'status':
+    case 'status': {
+      const correction = message === refused.status.notProvisional;
+      if (write === 'register') {
+        return alert(
+          correction ? copy.errMarketJudgementCorrectionStatus : copy.errMarketJudgementStatus,
+          true,
+        );
+      }
       return alert(
-        write === 'register'
-          ? copy.errMarketJudgementStatus
+        correction
+          ? copy.errMarketJudgementCorrectionDecisionStatus
           : copy.errMarketJudgementDecisionStatus,
         true,
       );
+    }
+    case 'correction':
+      if (path[1] === 'reason') {
+        return field('correctionReason', copy.errMarketJudgementCorrectionReason);
+      }
+      if (message === refused.correction.unchanged) {
+        return field('correction', copy.errMarketJudgementCorrectionUnchanged);
+      }
+      if (message === refused.correction.stale) {
+        return alert(
+          write === 'register'
+            ? copy.errMarketJudgementCorrectionStale
+            : copy.errMarketJudgementCorrectionDecisionStale,
+          true,
+        );
+      }
+      // A base version the body refused (not a version at all): the screen sent what it read.
+      return alert(copy.errMarketInvalid, true);
     case 'judgement':
       return alert(copy.errMarketJudgementPending, true);
     case 'disputeWindow':

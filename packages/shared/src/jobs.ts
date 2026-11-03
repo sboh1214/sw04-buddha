@@ -34,9 +34,11 @@ export const JOB_NAMES = {
    * with the settlement steps, then `market.finalize` at once. The delayed job the API registers
    * when an approval publishes the provisional result, and the worker's per-minute scan
    * (`market-resolve-scan`) as the backstop — which also confirms a market whose hold (#175's
-   * 판정 이의, #176's corrections) cleared after its deadline. A held market's run completes
-   * `held`; the dismissal that leaves nothing holding past the deadline enqueues it again under
-   * the same id, delay 0 (#175, ADR-0104), so the worker stays the only confirmer.
+   * 판정 이의; #176's waiting correction, ADR-0105) cleared after its deadline. A held market's run
+   * completes `held`, and the run of a deadline a correction replaced `not_due` (it is never
+   * cancelled); the dismissal, or the correction's 반려 or 철회, that leaves nothing holding past
+   * the deadline enqueues it again under the same id, delay 0 (#175, ADR-0104), so the worker
+   * stays the only confirmer.
    */
   marketResolve: 'market.resolve',
   marketFinalize: 'market.finalize',
@@ -109,8 +111,9 @@ export function marketCloseJobId(marketId: string, closeAt: Date): string {
 
 /**
  * `disputeDeadline` is the provisional result's 이의 기한 (#152, ADR-0103), fixed by the approval
- * that published it: the API registers the job delayed to it. A correction (#176) gives the market
- * a new deadline, and so a new job under the rule above.
+ * that published it: the API registers the job delayed to it. A correction's approval (#176,
+ * ADR-0105) gives the market a later deadline, and so a new job under the rule above; the old
+ * one still runs at its instant and finds the market not due.
  */
 export function marketResolveJobId(marketId: string, disputeDeadline: Date): string {
   return `${JOB_NAMES.marketResolve}.${marketId}.${String(disputeDeadline.getTime())}`;

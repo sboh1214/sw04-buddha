@@ -74,6 +74,7 @@ import {
   isClosingSoon,
   isEditable,
   marketIdParam,
+  judgementDelayedNote,
   judgementVersionName,
   marketEventLabel,
   marketEventRows,
@@ -201,10 +202,12 @@ export function AdminMarketDetail({ id }: { id: string }) {
       {/* 판정 (#152, ADR-0103): keyed and prefixed as the review panel is — its form and dialogs name
           the market and the registration they were opened on. First of the panels: from the close
           on, the judgement is what the market waits for. `readAt` judges 'before the scheduled
-          judgement' on the row as read; the detail re-reads a 잠정 결과 market at its dispute
-          deadline (`provisionalMarketPollDelay`), so its confirmation comes on screen by
-          itself — not while a 판정 이의 holds it (#175: the panel's '판정 이의' block, whose last
-          기각 starts the re-reads again). */}
+          judgement' on the row as read, and a correction's dialogs its dispute deadline; the
+          detail re-reads a 잠정 결과 market at its dispute deadline (`provisionalMarketPollDelay`),
+          so its confirmation comes on screen by itself — not while a 판정 이의 holds it (#175: the
+          panel's '판정 이의' block, whose last 기각 starts the re-reads again) nor while a 판정 정정
+          waits for its approval (#176: its 반려 or 철회 starts them again when nothing else holds
+          it). */}
       <MarketJudgementPanel
         key={`judgement-${data.id}`}
         market={data}
@@ -481,10 +484,7 @@ function TimeRows({ market }: { market: AdminMarket }) {
       </Item>
       {market.judgementDelayed && (
         <Item label={copy.adminMarketJudgementDelayed} testId="market-detail-judgement-delayed">
-          {/* A held 잠정 결과 past its 이의 기한 reads 판정 지연 too (#175, ADR-0104). */}
-          {market.status === 'provisional'
-            ? copy.adminMarketDisputeDelayedNote
-            : copy.adminMarketJudgementDelayedNote}
+          {judgementDelayedNote(market)}
         </Item>
       )}
     </>

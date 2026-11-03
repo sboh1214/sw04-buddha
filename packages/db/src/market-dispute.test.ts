@@ -2,12 +2,15 @@ import { randomUUID } from 'node:crypto';
 import {
   HOLDING_DISPUTE_STATUSES,
   MARKET_DISPUTE_STATUSES,
+  MARKET_JUDGEMENT_APPROVAL_KIND,
+  MARKET_PAUSE_DECISION_APPROVAL_KIND,
   type MarketDisputeDecision,
   type MarketDisputeStatus,
 } from '@buddha/shared';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  closeDisputesForCorrection,
   confirmationHold,
   decideMarketDispute,
   hasMarketFill,
@@ -15,15 +18,31 @@ import {
   readMarketDisputes,
   readMyDisputes,
   readMyMarketDispute,
+  reopenAcceptedDisputes,
   retractMarketDispute,
   submitMarketDispute,
 } from './market-dispute.js';
-import { dueProvisionalMarkets, resolveProvisionalMarket } from './market-judgement.js';
-import { marketDisputes, marketEvents, markets, orders, profiles } from './schema/index.js';
+import {
+  dueProvisionalMarkets,
+  resolveProvisionalMarket,
+  setCorrectionPending,
+} from './market-judgement.js';
+import {
+  approvalRequests,
+  marketDisputes,
+  marketEvents,
+  markets,
+  orders,
+  profiles,
+} from './schema/index.js';
 import {
   closeAccount,
+  createApprovalRequest,
+  createCorrectedMarket,
+  createCorrectionRequest,
   createDispute,
   createFill,
+  createJudgementRequest,
   createMarket,
   createModerationAction,
   createProvisionalMarket,
@@ -39,7 +58,7 @@ const LINK = 'https://example.com/evidence';
 const REASON = '발표 원문과 판정 결과가 다르다.';
 const DECISION = '판정의 근거를 다시 확인했다.';
 
-describe.skipIf(!hasTestDb())('market disputes (#175, docker test profile)', () => {
+describe.skipIf(!hasTestDb())('market disputes (#175, #176, docker test profile)', () => {
   let t: TestDb;
 
   beforeAll(async () => {
@@ -196,6 +215,48 @@ describe.skipIf(!hasTestDb())('market disputes (#175, docker test profile)', () 
     });
   }
 
+  /**
+   * As the API rejects or retracts a correction (#176): the market lock, its row, the admin lock,
+   * the request decided, `now`; then its accepted disputes reopened and the mirror cleared.
+   */
+  function endCorrection(
+    requestId: string,
+    how: { rejectedBy: string } | 'retracted',
+    disputeIds: readonly string[],
+  ) {
+    return t.db.transaction(async (tx) => {
+      const [request] = await tx
+        .select()
+        .from(approvalRequests)
+        .where(eq(approvalRequests.id, requestId));
+      const marketId = request!.targetId!;
+      await lockMarket(tx, marketId);
+      const [market] = await tx
+        .select()
+        .from(markets)
+        .where(eq(markets.id, marketId))
+        .for('update');
+      await lockAdminRoles(tx, 'shared');
+      const now = await clockTimestamp(tx);
+      await tx
+        .update(approvalRequests)
+        .set(
+          how === 'retracted'
+            ? { status: 'retracted', retractedAt: now }
+            : {
+                status: 'rejected',
+                decidedBy: how.rejectedBy,
+                decidedAt: now,
+                decisionReason: '정정할 근거가 부족하다.',
+              },
+        )
+        .where(eq(approvalRequests.id, requestId));
+      const reopened = await reopenAcceptedDisputes(tx, { market: market!, disputeIds, now });
+      const row = await setCorrectionPending(tx, { marketId, pending: false, now });
+      return { now, reopened, market: row, held: await confirmationHold(tx, row) };
+    });
+  }
+
   describe('submitMarketDispute', () => {
     it('writes a pending dispute at the instant, as the body schema parses it, and one more on the mirror', async () => {
       const { market } = await createProvisionalMarket(t.db);
@@ -222,6 +283,7 @@ describe.skipIf(!hasTestDb())('market disputes (#175, docker test profile)', () 
         decidedAt: null,
         decisionReason: null,
         retractedAt: null,
+        closedAt: null,
         purgedAt: null,
       });
       expect(await disputeOf(result.dispute.id)).toEqual(result.dispute);
@@ -409,7 +471,7 @@ describe.skipIf(!hasTestDb())('market disputes (#175, docker test profile)', () 
       });
     });
 
-    it('refuses a retracted dispute (retracted) and a decided one (decided), status before the deadline', async () => {
+    it('refuses a retracted dispute (retracted) and a decided or correction-closed one (decided), status before the deadline', async () => {
       const { market } = await createProvisionalMarket(t.db);
       const deadline = market.disputeDeadline!;
       for (const [status, reason] of [
@@ -422,6 +484,18 @@ describe.skipIf(!hasTestDb())('market disputes (#175, docker test profile)', () 
         expect(await disputeOf(dispute.id)).toEqual(dispute);
       }
       expect(await mirrorOf(market.id)).toBe(1);
+      // closed_by_correction (#176): pending when a correction replaced its version, which closed
+      // it — decided too, at the new version's deadline as well.
+      const { dispute: pending } = await createDispute(t.db, { marketId: market.id });
+      const corrected = await createCorrectedMarket(t.db, { marketId: market.id });
+      const [closed] = corrected.closedDisputes;
+      expect(closed).toMatchObject({ id: pending.id, status: 'closed_by_correction' });
+      expect(await retract(pending.id, corrected.market.disputeDeadline!)).toEqual({
+        retracted: false,
+        reason: 'decided',
+      });
+      expect(await disputeOf(pending.id)).toEqual(closed);
+      expect(await mirrorOf(market.id)).toBe(0);
     });
   });
 
@@ -454,7 +528,7 @@ describe.skipIf(!hasTestDb())('market disputes (#175, docker test profile)', () 
       expect(await mirrorOf(market.id)).toBe(0);
     });
 
-    it('accepts: the dispute still holds (a correction, #176), the mirror unchanged', async () => {
+    it('accepts: the dispute still holds (a correction to come, #176), the mirror unchanged', async () => {
       const { market } = await createProvisionalMarket(t.db);
       const { dispute } = await createDispute(t.db, { marketId: market.id });
       const decider = await admin();
@@ -470,7 +544,7 @@ describe.skipIf(!hasTestDb())('market disputes (#175, docker test profile)', () 
       expect(await confirmationHold(t.db, await rowOf(market.id))).toBe(true);
     });
 
-    it('refuses a retracted (retracted) or decided (decided) dispute, and throws for the registrant and the submitter', async () => {
+    it('refuses a retracted (retracted) or decided or correction-closed (decided) dispute, and throws for the registrant and the submitter', async () => {
       const { market, judgement } = await createProvisionalMarket(t.db);
       const decider = await admin();
       for (const [status, reason] of [
@@ -507,6 +581,203 @@ describe.skipIf(!hasTestDb())('market disputes (#175, docker test profile)', () 
       ).rejects.toThrow(/reason/);
       expect(await disputeOf(dispute.id)).toEqual(dispute);
       expect(await mirrorOf(market.id)).toBe(2);
+
+      // closed_by_correction (#176): the pending one, closed when a correction replaced its
+      // version — decided, status first: its version's registrant and its submitter are told so.
+      const corrected = await createCorrectedMarket(t.db, { marketId: market.id });
+      const [closed] = corrected.closedDisputes;
+      expect(closed).toMatchObject({ id: dispute.id, status: 'closed_by_correction' });
+      for (const decision of ['dismiss', 'accept'] as const) {
+        for (const adminId of [decider, judgement.registeredBy, dispute.userId]) {
+          expect((await decide(dispute.id, adminId, decision)).result).toEqual({
+            decided: false,
+            reason: 'decided',
+          });
+        }
+      }
+      expect(await disputeOf(dispute.id)).toEqual(closed);
+      expect(await mirrorOf(market.id)).toBe(0);
+    });
+
+    it('decides a corrected version’s dispute by any admin but that version’s registrant, the replaced one’s included (#176)', async () => {
+      const { market, judgement: first } = await createProvisionalMarket(t.db);
+      const corrected = await createCorrectedMarket(t.db, { marketId: market.id });
+      const { dispute } = await createDispute(t.db, { marketId: market.id });
+      expect(dispute.judgementVersion).toBe(corrected.judgement.version);
+      // The correction's registrant registered v2: out, as v1's registrant is for v1's disputes.
+      for (const decision of ['dismiss', 'accept'] as const) {
+        await expect(
+          decide(dispute.id, corrected.judgement.registeredBy, decision),
+        ).rejects.toThrow(/other than its judgement’s registrant/);
+      }
+      expect(await disputeOf(dispute.id)).toEqual(dispute);
+      // v1's registrant did not register v2, and decides its dispute.
+      const { now, result } = await decide(dispute.id, first.registeredBy, 'dismiss');
+      expect(result).toEqual({
+        decided: true,
+        held: false,
+        dispute: {
+          ...dispute,
+          status: 'dismissed',
+          decidedBy: first.registeredBy,
+          decidedAt: now,
+          decisionReason: DECISION,
+        },
+        market: { ...corrected.market, disputeHoldCount: 0, updatedAt: now },
+      });
+      expect(await mirrorOf(market.id)).toBe(0);
+    });
+  });
+
+  describe('a correction’s closing and reopening (#176)', () => {
+    it('closes the replaced version’s pending disputes alone, at the instant, the oldest first', async () => {
+      const { market, judgement } = await createProvisionalMarket(t.db);
+      const at = (ms: number) => new Date(judgement.publishedAt.getTime() + ms);
+      const later = (await createDispute(t.db, { marketId: market.id, submittedAt: at(2) }))
+        .dispute;
+      const earlier = (await createDispute(t.db, { marketId: market.id, submittedAt: at(1) }))
+        .dispute;
+      const kept = await Promise.all(
+        (['accepted', 'dismissed', 'retracted'] as const).map(
+          async (status) =>
+            (await createDispute(t.db, { marketId: market.id, status, submittedAt: at(3) }))
+              .dispute,
+        ),
+      );
+      const other = (await createDispute(t.db)).dispute;
+      const now = at(10);
+      const closed = await t.db.transaction(async (tx) => {
+        await lockMarket(tx, market.id);
+        return closeDisputesForCorrection(tx, { market, now });
+      });
+      expect(closed).toEqual(
+        [earlier, later].map((dispute) => ({
+          ...dispute,
+          status: 'closed_by_correction',
+          closedAt: now,
+        })),
+      );
+      for (const dispute of [...kept, other]) expect(await disputeOf(dispute.id)).toEqual(dispute);
+      // None pending: none closed. No judgement: a caller's bug.
+      expect(
+        await t.db.transaction((tx) => closeDisputesForCorrection(tx, { market, now })),
+      ).toEqual([]);
+      const unjudged = await createMarket(t.db, { status: 'closed' });
+      await expect(
+        t.db.transaction((tx) => closeDisputesForCorrection(tx, { market: unjudged, now })),
+      ).rejects.toThrow('has no judgement');
+    });
+
+    it('reopens a rejected correction’s disputes still accepted on the current version: the decision cleared, the submission kept, the mirror as it was', async () => {
+      const { market, judgement } = await createProvisionalMarket(t.db);
+      const at = (ms: number) => new Date(judgement.publishedAt.getTime() + ms);
+      const decider = await admin();
+      // Submitted first, then accepted: the pending one is submitted after it.
+      const answered = (
+        await createDispute(t.db, {
+          marketId: market.id,
+          status: 'accepted',
+          decidedBy: decider,
+          submittedAt: at(1),
+        })
+      ).dispute;
+      const pending = (await createDispute(t.db, { marketId: market.id, submittedAt: at(2) }))
+        .dispute;
+      const request = await createCorrectionRequest(t.db, { marketId: market.id });
+      expect(request.payload).toMatchObject({ correction: { disputeIds: [answered.id] } });
+      // Accepted after the registration: not the correction's, it stays accepted. Dismissed since:
+      // not accepted any more, left as it is.
+      const acceptedLater = (await createDispute(t.db, { marketId: market.id, status: 'accepted' }))
+        .dispute;
+      const dismissed = (await createDispute(t.db, { marketId: market.id, status: 'dismissed' }))
+        .dispute;
+      const elsewhere = (await createDispute(t.db, { status: 'accepted' })).dispute;
+      expect(await mirrorOf(market.id)).toBe(3);
+
+      const {
+        now,
+        reopened,
+        market: row,
+        held,
+      } = await endCorrection(request.id, { rejectedBy: await admin() }, [
+        answered.id,
+        dismissed.id,
+        elsewhere.id,
+        randomUUID(),
+      ]);
+      const back = {
+        ...answered,
+        status: 'pending',
+        decidedBy: null,
+        decidedAt: null,
+        decisionReason: null,
+      };
+      expect(reopened.disputes).toEqual([back]);
+      expect(reopened.market).toMatchObject({ updatedAt: now, disputeHoldCount: 3 });
+      expect(await disputeOf(answered.id)).toEqual(back);
+      for (const dispute of [pending, acceptedLater, dismissed, elsewhere]) {
+        expect(await disputeOf(dispute.id)).toEqual(dispute);
+      }
+      // The market stays PROVISIONAL at its version, its deadline as it was; still held (both
+      // statuses hold), the mirror unchanged and right.
+      expect(row).toMatchObject({
+        status: 'provisional',
+        judgementVersion: 1,
+        disputeDeadline: market.disputeDeadline,
+        correctionPending: false,
+      });
+      expect(held).toBe(true);
+      expect(await mirrorOf(market.id)).toBe(3);
+
+      // Pending again: in the 검토 대기 queue by its submission — ahead of the one submitted after
+      // it, though reopened since — retractable again before the deadline, and decided again — by
+      // an admin other than the registrant, the one who accepted it before included.
+      const queue = await readAdminDisputes(t.db, { status: 'pending', limit: 10 });
+      expect(queue.items.map((item) => item.id)).toEqual([answered.id, pending.id]);
+      expect((await decide(answered.id, decider, 'dismiss')).result).toMatchObject({
+        decided: true,
+        dispute: { status: 'dismissed', decidedBy: decider },
+        market: { disputeHoldCount: 2 },
+      });
+      expect(await mirrorOf(market.id)).toBe(2);
+    });
+
+    it('reopens on a retraction alike, and lets a reopened dispute be retracted again before the deadline', async () => {
+      const { market } = await createProvisionalMarket(t.db);
+      const answered = (await createDispute(t.db, { marketId: market.id, status: 'accepted' }))
+        .dispute;
+      const request = await createCorrectionRequest(t.db, { marketId: market.id });
+      const { reopened } = await endCorrection(request.id, 'retracted', [answered.id]);
+      expect(reopened.disputes.map((dispute) => dispute.id)).toEqual([answered.id]);
+      const result = await retract(answered.id);
+      expect(result).toMatchObject({ retracted: true, market: { disputeHoldCount: 0 } });
+      expect(await mirrorOf(market.id)).toBe(0);
+    });
+
+    it('leaves an accepted dispute of a replaced version accepted, and reopens none for an empty list', async () => {
+      const { market } = await createProvisionalMarket(t.db);
+      const accepted = (await createDispute(t.db, { marketId: market.id, status: 'accepted' }))
+        .dispute;
+      const corrected = await createCorrectedMarket(t.db, { marketId: market.id });
+      expect(corrected.request.payload).toMatchObject({
+        correction: { disputeIds: [accepted.id] },
+      });
+      // A second correction rejected, naming v1's dispute: it is not on the current version.
+      const second = await createCorrectionRequest(t.db, {
+        marketId: market.id,
+        disputeIds: [accepted.id],
+      });
+      const ended = await endCorrection(second.id, { rejectedBy: await admin() }, [accepted.id]);
+      expect(ended.reopened.disputes).toEqual([]);
+      expect(await disputeOf(accepted.id)).toEqual(accepted);
+      expect(ended.held).toBe(false);
+      expect(await mirrorOf(market.id)).toBe(0);
+      const at = await clockTimestamp(t.db);
+      expect(
+        await t.db.transaction((tx) =>
+          reopenAcceptedDisputes(tx, { market: corrected.market, disputeIds: [], now: at }),
+        ),
+      ).toEqual({ disputes: [], market: { ...ended.market, updatedAt: at } });
     });
   });
 
@@ -529,14 +800,96 @@ describe.skipIf(!hasTestDb())('market disputes (#175, docker test profile)', () 
       );
     });
 
-    it('holds by the current version alone: a pending dispute of an earlier one holds nothing (#176)', async () => {
-      const { market } = await createDispute(t.db);
-      // As #176's correction will move it (the mirror is #176's to recount).
-      await t.db
-        .update(markets)
-        .set({ judgementVersion: 2, disputeHoldCount: 0 })
-        .where(eq(markets.id, market.id));
-      expect(await confirmationHold(t.db, await rowOf(market.id))).toBe(false);
+    it('holds by the current version alone: after a correction, the replaced version’s disputes hold nothing (#176)', async () => {
+      const { market } = await createProvisionalMarket(t.db);
+      const pending = (await createDispute(t.db, { marketId: market.id })).dispute;
+      const accepted = (await createDispute(t.db, { marketId: market.id, status: 'accepted' }))
+        .dispute;
+      expect(await mirrorOf(market.id)).toBe(2);
+      const corrected = await createCorrectedMarket(t.db, { marketId: market.id });
+      // The pending one closed as 정정으로 종결, the accepted one answered and left accepted.
+      expect(corrected.closedDisputes.map((dispute) => dispute.id)).toEqual([pending.id]);
+      expect(await disputeOf(pending.id)).toMatchObject({
+        status: 'closed_by_correction',
+        closedAt: corrected.judgement.publishedAt,
+      });
+      expect(await disputeOf(accepted.id)).toEqual(accepted);
+      expect(await confirmationHold(t.db, corrected.market)).toBe(false);
+      expect(await mirrorOf(market.id)).toBe(0);
+      // A dispute of the new version holds it again, counted on the mirror.
+      await createDispute(t.db, { marketId: market.id });
+      expect(await confirmationHold(t.db, await rowOf(market.id))).toBe(true);
+      expect(await mirrorOf(market.id)).toBe(1);
+    });
+
+    it('holds while a market_judgement request waits on it — a correction — and not once it is decided (#176)', async () => {
+      const { market } = await createProvisionalMarket(t.db, {
+        publishedAt: new Date(Date.now() - DAY_MS - MINUTE_MS),
+      });
+      const deadline = market.disputeDeadline!;
+      expect(await confirmationHold(t.db, market)).toBe(false);
+      const request = await createCorrectionRequest(t.db, { marketId: market.id });
+      const held = await rowOf(market.id);
+      expect(await confirmationHold(t.db, held)).toBe(true);
+      // The worker: held past the deadline (not_due before it), and left out of the scan.
+      expect(await confirm(market.id, new Date(deadline.getTime() - 1))).toEqual({
+        resolved: false,
+        reason: 'not_due',
+      });
+      expect(await confirm(market.id)).toEqual({ resolved: false, reason: 'held' });
+      expect((await dueProvisionalMarkets(t.db)).map((row) => row.id)).not.toContain(market.id);
+      expect(await rowOf(market.id)).toEqual(held);
+      // A dismissal reads it too: the market stays held, so the API registers no confirmation.
+      const dispute = (await createDispute(t.db, { marketId: market.id })).dispute;
+      expect((await decide(dispute.id, await admin(), 'dismiss')).result).toMatchObject({
+        decided: true,
+        held: true,
+      });
+      // Rejected: nothing holds, and the original version is confirmed by its deadline.
+      const ended = await endCorrection(request.id, { rejectedBy: await admin() }, []);
+      expect(ended).toMatchObject({ held: false, market: { correctionPending: false } });
+      expect((await dueProvisionalMarkets(t.db)).map((row) => row.id)).toContain(market.id);
+      expect(await confirm(market.id)).toMatchObject({
+        resolved: true,
+        version: 1,
+        market: { status: 'resolved', correctionPending: false },
+      });
+      // Only a waiting request of the kind about the market holds it: an approved, rejected or
+      // retracted one, another market's, another kind's do not.
+      const { market: other } = await createProvisionalMarket(t.db);
+      const someone = await admin();
+      await createJudgementRequest(t.db, {
+        marketId: other.id,
+        correction: { baseVersion: 1 },
+        rejected: { by: someone },
+      });
+      await createJudgementRequest(t.db, {
+        marketId: other.id,
+        correction: { baseVersion: 1 },
+        retracted: {},
+      });
+      await createApprovalRequest(t.db, {
+        kind: MARKET_PAUSE_DECISION_APPROVAL_KIND,
+        targetType: 'market',
+        targetId: other.id,
+        payload: {},
+        requestedBy: someone,
+      });
+      await createApprovalRequest(t.db, {
+        kind: MARKET_JUDGEMENT_APPROVAL_KIND,
+        targetType: 'market',
+        targetId: other.id,
+        payload: {},
+        requestedBy: someone,
+        decision: { status: 'approved', by: await admin() },
+      });
+      await createCorrectionRequest(t.db, {
+        marketId: (await createProvisionalMarket(t.db)).market.id,
+      });
+      expect(await confirmationHold(t.db, other)).toBe(false);
+      // Any waiting one of the kind holds, without its payload read: errs toward holding.
+      await createJudgementRequest(t.db, { marketId: other.id });
+      expect(await confirmationHold(t.db, other)).toBe(true);
     });
 
     it('confirms nothing a dispute holds: not_due before the deadline, held at and after it, resolved once none holds', async () => {
@@ -556,8 +909,8 @@ describe.skipIf(!hasTestDb())('market disputes (#175, docker test profile)', () 
         reason: 'held',
       });
       expect(await rowOf(market.id)).toEqual(held);
-      // The pending one dismissed after the deadline: the accepted one still holds it (until #176
-      // approves its correction — owner answer 2026-11-02).
+      // The pending one dismissed after the deadline: the accepted one still holds it (until a
+      // correction is approved — owner answer 2026-11-02; #176).
       const after = new Date(deadline.getTime() + MINUTE_MS);
       await decide(dispute.id, await admin(), 'dismiss', { at: after });
       expect(accepted.status).toBe('accepted');
@@ -678,7 +1031,13 @@ describe.skipIf(!hasTestDb())('market disputes (#175, docker test profile)', () 
       const expected = made
         .map(({ dispute, market, deadline }) => ({
           ...dispute,
-          market: { id: market.id, slug: market.slug, title: market.title, status: market.status },
+          market: {
+            id: market.id,
+            slug: market.slug,
+            title: market.title,
+            status: market.status,
+            judgementVersion: 1,
+          },
           disputeDeadline: deadline,
         }))
         .sort((a, b) => b.submittedAt.getTime() - a.submittedAt.getTime());
@@ -720,7 +1079,13 @@ describe.skipIf(!hasTestDb())('market disputes (#175, docker test profile)', () 
         judgementVersion: 1,
         dispute: {
           ...dispute,
-          market: { id: market.id, slug: market.slug, title: market.title, status: 'provisional' },
+          market: {
+            id: market.id,
+            slug: market.slug,
+            title: market.title,
+            status: 'provisional',
+            judgementVersion: 1,
+          },
           disputeDeadline: deadline,
         },
       });
@@ -733,7 +1098,7 @@ describe.skipIf(!hasTestDb())('market disputes (#175, docker test profile)', () 
       });
     });
 
-    it('pages 이의 접수: pending oldest first, decided by its latest decision or retraction', async () => {
+    it('pages 이의 접수: pending oldest first, decided by its latest decision, retraction or closure', async () => {
       const { market } = await createProvisionalMarket(t.db);
       const base = market.disputeDeadline!.getTime() - DAY_MS;
       const at = (ms: number) => new Date(base + ms);
@@ -767,7 +1132,22 @@ describe.skipIf(!hasTestDb())('market disputes (#175, docker test profile)', () 
           decidedAt: at(600),
         })
       ).dispute;
-      const ref = { id: market.id, slug: market.slug, title: market.title, status: market.status };
+      // Closed by a correction (#176), keyed by its closure.
+      const closed = (
+        await createDispute(t.db, {
+          marketId: market.id,
+          status: 'closed_by_correction',
+          submittedAt: at(4),
+          closedAt: at(650),
+        })
+      ).dispute;
+      const ref = {
+        id: market.id,
+        slug: market.slug,
+        title: market.title,
+        status: market.status,
+        judgementVersion: 1,
+      };
       const page1 = await readAdminDisputes(t.db, { status: 'pending', limit: 2 });
       const byTime = [...pending].sort((a, b) => a.submittedAt.getTime() - b.submittedAt.getTime());
       expect(page1.items.map((item) => item.id)).toEqual(byTime.slice(0, 2).map((d) => d.id));
@@ -782,14 +1162,22 @@ describe.skipIf(!hasTestDb())('market disputes (#175, docker test profile)', () 
       expect(page2.next).toBeNull();
 
       const decided1 = await readAdminDisputes(t.db, { status: 'decided', limit: 2 });
-      expect(decided1.items.map((item) => item.id)).toEqual([retracted.id, accepted.id]);
-      expect(decided1.next).toEqual({ createdAt: at(600), id: accepted.id });
+      expect(decided1.items.map((item) => item.id)).toEqual([retracted.id, closed.id]);
+      expect(decided1.next).toEqual({ createdAt: at(650), id: closed.id });
       const decided2 = await readAdminDisputes(t.db, {
         status: 'decided',
         after: decided1.next!,
         limit: 2,
       });
-      expect(decided2).toMatchObject({ items: [{ id: dismissed.id, market: ref }], next: null });
+      expect(decided2.items.map((item) => item.id)).toEqual([accepted.id, dismissed.id]);
+      expect(decided2.next).toBeNull();
+      expect(decided2.items[1]).toMatchObject({ market: ref });
+      // After a correction a dispute's market names the version that replaced its own.
+      const corrected = await createCorrectedMarket(t.db, { marketId: market.id });
+      const page = await readAdminDisputes(t.db, { status: 'decided', limit: 10 });
+      expect(page.items.map((item) => item.market.judgementVersion)).toEqual(
+        page.items.map(() => corrected.judgement.version),
+      );
     });
   });
 
@@ -828,11 +1216,26 @@ describe.skipIf(!hasTestDb())('market disputes (#175, docker test profile)', () 
       const fresh = await createDispute(t.db, { status: 'retracted' });
       expect(fresh.market).toMatchObject({ status: 'provisional', disputeHoldCount: 0 });
       expect(fresh.dispute.retractedAt).toEqual(new Date(fresh.dispute.submittedAt.getTime() + 1));
+      // Closed by a correction (#176): its instant, no decision, no hold.
+      const closed = await createDispute(t.db, { status: 'closed_by_correction' });
+      expect(closed.dispute).toMatchObject({
+        closedAt: new Date(closed.dispute.submittedAt.getTime() + 1),
+        decidedBy: null,
+        decidedAt: null,
+        retractedAt: null,
+      });
+      expect(closed.market.disputeHoldCount).toBe(0);
       const rows = await t.db
         .select()
         .from(marketDisputes)
         .orderBy(asc(marketDisputes.submittedAt));
-      expect(rows).toHaveLength(3);
+      expect(rows).toHaveLength(4);
+      // A waiting correction holds it too.
+      const { market: waiting } = await createProvisionalMarket(t.db);
+      await createCorrectionRequest(t.db, { marketId: waiting.id });
+      await expect(resolveMarketNow(t.db, waiting.id)).rejects.toThrow(
+        /held by a 판정 이의 pending or accepted, or by a correction waiting/,
+      );
     });
   });
 });

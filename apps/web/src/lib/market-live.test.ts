@@ -312,6 +312,23 @@ describe('applyStatus', () => {
         statusEvent({ status: 'provisional', resolvedResult: 'NO', statusEventId: '4' }),
       ),
     ).toBeUndefined();
+    // An approved correction (#176, ADR-0105: `judgement_corrected` moves the key, no status
+    // change) writes its result and resets the flags; the version and the new deadline come with
+    // the refetch, as the first 잠정 결과's do. A correction's registration, 반려 or 철회 republishes
+    // the same key — nothing written, the refetch brings 판정 지연 or its end.
+    expect(
+      applyStatus(
+        held,
+        statusEvent({ status: 'provisional', resolvedResult: 'YES', statusEventId: '6' }),
+      ),
+    ).toEqual({
+      ...held,
+      resolvedResult: 'YES',
+      statusEventId: '6',
+      judgementDelayed: false,
+      disputeUnderReview: false,
+      disputeOpen: false,
+    });
   });
 
   it('writes nothing for a status no member sees: a scheduled market sent back (#78)', () => {
@@ -375,9 +392,10 @@ describe('applyStatus', () => {
 
   it('takes the same status under a newer key as a later transition', () => {
     // THE DAY the rank order stopped holding (A-M3-19): M5's `result_changed` repeated a status
-    // with a new result, and rank alone could only drop it — as a correction in PROVISIONAL will
-    // (#176). The event id says it is a LATER transition, so the whole status group is replaced —
-    // a rule the reducer keeps for any transition that repeats a status.
+    // with a new result, and rank alone could only drop it — as a correction in PROVISIONAL does
+    // (#176, ADR-0105: `judgement_corrected` moves the key). The event id says it is a LATER
+    // transition, so the whole status group is replaced — a rule the reducer keeps for any
+    // transition that repeats a status.
     const repeated = statusEvent({ status: 'resolved', resolvedResult: 'NO', statusEventId: '5' });
     expect(applyStatus(resolved, repeated)).toEqual({
       ...resolved,

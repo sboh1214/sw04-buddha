@@ -20,10 +20,17 @@ const row = (id: string, fields: Partial<AdminDisputeQueueItem> = {}): AdminDisp
   decidedAt: null,
   decisionReason: null,
   retractedAt: null,
+  closedAt: null,
   submitter: { id: 'member', nickname: '낸이' },
   decidedBy: null,
   purgedAt: null,
-  market: { id: MARKET, slug: 'first-snow', title: '첫눈이 올까?', status: 'provisional' },
+  market: {
+    id: MARKET,
+    slug: 'first-snow',
+    title: '첫눈이 올까?',
+    status: 'provisional',
+    judgementVersion: 1,
+  },
   ...fields,
 });
 

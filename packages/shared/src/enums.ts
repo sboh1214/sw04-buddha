@@ -188,9 +188,9 @@ export const marketResultSchema = z.enum(MARKET_RESULTS).meta({ id: 'MarketResul
 /**
  * market_events.type (varchar(40), PLAN 6.2). A row with a status change also carries
  * `from_status`/`to_status` (#174); each action issue adds the type of the transitions it
- * makes (#78 review, #114 pause and #152 judgement, below; #20 cancel) — #21's scheduled open
- * writes the `opened` the interim open wrote before it, and #152's confirmation the `resolved`
- * the interim judgement wrote.
+ * makes (#78 review, #114 pause, #152 judgement and #176 correction, below; #20 cancel) — #21's
+ * scheduled open writes the `opened` the interim open wrote before it, and #152's confirmation
+ * the `resolved` the interim judgement wrote.
  */
 export const MARKET_EVENT_TYPES = [
   /** → draft: the row is written (`to_status` only). */
@@ -300,6 +300,19 @@ export const MARKET_EVENT_TYPES = [
    * registrant and the 이의 기한 (ISO). The registration, 반려 and 철회 are admin actions alone.
    */
   'provisional',
+  /**
+   * No status change (`from_status`/`to_status` null): 판정 정정 (#176, ADR-0105; ADR-0093 decision
+   * 1 #173 items 2·5·8) — an admin other than the registrant approved a `market_judgement`
+   * registration of a PROVISIONAL market's current version (the actor is the approver): the
+   * judgement version moved on, `markets.resolved_result` took its result, a new 이의 기한 of the
+   * base version's length opened from the approval, and the replaced version's pending 판정 이의
+   * closed as 정정으로 종결. The market's `status_event_id` moves to it, so `market:status`
+   * republishes PROVISIONAL under a newer key. Payload `{version, previousVersion, result,
+   * previousResult, approvalId, requestedBy, disputeDeadline, closedDisputes}`
+   * (`MarketJudgementCorrectedPayload`, market-judgement.ts). The registration, 반려 and 철회 are
+   * admin actions alone, as a first judgement's.
+   */
+  'judgement_corrected',
 ] as const;
 export type MarketEventType = (typeof MARKET_EVENT_TYPES)[number];
 export const marketEventTypeSchema = z.enum(MARKET_EVENT_TYPES);
@@ -445,24 +458,38 @@ export const ADMIN_ACTION_TYPES = [
   'market_pause_decision_retract',
   /**
    * 판정 (#152, ADR-0103; ADR-0093 decision 3 the #152 rows): target `market` / its id, as each
-   * judgement record below. An admin registered a CLOSED market's judgement, which opens a
-   * `market_judgement` approval request and changes no status: payload `{approvalId, result,
-   * source, fallbackReason, voidReason, evidence, ruleVersion, description}`
-   * (`MarketJudgementRequestActionPayload`, market-judgement.ts) — the registration as the request
-   * froze it, the source's name and address copied from the rules.
+   * judgement record below — a 판정 정정's too (#176, ADR-0105: the same four, told apart by the
+   * request's `correction`). An admin registered a CLOSED market's judgement, or a correction of
+   * a PROVISIONAL one's current version, which opens a `market_judgement` approval request and
+   * changes no status: payload `{approvalId, result, source, fallbackReason, voidReason, evidence,
+   * ruleVersion, correction, description}` (`MarketJudgementRequestActionPayload`,
+   * market-judgement.ts) — the registration as the request froze it, the source's name and
+   * address copied from the rules (`correction` null for a first judgement; rows before #176 lack
+   * it).
    */
   'market_judgement_request',
   /**
-   * An admin other than the registrant approved it, and the market went CLOSED → PROVISIONAL in
-   * the same transaction (its `provisional` event): payload `{approvalId, version, result, reason,
-   * eventDeadlineConfirmed, disputeWindowMinutes, disputeDeadline, before, after}` — the
-   * approver's reason and event-deadline confirmation, the window read and the deadline it fixed,
-   * and `market_update`'s snapshot before and after.
+   * An admin other than the registrant approved it, and in the same transaction the market went
+   * CLOSED → PROVISIONAL (its `provisional` event) or, for a correction, moved to the next version
+   * (its `judgement_corrected` event): payload `{approvalId, version, result, reason,
+   * eventDeadlineConfirmed, disputeWindowMinutes, disputeDeadline, previous, correction,
+   * closedDisputeIds, before, after}` (`MarketJudgementApproveActionPayload`) — the approver's
+   * reason and event-deadline confirmation, the window used and the deadline it fixed, the
+   * version a correction replaced, its correction and the disputes it closed (null, null and
+   * empty for a first judgement; rows before #176 lack the three), and `market_update`'s snapshot
+   * before and after.
    */
   'market_judgement_approve',
-  /** Another admin rejected it, the market stays CLOSED: payload `{approvalId, result, reason}`. */
+  /**
+   * Another admin rejected it, the market stays as it was — CLOSED, or PROVISIONAL at the base
+   * version for a correction: payload `{approvalId, result, reason}`, and for a correction
+   * `reopenedDisputeIds`, the accepted disputes it sent back to pending (owner answer 2026-11-02).
+   */
   'market_judgement_reject',
-  /** Its registrant retracted it before anyone decided it: payload `{approvalId, result}`. */
+  /**
+   * Its registrant retracted it before anyone decided it: payload `{approvalId, result}`, and for
+   * a correction `reopenedDisputeIds`, as a 반려's.
+   */
   'market_judgement_retract',
   /**
    * 판정 이의 (#175, ADR-0104; ADR-0093 decision 1 #173 items 2·7): target `market` / its id. One
@@ -473,8 +500,10 @@ export const ADMIN_ACTION_TYPES = [
    */
   'market_dispute_dismiss',
   /**
-   * Such an admin accepted it (수용, a correction to come, #176): the same payload. The dispute
-   * keeps holding the market until its correction is approved (owner answer 2026-11-02).
+   * Such an admin accepted it (수용, a correction to come, #173 item 7): the same payload. The
+   * dispute keeps holding the market until a correction is approved (owner answer 2026-11-02), and
+   * goes back to pending when the correction registered for it is rejected or retracted (#176,
+   * ADR-0105) — this row still records the acceptance.
    */
   'market_dispute_accept',
   /**

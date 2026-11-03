@@ -429,6 +429,7 @@ describe('isJudgementDelayed (#173 items 11·12)', () => {
     scheduledJudgementAt: judgement,
     disputeDeadline: null,
     disputeHoldCount: 0,
+    correctionPending: false,
   };
 
   it('reads a CLOSED market delayed from its scheduled judgement on', () => {
@@ -453,6 +454,7 @@ describe('isJudgementDelayed (#173 items 11·12)', () => {
     scheduledJudgementAt: judgement,
     disputeDeadline: deadline,
     disputeHoldCount: 1,
+    correctionPending: false,
   };
 
   it('reads a held PROVISIONAL market delayed from its dispute deadline on, to the ms', () => {
@@ -474,6 +476,33 @@ describe('isJudgementDelayed (#173 items 11·12)', () => {
     for (const nowMs of [due - 1, due, due + 1]) {
       expect(isDisputeUnderReview(held), String(nowMs)).toBe(true);
       expect(isJudgementDelayed(held, nowMs), String(nowMs)).toBe(!isDisputeOpen(held, nowMs));
+    }
+  });
+
+  // #176 (ADR-0105; decision 3 '#176 정정 대기'): a waiting 판정 정정 holds the confirmation as a
+  // dispute does, so past the deadline it reads '판정 지연' with no dispute holding — before it
+  // the market reads '잠정 결과', no dispute being under review.
+  const correcting: MarketDisplayState = { ...held, disputeHoldCount: 0, correctionPending: true };
+
+  it('reads a PROVISIONAL market a waiting correction holds delayed from its deadline on', () => {
+    expect(isJudgementDelayed(correcting, due - 1)).toBe(false);
+    expect(isJudgementDelayed(correcting, due)).toBe(true);
+    expect(isJudgementDelayed(correcting, due + 86_400_000)).toBe(true);
+    expect(isDisputeUnderReview(correcting)).toBe(false);
+    // A dispute and a correction together read the same; neither and nothing is delayed.
+    expect(isJudgementDelayed({ ...correcting, disputeHoldCount: 2 }, due)).toBe(true);
+    expect(isJudgementDelayed({ ...correcting, correctionPending: false }, due + 1)).toBe(false);
+    expect(isJudgementDelayed({ ...correcting, disputeDeadline: null }, due + 1)).toBe(false);
+    // The flag on another status reads nothing (the database allows it on PROVISIONAL alone), and
+    // a CLOSED market is delayed by its scheduled judgement only.
+    for (const status of MARKET_STATUSES.filter((s) => s !== 'provisional')) {
+      expect(isJudgementDelayed({ ...correcting, status }, due + 1), status).toBe(
+        status === 'closed',
+      );
+      expect(
+        isJudgementDelayed({ ...correcting, status, scheduledJudgementAt: null }, due + 1),
+        status,
+      ).toBe(false);
     }
   });
 });

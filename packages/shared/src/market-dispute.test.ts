@@ -64,23 +64,50 @@ describe('판정 이의 (#175, ADR-0093 decision 1 #173 items 2·6·7)', () => {
     expect(DISPUTE_REASON_MAX).toBe(2_000);
   });
 
-  it('moves a pending dispute once — dismissed, accepted or retracted — and nothing else', () => {
-    expect(MARKET_DISPUTE_STATUSES).toEqual(['pending', 'dismissed', 'accepted', 'retracted']);
+  it('ends a pending dispute once — dismissed, accepted, retracted or closed — or reopens', () => {
+    expect(MARKET_DISPUTE_STATUSES).toEqual([
+      'pending',
+      'dismissed',
+      'accepted',
+      'retracted',
+      'closed_by_correction',
+    ]);
     expect(marketDisputeStatusSchema.options).toEqual([...MARKET_DISPUTE_STATUSES]);
     // The excluded cash-out token never names the retraction, nor M5's 'open'/'rejected' it.
-    for (const other of ['withdrawn', 'open', 'rejected', 'closed_by_correction', '']) {
+    for (const other of ['withdrawn', 'open', 'rejected', 'closed', 'corrected', '']) {
       expect(marketDisputeStatusSchema.safeParse(other).success, other).toBe(false);
     }
     expect(Object.keys(MARKET_DISPUTE_TRANSITIONS)).toEqual([...MARKET_DISPUTE_STATUSES]);
     for (const from of MARKET_DISPUTE_STATUSES) {
       for (const to of MARKET_DISPUTE_STATUSES) {
         expect(canMoveMarketDispute(from, to), `${from} → ${to}`).toBe(
-          from === 'pending' && to !== 'pending',
+          (from === 'pending' && to !== 'pending') || (from === 'accepted' && to === 'pending'),
         );
       }
     }
-    // market_disputes.status is varchar(20).
+    // market_disputes.status is varchar(20): '정정으로 종결' fills it exactly.
     for (const status of MARKET_DISPUTE_STATUSES) expect(status.length).toBeLessThanOrEqual(20);
+    expect('closed_by_correction').toHaveLength(20);
+  });
+
+  it('closes a corrected version’s pending disputes and reopens an accepted one (#176)', () => {
+    // #173 item 8: a correction's approval closes the replaced version's pending disputes, no
+    // admin deciding them — the one move into the status, and none out of it.
+    expect(
+      MARKET_DISPUTE_STATUSES.filter((from) => canMoveMarketDispute(from, 'closed_by_correction')),
+    ).toEqual(['pending']);
+    expect(MARKET_DISPUTE_TRANSITIONS.closed_by_correction).toEqual([]);
+    // Owner answer 2026-11-02: a rejected (or retracted) correction sends the accepted disputes it
+    // answered back to pending, to be decided again — the one move back, and nothing else leaves
+    // a decision.
+    expect(MARKET_DISPUTE_TRANSITIONS.accepted).toEqual(['pending']);
+    expect(MARKET_DISPUTE_STATUSES.filter((from) => canMoveMarketDispute(from, 'pending'))).toEqual(
+      ['accepted'],
+    );
+    expect(MARKET_DISPUTE_TRANSITIONS.dismissed).toEqual([]);
+    expect(MARKET_DISPUTE_TRANSITIONS.retracted).toEqual([]);
+    // A closed dispute holds nothing: its version is not the current one any more.
+    expect(isHoldingDisputeStatus('closed_by_correction')).toBe(false);
   });
 
   it('holds the confirmation by a pending or an accepted dispute (owner answer 2026-11-02)', () => {
@@ -162,11 +189,15 @@ describe('the refusals (DISPUTE_NOT_ALLOWED)', () => {
     expect(disputeRetractionRefusal(pending, new Date(due), due - 1)).toBeNull();
     expect(disputeRetractionRefusal(pending, deadline, due)).toBe('deadline_passed');
     expect(disputeRetractionRefusal(pending, new Date(due), due + 1)).toBe('deadline_passed');
-    // The status first: a decided or retracted dispute says so, before its deadline or after.
+    // The status first: a decided or retracted dispute says so, before its deadline or after —
+    // one closed by a correction reads as decided (#176: no reason of its own).
     for (const nowMs of [due - 1, due]) {
       expect(disputeRetractionRefusal({ status: 'dismissed' }, deadline, nowMs)).toBe('decided');
       expect(disputeRetractionRefusal({ status: 'accepted' }, deadline, nowMs)).toBe('decided');
       expect(disputeRetractionRefusal({ status: 'retracted' }, deadline, nowMs)).toBe('retracted');
+      expect(disputeRetractionRefusal({ status: 'closed_by_correction' }, deadline, nowMs)).toBe(
+        'decided',
+      );
     }
   });
 
@@ -178,11 +209,12 @@ describe('the refusals (DISPUTE_NOT_ALLOWED)', () => {
     expect(disputeDecisionRefusal(pending, 'member', 'admin-1', 'member')).toBe('own');
     // The status first, so the registrant learns a dispute is gone rather than theirs to skip.
     for (const adminId of ['admin-1', 'admin-2', 'member']) {
-      const refusal = (status: 'retracted' | 'dismissed' | 'accepted') =>
+      const refusal = (status: 'retracted' | 'dismissed' | 'accepted' | 'closed_by_correction') =>
         disputeDecisionRefusal({ status }, adminId, 'admin-1', 'member');
       expect(refusal('retracted')).toBe('retracted');
       expect(refusal('dismissed')).toBe('decided');
       expect(refusal('accepted')).toBe('decided');
+      expect(refusal('closed_by_correction')).toBe('decided');
     }
   });
 });
@@ -286,7 +318,13 @@ describe('the retraction and decision bodies', () => {
 });
 
 describe('the read models', () => {
-  const market = { id: marketId, slug: 'kospi-3000', title: '코스피 3000?', status: 'provisional' };
+  const market = {
+    id: marketId,
+    slug: 'kospi-3000',
+    title: '코스피 3000?',
+    status: 'provisional',
+    judgementVersion: 1,
+  };
   const fields = {
     id: disputeId,
     judgementVersion: 1,
@@ -297,6 +335,7 @@ describe('the read models', () => {
     decidedAt: null,
     decisionReason: null,
     retractedAt: null,
+    closedAt: null,
   };
   const mine = { ...fields, market, retractable: true };
   const admin = {
@@ -323,10 +362,42 @@ describe('the read models', () => {
     });
     expect(parsed).not.toHaveProperty('decidedBy');
     expect(parsed).not.toHaveProperty('submitter');
-    for (const field of ['market', 'retractable', 'decisionReason'] as const) {
+    for (const field of ['market', 'retractable', 'decisionReason', 'closedAt'] as const) {
       const { [field]: _gone, ...without } = mine;
       expect(paths(myDisputeSchema.safeParse(without)), field).toEqual([field]);
     }
+  });
+
+  it('shows a dispute a correction closed or replaced, with the market’s version (#176)', () => {
+    // 정정으로 종결: its instant and no decision; the market has moved to the next version.
+    const corrected = { ...market, judgementVersion: 2 };
+    const closed = {
+      ...mine,
+      status: 'closed_by_correction',
+      closedAt: at,
+      market: corrected,
+      retractable: false,
+    };
+    expect(myDisputeSchema.parse(closed)).toEqual(closed);
+    // An accepted dispute of the replaced version stays accepted: the version tells it apart.
+    const answered = {
+      ...mine,
+      status: 'accepted',
+      decidedAt: at,
+      decisionReason: '정정한다.',
+      market: corrected,
+      retractable: false,
+    };
+    expect(myDisputeSchema.parse(answered)).toEqual(answered);
+    expect(answered.judgementVersion).toBeLessThan(answered.market.judgementVersion);
+    // The market's version is a judged market's: never null, never 0.
+    for (const judgementVersion of [null, 0, undefined]) {
+      expect(
+        paths(myDisputeSchema.safeParse({ ...mine, market: { ...market, judgementVersion } })),
+        String(judgementVersion),
+      ).toEqual(['market.judgementVersion']);
+    }
+    expect(paths(myDisputeSchema.safeParse({ ...mine, closedAt: 'today' }))).toEqual(['closedAt']);
   });
 
   it('tells the screen the member’s standing, the version read and their dispute', () => {
@@ -355,10 +426,22 @@ describe('the read models', () => {
       purgedAt: at,
     };
     expect(adminMarketDisputeSchema.parse(purged)).toEqual(purged);
-    for (const field of ['submitter', 'decidedBy', 'purgedAt'] as const) {
+    for (const field of ['submitter', 'decidedBy', 'purgedAt', 'closedAt'] as const) {
       const { [field]: _gone, ...without } = admin;
       expect(paths(adminMarketDisputeSchema.safeParse(without)), field).toEqual([field]);
     }
+    // 정정으로 종결 (#176): closed at the correction's approval, nobody deciding it, and purged
+    // later like any ended dispute of a closed account.
+    const closed = {
+      ...admin,
+      links: [],
+      reason: '',
+      status: 'closed_by_correction',
+      submitter: { id: account, nickname: null },
+      closedAt: at,
+      purgedAt: at,
+    };
+    expect(adminMarketDisputeSchema.parse(closed)).toEqual(closed);
     const state = { holding: 1, items: [admin] };
     expect(adminMarketDisputesSchema.parse(state)).toEqual(state);
     expect(adminMarketDisputesSchema.parse({ holding: 0, items: [] })).toEqual({
@@ -378,9 +461,10 @@ describe('the read models', () => {
 
   it('lists the waiting disputes or every other one, waiting unless asked', () => {
     expect(ADMIN_DISPUTE_LIST_STATUSES).toEqual(['pending', 'decided']);
+    // 처리됨 holds every ended one, 정정으로 종결 too (#176); a reopened dispute is waiting again.
     expect(ADMIN_DISPUTE_LIST_STATUS_MEMBERS).toEqual({
       pending: ['pending'],
-      decided: ['dismissed', 'accepted', 'retracted'],
+      decided: ['dismissed', 'accepted', 'retracted', 'closed_by_correction'],
     });
     expect(
       [...ADMIN_DISPUTE_LIST_STATUS_MEMBERS.pending, ...ADMIN_DISPUTE_LIST_STATUS_MEMBERS.decided]
@@ -418,6 +502,8 @@ describe('the names', () => {
       'decision_reason',
       'retracted_at',
       'retractedAt',
+      'closed_at',
+      'closedAt',
       'purged_at',
       'purgedAt',
       'retractable',

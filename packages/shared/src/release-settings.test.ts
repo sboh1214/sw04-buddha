@@ -147,10 +147,11 @@ describe('release settings registry', () => {
     // #175 (ADR-0087 (6), ADR-0069 #57-18): a withdrawn account's 판정 이의, once decided or
     // retracted, emptied in place from the later of the two instants; a pending one is kept, and
     // an accepted one awaiting its correction counts as under review (the worker keeps it).
+    // #176 (ADR-0105): one closed by a correction (정정으로 종결) too, from its closing.
     expect(moderation.description).toContain(
-      '탈퇴한 계정이 낸 판정 이의(#175)는 기각·수용되거나 철회된 것의 근거 링크와 사유를',
+      '탈퇴한 계정이 낸 판정 이의(#175)는 기각·수용되거나 철회된 것과 정정으로 종결된 것(#176)의 근거 링크와 사유를',
     );
-    expect(moderation.description).toContain('탈퇴 시각과 처리·철회 시각 가운데 늦은 쪽부터');
+    expect(moderation.description).toContain('탈퇴 시각과 처리·철회·종결 시각 가운데 늦은 쪽부터');
     expect(moderation.description).toContain('(이의 건수와 처리 상태는 남는다)');
     expect(moderation.description).toContain(
       '검토 중이거나 수용해 정정을 기다리는 판정 이의는 지우지 않는다',
@@ -278,7 +279,10 @@ describe('release settings registry', () => {
     expect(description).toContain('모든 시장에 같은 값이다');
     expect(description).toContain('승인할 때 이 값을 읽어 그 시장의 이의 기한을 고정하고');
     expect(description).toContain('이미 공개한 시장의 기한은 그대로다');
-    expect(description).toContain('미정이면 판정을 등록하거나 승인할 수 없어');
+    expect(description).toContain('미정이면 첫 판정을 등록하거나 승인할 수 없어');
+    // A correction (#176, ADR-0105; #173 item 5) reads no value: the first deadline's length.
+    expect(description).toContain('판정을 정정하면(#176) 이 값을 다시 읽지 않고');
+    expect(description).toContain('그 시장의 첫 기한과 같은 길이의 새 기한을 준다');
     expect(description).not.toMatch(/환불|원금/);
     // The deadline the reading fixes: the publication plus the window, to the millisecond.
     const publishedAt = new Date('2026-11-02T03:04:05.678Z');

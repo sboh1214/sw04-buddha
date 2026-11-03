@@ -2,6 +2,7 @@ import { desc, sql } from 'drizzle-orm';
 import {
   type AnyPgColumn,
   bigint,
+  boolean,
   check,
   index,
   integer,
@@ -180,14 +181,16 @@ export const markets = pgTable(
     /**
      * The judgement's result type (YES·NO·VOID, #174): the current judgement's, written by the
      * approval that publishes it (CLOSED → PROVISIONAL, #152 — ADR-0095 8-2: a provisional result
-     * is a judged result too, and 8-7 hides a provisional VOID from related markets by it) and kept
-     * through RESOLVED and the settlement. Null before a judgement publishes one and on a CANCELLED
-     * market (ADR-0093 decision 1 item 10). Not the contract side `outcome`.
+     * is a judged result too, and 8-7 hides a provisional VOID from related markets by it) and by
+     * a correction's approval in PROVISIONAL (#176), and kept through RESOLVED and the settlement.
+     * Null before a judgement publishes one and on a CANCELLED market (ADR-0093 decision 1 item
+     * 10). Not the contract side `outcome`.
      */
     resolvedResult: marketResultEnum(),
     /**
      * The current judgement (#152, ADR-0103): its `market_judgements.version` — 1 from the
-     * approval that published the first one, then one more per correction (#176). Null until a
+     * approval that published the first one, then one more per approved correction (#176,
+     * `correctMarketJudgement`, which moves it, the result and the deadline together). Null until a
      * judgement is approved, and for a market judged by ADR-0046's interim route before #152 (D4,
      * no backfill: no judgement row). No foreign key (the judgement row references the market):
      * the approval writes both in one transaction. The settlement of a RESOLVED market is that
@@ -197,8 +200,9 @@ export const markets = pgTable(
     /**
      * 이의 기한 of the current judgement (#152, ADR-0103; ADR-0093 decision 1 #173 item 5): its
      * `market_judgements.dispute_deadline`, mirrored here for the worker's scan (`market.resolve`,
-     * the index below) and kept after the confirmation. Null until a judgement is approved. Not
-     * named `dispute_until`: that M5 column was dropped with its dispute flow (migration 0016).
+     * the index below) and kept after the confirmation — a correction's approval moves it to its
+     * new deadline (#176). Null until a judgement is approved. Not named `dispute_until`: that M5
+     * column was dropped with its dispute flow (migration 0016).
      */
     disputeDeadline: timestampTz(),
     /**
@@ -207,13 +211,24 @@ export const markets = pgTable(
      * (HOLDING_DISPUTE_STATUSES of @buddha/shared), mirrored here so every market read labels the
      * market '이의 검토 중' or '판정 지연' from the row alone, with no join. Written under the market
      * lock by the @buddha/db dispute writers only — one more for a submission, one fewer for a
-     * retraction or a dismissal, none for an acceptance (it still holds) — and 0 on every market
+     * retraction or a dismissal, none for an acceptance (it still holds) or for an accepted one a
+     * rejected or retracted correction sent back to pending (both statuses hold) — set to 0 by a
+     * correction's approval, whose new version has no dispute yet (#176), and 0 on every market
      * but a PROVISIONAL one (the CHECK). For the labels alone: the confirmation and the worker's
      * scan read the disputes themselves (`confirmationHold`), so a mirror that drifted could only
-     * mislabel a market, never confirm a held one. #176 recounts it when a correction moves the
-     * version.
+     * mislabel a market, never confirm a held one.
      */
     disputeHoldCount: integer().notNull().default(0),
+    /**
+     * 판정 정정 waiting (#176, ADR-0105; ADR-0093 decision 3 '#176 정정 대기'): whether a correction
+     * of the current version is registered and not yet decided, mirrored here so a market read
+     * labels it '판정 지연' past its deadline from the row alone (`isJudgementDelayed`). Written
+     * under the market lock — true by a correction's registration, false by its approval
+     * (`correctMarketJudgement`), its 반려 and its 철회 (`setCorrectionPending`) — and false on
+     * every market but a PROVISIONAL one (the CHECK). For the labels alone, as the dispute count:
+     * the hold itself is the waiting `market_judgement` request (`confirmationHold`).
+     */
+    correctionPending: boolean().notNull().default(false),
     /**
      * When the result was confirmed (→ `resolved`): since #152 the worker's confirmation once the
      * dispute deadline passed with no 판정 이의 holding it — after the last dismissal, for a held
@@ -224,12 +239,14 @@ export const markets = pgTable(
     /** When the settlement steps all finished (→ `settled`). */
     settledAt: timestampTz(),
     /**
-     * `market_events.id` of the transition that produced `status` (M5, A-M3-19): the ordering
-     * key of `market:status` and of the market DTOs. Written by every transition in the same
-     * transaction as its event row, under the market's advisory lock, so it is the market's
-     * commit order. No FK — market_events is append-only and the id is never reused. Null
-     * only for a row written outside the transition paths (a test factory; migration 0011
-     * backfills every existing market from its newest transition event).
+     * `market_events.id` of the transition that produced `status` (M5, A-M3-19) — or, since #176,
+     * of the `judgement_corrected` event that replaced its PROVISIONAL result with no status change
+     * (`correctMarketJudgement`, ADR-0105), so the correction republishes under a newer key: the
+     * ordering key of `market:status` and of the market DTOs. Written by every transition, and the
+     * correction, in the same transaction as its event row, under the market's advisory lock, so
+     * it is the market's commit order. No FK — market_events is append-only and the id is never
+     * reused. Null only for a row written outside the transition paths (a test factory; migration
+     * 0011 backfills every existing market from its newest transition event).
      */
     statusEventId: bigint({ mode: 'number' }),
     /**
@@ -279,8 +296,9 @@ export const markets = pgTable(
     /**
      * The worker's confirmation scan (`market.resolve`, #152; `dueProvisionalMarkets`): the
      * PROVISIONAL markets whose dispute deadline has passed, the earliest first — less those a
-     * dispute holds (#175), each looked up in `market_disputes_holding_idx`. Partial: a market
-     * keeps its deadline after the confirmation, and the PROVISIONAL set is the few awaiting one.
+     * dispute holds (#175), each looked up in `market_disputes_holding_idx`, or a correction waits
+     * for (#176), read by an index of `approval_requests`. Partial: a market keeps its deadline
+     * after the confirmation, and the PROVISIONAL set is the few awaiting one.
      */
     index('markets_provisional_dispute_deadline_idx')
       .on(t.disputeDeadline, t.id)
@@ -330,6 +348,14 @@ export const markets = pgTable(
     check(
       'markets_dispute_hold_status_check',
       sql`${t.disputeHoldCount} = 0 OR ${t.status} = 'provisional'`,
+    ),
+    /**
+     * The correction mirror (#176): true on a PROVISIONAL market alone — a confirmation of a market
+     * whose mirror still says a correction waits fails here too, after `confirmationHold`.
+     */
+    check(
+      'markets_correction_pending_status_check',
+      sql`NOT ${t.correctionPending} OR ${t.status} = 'provisional'`,
     ),
     check(
       'markets_fee_bps_check',

@@ -19,7 +19,8 @@ import {
 /**
  * 판정 이의 (#175, ADR-0104; ADR-0093 decision 1 #173 items 1·2·5–8·11–13·15, decision 3 the rows
  * '#175 토론의 이의 안내' and '#176 정정 대기', decision 4, and the owner's answers of 2026-11-02
- * and 2026-11-03). Not 제재 이의 — a sanction appeal goes by email (ADR-0084) and is apart:
+ * and 2026-11-03; the correction's part #176, ADR-0105). Not 제재 이의 — a sanction appeal goes by
+ * email (ADR-0084) and is apart:
  *
  * - 제출 (`POST /markets/:id/disputes`): a member with a fill on the market — either side of a fill
  *   counts (#173 item 6, `hasMarketFill` in @buddha/db) — disputes the provisional result of its
@@ -35,18 +36,24 @@ import {
  *   pending and the deadline is ahead. After the deadline it is the reason the market waits.
  * - 기각·수용 (`POST /admin/markets/:id/disputes/:disputeId/dismiss`, `…/accept`): one admin who is
  *   not the registrant of the dispute's judgement version — its approver may (#173 item 2) — with
- *   a reason the submitter reads (#173 item 7). Final. Accepting is a correction (#176): until a
- *   correction registered for it is approved the accepted dispute keeps holding the market, and a
- *   rejected correction sends it back to pending (owner answer 2026-11-02, #176's to build).
+ *   a reason the submitter reads (#173 item 7). A dismissal is final. Accepting is a correction
+ *   (#173 item 7, market-judgement.ts): the accepted dispute keeps holding the market until a
+ *   correction is approved, which moves the version past it (it stays accepted); a correction
+ *   registered for it that is rejected or retracted sends it back to pending, to be dismissed or
+ *   accepted again with a new correction (owner answer 2026-11-02; #176, ADR-0105).
+ * - 정정으로 종결 (#173 item 8): a correction's approval closes the replaced version's pending
+ *   disputes (`closed_by_correction`); their submitters may dispute the new version within its
+ *   new deadline — one per member per version.
  * - The hold (#173 items 1·7): a dispute of the current version pending or accepted
- *   (HOLDING_DISPUTE_STATUSES) keeps the market PROVISIONAL past its deadline. With none — every
- *   one dismissed or retracted — the worker confirms it at the deadline, or within seconds of the
- *   last dismissal after it (the API enqueues `market.resolve`); no review deadline (#173 item 7).
- * - The labels (#173 items 11·12, owner answer 2026-11-03): a held PROVISIONAL market reads '이의
- *   검토 중' before its deadline and '판정 지연' after it (`isDisputeUnderReview`,
- *   `isJudgementDelayed`, market-times.ts) — the public `Market` carries the flags, the deadline
- *   and whether disputes are taken (`disputeOpen`), so an anonymous visitor sees the deadline and
- *   the link (#173 item 6).
+ *   (HOLDING_DISPUTE_STATUSES) keeps the market PROVISIONAL past its deadline, and so does a
+ *   waiting correction (decision 3 '#176 정정 대기'). With neither — every dispute dismissed or
+ *   retracted — the worker confirms it at the deadline, or within seconds of the last dismissal
+ *   after it (the API enqueues `market.resolve`); no review deadline (#173 item 7).
+ * - The labels (#173 items 11·12, owner answer 2026-11-03): a PROVISIONAL market a dispute holds
+ *   reads '이의 검토 중' before its deadline, and one a dispute or a waiting correction holds '판정
+ *   지연' after it (`isDisputeUnderReview`, `isJudgementDelayed`, market-times.ts) — the public
+ *   `Market` carries the flags, the deadline and whether disputes are taken (`disputeOpen`), so an
+ *   anonymous visitor sees the deadline and the link (#173 item 6).
  *
  * The submitter and the body (the links and the reason) are the submitter's and the operators'
  * alone (#173 item 13, PRIVATE_DATA `dispute`); the count, the statuses and the decision reasons
@@ -67,32 +74,43 @@ export const DISPUTE_REASON_MAX = 2_000;
 
 // ---- statuses -------------------------------------------------------------------------
 /**
- * `market_disputes.status` (a varchar held by a CHECK, so #176 adds its own values):
+ * `market_disputes.status` (a varchar(20) held by a CHECK, so a value is a migration's):
  * - `pending` 검토 중: submitted and not decided — it holds the market;
  * - `dismissed` 기각: an admin found nothing to change (#173 item 7);
- * - `accepted` 수용: an admin accepted it, which is a correction (#176) — it holds the market until
- *   one is approved (owner answer 2026-11-02);
- * - `retracted` 철회: its submitter took it back within the deadline — still the one per version.
- * #176 adds '정정으로 종결' for the pending disputes of a corrected version (#173 item 8) and
- * accepted → pending for an accepted dispute whose correction is rejected.
+ * - `accepted` 수용: an admin accepted it, which is a correction (#173 item 7) — it holds the market
+ *   until a correction is approved and moves the version past it (owner answer 2026-11-02), and
+ *   goes back to `pending` when the correction registered for it is rejected or retracted;
+ * - `retracted` 철회: its submitter took it back within the deadline — still the one per version;
+ * - `closed_by_correction` 정정으로 종결 (#176, ADR-0105; #173 item 8): still pending when a
+ *   correction's approval replaced its version — `closedAt` the approval's instant, no decider.
  */
-export const MARKET_DISPUTE_STATUSES = ['pending', 'dismissed', 'accepted', 'retracted'] as const;
+export const MARKET_DISPUTE_STATUSES = [
+  'pending',
+  'dismissed',
+  'accepted',
+  'retracted',
+  'closed_by_correction',
+] as const;
 export type MarketDisputeStatus = (typeof MARKET_DISPUTE_STATUSES)[number];
 export const marketDisputeStatusSchema = z
   .enum(MARKET_DISPUTE_STATUSES)
   .meta({ id: 'MarketDisputeStatus' });
 
 /**
- * Where each status may go: a pending dispute is dismissed, accepted or retracted, once; nothing
- * leaves the others until #176. The database holds the same (`market_disputes_keep_record`).
+ * Where each status may go: a pending dispute is dismissed, accepted or retracted, or closed by a
+ * correction's approval (#173 item 8); an accepted one goes back to pending when the correction
+ * registered for it is rejected or retracted (owner answer 2026-11-02; #176, ADR-0105) — its
+ * decision cleared, its submission kept — and is decided again. Nothing leaves the others. The
+ * database holds the same (`market_disputes_keep_record`).
  */
 export const MARKET_DISPUTE_TRANSITIONS: Readonly<
   Record<MarketDisputeStatus, readonly MarketDisputeStatus[]>
 > = {
-  pending: ['dismissed', 'accepted', 'retracted'],
+  pending: ['dismissed', 'accepted', 'retracted', 'closed_by_correction'],
   dismissed: [],
-  accepted: [],
+  accepted: ['pending'],
   retracted: [],
+  closed_by_correction: [],
 };
 
 export function canMoveMarketDispute(from: MarketDisputeStatus, to: MarketDisputeStatus): boolean {
@@ -102,7 +120,8 @@ export function canMoveMarketDispute(from: MarketDisputeStatus, to: MarketDisput
 /**
  * The statuses that hold a PROVISIONAL market's confirmation, of its current judgement version
  * (#173 items 1·7; owner answer 2026-11-02): an undecided dispute, and an accepted one waiting for
- * its correction (#176). `markets.dispute_hold_count` counts these, for the labels alone.
+ * its correction — once a correction moves the version neither holds (#176, ADR-0105).
+ * `markets.dispute_hold_count` counts these, for the labels alone.
  */
 export const HOLDING_DISPUTE_STATUSES = [
   'pending',
@@ -136,17 +155,18 @@ export const MARKET_DISPUTE_DECISION_ACTION_TYPES = {
  * market that is not public:
  * - `not_provisional`: the market shows no provisional result — not judged yet, or confirmed;
  * - `stale_version`: the body's `judgementVersion` is not the market's current one — the screen
- *   showed a result a correction (#176) has replaced since, as `expectedAccountId` guards the
- *   account;
+ *   showed a result a correction (#176, ADR-0105) has replaced since, as `expectedAccountId`
+ *   guards the account;
  * - `deadline_passed`: the 이의 기한 has come (`now >= disputeDeadline`, the database clock);
  * - `admin`: the submitter holds the admin role (#173 item 15);
  * - `no_fill`: the submitter has no fill on the market, on either side (#173 item 6);
  * - `duplicate`: the submitter has a dispute of that version already, a retracted one included.
- * A retraction (DISPUTE_RETRACTION_REFUSALS): `decided` (dismissed or accepted), `retracted`, or
- * `deadline_passed`. A decision (DISPUTE_DECISION_REFUSALS): `retracted`, `decided`,
- * `registrant` — the deciding admin registered the dispute's judgement version (#173 item 2; its
- * approver may decide) — or `own`: the deciding admin submitted the dispute (an account given the
- * admin role after it disputed). A dispute of another account or market is NOT_FOUND.
+ * A retraction (DISPUTE_RETRACTION_REFUSALS): `decided` (dismissed, accepted or closed by a
+ * correction, #176), `retracted`, or `deadline_passed`. A decision (DISPUTE_DECISION_REFUSALS):
+ * `retracted`, `decided` (as a retraction's), `registrant` — the deciding admin registered the
+ * dispute's judgement version (#173 item 2; its approver may decide) — or `own`: the deciding
+ * admin submitted the dispute (an account given the admin role after it disputed). A dispute of
+ * another account or market is NOT_FOUND.
  */
 export const DISPUTE_NOT_ALLOWED_REASONS = [
   'not_provisional',
@@ -206,7 +226,8 @@ const instantMs = (at: string | Date) => (typeof at === 'string' ? Date.parse(at
 
 /**
  * Why its submitter may not retract a dispute at `nowMs` — its status first, then its version's
- * 이의 기한 — or null when they may (#173 item 6: 기한 안에 철회할 수 있다). The retraction refuses
+ * 이의 기한 — or null when they may (#173 item 6: 기한 안에 철회할 수 있다): a pending one, one a
+ * rejected or retracted correction sent back to pending included (#176). The retraction refuses
  * with it on the database clock; `MyDispute.retractable` is its null at the read.
  */
 export function disputeRetractionRefusal(
@@ -221,12 +242,13 @@ export function disputeRetractionRefusal(
 }
 
 /**
- * Why `adminId` may not dismiss or accept a dispute — its status first, then whether `adminId`
- * registered the dispute's judgement version (`registeredBy`, `market_judgements.registered_by`;
- * #173 item 2), then whether `adminId` submitted it (`submittedBy`: an admin never submits, but a
- * member given the role after disputing would decide their own) — or null when they may. The
- * decision refuses with it; the admin screen turns the buttons off by it. Admins who declared an
- * interest (#173 item 15) are #143's to add.
+ * Why `adminId` may not dismiss or accept a dispute — its status first (pending alone: again once
+ * a rejected or retracted correction sent it back, #176), then whether `adminId` registered the
+ * dispute's judgement version (`registeredBy`, `market_judgements.registered_by`; #173 item 2),
+ * then whether `adminId` submitted it (`submittedBy`: an admin never submits, but a member given
+ * the role after disputing would decide their own) — or null when they may. The decision refuses
+ * with it; the admin screen turns the buttons off by it. Admins who declared an interest (#173
+ * item 15) are #143's to add.
  */
 export function disputeDecisionRefusal(
   dispute: { status: MarketDisputeStatus },
@@ -333,9 +355,19 @@ export type MarketDisputeDismissActionPayload = MarketDisputeDecisionActionPaylo
 export type MarketDisputeAcceptActionPayload = MarketDisputeDecisionActionPayload;
 
 // ---- read models ----------------------------------------------------------------------
-/** The market a dispute is about, as the member's and the operators' lists link to it. */
+/**
+ * The market a dispute is about, as the member's and the operators' lists link to it, with its
+ * current judgement version (`Market.judgementVersion`, public; never null — a dispute is of a
+ * judged market): a dispute of an older version is one a correction replaced (#176, ADR-0105).
+ */
 export const disputeMarketSchema = z
-  .object({ id: z.uuid(), slug: z.string(), title: z.string(), status: marketStatusSchema })
+  .object({
+    id: z.uuid(),
+    slug: z.string(),
+    title: z.string(),
+    status: marketStatusSchema,
+    judgementVersion: judgementVersionSchema,
+  })
   .meta({ id: 'DisputeMarket' });
 export type DisputeMarket = z.infer<typeof disputeMarketSchema>;
 
@@ -348,12 +380,20 @@ const disputeFields = {
   reason: z.string(),
   status: marketDisputeStatusSchema,
   submittedAt: z.iso.datetime(),
-  /** The 기각 or 수용; null while pending or once retracted. */
+  /**
+   * The 기각 or 수용; null while pending — a rejected correction's reopening clears it (#176) — once
+   * retracted and once closed by a correction.
+   */
   decidedAt: z.iso.datetime().nullable(),
   /** The decision's reason, which the submitter reads (#173 item 7); null as `decidedAt`. */
   decisionReason: z.string().nullable(),
   /** The 철회; null unless retracted. */
   retractedAt: z.iso.datetime().nullable(),
+  /**
+   * 정정으로 종결 (#176, ADR-0105): the approval of the correction that replaced its version; null
+   * unless `closed_by_correction`.
+   */
+  closedAt: z.iso.datetime().nullable(),
 };
 
 /**
@@ -389,9 +429,9 @@ export type MyMarketDispute = z.infer<typeof myMarketDisputeSchema>;
 /**
  * A dispute on the admin screens: what was submitted, by whom (`submitter`; a closed account
  * keeps its id with a null nickname — its pending dispute is still decided, ADR-0069 decision 4
- * #140), how it ended and who decided it. `purgedAt`: a closed account's decided or retracted
- * dispute whose links and reason the retention emptied (`retention.moderation_records`; `links`
- * empty and `reason` '' then), null otherwise.
+ * #140), how it ended and who decided it. `purgedAt`: a closed account's decided, retracted or
+ * correction-closed dispute whose links and reason the retention emptied
+ * (`retention.moderation_records`; `links` empty and `reason` '' then), null otherwise.
  */
 export const adminMarketDisputeSchema = z
   .object({
@@ -417,9 +457,10 @@ export const adminMarketDisputesSchema = z
 export type AdminMarketDisputes = z.infer<typeof adminMarketDisputesSchema>;
 
 /**
- * `GET /admin/market-disputes` (이의 접수): `pending` — 검토 대기, the oldest submission first — or
- * `decided` — 처리됨, every dispute no longer pending (dismissed, accepted or retracted), the newest
- * first (ADMIN_DISPUTE_LIST_STATUS_MEMBERS).
+ * `GET /admin/market-disputes` (이의 접수): `pending` — 검토 대기, the oldest submission first, a
+ * dispute a rejected correction reopened among them by its submission — or `decided` — 처리됨,
+ * every dispute no longer pending (dismissed, accepted, retracted or closed by a correction), the
+ * newest ending first (ADMIN_DISPUTE_LIST_STATUS_MEMBERS).
  */
 export const ADMIN_DISPUTE_LIST_STATUSES = ['pending', 'decided'] as const;
 export type AdminDisputeListStatus = (typeof ADMIN_DISPUTE_LIST_STATUSES)[number];
@@ -427,7 +468,7 @@ export type AdminDisputeListStatus = (typeof ADMIN_DISPUTE_LIST_STATUSES)[number
 /** The dispute statuses each half of the list holds. */
 export const ADMIN_DISPUTE_LIST_STATUS_MEMBERS = {
   pending: ['pending'],
-  decided: ['dismissed', 'accepted', 'retracted'],
+  decided: ['dismissed', 'accepted', 'retracted', 'closed_by_correction'],
 } as const satisfies Record<AdminDisputeListStatus, readonly MarketDisputeStatus[]>;
 
 /** `GET /admin/market-disputes` (no `.meta`: query DTO), `pending` unless named. */

@@ -18,8 +18,9 @@ export interface LabelledMarket {
 /**
  * Whether a market's status reads '판정 지연' (ADR-0093 decision 1 #173 items 11·12; #22,
  * ADR-0098; #175, ADR-0104): a CLOSED market whose scheduled judgement has passed (예정 판정 시각이
- * 지나면 운영자 기록이 없어도 '판정 지연'으로 보인다), and a PROVISIONAL one a 판정 이의 still holds once
- * its 이의 기한 has passed (owner answer 2026-11-03). A display, not a status — no list filters by
+ * 지나면 운영자 기록이 없어도 '판정 지연'으로 보인다), and a PROVISIONAL one a 판정 이의 or a correction
+ * waiting for its approval (#176, ADR-0105, decision 3 '#176 정정 대기') still holds once its 이의
+ * 기한 has passed (owner answer 2026-11-03). A display, not a status — no list filters by
  * it (ADR-0095 8-6). The status is checked here as well as on the server: a `market:status` moves
  * a cached row's status and resets the flags (`applyStatus`), and a flag read for one status must
  * never label another — no other status reads delayed, whatever a cached row still holds.
@@ -31,8 +32,10 @@ export function readsJudgementDelayed(market: LabelledMarket): boolean {
 /**
  * Whether a market's status reads '이의 검토 중' (#173 item 12, #175, ADR-0104): a PROVISIONAL market
  * a 판정 이의 of its current judgement version holds (pending, or accepted and waiting for its
- * correction, #176) — before its 이의 기한; past it the same market reads '판정 지연'
- * (`readsJudgementDelayed`, which comes first). PROVISIONAL only, whatever a cached row holds.
+ * correction) — before its 이의 기한; past it the same market reads '판정 지연'
+ * (`readsJudgementDelayed`, which comes first). A correction waiting with no dispute holding the
+ * market is not under review: '잠정 결과' before the deadline (#176, ADR-0105). PROVISIONAL only,
+ * whatever a cached row holds.
  */
 export function readsDisputeUnderReview(market: LabelledMarket): boolean {
   return market.status === 'provisional' && market.disputeUnderReview;

@@ -66,7 +66,9 @@ import { marketStatusLabel } from '@/lib/market-status';
  * the server's `now` (`useDisputeOpen`) — a held market publishes nothing then. The standing is
  * the member's (`GET /me/disputes/markets/:id`, private), read once the session is known; the form
  * is drawn for the account of `GET /me` and keyed by it (ADR-0091), and submits the version the
- * standing was read for — the server refuses a version a correction (#176) replaced since.
+ * standing was read for — the server refuses a version a correction (#176) replaced since. After
+ * a correction the standing is the new version's: the form is offered again, and the member's
+ * dispute of the replaced version (정정으로 종결, or 수용 answered by it) is MY's.
  */
 export function DisputeScreen({ marketId, now }: { marketId: string; now?: number }) {
   useMarketSocket([marketId]);
@@ -74,11 +76,9 @@ export function DisputeScreen({ marketId, now }: { marketId: string; now?: numbe
   const market = useMarket(marketId);
   const data = market.data;
   // At the deadline a held market publishes nothing: its badge turns 판정 지연 on a fresh read, as
-  // the detail's (`StatusNotice`).
+  // the detail's (`StatusNotice`) — whatever holds it, a waiting correction too (#176, ADR-0105).
   const open = useDisputeOpen(data ?? { disputeOpen: false, disputeDeadline: null }, now, () => {
-    if (data?.disputeUnderReview === true) {
-      void queryClient.invalidateQueries({ queryKey: marketKey(marketId) });
-    }
+    void queryClient.invalidateQueries({ queryKey: marketKey(marketId) });
   });
   return (
     <Stack gap="6" data-testid="dispute-screen">
@@ -222,8 +222,9 @@ function DisputeBody({
   // The standing of the account this body was drawn for (ADR-0091, `myMarketDisputeKey`).
   const standing = useMyMarketDispute(market.id, accountId);
   // A standing read for another judgement version than the live row's — the screen was opened on
-  // the CLOSED market the socket has since moved to 잠정 결과, or before a correction (#176) — is
-  // read again; until then it says nothing of this version (`disputeScreenView`).
+  // the CLOSED market the socket has since moved to 잠정 결과, or before a correction (#176) moved
+  // the version on — is read again; until then it says nothing of this version
+  // (`disputeScreenView`).
   const stale =
     standing.data !== undefined &&
     market.judgementVersion !== null &&

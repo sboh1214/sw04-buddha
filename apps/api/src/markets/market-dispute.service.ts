@@ -49,12 +49,19 @@ const { marketDisputes, marketJudgements, markets, profiles } = schema;
 const notFound = (what: 'Market' | 'Dispute') =>
   new AppError('NOT_FOUND', { message: `${what} not found` });
 
-const marketRefOf = (row: MarketRow): DisputeMarketRef => ({
-  id: row.id,
-  slug: row.slug,
-  title: row.title,
-  status: row.status,
-});
+/** A disputed market's link, its current version among it (a disputed market has one). */
+function marketRefOf(row: MarketRow): DisputeMarketRef {
+  if (row.judgementVersion === null) {
+    throw new AppError('INTERNAL', { message: `Disputed market ${row.id} has no judgement` });
+  }
+  return {
+    id: row.id,
+    slug: row.slug,
+    title: row.title,
+    status: row.status,
+    judgementVersion: row.judgementVersion,
+  };
+}
 
 /**
  * 판정 이의 (#175, ADR-0104; ADR-0093 decision 1 #173 items 1·2·5–8·13·15, the owner's answers of
@@ -72,7 +79,9 @@ const marketRefOf = (row: MarketRow): DisputeMarketRef => ({
  *   approver may (#173 item 2) — with a reason the submitter reads (#173 item 7), written with its
  *   `admin_actions` row (`market_dispute_dismiss|accept`, payload the dispute, its version and the
  *   reason — never the submitter's body). An acceptance keeps holding the market: it is a
- *   correction, #176's (owner answer 2026-11-02).
+ *   correction (owner answer 2026-11-02), registered and approved by MarketJudgementService
+ *   (#176, ADR-0105) — whose approval moves the version past it, and whose 반려 or 철회 sends it
+ *   back to pending, to be decided here again.
  * - The reads: the member's own (`listMine`, `myMarketDispute` — the dispute screen's standing,
  *   asked as the submission would), and 이의 접수 (`adminList`). A market's disputes on the admin
  *   detail are `AdminMarket.disputes` (`readAdminMarketDisputes`).
@@ -149,8 +158,10 @@ export class MarketDisputeService {
 
   /**
    * 철회 (`POST /me/disputes/:disputeId/retract`): the submitter's own dispute — anybody else's is
-   * NOT_FOUND — refused DISPUTE_NOT_ALLOWED `retracted`, `decided` (dismissed or accepted) or
-   * `deadline_passed` (`retractMarketDispute`, status first). Answers the dispute, retracted.
+   * NOT_FOUND — refused DISPUTE_NOT_ALLOWED `retracted`, `decided` (dismissed, accepted or closed
+   * by a correction, #176) or `deadline_passed` (`retractMarketDispute`, status first). One a
+   * rejected or retracted correction sent back to pending is retractable again before the
+   * deadline. Answers the dispute, retracted.
    */
   async retract(userId: string, disputeId: string): Promise<MyDispute> {
     // Its market first, unlocked, for the market lock: a dispute never moves to another market.
@@ -326,7 +337,8 @@ export class MarketDisputeService {
 
   /**
    * 이의 접수 (`GET /admin/market-disputes`): 검토 대기 (`pending`, the oldest submission first) or
-   * 처리됨 (`decided`, the latest decision or retraction first), keyset-paginated.
+   * 처리됨 (`decided`, the latest decision, retraction or closure by a correction first),
+   * keyset-paginated.
    */
   async adminList(query: AdminDisputeListQuery): Promise<Page<AdminDisputeQueueItem>> {
     const page = await readAdminDisputes(this.db, {

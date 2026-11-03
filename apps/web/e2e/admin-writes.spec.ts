@@ -1029,10 +1029,11 @@ test.describe('탭의 세션이 아직 앞 관리자를 말하는데 `GET /me`�
   // check (ADR-0092) takes them. What A opened or typed on the screen would go with them: the
   // result A picked for a judgement and what A wrote it confirmed, the reason A gave a setting, A's
   // mark of a link, the market, theme, notice, rejection, memo, coupon or package A typed. The
-  // owner's «적용함»: an open dialog — or a form opened from a button, as the 판정 등록 (#152) — is
-  // held for the admin who opened it and closes (`useHeldForOperator`, ADR-0091 결정 3·5-5), and a
-  // form on the screen is drawn again for each admin, empty (`key`). One of each per area here;
-  // the rest are pinned in the sources (lib/admin-writes.test.ts).
+  // owner's «적용함»: an open dialog — or a form opened from a button, as the 판정 등록 (#152) and
+  // its 판정 정정 (#176, the same form) — is held for the admin who opened it and closes
+  // (`useHeldForOperator`, ADR-0091 결정 3·5-5), and a form on the screen is drawn again for each
+  // admin, empty (`key`). One of each per area here; the rest are pinned in the sources
+  // (lib/admin-writes.test.ts).
 
   test('시장 만들기 양식에 앞 관리자가 적던 것은 다른 관리자의 것으로 비어 다시 그려지고, 아무것도 보내지 않는다', async ({
     browser,

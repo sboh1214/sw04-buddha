@@ -28,7 +28,10 @@
  * submitted on it with a fill, which the admin dismissed with a reason, and the market confirmed
  * at its deadline; and a PROVISIONAL market in the same theme, its deadline ahead, where A has a
  * fill and a pending 판정 이의 (#175: the submitter and the body — the links and the reason — are
- * A's and the operators' alone, the decider the operators' alone, #173 item 13). Then:
+ * A's and the operators' alone, the decider the operators' alone, #173 item 13); and one more
+ * there whose v1 a 판정 정정 A registered replaced, another admin approving it (#176: v1's grounds,
+ * the 정정 사유, the new grounds and both approvals are operators' until #24, the card and the
+ * detail carry v2 alone). Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability — except that a route registered
@@ -50,8 +53,10 @@
  *   answer shows A's values and none of `NEVER_SHOWN`;
  * - the market room is listened to, anonymously and as B, while A's own events are published and
  *   smuggled onto the market channel and the API publishes real market events: a pause (#114),
- *   the approval of a judgement A registered, which publishes its provisional result (#152), and
- *   the dismissal of A's pending 판정 이의, which republishes the market's unchanged status (#175).
+ *   the approval of a judgement A registered, which publishes its provisional result (#152), the
+ *   dismissal of A's pending 판정 이의, which republishes the market's unchanged status (#175), and
+ *   the approval of a 판정 정정 of that judgement A registered, which publishes the new version's
+ *   result under a new key (#176).
  *
  * The routes come from the registry, which registry.test.ts holds to the module graph; this file
  * only knows how to call them. A route whose parameters, query keys or body it does not know
@@ -64,6 +69,8 @@ import {
   createApprovalRequest,
   createCategory,
   createConsents,
+  createCorrectedMarket,
+  createCorrectionRequest,
   createDispute,
   createMarket,
   createMarketLink,
@@ -212,6 +219,13 @@ interface Fixture {
   disputedMarket: MarketRow;
   /** A's pending 판정 이의 on `disputedMarket`: the id B's retract names. */
   disputeId: string;
+  /**
+   * PROVISIONAL at version 2 (#176), in `theme` too: its v1 corrected at A's registration — so a
+   * public answer carrying v1's grounds, the 정정 사유 or the correction's grounds, either
+   * approval's reason or id, or who registered it, would carry A's values; its card and its detail
+   * carry v2, its result and deadline alone.
+   */
+  correctedMarket: MarketRow;
   /**
    * Closed, and on A's watchlist alone (#89). Closed so no public call here lists it — `GET
    * /markets` is called without a query and lists open markets, and the detail routes are called
@@ -1774,7 +1788,39 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       links: [disputeText.link],
       reason: disputeText.reason,
     });
-    for (const linked of [market, judged, disputed]) {
+    // 판정 정정 (#176): a PROVISIONAL market in the same theme whose v1 — its evidence and
+    // description — a correction A registered replaced with v2, with its 정정 사유 and new
+    // grounds, another admin approving it (the records as the routes write them). The earlier
+    // versions and the reasons are operators' until #24 (#173 item 13); who registered or
+    // approved one is nobody's.
+    const correctionText = {
+      v1Description: `leak-corrected-v1-description-${tag}`,
+      v1Link: `https://example.com/leak-corrected-v1-evidence-${tag}`,
+      v1Approval: `leak-corrected-v1-approval-${tag}`,
+      reason: `leak-correction-reason-${tag}`,
+      description: `leak-correction-description-${tag}`,
+      link: `https://example.com/leak-correction-evidence-${tag}`,
+      approval: `leak-correction-approval-${tag}`,
+    };
+    const {
+      market: corrected,
+      previous: correctedV1,
+      request: correction,
+    } = await createCorrectedMarket(t.db, {
+      provisional: {
+        market: { createdBy: admin.id },
+        description: correctionText.v1Description,
+        evidence: { links: [correctionText.v1Link] },
+        approvalReason: correctionText.v1Approval,
+      },
+      reason: correctionText.reason,
+      description: correctionText.description,
+      evidence: { links: [correctionText.link] },
+      registeredBy: a.id,
+      approvedBy: admin.id,
+      approvalReason: correctionText.approval,
+    });
+    for (const linked of [market, judged, disputed, corrected]) {
       await createThemeMarket(t.db, {
         themeId: theme.id,
         marketId: linked.id,
@@ -1859,6 +1905,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       judgedMarket: judged,
       disputedMarket: disputed,
       disputeId: dispute.id,
+      correctedMarket: corrected,
       watchedCategory: watchedCategory!.slug,
       searchId: search.id,
       proposalId: proposal.id,
@@ -1930,6 +1977,15 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('decided dispute link', disputeText.decidedLink),
         text('decided dispute reason', disputeText.decidedReason),
         text('dispute decision reason', disputeText.decision),
+        text('corrected v1 description', correctionText.v1Description),
+        text('corrected v1 evidence link', correctionText.v1Link),
+        text('corrected v1 approval reason', correctionText.v1Approval),
+        text('corrected v1 approval id', correctedV1.approvalId),
+        text('correction reason', correctionText.reason),
+        text('correction description', correctionText.description),
+        text('correction evidence link', correctionText.link),
+        text('correction approval reason', correctionText.approval),
+        text('correction request id', correction.id),
         text('rejected judgement description', judgementText.rejectedDescription),
         text('rejected judgement void reason', judgementText.rejectedVoidReason),
         text('judgement rejection', judgementText.rejection),
@@ -2035,15 +2091,16 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     const answers: { route: string; caller: string; status: number; leaks: string[] }[] = [];
     const bodies = new Map<string, string>();
     const persons: { route: string; caller: string; shown: string[] }[] = [];
+    const callers = [
+      ['anonymous', undefined],
+      ['B', f.b.cookie],
+      ['A', f.a.cookie],
+    ] as const;
     for (const key of Object.keys(PUBLIC_ROUTES)) {
       // A route that shows a person (ADR-0069 decision 5) may hold A's nickname and public id as
       // the author it shows; every other value of A — the account id first — is still a leak.
       const allowed = PUBLIC_ROUTES[key]!.showsPerson === undefined ? [] : PERSON_LABELS;
-      for (const [caller, cookie] of [
-        ['anonymous', undefined],
-        ['B', f.b.cookie],
-        ['A', f.a.cookie],
-      ] as const) {
+      for (const [caller, cookie] of callers) {
         const res = await call(routeOf(key), {
           params: valuesOf(publicParamsOf(key), f),
           body: PUBLIC_BODIES[key]?.(f),
@@ -2070,6 +2127,23 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
           ],
         });
       }
+    }
+    // And the corrected market's own detail (#176), where its judgement is read: v2 alone, nothing
+    // of v1's grounds, the correction, either approval or who registered them.
+    const correctedDetail = routeOf('GET /markets/:idOrSlug');
+    let correctedBody = '';
+    for (const [caller, cookie] of callers) {
+      const res = await call(correctedDetail, {
+        params: { idOrSlug: f.correctedMarket.slug },
+        cookie,
+      });
+      if (caller === 'anonymous') correctedBody = res.body;
+      answers.push({
+        route: correctedDetail.key,
+        caller,
+        status: res.statusCode,
+        leaks: [...leaked(res.body), ...forbiddenFields(res.body)],
+      });
     }
     expect(answers).toEqual(
       answers.map(({ route, caller }) => ({
@@ -2226,7 +2300,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     expect(ids('GET /themes')).toEqual([f.theme.id]);
     expect(ids('GET /markets/:id/themes')).toEqual([f.theme.id]);
     expect(ids('GET /themes/:id/markets').sort()).toEqual(
-      [f.market.id, f.judgedMarket.id, f.disputedMarket.id].sort(),
+      [f.market.id, f.judgedMarket.id, f.disputedMarket.id, f.correctedMarket.id].sort(),
     );
     // The disputed market's card carried its public deadline, its version and '이의 검토 중' (#175,
     // #173 items 6·12) — and none of A's dispute, which the check above found in no answer.
@@ -2240,6 +2314,29 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       disputeOpen: true,
       disputeUnderReview: true,
       judgementDelayed: false,
+    });
+    // The corrected market's card carried v2 with its result and new deadline (#176) — and none of
+    // the correction, which the check above found in no answer.
+    const correctedCard = (
+      parse(bodies.get('GET /themes/:id/markets')!) as { data: Record<string, unknown>[] }
+    ).data.find((row) => row.id === f.correctedMarket.id);
+    expect(correctedCard).toMatchObject({
+      status: 'provisional',
+      resolvedResult: f.correctedMarket.resolvedResult,
+      judgementVersion: 2,
+      disputeDeadline: f.correctedMarket.disputeDeadline!.toISOString(),
+      disputeOpen: true,
+    });
+    // Its detail said the same, so the check above read the corrected market's judgement.
+    expect(parse(correctedBody)).toMatchObject({
+      data: {
+        id: f.correctedMarket.id,
+        status: 'provisional',
+        resolvedResult: f.correctedMarket.resolvedResult,
+        judgementVersion: 2,
+        disputeDeadline: f.correctedMarket.disputeDeadline!.toISOString(),
+        disputeOpen: true,
+      },
     });
     expect(ids('GET /themes/:id/results', 'marketId')).toEqual([f.judgedMarket.id]);
     const page = parse(bodies.get('GET /themes/:idOrSlug')!) as { data: { notices: object[] } };
@@ -2788,8 +2885,32 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       },
     });
     expect(dismissed.statusCode, dismissed.body).toBe(200);
+    // And a 판정 정정 (#176): A registers one of the judgement just published, with its 정정 사유
+    // and grounds (the record, as the fixture's, needs no admin role of A's), and the admin
+    // approves it with a reason — v2's result goes public under a new key, never the reason, the
+    // grounds, the registrant or the approval.
+    const sentinel = (label: string) => f.sentinels.find((s) => s.label === label)!.value;
+    const correction = await createCorrectionRequest(t.db, {
+      marketId: closed.id,
+      by: f.a.id,
+      result: 'NO',
+      reason: sentinel('correction reason'),
+      description: sentinel('correction description'),
+      evidence: { links: [sentinel('correction evidence link')] },
+    });
+    const corrected = await t.app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/markets/${closed.id}/judgements/${correction.id}/approve`,
+      headers: { origin: ORIGIN, 'content-type': 'application/json', cookie: f.admin.cookie },
+      payload: {
+        reason: sentinel('correction approval reason'),
+        eventDeadlineConfirmed: true,
+        expectedAccountId: f.admin.id,
+      },
+    });
+    expect(corrected.statusCode, corrected.body).toBe(200);
     const started = Date.now();
-    while (received.filter((entry) => entry.event === 'market:status').length < 6) {
+    while (received.filter((entry) => entry.event === 'market:status').length < 8) {
       if (Date.now() - started > 5_000) throw new Error('market:status did not reach both');
       await sleep(20);
     }
@@ -2800,25 +2921,39 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       'B market:status',
       'B market:status',
       'B market:status',
+      'B market:status',
+      'anonymous market:status',
       'anonymous market:status',
       'anonymous market:status',
       'anonymous market:status',
     ]);
-    const statusesOf = (marketId: string) =>
+    const payloadsOf = (marketId: string) =>
       received
-        .map(({ payload }) => payload as { marketId: string; status: string })
-        .filter((payload) => payload.marketId === marketId)
-        .map((payload) => payload.status);
-    expect(statusesOf(closed.id)).toEqual(['provisional', 'provisional']);
+        .map(
+          ({ payload }) => payload as { marketId: string; status: string; resolvedResult: string },
+        )
+        .filter((payload) => payload.marketId === marketId);
+    const statusesOf = (marketId: string) => payloadsOf(marketId).map(({ status }) => status);
+    expect(statusesOf(closed.id)).toEqual(Array.from({ length: 4 }, () => 'provisional'));
+    // Each watcher had the provisional YES and the corrected NO.
+    expect(
+      payloadsOf(closed.id)
+        .map(({ resolvedResult }) => resolvedResult)
+        .sort(),
+    ).toEqual(['NO', 'NO', 'YES', 'YES']);
     expect(statusesOf(f.disputedMarket.id)).toEqual(['provisional', 'provisional']);
     for (const { event, payload } of received) {
       const registered = REALTIME_EVENT_REGISTRY[event as keyof typeof REALTIME_EVENT_REGISTRY];
       expect({ event, channel: registered?.channel }).toEqual({ event, channel: 'market' });
       const body = JSON.stringify(payload);
-      expect({ event, leaks: [...leaked(body), ...forbiddenFields(body)] }).toEqual({
+      expect({
         event,
-        leaks: [],
-      });
+        leaks: [
+          ...leaked(body),
+          ...forbiddenFields(body),
+          ...(body.includes(correction.id) ? ['correction request id'] : []),
+        ],
+      }).toEqual({ event, leaks: [] });
     }
   });
 });

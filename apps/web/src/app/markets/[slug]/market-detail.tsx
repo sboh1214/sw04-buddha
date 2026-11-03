@@ -545,11 +545,11 @@ function MarketSummary({
  */
 export function StatusNotice({ market, now }: { market: Market; now?: number }) {
   const queryClient = useQueryClient();
-  // At the deadline a held market publishes nothing: its label turns 판정 지연 on a fresh read.
+  // At the deadline a held market publishes nothing: its label turns 판정 지연 on a fresh read. A
+  // waiting correction holds one too (#176, ADR-0105), which the public market cannot tell apart
+  // (it has no 이의 검토 중), so every 잠정 결과 is read again then; an unheld one is soon confirmed.
   const open = useDisputeOpen(market, now, () => {
-    if (market.disputeUnderReview) {
-      void queryClient.invalidateQueries({ queryKey: marketKey(market.id) });
-    }
+    void queryClient.invalidateQueries({ queryKey: marketKey(market.id) });
   });
   const notice = statusNotice(market);
   if (notice === undefined) return null;

@@ -16,7 +16,7 @@ import {
   type MarketPauseEndKind,
   type MarketPauseReviewResult,
 } from '@buddha/shared';
-import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, lte, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
@@ -25,11 +25,12 @@ import { type Executor } from './market-item-rules.js';
 import { type MarketRow } from './market.service.js';
 
 /**
- * 판정 등록과 별도 검토자 승인 (#152, ADR-0103; market-judgement.ts in @buddha/shared and
- * @buddha/db) as the admin screens read it: a market's judgements (`market_judgements`, the
- * current one) and its `market_judgement` registrations (`AdminMarket.judgement`), and the 판정
- * 승인 대기 queue. MarketJudgementService's writes read the registrations, the rule's sources and
- * the last pause here too, under the market lock.
+ * 판정 등록과 별도 검토자 승인 (#152, ADR-0103) and 판정 정정 (#176, ADR-0105; market-judgement.ts
+ * in @buddha/shared and @buddha/db) as the admin screens read it: a market's judgements
+ * (`market_judgements`: the current one and the versions corrections replaced) and its
+ * `market_judgement` registrations, a correction's among them (`AdminMarket.judgement`), and the
+ * 판정 승인 대기 queue. MarketJudgementService's writes read the registrations, the rule's
+ * sources, the last pause and a correction's accepted disputes here too, under the market lock.
  *
  * An account is named as every admin record names one (`AdminAccountActor`, as market-pause.ts):
  * its id and its current nickname, read from `profiles` — null once its member closed it (#140).
@@ -38,8 +39,15 @@ import { type MarketRow } from './market.service.js';
  * never who registered or approved it (ADR-0093 decision 1 #173 item 13).
  */
 
-const { approvalRequests, marketJudgements, marketPauses, marketSources, markets, profiles } =
-  schema;
+const {
+  approvalRequests,
+  marketDisputes,
+  marketJudgements,
+  marketPauses,
+  marketSources,
+  markets,
+  profiles,
+} = schema;
 
 /** An account as the admin screen names it (see the module doc). */
 const actor = (id: string, nickname: string | null): AdminAccountActor => ({ id, nickname });
@@ -65,8 +73,9 @@ export interface JudgementRequest {
 
 /**
  * A registration's payload (`approval_requests.payload`, frozen at the insert): `{result, source,
- * fallbackReason, voidReason, evidence, ruleVersion}` as MarketJudgementService wrote it. Anything
- * else is a broken invariant — INTERNAL, never an answer.
+ * fallbackReason, voidReason, evidence, ruleVersion, correction}` as MarketJudgementService wrote
+ * it — `correction` null for a first judgement, and for a row written before #176, which has no
+ * such key. Anything else is a broken invariant — INTERNAL, never an answer.
  */
 export function judgementPayloadOf(
   request: Pick<JudgementRequest, 'id' | 'payload'>,
@@ -106,8 +115,9 @@ export async function judgementRequestOf(
 }
 
 /**
- * Whether a registration of the market waits: read under the market lock, which every judgement
- * write holds, so at most one ever does (MarketJudgementService.register).
+ * Whether a registration of the market waits — a first judgement's or a correction's: read under
+ * the market lock, which every judgement write holds, so at most one ever does
+ * (MarketJudgementService.register).
  */
 export async function hasPendingJudgement(executor: Executor, marketId: string): Promise<boolean> {
   const [row] = await executor
@@ -116,6 +126,31 @@ export async function hasPendingJudgement(executor: Executor, marketId: string):
     .where(and(judgementRequestsOf(marketId), eq(approvalRequests.status, 'pending')))
     .limit(1);
   return row !== undefined;
+}
+
+/**
+ * The ids of the market's disputes of judgement version `version` that are `accepted`, the oldest
+ * submission first (`market_disputes`): what a 판정 정정 of that version answers (#176, its
+ * payload's `correction.disputeIds`) — read under the market lock, which every dispute write
+ * holds.
+ */
+export async function acceptedDisputeIdsOf(
+  executor: Executor,
+  marketId: string,
+  version: number,
+): Promise<string[]> {
+  const rows = await executor
+    .select({ id: marketDisputes.id })
+    .from(marketDisputes)
+    .where(
+      and(
+        eq(marketDisputes.marketId, marketId),
+        eq(marketDisputes.judgementVersion, version),
+        eq(marketDisputes.status, 'accepted'),
+      ),
+    )
+    .orderBy(asc(marketDisputes.submittedAt), asc(marketDisputes.id));
+  return rows.map((row) => row.id);
 }
 
 /**
@@ -181,61 +216,64 @@ const decider = alias(profiles, 'judgement_decider');
 
 /**
  * `AdminMarket.judgement` (#152, every status), through `executor` so a write answers with what it
- * wrote: the market's current judgement — the `market_judgements` row `row.judgement_version`
- * names, with who registered and who approved it; null before an approval, and for a market the
- * interim route judged before #152 (D4) or a factory wrote PROVISIONAL with no row — every
- * `market_judgement` request of the market, the newest first, with how it ended (the decider, the
- * decision's instant and reason, the 철회's instant, the version an approval made) and the one
- * waiting, if any; and whether `market.dispute_window` is undecided, as the caller read it in the
- * same snapshot. One statement each.
+ * wrote: the market's judgements, each with who registered and who approved it and its 정정 사유
+ * (#176) — the current one, the `market_judgements` row `row.judgement_version` names (null before
+ * an approval, and for a market the interim route judged before #152 (D4) or a factory wrote
+ * PROVISIONAL with no row), and 판정 버전 이력, the versions before it a correction replaced, the
+ * newest first, each as it was published (#173 item 13) — every `market_judgement` request of the
+ * market, the newest first, with whether it is a correction (its `correction`) and how it ended
+ * (the decider, the decision's instant and reason, the 철회's instant, the version an approval
+ * made) and the one waiting, if any; and whether `market.dispute_window` is undecided, as the
+ * caller read it in the same snapshot. One statement each.
  */
 export async function readMarketJudgement(
   executor: Executor,
   row: Pick<MarketRow, 'id' | 'judgementVersion'>,
   disputeWindowUndecided: boolean,
 ): Promise<AdminMarketJudgementState> {
-  let current: AdminMarketJudgement | null = null;
-  if (row.judgementVersion !== null) {
-    const [stored] = await executor
-      .select({
-        judgement: marketJudgements,
-        registrantNickname: registrant.nickname,
-        approverNickname: approver.nickname,
-      })
-      .from(marketJudgements)
-      .leftJoin(registrant, eq(registrant.userId, marketJudgements.registeredBy))
-      .leftJoin(approver, eq(approver.userId, marketJudgements.approvedBy))
-      .where(
-        and(
-          eq(marketJudgements.marketId, row.id),
-          eq(marketJudgements.version, row.judgementVersion),
-        ),
-      )
-      .limit(1);
-    if (stored) {
-      const { judgement } = stored;
-      current = {
-        version: judgement.version,
-        result: judgement.result,
-        source: storedSource(judgement.sourcePriority, judgement.sourceName, judgement.sourceUrl),
-        fallbackReason: judgement.fallbackReason,
-        voidReason: judgement.voidReason,
-        evidence: {
-          links: judgement.evidenceLinks,
-          collectedAt: judgement.collectedAt.toISOString(),
-        },
-        description: judgement.evidenceDescription,
-        ruleVersion: judgement.ruleVersion,
-        eventDeadlineConfirmed: judgement.eventDeadlineConfirmed,
-        disputeWindowMinutes: judgement.disputeWindowMinutes,
-        publishedAt: judgement.publishedAt.toISOString(),
-        disputeDeadline: judgement.disputeDeadline.toISOString(),
-        approvalId: judgement.approvalId,
-        registeredBy: actor(judgement.registeredBy, stored.registrantNickname),
-        approvedBy: actor(judgement.approvedBy, stored.approverNickname),
-      };
-    }
-  }
+  const versions =
+    row.judgementVersion === null
+      ? []
+      : await executor
+          .select({
+            judgement: marketJudgements,
+            registrantNickname: registrant.nickname,
+            approverNickname: approver.nickname,
+          })
+          .from(marketJudgements)
+          .leftJoin(registrant, eq(registrant.userId, marketJudgements.registeredBy))
+          .leftJoin(approver, eq(approver.userId, marketJudgements.approvedBy))
+          .where(
+            and(
+              eq(marketJudgements.marketId, row.id),
+              lte(marketJudgements.version, row.judgementVersion),
+            ),
+          )
+          .orderBy(desc(marketJudgements.version));
+  const judgements = versions.map(
+    ({ judgement, registrantNickname, approverNickname }): AdminMarketJudgement => ({
+      version: judgement.version,
+      result: judgement.result,
+      source: storedSource(judgement.sourcePriority, judgement.sourceName, judgement.sourceUrl),
+      fallbackReason: judgement.fallbackReason,
+      voidReason: judgement.voidReason,
+      evidence: {
+        links: judgement.evidenceLinks,
+        collectedAt: judgement.collectedAt.toISOString(),
+      },
+      description: judgement.evidenceDescription,
+      ruleVersion: judgement.ruleVersion,
+      correctionReason: judgement.correctionReason,
+      eventDeadlineConfirmed: judgement.eventDeadlineConfirmed,
+      disputeWindowMinutes: judgement.disputeWindowMinutes,
+      publishedAt: judgement.publishedAt.toISOString(),
+      disputeDeadline: judgement.disputeDeadline.toISOString(),
+      approvalId: judgement.approvalId,
+      registeredBy: actor(judgement.registeredBy, registrantNickname),
+      approvedBy: actor(judgement.approvedBy, approverNickname),
+    }),
+  );
+  const current = judgements.find((judgement) => judgement.version === row.judgementVersion);
 
   const requests = await executor
     .select({
@@ -271,6 +309,7 @@ export async function readMarketJudgement(
       evidence: payload.evidence,
       description: request.requestReason,
       ruleVersion: payload.ruleVersion,
+      correction: payload.correction,
       requestedBy: actor(request.requestedBy, request.requesterNickname),
       requestedAt: request.requestedAt.toISOString(),
       status: request.status,
@@ -284,7 +323,8 @@ export async function readMarketJudgement(
   });
   const pending = log.find((entry) => entry.status === 'pending');
   return {
-    current,
+    current: current ?? null,
+    history: judgements.filter((judgement) => judgement !== current),
     pending:
       pending === undefined
         ? null
@@ -297,6 +337,7 @@ export async function readMarketJudgement(
             evidence: pending.evidence,
             description: pending.description,
             ruleVersion: pending.ruleVersion,
+            correction: pending.correction,
             requestedBy: pending.requestedBy,
             requestedAt: pending.requestedAt,
           },
@@ -309,8 +350,9 @@ const queueRequester = alias(profiles, 'judgement_queue_requester');
 
 /**
  * `GET /admin/market-judgements` (판정 승인 대기, #152): every waiting `market_judgement` request
- * with its market and its result, in any status — one still waiting on a market no longer CLOSED
- * shows until its 반려 or 철회 — the oldest request first over `(requested_at, id)` ascending, the
+ * with its market, its result and whether it is a 판정 정정 (its `correction`, #176), in any status
+ * — one still waiting on a market that left the status it needs shows until its 반려 or 철회 —
+ * the oldest request first over `(requested_at, id)` ascending, the
  * order of `approval_requests_pending_requested_at_idx` (migration 0042), with the request's keyset
  * as the cursor (as the 일시 중단 결정 대기 queue). The scheduled judgement (null before #22) lets
  * the queue say an approval would come before it.
@@ -363,18 +405,22 @@ export async function listMarketJudgements(
   const kept = hasMore ? rows.slice(0, limit) : rows;
   const last = kept.at(-1);
   return {
-    items: kept.map((row) => ({
-      requestId: row.id,
-      marketId: row.marketId,
-      slug: row.slug,
-      title: row.title,
-      status: row.marketStatus,
-      closeAt: row.closeAt.toISOString(),
-      scheduledJudgementAt: row.scheduledJudgementAt?.toISOString() ?? null,
-      result: judgementPayloadOf(row).result,
-      requestedBy: actor(row.requestedBy, row.requesterNickname),
-      requestedAt: row.requestedAt.toISOString(),
-    })),
+    items: kept.map((row) => {
+      const { result, correction } = judgementPayloadOf(row);
+      return {
+        requestId: row.id,
+        marketId: row.marketId,
+        slug: row.slug,
+        title: row.title,
+        status: row.marketStatus,
+        closeAt: row.closeAt.toISOString(),
+        scheduledJudgementAt: row.scheduledJudgementAt?.toISOString() ?? null,
+        result,
+        correction,
+        requestedBy: actor(row.requestedBy, row.requesterNickname),
+        requestedAt: row.requestedAt.toISOString(),
+      };
+    }),
     nextCursor: hasMore && last ? encodeKeyset({ createdAt: last.requestedAt, id: last.id }) : null,
   };
 }

@@ -34,10 +34,11 @@ export type Disputes = Pick<
 
 /**
  * `/my/disputes`: MY '판정 이의' (#175, ADR-0104). The member's own 판정 이의, newest first, each
- * with its market (to its detail), its status (검토 중 · 기각 · 수용 · 철회), the decision's reason
- * and time (#173 item 7), what it submitted (folded) and 철회 while it is pending and its deadline
- * ahead (`retractable`). Never who decided it: the API does not send it (#173 item 13). Personal
- * and client-only like every MY list.
+ * with its market (to its detail), its status (검토 중 · 기각 · 수용 · 철회 · 정정으로 종결, #176), the
+ * decision's reason and time (#173 item 7), a line once the market's judgement was corrected past
+ * its version (`disputeNote`, #176, ADR-0105), what it submitted (folded) and 철회 while it is
+ * pending and its deadline ahead (`retractable`). Never who decided it: the API does not send it
+ * (#173 item 13). Personal and client-only like every MY list.
  */
 export function MyDisputes() {
   const ended = useSessionEnded();

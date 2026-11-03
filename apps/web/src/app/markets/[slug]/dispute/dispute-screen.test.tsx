@@ -68,7 +68,14 @@ const own: MyDispute = {
   decidedAt: '2026-11-30T05:00:00.000Z',
   decisionReason: '출처의 발표와 같습니다.',
   retractedAt: null,
-  market: { id: MARKET_ID, slug: 'first-snow', title: '첫눈이 올까?', status: 'provisional' },
+  closedAt: null,
+  market: {
+    id: MARKET_ID,
+    slug: 'first-snow',
+    title: '첫눈이 올까?',
+    status: 'provisional',
+    judgementVersion: 1,
+  },
   retractable: false,
 };
 
@@ -251,6 +258,12 @@ describe('the detail’s 이의 기한 and its link', () => {
     expect(byTestId(reviewing, 'market-status-notice-detail')?.text).toBe(
       copy.marketProvisionalUnderReview,
     );
+    // Held past it by a correction waiting for its approval, no dispute holding it (#176).
+    const correcting = notice({ ...provisional, disputeOpen: false, judgementDelayed: true });
+    expect(byTestId(correcting, 'market-status-notice-detail')?.text).toBe(
+      copy.marketProvisionalDelayedCorrection,
+    );
+    expect(byTestId(correcting, 'market-detail-dispute-deadline')).toBeDefined();
   });
 
   it('draws neither on any other status, and no 이의 on a settled market', () => {

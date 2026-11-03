@@ -22,11 +22,13 @@ import { ReasonField, ReviewDialogShell } from './market-review-dialogs';
 /**
  * A 판정 이의's 기각 and 수용 (#175, ADR-0104; ADR-0093 decision 1 #173 items 2·7): one admin who did
  * not register the disputed judgement version — its approver may — with a reason the submitter
- * reads (#173 item 7) and #24 publishes without the decider (#173 item 13). Final, both. A 기각
+ * reads (#173 item 7) and #24 publishes without the decider (#173 item 13). A 기각 is final and
  * says nothing needed changing; once the deadline has passed and none holds the market any more,
  * the API queues the confirmation and the worker confirms it within seconds. A 수용 is a
- * correction (#176), which goes through its own registration and another admin's approval, and the
- * market waits PROVISIONAL until then — the dialog says so. No market price, volume or majority is
+ * correction (#176, ADR-0105), which goes through its own registration (the dispute's 정정 등록)
+ * and another admin's approval, and the market waits PROVISIONAL until then; a rejected or
+ * retracted correction sends the dispute back to 검토 중 (owner answer 2026-11-02) — the dialog
+ * says both. No market price, volume or majority is
  * drawn (N03 §5). Drawn in the review's frame (`ReviewDialogShell`), the confirm off until a reason
  * is typed and the admin on screen is known (`useOperatorId`, ADR-0092): the write names that
  * admin. Mounted only while the block holds it for the admin who opened it (`useHeldForOperator`),

@@ -347,15 +347,18 @@ export function longDelayDeadline(judgementIso: string | null, days: number | nu
 /**
  * What a market's status displays read of it (`isJudgementDelayed`, `isDisputeOpen`,
  * `isDisputeUnderReview`): its status, its scheduled judgement (#22), the current judgement's 이의
- * 기한 (#152: `markets.dispute_deadline`, null before a judgement) and how many 판정 이의 of that
+ * 기한 (#152: `markets.dispute_deadline`, null before a judgement), how many 판정 이의 of that
  * version hold its confirmation (#175: `markets.dispute_hold_count` — pending or accepted,
- * HOLDING_DISPUTE_STATUSES in market-dispute.ts), each instant as ISO.
+ * HOLDING_DISPUTE_STATUSES in market-dispute.ts) and whether a 판정 정정 waits for its approval
+ * (#176, ADR-0105: `markets.correction_pending`, false unless PROVISIONAL), each instant as ISO.
+ * The two are mirrors for the labels alone; the hold itself is the database's (@buddha/db).
  */
 export interface MarketDisplayState {
   status: MarketStatus;
   scheduledJudgementAt: string | null;
   disputeDeadline: string | null;
   disputeHoldCount: number;
+  correctionPending: boolean;
 }
 
 /**
@@ -363,9 +366,12 @@ export interface MarketDisplayState {
  * `nowMs` — an instant on the reader's clock, which for a DTO is the server's at the read
  * (`judgementDelayed`):
  * - a CLOSED market whose scheduled judgement has passed (#22), no operator record needed;
- * - a PROVISIONAL market a 판정 이의 still holds once its 이의 기한 has come (owner answer
- *   2026-11-03: '이의 검토 중' before the deadline, '판정 지연' from it while not confirmed) — the
- *   instant the submission closes (`isDisputeOpen` false) and the confirmation could come.
+ * - a PROVISIONAL market a 판정 이의 or a waiting 판정 정정 still holds once its 이의 기한 has come
+ *   (owner answer 2026-11-03: '이의 검토 중' before the deadline, '판정 지연' from it while not
+ *   confirmed; #176, ADR-0105: a correction holds it as a dispute does, decision 3 '#176 정정
+ *   대기') — the instant the submission closes (`isDisputeOpen` false) and the confirmation could
+ *   come. A waiting correction alone reads '잠정 결과' before the deadline: no dispute is under
+ *   review (`isDisputeUnderReview`).
  * It is a display, not a status: nothing changes at either instant, and no list filters by it
  * (ADR-0095 8-6). The delay record's reason and next review time are #142's.
  */
@@ -374,7 +380,8 @@ export function isJudgementDelayed(market: MarketDisplayState, nowMs: number): b
     return market.scheduledJudgementAt !== null && nowMs >= Date.parse(market.scheduledJudgementAt);
   }
   return (
-    isDisputeUnderReview(market) &&
+    market.status === 'provisional' &&
+    (market.disputeHoldCount > 0 || market.correctionPending) &&
     market.disputeDeadline !== null &&
     nowMs >= Date.parse(market.disputeDeadline)
   );

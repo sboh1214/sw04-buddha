@@ -27,8 +27,10 @@ import {
   disputeRefusalOf,
   disputeRetractFailureMessage,
   disputeScreenView,
+  disputeNote,
   disputeStatusTime,
   disputeSubmitFailure,
+  myDisputePalette,
   myMarketDisputeKey,
   myMarketDisputesKey,
   openDisputeDeadline,
@@ -53,11 +55,13 @@ const dispute = (fields: Partial<MyDispute> = {}): MyDispute => ({
   decidedAt: null,
   decisionReason: null,
   retractedAt: null,
+  closedAt: null,
   market: {
     id: MARKET.toLowerCase(),
     slug: 'first-snow',
     title: '첫눈이 올까?',
     status: 'provisional',
+    judgementVersion: 1,
   },
   retractable: true,
   ...fields,
@@ -103,20 +107,38 @@ describe('the 판정 이의 screens’ addresses and keys', () => {
 });
 
 describe('a dispute’s status', () => {
-  it('reads 검토 중 · 기각 · 수용 · 철회, each with its colour', () => {
+  it('reads 검토 중 · 기각 · 수용 · 철회 · 정정으로 종결, each with its colour', () => {
     expect(MARKET_DISPUTE_STATUSES.map((status) => DISPUTE_STATUS_LABEL[status])).toEqual([
       '검토 중',
       '기각',
       '수용',
       '철회',
+      '정정으로 종결',
     ]);
-    // A holding status reads orange (the market waits for it), a dismissal `no`, a 철회 gray.
+    // A holding status reads orange (the market waits for it), a dismissal `no`, a 철회 and a
+    // closure by a correction (no decision either way, #176) gray.
     expect(DISPUTE_STATUS_PALETTE).toEqual({
       pending: 'orange',
       dismissed: 'no',
       accepted: 'orange',
       retracted: 'gray',
+      closed_by_correction: 'gray',
     });
+  });
+
+  it('turns gray in MY for a 수용 a correction already answered (#176)', () => {
+    // Accepted on v1 and the market at v1: it holds the market, waiting for its correction.
+    expect(myDisputePalette(dispute({ status: 'accepted' }))).toBe('orange');
+    // The market at v2: the correction answered it (`disputeNote`'s 'corrected') — nothing waits.
+    const moved = { ...dispute().market, judgementVersion: 2 };
+    expect(myDisputePalette(dispute({ status: 'accepted', market: moved }))).toBe('gray');
+    // Every other status keeps its own colour, the version moved or not.
+    for (const status of ['pending', 'dismissed', 'retracted', 'closed_by_correction'] as const) {
+      expect(myDisputePalette(dispute({ status, market: moved })), status).toBe(
+        DISPUTE_STATUS_PALETTE[status],
+      );
+      expect(myDisputePalette(dispute({ status })), status).toBe(DISPUTE_STATUS_PALETTE[status]);
+    }
   });
 
   it('names the instant it took its status', () => {
@@ -138,6 +160,43 @@ describe('a dispute’s status', () => {
         }),
       ),
     ).toEqual({ label: copy.disputeRetractedAt, at: '2026-11-30T04:00:00.000Z' });
+    // Closed by a correction (#176): the correction's approval.
+    expect(
+      disputeStatusTime(
+        dispute({
+          status: 'closed_by_correction',
+          closedAt: '2026-11-30T05:00:00.000Z',
+          retractable: false,
+        }),
+      ),
+    ).toEqual({ label: copy.disputeClosedAt, at: '2026-11-30T05:00:00.000Z' });
+    // Sent back to 검토 중 by a rejected correction: its decision cleared, 낸 시각 again.
+    expect(disputeStatusTime(dispute({ status: 'pending', decidedAt: null }))).toEqual({
+      label: copy.disputeSubmittedAt,
+      at: '2026-11-30T03:00:00.000Z',
+    });
+  });
+
+  it('says once the judgement was corrected past its version, and that a correction follows (#176)', () => {
+    // Accepted on the current version: the correction follows (#173 item 7).
+    expect(disputeNote(dispute({ status: 'accepted' }))).toEqual({
+      kind: 'accepted',
+      text: copy.disputeAcceptedNote,
+    });
+    // Accepted on v1, the market at v2: the correction answered it.
+    const moved = { ...dispute().market, judgementVersion: 2 };
+    expect(disputeNote(dispute({ status: 'accepted', market: moved }))).toEqual({
+      kind: 'corrected',
+      text: copy.disputeAcceptedCorrectedNote,
+    });
+    // Closed by the correction: the corrected judgement takes a new one (#173 item 8).
+    expect(disputeNote(dispute({ status: 'closed_by_correction', market: moved }))).toEqual({
+      kind: 'closed',
+      text: copy.disputeClosedByCorrectionNote,
+    });
+    for (const status of ['pending', 'dismissed', 'retracted'] as const) {
+      expect(disputeNote(dispute({ status, market: moved })), status).toBeNull();
+    }
   });
 });
 
