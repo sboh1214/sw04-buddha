@@ -31,18 +31,19 @@ import {
   reviewActorName,
   reviewExclusion,
   reviewLogRows,
+  scheduledCloseLapsed,
   showsExcludedAdmins,
 } from '@/lib/market-review';
 import { type ReviewDialogKind, ReviewDialog } from './market-review-dialogs';
 
 /**
- * 검수 제출 (DRAFT → REVIEW, #78, ADR-0099), beside the interim 열기: one press, which locks the
- * content (#172 item 6 (a)) and opens the review request another admin decides. Off while the
- * open-items check finds something missing — the notice under the buttons says what — and until
- * the admin on screen is known (ADR-0092). A refusal is the toast 열기's is
- * (`transitionErrorMessage`: OPEN_ITEMS_MISSING by its items, a close already passed, a status
- * another admin moved), and the detail is read again so the notice says what the server found.
- * Nothing on any other status.
+ * 검수 제출 (DRAFT → REVIEW, #78, ADR-0099), the one way out of a draft since the interim 열기 went
+ * (#21, ADR-0100): one press, which locks the content (#172 item 6 (a)) and opens the review
+ * request another admin decides. Off while the open-items check finds something missing — the
+ * notice under the buttons says what — and until the admin on screen is known (ADR-0092). A
+ * refusal is a transition's toast (`transitionErrorMessage`: OPEN_ITEMS_MISSING by its items, a
+ * close already passed, a status another admin moved), and the detail is read again so the notice
+ * says what the server found. Nothing on any other status.
  */
 export function SubmitReviewButton({ market }: { market: AdminMarket }) {
   const apply = useApplyMarket(market.id);
@@ -95,12 +96,12 @@ export function SubmitReviewButton({ market }: { market: AdminMarket }) {
  * (`useHeldForOperator`, ADR-0092 answer 1) — once `['me']` turns from A to B in place, the dialog
  * closes with what A checked and typed.
  */
-export function MarketReviewPanel({ market }: { market: AdminMarket }) {
+export function MarketReviewPanel({ market, readAt }: { market: AdminMarket; readAt: number }) {
   const operatorId = useOperatorId();
   const [dialog, setDialog] = useHeldForOperator<ReviewDialogKind>();
   return (
     <>
-      <ReviewPanelBody market={market} operatorId={operatorId} onOpen={setDialog} />
+      <ReviewPanelBody market={market} readAt={readAt} operatorId={operatorId} onOpen={setDialog} />
       {dialog !== null && (
         <ReviewDialog kind={dialog} market={market} onClose={() => setDialog(null)} />
       )}
@@ -115,7 +116,11 @@ export function MarketReviewPanel({ market }: { market: AdminMarket }) {
  *   precedence) with 승인 and 반려 off — the server refuses them anyway; 초안으로 되돌리기 for
  *   anyone; the markets with the same YES condition and event deadline (the 중복 aid, each to its
  *   admin detail).
- * - 개장 예정: that the content is locked, 예정 개장 시각 변경 and 초안으로 되돌리기 for anyone.
+ * - 개장 예정: that it opens by itself at its scheduled open (#21, ADR-0100) and the content is
+ *   locked — or, read still 개장 예정 once its close had passed (`scheduledCloseLapsed` at `readAt`;
+ *   the detail re-reads it at the close, `scheduledMarketPollDelay`), the warning that it will not
+ *   open and goes back to a draft to fix its times; 예정 개장 시각 변경 and 초안으로 되돌리기 for
+ *   anyone.
  * - 초안 and 검수 중: 승인·반려할 수 없는 관리자 — the creator, every editor, the submitter — one row per
  *   account, '(나)' after the admin on screen.
  * - every status: the 검수 기록, newest first — who, when, which record, the status change and what
@@ -125,16 +130,20 @@ export function MarketReviewPanel({ market }: { market: AdminMarket }) {
  */
 export function ReviewPanelBody({
   market,
+  readAt,
   operatorId,
   onOpen,
 }: {
   market: AdminMarket;
+  /** When `market` was read (the query's `dataUpdatedAt`): what `scheduledCloseLapsed` judges. */
+  readAt: number;
   operatorId: string | undefined;
   onOpen: (kind: ReviewDialogKind) => void;
 }) {
   const { review, status } = market;
   const exclusion = status === 'review' ? reviewExclusion(review, operatorId) : null;
   const revertable = status === 'review' || status === 'scheduled';
+  const closeLapsed = scheduledCloseLapsed(market, readAt);
   return (
     <Card.Root data-testid="market-review" data-status={status}>
       <Card.Header>
@@ -160,11 +169,19 @@ export function ReviewPanelBody({
               </Alert.Content>
             </Alert.Root>
           )}
-          {status === 'scheduled' && (
+          {status === 'scheduled' && !closeLapsed && (
             <Alert.Root status="info" role="status" data-testid="market-review-scheduled">
               <Alert.Indicator />
               <Alert.Content>
                 <Alert.Description>{copy.adminMarketReviewScheduledNote}</Alert.Description>
+              </Alert.Content>
+            </Alert.Root>
+          )}
+          {closeLapsed && (
+            <Alert.Root status="warning" role="status" data-testid="market-review-close-passed">
+              <Alert.Indicator />
+              <Alert.Content>
+                <Alert.Description>{copy.adminMarketReviewCloseLapsed}</Alert.Description>
               </Alert.Content>
             </Alert.Root>
           )}

@@ -1,11 +1,12 @@
 /**
  * Admin market CRUD and transitions (PLAN 5.2, 5.5, 12; M3 design 3.4) against the docker
- * `test` profile: create/update per status, open/close with their audit rows, list/detail, and
+ * `test` profile: create/update per status, the close with its audit row, list/detail, and
  * the guard surface (401/403/CSRF). The rule items (#23, ADR-0097): every one written trimmed and
  * read back, the sources replaced in order, the entry refusals with their paths, the open-items
- * check naming each, RULES_REQUIRED on an open market and the `rules_edited` record. The market
- * times' own cases (#22) are admin-markets-times.controller.test.ts's; here a complete draft sends
- * them (`timesFor`). Skips when TEST_* are unset.
+ * check naming each at the submission, RULES_REQUIRED on an open market and the `rules_edited`
+ * record. The market times' own cases (#22) are admin-markets-times.controller.test.ts's; here a
+ * complete draft sends them (`timesFor`). The review and the open it leads to (#78, #21) are
+ * admin-markets-review.controller.test.ts's. Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import {
@@ -28,7 +29,6 @@ import {
   type AdminMarket,
   type Market,
   type MarketSummary,
-  type PriceSeries,
 } from '@buddha/shared';
 import { randomUUID } from 'node:crypto';
 import { asc, eq, inArray } from 'drizzle-orm';
@@ -96,9 +96,9 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
 
   /**
    * The times a complete draft sends (#22), from the body's final close and 사건 기한: the scheduled
-   * open a minute ago, floored, so the open takes it at once; the judgement 24 hours after the
-   * later of the two, raised to the minute (ADR-0098); the zone the form pre-fills; and no
-   * announcement ('없음'), so the undecided lead-close gap never blocks the open.
+   * open a minute ago, floored, so an approval would open it at once (#21); the judgement 24 hours
+   * after the later of the two, raised to the minute (ADR-0098); the zone the form pre-fills; and
+   * no announcement ('없음'), so the undecided lead-close gap never blocks the submission.
    */
   const timesFor = (body: Record<string, unknown>) => {
     const ends = [body.closeAt, body.eventDeadline]
@@ -148,7 +148,8 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
 
   const create = (overrides: Record<string, unknown> = {}) =>
     post('/api/v1/admin/markets', createBody(overrides));
-  const open = (id: string) => post(`/api/v1/admin/markets/${id}/open`);
+  /** 검수 제출 (#78): the gate of the open-items check (OPEN_ITEMS_MISSING). */
+  const submit = (id: string) => post(`/api/v1/admin/markets/${id}/submit`);
   const close = (id: string) => post(`/api/v1/admin/markets/${id}/close`);
 
   /**
@@ -226,7 +227,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       primarySource: { name: '한국은행 보도자료', url: 'https://www.bok.or.kr' },
       fallbackSources: [],
       imageUrl: null,
-      // In the order sent (#17); and nothing missing, so it may open.
+      // In the order sent (#17); and nothing missing, so it may be submitted for review.
       tags: ['금리', '한국은행'],
       missingOpenItems: [],
     });
@@ -555,7 +556,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       before: { tags: ['금리', '한국은행'] },
       after: { tags: ['한국은행', '물가', '금리'] },
     });
-    // A draft may be edited down to none (it cannot open that way).
+    // A draft may be edited down to none (it cannot be submitted that way).
     const cleared = detail(await patch(`/api/v1/admin/markets/${draft.id}`, { tags: [] }));
     expect(cleared).toMatchObject({ tags: [], missingOpenItems: ['tags'] });
     expect(
@@ -801,9 +802,9 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
   });
 
   it('keeps an open market from leaving a rule item missing that it had filled (RULES_REQUIRED)', async () => {
-    // #23: what open() required holds for as long as the market trades — one detail per item the
-    // edit would newly leave missing, in RULE_ITEMS order, as the open-items check counts one; a
-    // draft may still be saved with them missing (it cannot open that way).
+    // #23: what the review required holds for as long as the market trades — one detail per item
+    // the edit would newly leave missing, in RULE_ITEMS order, as the open-items check counts one;
+    // a draft may still be saved with them missing (it cannot be submitted that way).
     const fallback = { name: '대체 출처', url: 'https://example.com/fallback' };
     const row = await market({ status: 'open', fallbackSources: [fallback] });
     const url = `/api/v1/admin/markets/${row.id}`;
@@ -908,21 +909,20 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     // transaction START — fixed before the transaction waits on the market lock. The event
     // log then sorted a transition below an edit that committed while it queued. Every row a
     // transition writes now carries the post-lock database clock, so the row, its payload and
-    // the market column all name one instant.
-    const draft = detail(await create());
-    const opened = detail(await open(draft.id));
-    const openEvent = (await eventsFor(draft.id)).find((event) => event.type === 'opened')!;
-    expect(openEvent.createdAt.toISOString()).toBe(opened.openAt);
-    expect((await marketRow(draft.id)).updatedAt.toISOString()).toBe(opened.openAt);
-    const openAction = (await actionsFor(draft.id)).find((row) => row.type === 'market_open')!;
-    expect(openAction.createdAt.toISOString()).toBe(opened.openAt);
-
-    const closed = detail(await close(draft.id));
-    const closeEvent = (await eventsFor(draft.id)).find((event) => event.type === 'closed')!;
+    // the market column all name one instant. (The open's instant — `open_at`, the `opened` event,
+    // the row — is the approval's, in admin-markets-review.controller.test.ts, #21.)
+    const row = await market({ status: 'open' });
+    const closed = detail(await close(row.id));
+    const closeEvent = (await eventsFor(row.id)).find((event) => event.type === 'closed')!;
     expect((closeEvent.payload as { closedAt: string }).closedAt).toBe(
       closeEvent.createdAt.toISOString(),
     );
     expect(closeEvent.createdAt.toISOString()).toBe(closed.updatedAt);
+    expect((await marketRow(row.id)).updatedAt.toISOString()).toBe(closed.updatedAt);
+    const closeAction = (await actionsFor(row.id)).find(
+      (action) => action.type === 'market_close',
+    )!;
+    expect(closeAction.createdAt.toISOString()).toBe(closed.updatedAt);
   });
 
   it('keeps a transition above an edit that commits while it waits on the market lock', async () => {
@@ -1257,93 +1257,8 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect(data<Market>(pub).primarySource).toEqual(fresh);
   });
 
-  // --- open / close ---------------------------------------------------------------------
-  it('opens a draft: open_at, the "opened" event, an audit row and a publish, and no tick', async () => {
-    const draft = detail(await create());
-    const subscriber = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
-    const received: string[] = [];
-    subscriber.on('message', (_channel, message) => received.push(message));
-    await subscriber.subscribe(marketChannel(draft.id));
-    try {
-      const res = await open(draft.id);
-      expect(res.statusCode).toBe(200);
-      const opened = detail(res);
-      expect(opened.status).toBe('open');
-      expect(opened.openAt).not.toBeNull();
-      expect(opened.events.map((event) => event.type)).toEqual(['opened', 'created']);
-      // Who, when, from and to (#174), on the detail and on the row alike.
-      expect(opened.events[0]).toMatchObject({
-        actorId: admin.id,
-        fromStatus: 'draft',
-        toStatus: 'open',
-        createdAt: opened.openAt,
-      });
-      expect((await eventsFor(draft.id)).at(-1)).toMatchObject({
-        type: 'opened',
-        actorId: admin.id,
-        fromStatus: 'draft',
-        toStatus: 'open',
-      });
-
-      // Opening is not a price: the chart starts at the first fill (N02 §5).
-      const ticks = await t.db
-        .select()
-        .from(schema.priceTicks)
-        .where(eq(schema.priceTicks.marketId, draft.id));
-      expect(ticks).toHaveLength(0);
-
-      const actions = await actionsFor(draft.id);
-      expect(actions.map((action) => action.type)).toEqual(['market_create', 'market_open']);
-      expect(actions[1]!.payload).toMatchObject({
-        before: { status: 'draft', openAt: null },
-        after: { status: 'open', openAt: opened.openAt },
-      });
-
-      // Visible to the public now, still without a price or a chart point.
-      const pub = await t.app.inject({ method: 'GET', url: `/api/v1/markets/${draft.id}` });
-      expect(pub.statusCode).toBe(200);
-      expect(data<Market>(pub)).toMatchObject({ status: 'open', lastPrice: null, tradeCount: 0 });
-      expect(data<Market>(pub)).not.toHaveProperty('pYesBp');
-      const chart = await t.app.inject({ method: 'GET', url: `/api/v1/markets/${draft.id}/ticks` });
-      // `data` is a PriceSeries object since M4, not a bare array (ADR-0029).
-      expect(data<PriceSeries>(chart)).toMatchObject({
-        resolution: 'raw',
-        bucketSeconds: 0,
-        truncated: false,
-        points: [],
-      });
-
-      // PLAN 8: `market:status` published after commit on the market's channel.
-      await new Promise<void>((resolve, reject) => {
-        const started = Date.now();
-        const poll = () => {
-          if (received.length >= 1) return resolve();
-          if (Date.now() - started > 5_000) return reject(new Error('market:status not received'));
-          setTimeout(poll, 20);
-        };
-        poll();
-      });
-      expect(JSON.parse(received[0]!)).toMatchObject({
-        type: 'market:status',
-        marketId: draft.id,
-        status: 'open',
-        // The `opened` event's id: what a client orders this event by (A-M3-19).
-        statusEventId: opened.events[0]!.id,
-      });
-      expect(opened.statusEventId).toBe(opened.events[0]!.id);
-
-      // Twice: the second open finds an open market, which is a status error, not a no-op.
-      const twice = await open(draft.id);
-      expect(twice.statusCode).toBe(400);
-      expect(errorOf(twice).code).toBe('VALIDATION_ERROR');
-      expect(detailPath(twice)).toEqual(['status']);
-      expect(await actionsFor(draft.id)).toHaveLength(2);
-    } finally {
-      await subscriber.quit();
-    }
-  });
-
-  it('refuses to open a draft the open-items check finds wanting (OPEN_ITEMS_MISSING), naming every item in order', async () => {
+  // --- the open-items check at the submission (#17, #78) -------------------------------------
+  it('refuses to submit a draft the open-items check finds wanting (OPEN_ITEMS_MISSING), naming every item in order', async () => {
     // #17, #23, #22: the title, every rule item, the required times, a category a new market may be
     // filed under, 1..5 tags — all named at once, in OPEN_ITEMS order. Here: no rule item but a
     // blank YES condition and a fallback with no address, no time but the close, a top-level
@@ -1377,7 +1292,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       nameKo: '금리',
       parentId: category.id,
     });
-    const res = await open(blank.id);
+    const res = await submit(blank.id);
     expect(res.statusCode).toBe(422);
     const named = [...blankItems, 'category', 'tags'];
     expect(errorOf(res)).toEqual({
@@ -1389,19 +1304,19 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
         { path: ['tags'], message: 'required' },
       ],
     });
-    // The detail reports the same, read without the open's locks.
+    // The detail reports the same, read without the submission's locks.
     expect(detail(await get(`/api/v1/admin/markets/${blank.id}`)).missingOpenItems).toEqual([
       ...blankItems,
       'category',
       'tags',
     ]);
-    // Nothing written: still a draft, no event, no record, no tick.
+    // Nothing written: still a draft, no event, no record, no review request.
     expect((await marketRow(blank.id)).status).toBe('draft');
     expect((await eventsFor(blank.id)).map((event) => event.type)).toEqual(['created']);
     expect((await actionsFor(blank.id)).map((row) => row.type)).toEqual(['market_create']);
-    expect(await t.db.select().from(schema.priceTicks)).toHaveLength(0);
+    expect(await t.db.select().from(schema.approvalRequests)).toHaveLength(0);
 
-    // Each fixed in turn leaves the rest named: no RULES_REQUIRED on open any more. A fallback
+    // Each fixed in turn leaves the rest named: no RULES_REQUIRED at the submission. A fallback
     // needs its address and then its switch condition; with none, no condition is asked for.
     const draftUrl = `/api/v1/admin/markets/${blank.id}`;
     const fallback = { name: '이름만 적은 대체 출처', url: '' };
@@ -1412,39 +1327,40 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       fallbackSources: [fallback],
       fallbackCondition: '',
     });
-    expect(errorOf(await open(blank.id)).details).toEqual([
+    expect(errorOf(await submit(blank.id)).details).toEqual([
       { path: ['fallbackSources'], message: 'required' },
       { path: ['fallbackCondition'], message: 'required' },
       { path: ['category'], message: 'subcategories' },
       { path: ['tags'], message: 'required' },
     ]);
     await patch(draftUrl, { fallbackSources: [{ ...fallback, url: 'https://example.com/fb' }] });
-    expect(errorOf(await open(blank.id)).details?.map((issue) => issue.path)).toEqual([
+    expect(errorOf(await submit(blank.id)).details?.map((issue) => issue.path)).toEqual([
       ['fallbackCondition'],
       ['category'],
       ['tags'],
     ]);
     await patch(draftUrl, { fallbackSources: [], fallbackCondition: '' });
-    expect(errorOf(await open(blank.id)).details).toEqual([
+    expect(errorOf(await submit(blank.id)).details).toEqual([
       { path: ['category'], message: 'subcategories' },
       { path: ['tags'], message: 'required' },
     ]);
     await patch(`/api/v1/admin/markets/${blank.id}`, { categoryId: leaf.id });
-    const tagless = await open(blank.id);
+    const tagless = await submit(blank.id);
     expect(errorOf(tagless)).toMatchObject({
       code: 'OPEN_ITEMS_MISSING',
       details: [{ path: ['tags'], message: 'required' }],
     });
     await patch(`/api/v1/admin/markets/${blank.id}`, { tags: ['금리'] });
-    const opened = await open(blank.id);
-    expect(opened.statusCode).toBe(200);
-    expect(detail(opened)).toMatchObject({ status: 'open', tags: ['금리'], missingOpenItems: [] });
-    // The open's record carries the tags like every snapshot.
-    const openAction = (await actionsFor(blank.id)).find((row) => row.type === 'market_open')!;
-    expect(openAction.payload).toMatchObject({
-      before: { tags: ['금리'] },
-      after: { tags: ['금리'] },
+    const submitted = await submit(blank.id);
+    expect(submitted.statusCode).toBe(200);
+    expect(detail(submitted)).toMatchObject({
+      status: 'review',
+      tags: ['금리'],
+      missingOpenItems: [],
     });
+    // The submission's record carries the tags like every snapshot.
+    const submitAction = (await actionsFor(blank.id)).find((row) => row.type === 'market_submit')!;
+    expect(submitAction.payload).toMatchObject({ after: { status: 'review', tags: ['금리'] } });
 
     // A hidden category, and a sub-category under a hidden parent, are missing the same way —
     // the reason as the message.
@@ -1469,7 +1385,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       [hiddenDraft, 'inactive'],
       [orphanDraft, 'parent_inactive'],
     ] as const) {
-      const refused = await open(row.id);
+      const refused = await submit(row.id);
       expect({ reason, status: refused.statusCode }).toEqual({ reason, status: 422 });
       expect(errorOf(refused).details).toEqual([{ path: ['category'], message: reason }]);
       expect((await marketRow(row.id)).status).toBe('draft');
@@ -1485,7 +1401,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       closeAt: new Date(Date.now() - 1_000),
       tags: [],
     });
-    const lacking = await open(stale.id);
+    const lacking = await submit(stale.id);
     expect(lacking.statusCode).toBe(422);
     expect(errorOf(lacking).code).toBe('OPEN_ITEMS_MISSING');
     const staleRules = await market({
@@ -1494,7 +1410,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       closeAt: new Date(Date.now() - 1_000),
       eventDeadline: null,
     });
-    const undated = await open(staleRules.id);
+    const undated = await submit(staleRules.id);
     expect(undated.statusCode).toBe(422);
     expect(errorOf(undated).details).toEqual([{ path: ['eventDeadline'], message: 'required' }]);
     const staleTagged = await market({
@@ -1502,13 +1418,13 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       categoryId: leaf.id,
       closeAt: new Date(Date.now() - 1_000),
     });
-    const past = await open(staleTagged.id);
+    const past = await submit(staleTagged.id);
     expect(past.statusCode).toBe(400);
     expect(detailPath(past)).toEqual(['closeAt']);
     expect((await marketRow(staleTagged.id)).status).toBe('draft');
 
-    expect((await open(randomUUID())).statusCode).toBe(404);
-    expect((await open('not-a-uuid')).statusCode).toBe(400);
+    expect((await submit(randomUUID())).statusCode).toBe(404);
+    expect((await submit('not-a-uuid')).statusCode).toBe(400);
   });
 
   it('reports what the open-items check finds missing on the admin detail, for every status', async () => {
@@ -1575,8 +1491,8 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
 
   it('closes a market whose close time has already passed', async () => {
     // An open market past its close time whose close job has not run (A-M3-31): this button is
-    // the operator's way out. `close` does not check the close time — only `open` and the edits
-    // do — so it must work here.
+    // the operator's way out. `close` does not check the close time — only the submission, the
+    // approval and the edits do — so it must work here.
     const row = await market({ status: 'open', closeAt: new Date(Date.now() - 60_000) });
     const res = await close(row.id);
     expect(res.statusCode).toBe(200);
@@ -1644,33 +1560,8 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     }
   });
 
-  it('opens a draft only: any other status is refused naming status, with nothing written', async () => {
-    // draft → open is the interim edge (#21 removes it); REVIEW → OPEN and the rest are not
-    // edges at all, and SCHEDULED → OPEN is #21's timer, not this action (ADR-0093).
-    for (const status of [
-      'review',
-      'scheduled',
-      'paused',
-      'closed',
-      'provisional',
-      'cancelled',
-    ] as const) {
-      const row = await market({ status });
-      const res = await open(row.id);
-      expect({ status, code: res.statusCode }).toEqual({ status, code: 400 });
-      expect(errorOf(res)).toMatchObject({
-        code: 'VALIDATION_ERROR',
-        message: `Market is ${status}`,
-      });
-      expect(detailPath(res)).toEqual(['status']);
-      expect(await marketRow(row.id)).toMatchObject({ status, statusEventId: null });
-      expect(await eventsFor(row.id)).toHaveLength(0);
-      expect(await actionsFor(row.id)).toHaveLength(0);
-    }
-  });
-
   it.each([
-    ['open', 'draft', open],
+    ['submit', 'draft', submit],
     ['close', 'open', close],
   ] as const)(
     '%s waits for the market advisory lock before touching the row (PLAN 0.2)',
@@ -1890,7 +1781,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
         'update',
         await patch(`/api/v1/admin/markets/${draft.id}`, { title: '바뀜', ...asShown }, other),
       ],
-      ['open', await post(`/api/v1/admin/markets/${draft.id}/open`, asShown, other)],
+      ['submit', await post(`/api/v1/admin/markets/${draft.id}/submit`, asShown, other)],
       ['close', await post(`/api/v1/admin/markets/${open.id}/close`, asShown, other)],
     ] as const) {
       expect({ what, status: res.statusCode }).toEqual({ what, status: 403 });
@@ -1912,25 +1803,23 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     for (const [what, res] of [
       ['create', await unnamed('POST', '/api/v1/admin/markets', createBody())],
       ['update', await unnamed('PATCH', `/api/v1/admin/markets/${draft.id}`, { title: 'x' })],
-      ['open', await unnamed('POST', `/api/v1/admin/markets/${draft.id}/open`, {})],
+      ['submit', await unnamed('POST', `/api/v1/admin/markets/${draft.id}/submit`, {})],
       ['close', await unnamed('POST', `/api/v1/admin/markets/${draft.id}/close`, {})],
     ] as const) {
       expect({ what, status: res.statusCode }).toEqual({ what, status: 400 });
       expect(errorOf(res).code).toBe('VALIDATION_ERROR');
       expect(detailPath(res)).toEqual(['expectedAccountId']);
     }
-    // A tab from before the deploy sends the formerly bodyless transitions with no body at all: the
-    // same 400, but the schema's own issue (no object) names no field — `details[0].path` is [].
-    for (const action of ['open', 'close'] as const) {
-      const res = await t.app.inject({
-        method: 'POST',
-        url: `/api/v1/admin/markets/${draft.id}/${action}`,
-        headers: { origin: jsonHeaders.origin, cookie: admin.cookie },
-      });
-      expect({ action, status: res.statusCode }).toEqual({ action, status: 400 });
-      expect(errorOf(res).code).toBe('VALIDATION_ERROR');
-      expect(detailPath(res)).toEqual([]);
-    }
+    // A tab from before the deploy sends the formerly bodyless close with no body at all: the same
+    // 400, but the schema's own issue (no object) names no field — `details[0].path` is [].
+    const bodyless = await t.app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/markets/${draft.id}/close`,
+      headers: { origin: jsonHeaders.origin, cookie: admin.cookie },
+    });
+    expect(bodyless.statusCode).toBe(400);
+    expect(errorOf(bodyless).code).toBe('VALIDATION_ERROR');
+    expect(detailPath(bodyless)).toEqual([]);
     expect((await marketRow(draft.id)).status).toBe('draft');
     expect(await t.db.select().from(schema.adminActions)).toEqual([]);
     // The account checked is never stored: the `created` event keeps the fields as sent.
@@ -1941,12 +1830,15 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect(
       (await patch(`/api/v1/admin/markets/${created.id}`, { yesCondition: '규칙' })).statusCode,
     ).toBe(200);
-    expect((await open(created.id)).statusCode).toBe(200);
-    expect((await close(created.id)).statusCode).toBe(200);
+    expect((await submit(created.id)).statusCode).toBe(200);
     expect((await actionsFor(created.id)).map((row) => [row.type, row.adminId])).toEqual([
       ['market_create', admin.id],
       ['market_update', admin.id],
-      ['market_open', admin.id],
+      ['market_submit', admin.id],
+    ]);
+    const live = await market({ status: 'open' });
+    expect((await close(live.id)).statusCode).toBe(200);
+    expect((await actionsFor(live.id)).map((row) => [row.type, row.adminId])).toEqual([
       ['market_close', admin.id],
     ]);
   });
@@ -1959,7 +1851,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       ['GET', `/api/v1/admin/markets/${row.id}`, undefined],
       ['POST', '/api/v1/admin/markets', createBody()],
       ['PATCH', `/api/v1/admin/markets/${row.id}`, { title: 'x' }],
-      ['POST', `/api/v1/admin/markets/${row.id}/open`, undefined],
+      ['POST', `/api/v1/admin/markets/${row.id}/submit`, undefined],
       ['POST', `/api/v1/admin/markets/${row.id}/close`, undefined],
     ] as const) {
       const asMember = await t.app.inject({
@@ -1991,12 +1883,12 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       });
       expect({ origin, status: created.statusCode }).toEqual({ origin, status: 403 });
       expect(errorOf(created).code).toBe('FORBIDDEN');
-      const opened = await t.app.inject({
+      const submitted = await t.app.inject({
         method: 'POST',
-        url: `/api/v1/admin/markets/${row.id}/open`,
+        url: `/api/v1/admin/markets/${row.id}/submit`,
         headers: { origin, cookie: admin.cookie },
       });
-      expect(opened.statusCode).toBe(403);
+      expect(submitted.statusCode).toBe(403);
     }
     expect(await t.db.select().from(schema.markets)).toHaveLength(1);
     expect((await marketRow(row.id)).status).toBe('draft');
@@ -2005,7 +1897,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     // No Origin at all (curl, a server) is not a browser and passes; reads are never checked.
     const curl = await t.app.inject({
       method: 'POST',
-      url: `/api/v1/admin/markets/${row.id}/open`,
+      url: `/api/v1/admin/markets/${row.id}/submit`,
       headers: { cookie: admin.cookie, 'content-type': 'application/json' },
       payload: { expectedAccountId: admin.id },
     });

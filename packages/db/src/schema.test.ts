@@ -1485,7 +1485,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       });
       expect((await timesOf(noDeadline.id)).scheduledJudgementAt).toBe('2099-12-02T00:00:00.000Z');
 
-      // As given — an announcement, a zone, the gap the open stored — or one left blank.
+      // As given — an announcement, a zone, the gap the submission stored — or one left blank.
       const given = await createMarket(t.db, {
         closeAt: new Date('2099-12-01T00:00:00.000Z'),
         scheduledAnnouncementAt: new Date('2099-12-01T01:00:00.000Z'),
@@ -1500,7 +1500,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       });
       expect(given.leadCloseGapMinutes).toBe(60);
       expect(await missingOf(given.id, 60)).toEqual(['scheduledJudgementAt']);
-      // An announcement under the undecided gap fails the lead close, so such a market can't open.
+      // An announcement under the undecided gap fails the lead close, so such a market can't be
+      // submitted.
       expect(await missingOf(given.id, null)).toEqual(['scheduledJudgementAt', 'leadClose']);
 
       // A market from before #22: every time blank but those given.

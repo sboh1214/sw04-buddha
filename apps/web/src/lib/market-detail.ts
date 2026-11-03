@@ -251,10 +251,11 @@ export interface StatusNotice {
 /**
  * What a status other than 거래 중 leaves a reader able to do (PLAN 11.3), one notice per public
  * status (ADR-0093 decision 1, item 12), each saying only what is so in that status — nothing
- * about what a later issue brings (the scheduled open #21, a pause's reason #114, the dispute
- * #175). `open`, `draft` and `review` are absent on purpose: an open market's state is its
- * countdown, and a draft or a market in review never reaches the detail route — the API answers
- * NOT_FOUND for both, so the page 404s before the detail renders.
+ * about what a later issue brings (a pause's reason #114, the dispute #175). 개장 예정 promises no
+ * open even since the scheduled open opens it (#21, ADR-0100): the time can move, and a close
+ * passed first keeps it shut. `open`, `draft` and `review` are absent on purpose: an open market's
+ * state is its countdown, and a draft or a market in review never reaches the detail route — the
+ * API answers NOT_FOUND for both, so the page 404s before the detail renders.
  *
  * The tone is a second, redundant channel: every notice says in words what it is, so nothing
  * here is carried by colour alone (PLAN 11.2, AC 6). `warning` where trading is stopped while the

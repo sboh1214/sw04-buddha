@@ -15,6 +15,7 @@ import {
   expect,
   kstLocalOf,
   meOf,
+  REVIEW_CHECKLIST,
   secondAdminAccount,
   signIn,
   subscribed,
@@ -34,15 +35,16 @@ import {
  * too, sends a market in review or 개장 예정 back to a draft with a reason (되돌리기) — from 개장
  * 예정 it leaves the public screens: a visitor's open detail says so, its address is a 404. 개장
  * 예정's one change is its scheduled open, with a reason and no new review, still before the close.
- * A draft the open-items check finds incomplete cannot be submitted. The interim 열기 stays beside
- * 검수 제출 until #21.
+ * A draft the open-items check finds incomplete cannot be submitted. 검수 제출 is the one way out of
+ * a draft: there is no 열기 beside it since #21 (ADR-0100).
  *
  * Admin 1 (`admin`) makes every market here, so admin 2 (`secondAdmin`) is the one who may decide
  * it, as on any database with the two seed admins. The markets are opened publicly by their ASCII
  * slugs (helpers.ts `createDraftMarket`), and a market that reaches 개장 예정 here has its scheduled
- * open an hour ahead: what opens a 개장 예정 market at its time is #21's. Nothing here writes a
- * release setting (docs/SETTINGS.md): no market has an announcement time, so the lead close never
- * depends on one.
+ * open an hour ahead, so it stays 개장 예정 while a test looks: the worker opens it only at that
+ * time, and an approval past it opens it at once (#21, scheduled-open.spec.ts). Nothing here
+ * writes a release setting (docs/SETTINGS.md): no market has an announcement time, so the lead
+ * close never depends on one.
  *
  * Every refusal's details, the records (market events, admin actions, approval requests), the lock
  * order and an approval racing a 되돌리기 are the API's integration tests
@@ -57,8 +59,8 @@ const MINUTE_MS = 60 * 1_000;
 const HOUR_MS = 60 * MINUTE_MS;
 
 /**
- * The checklist (#172 item 4) as the approval dialog names it, in MARKET_REVIEW_CHECKLIST order —
- * restated, as helpers.ts takes only types from @buddha/shared; the record's type makes it whole.
+ * The checklist's items (#172 item 4) as the approval dialog names them; the record's type makes it
+ * whole. Their order is helpers.ts's `REVIEW_CHECKLIST`, MARKET_REVIEW_CHECKLIST's.
  */
 const CHECK_LABEL: Readonly<Record<MarketReviewChecklistItem, string>> = {
   knownResult: copy.reviewCheckKnownResult,
@@ -69,7 +71,6 @@ const CHECK_LABEL: Readonly<Record<MarketReviewChecklistItem, string>> = {
   leadClose: copy.reviewCheckLeadClose,
   independence: copy.reviewCheckIndependence,
 };
-const CHECKLIST = Object.keys(CHECK_LABEL) as MarketReviewChecklistItem[];
 
 /** The ISO instant of the whole minute `ms` falls in: what a `datetime-local` input holds. */
 function minuteIso(ms: number): string {
@@ -127,12 +128,12 @@ const NO_REQUEST = '0b6f6a3e-2c1d-4c8e-9f0a-1b2c3d4e5f60';
 
 /** An approval's body: every checklist item confirmed, and its reason. */
 function approval(reason: string): Record<string, unknown> {
-  return { checklist: CHECKLIST, reason };
+  return { checklist: REVIEW_CHECKLIST, reason };
 }
 
 /**
- * A complete draft of admin 1's whose scheduled open is an hour ahead (#78: what opens a 개장 예정
- * market at its time is #21's, so it stays 개장 예정 here), submitted by admin 1.
+ * A complete draft of admin 1's whose scheduled open is an hour ahead (#21: the worker opens a 개장
+ * 예정 market only at that time, so approved, it stays 개장 예정 here), submitted by admin 1.
  */
 async function marketInReview(admin: APIRequestContext): Promise<TestMarket> {
   const market = await createDraftMarket(admin, {
@@ -291,9 +292,10 @@ test.describe('개설 검수', () => {
         `${firstName} ${copy.adminMarketReviewViewer} · ${copy.adminMarketReviewRoleCreator}`,
       );
       await expect(firstPage.getByTestId('market-review-actions')).toHaveCount(0);
-      // Nothing is missing: 검수 제출 is on, beside the interim 열기 (until #21).
+      // Nothing is missing: 검수 제출 is on, the one way out of a draft — no 열기 (#21).
       await expect(firstPage.getByTestId('market-open-items')).toHaveCount(0);
-      await expect(firstPage.getByTestId('market-open')).toBeVisible();
+      await expect(firstPage.getByTestId('market-review-submit')).toBeEnabled();
+      await expect(firstPage.getByTestId('market-open')).toHaveCount(0);
 
       // --- 검수 제출: one press, naming the admin on screen (ADR-0092).
       const submitted = nextWrite(firstPage, market.id, 'submit');
@@ -324,7 +326,7 @@ test.describe('개설 검수', () => {
       );
 
       // --- the content is locked from the submission (#172 item 6 (a)): the form says why and
-      // saves nothing; the API refuses an edit and the interim open.
+      // saves nothing; the API refuses an edit.
       await expect(firstPage.getByTestId('market-edit-locked')).toHaveText(
         copy.adminMarketEditLockedReview,
       );
@@ -335,13 +337,6 @@ test.describe('개설 검수', () => {
           await admin.patch(path, {
             data: { title: `${market.title} 고침`, expectedAccountId: first.id },
           }),
-          400,
-          'VALIDATION_ERROR',
-        ),
-      ).toEqual([{ path: ['status'], message: 'market is review' }]);
-      expect(
-        await refusalOf(
-          await admin.post(`${path}/open`, { data: { expectedAccountId: first.id } }),
           400,
           'VALIDATION_ERROR',
         ),
@@ -429,10 +424,10 @@ test.describe('개설 검수', () => {
           .getByTestId('market-review-checklist')
           .locator('[data-testid^="market-review-check-"]')
           .evaluateAll((boxes) => boxes.map((box) => box.getAttribute('data-testid'))),
-      ).toEqual(CHECKLIST.map((item) => `market-review-check-${item}`));
+      ).toEqual(REVIEW_CHECKLIST.map((item) => `market-review-check-${item}`));
       const confirm = dialog.getByTestId('market-review-approve-dialog-confirm');
       await expect(confirm).toBeDisabled();
-      for (const item of CHECKLIST.slice(0, -1)) {
+      for (const item of REVIEW_CHECKLIST.slice(0, -1)) {
         const box = dialog.getByTestId(`market-review-check-${item}`);
         await expect(box).toContainText(CHECK_LABEL[item]);
         await box.click();
@@ -441,7 +436,7 @@ test.describe('개설 검수', () => {
       await dialog.getByTestId('market-review-approve-reason').fill(reason);
       // One item short: still off.
       await expect(confirm).toBeDisabled();
-      const last = dialog.getByTestId(`market-review-check-${CHECKLIST.at(-1) ?? ''}`);
+      const last = dialog.getByTestId(`market-review-check-${REVIEW_CHECKLIST.at(-1) ?? ''}`);
       await last.click();
       await expect(last).toHaveAttribute('data-state', 'checked');
       await expect(confirm).toBeEnabled();
@@ -449,7 +444,7 @@ test.describe('개설 검수', () => {
       await confirm.click();
       expect((await approved).postDataJSON()).toEqual({
         requestId: requested.review.pending?.requestId,
-        checklist: CHECKLIST,
+        checklist: REVIEW_CHECKLIST,
         reason,
         expectedAccountId: second.id,
       });
@@ -474,8 +469,8 @@ test.describe('개설 검수', () => {
         actor: secondName,
         rows: [
           statusRow(copy.marketStatusReview, copy.marketStatusScheduled),
-          `${copy.reviewLogChecklist} ${String(CHECKLIST.length)}/${String(CHECKLIST.length)}` +
-            copy.reviewLogChecklistTail,
+          `${copy.reviewLogChecklist} ${String(REVIEW_CHECKLIST.length)}/` +
+            `${String(REVIEW_CHECKLIST.length)}${copy.reviewLogChecklistTail}`,
           `${copy.reviewLogReason} ${reason}`,
         ],
       });
@@ -539,7 +534,7 @@ test.describe('개설 검수', () => {
       await expect(select).toHaveValue('');
       // The list is the checklist's names and 기타 (#172 item 4).
       await expect(select.locator('option:not([value=""])')).toHaveText([
-        ...CHECKLIST.map((item) => CHECK_LABEL[item]),
+        ...REVIEW_CHECKLIST.map((item) => CHECK_LABEL[item]),
         copy.reviewRejectOther,
       ]);
       await expect(confirm).toBeDisabled();
@@ -604,7 +599,9 @@ test.describe('개설 검수', () => {
       await secondPage.goto(`/admin/markets/${market.id}`);
       await secondPage.getByTestId('market-review-approve').click();
       const dialog = secondPage.getByTestId('market-review-approve-dialog');
-      for (const item of CHECKLIST) await dialog.getByTestId(`market-review-check-${item}`).click();
+      for (const item of REVIEW_CHECKLIST) {
+        await dialog.getByTestId(`market-review-check-${item}`).click();
+      }
       await dialog.getByTestId('market-review-approve-reason').fill(`확인했습니다 ${market.tag}`);
       const confirm = dialog.getByTestId('market-review-approve-dialog-confirm');
       await expect(confirm).toBeEnabled();

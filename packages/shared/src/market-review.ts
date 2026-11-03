@@ -10,7 +10,7 @@ import { storableInstantSchema } from './market-rules.js';
  * 개설 검수 (#78, ADR-0099; ADR-0093 decision 1 #173 items 1·12, decision 2 #172 items 4·5·6·12·13,
  * decision 3 '#78 수정 기록의 사유' and '#21 앞당긴 개장'):
  *
- * - 검수 제출 (DRAFT → REVIEW, `POST /admin/markets/:id/submit`, the body of the open and the close,
+ * - 검수 제출 (DRAFT → REVIEW, `POST /admin/markets/:id/submit`, the body of the close,
  *   `expectedAccountBodySchema`): any admin, once the open-items check (`missingOpenItems`) passes
  *   and the close is still ahead. It opens a `market_review` approval request (#171, approvals.ts)
  *   and locks the content (#172 item 6 (a)): nothing of a market in REVIEW or SCHEDULED is edited.
@@ -18,16 +18,22 @@ import { storableInstantSchema } from './market-rules.js';
  *   admin other than the creator, anyone who edited the market's content before, and the submitter
  *   (MARKET_REVIEW_EXCLUSIONS, #172 item 5), the open-items check passing again. An approval
  *   confirms every MARKET_REVIEW_CHECKLIST item with a reason; a 반려 names one of
- *   MARKET_REJECT_REASONS with a description.
+ *   MARKET_REJECT_REASONS with a description. An approval at or past the scheduled open also opens
+ *   the market in the same transaction (SCHEDULED → OPEN, #21, ADR-0100; #172 item 6); otherwise
+ *   the worker opens it at that time.
  * - 되돌리기 (REVIEW or SCHEDULED → DRAFT): any admin, with a reason, to edit the market and have it
- *   reviewed again (#172 item 6).
+ *   reviewed again (#172 item 6) — the only way on for a SCHEDULED market whose close has passed,
+ *   which never opens (#21).
  * - 예정 개장 시각 변경 (SCHEDULED, no status change): any admin, with a reason, without a new review;
- *   the order rule is checked again (#172 item 6, ADR-0093 decision 3 '#21 앞당긴 개장').
+ *   the order rule is checked again (#172 item 6, ADR-0093 decision 3 '#21 앞당긴 개장'). A time
+ *   that has already come opens the market at once, in the same transaction (#21): to open early,
+ *   move the scheduled open earlier — there is no other early open.
  *
  * Every one writes a `market_events` row of MARKET_REVIEW_EVENT_TYPES and an `admin_actions` row
  * (`market_submit` … `market_reschedule`, enums.ts), and the admin detail shows them back as the
- * 검수 기록 (`AdminMarket.review.log`). The bot budget and the config version are #72's: neither the
- * check nor the checklist names them until #72 adds them.
+ * 검수 기록 (`AdminMarket.review.log`); an approval or a reschedule that opens the market also
+ * writes its own `opened` event, outside the 검수 기록, and no admin action. The bot budget and the
+ * config version are #72's: neither the check nor the checklist names them until #72 adds them.
  */
 
 /** `approval_requests.kind` of a review (#171: lower-case words joined by `_`); target `market`. */
@@ -149,7 +155,9 @@ export const REVIEW_CHECKLIST_INCOMPLETE = 'every item must be confirmed';
 /**
  * `POST /admin/markets/:id/approve` (#78): every checklist item confirmed, each once, in any order
  * (`isCompleteReviewChecklist`, refused on `checklist` before anything is read), the approving
- * admin's reason (approvals.ts: required, trimmed) and the admin on screen (ADR-0092).
+ * admin's reason (approvals.ts: required, trimmed) and the admin on screen (ADR-0092). The answer
+ * is the market after it: SCHEDULED, or OPEN when its scheduled open had already come — the
+ * approval opened it at once (#21, ADR-0100; ADR-0093 decision 2 #172 item 6).
  */
 export const approveMarketReviewBodySchema = z
   .object({
@@ -198,8 +206,9 @@ export type RevertMarketBody = z.infer<typeof revertMarketBodySchema>;
 /**
  * `POST /admin/markets/:id/reschedule` (#78, SCHEDULED only): the new 예정 개장 시각 — an instant as
  * the create and update bodies take it, required; before the close in whole minutes (the
- * service's, `timeRuleViolations`), and a past one is allowed: the market opens when #21's job next
- * runs — and why, required (ADR-0093 decision 3 '#21 앞당긴 개장').
+ * service's, `timeRuleViolations`), and a past one is allowed: the reschedule then opens the market
+ * at once, in the same transaction, and answers the OPEN market (#21, ADR-0100) — and why,
+ * required (ADR-0093 decision 3 '#21 앞당긴 개장').
  */
 export const rescheduleMarketOpenBodySchema = z
   .object({

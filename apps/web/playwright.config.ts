@@ -85,7 +85,7 @@ export default defineConfig({
   /*
    * All three processes, because the specs depend on all three: the web server for the pages,
    * the API directly for `/ws` (a Next rewrite does not proxy a WebSocket upgrade), and since
-   * M5 the worker for the close and finalize jobs — so a run with one of them down fails as
+   * M5 the worker for the open, close and finalize jobs — so a run with one of them down fails as
    * "the probability never moved" or "실현 손익 never appeared" rather than as "X is down".
    * (The worker entry is the one exception, and only when its probe is switched off — above.)
    *

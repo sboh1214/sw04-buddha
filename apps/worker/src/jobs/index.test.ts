@@ -13,6 +13,7 @@ import {
   createMedia,
   createPost,
   createPosition,
+  createScheduledMarket,
   createStartGrant,
   createUser,
   createWriteLimitEvent,
@@ -111,6 +112,71 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
       .where(eq(schema.marketSettlementSteps.marketId, marketId));
     return row!;
   }
+
+  /** An approved market (#78) whose scheduled open is `scheduledOpenAt` — due by default. */
+  async function scheduled(scheduledOpenAt?: Date) {
+    return (await createScheduledMarket(t.db, { scheduledOpenAt })).market;
+  }
+
+  it('market.open without a market id is the scan: opens what is due and returns the counts (#21)', async () => {
+    const due = await scheduled();
+    const future = await scheduled(new Date(Date.now() + 60 * MINUTE_MS));
+
+    await expect(run({ name: JOB_NAMES.marketOpen, data: {} })).resolves.toEqual({
+      opened: 1,
+      skipped: 0,
+      failed: 0,
+      failures: [],
+    });
+    expect((await marketRow(due.id)).status).toBe('open');
+    expect((await marketRow(future.id)).status).toBe('scheduled');
+    expect(published).toEqual([
+      {
+        channel: marketChannel(due.id),
+        event: expect.objectContaining({ type: 'market:status', status: 'open' }) as unknown,
+      },
+    ]);
+    // Something was done: the counts line is at info.
+    expect(logs.at(-1)).toMatchObject({ level: 30, msg: 'market open scan', opened: 1 });
+
+    // The scheduler job of queues.ts carries no data at all; that is the scan too, and with
+    // nothing left to do it reports zeros (at debug — it runs every minute).
+    await expect(run({ name: JOB_NAMES.marketOpen })).resolves.toEqual({
+      opened: 0,
+      skipped: 0,
+      failed: 0,
+      failures: [],
+    });
+    expect(logs.at(-1)).toMatchObject({ level: 20, msg: 'market open scan', opened: 0 });
+  });
+
+  it('market.open with a market id opens that market only (#21)', async () => {
+    const target = await scheduled();
+    const other = await scheduled();
+
+    const result = await run({ name: JOB_NAMES.marketOpen, data: { marketId: target.id } });
+    expect(result).toMatchObject({ outcome: 'opened', marketId: target.id });
+    expect(() => JSON.stringify(result)).not.toThrow();
+    expect((await marketRow(target.id)).status).toBe('open');
+    expect((await marketRow(other.id)).status).toBe('scheduled');
+    expect(published.map((p) => p.channel)).toEqual([marketChannel(target.id)]);
+    expect(logs.at(-1)).toMatchObject({ level: 30, msg: 'market open', outcome: 'opened' });
+
+    // The delayed job's retry, or a duplicate: skipped, and the skip is JSON too.
+    await expect(
+      run({ name: JOB_NAMES.marketOpen, data: { marketId: target.id } }),
+    ).resolves.toEqual({ outcome: 'skipped', marketId: target.id, reason: 'not_scheduled' });
+  });
+
+  it('rejects a market.open payload the schema refuses with UnrecoverableError (#21)', async () => {
+    const due = await scheduled();
+    const attempt = run({ name: JOB_NAMES.marketOpen, data: { marketId: 'nope' } });
+    await expect(attempt).rejects.toBeInstanceOf(UnrecoverableError);
+    await expect(attempt).rejects.toThrow(/Invalid market\.open payload \(job job-1\)/);
+    // Refused before any handler ran: the due market is untouched by this job.
+    expect((await marketRow(due.id)).status).toBe('scheduled');
+    expect(published).toEqual([]);
+  });
 
   it('market.close without a market id is the scan: closes what is due and returns the counts', async () => {
     const due = await createMarket(t.db, { closeAt: new Date(Date.now() - MINUTE_MS) });

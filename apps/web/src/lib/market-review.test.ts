@@ -2,10 +2,11 @@ import {
   APPROVAL_REASON_MAX_LENGTH,
   MARKET_REJECT_REASONS,
   MARKET_REVIEW_CHECKLIST,
+  MARKET_STATUSES,
   type MarketReviewChecklistItem,
   TIME_RULE_MESSAGES,
 } from '@buddha/shared';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { copy } from '@/copy';
 import { ApiError, type MarketReviewLogEntry } from './api';
 import { formatKst } from './datetime';
@@ -25,6 +26,8 @@ import {
   reviewFailure,
   reviewLogRows,
   reviewReasonDraft,
+  reviewWriteSuccess,
+  scheduledCloseLapsed,
   showsExcludedAdmins,
 } from './market-review';
 
@@ -311,7 +314,7 @@ describe('what the review dialogs may send', () => {
       expect(rescheduleDraft('2026-11-20T08:59', '이유', scheduled).ready).toBe(true);
     });
 
-    it('allows a past instant: the market opens when the open job next runs', () => {
+    it('allows a past instant: the reschedule then opens the market at once (#21)', () => {
       expect(rescheduleDraft('2020-01-01T00:00', '이유', scheduled).ready).toBe(true);
     });
 
@@ -320,6 +323,65 @@ describe('what the review dialogs may send', () => {
         copy.errMarketReviewRescheduleTime,
       );
     });
+  });
+});
+
+describe('what a review write that went through says (#21, ADR-0100)', () => {
+  it('says the approval opened the market when the answer is OPEN, else that it waits', () => {
+    // ADR-0093 decision 2 #172 item 6: an approval past the scheduled open opens it at once.
+    expect(reviewWriteSuccess('approve', 'open')).toBe(copy.adminMarketReviewApprovedOpened);
+    expect(reviewWriteSuccess('approve', 'scheduled')).toBe(copy.adminMarketReviewApproved);
+    expect(copy.adminMarketReviewApprovedOpened).toBe('승인해 거래를 열었습니다.');
+  });
+
+  it('says the reschedule opened the market when the answer is OPEN, else that it moved', () => {
+    // Decision 3 '#21 앞당긴 개장': to open sooner, the scheduled open moves to now or earlier.
+    expect(reviewWriteSuccess('reschedule', 'open')).toBe(copy.adminMarketReviewRescheduledOpened);
+    expect(reviewWriteSuccess('reschedule', 'scheduled')).toBe(copy.adminMarketReviewRescheduled);
+    expect(copy.adminMarketReviewRescheduledOpened).toBe(
+      '예정 개장 시각을 바꿔 거래를 열었습니다.',
+    );
+  });
+
+  it('says the market opens by itself at its scheduled open, and at once past it', () => {
+    expect(copy.adminMarketReviewScheduledNote).toContain('예정 개장 시각에 자동으로 열립니다');
+    expect(copy.adminMarketReviewApproveBody).toContain('승인하는 즉시 열립니다');
+    expect(copy.adminMarketReviewRescheduleAtHint).toContain('바로 열립니다');
+  });
+});
+
+describe('scheduledCloseLapsed (#21, ADR-0100; #172 item 6)', () => {
+  const closeAt = '2026-11-20T00:00:00.000Z';
+  const at = (iso: string) => new Date(iso).getTime();
+
+  it('is a scheduled market read once its close had come: it never opens, back to a draft', () => {
+    const scheduled = { status: 'scheduled' as const, closeAt };
+    expect(scheduledCloseLapsed(scheduled, at('2026-11-19T23:59:59.999Z'))).toBe(false);
+    // Read at the close itself: the open needs the close ahead (`close_at > now`).
+    expect(scheduledCloseLapsed(scheduled, at(closeAt))).toBe(true);
+    expect(scheduledCloseLapsed(scheduled, at('2026-12-01T00:00:00.000Z'))).toBe(true);
+  });
+
+  it('judges when the row was read, not the clock now: a row read before says nothing', () => {
+    // Codex review on #21: the page left open across the close still holds the row read before
+    // it, which the worker may have opened and the close job closed since. Only a read from
+    // after the close counts, whatever the clock says now.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-12-01T00:00:00.000Z'));
+      const readBefore = at('2026-11-19T00:00:00.000Z');
+      expect(scheduledCloseLapsed({ status: 'scheduled', closeAt }, readBefore)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('is never another status’s, nor an unreadable close', () => {
+    const later = at('2026-12-01T00:00:00.000Z');
+    for (const status of MARKET_STATUSES.filter((value) => value !== 'scheduled')) {
+      expect(scheduledCloseLapsed({ status, closeAt }, later), status).toBe(false);
+    }
+    expect(scheduledCloseLapsed({ status: 'scheduled', closeAt: 'nope' }, later)).toBe(false);
   });
 });
 

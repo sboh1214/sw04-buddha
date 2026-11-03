@@ -411,10 +411,10 @@ export const copy = {
   adminMarketTitle: '질문',
   // 규칙 항목 (#23, ADR-0097; ADR-0093 결정 2 #172 7~10항): 질문 다음의 묶음 하나에 개설 항목 순서
   // (OPEN_ITEMS)대로 놓인다. 배경은 시장의 description이고 공개 상세의 '배경'(marketBackground)과 같은
-  // 이름이다. 초안은 어느 항목이 비어도 저장되고, 검수 제출·열기 전에 모두 채운다(대체 출처는 없어도 된다).
+  // 이름이다. 초안은 어느 항목이 비어도 저장되고, 검수 제출 전에 모두 채운다(대체 출처는 없어도 된다).
   adminMarketRuleItems: '규칙 항목',
   adminMarketRuleItemsHint:
-    '비워 둔 항목이 있어도 초안으로 저장됩니다. 검수를 제출하거나 시장을 열려면 모두 채워야 합니다. 대체 출처는 없어도 됩니다.',
+    '비워 둔 항목이 있어도 초안으로 저장됩니다. 검수를 제출하려면 모두 채워야 합니다. 대체 출처는 없어도 됩니다.',
   adminMarketDescription: '배경',
   adminMarketYesCondition: 'YES 조건',
   adminMarketNoCondition: 'NO 조건',
@@ -454,7 +454,10 @@ export const copy = {
   adminMarketTimesHint:
     '시각은 한국 시간으로 입력합니다. 예정 개장 시각은 거래 마감 시각보다 앞서고, 거래 마감 시각과 사건 기한은 예정 판정 시각과 같거나 앞서야 합니다.',
   adminMarketScheduledOpenAt: '예정 개장 시각 (KST)',
-  adminMarketScheduledOpenAtHint: '이 시각이 되어야 열 수 있습니다. 일찍 열려면 앞당기세요.',
+  // 시장은 승인된 뒤 이 시각에 자동으로 열리고, 이 시각이 지난 뒤 승인되면 승인하는 즉시 열린다(#21,
+  // ADR-0100; ADR-0093 결정 2 #172 6항). 일찍 여는 버튼은 없다(결정 3 '#21 앞당긴 개장').
+  adminMarketScheduledOpenAtHint:
+    '승인된 시장은 이 시각에 자동으로 열립니다(이미 지났으면 승인하는 즉시). 일찍 열려면 앞당기세요.',
   adminMarketCloseAt: '거래 마감 시각 (KST)',
   adminMarketCloseAtHint:
     '경기는 시작 전, 선거는 투표 종료 전에 마감합니다. 개장 뒤에는 늦추기만 할 수 있고 예정 판정 시각을 넘지 않습니다.',
@@ -471,7 +474,7 @@ export const copy = {
   // 거래 중인 시장에서 잠긴 예정 개장·예정 판정 시각 칸의 안내(#172 14항).
   adminMarketTimeFixedHint: '시장을 연 뒤에는 바꾸지 않습니다.',
   // 선행 마감 간격: 숫자 뒤에 '분'이 붙고, 출시 설정이 미정이면 '미정'이다. 시장은 선행 마감을 마지막으로
-  // 검사한 간격(검수 제출·열 때 저장하고 반려·되돌리기가 지운다)을 쓰므로(ADR-0098, ADR-0099) 검수 중·개장
+  // 검사한 간격(검수 제출이 저장하고 개장은 그대로 두며 반려·되돌리기가 지운다)을 쓰므로(ADR-0098, ADR-0099) 검수 중·개장
   // 예정·연 시장은 그 값을, 초안은 지금의 출시 설정 값을 보인다.
   adminMarketLeadCloseGap: '선행 마감 간격',
   adminMarketLeadCloseGapMinutes: '분',
@@ -491,9 +494,9 @@ export const copy = {
   adminMarketTagAdd: '넣기',
   adminMarketTagRemove: '빼기',
   adminMarketTagsHint:
-    '검수를 제출하거나 시장을 열려면 1~5개가 있어야 합니다. Enter나 넣기로 넣고, 쉼표로 나눈 목록은 한 번에 들어갑니다. 대소문자만 다른 이름은 같은 태그입니다.',
-  // 개설 항목 검사 (#17): 초안을 검수 제출·열기 전에 채울 항목의 이름. 초안 상세의 안내(빠진 것이 없으면
-  // 안내도 없다)와 검수 제출·열기·승인을 거절한 알림이 같은 이름을 OPEN_ITEMS 순서로 ' · '로 잇는다. 초안이
+    '검수를 제출하려면 1~5개가 있어야 합니다. Enter나 넣기로 넣고, 쉼표로 나눈 목록은 한 번에 들어갑니다. 대소문자만 다른 이름은 같은 태그입니다.',
+  // 개설 항목 검사 (#17): 초안을 검수 제출하기 전에 채울 항목의 이름. 초안 상세의 안내(빠진 것이 없으면
+  // 안내도 없다)와 검수 제출·승인을 거절한 알림이 같은 이름을 OPEN_ITEMS 순서로 ' · '로 잇는다. 초안이
   // 아닌 시장에는 안내가 없다(검사는 초안을 떠날 때의 것이고, 승인은 같은 검사를 다시 한다, #78). 규칙
   // 항목의 이름은 #23(ADR-0097)의 것이고, '정산'은 Coin 지급의 말이라(ADR-0052) 쓰지 않는다. 시각 항목과
   // 시각 순서·선행 마감은 #22(ADR-0098)의 것이고, 뒤의 둘은 #78 체크리스트의 줄 이름이다(ADR-0093 결정 2
@@ -525,13 +528,13 @@ export const copy = {
   openItemRuleLeadCloseBefore: '거래 마감 시각이 발표 예정 시각보다',
   openItemRuleLeadCloseTail: '분 이상 앞서지 않습니다',
   openItemRuleLeadCloseUndecided:
-    '간격(출시 설정)이 미정이라 발표 예정 시각이 있는 시장은 검수 제출하거나 열 수 없습니다',
-  // 시각 순서·선행 마감은 채우는 것이 아니라 고치는 것이라 '채우거나 고칠'이다(#22). 검수 제출(#78)과
-  // 임시 열기(#21까지)가 같은 검사를 받는다.
-  adminMarketOpenItems: '검수 제출·열기 전에 채우거나 고칠 항목',
+    '간격(출시 설정)이 미정이라 발표 예정 시각이 있는 시장은 검수 제출할 수 없습니다',
+  // 시각 순서·선행 마감은 채우는 것이 아니라 고치는 것이라 '채우거나 고칠'이다(#22). 검수 제출(#78)이 이
+  // 검사를 받고, 승인이 다시 본다. 개장(#21)은 다시 보지 않는다(ADR-0093 결정 2 #172 1항).
+  adminMarketOpenItems: '검수 제출 전에 채우거나 고칠 항목',
   adminMarketImageUrl: '이미지 URL',
   adminMarketImageUrlPlaceholder: 'https://',
-  // 목록의 마감 줄·열기 기록(opened)의 마감(closeAt)과 마감 기록(closed)의 실제로 닫은
+  // 목록의 마감 줄·개장 기록(opened)의 마감(closeAt)과 마감 기록(closed)의 실제로 닫은
   // 시각(closedAt)에 쓰는 짧은 이름. 시각 묶음의 칸 이름(adminMarketCloseAt)과는 다른 자리다(#22).
   adminMarketCloseAtShort: '마감 시각',
   adminMarketSlug: '슬러그 (비우면 자동 생성)',
@@ -542,8 +545,6 @@ export const copy = {
   adminMarketEditOpenTitle: '열린 시장을 수정합니다',
   adminMarketEditOpenBody:
     '이미 거래가 진행 중인 시장입니다. 규칙이나 거래 마감 시각을 바꾸면 참여자에게 영향을 줍니다. 거래 마감 시각은 늦추기만 할 수 있고 예정 판정 시각을 넘을 수 없습니다. 계속할까요?',
-  adminMarketOpen: '열기',
-  adminMarketOpened: '시장을 열었습니다.',
   adminMarketClose: '마감',
   adminMarketCloseTitle: '시장을 마감합니다',
   adminMarketCloseBody: '마감하면 더 이상 거래할 수 없습니다. 계속할까요?',
@@ -560,8 +561,13 @@ export const copy = {
   adminMarketReviewPendingAt: '제출 시각',
   adminMarketReviewPendingNote:
     '검수 중에는 내용을 고칠 수 없습니다. 고치려면 초안으로 되돌린 뒤 다시 검수 제출하세요.',
+  // 개장 예정 (#21, ADR-0100; ADR-0093 결정 1 #173 1항): 예정 개장 시각에 워커가 연다. 그 전에 거래 마감
+  // 시각이 지나면 열지 않고 개장 예정에 머문다. 관리자가 초안으로 되돌려 시각을 고친다(#172 6항). 이 경고는
+  // 브라우저의 시계로 고른다(서버는 그 시장을 열지 않고, 되돌리기만 받는다).
   adminMarketReviewScheduledNote:
-    '승인된 시장입니다. 내용은 고칠 수 없고, 예정 개장 시각만 새 검수 없이 사유와 함께 바꿀 수 있습니다.',
+    '승인된 시장입니다. 예정 개장 시각에 자동으로 열립니다. 내용은 고칠 수 없고, 예정 개장 시각만 새 검수 없이 사유와 함께 바꿀 수 있습니다.',
+  adminMarketReviewCloseLapsed:
+    '거래 마감 시각이 지나 이 시장은 열리지 않습니다. 초안으로 되돌려 시각을 고친 뒤 다시 검수 제출하세요.',
   adminMarketReviewApprove: '승인',
   adminMarketReviewReject: '반려',
   adminMarketReviewRevert: '초안으로 되돌리기',
@@ -614,9 +620,12 @@ export const copy = {
   adminMarketReviewReason: '사유',
   adminMarketReviewReasonHint: '검수 기록에 관리자·시각과 함께 남습니다. 500자까지 쓸 수 있습니다.',
   adminMarketReviewApproveTitle: '검수를 승인합니다',
+  // 승인하면 개장 예정이 되고 예정 개장 시각에 열린다. 그 시각이 이미 지났으면 승인하는 즉시 연다(#21,
+  // ADR-0100; ADR-0093 결정 2 #172 6항). 알림은 응답의 상태를 따른다(reviewWriteSuccess).
   adminMarketReviewApproveBody:
-    '승인하면 시장이 개장 예정이 되어 공개 화면에 보입니다. 확인한 체크리스트와 사유가 검수 기록에 남습니다.',
+    '승인하면 시장이 개장 예정이 되어 공개 화면에 보이고, 예정 개장 시각에 자동으로 열립니다. 예정 개장 시각이 이미 지났으면 승인하는 즉시 열립니다. 확인한 체크리스트와 사유가 검수 기록에 남습니다.',
   adminMarketReviewApproved: '승인했습니다. 시장이 개장 예정이 되었습니다.',
+  adminMarketReviewApprovedOpened: '승인해 거래를 열었습니다.',
   adminMarketReviewRejectTitle: '검수를 반려합니다',
   adminMarketReviewRejectBody:
     '반려하면 시장이 초안으로 돌아갑니다. 고른 사유와 설명이 검수 기록에 남고, 만든 관리자가 이 화면에서 읽습니다.',
@@ -635,9 +644,11 @@ export const copy = {
   adminMarketReviewRescheduleBody:
     '새 검수 없이 예정 개장 시각만 바꿉니다. 이전·이후 시각과 사유가 검수 기록에 남습니다.',
   adminMarketReviewRescheduleAt: '새 예정 개장 시각 (KST)',
+  // 지금이나 지난 시각으로 바꾸면 같은 요청이 시장을 연다(#21, ADR-0100; ADR-0093 결정 3 '#21 앞당긴 개장').
   adminMarketReviewRescheduleAtHint:
-    '거래 마감 시각보다 앞서야 합니다(분 단위). 지난 시각으로도 바꿀 수 있습니다.',
+    '거래 마감 시각보다 앞서야 합니다(분 단위). 지금이나 지난 시각으로 바꾸면 바로 열립니다.',
   adminMarketReviewRescheduled: '예정 개장 시각을 바꿨습니다.',
+  adminMarketReviewRescheduledOpened: '예정 개장 시각을 바꿔 거래를 열었습니다.',
   // 검수 기록 (AdminMarket.review.log, 최근 것부터): 누가·언제·무엇을, 그리고 사유·반려 사유·체크리스트의
   // 개수·예정 개장 시각의 이전과 이후. 이벤트 로그도 같은 줄 이름을 쓴다.
   adminMarketReviewLog: '검수 기록',
@@ -954,16 +965,13 @@ export const copy = {
   errMarketCloseEarlier:
     '거래 중인 시장의 거래 마감 시각은 앞당길 수 없습니다. 일찍 끝내려면 마감하세요.',
   errMarketTimeFixed: '거래 중인 시장에서는 바꿀 수 없습니다.',
-  // 열기 (ADR-0093 결정 3 '#21 앞당긴 개장'): 예정 개장 시각 전에는 열지 않는다.
-  errMarketScheduledOpenNotReached:
-    '예정 개장 시각이 되지 않았습니다. 일찍 열려면 예정 개장 시각을 앞당기세요.',
   errMarketSlug: '슬러그는 영문 소문자·숫자·한글·하이픈 3~80자로 입력하거나 비워 두세요.',
   errMarketSlugTaken: '이미 사용 중인 슬러그입니다.',
   errMarketInvalid: '입력값을 확인해 주세요.',
-  // 검수 제출(#78)·열기의 개설 항목 검사 거절(OPEN_ITEMS_MISSING): 뒤에 ': '와 빠진 항목의 이름
+  // 검수 제출(#78)의 개설 항목 검사 거절(OPEN_ITEMS_MISSING): 뒤에 ': '와 빠진 항목의 이름
   // (openItem…)이 붙는다. 응답이 항목을 싣지 않았으면 마침표로 끝낸다. 상세는 다시 읽혀 초안의 안내가 같은
   // 항목을 보인다. 승인에서의 같은 거절은 errMarketReviewOpenItems다.
-  errMarketOpenItemsMissing: '검수 제출·열기 전에 채우거나 고칠 항목이 있습니다',
+  errMarketOpenItemsMissing: '검수 제출 전에 채우거나 고칠 항목이 있습니다',
   errMarketRulesOpen: '열린 시장의 규칙은 비울 수 없습니다.',
   errMarketNotOpen: '거래 중인 시장이 아닙니다. 화면을 새로 고쳐 주세요.',
   errMarketStatus: '지금 상태에서는 할 수 없는 작업입니다. 화면을 새로 고쳐 주세요.',
@@ -1433,7 +1441,9 @@ export const copy = {
 
   // 상태별 안내 (PLAN 11.3). 색과 배지는 MARKET_STATUS_LABEL/PALETTE가 맡고, 이 문구는
   // 그 아래에서 "지금 무엇을 할 수 있는지"를 말한다. 그 상태의 사실만 적고, 다른 이슈가 만들 것
-  // (예약 개장 #21, 중단 사유 #114, 이의 #175, 무효 지급 #126)은 약속하지 않는다(#174의 글).
+  // (중단 사유 #114, 이의 #175, 무효 지급 #126)은 약속하지 않는다(#174의 글). 개장 예정의 안내는 예정 개장
+  // 시각의 자동 개장(#21) 뒤에도 여는 시각을 약속하지 않는다: 그 시각은 바뀔 수 있고, 그 전에 거래 마감
+  // 시각이 지나면 열리지 않는다(ADR-0100).
   marketScheduledNotice: '아직 열리지 않은 시장입니다. 지금은 거래할 수 없습니다.',
   marketPausedNotice: '거래가 일시 중단된 시장입니다. 지금은 거래할 수 없습니다.',
   marketClosedNotice: '마감된 시장입니다. 더 이상 거래할 수 없습니다.',

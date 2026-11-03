@@ -2,7 +2,7 @@
   "name": "worker",
   "version": "0.0.0",
   "private": true,
-  "description": "BullMQ consumer: market close/finalize, ledger audit, stats",
+  "description": "BullMQ consumer: market open/close/finalize, ledger audit, stats",
   "type": "module",
   "scripts": {
     "dev": "tsx watch --clear-screen=false src/main.ts",

@@ -23,7 +23,7 @@ const VOID_PAYOUT = voidPayoutText();
  * and NO conditions, the event deadline (KST, whole minutes, as 마감), the primary source's name
  * and address, the fallbacks (`MarketSourcesField`), the switch condition, the long-delay deadline
  * in days and the delay handling. A draft saves with any of them blank; the draft's notice names
- * what 열기 still needs, and on an open market an item it had may not be emptied
+ * what 검수 제출 still needs, and on an open market an item it had may not be emptied
  * (`marketFormSchema`'s `openMarket`, the API's RULES_REQUIRED).
  *
  * The switch condition shows only while there is a fallback to switch to (#172 item 9) — and while

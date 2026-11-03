@@ -3,6 +3,7 @@ import {
   JOB_NAMES,
   marketCloseJobId,
   marketFinalizeJobId,
+  marketOpenJobId,
   type JobName,
   type MarketJobData,
   type QueueName,
@@ -11,7 +12,7 @@ import { Queue, type JobsOptions } from 'bullmq';
 import { type Redis } from 'ioredis';
 import { REDIS_COMMAND_TIMEOUT_MS, REDIS_QUEUE } from '../infra/redis/redis.provider.js';
 
-/** The queue the worker consumes `market.close` / `market.finalize` from (PLAN 9). */
+/** The queue the worker consumes `market.open`, `.close` and `.finalize` from (PLAN 9). */
 export const MARKETS_QUEUE: QueueName = 'markets';
 
 /**
@@ -77,15 +78,18 @@ function bounded<T>(promise: Promise<T>, what: string): Promise<T> {
 }
 
 /**
- * PLAN 9's producer side (M5, ADR-0046): the `market.close` and `market.finalize` jobs the
- * worker consumes, registered by MarketAdminService AFTER its transaction commits. A close job
- * is delayed to `closeAt` and cancelled the same way when that instant stops being true (a
- * PATCHed `closeAt`, a manual close); a finalize job is due at once after the
- * judgement and never cancelled.
+ * PLAN 9's producer side (M5, ADR-0046; #21, ADR-0100): the `market.open`, `market.close` and
+ * `market.finalize` jobs the worker consumes, registered by MarketAdminService AFTER its
+ * transaction commits. An open job is delayed to `scheduledOpenAt` — registered by an approval
+ * or a reschedule that leaves the market SCHEDULED, moved by a reschedule, cancelled by a
+ * 되돌리기 from SCHEDULED. A close job is delayed to `closeAt` — registered at the approval (the
+ * close is locked from then on, and the worker's close only acts on an open market) and cancelled
+ * the same way when that instant stops being true (a PATCHed `closeAt`, a manual close, a
+ * 되돌리기 from SCHEDULED); a finalize job is due at once after the judgement and never cancelled.
  *
  * Best effort by design, like MarketPublisher: the transition has COMMITted when this runs,
  * so a failure here is logged and swallowed, never turned into an error response — and never
- * lost either, because the worker's per-minute scan (PLAN 5.5 "안전망") closes and finalizes
+ * lost either, because the worker's per-minute scans (PLAN 5.5 "안전망") open, close and finalize
  * whatever is due whether or not its job exists. That scan is also why a cancel that finds
  * nothing (the job already ran, or was never added) needs no retry: the job it would have
  * removed re-verifies status and instant under the market lock and is a no-op.
@@ -119,6 +123,26 @@ export class MarketJobs implements OnApplicationShutdown {
     this.queue.on('error', (error: Error) => {
       this.logger.warn(`markets queue error: ${describeError(error)}`);
     });
+  }
+
+  /**
+   * `market.open` for one SCHEDULED market at `scheduledOpenAt` (#21, ADR-0100; job id fixed by
+   * market and instant). The callers register it only for a scheduled open still ahead of `now`:
+   * the approval and the reschedule open a market whose scheduled open has come in their own
+   * transaction instead.
+   */
+  scheduleOpen(marketId: string, scheduledOpenAt: Date, now: Date): Promise<void> {
+    return this.schedule(
+      JOB_NAMES.marketOpen,
+      marketOpenJobId(marketId, scheduledOpenAt),
+      marketId,
+      scheduledOpenAt,
+      now,
+    );
+  }
+
+  cancelOpen(marketId: string, scheduledOpenAt: Date): Promise<void> {
+    return this.cancel(marketOpenJobId(marketId, scheduledOpenAt));
   }
 
   /** `market.close` for one market at `closeAt` (job id fixed by market and instant). */

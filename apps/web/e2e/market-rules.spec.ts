@@ -12,7 +12,9 @@ import {
   fillTimeInputs,
   freshTag,
   kstLocalOf,
+  openThroughReview,
   signIn,
+  submitRefusedItems,
   test,
   timesFor,
 } from './helpers';
@@ -24,13 +26,14 @@ import {
  * 대체 출처 in priority order (위로·아래로 move one, 추가 is off at three) with the condition for
  * switching to them, the 장기 지연 기한 in days and the 지연·취소·무효 처리 — under which the VOID
  * payout stands fixed. A draft saves with any of them blank or half a source, and its detail names
- * what 열기 still needs, which 열기 refuses naming; an address that is not http(s) and a fallback
- * row left empty are refused under their inputs, the empty row's refusal going as it is typed
- * into. Once every item is filled the notice goes and the market opens, and an open market cannot
- * lose an item it had. 빼기 takes a fallback out, and the last one out takes the switch condition
- * with it: the market saves with no fallback and a blank condition. The market's times (#22) are
- * filled in with the rule items, as 열기 needs them too (market-times.spec.ts takes them through
- * the form).
+ * what 검수 제출 still needs — off until then, and refused by the API naming the same (#78); an
+ * address that is not http(s) and a fallback row left empty are refused under their inputs, the
+ * empty row's refusal going as it is typed into. Once every item is filled the notice goes and the
+ * market opens through the review (submitted, then approved by the second admin past its scheduled
+ * open — #21, ADR-0100), and an open market cannot lose an item it had. 빼기 takes a fallback out,
+ * and the last one out takes the switch condition with it: the market saves with no fallback and a
+ * blank condition. The market's times (#22) are filled in with the rule items, as the review needs
+ * them too (market-times.spec.ts takes them through the form).
  *
  * A visitor who is not signed in reads every item on the detail's 규칙, in the form's order and all
  * of it at once — nothing folds (decision 3 '#23 문장 길이와 표시') — with each source's name a link
@@ -96,7 +99,7 @@ const RULE_ROWS = [
  */
 const MISSING_TIMES = [copy.openItemScheduledOpenAt, copy.openItemScheduledJudgementAt];
 
-/** The open-items notice and refusal join item names so (lib/market-admin.ts `openItemList`). */
+/** The open-items notice joins item names so (lib/market-admin.ts `openItemList`). */
 const openItems = (...labels: string[]) => labels.join(' · ');
 
 /** `{ data }` out of the success envelope, with the body in the message on a failure. */
@@ -243,7 +246,8 @@ test.describe('규칙 항목', () => {
       await expect(adminPage).toHaveURL(/\/admin\/markets\/[0-9a-f-]{36}$/);
       const marketId = adminPage.url().split('/').at(-1) ?? '';
 
-      // --- the draft names what 열기 still needs, and 열기 is refused naming the same.
+      // --- the draft names what 검수 제출 still needs: it is off, and the API refuses it naming
+      // the same.
       const missing = openItems(
         copy.openItemNoCondition,
         copy.openItemEventDeadline,
@@ -254,11 +258,12 @@ test.describe('규칙 항목', () => {
       );
       const notice = adminPage.getByTestId('market-open-items');
       await expect(notice).toHaveText(`${copy.adminMarketOpenItems}: ${missing}`);
-      await letToastsGo(adminPage);
-      await adminPage.getByTestId('market-open').click();
-      await expect(
-        adminPage.getByText(`${copy.errMarketOpenItemsMissing}: ${missing}`, { exact: true }),
-      ).toBeVisible();
+      const submit = adminPage.getByTestId('market-review-submit');
+      await expect(submit).toBeDisabled();
+      const draft = await dataOf<{ missingOpenItems: string[] }>(
+        await admin.get(`/api/v1/admin/markets/${marketId}`),
+      );
+      expect(await submitRefusedItems(admin, marketId)).toEqual(draft.missingOpenItems);
       await expect(adminPage.getByTestId('market-detail-status')).toHaveText(
         copy.marketStatusDraft,
       );
@@ -353,10 +358,11 @@ test.describe('규칙 항목', () => {
       );
       expect(kstLocalOf(stored.eventDeadline ?? '')).toBe(eventDeadline);
 
-      // --- 열기 opens it now.
-      await letToastsGo(adminPage);
-      await adminPage.getByTestId('market-open').click();
-      await expect(adminPage.getByText(copy.adminMarketOpened)).toBeVisible();
+      // --- 검수 제출 is on now; submitted, and approved by the second admin past its scheduled
+      // open, the market opens at once (#21, ADR-0100).
+      await expect(submit).toBeEnabled();
+      await openThroughReview(admin, marketId);
+      await adminPage.reload();
       await expect(adminPage.getByTestId('market-detail-status')).toHaveText(copy.marketStatusOpen);
 
       // --- an open market cannot lose an item it had: the YES 조건 emptied is refused under its

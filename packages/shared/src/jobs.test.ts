@@ -5,12 +5,13 @@ import {
   marketCloseJobId,
   marketFinalizeJobId,
   marketJobDataSchema,
+  marketOpenJobId,
 } from './jobs.js';
 
 const marketId = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 
 describe('jobs (PLAN 9)', () => {
-  it('declares the seven queues and the eight job names', () => {
+  it('declares the seven queues and the nine job names, the market open first (#21)', () => {
     expect(QUEUE_NAMES).toEqual([
       'markets',
       'audit',
@@ -21,6 +22,7 @@ describe('jobs (PLAN 9)', () => {
       'retention',
     ]);
     expect(Object.values(JOB_NAMES)).toEqual([
+      'market.open',
       'market.close',
       'market.finalize',
       'ledger.audit',
@@ -54,5 +56,17 @@ describe('jobs (PLAN 9)', () => {
     );
     // A moved instant is a different job, so the stale one can be removed and the new one added.
     expect(marketCloseJobId(marketId, new Date(closeAt.getTime() + 1))).not.toBe(id);
+  });
+
+  it('builds the open job id from the scheduled open, which a reschedule moves (#21)', () => {
+    const scheduledOpenAt = new Date('2026-11-02T01:00:00.000Z');
+    const id = marketOpenJobId(marketId, scheduledOpenAt);
+    expect(id).toBe(`market.open.${marketId}.${String(scheduledOpenAt.getTime())}`);
+    expect(id).not.toContain(':');
+    // A rescheduled instant is a new job; the API removes the one under the old instant.
+    expect(marketOpenJobId(marketId, new Date(scheduledOpenAt.getTime() - 60_000))).not.toBe(id);
+    // The same market and instant never collide with the close's or the finalize's id.
+    expect(id).not.toBe(marketCloseJobId(marketId, scheduledOpenAt));
+    expect(id).not.toBe(marketFinalizeJobId(marketId, scheduledOpenAt));
   });
 });

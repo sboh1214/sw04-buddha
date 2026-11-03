@@ -907,8 +907,8 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       expect(rows).toHaveLength(SEED_MARKET_COUNT);
       for (const row of rows) expect(row.createdAt.getTime()).toBeLessThanOrEqual(after);
       for (const event of events) expect(event.createdAt.getTime()).toBeLessThanOrEqual(after);
-      // The scheduled open too (#22): from the runner's clock it would be up to an hour ahead,
-      // a market the interim open refuses as not reached yet.
+      // The scheduled open too (#22): from the runner's clock it would be up to an hour ahead, and
+      // an approval would leave the market waiting that hour instead of opening it at once (#21).
       for (const row of rows) {
         expect(row.scheduledOpenAt!.getTime(), row.slug).toBeLessThanOrEqual(after);
       }
@@ -927,7 +927,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       // was seeded long before — and the seed never rewrites an existing row. That half used
       // to pass in silence: the warning was guarded on having just inserted the market.
       const slug = 'cpi-september-2026-above-2pct';
-      // An admin opened this one (the trading gap allows it, #125) before its cutoff passed.
+      // This one opened (the trading gap allows it, #125) before its cutoff passed.
       const opened = 'seoul-october-2026-rain-above-50mm';
       runSeed();
       // The times move with the close, as an admin's edit would have to (#22): the database holds
@@ -953,9 +953,9 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       const mine = stderr.split(NEWLINE).filter((line) => line.includes(slug));
       expect(mine).toHaveLength(1);
       expect(mine[0]).toContain('is already past');
-      // A draft can be neither submitted for review (#78) nor opened past its cutoff: the admin
-      // has to move it first.
-      expect(mine[0]).toContain('cannot be submitted for review or opened');
+      // A draft cannot be submitted for review (#78) past its cutoff, and only an approved market
+      // opens (#21): the admin has to move the close first.
+      expect(mine[0]).toContain('cannot be submitted for review until');
       expect(mine[0]).toContain('수정');
       // An open one is the worker's to close.
       const openLine = stderr.split(NEWLINE).filter((line) => line.includes(opened));
@@ -971,6 +971,52 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       expect(statuses).toEqual([
         { slug, status: 'draft' },
         { slug: opened, status: 'open' },
+      ]);
+    });
+
+    it('reports one in review or scheduled past its cutoff: back to a draft (#21)', async () => {
+      // Submitted or approved before the cutoff, then left: the approval refuses a passed close
+      // (#78) and the open never opens one (#21, ADR-0100), so it stays in review or scheduled —
+      // public as 개장 예정 — until an admin sends it back to a draft and moves the close there
+      // (ADR-0093 decision 2 #172 item 6). Two stale seeds, whose 사건 기한 the judgement below
+      // still covers (`markets_deadline_by_judgement_check`).
+      const inReview = 'bok-october-rate-cut-2026';
+      const scheduled = 'unemployment-october-2026-below-3pct';
+      runSeed();
+      const pastClose = {
+        scheduledOpenAt: sql`clock_timestamp() - interval '1 day'`,
+        closeAt: sql`clock_timestamp() - interval '1 minute'`,
+        scheduledJudgementAt: sql`clock_timestamp() + interval '1 day'`,
+      };
+      await t.db
+        .update(markets)
+        .set({ status: 'review', ...pastClose })
+        .where(eq(markets.slug, inReview));
+      await t.db
+        .update(markets)
+        .set({ status: 'scheduled', ...pastClose })
+        .where(eq(markets.slug, scheduled));
+
+      const { stdout, stderr } = runSeedIo();
+      expect(stdout).toContain('markets: 0 inserted, 14 already existed');
+      // Each judged on its own slug's line, as above.
+      for (const slug of [inReview, scheduled]) {
+        const mine = stderr.split(NEWLINE).filter((line) => line.includes(slug));
+        expect(mine, slug).toHaveLength(1);
+        expect(mine[0], slug).toContain('is already past');
+        expect(mine[0], slug).toContain('send it back to a draft and move its close');
+        expect(mine[0], slug).toContain('초안으로 되돌리기');
+        expect(mine[0], slug).not.toContain('market.close');
+      }
+      // Reported, not rewritten.
+      const statuses = await t.db
+        .select({ slug: markets.slug, status: markets.status })
+        .from(markets)
+        .where(inArray(markets.slug, [inReview, scheduled]))
+        .orderBy(asc(markets.slug));
+      expect(statuses).toEqual([
+        { slug: inReview, status: 'review' },
+        { slug: scheduled, status: 'scheduled' },
       ]);
     });
 

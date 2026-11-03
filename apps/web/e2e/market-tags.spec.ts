@@ -11,9 +11,11 @@ import {
   freshEmail,
   freshTag,
   kstLocalOf,
+  openThroughReview,
   ruleItemsFor,
   signIn,
   signUp,
+  submitRefusedItems,
   test,
   timesFor,
 } from './helpers';
@@ -23,13 +25,15 @@ import {
  * search): an operator gives a market its tags on the market form — typed and added with Enter or
  * 넣기, a comma-separated list at once, a second name of one tag refused on the spot — and a name
  * some tag already has in another case is linked to that tag in its first spelling. A draft may be
- * made without everything 열기 needs: its detail says what is missing (the open-items check: 질문,
- * the rule items of #23, the times of #22, 카테고리, 태그 1~5개), 열기 is refused naming it, and
- * once it is filled the notice goes and 열기 opens it. An open market cannot be edited down to no
- * tags. A reader then sees the tags on the detail as '#이름' chips in the order entered, each
- * opening that tag's search — which lists the market although its title holds no such word, and
- * which, opened by its address, is not recorded in the reader's recent searches (ADR-0066). The
- * public search matches a tag's whole name in any case, never a part of it.
+ * made without everything 검수 제출 needs: its detail says what is missing (the open-items check:
+ * 질문, the rule items of #23, the times of #22, 카테고리, 태그 1~5개), 검수 제출 is off and the API
+ * refuses it naming the same (#78), and once it is filled the notice goes and the review opens it
+ * (submitted, then approved by the second admin past its scheduled open — #21, ADR-0100). An open
+ * market cannot be edited down to no tags. A reader then sees the tags on the detail as '#이름'
+ * chips in the order entered, each opening that tag's search — which lists the market although its
+ * title holds no such word, and which, opened by its address, is not recorded in the reader's
+ * recent searches (ADR-0066). The public search matches a tag's whole name in any case, never a
+ * part of it.
  *
  * The rules themselves (the name pattern, the count, the order kept, the first spelling winning)
  * are unit-tested on both sides (lib/market-form.test.ts, admin-markets.controller.test.ts); this
@@ -154,7 +158,8 @@ test.describe('태그', () => {
       await expect(adminPage).toHaveURL(/\/admin\/markets\/[0-9a-f-]{36}$/);
       marketId = adminPage.url().split('/').at(-1) ?? '';
 
-      // --- the draft: the existing tag in its first spelling, and what 열기 still needs.
+      // --- the draft: the existing tag in its first spelling, and what 검수 제출 still needs — it
+      // is off, and the API refuses it naming the same.
       await expect(adminPage.getByTestId('market-detail-tags')).toHaveText(`${stored}, ${own}`);
       await expect(adminPage.getByTestId('market-tags-list').locator('li')).toHaveText([
         stored,
@@ -163,19 +168,17 @@ test.describe('태그', () => {
       await expect(adminPage.getByTestId('market-open-items')).toHaveText(
         `${copy.adminMarketOpenItems}: ${MISSING_ITEMS}`,
       );
-      await letToastsGo(adminPage);
-      await adminPage.getByTestId('market-open').click();
-      await expect(
-        adminPage.getByText(`${copy.errMarketOpenItemsMissing}: ${MISSING_ITEMS}`, {
-          exact: true,
-        }),
-      ).toBeVisible();
+      const submit = adminPage.getByTestId('market-review-submit');
+      await expect(submit).toBeDisabled();
+      const draft = await dataOf<AdminMarket>(await admin.get(`/api/v1/admin/markets/${marketId}`));
+      expect(await submitRefusedItems(admin, marketId)).toEqual(draft.missingOpenItems);
       await expect(adminPage.getByTestId('market-detail-status')).toHaveText(
         copy.marketStatusDraft,
       );
 
       // --- the rule items and the times filled in (market-rules.spec.ts and market-times.spec.ts
-      // take each through the form): the notice goes, and 열기 opens it.
+      // take each through the form): the notice goes, and the review opens it — its scheduled open
+      // has passed, so the approval does at once (#21).
       const items = ruleItemsFor(own);
       await fillRuleItemInputs(adminPage, items);
       await fillTimeInputs(adminPage, timesFor(closeAt, items.eventDeadline));
@@ -183,9 +186,9 @@ test.describe('태그', () => {
       await adminPage.getByTestId('market-save').click();
       await expect(adminPage.getByText(copy.adminMarketSaved)).toBeVisible();
       await expect(adminPage.getByTestId('market-open-items')).toHaveCount(0);
-      await letToastsGo(adminPage);
-      await adminPage.getByTestId('market-open').click();
-      await expect(adminPage.getByText(copy.adminMarketOpened)).toBeVisible();
+      await expect(submit).toBeEnabled();
+      await openThroughReview(admin, marketId);
+      await adminPage.reload();
       await expect(adminPage.getByTestId('market-detail-status')).toHaveText(copy.marketStatusOpen);
       // No notice on an open market.
       await expect(adminPage.getByTestId('market-open-items')).toHaveCount(0);

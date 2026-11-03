@@ -580,10 +580,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // row sits inside `staleTime` with nothing scheduled. Only a focus, a reconnect or a
         // remount does. The reachable transitions are those of a market that has traded and has
         // not reached the other position list — open → closed, open ↔ paused, and on to resolved
-        // and settling (#174): draft → open cannot be held (a draft is on no public route) and a
-        // terminal status (settled, cancelled) arrives per holder as `user:position`, which
-        // `liveMarketStatus` refuses as terminal anyway. Measured: bare invalidation → one
-        // fetch and the row stays `open`; restarted → two and it reads `closed`.
+        // and settling (#174): scheduled → open cannot be held (no position exists before the
+        // open, #21) and a terminal status (settled, cancelled) arrives per holder as
+        // `user:position`, which `liveMarketStatus` refuses as terminal anyway. Measured: bare
+        // invalidation → one fetch and the row stays `open`; restarted → two and it reads
+        // `closed`.
         //
         // No gate and no throttle here, unlike the tick handler. This refetch is sanctioned on
         // EVERY status event whatever the cache holds, so `restartQueries` only adds the cancel

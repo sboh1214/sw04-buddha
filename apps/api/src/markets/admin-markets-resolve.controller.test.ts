@@ -12,6 +12,7 @@ import {
   completeOnboarding,
   createCategory,
   createMarket,
+  createOpenedMarket,
   createSettlementStep,
 } from '@buddha/db/test';
 import {
@@ -34,7 +35,7 @@ import { randomUUID } from 'node:crypto';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
-import { MARKETS_QUEUE } from '../jobs/market-jobs.service.js';
+import { MARKETS_QUEUE, MarketJobs } from '../jobs/market-jobs.service.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { sleep, waitForMessages } from '../test/wait.js';
@@ -132,7 +133,6 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
       ...overrides,
     });
   };
-  const open = (id: string) => post(`/api/v1/admin/markets/${id}/open`);
   const close = (id: string) => post(`/api/v1/admin/markets/${id}/close`);
   const resolve = (id: string, body: Record<string, unknown>, who?: TestUser) =>
     post(`/api/v1/admin/markets/${id}/resolve`, body, who);
@@ -447,37 +447,31 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
   });
 
   // --- close job --------------------------------------------------------------------------
-  it('registers the close job on open, moves it with closeAt, and drops it on close', async () => {
-    const draft = detail(await create());
-    expect(await jobIds()).toEqual([]);
-
-    // PLAN 5.5: delayed `market.close` for `close_at`, delayed from the open's own instant.
-    const opened = detail(await open(draft.id));
-    const firstId = marketCloseJobId(draft.id, new Date(opened.closeAt));
-    const first = await queue.getJob(firstId);
-    expect(first).toBeDefined();
-    expect(first!.name).toBe(JOB_NAMES.marketClose);
-    expect(first!.data).toEqual({ marketId: draft.id });
-    expect(first!.delay).toBe(Date.parse(opened.closeAt) - Date.parse(opened.openAt!));
+  it('moves the close job with closeAt, and drops it on close', async () => {
+    // PLAN 5.5: delayed `market.close` for `close_at`, registered at the approval (#21, ADR-0100:
+    // admin-markets-review.controller.test.ts); registered here as the approval left it.
+    const row = await market({ status: 'open', closeAt: new Date(Date.now() + 7 * DAY_MS) });
+    await t.app.get(MarketJobs).scheduleClose(row.id, row.closeAt, new Date());
+    const firstId = marketCloseJobId(row.id, row.closeAt);
     expect(await jobIds()).toEqual([firstId]);
 
     // An edit that keeps the close time leaves the registration alone.
-    const retitled = await patch(`/api/v1/admin/markets/${draft.id}`, { title: '제목만 수정' });
+    const retitled = await patch(`/api/v1/admin/markets/${row.id}`, { title: '제목만 수정' });
     expect(retitled.statusCode).toBe(200);
     expect(await jobIds()).toEqual([firstId]);
 
     // A moved close time is a new job (the instant is part of the id) and the old one is gone. On
     // an open market it only moves later, up to the scheduled judgement (#22, owner answer
     // 2026-10-31 A2): a day later stays before it.
-    const laterCloseAt = new Date(Date.now() + 8 * DAY_MS).toISOString();
-    const moved = detail(
-      await patch(`/api/v1/admin/markets/${draft.id}`, { closeAt: laterCloseAt }),
-    );
+    const laterCloseAt = new Date(row.closeAt.getTime() + DAY_MS).toISOString();
+    const moved = detail(await patch(`/api/v1/admin/markets/${row.id}`, { closeAt: laterCloseAt }));
     expect(moved.closeAt).toBe(laterCloseAt);
-    const secondId = marketCloseJobId(draft.id, new Date(laterCloseAt));
+    const secondId = marketCloseJobId(row.id, new Date(laterCloseAt));
     expect(await queue.getJob(firstId)).toBeUndefined();
     const second = await queue.getJob(secondId);
     expect(second).toBeDefined();
+    expect(second!.name).toBe(JOB_NAMES.marketClose);
+    expect(second!.data).toEqual({ marketId: row.id });
     expect(second!.delay).toBe(Date.parse(laterCloseAt) - Date.parse(moved.updatedAt));
     expect(await jobIds()).toEqual([secondId]);
 
@@ -490,7 +484,7 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
     expect(await jobIds()).toEqual([secondId]);
 
     // The manual close is the job's job done by hand: the registration is dropped.
-    expect((await close(draft.id)).statusCode).toBe(200);
+    expect((await close(row.id)).statusCode).toBe(200);
     expect(await queue.getJob(secondId)).toBeUndefined();
     expect(await jobIds()).toEqual([]);
   });
@@ -502,52 +496,56 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
     expect(created.statusEventId).toBe(String(createdEvent!.id));
     expect((await marketRow(created.id)).statusEventId).toBe(createdEvent!.id);
 
-    const { received, quit } = await subscribeStatus(created.id);
-    let opened!: AdminMarket;
+    // Opened at its scheduled open as the worker's job leaves it (#21): submitted, approved and
+    // opened, each a transition event. The approval's own open is admin-markets-review's.
+    const { market: opened } = await createOpenedMarket(t.db, {
+      createdBy: admin.id,
+      categoryId: category.id,
+    });
+    const { received, quit } = await subscribeStatus(opened.id);
     let edited!: AdminMarket;
     let closed!: AdminMarket;
     try {
-      opened = detail(await open(created.id));
       // A rule-item edit is not a transition: it republishes the UNCHANGED key (A-M4-36), which
       // is what lets a client drop the repeat and still refetch the row.
       edited = detail(
-        await patch(`/api/v1/admin/markets/${created.id}`, { yesCondition: '고친 YES 조건' }),
+        await patch(`/api/v1/admin/markets/${opened.id}`, { yesCondition: '고친 YES 조건' }),
       );
-      closed = detail(await close(created.id));
-      await waitForMessages(received, 3, 'market:status of open, edit and close');
+      closed = detail(await close(opened.id));
+      await waitForMessages(received, 2, 'market:status of edit and close');
       await sleep(100);
-      expect(received).toHaveLength(3);
+      expect(received).toHaveLength(2);
     } finally {
       await quit();
     }
 
-    const events = await eventsFor(created.id);
+    const events = await eventsFor(opened.id);
     expect(events.map((event) => event.type)).toEqual([
-      'created',
+      'submitted',
+      'approved',
       'opened',
       'rules_edited',
       'closed',
     ]);
-    const [, openedEvent, rulesEvent, closedEvent] = events;
-    expect(opened.statusEventId).toBe(String(openedEvent!.id));
+    const [, , openedEvent, rulesEvent, closedEvent] = events;
+    expect(opened.statusEventId).toBe(openedEvent!.id);
     expect(edited.statusEventId).toBe(String(openedEvent!.id));
     expect(edited.statusEventId).not.toBe(String(rulesEvent!.id));
     expect(closed.statusEventId).toBe(String(closedEvent!.id));
-    expect(BigInt(closed.statusEventId!)).toBeGreaterThan(BigInt(opened.statusEventId!));
+    expect(BigInt(closed.statusEventId!)).toBeGreaterThan(BigInt(edited.statusEventId!));
     expect(received.map((event) => [event.status, event.statusEventId])).toEqual([
-      ['open', String(openedEvent!.id)],
       ['open', String(openedEvent!.id)],
       ['closed', String(closedEvent!.id)],
     ]);
 
     // The same key on every read, public and admin, list and detail.
-    const pub = await t.app.inject({ method: 'GET', url: `/api/v1/markets/${created.id}` });
+    const pub = await t.app.inject({ method: 'GET', url: `/api/v1/markets/${opened.id}` });
     expect(data<Market>(pub).statusEventId).toBe(String(closedEvent!.id));
     const list = await t.app.inject({ method: 'GET', url: '/api/v1/markets?status=closed' });
     expect(data<MarketSummary[]>(list).map((item) => [item.id, item.statusEventId])).toEqual([
-      [created.id, String(closedEvent!.id)],
+      [opened.id, String(closedEvent!.id)],
     ]);
-    expect(detail(await get(`/api/v1/admin/markets/${created.id}`)).statusEventId).toBe(
+    expect(detail(await get(`/api/v1/admin/markets/${opened.id}`)).statusEventId).toBe(
       String(closedEvent!.id),
     );
     const adminList = await get('/api/v1/admin/markets?status=closed');

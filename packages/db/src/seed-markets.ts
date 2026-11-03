@@ -87,12 +87,12 @@ const MINUTE_MS = 60_000;
 /**
  * A seed market's 예정 개장 시각 (#22, ADR-0098): the one seed time relative to the run, so not a
  * `SeedMarket` literal. `now` — the run's database clock (`seedMarkets` in seed.ts, ADR-0027) —
- * floored to the minute: a scheduled open already passed, so the draft opens as soon as it is
- * approved (ADR-0093 decision 2 #172 item 6: past at the approval, it opens at once — #21's; until
- * #21 the approved market waits in SCHEDULED, and the interim 열기 opens a draft). For a stale
- * seed whose close is not after that minute, the minute before the close instead, so it stays
- * before the close (`markets_open_before_close_check`): such a draft cannot open anyway — its
- * close has passed, and the seed's staleness report says so. The close stays absolute (Q-M3-4).
+ * floored to the minute: a scheduled open already passed, so the approval opens the draft at once
+ * (ADR-0093 decision 2 #172 item 6: past at the approval, it opens at once — #21, ADR-0100). For a
+ * stale seed whose close is not after that minute, the minute before the close instead, so it
+ * stays before the close (`markets_open_before_close_check`): such a draft cannot open anyway —
+ * its close has passed, so it cannot be submitted for review, and the seed's staleness report
+ * says so. The close stays absolute (Q-M3-4).
  */
 export function seedScheduledOpenAt(closeAt: Date, now: Date): Date {
   return new Date(

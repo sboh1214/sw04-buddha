@@ -22,9 +22,11 @@ import {
   createProposal,
 } from '@buddha/db/test';
 import {
+  MARKET_REVIEW_CHECKLIST,
   adminProposalSchema,
   proposalDraftCloseAt,
   proposalSchema,
+  type AdminMarket,
   type AdminProposal,
 } from '@buddha/shared';
 import { randomUUID } from 'node:crypto';
@@ -156,6 +158,30 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
       })
       .from(schema.adminActions)
       .orderBy(asc(schema.adminActions.createdAt));
+  /**
+   * Makes a market public as the market's own routes do (#78, #21): `admin` submits the draft for
+   * review and `second` approves it, which opens it at once — the factory's scheduled open has
+   * passed.
+   */
+  const publish = async (marketId: string) => {
+    const marketPost = (action: string, who: TestUser, payload: object = {}) =>
+      t.app.inject({
+        method: 'POST',
+        url: `/api/v1/admin/markets/${marketId}/${action}`,
+        headers: { ...jsonHeaders, cookie: who.cookie },
+        payload: { expectedAccountId: who.id, ...payload },
+      });
+    const submitted = await marketPost('submit', admin);
+    expect(submitted.statusCode, submitted.body).toBe(200);
+    const pending = submitted.json<{ data: AdminMarket }>().data.review.pending;
+    const approved = await marketPost('approve', second, {
+      requestId: pending!.requestId,
+      checklist: [...MARKET_REVIEW_CHECKLIST],
+      reason: '검수 통과',
+    });
+    expect(approved.statusCode, approved.body).toBe(200);
+    expect(approved.json<{ data: AdminMarket }>().data.status).toBe('open');
+  };
   const proposerView = async (id: string) => {
     const res = await t.app.inject({
       method: 'GET',
@@ -660,7 +686,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
       createdBy: admin.id,
       categoryId: category.id,
       status: 'draft',
-      // What the open asks of a draft (#17's open-items check), so the route below opens it.
+      // What the submission asks of a draft (#17's open-items check), so `publish` below opens it.
       tags: ['금리'],
     });
     const linked = await proposal({ status: 'reviewing' });
@@ -675,14 +701,8 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
       market: { id: draft.id, slug: draft.slug, title: draft.title, status: 'draft' },
     });
     expect((await proposerView(linked.id)).adoption?.market).toBeNull();
-    // The admin opens the market (the market's own route): now the proposer sees it.
-    const opened = await t.app.inject({
-      method: 'POST',
-      url: `/api/v1/admin/markets/${draft.id}/open`,
-      headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: { expectedAccountId: admin.id },
-    });
-    expect(opened.statusCode, opened.body).toBe(200);
+    // The market is reviewed and opened (the market's own routes): now the proposer sees it.
+    await publish(draft.id);
     expect((await proposerView(linked.id)).adoption?.market).toEqual({
       id: draft.id,
       slug: draft.slug,
@@ -718,7 +738,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
       createdBy: admin.id,
       categoryId: category.id,
       status: 'draft',
-      // What the open asks of a draft (#17's open-items check), so the route below opens it.
+      // What the submission asks of a draft (#17's open-items check), so `publish` below opens it.
       tags: ['금리'],
     });
     // An unknown market is NOT_FOUND naming the field, and nothing is linked.
@@ -754,13 +774,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
     });
     // The proposer sees the link once the market is public, as after a 채택 with it.
     expect((await proposerView(adopted.id)).adoption).toEqual({ memo: '채택 사유', market: null });
-    const opened = await t.app.inject({
-      method: 'POST',
-      url: `/api/v1/admin/markets/${draft.id}/open`,
-      headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: { expectedAccountId: admin.id },
-    });
-    expect(opened.statusCode, opened.body).toBe(200);
+    await publish(draft.id);
     expect((await proposerView(adopted.id)).adoption).toEqual({
       memo: '채택 사유',
       market: { id: draft.id, slug: draft.slug, title: draft.title },

@@ -24,12 +24,16 @@ export const MARKET_LIFECYCLE_TRANSITIONS: Readonly<Record<MarketStatus, readonl
     draft: ['review'],
     // #78: approved by an admin other than the creator, the editors and the submitter; rejected
     // (반려) by such an admin, or sent back (되돌리기) by any admin with a reason (#172 items 5·6,
-    // #173 item 1). Approved after its scheduled open time, it is scheduled all the same and #21's
-    // job opens it at once (#172 item 6): scheduled, then open, two transitions.
+    // #173 item 1). Approved at or after its scheduled open, it is scheduled all the same and the
+    // approval opens it in the same transaction (#21, #172 item 6): scheduled, then open, two
+    // transitions.
     review: ['scheduled', 'draft'],
-    // #21: opens at its scheduled time, which #78 may move with a reason and no new review. #78:
-    // sent back to a draft by any admin with a reason, to edit and review again (#172 item 6).
-    // #173·#20: ended without opening with another admin's approval (#173 item 10).
+    // #21: opened by the worker at its scheduled open (actor NULL), or at once by the approval or
+    // by #78's reschedule (a move with a reason and no new review) that finds that time already
+    // come — never once its close has passed, which an admin fixes by sending it back to a draft
+    // (#173 item 1, #172 item 6). #78: sent back to a draft by any admin with a reason, to edit and
+    // review again (#172 item 6). #173·#20: ended without opening with another admin's approval
+    // (#173 item 10).
     scheduled: ['open', 'draft', 'cancelled'],
     // #114: paused. At `close_at`: closed, or cancelled when no user fill happened (#120, #20).
     open: ['paused', 'closed', 'cancelled'],
@@ -50,8 +54,10 @@ export const MARKET_LIFECYCLE_TRANSITIONS: Readonly<Record<MarketStatus, readonl
 
 /**
  * Edges that keep today's admin actions working on the new statuses until the issue that
- * replaces each one merges (ADR-0047 result 3; ADR-0093 result 2 for ADR-0027). Each is
- * deleted by that issue's PR, which also removes the action that takes it.
+ * replaces each one merges (ADR-0047 result 3). Each is deleted by that issue's PR, which also
+ * removes the action that takes it: #21 deleted ADR-0027's direct open from a draft (draft →
+ * open, ADR-0093 result 2; ADR-0100), so a market opens only from SCHEDULED (PAUSED → OPEN is
+ * #114's resume).
  */
 export const INTERIM_MARKET_TRANSITIONS: readonly {
   from: MarketStatus;
@@ -59,9 +65,6 @@ export const INTERIM_MARKET_TRANSITIONS: readonly {
   /** The issue whose PR removes the edge. */
   until: string;
 }[] = [
-  // ADR-0027's direct open from a draft, without review or a scheduled time (#21; #78 keeps it
-  // beside the review, ADR-0099).
-  { from: 'draft', to: 'open', until: '#21' },
   // ADR-0046's immediate judgement by one admin, skipping PROVISIONAL and the dispute window.
   { from: 'closed', to: 'resolved', until: '#152' },
 ];

@@ -4,8 +4,8 @@
  * entered and read back, the zone as given; the order rules refused on entry naming both ends in
  * whole minutes, the sent end first; the lead close never refused on a draft, named by the
  * open-items check at the gap in force (the release setting `market.lead_close_gap`, undecided
- * until a test enters it through /admin/release-settings) and stored by the open; no open before
- * the scheduled open; an open market's fixed times, its close moved later only and up to the
+ * until a test enters it through /admin/release-settings) and stored by the review submission (the
+ * open keeps it, #21); an open market's fixed times, its close moved later only and up to the
  * scheduled judgement, the lead close checked again at the gap it was last checked against;
  * `rules_edited` for the announcement and the zone alone; the republished status. Skips when
  * TEST_* are unset.
@@ -39,7 +39,7 @@ type ErrorBody = {
 const iso = (ms: number) => new Date(ms).toISOString();
 /** A whole minute a week ahead: the close the tests' markets start from. */
 const week = () => floorToMinute(Date.now()) + 7 * DAY_MS;
-/** A whole minute already passed: a scheduled open the interim open takes at once. */
+/** A whole minute already passed: a scheduled open an approval would take at once (#21). */
 const passed = () => iso(floorToMinute(Date.now()) - MINUTE_MS);
 
 describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
@@ -88,7 +88,8 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
   /**
    * A complete draft closing at `closeMs` (a whole minute): every rule item, the scheduled open
    * passed, 사건 기한 a day after the close and the judgement a day after that, the zone the form
-   * pre-fills, no announcement ('없음') and a tag — it opens at once unless the overrides say not.
+   * pre-fills, no announcement ('없음') and a tag — it can be submitted for review at once unless
+   * the overrides say not.
    */
   const draftBody = (closeMs: number, overrides: Record<string, unknown> = {}) => ({
     title: '기준금리 3% 이하로 인하?',
@@ -109,7 +110,8 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
   });
   const create = (closeMs: number, overrides: Record<string, unknown> = {}) =>
     post('/api/v1/admin/markets', draftBody(closeMs, overrides));
-  const open = (id: string) => post(`/api/v1/admin/markets/${id}/open`);
+  /** 검수 제출 (#78): the open-items check at the gap in force, which the market then keeps. */
+  const submit = (id: string) => post(`/api/v1/admin/markets/${id}/submit`);
 
   /**
    * An open market written by the factory closing at `closeMs`, 사건 기한 a day later and the
@@ -400,10 +402,10 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
     expect(detail(moved).missingOpenItems).toEqual([]);
   });
 
-  it('never refuses the lead close on a draft: the open-items check names it at the gap in force, and the open stores that gap', async () => {
+  it('never refuses the lead close on a draft: the open-items check names it at the gap in force, and the submission stores that gap', async () => {
     const c = week();
     // Undecided: a market with an announcement time fails `leadClose` ('gap undecided') and
-    // cannot open; one with '없음' is not concerned (ADR-0098).
+    // cannot be submitted; one with '없음' is not concerned (ADR-0098).
     const missing = detail(
       await create(c, {
         scheduledJudgementAt: null,
@@ -416,7 +418,7 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
       leadCloseGapMinutes: null,
       missingOpenItems: ['scheduledJudgementAt', 'judgementTimeZone', 'leadClose', 'tags'],
     });
-    const refused = await open(missing.id);
+    const refused = await submit(missing.id);
     expect(refused.statusCode).toBe(422);
     expect(errorOf(refused)).toEqual({
       code: 'OPEN_ITEMS_MISSING',
@@ -434,10 +436,10 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
     expect(announced.missingOpenItems).toEqual(['leadClose']);
     const none = detail(await create(c));
     expect(none).toMatchObject({ missingOpenItems: [], leadCloseGapMinutes: null });
-    const openedNone = await open(none.id);
-    expect(openedNone.statusCode).toBe(200);
-    // Opened while undecided, it has no gap of its own.
-    expect(detail(openedNone).leadCloseGapMinutes).toBeNull();
+    const submittedNone = await submit(none.id);
+    expect(submittedNone.statusCode).toBe(200);
+    // Submitted while undecided, it has no gap of its own.
+    expect(detail(submittedNone).leadCloseGapMinutes).toBeNull();
     expect((await marketRow(none.id)).leadCloseGapMinutes).toBeNull();
 
     // Decided, in any status: close ≤ announcement − 60 minutes, whole minutes.
@@ -450,7 +452,7 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
     const tight = await create(c, { scheduledAnnouncementAt: iso(c + 59 * MINUTE_MS + 59_999) });
     expect(tight.statusCode).toBe(201);
     expect(detail(tight).missingOpenItems).toEqual(['leadClose']);
-    expect(errorOf(await open(detail(tight).id))).toEqual({
+    expect(errorOf(await submit(detail(tight).id))).toEqual({
       code: 'OPEN_ITEMS_MISSING',
       message: 'The market misses what it needs to open: leadClose',
       details: [{ path: ['leadClose'], message: 'leadClose' }],
@@ -462,14 +464,15 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
     // At the gap to the minute it passes.
     const atGap = await patch(tightUrl, { scheduledAnnouncementAt: iso(c + 60 * MINUTE_MS) });
     expect(detail(atGap).missingOpenItems).toEqual([]);
-    const opened = await open(detail(tight).id);
-    expect(opened.statusCode).toBe(200);
-    // The open stores the gap it checked against (docs/SETTINGS.md: work under way keeps the value
-    // it started with), and its record carries the times and the gap.
-    expect(detail(opened).leadCloseGapMinutes).toBe(60);
+    const submitted = await submit(detail(tight).id);
+    expect(submitted.statusCode).toBe(200);
+    // The submission stores the gap it checked against (docs/SETTINGS.md: work under way keeps the
+    // value it started with) — the approval checks with it and the open keeps it (#21, ADR-0098
+    // 7-6) — and its record carries the times and the gap.
+    expect(detail(submitted)).toMatchObject({ status: 'review', leadCloseGapMinutes: 60 });
     expect((await marketRow(detail(tight).id)).leadCloseGapMinutes).toBe(60);
-    const openAction = (await actionsFor(detail(tight).id)).find(
-      (row) => row.type === 'market_open',
+    const submitAction = (await actionsFor(detail(tight).id)).find(
+      (row) => row.type === 'market_submit',
     )!;
     const times = {
       scheduledOpenAt: detail(atGap).scheduledOpenAt,
@@ -478,15 +481,13 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
       scheduledJudgementAt: iso(c + 2 * DAY_MS),
       judgementTimeZone: 'Asia/Seoul',
     };
-    expect(openAction.payload).toMatchObject({
-      before: { status: 'draft', ...times, leadCloseGapMinutes: null },
-      after: { status: 'open', ...times, leadCloseGapMinutes: 60 },
+    expect(submitAction.payload).toMatchObject({
+      after: { status: 'review', ...times, leadCloseGapMinutes: 60 },
     });
-    // The `opened` event keeps its payload.
-    const openedEvent = (await eventsFor(detail(tight).id)).find((row) => row.type === 'opened')!;
-    expect(Object.keys(openedEvent.payload as object).sort()).toEqual(['closeAt', 'openAt']);
+    expect(submitAction.payload).not.toHaveProperty('before');
 
-    // A changed setting: the open market keeps the gap it opened under, a draft takes the new one.
+    // A changed setting: the market in review keeps the gap it was submitted under, a draft takes
+    // the new one.
     await setGap(120);
     expect(detail(await get(marketUrl(detail(tight).id))).leadCloseGapMinutes).toBe(60);
     expect(detail(await get(marketUrl(announced.id)))).toMatchObject({
@@ -495,33 +496,6 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
     });
     await setGap(121);
     expect(detail(await get(marketUrl(announced.id))).missingOpenItems).toEqual(['leadClose']);
-  });
-
-  it('opens only once the scheduled open is reached, on the database clock (decision 3 #21)', async () => {
-    const c = week();
-    // Seconds ahead, not a minute: "has it passed" is an instant (ADR-0098).
-    const ahead = detail(await create(c, { scheduledOpenAt: iso(Date.now() + 15_000) }));
-    expect(ahead.missingOpenItems).toEqual([]);
-    const early = await open(ahead.id);
-    expect(early.statusCode).toBe(400);
-    expect(errorOf(early)).toEqual({
-      code: 'VALIDATION_ERROR',
-      message: 'The market cannot open before its scheduled open: move the scheduled open earlier',
-      details: [{ path: ['scheduledOpenAt'], message: 'not reached yet' }],
-    });
-    expect((await marketRow(ahead.id)).status).toBe('draft');
-    expect((await eventsFor(ahead.id)).map((row) => row.type)).toEqual(['created']);
-    // What the market lacks comes first.
-    const lacking = detail(await create(c, { scheduledOpenAt: iso(c - DAY_MS), tags: [] }));
-    expect(errorOf(await open(lacking.id)).code).toBe('OPEN_ITEMS_MISSING');
-    // To open sooner the admin moves the scheduled open earlier (#172 item 6).
-    const moved = await patch(marketUrl(ahead.id), { scheduledOpenAt: passed() });
-    expect(moved.statusCode).toBe(200);
-    const opened = await open(ahead.id);
-    expect(opened.statusCode).toBe(200);
-    const { openAt, scheduledOpenAt } = detail(opened);
-    // The actual open is never before the scheduled one; it is its own column (ADR-0065).
-    expect(Date.parse(openAt!)).toBeGreaterThanOrEqual(Date.parse(scheduledOpenAt!));
   });
 
   // --- an open market (until #80's supplement) ---------------------------------------------

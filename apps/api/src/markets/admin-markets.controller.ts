@@ -64,13 +64,15 @@ import { RelatedMarketsService } from './related-markets.service.js';
  * of an unlink, whose DELETE has no body; assertExpectedAccount, ADR-0092): a mismatch with the
  * cookie is refused (403 FORBIDDEN naming the field) before anything is read, locked or written,
  * so a market is never created, edited, submitted, approved, rejected, sent back, rescheduled,
- * opened, closed, judged or linked as an admin the user is not looking at. The services are
- * handed the rest of the body: the account is never stored.
+ * closed, judged or linked as an admin the user is not looking at. The services are handed the
+ * rest of the body: the account is never stored.
  *
  * 개설 검수 (#78, ADR-0099): submit (draft → review), approve (→ scheduled) and reject (→ draft) by
  * another admin, revert (review or scheduled → draft) by any admin with a reason, and a SCHEDULED
  * market's scheduled open moved with a reason (reschedule). The queue of pending reviews is
- * AdminMarketReviewsController's.
+ * AdminMarketReviewsController's. No route opens a market directly (#21, ADR-0100): the worker
+ * opens a SCHEDULED one at its scheduled open, and an approval or a reschedule that finds that
+ * instant come opens it at once — the interim draft → open route is gone.
  */
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -258,14 +260,18 @@ export class AdminMarketsController {
   @ApiOperation({
     operationId: 'adminSubmitMarket',
     summary:
-      'draft → review (검수 제출): refused with OPEN_ITEMS_MISSING as the interim open is, ' +
-      'then with a past closeAt; opens the review request another admin decides, stores the ' +
-      'lead-close gap it checked against and locks the content (no edit in review or scheduled)',
+      'draft → review (검수 제출): refused with OPEN_ITEMS_MISSING when the open-items check finds ' +
+      'the title, a rule item, a time, the time order, the lead close, the category or the tags ' +
+      'missing, then with a past closeAt; opens the review request another admin decides, ' +
+      'stores the lead-close gap it checked against and locks the content (no edit in review or ' +
+      'scheduled)',
   })
   @ApiData(adminMarketSchema)
   // VALIDATION_ERROR names `status` (not a draft) or `closeAt` ('must be in the future');
-  // OPEN_ITEMS_MISSING comes before the close with open's details (every missing item in
-  // OPEN_ITEMS order). The scheduled open is not asked.
+  // OPEN_ITEMS_MISSING names every missing item, in OPEN_ITEMS order, and comes before the close:
+  // `timeOrder`'s message the broken order rules, `leadClose`'s 'leadClose', or 'gap undecided'
+  // while `market.lead_close_gap` is. The scheduled open is not asked: a market approved after it
+  // opens at the approval (#21).
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
@@ -290,7 +296,8 @@ export class AdminMarketsController {
     summary:
       'review → scheduled (승인) by an admin who neither created, edited nor submitted the ' +
       'market, every checklist item confirmed, with a reason; the open-items check and the close ' +
-      'are checked again. The market becomes public as scheduled',
+      'are checked again. The market becomes public as scheduled — and opens at once (status ' +
+      'open) when its scheduled open has passed; otherwise it opens at its scheduled open',
   })
   @ApiData(adminMarketSchema)
   // VALIDATION_ERROR names, from the body, `requestId`, `checklist` ('every item must be
@@ -381,9 +388,10 @@ export class AdminMarketsController {
     operationId: 'adminRescheduleMarketOpen',
     summary:
       'Move a scheduled market’s scheduled open without a new review, with a reason; it stays ' +
-      'before the close in whole minutes, a past instant is allowed (#21’s scheduled-open job ' +
-      'opens the market; until #21 a scheduled market does not open), and once the close has ' +
-      'passed it is refused (closeAt) — send the market back to a draft (revert) to fix its times',
+      'before the close in whole minutes, and an instant already passed opens the market at ' +
+      'once (status open: there is no early open, move the scheduled open earlier instead); ' +
+      'once the close has passed it is refused (closeAt) — send the market back to a draft ' +
+      '(revert) to fix its times',
   })
   @ApiData(adminMarketSchema)
   // VALIDATION_ERROR names `scheduledOpenAt` (not an instant, or before 1900) or `reason` from the
@@ -400,38 +408,6 @@ export class AdminMarketsController {
     const { expectedAccountId, ...reschedule } = body;
     assertExpectedAccount(admin.id, expectedAccountId);
     return this.markets.reschedule(admin.id, id, reschedule);
-  }
-
-  @Post(':id/open')
-  @HttpCode(200)
-  @ApiOperation({
-    operationId: 'adminOpenMarket',
-    summary:
-      'draft → open (interim, until the scheduled open; beside the review); refused with ' +
-      'OPEN_ITEMS_MISSING when the open-items check finds the title, a rule item, a time, the ' +
-      'time order, the lead close, the category or the tags missing, then with a past closeAt, ' +
-      'then before the scheduled open; stores the lead-close gap it checked against',
-  })
-  @ApiData(adminMarketSchema)
-  // VALIDATION_ERROR names `status` (not a draft), `closeAt` (already past) or `scheduledOpenAt`
-  // ('not reached yet': no early open, #22); OPEN_ITEMS_MISSING names every missing item, in
-  // OPEN_ITEMS order, and comes before both: `timeOrder`'s message the broken order rules,
-  // `leadClose`'s 'leadClose', or 'gap undecided' while `market.lead_close_gap` is.
-  @ApiErrors(
-    'UNAUTHENTICATED',
-    'FORBIDDEN',
-    'ONBOARDING_REQUIRED',
-    'NOT_FOUND',
-    'VALIDATION_ERROR',
-    'OPEN_ITEMS_MISSING',
-  )
-  adminOpenMarket(
-    @CurrentUser() admin: SessionUser,
-    @Param('id', { schema: uuidParamSchema }) id: string,
-    @Body({ schema: expectedAccountBodySchema }) body: ExpectedAccountBody,
-  ): Promise<AdminMarket> {
-    assertExpectedAccount(admin.id, body.expectedAccountId);
-    return this.markets.open(admin.id, id);
   }
 
   @Post(':id/close')

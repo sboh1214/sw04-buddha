@@ -41,8 +41,9 @@ const TIME_INPUT: InputProps = { type: 'datetime-local', maxW: '56' };
  * 시각 (#22, ADR-0098; ADR-0093 decision 2 #172 items 11–14): the market form's group after the
  * rule items, one input per time item in OPEN_ITEMS order — 예정 개장, 거래 마감, 발표 예정 and 예정
  * 판정 시각, each a `datetime-local` in KST like every admin time (decision 3 '#22 시간대'), then 판정
- * 기준 시간대. A draft saves with any of them blank but the close; the draft's notice names what 열기
- * still needs, 시각 순서 and 선행 마감 included.
+ * 기준 시간대. A draft saves with any of them blank but the close; the draft's notice names what 검수
+ * 제출 still needs, 시각 순서 and 선행 마감 included. The scheduled open's hint says the market opens
+ * by itself at that time once approved, or at its approval when that comes later (#21, ADR-0100).
  *
  * The announcement's blank is '없음', an event with no scheduled release (#172 item 13); its hint
  * says the close must lead it by the release setting's gap, and the edit form adds the gap the

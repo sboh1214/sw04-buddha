@@ -2,9 +2,10 @@ import * as z from 'zod';
 import { uuidSchema } from './api/uuid.js';
 
 /**
- * BullMQ queue and job names (PLAN 9), shared by the producer (apps/api enqueues the delayed
- * close and finalize jobs after a transition commits) and the consumer (apps/worker). One
- * module, so a renamed job cannot leave the API adding work that no worker handles.
+ * BullMQ queue and job names (PLAN 9), shared by the producer (apps/api enqueues a market's
+ * delayed open, close and finalize jobs after the write that sets their instant commits) and the
+ * consumer (apps/worker). One module, so a renamed job cannot leave the API adding work that no
+ * worker handles.
  */
 export const QUEUE_NAMES = [
   'markets',
@@ -18,6 +19,14 @@ export const QUEUE_NAMES = [
 export type QueueName = (typeof QUEUE_NAMES)[number];
 
 export const JOB_NAMES = {
+  /**
+   * Opens a SCHEDULED market at its 예정 개장 시각 (#21, ADR-0100; ADR-0093 decision 1 #173 item
+   * 1): SCHEDULED → OPEN, actor NULL (the worker). The delayed job the API registers per market
+   * when an approval or a reschedule leaves it SCHEDULED, and the worker's per-minute scan as the
+   * backstop. A market whose close has passed is never opened: it stays SCHEDULED until an admin
+   * sends it back to a draft (ADR-0093 decision 2 #172 item 6).
+   */
+  marketOpen: 'market.open',
   marketClose: 'market.close',
   marketFinalize: 'market.finalize',
   ledgerAudit: 'ledger.audit',
@@ -52,26 +61,36 @@ export const JOB_NAMES = {
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
 
 /**
- * Payload of `market.close` and `market.finalize`. With a `marketId` the job is the trigger
- * the API registered for one market (PLAN 5.5: delayed to `close_at`, or immediate after the
- * judgement — ADR-0046); without one it is the per-minute safety-net scan the worker schedules
- * for itself, which handles every market that is due. Both paths run the same per-market
- * transaction and re-verify the status under the market lock, so a stale or duplicated job is a
- * no-op, never a second settlement.
+ * Payload of `market.open`, `market.close` and `market.finalize`. With a `marketId` the job is
+ * the trigger the API registered for one market (#21: delayed to `scheduled_open_at`; PLAN 5.5:
+ * delayed to `close_at`, or immediate after the judgement — ADR-0046); without one it is the
+ * per-minute safety-net scan the worker schedules for itself, which handles every market that is
+ * due. Both paths run the same per-market transaction and re-verify the status and the instant
+ * under the market lock, so a stale or duplicated job is a no-op, never a second open, close or
+ * settlement.
  */
 export const marketJobDataSchema = z.object({ marketId: uuidSchema.optional() });
 export type MarketJobData = z.infer<typeof marketJobDataSchema>;
 
 /**
  * Deterministic job ids, so the API can remove the job it registered before when the instant
- * moves (a PATCHed `closeAt`) and so a duplicate registration of the same instant is refused
- * by BullMQ rather than run twice.
+ * moves (a rescheduled `scheduledOpenAt`, a PATCHed `closeAt`) and so a duplicate registration of
+ * the same instant is refused by BullMQ rather than run twice.
  *
  * The instant is part of the id on purpose: a rescheduled job must be a NEW job even while the
  * old one is active (an active job cannot be removed, and a completed one with a custom id
  * would block a later add under the same id). Dots, never colons — BullMQ refuses a custom id
  * containing `:` because its own keys are colon-delimited.
+ *
+ * `scheduledOpenAt` is the market's 예정 개장 시각 (#21, ADR-0100): an approval that leaves the
+ * market SCHEDULED registers the job under it, a reschedule (#78) removes that one and registers
+ * one under the new instant unless it opened the market, and a 되돌리기 from SCHEDULED removes it.
  */
+export function marketOpenJobId(marketId: string, scheduledOpenAt: Date): string {
+  return `${JOB_NAMES.marketOpen}.${marketId}.${String(scheduledOpenAt.getTime())}`;
+}
+
+/** `closeAt` is the market's 거래 마감 시각, under the same rule. */
 export function marketCloseJobId(marketId: string, closeAt: Date): string {
   return `${JOB_NAMES.marketClose}.${marketId}.${String(closeAt.getTime())}`;
 }

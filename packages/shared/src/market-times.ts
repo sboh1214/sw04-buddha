@@ -10,7 +10,8 @@ import { TIME_ZONE_MAX_LENGTH } from './time-zone.js';
  * #80's rule versions — and the list is in the admin form's order:
  *
  * - `scheduledOpenAt` 예정 개장 시각: the market opens no earlier (ADR-0093 decision 3 '#21 앞당긴
- *   개장'); `openAt` stays the actual open (ADR-0065).
+ *   개장') — the worker opens a SCHEDULED market at it, or its approval does when that comes later
+ *   (#21); `openAt` stays the actual open (ADR-0065).
  * - `closeAt` 거래 마감 시각: the worker closes the market at it. After the open it only moves later,
  *   and never past the scheduled judgement (#172 item 14, owner answer 2026-10-31 A2).
  * - `scheduledAnnouncementAt` 발표 예정 시각 (#172 item 13): when the source is to publish; null is

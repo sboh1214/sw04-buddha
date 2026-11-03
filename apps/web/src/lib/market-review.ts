@@ -32,7 +32,8 @@ import { type EventRow, openItemsRefused, reviewDetailRows } from './market-admi
 /**
  * The pure half of the 개설 검수 screens (#78, ADR-0099; ADR-0093 decision 2 #172 items 4·5·6): who
  * on screen may decide a review, the 승인할 수 없는 관리자 list, the 검수 기록's rows, what each
- * dialog may send, and what a refusal says. The admin detail's panel and dialogs
+ * dialog may send, what a refusal says, what a write that went through says (#21, ADR-0100) and
+ * whether a 개장 예정 market's close has passed before it opened. The admin detail's panel and dialogs
  * (app/admin/markets/[id]/market-review-*.tsx) draw them; the names of the checklist items and of
  * the 반려 사유 are lib/market-admin.ts's, which the 이벤트 로그 reads too.
  */
@@ -180,6 +181,31 @@ export function reviewActorName(actor: MarketReviewLogEntry['actor']): string {
   return nicknameShown(actor?.nickname ?? null);
 }
 
+/**
+ * A 개장 예정 market whose close has come before it opened (#21, ADR-0100; ADR-0093 decision 2 #172
+ * item 6): the worker opens a SCHEDULED market only while its close is ahead, so this one stays
+ * 개장 예정 — public as such — until an admin sends it back to a draft to fix its times; the
+ * reschedule is refused too (a close already passed). The panel warns in place of its note.
+ *
+ * Judged at `readAt`, the instant the row was read (the admin query's `dataUpdatedAt`), not at the
+ * instant it is drawn: a row read before the close says nothing of what the worker did since — it
+ * may have opened the market, and the close job closed it — so only the server's own answer from
+ * after the close, still 개장 예정, is a market that will not open (Codex review on #21). The
+ * detail re-reads a SCHEDULED market at its close for that answer (`scheduledMarketPollDelay` in
+ * market-admin.ts). At the close itself, as the open's rule reads it (`close_at > now` to open), on
+ * the browser's clock — as the browser received the row, so a clock running ahead of the
+ * database's, or an answer crossing the close in flight, can call lapsed a row the server read a
+ * moment before (ADR-0100 7-13).
+ */
+export function scheduledCloseLapsed(
+  market: { status: MarketStatus; closeAt: string },
+  readAt: number,
+): boolean {
+  if (market.status !== 'scheduled') return false;
+  const closeAt = new Date(market.closeAt).getTime();
+  return !Number.isNaN(closeAt) && closeAt <= readAt;
+}
+
 // ---- what each dialog may send ---------------------------------------------------------------
 
 /**
@@ -235,7 +261,8 @@ export type RescheduleMarket = TimeRuleInput & { leadCloseGapMinutes: number | n
  * - `scheduledOpenAt`: the instant typed, or null while it is blank or unreadable;
  * - `atError`: what is said under the field — an unreadable date, or the order rule the server
  *   checks again on the merged times (`timeRuleViolations` at the market's gap: of the rules only
- *   openBeforeClose can move, in whole minutes). A past instant is allowed;
+ *   openBeforeClose can move, in whole minutes). A past instant is allowed, and opens the market
+ *   at once (#21, ADR-0100: `reviewWriteSuccess`);
  * - `unchanged`: the instant the market holds already, which the server refuses ('unchanged') — not
  *   said, since the field opens on it: the confirm stays off until it moves;
  * - `ready`: a new, ordered instant and a reason.
@@ -276,6 +303,27 @@ export function rescheduleDraft(
     unchanged,
     reason,
   };
+}
+
+// ---- what a write that went through says -----------------------------------------------------
+
+/** The two review writes that can open the market (#21): 승인 and 예정 개장 시각 변경. */
+export type OpeningReviewWrite = 'approve' | 'reschedule';
+
+/**
+ * The toast of a 승인 or an 예정 개장 시각 변경 that went through (#21, ADR-0100), from the status of
+ * the market the write answered with. `open` when the scheduled open had come by the write's own
+ * instant, so the same transaction opened the market (an approval past the scheduled open opens at
+ * once, ADR-0093 decision 2 #172 item 6; a scheduled open moved to now or earlier opens it,
+ * decision 3 '#21 앞당긴 개장'): the toast says it opened. Otherwise the market is 개장 예정, which
+ * the worker opens at its scheduled open, and the toast is the write's own.
+ */
+export function reviewWriteSuccess(write: OpeningReviewWrite, status: MarketStatus): string {
+  const opened = status === 'open';
+  if (write === 'approve') {
+    return opened ? copy.adminMarketReviewApprovedOpened : copy.adminMarketReviewApproved;
+  }
+  return opened ? copy.adminMarketReviewRescheduledOpened : copy.adminMarketReviewRescheduled;
 }
 
 // ---- what a refusal says ---------------------------------------------------------------------

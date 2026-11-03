@@ -7,7 +7,7 @@ export interface StatementExecutor {
 
 /**
  * The two statements every writer of market state runs first, shared by apps/api (admin
- * transitions) and apps/worker (close, finalize) so the two cannot drift — PLAN 4.1 lets
+ * transitions) and apps/worker (open, close, finalize) so the two cannot drift — PLAN 4.1 lets
  * both apps depend on this package and forbids them depending on each other, which is why they
  * live here rather than beside the API's transaction code. Neither throws a framework error:
  * the API wraps `clockTimestamp` to answer INTERNAL, the worker fails the job.

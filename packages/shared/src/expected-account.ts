@@ -14,7 +14,7 @@ export const expectedAccountIdSchema = z.string().min(1).max(255);
 
 /**
  * The body of an admin write that takes nothing else — a transition named by its path (a market's
- * 공개·마감, a theme's 공개·내리기, a theme notice's 숨기기·보이기, a notice's 고정·고정 해제, a
+ * 검수 제출·마감, a theme's 공개·내리기, a theme notice's 숨기기·보이기, a notice's 고정·고정 해제, a
  * proposal's 검토 시작): the admin on screen, and nothing else.
  */
 export const expectedAccountBodySchema = z

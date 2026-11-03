@@ -156,7 +156,7 @@ describe('enums', () => {
 
   it('records the market review in the market events and the admin log (#78)', () => {
     // Each status change of the review and the reschedule, in the lifecycle's order after the
-    // draft's creation; the interim open stays until #21.
+    // draft's creation, then the open — scheduled → open since #21, draft → open before it.
     expect(enums.MARKET_EVENT_TYPES.slice(0, 7)).toEqual([
       'created',
       'submitted',
@@ -173,9 +173,10 @@ describe('enums', () => {
         'market_reject',
         'market_revert',
         'market_reschedule',
-        'market_open',
       ]),
     );
+    // Retired by #21 (nothing writes it), kept so the interim open's rows still parse.
+    expect(enums.adminActionTypeSchema.parse('market_open')).toBe('market_open');
     expect(new Set(enums.MARKET_EVENT_TYPES).size).toBe(enums.MARKET_EVENT_TYPES.length);
     expect(new Set(enums.ADMIN_ACTION_TYPES).size).toBe(enums.ADMIN_ACTION_TYPES.length);
   });

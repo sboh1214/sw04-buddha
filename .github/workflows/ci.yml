@@ -284,8 +284,9 @@ jobs:
         run: pnpm --filter web exec playwright install --with-deps chromium
 
       # The e2e flow needs the categories, and its market fixture is created through the admin API
-      # as the seeded admin (SEED_ADMIN_* above); the admin-accounts spec also signs in as the
-      # second one (SEED_SECOND_ADMIN_*, #171) and needs exactly these two admins. Since #171 the
+      # as the seeded admin (SEED_ADMIN_* above) and approved by the second one
+      # (SEED_SECOND_ADMIN_*, #171) — a market opens only through the review (#78, #21); the
+      # admin-accounts spec needs exactly these two admins. Since #171 the
       # seed creates them only while no account is an admin, which holds here: no test ran on
       # this job's database, so it has the migrations and nothing else. No spec charges:
       # paid Coin is closed (ADR-0049), and the payment spec puts a package on sale itself (the
@@ -299,7 +300,8 @@ jobs:
       # is missing and the start script exits 1 on its BUILD_ID check. `next start` serves the
       # restored `.next` and only warns about output: 'standalone' (only 'export' throws).
       # Logs go to files so the step can exit while all three servers keep running.
-      # The worker too (M5): the settlement spec waits on its `market.finalize` job.
+      # The worker too (M5): the settlement spec waits on its `market.finalize` job, and
+      # scheduled-open.spec.ts on its `market.open` (#21).
       - name: Start the API, the worker and the web server
         run: |
           mkdir -p "$RUNNER_TEMP/e2e-logs"

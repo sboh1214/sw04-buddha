@@ -18,7 +18,7 @@ import { RelatedMarketsService } from './related-markets.service.js';
  * between markets that a detail lists as 관련 시장 (#65, RelatedMarketsService).
  * Guards are instantiated by the module that declares the controller, so DbModule and
  * RedisModule are imported for AdminGuard (role lookup through the Redis cache). JobsModule
- * is the M5 producer the transitions hand their close/finalize jobs to; ReleaseSettingsModule
+ * is the M5 producer the transitions hand their open/close/finalize jobs to; ReleaseSettingsModule
  * reads the lead-close gap `market.lead_close_gap` the open-items check and an open market's close
  * edit hold a market to (#22, ADR-0098). ApprovalsModule is the two-person rule (#171) the review
  * takes its `market_review` requests through (#78, ADR-0099), and AdminMarketReviewsController the

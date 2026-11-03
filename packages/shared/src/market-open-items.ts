@@ -20,8 +20,10 @@ export type TimeRelationItem = (typeof TIME_RELATION_ITEMS)[number];
 
 /**
  * 개설 항목 검사 (#17): what a market must have before it may leave the draft — N03 §2's required
- * items, as far as the market stores them. The review submission (#78) and its approval, and the
- * interim open (draft → open, until #21), refuse a market missing any with OPEN_ITEMS_MISSING.
+ * items, as far as the market stores them. The review submission (#78) and its approval refuse a
+ * market missing any with OPEN_ITEMS_MISSING. The open (SCHEDULED → OPEN, #21, ADR-0100) does not
+ * check them again: the approval was the last gate, and a market whose category was hidden since
+ * keeps it (ADR-0093 decision 2 #172 item 1).
  *
  * - `title`: not blank. The API never stores a blank one; it is listed so the check is N03 §2's
  *   list (#23 AC 2).
@@ -37,7 +39,8 @@ export type TimeRelationItem = (typeof TIME_RELATION_ITEMS)[number];
  *   too, so a stored market never fails it; it is listed so #78 and the admin form share the check.
  * - `leadClose` 선행 마감: with an announcement, the close leads it by the release setting
  *   `market.lead_close_gap` (`leadCloseGapMinutes`). While the setting is undecided a market with
- *   an announcement fails it, so it cannot open (ADR-0098); one with '없음' passes.
+ *   an announcement fails it, so it cannot be submitted for review (ADR-0098); one with '없음'
+ *   passes. The open does not check it again (ADR-0098 7-6).
  * - `category`: one a new market may be filed under (`categorySelectable`): active, under an active
  *   parent, and a leaf — a sub-category, or a top-level category with no active sub-category
  *   (ADR-0093 decision 2 #172 item 1). `markets.category_id` is never null, so a market always has

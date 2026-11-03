@@ -5,6 +5,7 @@ import { formatKst } from '../src/lib/datetime';
 import {
   accountIdOf,
   adminAccount,
+  approveAsReviewer,
   closeMarket,
   createDraftMarket,
   createOpenMarket,
@@ -15,8 +16,10 @@ import {
   fillTimeInputs,
   freshTag,
   kstLocalOf,
+  openThroughReview,
   ruleItemsFor,
   signIn,
+  submitRefusedItems,
   test,
   timesFor,
 } from './helpers';
@@ -30,10 +33,12 @@ import {
  * or after the close, the close after the scheduled judgement, the 사건 기한 after it (A1) — are
  * refused under both inputs before anything is sent; a close later than the announcement time
  * less the 선행 마감 gap (the release setting `market.lead_close_gap`) is not refused on a draft but
- * named by the open-items check, which 열기 then refuses. A draft made without its times names
- * them; saving the pre-filled zone confirms it. 열기 is refused before the scheduled open — move it
- * earlier to open sooner. Once open, the scheduled open and judgement are fixed, and the close only
- * moves later, never past the scheduled judgement (A2) — refused on the form and by the API.
+ * named by the open-items check, which keeps 검수 제출 off and refuses it (#78). A draft made
+ * without its times names them; saving the pre-filled zone confirms it. Approved before its
+ * scheduled open, a market waits as 개장 예정 — there is no early open: moved earlier to a time
+ * already come, it opens at once (#21, ADR-0100). Once open, the scheduled open and judgement are
+ * fixed, and the close only moves later, never past the scheduled judgement (A2) — refused on the
+ * form and by the API.
  *
  * A visitor reads every time of the rules in their own zone and, when the market's 판정 기준
  * 시간대 is another, in that zone too on a second line — after hydration only: the server's HTML
@@ -163,7 +168,7 @@ function watchHydration(page: Page): string[] {
 }
 
 test.describe('시장 시간', () => {
-  test('관리자가 시장 만들기에서 네 시각을 한국 시간으로 넣고 판정 기준 시간대를 고르면 그대로 저장되고, 어긋난 순서는 두 입력 아래에서 거절되며, 발표 예정 시각보다 늦은 마감은 선행 마감으로 열기가 거절되고 없음으로 고치면 열린다. 서울의 방문자는 시각마다 판정 기준 시간대의 줄을 함께 읽는다', async ({
+  test('관리자가 시장 만들기에서 네 시각을 한국 시간으로 넣고 판정 기준 시간대를 고르면 그대로 저장되고, 어긋난 순서는 두 입력 아래에서 거절되며, 발표 예정 시각보다 늦은 마감은 선행 마감으로 검수 제출이 꺼지고 거절되며 없음으로 고치면 검수를 거쳐 열린다. 서울의 방문자는 시각마다 판정 기준 시간대의 줄을 함께 읽는다', async ({
     admin,
     browser,
     page,
@@ -356,7 +361,8 @@ test.describe('시장 시간', () => {
       );
       await expect(preview.locator(JUDGEMENT_LINES)).toHaveCount(0);
 
-      // --- the open-items check names 선행 마감, with a line that says why, and 열기 is refused.
+      // --- the open-items check names 선행 마감, with a line that says why: 검수 제출 is off, and
+      // the API refuses it naming the same (#78).
       const leadLine =
         gap === null
           ? copy.openItemRuleLeadCloseUndecided
@@ -368,18 +374,16 @@ test.describe('시장 시간', () => {
           `${copy.openItemLeadClose}: ${leadLine}`,
         ].join('\n'),
       );
-      await letToastsGo(adminPage);
-      await adminPage.getByTestId('market-open').click();
-      await expect(
-        adminPage.getByText(`${copy.errMarketOpenItemsMissing}: ${copy.openItemLeadClose}`, {
-          exact: true,
-        }),
-      ).toBeVisible();
+      const submit = adminPage.getByTestId('market-review-submit');
+      await expect(submit).toBeDisabled();
+      expect(await submitRefusedItems(admin, marketId)).toEqual(stored.missingOpenItems);
       await expect(adminPage.getByTestId('market-detail-status')).toHaveText(
         copy.marketStatusDraft,
       );
 
-      // --- the announcement cleared, '없음' (#172 item 13): only it is sent, and the market opens.
+      // --- the announcement cleared, '없음' (#172 item 13): only it is sent, and the market opens
+      // through the review — submitted, and approved by the second admin past its scheduled open,
+      // which opens it at once (#21, ADR-0100).
       await letToastsGo(adminPage);
       const announcementInput = adminPage.getByTestId('market-scheduled-announcement-at');
       await expect(announcementInput).toHaveValue(kstLocalOf(announcementAt));
@@ -394,9 +398,9 @@ test.describe('시장 시간', () => {
       await expect(detailRow(adminPage, 'market-detail-scheduled-announcement-at')).toHaveText(
         copy.adminMarketAnnouncementNone,
       );
-      await letToastsGo(adminPage);
-      await adminPage.getByTestId('market-open').click();
-      await expect(adminPage.getByText(copy.adminMarketOpened)).toBeVisible();
+      await expect(submit).toBeEnabled();
+      await openThroughReview(admin, marketId);
+      await adminPage.reload();
       await expect(adminPage.getByTestId('market-detail-status')).toHaveText(copy.marketStatusOpen);
       // Open, its scheduled open and judgement are fixed (#172 item 14): the inputs are locked.
       await expect(openInput).toBeDisabled();
@@ -450,7 +454,7 @@ test.describe('시장 시간', () => {
     expect(html).not.toContain('-judgement-zone"');
   });
 
-  test('시각 없이 만든 초안은 예정 개장·예정 판정 시각과 판정 기준 시간대를 채울 항목으로 이름 대고, 미리 채운 서울은 저장으로 확인되며, 예정 개장 시각 전의 열기는 거절되고 앞당기면 열린다. 연 시장의 마감은 예정 판정 시각까지 늦추기만 하고 예정 판정 시각은 바뀌지 않는다', async ({
+  test('시각 없이 만든 초안은 예정 개장·예정 판정 시각과 판정 기준 시간대를 채울 항목으로 이름 대고 검수 제출이 꺼지며, 미리 채운 서울은 저장으로 확인되고, 예정 개장 시각 전에 승인되면 개장 예정으로 기다리다 예정 개장 시각을 지난 시각으로 앞당기면 바로 열린다. 연 시장의 마감은 예정 판정 시각까지 늦추기만 하고 예정 판정 시각은 바뀌지 않는다', async ({
     admin,
     page,
   }) => {
@@ -476,8 +480,10 @@ test.describe('시장 시간', () => {
     });
     await page.goto(`/admin/markets/${market.id}`);
     const status = page.getByTestId('market-detail-status');
+    const path = `/api/v1/admin/markets/${market.id}`;
 
-    // --- the draft names the missing times, in OPEN_ITEMS order; 열기 is refused naming them.
+    // --- the draft names the missing times, in OPEN_ITEMS order; 검수 제출 is off, and the API
+    // refuses it naming them (#78).
     const missing = [
       copy.openItemScheduledOpenAt,
       copy.openItemScheduledJudgementAt,
@@ -495,11 +501,13 @@ test.describe('시장 시간', () => {
     await expect(detailRow(page, 'market-detail-scheduled-announcement-at')).toHaveText(
       copy.adminMarketAnnouncementNone,
     );
-    await letToastsGo(page);
-    await page.getByTestId('market-open').click();
-    await expect(
-      page.getByText(`${copy.errMarketOpenItemsMissing}: ${missing}`, { exact: true }),
-    ).toBeVisible();
+    const submit = page.getByTestId('market-review-submit');
+    await expect(submit).toBeDisabled();
+    expect(await submitRefusedItems(admin, market.id)).toEqual([
+      'scheduledOpenAt',
+      'scheduledJudgementAt',
+      'judgementTimeZone',
+    ]);
     await expect(status).toHaveText(copy.marketStatusDraft);
 
     // --- the zone shows Asia/Seoul pre-filled, and the form may be saved for it alone: saving is
@@ -529,32 +537,62 @@ test.describe('시장 시간', () => {
     await expect(notice).toHaveCount(0);
     await expect(detailRow(page, 'market-detail-judgement-time-zone')).toHaveText(/^Asia\/Seoul/);
 
-    // --- 열기 before the scheduled open is refused: there is no early open, the operator moves the
-    // scheduled open earlier (ADR-0093 decision 3 '#21 앞당긴 개장').
+    // --- 검수 제출 on screen, and the second admin's approval an hour before the scheduled open:
+    // 개장 예정, which the worker opens only at that time (#21, ADR-0100).
     await letToastsGo(page);
-    await page.getByTestId('market-open').click();
-    await expect(
-      page.getByText(copy.errMarketScheduledOpenNotReached, { exact: true }),
-    ).toBeVisible();
-    await expect(status).toHaveText(copy.marketStatusDraft);
-    await letToastsGo(page);
+    await expect(submit).toBeEnabled();
+    await submit.click();
+    await expect(page.getByText(copy.adminMarketReviewSubmitted)).toBeVisible();
+    await expect(status).toHaveText(copy.marketStatusReview);
+    expect((await approveAsReviewer(admin, market.id)).status).toBe('scheduled');
+    await page.reload();
+    await expect(status).toHaveText(copy.marketStatusScheduled);
+    await expect(page.getByTestId('market-review-scheduled')).toHaveText(
+      copy.adminMarketReviewScheduledNote,
+    );
+    await expect(detailRow(page, 'market-detail-open-at')).toHaveText('—');
+
+    // --- there is no early open: the operator moves the scheduled open earlier, with a reason and
+    // no new review (ADR-0093 decision 3 '#21 앞당긴 개장'), and a time already come opens the
+    // market at once, in the same write (#21) — the admin who moved it its opener.
     const passedAt = minuteIso(Date.now() - MINUTE_MS);
-    await page.getByTestId('market-scheduled-open-at').fill(kstLocalOf(passedAt));
-    const movedEarlier = nextPatch(page, market.id);
-    await page.getByTestId('market-save').click();
-    expect((await movedEarlier).postDataJSON()).toMatchObject({ scheduledOpenAt: passedAt });
-    await expect(page.getByText(copy.adminMarketSaved)).toBeVisible();
-    await letToastsGo(page);
-    await page.getByTestId('market-open').click();
-    await expect(page.getByText(copy.adminMarketOpened)).toBeVisible();
+    const reason = `발표 일정이 당겨져 지금 엽니다 ${market.tag}`;
+    await page.getByTestId('market-review-reschedule').click();
+    const dialog = page.getByTestId('market-review-reschedule-dialog');
+    await dialog.getByTestId('market-review-reschedule-at').fill(kstLocalOf(passedAt));
+    await dialog.getByTestId('market-review-reschedule-reason').fill(reason);
+    const rescheduled = page.waitForRequest(
+      (sent) => sent.method() === 'POST' && new URL(sent.url()).pathname === `${path}/reschedule`,
+    );
+    await dialog.getByTestId('market-review-reschedule-dialog-confirm').click();
+    expect((await rescheduled).postDataJSON()).toEqual({
+      scheduledOpenAt: passedAt,
+      reason,
+      expectedAccountId,
+    });
+    await expect(page.getByText(copy.adminMarketReviewRescheduledOpened)).toBeVisible();
+    await expect(dialog).toHaveCount(0);
     await expect(status).toHaveText(copy.marketStatusOpen);
+    const opened = await dataOf<AdminMarket>(await admin.get(path));
+    expect(opened.events.slice(0, 2).map((event) => event.type)).toEqual([
+      'opened',
+      'open_rescheduled',
+    ]);
+    expect(opened.events[0]).toMatchObject({
+      actorId: expectedAccountId,
+      fromStatus: 'scheduled',
+      toStatus: 'open',
+      payload: { source: 'reschedule' },
+    });
+    await expect(detailRow(page, 'market-detail-open-at')).toHaveText(
+      formatKst(present(opened.openAt)),
+    );
 
     // --- open: the scheduled open and judgement are locked (#172 item 14), and the API refuses a
     // change to either (ADR-0098).
     const closeInput = page.getByTestId('market-close-at');
     await expect(page.getByTestId('market-scheduled-open-at')).toBeDisabled();
     await expect(page.getByTestId('market-scheduled-judgement-at')).toBeDisabled();
-    const path = `/api/v1/admin/markets/${market.id}`;
     expect(
       await firstDetail(
         await admin.patch(path, {
@@ -699,8 +737,8 @@ test.describe('시장 시간', () => {
     page,
     request,
   }) => {
-    // Closes and is judged in 25 seconds: room for making and opening it, which needs the close
-    // ahead, and then a short wait. The 사건 기한 is at the judgement too (A1).
+    // Closes and is judged in 25 seconds: room for making it and opening it through the review,
+    // which needs the close ahead, and then a short wait. The 사건 기한 is at the judgement too (A1).
     const dueAt = new Date(Date.now() + 25_000).toISOString();
     const market = await createOpenMarket(admin, {
       closeAt: dueAt,
