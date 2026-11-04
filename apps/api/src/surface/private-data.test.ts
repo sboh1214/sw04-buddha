@@ -80,6 +80,7 @@ import {
   createJudgementDelay,
   createMarket,
   createMarketLink,
+  createMarketMakerAccount,
   createMarketPause,
   createComment,
   createCommentLike,
@@ -1354,6 +1355,9 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     });
     // The other side of A's fill: a resting order of a third account (the counterparty).
     const maker = await createUser(t.db);
+    // The 운영 마켓메이커 account the seed makes (#115): it has no public face, so its id is in no
+    // answer anyone but an operator reads.
+    const marketMaker = await createMarketMakerAccount(t.db);
     const order = (values: {
       userId: string;
       side: 'buy' | 'sell';
@@ -2117,6 +2121,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('counterparty email', maker.user.email),
         text('counterparty order id', resting.id),
         text('counterparty order key', makerKey),
+        text('market maker account id', marketMaker),
         text('payment id', payment!.id),
         text('payment key', paymentKey),
         text('watched market id', watched.id),

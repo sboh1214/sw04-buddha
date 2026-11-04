@@ -1,5 +1,5 @@
 import type { APIRequestContext, APIResponse, Page } from '@playwright/test';
-import type { AdminAccount } from '@buddha/shared';
+import { MARKET_MAKER_ACCOUNT_EMAIL, type AdminAccount } from '@buddha/shared';
 import { copy } from '../src/copy';
 import {
   E2E_PASSWORD,
@@ -361,6 +361,29 @@ test('관리자가 아닌 계정은 /admin/admins를 열 수 없고, API는 목�
     403,
     'FORBIDDEN',
   );
+});
+
+test('시드가 만든 운영 마켓메이커 계정은 관리자의 사용자 목록에 없고, 그 주소로는 로그인할 수 없다 (#115)', async ({
+  page,
+  admin,
+}) => {
+  // ADR-0107 결정 2 #73 11항, ADR-0108: the seed made the one 운영 마켓메이커 account (every e2e
+  // database is seeded), with no profile — so no admin list, the grant search included, has a row
+  // for it, and nothing an admin could grant or adjust — and with no login method.
+  for (const query of ['', '&status=open']) {
+    const users = await dataOf<{ email: string }[]>(
+      await admin.get(
+        `/api/v1/admin/users?q=${encodeURIComponent(MARKET_MAKER_ACCOUNT_EMAIL)}${query}`,
+      ),
+    );
+    expect(users, query).toEqual([]);
+  }
+  // Its address is on the no-email domain: the sign-in refuses it before looking anything up.
+  const signedIn = await page.request.post('/api/auth/sign-in/email', {
+    data: { email: MARKET_MAKER_ACCOUNT_EMAIL, password: E2E_PASSWORD },
+  });
+  expect(signedIn.status()).toBe(400);
+  expect(((await signedIn.json()) as { code: string }).code).toBe('INVALID_EMAIL');
 });
 
 test.describe('탭의 계정이 바뀌는 틈의 부여·회수 (ADR-0091)', () => {

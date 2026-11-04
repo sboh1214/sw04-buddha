@@ -44,6 +44,7 @@ import {
   createFill,
   createJudgementRequest,
   createMarket,
+  createMarketMakerAccount,
   createModerationAction,
   createProvisionalMarket,
   createUser,
@@ -407,6 +408,29 @@ describe.skipIf(!hasTestDb())('market disputes (#175, #176, docker test profile)
         .values([order(partial.id, 1, 'cancelled'), order(resting.id, 0, 'open')]);
       expect(await hasMarketFill(t.db, partial.id, market.id)).toBe(true);
       expect(await hasMarketFill(t.db, resting.id, market.id)).toBe(false);
+    });
+
+    it('counts a person’s fill only: the 운영 마켓메이커’s side gives it none, its counterparty one (#115)', async () => {
+      // The participants' rule (#177 13항, ADR-0107 결정 4 #115): a 사용자 is a person's account.
+      const { market } = await createProvisionalMarket(t.db);
+      const marketMaker = await createMarketMakerAccount(t.db);
+      const { user: taker } = await createUser(t.db);
+      const { user: maker } = await createUser(t.db);
+      await createFill(t.db, {
+        marketId: market.id,
+        userId: taker.id,
+        makerId: marketMaker,
+        amountCoin: 50n,
+      });
+      await createFill(t.db, {
+        marketId: market.id,
+        userId: marketMaker,
+        makerId: maker.id,
+        amountCoin: 50n,
+      });
+      expect(await hasMarketFill(t.db, marketMaker, market.id)).toBe(false);
+      expect(await hasMarketFill(t.db, taker.id, market.id)).toBe(true);
+      expect(await hasMarketFill(t.db, maker.id, market.id)).toBe(true);
     });
 
     it('asks no restriction: an account or writing restriction leaves 판정 이의 open (#173 item 6, #45-12)', async () => {

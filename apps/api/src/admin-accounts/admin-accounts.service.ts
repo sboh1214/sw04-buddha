@@ -1,5 +1,11 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { isPhoneVerified, lockAdminRoles, schema, type Db } from '@buddha/db';
+import {
+  isHumanAccountTypeSql,
+  isPhoneVerified,
+  lockAdminRoles,
+  schema,
+  type Db,
+} from '@buddha/db';
 import {
   adminRoleChangePayloadSchema,
   decodeKeyset,
@@ -131,7 +137,9 @@ export class AdminAccountsService {
    * rule does not cover role changes. An account its member closed (#140) is refused first as
    * ACCOUNT_CLOSED — its address is unverified then, and `email_not_verified` would tell the
    * operator to wait for a verification that never comes. A closure takes the admin-roles lock
-   * (shared) before it closes, so under this exclusive one the read sees a closure committed.
+   * (shared) before it closes, so under this exclusive one the read sees a closure committed. An
+   * operating account (the 운영 마켓메이커, #115) is never an admin: it answers NOT_FOUND, as an id
+   * that is no account does, before any other reason.
    */
   async grant(actorId: string, userId: string, reason: string): Promise<AdminRoleChange> {
     const recordId = await this.db.transaction(async (tx) => {
@@ -145,7 +153,10 @@ export class AdminAccountsService {
         })
         .from(schema.user)
         .innerJoin(schema.profiles, eq(schema.profiles.userId, schema.user.id))
-        .where(eq(schema.user.id, userId))
+        // Admin rights are apart from the account's type (ADR-0107 결정 4 #115), but only a
+        // person's account takes them: the role lives on the profile an operating account never
+        // has (migration 0059), and the one rule says so here too.
+        .where(and(eq(schema.user.id, userId), isHumanAccountTypeSql(schema.user.accountType)))
         .limit(1);
       if (!target) throw new AppError('NOT_FOUND', { message: 'User not found' });
       if (target.closedAt !== null) {

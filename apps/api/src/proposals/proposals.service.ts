@@ -54,7 +54,9 @@ const { marketProposals } = schema;
  * The form's checks come before the limits, so a refusal for the limits means the form itself
  * was fine; the onboarding and the restrictions come before both, as a guard's would. An
  * operator's proposal is stored like a member's, the number's hash included: it is a proposal of
- * that number, and a member account the number verifies later counts it (decision 7).
+ * that number, and a member account the number verifies later counts it (decision 7). An
+ * operating account (#115) proposes nothing (ADR-0107 결정 2 #73 11항): the onboarding refuses it
+ * (no profile) and the database refuses its proposal row (migration 0059).
  */
 @Injectable()
 export class ProposalsService {

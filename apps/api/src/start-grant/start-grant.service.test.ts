@@ -10,7 +10,7 @@
  */
 import { MODULE_METADATA } from '@nestjs/common/constants.js';
 import { cancelStartGrant, schema } from '@buddha/db';
-import { createPhoneVerification, createUser } from '@buddha/db/test';
+import { createMarketMakerAccount, createPhoneVerification, createUser } from '@buddha/db/test';
 import {
   START_COIN_SETTING,
   meSchema,
@@ -139,6 +139,19 @@ describe.skipIf(!hasTestInfra)('StartGrantService (integration)', () => {
     expect(await t.db.select().from(schema.startGrants)).toEqual([]);
     expect(await ledgerOf(user.id)).toEqual([]);
     expect(await balanceOf(user.id)).toBe(0n);
+  });
+
+  it('refuses the 운영 마켓메이커 account even with a 본인확인 record, recording nothing (#115)', async () => {
+    // No route reaches it (no session for that account): the service's own refusal, before the
+    // database's (`start_grants_human_account`, migration 0059) would be asked.
+    await setAmount(10_000);
+    const marketMaker = await createMarketMakerAccount(t.db);
+    await createPhoneVerification(t.db, { userId: marketMaker });
+    await expect(grants.grant(marketMaker)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(await t.db.select().from(schema.startGrants)).toEqual([]);
+    expect(await t.db.select().from(schema.startGrantNumbers)).toEqual([]);
+    expect(await ledgerOf(marketMaker)).toEqual([]);
+    expect(await balanceOf(marketMaker)).toBe(0n);
   });
 
   it('grants the set amount once: the balance, one START_GRANT entry, the record and the event', async () => {

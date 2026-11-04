@@ -11,25 +11,48 @@
  * setting does not affect them. better-auth reads/writes these tables through its Drizzle adapter;
  * application code never writes them (PLAN 6.1) except the seed, test factories and an admin
  * revoke, which deletes the account's `session` rows to sign it out everywhere (#171).
+ * `user.account_type` and its partial unique index are ours too (#115, ADR-0108): add them back
+ * after a regenerate.
  * Re-run the generator only on a better-auth upgrade and diff against this file.
  */
+import { sql } from 'drizzle-orm';
 import { boolean, index, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { accountTypeEnum } from './enums.js';
 
 const timestamptz = (name: string) =>
   timestamp(name, { withTimezone: true, mode: 'date', precision: 3 });
 
-export const user = pgTable('user', {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
-  email: text('email').notNull().unique(),
-  emailVerified: boolean('email_verified').default(false).notNull(),
-  image: text('image'),
-  createdAt: timestamptz('created_at').defaultNow().notNull(),
-  updatedAt: timestamptz('updated_at')
-    .defaultNow()
-    .$onUpdate(() => new Date())
-    .notNull(),
-});
+export const user = pgTable(
+  'user',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    email: text('email').notNull().unique(),
+    emailVerified: boolean('email_verified').default(false).notNull(),
+    image: text('image'),
+    createdAt: timestamptz('created_at').defaultNow().notNull(),
+    updatedAt: timestamptz('updated_at')
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+    /**
+     * The account's type (#115, ADR-0107 결정 4): '일반 사용자' for every sign-up and every account
+     * made before migration 0059 — the database default, so better-auth never writes it and no
+     * client input can (it is no `additionalFields` entry) — or '운영 마켓메이커' for the one
+     * account `ensureMarketMakerAccount` makes (account-types.ts). Fixed at creation: a trigger
+     * refuses any change, whoever writes (migration 0059). Read through the one rule
+     * (`isHumanAccountTypeSql`, `is_human_account`), never compared.
+     */
+    accountType: accountTypeEnum('account_type').default('member').notNull(),
+  },
+  (table) => [
+    // One 운영 마켓메이커 account (ADR-0107 결정 2 #73 11항): a second is refused, so the seed's
+    // `ON CONFLICT DO NOTHING` makes it once however many seeds race.
+    uniqueIndex('user_market_maker_uidx')
+      .on(table.accountType)
+      .where(sql`${table.accountType} = 'market_maker'`),
+  ],
+);
 
 export const session = pgTable(
   'session',

@@ -8,6 +8,8 @@ import {
   AUTH_USER_NAME,
   AUTO_NICKNAME_PATTERN,
   CATEGORY_SLUGS,
+  MARKET_MAKER_ACCOUNT_EMAIL,
+  NO_EMAIL_DOMAIN,
   SEED_ADMIN_GRANT_REASON,
   SUBCATEGORY_SLUGS,
   floorToMinute,
@@ -31,6 +33,8 @@ import {
   priceTicks,
   profiles,
   releaseSettings,
+  session,
+  startGrants,
   tags,
   user,
 } from './schema/index.js';
@@ -230,6 +234,31 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     };
   }
 
+  /**
+   * The 운영 마켓메이커 accounts the seed made (#115) — one, or the test fails — and what each
+   * holds: its row, and the rows the database would refuse it, all expected empty.
+   */
+  async function marketMakerState() {
+    const rows = await t.db.select().from(user).where(eq(user.email, MARKET_MAKER_ACCOUNT_EMAIL));
+    expect(rows).toHaveLength(1);
+    const id = rows[0]!.id;
+    return {
+      row: rows[0]!,
+      balances: await t.db
+        .select({ available: balances.availableCoin, locked: balances.lockedCoin })
+        .from(balances)
+        .where(eq(balances.userId, id)),
+      held: [
+        ...(await t.db.select().from(profiles).where(eq(profiles.userId, id))),
+        ...(await t.db.select().from(account).where(eq(account.userId, id))),
+        ...(await t.db.select().from(session).where(eq(session.userId, id))),
+        ...(await t.db.select().from(startGrants).where(eq(startGrants.userId, id))),
+        ...(await t.db.select().from(ledgerEntries).where(eq(ledgerEntries.userId, id))),
+        ...(await t.db.select().from(adminActions).where(eq(adminActions.targetId, id))),
+      ],
+    };
+  }
+
   /** The admin_grant / admin_revoke records, oldest first. */
   async function roleRecords() {
     return t.db
@@ -297,6 +326,18 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     // Not verified: the bootstrap admins verify at their first sign-in like every account
     // (ADR-0069 decision 4, #58; ADR-0070).
     expect(await t.db.select().from(phoneVerifications)).toEqual([]);
+    // The 운영 마켓메이커 account, made once (ADR-0107 결정 2 #73 11항): its type, an address no
+    // mail and no sign-in reaches, and a zero balance — no profile, no sign-in method, no session,
+    // no grant, no ledger entry and no admin record.
+    const marketMaker = await marketMakerState();
+    expect(marketMaker.row).toMatchObject({
+      accountType: 'market_maker',
+      emailVerified: false,
+      name: AUTH_USER_NAME,
+      image: null,
+    });
+    expect(marketMaker.balances).toEqual([{ available: 0n, locked: 0n }]);
+    expect(marketMaker.held).toEqual([]);
   });
 
   it('creates one admin when no second is configured', async () => {
@@ -372,6 +413,12 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       { secondEnv: { email: SECOND_EMAIL, password: 'short' } },
       'SEED_SECOND_ADMIN_PASSWORD must be 8-128 characters',
     ],
+    // An address that signs in nowhere — the 운영 마켓메이커's among them, never an admin (#115).
+    [
+      'the 운영 마켓메이커’s address as an admin',
+      { firstEnv: { email: MARKET_MAKER_ACCOUNT_EMAIL, password: ADMIN_PASSWORD }, second: false },
+      `SEED_ADMIN_EMAIL must be an address mail reaches, not one on ${NO_EMAIL_DOMAIN}`,
+    ],
   ])(
     'fails before seeding anything on any other admin setting it cannot seed as given (#171): %s',
     async (_, options, message) => {
@@ -401,9 +448,13 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
 
   it('adds no second admin to an existing one: a later SEED_SECOND_ADMIN_* creates nobody', async () => {
     // The second is then granted on the admin screen instead.
-    runSeed({ second: false });
+    expect(runSeed({ second: false })).toContain('[db:seed] market maker account: created');
+    const { row: marketMaker } = await marketMakerState();
     const output = runSeed();
     expect(output).toContain('nobody created or promoted');
+    // The 운영 마켓메이커 account too is made once and kept (시드가 없을 때만 만든다, #115).
+    expect(output).toContain('[db:seed] market maker account: exists');
+    expect((await marketMakerState()).row.id).toBe(marketMaker.id);
     expect(await t.db.select().from(user).where(eq(user.email, SECOND_EMAIL))).toEqual([]);
     expect(await roleRecords()).toHaveLength(1);
   });
@@ -1687,6 +1738,9 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       const output = runSeed({ admin: false });
       expect(output).toContain('admin skipped');
       expect(output).toContain('markets skipped (no admin)');
+      // The 운영 마켓메이커 account needs no admin (#115): made all the same.
+      expect(output).toContain('[db:seed] market maker account: created');
+      expect((await marketMakerState()).held).toEqual([]);
       expect(await t.db.select().from(markets)).toHaveLength(0);
       // The tree needs no admin: five top-level rows and every leaf under them.
       const categoryRows = await t.db.select().from(categories);
@@ -1725,6 +1779,8 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
 
     expect(await t.db.select().from(chargePackages)).toHaveLength(5);
     expect(await t.db.select().from(user).where(eq(user.email, ADMIN_EMAIL))).toHaveLength(1);
+    // One 운영 마켓메이커 account however many seeds ran at once (#115): both left the lock together.
+    expect((await marketMakerState()).held).toEqual([]);
     expect(await adminState()).toMatchObject({ role: 'admin' });
     // The admins too: the second seed found them and recorded no grant of its own.
     expect(await roleRecords()).toHaveLength(2);

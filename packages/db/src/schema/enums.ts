@@ -4,6 +4,7 @@
  * drizzle.config.ts only affects column names.
  */
 import {
+  ACCOUNT_TYPES,
   APPROVAL_STATUSES,
   COUNTERPARTY_TYPES,
   LEDGER_ENTRY_TYPES,
@@ -28,6 +29,8 @@ import {
 import { pgEnum } from 'drizzle-orm/pg-core';
 
 export const roleEnum = pgEnum('role', ROLES);
+/** '일반 사용자' or '운영 마켓메이커' (#115, ADR-0107 결정 4): `user.account_type`, migration 0059. */
+export const accountTypeEnum = pgEnum('account_type', ACCOUNT_TYPES);
 export const ledgerEntryTypeEnum = pgEnum('ledger_entry_type', LEDGER_ENTRY_TYPES);
 export const paymentStatusEnum = pgEnum('payment_status', PAYMENT_STATUSES);
 export const marketStatusEnum = pgEnum('market_status', MARKET_STATUSES);

@@ -19,6 +19,7 @@ import {
 import { and, asc, desc, eq, gt, inArray, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { alias } from 'drizzle-orm/pg-core';
+import { isHumanAccountSql } from './account-types.js';
 import type * as schema from './schema/index.js';
 import {
   approvalRequests,
@@ -132,9 +133,11 @@ export function marketConfirmationHeld(): SQL {
  * Whether `userId` has a fill on `marketId` (#173 item 6 '자격': 그 시장에 체결 이력이 있는 사용자):
  * an order of theirs on it with anything filled — the taker's and the resting order's alike, so
  * either side of a fill counts — whatever became of the order (a cancelled remainder keeps its
- * filled part). The one place eligibility reads the orders: #119 reshapes them and adapts this,
- * and #115 keeps the market-maker bot's own account out (a bot has no fill to dispute with). No
- * fill exists before #119, so nobody is eligible on the deployed environment until then.
+ * filled part). The one place eligibility reads the orders: #119 reshapes them and adapts this.
+ * A 사용자 is a person's account (`isHumanAccountSql`, #115 — the participants' rule, #177 13항):
+ * the 운영 마켓메이커's own fills give it nothing to dispute with, while a member whose fill's other
+ * side was the 운영 마켓메이커 has one like any other. No fill exists before #119, so nobody is
+ * eligible on the deployed environment until then.
  */
 export async function hasMarketFill(
   executor: Reader,
@@ -144,7 +147,14 @@ export async function hasMarketFill(
   const [filled] = await executor
     .select({ id: orders.id })
     .from(orders)
-    .where(and(eq(orders.userId, userId), eq(orders.marketId, marketId), gt(orders.filledQty, 0)))
+    .where(
+      and(
+        eq(orders.userId, userId),
+        eq(orders.marketId, marketId),
+        gt(orders.filledQty, 0),
+        isHumanAccountSql(orders.userId),
+      ),
+    )
     .limit(1);
   return filled !== undefined;
 }

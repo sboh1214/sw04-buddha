@@ -9,14 +9,15 @@ import { identifierWords } from './excluded.js';
  * The plan's list (N04 §2, N01 §5) and D8's new records start it; the decision issues change it
  * (#37: the scope of 인증 정보 and of the risk flags, and what else outside the owner-only list is
  * public; #123·#122: whether a fill says the house was the other side). #180 kept a market's bot
- * participation and settings to admins (ADR-0058). The owner kept a user's time zone out while a
- * market's judging time zone (#22) stays public (2026-10-16, ADR-0063), and kept every watchlist
- * and every market's watch count to nobody but the member (#37 for #89, ADR-0061 decision 3,
- * ADR-0064). A member's recorded searches are listed by ADR-0066's own choice: the owner decided
- * they are recorded and shown to the member (#15, ADR-0061 decision 3), not who else may see them.
- * A hidden post's or comment's mark and reason are its author's (#45-5, ADR-0080). Reports and the
- * operators' actions are operators' (N04 §6, #45-13), the reporter's own reports and the member's
- * own actions theirs (#50, ADR-0081).
+ * participation and settings to admins (ADR-0058), and the owner an account's type — a person's or
+ * the 운영 마켓메이커's — out of every public answer (ADR-0107 결정 5, #115). The owner kept a user's time
+ * zone out while a market's judging time zone (#22) stays public (2026-10-16, ADR-0063), and kept
+ * every watchlist and every market's watch count to nobody but the member (#37 for #89, ADR-0061
+ * decision 3, ADR-0064). A member's recorded searches are listed by ADR-0066's own choice: the
+ * owner decided they are recorded and shown to the member (#15, ADR-0061 decision 3), not who else
+ * may see them. A hidden post's or comment's mark and reason are its author's (#45-5, ADR-0080).
+ * Reports and the operators' actions are operators' (N04 §6, #45-13), the reporter's own reports
+ * and the member's own actions theirs (#50, ADR-0081).
  * A market proposal and its proposer are the proposer's and the operators' alone (#77, ADR-0069
  * decision 4), and so are a 판정 이의's submitter and body (#175, ADR-0093 decision 1 #173 item 13).
  * Items nothing stores yet
@@ -55,6 +56,7 @@ export const PRIVATE_DATA_IDS = [
   'moderation',
   'reports',
   'market-maker',
+  'account-type',
 ] as const;
 export type PrivateDataId = (typeof PRIVATE_DATA_IDS)[number];
 
@@ -539,7 +541,20 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       ['treasury'],
       ['concentration'],
     ],
-    pending: '운영 마켓메이커가 아직 없다(#72·#129·#182)',
+    // The 운영 마켓메이커 account exists from #115 (ADR-0108); what it does per market does not yet.
+    pending: '시장별 운영 마켓메이커의 참여·설정·재고가 아직 없다(#72·#129·#182)',
+  },
+  {
+    id: 'account-type',
+    name: '계정 유형(사람 계정과 운영 마켓메이커의 구분)',
+    basis: 'ADR-0107 결정 5(#179·#119 행), 결정 2(#73 11항), ADR-0108',
+    // Whether an account is a person's or the 운영 마켓메이커 (#115) is kept on its account and,
+    // from #119, on its fill records, and never said in a public answer (ADR-0107 결정 5 #179·#119
+    // 행): the operator's account has no public face at all, and whether a fill's other side was
+    // operating liquidity is #122's and #123's to decide (M11). A public shape never carries an
+    // account's type (`accountType`, `account_kind`) or says whether one is a person (`isHuman`,
+    // `humanAccount`); an author's `kind` (member or closed) is a profile's state, not this.
+    fields: [['account', 'type'], ['account', 'types'], ['account', 'kind'], ['human'], ['humans']],
   },
 ];
 

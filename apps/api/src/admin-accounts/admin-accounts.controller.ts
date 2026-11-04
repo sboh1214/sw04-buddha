@@ -84,7 +84,8 @@ export class AdminAccountsController {
   // ROLE_CHANGE_NOT_ALLOWED: details[0].message is `already_admin`, `email_not_verified` or
   // `phone_not_verified` (ADMIN_GRANT_REFUSALS). ACCOUNT_CLOSED: its member closed the account
   // (#140). FORBIDDEN: also an actor revoked meanwhile, or a body whose `expectedAccountId` is
-  // not the cookie's account (details name the field).
+  // not the cookie's account (details name the field). NOT_FOUND: also the 운영 마켓메이커 account,
+  // which is never an admin (#115).
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',

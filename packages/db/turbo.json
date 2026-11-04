@@ -7,7 +7,9 @@
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/deploy/reset-db.sh",
         "$TURBO_ROOT$/packages/storage/src/empty-cli.ts",
-        "$TURBO_ROOT$/docs/OPERATIONS.md"
+        "$TURBO_ROOT$/docs/OPERATIONS.md",
+        "$TURBO_ROOT$/apps/*/src/**",
+        "$TURBO_ROOT$/packages/*/src/**"
       ]
     }
   }

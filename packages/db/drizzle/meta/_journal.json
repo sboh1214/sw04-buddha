@@ -414,6 +414,13 @@
       "when": 1793688506949,
       "tag": "0058_judgement_delays",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1793781048404,
+      "tag": "0059_account_types",
+      "breakpoints": true
     }
   ]
 }

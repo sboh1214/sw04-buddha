@@ -6,6 +6,7 @@ import { schema } from '@buddha/db';
 import {
   closeAccount,
   connectTestDb,
+  createMarketMakerAccount,
   createStartGrant,
   createUser,
   hasTestDb,
@@ -151,8 +152,10 @@ describe.skipIf(!hasTestDb())('ledger.audit (integration)', () => {
   it('counts an account with no ledger entries and a zero balance as consistent', async () => {
     // Every new account since migration 0031 (signing up grants nothing, #70).
     await createUser(t.db);
+    // And the 운영 마켓메이커 account (#115): no profile, but the zero balance migration 0059 gives it.
+    await createMarketMakerAccount(t.db);
     const result = await runLedgerAudit(t.db);
-    expect(result).toMatchObject({ checked: 1, recorded: 0 });
+    expect(result).toMatchObject({ checked: 2, recorded: 0 });
   });
 
   it('reports such an account once its balance row is gone: 0 against 0 is not enough', async () => {
