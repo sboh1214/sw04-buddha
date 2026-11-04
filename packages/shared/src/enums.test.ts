@@ -80,19 +80,48 @@ describe('enums', () => {
   it('only ever appends to the Postgres-backed payment and ledger enums (ADR-0042)', () => {
     // `ALTER TYPE ... ADD VALUE` appends; reordering a tuple would reorder nothing in the
     // database and make drizzle-kit emit a BEFORE/AFTER migration nobody meant to write. The
-    // one removal so far (MARKET_VOID_REFUND) recreated the type on an emptied table (0017).
+    // removals so far recreated the type on an emptied table: MARKET_VOID_REFUND (0017), and the
+    // ledger types #116 replaced (0060, ADR-0109), whose order is pinned here from then on.
     expect(enums.PAYMENT_STATUSES.slice(0, 3)).toEqual(['pending', 'succeeded', 'failed']);
     expect(enums.PAYMENT_STATUSES.slice(3)).toEqual(['cancelled', 'refunding', 'refunded']);
-    expect(enums.LEDGER_ENTRY_TYPES.slice(-4)).toEqual([
+    expect(enums.LEDGER_ENTRY_TYPES).toEqual([
+      'START_GRANT',
+      'TREASURY_MINT',
+      'BOT_ALLOCATION',
+      'BOT_RECALL',
+      'PAIR_MINT_COLLATERAL',
+      'PAIR_BURN_RETURN',
+      'TRADE_FILL',
+      'SETTLEMENT_PAYOUT',
+      'CLOSURE_FORFEIT',
+      'RECONCILIATION_CORRECTION',
+      'DEPOSIT',
+      'BONUS',
       'PAYMENT_CANCEL',
       'PAYMENT_CANCEL_REVERSAL',
-      'START_GRANT',
-      'CLOSURE_FORFEIT',
     ]);
     expect(enums.paymentStatusSchema.parse('refunding')).toBe('refunding');
     expect(enums.ledgerEntryTypeSchema.parse('PAYMENT_CANCEL_REVERSAL')).toBe(
       'PAYMENT_CANCEL_REVERSAL',
     );
+  });
+
+  it('has no admin adjustment, no fee and no side-of-trade ledger type (#116)', () => {
+    // ADR-0107 결정 2 #73 7항 (관리자 잔액 조정 폐지), 15항 (수수료 0, FEE 행 없음) and 1항 (체결은
+    // 체결 대금 하나): the types and the admin action went with migration 0060.
+    for (const type of ['ADMIN_ADJUST', 'FEE', 'TRADE_BUY', 'TRADE_SELL']) {
+      expect(enums.ledgerEntryTypeSchema.safeParse(type).success, type).toBe(false);
+    }
+    expect(enums.adminActionTypeSchema.safeParse('balance_adjust').success).toBe(false);
+    expect(enums.ledgerRefTypeSchema.safeParse('admin_action').success).toBe(false);
+    expect(enums.LEDGER_ACCOUNT_KINDS).toEqual([
+      'user',
+      'treasury',
+      'market_collateral',
+      'market_maker_funds',
+    ]);
+    expect(enums.ledgerRefTypeSchema.parse('approval_request')).toBe('approval_request');
+    expect(enums.ledgerRefTypeSchema.parse('audit_failure')).toBe('audit_failure');
   });
 
   it('has no value only the direct AMM wrote (#125)', () => {
@@ -369,7 +398,7 @@ describe('enums', () => {
     expect(enums.timeInForceSchema.parse('ioc')).toBe('ioc');
     expect(enums.counterpartyTypeSchema.parse('order')).toBe('order');
     expect(enums.priceTickTriggerSchema.parse('trade')).toBe('trade');
-    expect(enums.adminActionTypeSchema.parse('balance_adjust')).toBe('balance_adjust');
+    expect(enums.adminActionTypeSchema.parse('coupon_create')).toBe('coupon_create');
     expect(enums.auditFailureKindSchema.parse('ledger_balance_mismatch')).toBe(
       'ledger_balance_mismatch',
     );

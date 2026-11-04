@@ -6,8 +6,9 @@
  * adds is never missed.
  *
  * Migration 0017 runs exactly this statement, once, before it drops the direct AMM's columns and
- * enum values (#125: the deployed database is wiped, accounts too), and migration 0048 again
- * before it rebuilds the market status type (#174, ADR-0093 decision 3). deploy/reset-db.sh runs it
+ * enum values (#125: the deployed database is wiped, accounts too), migration 0048 again before it
+ * rebuilds the market status type (#174, ADR-0093 decision 3), and migration 0060 before it
+ * reshapes the ledger into ledger accounts (#116, ADR-0107 결정 3). deploy/reset-db.sh runs it
  * again through wipe-cli.ts (docs/RESET.md; #149 uses that procedure in the scope #133 decides,
  * narrowed first if anything is kept), and the test harness's `reset()` runs it before every
  * DB-backed case; wipe.test.ts fails if a migration's copy drifts from this one or the reset

@@ -10,14 +10,19 @@
 import { randomUUID } from 'node:crypto';
 import { Logger } from '@nestjs/common';
 import { schema } from '@buddha/db';
-import { completeOnboarding } from '@buddha/db/test';
+import {
+  completeOnboarding,
+  createStartGrant,
+  ledgerOf as accountLedgerOf,
+  spendCoin,
+} from '@buddha/db/test';
 import {
   userChannel,
   type AdminPayment,
   type ChargeResult,
   type PaymentStatus,
 } from '@buddha/shared';
-import { asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
@@ -146,19 +151,32 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     return row!;
   }
 
-  async function ledgerOf(userId: string) {
-    return t.db
-      .select()
-      .from(schema.ledgerEntries)
-      .where(eq(schema.ledgerEntries.userId, userId))
-      .orderBy(asc(schema.ledgerEntries.id));
-  }
+  /** The account's ledger, each event from its side (`ledgerOf` of @buddha/db/test, #116). */
+  const ledgerOf = (userId: string) => accountLedgerOf(t.db, userId);
 
   async function refundActions() {
     return t.db
       .select()
       .from(schema.adminActions)
       .where(eq(schema.adminActions.type, 'payment_refund'));
+  }
+
+  /** The payment's ledger events as stored (#116): sides, key, in id order. */
+  async function entriesOf(paymentId: string) {
+    const rows = await t.db
+      .select()
+      .from(schema.ledgerEntries)
+      .where(
+        and(eq(schema.ledgerEntries.refType, 'payment'), eq(schema.ledgerEntries.refId, paymentId)),
+      )
+      .orderBy(asc(schema.ledgerEntries.id));
+    return rows.map((row) => ({
+      type: row.type,
+      mint: row.fromAccountId === null,
+      burn: row.toAccountId === null,
+      key: row.idempotencyKey,
+      id: row.id,
+    }));
   }
 
   async function eventsOf(paymentId: string) {
@@ -238,6 +256,12 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
       payload: { amountCoin: '10000', priceKrw: 9_700, provider: 'mock', memo: REASON },
     });
     expect(actions[0]!.createdAt.getTime()).toBe(ledger[1]!.createdAt.getTime());
+    // Kept types on the ledger accounts (#116, ADR-0107 결정 2 #73 2항): the DEPOSIT a mint into
+    // the account, the PAYMENT_CANCEL a burn out of it, keyed by this refund's audit row.
+    expect(await entriesOf(id)).toEqual([
+      { type: 'DEPOSIT', mint: true, burn: false, key: id, id: ledger[0]!.id },
+      { type: 'PAYMENT_CANCEL', mint: false, burn: true, key: actions[0]!.id, id: ledger[1]!.id },
+    ]);
 
     expect((await eventsOf(id)).map((event) => event.type)).toEqual(['refund_cancel']);
 
@@ -285,15 +309,9 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
 
   it('refuses once part of the Coin is used (INSUFFICIENT_BALANCE), changing nothing', async () => {
     const { id } = await charge();
-    // Spend 1 Coin of the charge (a new account has nothing else, #70): 9,999 Coin left against
-    // a 10,000 Coin payment.
-    const spent = await t.app.inject({
-      method: 'POST',
-      url: `/api/v1/admin/users/${member.id}/balance-adjust`,
-      headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: { amountCoin: '-1', memo: 'spent', expectedAccountId: admin.id },
-    });
-    expect(spent.statusCode).toBe(200);
+    // Spend 1 Coin of the charge (a new account has nothing else, #70) as a trade will (pair-mint
+    // collateral, #116): 9,999 Coin left against a 10,000 Coin payment.
+    await spendCoin(t.db, member.id, 1n);
 
     const res = await refund(id);
     expect(res.statusCode).toBe(409);
@@ -423,6 +441,32 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
       resultCode: '2002',
       resultMessage: '취소 불가 거래',
     });
+
+    // Refused again (#116's keys): a second claw-back under its own audit row, and a second
+    // reversal keyed by that second cancel — the payment's latest — not by the first, whose key
+    // the first reversal already took (reused, it would be a duplicate and nothing put back).
+    expect((await refund(id)).statusCode).toBe(409);
+    expect(await paymentRow(id)).toMatchObject({ status: 'succeeded', refundedAt: null });
+    expectLedgerChain(await ledgerOf(member.id), 10_000n);
+
+    // Refunded at last: a third claw-back, this one kept — each event once, a reversal a mint.
+    onCancel = mockCancel;
+    expect((await refund(id)).statusCode).toBe(200);
+    const actions = await t.db
+      .select({ id: schema.adminActions.id })
+      .from(schema.adminActions)
+      .where(eq(schema.adminActions.type, 'payment_refund'))
+      .orderBy(asc(schema.adminActions.createdAt));
+    const entries = await entriesOf(id);
+    expect(entries.map(({ type, mint, burn, key }) => ({ type, mint, burn, key }))).toEqual([
+      { type: 'DEPOSIT', mint: true, burn: false, key: id },
+      { type: 'PAYMENT_CANCEL', mint: false, burn: true, key: actions[0]!.id },
+      { type: 'PAYMENT_CANCEL_REVERSAL', mint: true, burn: false, key: String(entries[1]!.id) },
+      { type: 'PAYMENT_CANCEL', mint: false, burn: true, key: actions[1]!.id },
+      { type: 'PAYMENT_CANCEL_REVERSAL', mint: true, burn: false, key: String(entries[3]!.id) },
+      { type: 'PAYMENT_CANCEL', mint: false, burn: true, key: actions[2]!.id },
+    ]);
+    expectLedgerChain(await ledgerOf(member.id), 0n);
   });
 
   it('stays refunding when the PG does not answer, and a retry finishes it', async () => {
@@ -839,18 +883,11 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
   });
 
   it("refunds when exactly the payment's Coin is still available", async () => {
-    // Other Coin first, then spent: 10,000 Coin left against a 10,000 Coin payment — none of it
-    // used. (A new account starts at 0, #70.)
-    const adjustBy = (amountCoin: string, memo: string) =>
-      t.app.inject({
-        method: 'POST',
-        url: `/api/v1/admin/users/${member.id}/balance-adjust`,
-        headers: { ...jsonHeaders, cookie: admin.cookie },
-        payload: { amountCoin, memo, expectedAccountId: admin.id },
-      });
-    expect((await adjustBy('2500', 'other coin')).statusCode).toBe(200);
+    // Other Coin first (the start grant; a new account starts at 0, #70), then spent as a trade
+    // will (#116): 10,000 Coin left against a 10,000 Coin payment — none of it used.
+    await createStartGrant(t.db, { userId: member.id, amountCoin: 2_500n });
     const { id } = await charge();
-    expect((await adjustBy('-2500', 'spent the other coin')).statusCode).toBe(200);
+    await spendCoin(t.db, member.id, 2_500n);
     expect((await balanceOf(member.id)).availableCoin).toBe(10_000n);
 
     const res = await refund(id);

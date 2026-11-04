@@ -4,12 +4,8 @@
  */
 import { schema } from '@buddha/db';
 import { completeOnboarding, createMarketMakerAccount } from '@buddha/db/test';
-import {
-  MARKET_MAKER_ACCOUNT_EMAIL,
-  type AdminBalanceAdjustResult,
-  type AdminUser,
-} from '@buddha/shared';
-import { asc, eq } from 'drizzle-orm';
+import { MARKET_MAKER_ACCOUNT_EMAIL, type AdminUser } from '@buddha/shared';
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import {
@@ -21,9 +17,7 @@ import {
   type TestApp,
   type TestUser,
 } from '../test/app.js';
-import { expectLedgerChain } from '../test/ledger.js';
 import { hasTestInfra } from '../test/setup-env.js';
-import { waitForLockWaiter } from '../test/wait.js';
 
 const jsonHeaders = { origin: 'http://localhost:3000', 'content-type': 'application/json' };
 
@@ -54,16 +48,6 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
     await t.app.get(AdminGuard).invalidate(admin.id);
   });
 
-  // An adjustment names the admin on screen (ADR-0092, Q-PG-8 ①): `who`'s own account unless the
-  // payload names another.
-  const adjust = (payload: Record<string, unknown>, who: TestUser = admin, target = member.id) =>
-    t.app.inject({
-      method: 'POST',
-      url: `/api/v1/admin/users/${target}/balance-adjust`,
-      headers: { ...jsonHeaders, cookie: who.cookie },
-      payload: { expectedAccountId: who.id, ...payload },
-    });
-
   /** Buys a package worth `amountCoin` (ADR-0026: users can only buy what an admin listed). */
   const chargeMember = async (amountCoin: bigint) => {
     const pack = await createTestPackage(t.db, { amountCoin, priceKrw: Number(amountCoin) });
@@ -83,125 +67,24 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
     return row;
   }
 
-  it('debits 3,000 Coin from a charged balance and records ADMIN_ADJUST with the reason (AC 3)', async () => {
+  it('has no balance adjustment: the route is gone, nothing moves (#116, ADR-0107 결정 2 #73 7항)', async () => {
+    // Neither direction remains: no admin grants or takes Coin at discretion (결정 4 #116).
     await chargeMember(10_000n);
-    // A new account starts at 0 (#70): the charge is all it has.
-    const afterAdjust = 10_000n - 3_000n;
-
-    const res = await adjust({ amountCoin: '-3000', memo: '중복 충전 회수' });
-    expect(res.statusCode).toBe(200);
-    const { data } = res.json<{ data: AdminBalanceAdjustResult }>();
-    expect(data.user.balance).toEqual({ availableCoin: afterAdjust.toString(), lockedCoin: '0' });
-    expect(data.ledgerEntry).toMatchObject({
-      type: 'ADMIN_ADJUST',
-      amountCoin: '-3000',
-      balanceAfterCoin: afterAdjust.toString(),
-      refType: 'admin_action',
-      memo: '중복 충전 회수',
-    });
-
-    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: afterAdjust });
-    const [action] = await t.db
-      .select()
-      .from(schema.adminActions)
-      .where(eq(schema.adminActions.targetId, member.id));
-    expect(action).toMatchObject({ adminId: admin.id, type: 'balance_adjust', targetType: 'user' });
-    expect(data.ledgerEntry.refId).toBe(action?.id);
-  });
-
-  it('refuses an adjustment that would make the balance negative, changing nothing (AC 4)', async () => {
-    await chargeMember(10_000n);
-    const balance = 10_000n;
-
-    const res = await adjust({ amountCoin: (-balance - 1n).toString(), memo: '과다 회수' });
-    expect(res.statusCode).toBe(409); // HTTP_STATUS_BY_CODE: INSUFFICIENT_BALANCE -> CONFLICT
-    expect(res.json()).toMatchObject({ error: { code: 'INSUFFICIENT_BALANCE' } });
-
-    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: balance });
-    const entries = await t.db
-      .select()
-      .from(schema.ledgerEntries)
-      .where(eq(schema.ledgerEntries.userId, member.id))
-      .orderBy(schema.ledgerEntries.id);
-    // The charge; the refused adjustment added nothing (signing up writes no entry, #70).
-    expect(entries.map((entry) => entry.type)).toEqual(['DEPOSIT']);
-    // The audit row is rolled back with the rest of the transaction.
-    expect(
-      await t.db
-        .select()
-        .from(schema.adminActions)
-        .where(eq(schema.adminActions.targetId, member.id)),
-    ).toHaveLength(0);
-  });
-
-  it('stamps the adjustment after the balance lock, not at transaction start (A-M3-14)', async () => {
-    // The adjustment transaction begins and then waits on the balance row this connection
-    // holds. Whatever committed against the account meanwhile is already in its
-    // balance_after_coin, so its ledger and audit rows must sort after it.
-    const holder = await t.db.$client.connect();
-    let pending: ReturnType<typeof adjust> | undefined;
-    let released = false;
-    let releasedMs!: number;
-    try {
-      await holder.query('BEGIN');
-      await holder.query(`SELECT user_id FROM balances WHERE user_id = '${member.id}' FOR UPDATE`);
-      pending = adjust({ amountCoin: '2500', memo: '보상 지급' });
-      await waitForLockWaiter(holder, 'the adjustment on the balance row');
-      const { rows } = await holder.query<{ ms: string }>(
-        'SELECT (extract(epoch FROM clock_timestamp()) * 1000)::bigint::text AS ms',
-      );
-      releasedMs = Number(rows[0]!.ms);
-      await holder.query('COMMIT');
-      released = true;
-      expect((await pending).statusCode).toBe(200);
-    } finally {
-      if (!released) await holder.query('ROLLBACK');
-      holder.release();
-      await pending?.catch(() => undefined);
+    for (const amountCoin of ['2500', '-3000']) {
+      const res = await t.app.inject({
+        method: 'POST',
+        url: `/api/v1/admin/users/${member.id}/balance-adjust`,
+        headers: { ...jsonHeaders, cookie: admin.cookie },
+        payload: { amountCoin, memo: '조정', expectedAccountId: admin.id },
+      });
+      expect(res.statusCode, res.body).toBe(404);
     }
-
-    const ledger = await t.db
-      .select()
-      .from(schema.ledgerEntries)
-      .where(eq(schema.ledgerEntries.userId, member.id))
-      .orderBy(asc(schema.ledgerEntries.id));
-    const adjusted = ledger.find((entry) => entry.type === 'ADMIN_ADJUST')!;
-    expect(adjusted.createdAt.getTime()).toBeGreaterThanOrEqual(releasedMs);
-    expect((await balanceOf(member.id))!.updatedAt.getTime()).toBe(adjusted.createdAt.getTime());
-    // The audit row of the same transaction carries that instant too.
-    const [action] = await t.db
-      .select()
-      .from(schema.adminActions)
-      .where(eq(schema.adminActions.targetId, member.id));
-    expect(action!.createdAt.getTime()).toBe(adjusted.createdAt.getTime());
-    expectLedgerChain(ledger, 2_500n);
-  });
-
-  it('credits Coin as well, and requires a memo and a non-zero amount', async () => {
-    const credited = await adjust({ amountCoin: '2500', memo: '보상 지급' });
-    expect(credited.statusCode).toBe(200);
-    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: 2_500n });
-
-    for (const payload of [
-      { amountCoin: '1000' },
-      { amountCoin: '1000', memo: '   ' },
-      { amountCoin: '0', memo: '영원' },
-    ]) {
-      const res = await adjust(payload);
-      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
-      expect(res.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
-    }
-    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: 2_500n });
-  });
-
-  it('404s for an unknown user without writing an audit row', async () => {
-    const res = await adjust({ amountCoin: '1000', memo: '없는 사용자' }, admin, 'no-such-user');
-    expect(res.statusCode).toBe(404);
+    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: 10_000n });
     expect(await t.db.select().from(schema.adminActions)).toHaveLength(0);
   });
 
-  it('neither lists nor adjusts the 운영 마켓메이커 account, which has no profile (#115)', async () => {
-    const marketMaker = await createMarketMakerAccount(t.db);
+  it('does not list the 운영 마켓메이커 account, which has no profile (#115)', async () => {
+    await createMarketMakerAccount(t.db);
     const search = await t.app.inject({
       method: 'GET',
       url: `/api/v1/admin/users?q=${encodeURIComponent(MARKET_MAKER_ACCOUNT_EMAIL)}`,
@@ -209,14 +92,14 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
     });
     expect(search.statusCode).toBe(200);
     expect(search.json<{ data: AdminUser[] }>().data).toEqual([]);
-    const res = await adjust({ amountCoin: '1000', memo: '운영 계정' }, admin, marketMaker);
-    expect(res.statusCode).toBe(404);
-    expect(await t.db.select().from(schema.adminActions)).toHaveLength(0);
-    expect(await balanceOf(marketMaker)).toMatchObject({ availableCoin: 0n, lockedCoin: 0n });
   });
 
   it('is closed to members and to anonymous callers', async () => {
-    const asMember = await adjust({ amountCoin: '1000', memo: '권한 없음' }, member);
+    const asMember = await t.app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/users',
+      headers: { cookie: member.cookie },
+    });
     expect(asMember.statusCode).toBe(403);
     expect(asMember.json()).toMatchObject({ error: { code: 'FORBIDDEN' } });
 
@@ -225,61 +108,6 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
       url: '/api/v1/admin/users',
     });
     expect(anonymous.statusCode).toBe(401);
-  });
-
-  it('refuses an adjustment that names another admin than the cookie’s, or none, before anything is read (Q-PG-8 ①, ADR-0092)', async () => {
-    const other = await signUpTestUser(t);
-    await t.db
-      .update(schema.profiles)
-      .set({ role: 'admin' })
-      .where(eq(schema.profiles.userId, other.id));
-    await completeOnboarding(t.db, { userId: other.id });
-    await t.app.get(AdminGuard).invalidate(other.id);
-    await chargeMember(10_000n);
-    const snapshot = async () => ({
-      balances: await t.db.select().from(schema.balances).orderBy(schema.balances.userId),
-      ledger: await t.db.select().from(schema.ledgerEntries).orderBy(schema.ledgerEntries.id),
-      actions: await t.db.select().from(schema.adminActions),
-    });
-    const before = await snapshot();
-    type Refusal = { error: { code: string; details?: { path: (string | number)[] }[] } };
-
-    // The screen still shows `admin` while the tab's cookie is `other`'s: refused before the
-    // account is looked up — an unknown one is the same 403, not the 404 the lookup answers.
-    for (const target of [member.id, 'no-such-user']) {
-      const res = await adjust(
-        { amountCoin: '-3000', memo: '중복 충전 회수', expectedAccountId: admin.id },
-        other,
-        target,
-      );
-      expect(res.statusCode, res.body).toBe(403);
-      expect(res.json<Refusal>().error.code).toBe('FORBIDDEN');
-      expect(res.json<Refusal>().error.details?.[0]?.path).toEqual(['expectedAccountId']);
-    }
-    // No account at all: a validation error naming the field.
-    const unnamed = await adjust({
-      amountCoin: '-3000',
-      memo: '중복 충전 회수',
-      expectedAccountId: undefined,
-    });
-    expect(unnamed.statusCode, unnamed.body).toBe(400);
-    expect(unnamed.json<Refusal>().error.details?.map((detail) => detail.path)).toEqual([
-      ['expectedAccountId'],
-    ]);
-    // Nothing moved, nothing audited.
-    expect(await snapshot()).toEqual(before);
-
-    // The cookie's own account is taken, and audited as that admin.
-    const own = await adjust({ amountCoin: '-3000', memo: '중복 충전 회수' }, other);
-    expect(own.statusCode, own.body).toBe(200);
-    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: 7_000n });
-    const [action] = await t.db
-      .select()
-      .from(schema.adminActions)
-      .where(eq(schema.adminActions.targetId, member.id));
-    expect(action).toMatchObject({ adminId: other.id, type: 'balance_adjust' });
-    // The account is not kept with what the adjustment records.
-    expect(JSON.stringify(action?.payload)).not.toContain('expectedAccountId');
   });
 
   it('searches users by email and nickname', async () => {
@@ -433,12 +261,12 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
     // off, so a form body is no body at all (400) even from our own origin — this API speaks
     // JSON, which no cross-origin page can send without a preflight we never answer. Before
     // this round the form was stopped by accident alone: the parser 500ed for want of `qs`.
-    // Coin to take back: a new account starts at 0 (#70). A charge, so no admin action is written.
-    await chargeMember(10_000n);
+    // An admin write that leaves an audit row: issuing a coupon (preserved code, open in this
+    // sale-enabled app; the balance adjustment this case probed went with #116).
     const post = (origin: string | undefined, body: { type: 'form' | 'json' }) =>
       t.app.inject({
         method: 'POST',
-        url: `/api/v1/admin/users/${member.id}/balance-adjust`,
+        url: '/api/v1/admin/coupons',
         headers: {
           ...(origin === undefined ? {} : { origin }),
           cookie: admin.cookie,
@@ -447,8 +275,8 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
         },
         payload:
           body.type === 'form'
-            ? `amountCoin=-3000&memo=csrf&expectedAccountId=${admin.id}`
-            : { amountCoin: '-3000', memo: 'csrf', expectedAccountId: admin.id },
+            ? `amountCoin=3000&memo=csrf&expectedAccountId=${admin.id}`
+            : { amountCoin: '3000', memo: 'csrf', expectedAccountId: admin.id },
       });
 
     for (const origin of ['https://evil.example', 'null']) {
@@ -458,7 +286,7 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
         expect(res.json()).toMatchObject({ error: { code: 'FORBIDDEN' } });
       }
     }
-    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: 10_000n });
+    expect(await t.db.select().from(schema.coupons)).toHaveLength(0);
     expect(await t.db.select().from(schema.adminActions)).toHaveLength(0);
 
     // A form from our own origin is refused for its shape, not its origin.
@@ -467,9 +295,10 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
     expect(form.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
     // JSON from our own origin passes; so does JSON with no Origin at all (curl, a server):
     // no browser sent it, so it cannot be a forgery.
-    expect((await post('http://localhost:3000', { type: 'json' })).statusCode).toBe(200);
-    expect((await post(undefined, { type: 'json' })).statusCode).toBe(200);
-    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: 10_000n - 6_000n });
+    expect((await post('http://localhost:3000', { type: 'json' })).statusCode).toBe(201);
+    expect((await post(undefined, { type: 'json' })).statusCode).toBe(201);
+    expect(await t.db.select().from(schema.coupons)).toHaveLength(2);
+    expect(await t.db.select().from(schema.adminActions)).toHaveLength(2);
 
     // Reads are never checked: without CORS headers nothing cross-origin can read them anyway.
     const read = await t.app.inject({

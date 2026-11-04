@@ -4,7 +4,8 @@
  * production while paid Coin is off (ADR-0049; paid-coin-sales.test.ts), so this app opens them.
  * Skips when TEST_* are unset (fails under CI=true, see the harness).
  */
-import { schema } from '@buddha/db';
+import { recordLedgerEntry, schema } from '@buddha/db';
+import { createMarket, ledgerOf as accountLedgerOf, withLedgerGuardsOff } from '@buddha/db/test';
 import {
   userChannel,
   type ChargePackage,
@@ -13,7 +14,7 @@ import {
   type Payment,
 } from '@buddha/shared';
 import { randomUUID } from 'node:crypto';
-import { asc, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PAYMENT_PROVIDER, type PaymentProvider } from '../payments/payment-provider.js';
@@ -79,14 +80,14 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     return row;
   }
 
-  async function ledgerOf(userId: string) {
-    // In commit order: the id is drawn under the balance lock, so it is the truthful one.
-    return t.db
-      .select()
-      .from(schema.ledgerEntries)
-      .where(eq(schema.ledgerEntries.userId, userId))
-      .orderBy(asc(schema.ledgerEntries.id));
-  }
+  /** Deletes a person's balance row, as only a broken database lacks it (no app role may). */
+  const deleteBalanceRow = (userId: string) =>
+    withLedgerGuardsOff((client) =>
+      client.query('DELETE FROM balances WHERE user_id = $1', [userId]),
+    );
+
+  /** The account's ledger, each event from its side (`ledgerOf` of @buddha/db/test, #116). */
+  const ledgerOf = (userId: string) => accountLedgerOf(t.db, userId);
 
   it('starts a new account at 0 with no ledger entry: signing up grants nothing (#70)', async () => {
     // The start Coin comes from the start grant once the onboarding is done (ADR-0071).
@@ -140,6 +141,14 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     expect(await balanceOf(user.id)).toMatchObject({ availableCoin: expected });
     const deposits = (await ledgerOf(user.id)).filter((entry) => entry.type === 'DEPOSIT');
     expect(deposits).toHaveLength(1);
+    // A kept type on the ledger accounts (#116, ADR-0107 결정 2 #73 2항): a mint into the
+    // account, keyed by the payment.
+    const [stored] = await t.db.select().from(schema.ledgerEntries);
+    expect(stored).toMatchObject({
+      type: 'DEPOSIT',
+      fromAccountId: null,
+      idempotencyKey: data.payment.id,
+    });
   });
 
   it('20 concurrent charges add up, with one ledger entry each (AC 2)', async () => {
@@ -165,7 +174,7 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
   it('stamps the DEPOSIT after the balance lock, not at transaction start (A-M3-14)', async () => {
     // The credit transaction begins, then waits on the balance row this connection holds.
     // Anything that committed against this account meanwhile is already in its
-    // balance_after_coin, so its ledger row must sort after it — the column default `now()` is
+    // total after, so its ledger row must sort after it — the column default `now()` is
     // the transaction start and sorted before it.
     const holder = await t.db.$client.connect();
     let pending: ReturnType<typeof charge> | undefined;
@@ -222,15 +231,16 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
   });
 
   it('refuses an account with no balance row before the provider runs (404, no field)', async () => {
-    // The "user" trigger creates the row at sign-up, but buddha_app keeps DELETE on balances
-    // (migration 0001 revokes it only on the append-only tables), and ledger.audit reports
-    // such an account as `balanceMissing`. This 404 is not the catalogue's fault, so it must
+    // The "user" trigger creates the row at sign-up, and since migration 0060 buddha_app may not
+    // delete it (#116): only a broken database (an owner's hand, a restored dump) lacks it, and
+    // ledger.audit reports such an account as `balanceMissing` — the test breaks it the one way
+    // a test may (`withLedgerGuardsOff`). This 404 is not the catalogue's fault, so it must
     // not carry the `packageId` detail that makes the web refetch the cards and call the
     // package unavailable; the card the user clicked is still on sale. And it has to come
     // before the reservation and the provider: found out afterwards, the account would have
     // been charged with nothing credited, and the web — which spends its key on a 4xx — would
     // charge it again on every click.
-    await t.db.delete(schema.balances).where(eq(schema.balances.userId, user.id));
+    await deleteBalanceRow(user.id);
     const provider = t.app.get<PaymentProvider>(PAYMENT_PROVIDER);
     const spy = vi.spyOn(provider, 'charge');
     try {
@@ -502,13 +512,14 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
 
   it('answers 500 and keeps the reservation when the balance row vanishes mid-charge', async () => {
     // The row was checked before the provider ran, so losing it between the check and the
-    // credit is a race with a DELETE, not a client error. A 500 is what makes the web keep its
+    // credit (a broken database since migration 0060, as in the previous case) is not a client
+    // error. A 500 is what makes the web keep its
     // key (a 4xx would spend it and the next click would charge again), and the `pending`
     // reservation is the only record that the provider accepted. The same key then answers
     // "in progress", never a second purchase.
     const provider = t.app.get<PaymentProvider>(PAYMENT_PROVIDER);
     const spy = vi.spyOn(provider, 'charge').mockImplementationOnce(async (request) => {
-      await t.db.delete(schema.balances).where(eq(schema.balances.userId, user.id));
+      await deleteBalanceRow(user.id);
       return { status: 'succeeded', providerRef: `mock_${request.paymentId}` };
     });
     try {
@@ -559,6 +570,61 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
       oldest.json<{ data: ChargeResult }>().data.ledgerEntry.id,
     ]);
     expect(secondPage.meta.nextCursor).toBeNull();
+  });
+
+  it('GET /me/ledger lists both sides of the caller own account, each signed from it (#116)', async () => {
+    // The ledger records moves between accounts, the sign is worked out at read time: an event
+    // paid out of the caller's account (a fill to another person) is listed with a negative
+    // amount and the payer's total after it, the payee's with a positive one and its own total.
+    await charge(pack);
+    const other = await signUpTestUser(t);
+    const market = await createMarket(t.db);
+    const fill = await t.db.transaction((tx) =>
+      recordLedgerEntry(tx, {
+        type: 'TRADE_FILL',
+        amountCoin: 1_234n,
+        from: { kind: 'user', userId: user.id },
+        to: { kind: 'user', userId: other.id },
+        marketId: market.id,
+        refType: 'fill',
+        refId: randomUUID(),
+        idempotencyKey: randomUUID(),
+      }),
+    );
+    const ledgerFor = async (as: TestUser) => {
+      const res = await t.app.inject({
+        method: 'GET',
+        url: '/api/v1/me/ledger',
+        headers: { cookie: as.cookie },
+      });
+      expect(res.statusCode).toBe(200);
+      return res.json<{ data: LedgerEntry[] }>().data;
+    };
+
+    const payer = await ledgerFor(user);
+    expect(payer.map((entry) => [entry.type, entry.amountCoin, entry.balanceAfterCoin])).toEqual([
+      ['TRADE_FILL', '-1234', (pack.amountCoin - 1_234n).toString()],
+      ['DEPOSIT', pack.amountCoin.toString(), pack.amountCoin.toString()],
+    ]);
+    const payee = await ledgerFor(other);
+    expect(payee).toEqual([
+      expect.objectContaining({ type: 'TRADE_FILL', amountCoin: '1234', balanceAfterCoin: '1234' }),
+    ]);
+    // The same event on both pages, never naming the other side's account.
+    expect(payee[0]!.id).toBe(fill.entry.id.toString());
+    expect(payer[0]!.id).toBe(fill.entry.id.toString());
+    for (const entry of [...payer, ...payee]) {
+      expect(Object.keys(entry).sort()).toEqual([
+        'amountCoin',
+        'balanceAfterCoin',
+        'createdAt',
+        'id',
+        'memo',
+        'refId',
+        'refType',
+        'type',
+      ]);
+    }
   });
 
   it('serves the first page for a malformed cursor instead of a 500', async () => {

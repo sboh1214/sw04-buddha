@@ -1,5 +1,10 @@
 import { type FullConfig, request } from '@playwright/test';
-import { ensureDisputeWindow, signInFirstSeedAdmin } from './helpers';
+import {
+  awaitOwnStartGrant,
+  ensureDisputeWindow,
+  ensureStartCoin,
+  signInFirstSeedAdmin,
+} from './helpers';
 
 /**
  * The suite's global setup (playwright.config.ts `globalSetup`): runs once per invocation — per
@@ -17,8 +22,18 @@ import { ensureDisputeWindow, signInFirstSeedAdmin } from './helpers';
  * entered another on their database, and a spec skips its wait when that one is long
  * (`skipUnlessResolvable`).
  *
- * Before any test, so no spec writes the setting while another reads it:
- * release-settings.spec.ts reads the whole list once and holds the screen to it. The value stays
+ * It gives `grant.start_coin` a value the same way (#116, ADR-0109): no admin adjusts a balance any
+ * more (ADR-0107 결정 2 #73 7항), and the owner chose that "e2e는 시험 DB의 시작 지급 설정값으로 Coin을
+ * 받는다". While it is 미정 the first seed admin enters 1,000,000 Coin (`START_GRANT_MAX_COIN`) as a
+ * 시험값 (`ensureStartCoin`), so every account a spec signs up is paid its start Coin at the
+ * nickname step. The first seed admin's own grant, made by the sign-in above on a fresh database
+ * before the amount was entered, waits for the worker (`start_grant.pay`), and the setup waits for
+ * that payment (`awaitOwnStartGrant`) so it never lands under a spec that holds the admin's balance
+ * still (market.spec.ts AC 1). A value already there is left as it is, and the specs read the one
+ * in force (`startCoinValue`).
+ *
+ * Before any test, so no spec writes a setting while another reads it:
+ * release-settings.spec.ts reads the whole list once and holds the screen to it. The values stay
  * in the database for the runs after this one (README '테스트').
  */
 export default async function globalSetup(config: FullConfig): Promise<void> {
@@ -26,6 +41,8 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
   try {
     await signInFirstSeedAdmin(context);
     await ensureDisputeWindow(context);
+    await ensureStartCoin(context);
+    await awaitOwnStartGrant(context);
   } finally {
     await context.dispose();
   }

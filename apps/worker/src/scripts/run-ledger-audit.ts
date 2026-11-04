@@ -26,8 +26,9 @@ try {
   };
   console.log(JSON.stringify(summary));
   for (const mismatch of result.mismatches) {
+    const account = mismatch.accountMissing ? 'missing' : String(mismatch.ledgerAccountId);
     console.error(
-      `mismatch user=${mismatch.userId} balance=${(mismatch.availableCoin + mismatch.lockedCoin).toString()} ledger=${mismatch.ledgerSumCoin.toString()} diff=${mismatch.differenceCoin.toString()}`,
+      `mismatch account=${account} kind=${mismatch.kind} user=${mismatch.userId ?? '-'} market=${mismatch.marketId ?? '-'} balance=${(mismatch.availableCoin + mismatch.lockedCoin).toString()} ledger=${mismatch.ledgerSumCoin.toString()} diff=${mismatch.differenceCoin.toString()} ledger_coin=${mismatch.ledgerCoin.toString()}`,
     );
   }
   // A mismatch is a real accounting failure: exit non-zero so a cron/CI caller notices.

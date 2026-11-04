@@ -716,8 +716,8 @@ export function createAuth({
       }),
     },
 
-    // profiles + balances rows are created by the Postgres trigger on "user"
-    // (packages/db/drizzle/0002_user_profile_trigger.sql), not by databaseHooks:
+    // profiles, the user ledger account and its balances row are created by the Postgres trigger
+    // on "user" (migrations 0002 and 0060), not by databaseHooks:
     // better-auth runs `user.create.after` after the insert has committed, never inside it.
 
     // The built-in limiter stays off: it keeps state in process memory (PLAN 16 forbids that)

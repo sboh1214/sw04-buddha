@@ -30,6 +30,7 @@ import {
   createPost,
   createProvisionalMarket,
   createReport,
+  ledgerOf,
 } from '@buddha/db/test';
 import {
   WRITE_LIMITS,
@@ -1043,12 +1044,12 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
           expect(res.statusCode, `${url} ${res.body}`).toBe(200);
           answers.push(res.body);
         }
-        const { balances, ledgerEntries, orders, positions } = schema;
+        const { balances, orders, positions } = schema;
         return {
           answers,
           rows: await Promise.all([
             t.db.select().from(balances).where(eq(balances.userId, member.id)),
-            t.db.select().from(ledgerEntries).where(eq(ledgerEntries.userId, member.id)),
+            ledgerOf(t.db, member.id),
             t.db.select().from(orders).where(eq(orders.userId, member.id)),
             t.db.select().from(positions).where(eq(positions.userId, member.id)),
           ]),

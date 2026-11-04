@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { schema, type Db } from '@buddha/db';
+import { ledgerKeys, lockLedgerAccounts, recordLedgerEntry, schema, type Db } from '@buddha/db';
 import {
   PAYMENT_REFUND_WINDOW_DAYS,
   serializeCoinAmount,
@@ -7,7 +7,7 @@ import {
   type PaymentStatus,
   type UserBalanceEvent,
 } from '@buddha/shared';
-import { and, eq, gte, sql } from 'drizzle-orm';
+import { and, desc, eq, gte } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
@@ -60,9 +60,11 @@ async function markRefunded(tx: Tx, paymentId: string, at: Date): Promise<boolea
 
 /**
  * `refunding` → `succeeded`: the card was NOT cancelled, so the Coin the claw-back took goes back
- * with a PAYMENT_CANCEL_REVERSAL row. Undefined (nothing restored) when the payment was no
- * longer `refunding`, so the Coin comes back at most once. The caller holds the balance row's lock
- * (taken before the payment's) and read `at` after it.
+ * with a PAYMENT_CANCEL_REVERSAL event — a mint into the account's user ledger account, kept as an
+ * inactive type (#116, ADR-0107 결정 2 #73 2항), keyed by the PAYMENT_CANCEL it puts back (the
+ * payment's latest: one refunded again after a reversal has one per claw-back). Undefined (nothing
+ * restored) when the payment was no longer `refunding`, so the Coin comes back at most once. The
+ * caller holds the balance row's lock (taken before the payment's) and read `at` after it.
  */
 async function restoreClawBack(
   tx: Tx,
@@ -76,30 +78,34 @@ async function restoreClawBack(
     .returning();
   if (!restored) return undefined;
 
-  const [balance] = await tx
-    .update(schema.balances)
-    .set({
-      availableCoin: sql`${schema.balances.availableCoin} + ${restored.amountCoin}`,
-      // Explicit on purpose: the column's `$onUpdate` would write the API host's clock.
-      updatedAt: at,
-    })
-    .where(eq(schema.balances.userId, restored.userId))
-    .returning();
-  if (!balance) throw new AppError('INTERNAL', { message: 'Balance row vanished mid-refund' });
-  const [entry] = await tx
-    .insert(schema.ledgerEntries)
-    .values({
-      userId: restored.userId,
-      type: 'PAYMENT_CANCEL_REVERSAL',
-      amountCoin: restored.amountCoin,
-      balanceAfterCoin: balance.availableCoin,
-      refType: 'payment',
-      refId: restored.id,
-      createdAt: at,
-    })
-    .returning();
-  if (!entry) throw new AppError('INTERNAL', { message: 'Ledger insert failed' });
-  return balanceEvent(balance, entry);
+  const [cancel] = await tx
+    .select({ id: schema.ledgerEntries.id })
+    .from(schema.ledgerEntries)
+    .where(
+      and(
+        eq(schema.ledgerEntries.type, 'PAYMENT_CANCEL'),
+        eq(schema.ledgerEntries.refType, 'payment'),
+        eq(schema.ledgerEntries.refId, restored.id),
+      ),
+    )
+    .orderBy(desc(schema.ledgerEntries.id))
+    .limit(1);
+  if (!cancel) throw new AppError('INTERNAL', { message: 'Refunding payment with no claw-back' });
+  const recorded = await recordLedgerEntry(tx, {
+    type: 'PAYMENT_CANCEL_REVERSAL',
+    amountCoin: restored.amountCoin,
+    from: null,
+    to: { kind: 'user', userId: restored.userId },
+    refType: 'payment',
+    refId: restored.id,
+    idempotencyKey: ledgerKeys.paymentCancelReversal(cancel.id),
+    at,
+  });
+  // The payment was `refunding` under its lock, so its claw-back has not been put back yet.
+  if (recorded.outcome !== 'recorded' || !recorded.to) {
+    throw new AppError('INTERNAL', { message: 'Ledger insert failed' });
+  }
+  return balanceEvent(recorded.to, recorded.entry);
 }
 
 /**
@@ -199,17 +205,14 @@ export class PaymentRefundService {
 
   /**
    * tx1: the whole Coin out of the balance (only if it is all still available — "unused"), a
-   * PAYMENT_CANCEL ledger row, the payment `refunding`, and the audit row, together. The window
-   * and the status are judged again under the locks, against the database clock.
+   * PAYMENT_CANCEL event — a burn out of the account's user ledger account, kept as an inactive
+   * type (#116, ADR-0107 결정 2 #73 2항), keyed by this refund's audit row — the payment
+   * `refunding`, and the audit row, together. The window and the status are judged again under the
+   * locks, against the database clock.
    */
   private async clawBack(adminId: string, payment: PaymentRow, reason: string): Promise<Date> {
     const { event: published, at: stamp } = await this.db.transaction(async (tx) => {
-      await tx
-        .select({ userId: schema.balances.userId })
-        .from(schema.balances)
-        .where(eq(schema.balances.userId, payment.userId))
-        .limit(1)
-        .for('update');
+      const [held] = await lockLedgerAccounts(tx, [{ kind: 'user', userId: payment.userId }]);
       const [locked] = await tx
         .select()
         .from(schema.payments)
@@ -227,21 +230,7 @@ export class PaymentRefundService {
         throw refundNotAllowed('window_closed');
       }
 
-      const [balance] = await tx
-        .update(schema.balances)
-        .set({
-          availableCoin: sql`${schema.balances.availableCoin} - ${locked.amountCoin}`,
-          // Explicit on purpose: the column's `$onUpdate` would write the API host's clock.
-          updatedAt: at,
-        })
-        .where(
-          and(
-            eq(schema.balances.userId, locked.userId),
-            sql`${schema.balances.availableCoin} >= ${locked.amountCoin}`,
-          ),
-        )
-        .returning();
-      if (!balance) {
+      if (held!.balance.availableCoin < locked.amountCoin) {
         // Some of this charge's Coin has been spent (or is locked in an order): the owner's
         // policy refunds unused charges only.
         throw new AppError('INSUFFICIENT_BALANCE', {
@@ -268,25 +257,26 @@ export class PaymentRefundService {
         .returning();
       if (!action) throw new AppError('INTERNAL', { message: 'Admin action insert failed' });
 
-      const [entry] = await tx
-        .insert(schema.ledgerEntries)
-        .values({
-          userId: locked.userId,
-          type: 'PAYMENT_CANCEL',
-          amountCoin: -locked.amountCoin,
-          balanceAfterCoin: balance.availableCoin,
-          refType: 'payment',
-          refId: locked.id,
-          createdAt: at,
-        })
-        .returning();
-      if (!entry) throw new AppError('INTERNAL', { message: 'Ledger insert failed' });
+      // The balance was judged under its lock above, so the burn has the Coin.
+      const recorded = await recordLedgerEntry(tx, {
+        type: 'PAYMENT_CANCEL',
+        amountCoin: locked.amountCoin,
+        from: { kind: 'user', userId: locked.userId },
+        to: null,
+        refType: 'payment',
+        refId: locked.id,
+        idempotencyKey: ledgerKeys.paymentCancel(action.id),
+        at,
+      });
+      if (recorded.outcome !== 'recorded' || !recorded.from) {
+        throw new AppError('INTERNAL', { message: 'Ledger insert failed' });
+      }
 
       await tx
         .update(schema.payments)
         .set({ status: 'refunding', updatedAt: at })
         .where(eq(schema.payments.id, locked.id));
-      return { event: balanceEvent(balance, entry), at };
+      return { event: balanceEvent(recorded.from, recorded.entry), at };
     });
     await this.publisher.publishUser(payment.userId, published);
     return stamp;
@@ -408,12 +398,7 @@ export class PaymentRefundService {
         | { kind: 'taken' }
         | { kind: 'moved'; status: PaymentStatus | undefined }
       > => {
-        await tx
-          .select({ userId: schema.balances.userId })
-          .from(schema.balances)
-          .where(eq(schema.balances.userId, payment.userId))
-          .limit(1)
-          .for('update');
+        await lockLedgerAccounts(tx, [{ kind: 'user', userId: payment.userId }]);
         const [locked] = await tx
           .select()
           .from(schema.payments)

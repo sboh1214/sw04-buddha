@@ -1,23 +1,50 @@
-import { schema, type Db } from '@buddha/db';
+import { isHumanAccountTypeSql, schema, type Db } from '@buddha/db';
+import { type LedgerAccountKind } from '@buddha/shared';
 import { sql } from 'drizzle-orm';
 
-/** One account whose balance does not match the sum of its ledger entries (PLAN 5.6). */
+/**
+ * One ledger account whose balance does not match its ledger (PLAN 5.6, #116): a person's own,
+ * the treasury, a market's collateral or a market's 마켓메이커 자금 — or a person's account that
+ * has no ledger account at all. The balance's total (available + locked) and its ledger-total copy
+ * (`ledger_coin`, migration 0060) are each held against the ledger sum.
+ */
 export interface LedgerMismatch {
-  userId: string;
-  /** No `balances` row at all — an accounting failure of its own: every wallet call 404s. */
+  /** null when `accountMissing`. */
+  ledgerAccountId: number | null;
+  kind: LedgerAccountKind;
+  /** The person of a `user` account (or of a missing one); null for the other kinds. */
+  userId: string | null;
+  /** The market of a collateral or a 마켓메이커 자금; null for the other kinds. */
+  marketId: string | null;
+  /**
+   * A person's account with no user ledger account — the "user" trigger makes one with every
+   * account (migration 0060), so nothing can be credited to it and every wallet call fails.
+   */
+  accountMissing: boolean;
+  /** No `balances` row for the ledger account (always so when `accountMissing`). */
   balanceMissing: boolean;
   /** 0n when `balanceMissing`. */
   availableCoin: bigint;
   /** 0n when `balanceMissing`. */
   lockedCoin: bigint;
+  /** The balance row's copy of its ledger total, `ledger_coin`; 0n when `balanceMissing`. */
+  ledgerCoin: bigint;
+  /** What came in minus what went out, over every event naming the account. */
   ledgerSumCoin: bigint;
   /** balance − ledger sum, an absent balance read as 0: positive means the balance holds Coin
-   *  the ledger never granted. */
+   *  the ledger never moved there. ADR-0107 결정 2 #73 10항's account mismatch when not 0. */
   differenceCoin: bigint;
+  /**
+   * `ledgerCoin` is not the ledger sum: the copy every event moves (and the database checks at
+   * COMMIT) was changed around it — an owner-level write, a restored dump. Independent of
+   * `differenceCoin`, which compares the buckets. Unlike a difference alone, the account takes no
+   * event, a payout included, until the owner resets the copy (ADR-0109 결과 5).
+   */
+  ledgerCoinMismatch: boolean;
 }
 
 export interface LedgerAuditResult {
-  /** Accounts examined (every row of `user`). */
+  /** Accounts examined: every ledger account, and every person's account that has none. */
   checked: number;
   mismatches: LedgerMismatch[];
   /** `audit_failures` rows written — one per mismatch. */
@@ -58,19 +85,33 @@ export interface LedgerAuditOptions {
 }
 
 /**
- * Verifies the PLAN 5.6 invariant for every account:
+ * Verifies the PLAN 5.6 invariant for every ledger account (#116, ADR-0109) — every person's
+ * own, the treasury, every market's collateral and every market's 마켓메이커 자금:
  *
- *   balances.available_coin + balances.locked_coin == SUM(ledger_entries.amount_coin)
+ *   balances.available_coin + balances.locked_coin
+ *     == SUM(amount_coin of events into it) − SUM(amount_coin of events out of it)
+ *     == balances.ledger_coin
  *
- * The check runs entirely in Postgres (one grouped query), so it stays a single pass over
- * the ledger index no matter how many accounts exist, and it never mutates money — a
- * mismatch is only ever *recorded* in `audit_failures`, because the ledger is the source of
- * truth and silently "fixing" a balance would destroy the evidence.
+ * Per-account equality is also the books' total: every event moves one amount out of one account
+ * and into another, or mints into one, or burns from one, so the accounts together hold exactly
+ * what was minted minus what was burned. The totals themselves, collateral = unsettled pairs ×
+ * 100, locked = the live orders' locks, a run every minute and the automatic pause are #93's.
  *
- * Driven from `user`, not from `balances`. buddha_app keeps DELETE on `balances` (migration
- * 0001 revokes it only on the append-only tables), and an account that lost its balance row
- * is broken in its own right — every wallet call 404s. Anchored on `balances` such an account
- * simply vanished from the result: no mismatch, and `checked` quietly one short.
+ * The check runs entirely in Postgres (one grouped query), so it stays a single pass over the
+ * ledger no matter how many accounts exist, and it never mutates money — a mismatch is only ever
+ * *recorded* in `audit_failures`, because the ledger is the source of truth and silently "fixing"
+ * a balance would destroy the evidence (a gap is closed by #93's 대사 정정, an event of its own).
+ * Since migration 0060 the database refuses at COMMIT a `ledger_coin` that is not its ledger's,
+ * and at every UPDATE a total that moves apart from it, and buddha_app holds no INSERT or DELETE of
+ * `balances`; this job is the backstop for what goes around that — an owner-level change, a
+ * restored dump. Such an account keeps its gap while it takes its events (ADR-0107 결정 2 #73
+ * 10항), so the run reports it every day until the gap is closed — unless its `ledger_coin` copy
+ * left the ledger too (`ledgerCoinMismatch`): that one takes no event until the copy is reset.
+ *
+ * Driven from `ledger_accounts`, not from `balances`, so an account that lost its balance row is
+ * reported instead of vanishing from the result; and every person's account (`is_human_account`
+ * — the 운영 마켓메이커 has no ledger account of its own) without a user ledger account is
+ * reported too, so `checked` counts the ledger accounts plus those.
  *
  * Idempotent by design: re-running writes one more failure row per still-broken account and
  * changes nothing else, which is what a daily job needs (PLAN 9).
@@ -85,52 +126,95 @@ export async function runLedgerAudit(
   }
 
   const { rows } = await db.execute<{
-    user_id: string;
+    ledger_account_id: string | null;
+    kind: LedgerAccountKind;
+    user_id: string | null;
+    market_id: string | null;
+    account_missing: boolean;
     balance_missing: boolean;
     available_coin: string;
     locked_coin: string;
+    ledger_coin: string;
     ledger_sum_coin: string;
     checked: string;
   }>(sql`
-    with ledger as (
-      select user_id, sum(amount_coin) as ledger_sum_coin
+    with moves as (
+      select to_account_id as account_id, amount_coin as delta_coin
       from ledger_entries
-      group by user_id
+      where to_account_id is not null
+      union all
+      select from_account_id, -amount_coin
+      from ledger_entries
+      where from_account_id is not null
+    ),
+    ledger as (
+      select account_id, sum(delta_coin) as ledger_sum_coin
+      from moves
+      group by account_id
     ),
     accounts as (
       select
-        u.id as user_id,
-        (b.user_id is null) as balance_missing,
+        a.id as ledger_account_id,
+        a.kind,
+        case when a.kind = 'user' then a.owner_id end as user_id,
+        a.market_id,
+        false as account_missing,
+        (b.account_id is null) as balance_missing,
         coalesce(b.available_coin, 0) as available_coin,
         coalesce(b.locked_coin, 0) as locked_coin,
+        coalesce(b.ledger_coin, 0) as ledger_coin,
         coalesce(g.ledger_sum_coin, 0) as ledger_sum_coin
-      from "user" u
-      left join balances b on b.user_id = u.id
-      left join ledger g on g.user_id = u.id
+      from ledger_accounts a
+      left join balances b on b.account_id = a.id
+      left join ledger g on g.account_id = a.id
+      union all
+      select
+        null,
+        'user'::ledger_account_kind,
+        ${schema.user.id},
+        null,
+        true,
+        true,
+        0,
+        0,
+        0,
+        0
+      from ${schema.user}
+      where ${isHumanAccountTypeSql(schema.user.accountType)}
+        and not exists (
+          select 1 from ledger_accounts a where a.kind = 'user' and a.owner_id = ${schema.user.id}
+        )
     )
     select
+      ledger_account_id,
+      kind,
       user_id,
+      market_id,
+      account_missing,
       balance_missing,
       available_coin,
       locked_coin,
+      ledger_coin,
       ledger_sum_coin,
       (select count(*) from accounts) as checked
     from accounts
     -- balance_missing needs its own disjunct. With no balance row AND no ledger entries the
     -- arithmetic below is 0 <> 0, so the broken account would still pass -- and every account
-    -- starts with no ledger entry since migration 0031 (signing up grants nothing, #70), as did
-    -- the accounts predating the 0004 bonus. One of those losing its balance row is exactly the
-    -- silent case this job exists to catch.
-    where balance_missing or available_coin + locked_coin <> ledger_sum_coin
-    order by user_id
+    -- starts with no ledger entry until its start grant is paid (#70). One of those losing its
+    -- balance row, or having no ledger account at all, is exactly the silent case this job
+    -- exists to catch.
+    where balance_missing
+      or available_coin + locked_coin <> ledger_sum_coin
+      or ledger_coin <> ledger_sum_coin
+    order by ledger_account_id nulls last, user_id
   `);
 
   // `checked` rides along on every row; with no mismatch the count needs its own query.
   const checked = rows[0]
     ? Number(rows[0].checked)
     : Number(
-        (await db.execute<{ count: string }>(sql`select count(*) as count from "user"`)).rows[0]
-          ?.count ?? '0',
+        (await db.execute<{ count: string }>(sql`select count(*) as count from ledger_accounts`))
+          .rows[0]?.count ?? '0',
       );
 
   const mismatches = rows.map((row) => {
@@ -138,29 +222,44 @@ export async function runLedgerAudit(
     // detected orphan into a crashed job.
     const availableCoin = BigInt(row.available_coin);
     const lockedCoin = BigInt(row.locked_coin);
+    const ledgerCoin = BigInt(row.ledger_coin);
     const ledgerSumCoin = BigInt(row.ledger_sum_coin);
     return {
+      // bigserial in `{ mode: 'number' }` (schema/ledger-accounts.ts): the raw row brings text.
+      ledgerAccountId: row.ledger_account_id === null ? null : Number(row.ledger_account_id),
+      kind: row.kind,
       userId: row.user_id,
+      marketId: row.market_id,
+      accountMissing: row.account_missing,
       balanceMissing: row.balance_missing,
       availableCoin,
       lockedCoin,
+      ledgerCoin,
       ledgerSumCoin,
       differenceCoin: availableCoin + lockedCoin - ledgerSumCoin,
+      ledgerCoinMismatch: ledgerCoin !== ledgerSumCoin,
     };
   });
 
   if (mismatches.length > 0) {
     const rows = mismatches.map((mismatch) => ({
       kind: LEDGER_AUDIT_FAILURE_KIND,
-      // One kind, as AUDIT_FAILURE_KINDS declares; the two failures are told apart by
-      // `balanceMissing` in the free-form jsonb payload.
+      // One kind, as AUDIT_FAILURE_KINDS declares; the failures are told apart by
+      // `accountMissing`, `balanceMissing`, `differenceCoin` and `ledgerCoinMismatch` in the
+      // free-form jsonb payload.
       payload: {
+        ledgerAccountId: mismatch.ledgerAccountId,
+        kind: mismatch.kind,
         userId: mismatch.userId,
+        marketId: mismatch.marketId,
+        accountMissing: mismatch.accountMissing,
         balanceMissing: mismatch.balanceMissing,
         availableCoin: mismatch.availableCoin.toString(),
         lockedCoin: mismatch.lockedCoin.toString(),
+        ledgerCoin: mismatch.ledgerCoin.toString(),
         ledgerSumCoin: mismatch.ledgerSumCoin.toString(),
         differenceCoin: mismatch.differenceCoin.toString(),
+        ledgerCoinMismatch: mismatch.ledgerCoinMismatch,
       },
     }));
     // Chunked (see AUDIT_FAILURE_INSERT_CHUNK) but one transaction, so every row of a run

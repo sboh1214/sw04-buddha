@@ -1,12 +1,8 @@
 import * as z from 'zod';
 import { cursorQuerySchema } from './api/pagination.js';
-import { coinAmountInputSchema, coinAmountSchema } from './api/coin-amount.js';
-import { ledgerEntryTypeSchema, ledgerRefTypeSchema, paymentStatusSchema } from './enums.js';
-import { expectedAccountIdSchema } from './expected-account.js';
-
-/** Admin adjustments are bounded in either direction (PLAN 7.3). */
-export const ADJUST_MAX_ABS_COIN = 1_000_000n;
-export const ADJUST_MEMO_MAX_LENGTH = 200;
+import { coinAmountSchema } from './api/coin-amount.js';
+import { ledgerRefTypeSchema, paymentStatusSchema } from './enums.js';
+import { memberLedgerEntryTypeSchema } from './ledger.js';
 
 export const balanceSchema = z
   .object({ availableCoin: coinAmountSchema, lockedCoin: coinAmountSchema })
@@ -54,13 +50,25 @@ export const ledgerEntrySchema = z
   .object({
     /** ledger_entries.id (bigserial) as a decimal string, like every other 64-bit id. */
     id: z.string(),
-    type: ledgerEntryTypeSchema,
-    /** Signed: `+` credits the account, `−` debits it (PLAN 5.6). */
+    /**
+     * A type a person's ledger can hold (MEMBER_LEDGER_ENTRY_TYPES, #116): no treasury or bot type
+     * ever reaches a member.
+     */
+    type: memberLedgerEntryTypeSchema,
+    /**
+     * Signed from the caller's own ledger account: `+` credits it, `−` debits it (PLAN 5.6). Never
+     * the other side of the move: no counterparty, no account id (#116).
+     */
     amountCoin: coinAmountSchema,
-    /** available_coin right after this entry was written. */
+    /**
+     * The account's total as its ledger says — available + locked, unless an owner-level write
+     * left a gap (ADR-0109 결정 12-8) — right after this event (#116). Equal to the available Coin
+     * until order locks exist (#118): a lock moves Coin within the total.
+     */
     balanceAfterCoin: coinAmountSchema,
-    refType: ledgerRefTypeSchema.nullable(),
-    refId: z.string().nullable(),
+    /** The event's source (#116: every event names one — a payment, a grant, a fill …). */
+    refType: ledgerRefTypeSchema,
+    refId: z.string(),
     memo: z.string().nullable(),
     createdAt: z.iso.datetime(),
   })
@@ -85,22 +93,6 @@ export const chargeResultSchema = z
   })
   .meta({ id: 'ChargeResult' });
 export type ChargeResult = z.infer<typeof chargeResultSchema>;
-
-/**
- * `POST /admin/users/:id/balance-adjust` (PLAN 7.3): signed amount, reason required, as the admin
- * on screen (`expectedAccountId`, ADR-0092 — Q-PG-8 ①, owner decision 2026-10-26 «이 PR에서 더함»).
- */
-export const balanceAdjustBodySchema = z
-  .object({
-    amountCoin: coinAmountInputSchema.refine(
-      (value) => value !== 0n && value >= -ADJUST_MAX_ABS_COIN && value <= ADJUST_MAX_ABS_COIN,
-      `must be a non-zero amount within ±${ADJUST_MAX_ABS_COIN.toString()}`,
-    ),
-    memo: z.string().trim().min(1).max(ADJUST_MEMO_MAX_LENGTH),
-    expectedAccountId: expectedAccountIdSchema,
-  })
-  .meta({ id: 'BalanceAdjustBody' });
-export type BalanceAdjustBody = z.infer<typeof balanceAdjustBodySchema>;
 
 export const adminUserSchema = z
   .object({
@@ -144,11 +136,6 @@ export const adminPaymentSchema = paymentSchema
   })
   .meta({ id: 'AdminPayment' });
 export type AdminPayment = z.infer<typeof adminPaymentSchema>;
-
-export const adminBalanceAdjustResultSchema = z
-  .object({ user: adminUserSchema, ledgerEntry: ledgerEntrySchema })
-  .meta({ id: 'AdminBalanceAdjustResult' });
-export type AdminBalanceAdjustResult = z.infer<typeof adminBalanceAdjustResultSchema>;
 
 export const auditFailureSchema = z
   .object({

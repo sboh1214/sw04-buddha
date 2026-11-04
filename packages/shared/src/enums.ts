@@ -6,7 +6,7 @@
  *
  * Adding a value here does NOT alter the database by itself: run `pnpm db:generate` so
  * drizzle-kit emits the matching `ALTER TYPE ... ADD VALUE` migration. Removing one means
- * recreating the Postgres type, which only an emptied table makes safe (migration 0017).
+ * recreating the Postgres type, which only an emptied table makes safe (migrations 0017, 0060).
  */
 import * as z from 'zod';
 
@@ -26,53 +26,90 @@ export const roleSchema = z.enum(ROLES).meta({ id: 'UserRole' });
 export const ACCOUNT_TYPES = ['member', 'market_maker'] as const;
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
 
-// ---- ledger (PLAN 5.6) --------------------------------------------------------------
+// ---- ledger (PLAN 5.6, #116) --------------------------------------------------------
+/**
+ * Ledger event types (ADR-0107 결정 2 #73 1·2·15·16항, ADR-0109): one per source of a move
+ * between ledger accounts (LEDGER_ACCOUNT_KINDS below). Which accounts each moves Coin between,
+ * and which ones mint or burn, is LEDGER_ENTRY_RULES (ledger.ts), which the database repeats
+ * (`ledger_entry_direction_allowed`, migration 0060). Migration 0060 recreated the Postgres type
+ * on the emptied database (#116, as 0017 did for #125) — ADMIN_ADJUST, TRADE_BUY, TRADE_SELL and
+ * FEE went —, so this order is 0060's; from here on it only appends again (ADR-0042). No FEE type
+ * while fees are 0 (15항), no generic burn (16항), no test-only value (7항); 재지급 and 판정 오류
+ * 보상 come with #74 and #144. Names avoid the excluded storage tokens (`transfer`, `reward`, …).
+ */
 export const LEDGER_ENTRY_TYPES = [
-  'DEPOSIT',
-  'TRADE_BUY',
-  'TRADE_SELL',
-  'FEE',
-  'SETTLEMENT_PAYOUT',
-  'ADMIN_ADJUST',
   /**
-   * A redeemed coupon (ADR-0026, kept while paid Coin is closed, D9). Accounts created before
-   * #70 also carry the old sign-up grant under it; new accounts never get one (ADR-0071).
-   */
-  'BONUS',
-  /**
-   * An admin refund claws back a charge's Coin (−amount_coin, ref payment) before the PG cancel.
-   */
-  'PAYMENT_CANCEL',
-  /**
-   * Puts that Coin back (+amount_coin, ref payment) when the PG refused the cancel. Written only
-   * after a PAYMENT_CANCEL of the same payment, so the ledger shows both halves.
-   */
-  'PAYMENT_CANCEL_REVERSAL',
-  /**
-   * 시작 지급 (#70, ADR-0069 decision 4 #70, ADR-0071): the start Coin a verified phone number
-   * gets once — new issuance with its own type, never `BONUS`, which coupons share. Written only
-   * by the start grant (+amount_coin, ref `start_grant` → start_grants.id). Not trading profit
+   * 시작 지급 (#70, ADR-0071; ADR-0107 결정 5): the start Coin a verified phone number gets once,
+   * minted straight into the account's user ledger account — never `BONUS`, which coupons share.
+   * Written only by the start grant (ref `start_grant` → start_grants.id). Not trading profit
    * (N02 §8): nothing that computes PnL reads the ledger.
    */
   'START_GRANT',
+  /** 금고 발행 (#73 4·5항): minted into the operating treasury. #129 writes it, approved by two. */
+  'TREASURY_MINT',
+  /** 봇 배정 (#73 1항, 운영금 이전): treasury → a market's 마켓메이커 자금, at the open and on 증액. */
+  'BOT_ALLOCATION',
+  /** 봇 회수 (#73 1항, 운영금 이전): a market's 마켓메이커 자금 → treasury (#181). */
+  'BOT_RECALL',
+  /** 쌍 발행 담보 (#73 1항): a buyer's Coin → the market's collateral, 100 per pair (#118/#119). */
+  'PAIR_MINT_COLLATERAL',
+  /**
+   * 쌍 소각 반환 (#73 1·12항, #177 6항): collateral → the owner of the burned pair, which is only
+   * the bot's automatic burn today — so never a user ledger account (#118).
+   */
+  'PAIR_BURN_RETURN',
+  /** 체결 대금 (#73 1항): buyer → seller, the only move between two holders (#119). */
+  'TRADE_FILL',
+  /** 정산 지급 (#73 1항): a market's collateral → a holder, VOID's 50·50 too (#126). */
+  'SETTLEMENT_PAYOUT',
   /**
    * 탈퇴 소멸 (#140, ADR-0069 decision 1 #57-16): the Coin left on an account its member closes,
-   * forfeited with the closure — the balance taken to 0 by an entry, never overwritten, so the
-   * ledger still sums to the balance (PLAN 5.6). Written only by the closure (−amount_coin, ref
+   * burned with the closure — the only real burn (#73 16항). Written only by the closure (ref
    * `account_closure` → the account itself), once per account, and nothing is written for the
-   * account after it (migration 0043). Not trading loss (N02 §8).
+   * account after it (migrations 0043, 0060). Not trading loss (N02 §8).
    */
   'CLOSURE_FORFEIT',
+  /**
+   * 대사 정정 (#73 10항): the only way a reconciliation difference is fixed, against the operating
+   * treasury, referring to its `audit_failures` row and approved by a second admin (#93). Never
+   * takes Coin from a user and never undoes a paid settlement (N03 §7).
+   */
+  'RECONCILIATION_CORRECTION',
+  /**
+   * The kept paid-Coin and coupon types (D9, ADR-0049; #73 2항: '보존·비활성'): a charge's Coin,
+   * a redeemed coupon's (BONUS), an admin refund's clawback before the PG cancel (PAYMENT_CANCEL)
+   * and its return when the PG refused the cancel (PAYMENT_CANCEL_REVERSAL, written only after a
+   * PAYMENT_CANCEL of the same payment). Mints into, or (the cancel) burns from, the user ledger
+   * account, so #93's totals still agree if sales reopen (#111).
+   */
+  'DEPOSIT',
+  'BONUS',
+  'PAYMENT_CANCEL',
+  'PAYMENT_CANCEL_REVERSAL',
 ] as const;
 export type LedgerEntryType = (typeof LEDGER_ENTRY_TYPES)[number];
 export const ledgerEntryTypeSchema = z.enum(LEDGER_ENTRY_TYPES);
+
+/**
+ * Ledger account kinds (#116, ADR-0107 결정 2 #73 1·11항): a person's own (`user`, one per
+ * person's account, made with it), the operating treasury (one), a market's collateral and a
+ * market's 마켓메이커 자금 (one each per market, owned by the 운영 마켓메이커). The treasury and the
+ * collateral have no owner. `ledger_accounts.kind` (migration 0060).
+ */
+export const LEDGER_ACCOUNT_KINDS = [
+  'user',
+  'treasury',
+  'market_collateral',
+  'market_maker_funds',
+] as const;
+export type LedgerAccountKind = (typeof LEDGER_ACCOUNT_KINDS)[number];
+export const ledgerAccountKindSchema = z.enum(LEDGER_ACCOUNT_KINDS);
 
 /** ledger_entries.ref_type (varchar, not a Postgres enum): what ref_id points at. */
 export const LEDGER_REF_TYPES = [
   'payment',
   'fill',
   'market',
-  'admin_action',
   'coupon',
   /** A START_GRANT entry's start_grants row (#70, ADR-0071). */
   'start_grant',
@@ -81,6 +118,10 @@ export const LEDGER_REF_TYPES = [
    * `profiles.closed_at` says when it closed — one entry per account (migration 0043).
    */
   'account_closure',
+  /** The two-person request a TREASURY_MINT or a BOT_ALLOCATION on 증액 carries out (#129/#130). */
+  'approval_request',
+  /** The `audit_failures` row a RECONCILIATION_CORRECTION fixes (#93). */
+  'audit_failure',
 ] as const;
 export type LedgerRefType = (typeof LEDGER_REF_TYPES)[number];
 export const ledgerRefTypeSchema = z.enum(LEDGER_REF_TYPES);
@@ -407,7 +448,6 @@ export const settlementStepStatusSchema = z
 
 // ---- admin / audit (varchar columns, PLAN 6.2) --------------------------------------
 export const ADMIN_ACTION_TYPES = [
-  'balance_adjust',
   'charge_package_create',
   'charge_package_update',
   'charge_package_delete',

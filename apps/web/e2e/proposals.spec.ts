@@ -704,15 +704,23 @@ test.describe('시장 제안', () => {
     await expect(page.getByTestId('closure-kept')).toHaveText(copy.closureKept);
     await expect(page.getByTestId('closure-proposals')).toHaveCount(0);
 
-    // A 접수 proposal: the line, right under what stays (ADR-0089 7-34 — this database pays no
-    // start Coin, so no start Coin's line follows it).
+    // A 접수 proposal: the line, right under what stays (ADR-0089 7-34), and the start Coin's
+    // line after it — the global setup gives this database a start Coin, so the account was paid
+    // one at the nickname step (#116, ADR-0109).
     const waiting = await proposeThroughApi(page, `E2E 탈퇴 ${group}`);
     await openClosure(page);
     await expect(page.getByTestId('closure-proposals')).toHaveText(copy.closureProposals);
+    await expect(page.getByTestId('closure-start-grant')).toHaveText(copy.closureStartGrant);
     const lines = page.getByTestId('closure-deleted').locator('xpath=../*');
     expect(
       await lines.evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-testid'))),
-    ).toEqual(['closure-deleted', 'closure-phone-records', 'closure-kept', 'closure-proposals']);
+    ).toEqual([
+      'closure-deleted',
+      'closure-phone-records',
+      'closure-kept',
+      'closure-proposals',
+      'closure-start-grant',
+    ]);
 
     // It refuses nothing (ADR-0069 decision 4 #140): closed on the screen, home and signed out.
     await expect(page.getByTestId('closure-blocked')).toHaveCount(0);

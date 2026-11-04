@@ -28,10 +28,10 @@ import {
   createCorrectionRequest,
   createDispute,
   createMarket,
-  createPosition,
   createProvisionalMarket,
   createUser,
   hasTestDb,
+  mintTestPairs,
   type TestDb,
 } from '@buddha/db/test';
 import { MARKET_STATUSES, marketChannel } from '@buddha/shared';
@@ -677,8 +677,15 @@ describe.skipIf(!hasTestInfra)('market.resolve (integration)', () => {
 
   it('leaves the finalize what it needs: the steps it wrote take the market to settled', async () => {
     const { market } = await provisional(2 * MINUTE_MS, 'YES');
-    const { user: holder } = await createUser(t.db);
-    await createPosition(t.db, { userId: holder.id, marketId: market.id, outcome: 'YES', qty: 2 });
+    // Two pairs as #118's pair mint leaves them (#116): the collateral holds the 200 Coin paid.
+    const { user: holder } = await createUser(t.db, { balanceCoin: 1_000n });
+    const { user: other } = await createUser(t.db, { balanceCoin: 1_000n });
+    await mintTestPairs(t.db, {
+      marketId: market.id,
+      yesHolderId: holder.id,
+      noHolderId: other.id,
+      qty: 2,
+    });
     const result = await resolveMarket(t.db, market.id, publish, enqueueFinalize);
     expect(result.outcome).toBe('resolved');
     const finalized = await finalizeMarket(t.db, market.id, publish, pino({ level: 'silent' }));

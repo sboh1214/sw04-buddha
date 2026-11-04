@@ -1,50 +1,24 @@
 import { describe, expect, it } from 'vitest';
+import * as wallet from './wallet.js';
 import {
-  ADJUST_MAX_ABS_COIN,
   ADMIN_USER_STATUSES,
   adminPaymentSchema,
   adminUserQuerySchema,
   auditFailureSchema,
-  balanceAdjustBodySchema,
   ledgerEntrySchema,
   paymentSchema,
 } from './wallet.js';
 
-/** The admin on screen, which the adjustment names (ADR-0092, Q-PG-8 ①). */
-const account = { expectedAccountId: 'admin-1' } as const;
-
-describe('balanceAdjustBodySchema', () => {
-  it('accepts a signed amount with a reason', () => {
-    expect(
-      balanceAdjustBodySchema.parse({ amountCoin: '-3000', memo: '중복 충전 회수', ...account }),
-    ).toEqual({
-      amountCoin: -3000n,
-      memo: '중복 충전 회수',
-      ...account,
-    });
-    expect(
-      balanceAdjustBodySchema.parse({ amountCoin: '2500', memo: '  보상  ', ...account }).memo,
-    ).toBe('보상');
-  });
-
-  it('requires a non-zero amount within the cap and a non-empty reason', () => {
-    for (const body of [
-      { amountCoin: '0', memo: '영원', ...account },
-      { amountCoin: (ADJUST_MAX_ABS_COIN + 1n).toString(), memo: '과다', ...account },
-      { amountCoin: (-ADJUST_MAX_ABS_COIN - 1n).toString(), memo: '과다', ...account },
-      { amountCoin: '1000', memo: '   ', ...account },
-      { amountCoin: '1000', ...account },
-      { amountCoin: '1000.5', memo: '소수', ...account },
+describe('the admin balance adjustment (#116)', () => {
+  it('is gone: no body, no answer, no bound (ADR-0107 결정 2 #73 7항)', () => {
+    // 관리자 잔액 조정은 증감 모두 없앤다: no schema is left for a route to take.
+    for (const name of [
+      'balanceAdjustBodySchema',
+      'adminBalanceAdjustResultSchema',
+      'ADJUST_MAX_ABS_COIN',
+      'ADJUST_MEMO_MAX_LENGTH',
     ]) {
-      expect(balanceAdjustBodySchema.safeParse(body).success, JSON.stringify(body)).toBe(false);
-    }
-  });
-
-  it('requires the admin on screen (Q-PG-8 ①, ADR-0092)', () => {
-    // A tab whose cookie turned to another admin must not adjust as that admin.
-    for (const expectedAccountId of [undefined, '', 'x'.repeat(256), 7]) {
-      const body = { amountCoin: '1000', memo: '보상', expectedAccountId };
-      expect(balanceAdjustBodySchema.safeParse(body).success, JSON.stringify(body)).toBe(false);
+      expect(wallet).not.toHaveProperty(name);
     }
   });
 });
@@ -86,12 +60,55 @@ describe('response schemas', () => {
         type: 'UNKNOWN',
         amountCoin: '1',
         balanceAfterCoin: '1',
+        refType: 'payment',
+        refId: 'p1',
+        memo: null,
+        createdAt,
+      }).success,
+    ).toBe(false);
+
+    // A member's ledger holds only the types a person's account takes part in (#116): no
+    // treasury or bot type parses, though the ledger stores them.
+    for (const type of ['TREASURY_MINT', 'BOT_ALLOCATION', 'BOT_RECALL', 'PAIR_BURN_RETURN']) {
+      expect(
+        ledgerEntrySchema.safeParse({
+          id: '14',
+          type,
+          amountCoin: '1',
+          balanceAfterCoin: '1',
+          refType: 'approval_request',
+          refId: 'a1',
+          memo: null,
+          createdAt,
+        }).success,
+        type,
+      ).toBe(false);
+    }
+    // Every event names its source (#116, migration 0060: ref_type and ref_id NOT NULL).
+    expect(
+      ledgerEntrySchema.safeParse({
+        id: '13',
+        type: 'START_GRANT',
+        amountCoin: '1',
+        balanceAfterCoin: '1',
         refType: null,
         refId: null,
         memo: null,
         createdAt,
       }).success,
     ).toBe(false);
+    expect(
+      ledgerEntrySchema.parse({
+        id: '15',
+        type: 'TRADE_FILL',
+        amountCoin: '-60',
+        balanceAfterCoin: '940',
+        refType: 'fill',
+        refId: 'f1',
+        memo: null,
+        createdAt,
+      }).type,
+    ).toBe('TRADE_FILL');
   });
 
   it('parses a payment with its KRW price and package, and an audit failure', () => {

@@ -8,7 +8,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { schema } from '@buddha/db';
-import { completeOnboarding } from '@buddha/db/test';
+import { completeOnboarding, ledgerOf } from '@buddha/db/test';
 import { PAID_COIN_SALES_ENABLED } from '@buddha/shared';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -70,10 +70,10 @@ describe.skipIf(!hasTestInfra)('paid Coin closed (integration)', () => {
       })
       .from(schema.balances)
       .where(eq(schema.balances.userId, userId));
-    const ledger = await t.db
-      .select({ type: schema.ledgerEntries.type, amountCoin: schema.ledgerEntries.amountCoin })
-      .from(schema.ledgerEntries)
-      .where(eq(schema.ledgerEntries.userId, userId));
+    const ledger = (await ledgerOf(t.db, userId)).map(({ type, amountCoin }) => ({
+      type,
+      amountCoin,
+    }));
     const payments = await t.db
       .select({ id: schema.payments.id, status: schema.payments.status })
       .from(schema.payments)

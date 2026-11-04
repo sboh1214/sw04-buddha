@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
  * ADR-0092: the admin writes the server did not check before — 반복 링크 '확인함', 시장 (만들기·고치기·
  * 공개·마감·판정·관련 시장; the one-admin 공개, 마감 and 판정 since gone, #21·#114·#152), 테마 (and its markets and
  * notices), 운영 공지 (쓰기·수정·고정·고정 해제), 시장 제안 처리, 출시 설정, 쿠폰, 충전 상품, and since the owner closed Q-PG-8 ①
- * («이 PR에서 더함») 잔고 조정 and 환불 — name the admin on screen (`expectedAccountId`), which the API now
+ * («이 PR에서 더함») 환불 (and 잔고 조정 until #116) — name the admin on screen (`expectedAccountId`), which the API now
  * compares with the cookie's account. In the render between the session naming B and
  * SessionCacheGuard's reset the admin screens are still A's; a write from one went with B's cookie
  * and was recorded as B. No component renders under node (vitest's `environment: 'node'`), so the
@@ -138,20 +138,12 @@ const SCREENS: Readonly<Record<string, readonly string[]>> = {
     '{ noticeId: notice.id, expectedAccountId: operatorId },',
   ],
   '../app/admin/notices/admin-notices.tsx': ['{ noticeId: id, expectedAccountId: operatorId },'],
-  // Q-PG-8 ① (owner decision 2026-10-26 17:21 answer 4 «이 PR에서 더함»)
-  '../app/admin/users/admin-users.tsx': [
-    'body: { amountCoin: values.amountCoin, memo: values.memo, expectedAccountId: by },',
-  ],
+  // Q-PG-8 ① (owner decision 2026-10-26 17:21 answer 4 «이 PR에서 더함»); 잔고 조정, the other half,
+  // went with #116 (ADR-0109, below)
   '../app/admin/payments/admin-payments.tsx': [
     '{ id: payment.id, body: { reason: values.reason, expectedAccountId: operatorId } },',
   ],
 };
-
-/**
- * The screens whose `user.id` is a listed account's, never the session's: 사용자 — each card is one
- * account, its moderation page and its adjustment's target.
- */
-const LISTS_ACCOUNTS: ReadonlySet<string> = new Set(['../app/admin/users/admin-users.tsx']);
 
 describe('the admin the admin writes name (ADR-0092)', () => {
   it('is the admin of the `Me` the screen is drawn from, never the session’s', () => {
@@ -162,13 +154,17 @@ describe('the admin the admin writes name (ADR-0092)', () => {
       );
       expect(text, file).toContain('const operatorId = useOperatorId();');
       // Nothing on these screens reads the session's account; the session is only asked again.
-      expect(text, file).not.toMatch(
-        LISTS_ACCOUNTS.has(file)
-          ? /useSession\b|session\.user/
-          : /useSession\b|session\.user|user\.id/,
-      );
+      expect(text, file).not.toMatch(/useSession\b|session\.user|user\.id/);
       for (const send of sends) expect(text, `${file}: ${send}`).toContain(send);
     }
+  });
+
+  it('leaves 사용자 with no write: no admin adjusts a balance (#116, ADR-0109)', () => {
+    // ADR-0107 결정 2 #73 7항: the adjustment is gone in both directions — the route, the form and
+    // the type — so the screen only lists accounts, and names no admin.
+    const users = source('../app/admin/users/admin-users.tsx');
+    expect(users).not.toMatch(/api\.(?:POST|PUT|PATCH|DELETE)\(|useMutation|balance-adjust/);
+    expect(users).not.toMatch(/AdjustForm|adjust-submit|admin-user-closed|useOperatorId/);
   });
 
   it('waits for `GET /me` before any of them can be pressed', () => {
@@ -225,8 +221,6 @@ describe('the admin the admin writes name (ADR-0092)', () => {
       '../app/admin/coupons/admin-coupons.tsx': 3,
       // 추가, 판매 중지·재개, 삭제, and the form's fields
       '../app/admin/charge-packages/admin-charge-packages.tsx': 4,
-      // 조정, and the form's fields
-      '../app/admin/users/admin-users.tsx': 2,
       // 환불 (and 다시 시도) and its confirm
       '../app/admin/payments/admin-payments.tsx': 2,
     };
@@ -411,11 +405,6 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
     },
     '../app/admin/charge-packages/admin-charge-packages.tsx': {
       keys: ["<CreatePackageCard key={operatorId ?? ''} />"],
-      fieldsets: 1,
-    },
-    // Each account's 잔고 조정 (Q-PG-8 ①, answer 4)
-    '../app/admin/users/admin-users.tsx': {
-      keys: ["<AdjustForm key={operatorId ?? ''} userId={user.id} />"],
       fieldsets: 1,
     },
   };

@@ -132,6 +132,22 @@ export {
   type StartGrantRow,
 } from './start-grants.js';
 export {
+  ensureLedgerAccount,
+  findLedgerAccount,
+  holderLedgerAccount,
+  LedgerEntryError,
+  ledgerEntryForAccount,
+  ledgerKeys,
+  lockLedgerAccounts,
+  recordLedgerEntry,
+  type BalanceRow,
+  type LedgerAccountRef,
+  type LedgerAccountRow,
+  type LedgerEntryInput,
+  type LedgerEntryRow,
+  type RecordLedgerEntryResult,
+} from './ledger.js';
+export {
   clockTimestamp,
   lockAdminRoles,
   lockMarket,

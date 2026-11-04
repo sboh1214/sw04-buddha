@@ -12,9 +12,10 @@ import { readFailed } from '@/lib/query-client';
 const ADMIN_AUDIT_FAILURES_KEY = ['admin', 'audit-failures'] as const;
 
 /**
- * PLAN 12 감사 실패 목록: what the `ledger.audit` worker found (a balance that disagrees with
- * its ledger), newest first, 20 per page with 더 보기 (A-M2-5). Read-only: the fix is an
- * ADMIN_ADJUST on the user screen, after looking at the payload.
+ * PLAN 12 감사 실패 목록: what the `ledger.audit` worker found (a ledger account whose balance
+ * disagrees with its ledger, or a person with no user ledger account, #116), newest first, 20 per
+ * page with 더 보기 (A-M2-5). Read-only: no admin adjusts a balance any more (ADR-0109); a gap is
+ * fixed only by #93's 대사 정정, and until then it stays recorded here (ADR-0107 결정 2 #73 7항).
  */
 export function AdminAuditFailures() {
   const failures = useInfiniteQuery({

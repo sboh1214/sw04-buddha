@@ -67,8 +67,9 @@ export async function marketMakerAccountId(executor: Reader): Promise<string | n
  * 만들고) — the seed's step, and the test factory's — and returns its id, `created` when this call
  * made it. One `user` row of the type, `name` AUTH_USER_NAME as every account's, its address
  * MARKET_MAKER_ACCOUNT_EMAIL (no mail, no sign-in reaches it) unverified, and the database clock
- * for its times; the "user" trigger gives it a zero balance and no profile (migration 0059). It
- * writes no sign-in method, no session, no admin action and no ledger entry, and the database
+ * for its times; the "user" trigger gives it no profile (migration 0059) and no ledger account of
+ * its own (0060: its Coin is in each market's 마켓메이커 자금, `ensureLedgerAccount`). It writes
+ * no sign-in method, no session, no admin action and no ledger entry, and the database
  * refuses it each of those (and a profile, a start grant and public activity) whoever asks.
  *
  * Race-safe with no lock: the address and `user_market_maker_uidx` are unique, so a second call

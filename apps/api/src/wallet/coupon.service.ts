@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
-import { schema, type Db } from '@buddha/db';
+import { ledgerKeys, lockLedgerAccounts, recordLedgerEntry, schema, type Db } from '@buddha/db';
 import {
   COUPON_CODE_PATTERN,
   decodeKeyset,
@@ -12,7 +12,7 @@ import {
   type UpdateCouponBody,
   type WithoutExpectedAccount,
 } from '@buddha/shared';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
 import { isPgError, PG_UNIQUE_VIOLATION } from '../common/errors/pg-error.js';
@@ -97,12 +97,12 @@ export class CouponService {
         throw invalidCoupon();
       }
 
+      let redemption: { id: string } | undefined;
       try {
-        await tx.insert(schema.couponRedemptions).values({
-          couponId: coupon.id,
-          userId,
-          amountCoin: coupon.amountCoin,
-        });
+        [redemption] = await tx
+          .insert(schema.couponRedemptions)
+          .values({ couponId: coupon.id, userId, amountCoin: coupon.amountCoin })
+          .returning({ id: schema.couponRedemptions.id });
       } catch (error) {
         if (isPgError(error, PG_UNIQUE_VIOLATION, COUPON_REDEMPTION_UNIQUE)) {
           throw new AppError('DUPLICATE_REQUEST', {
@@ -122,58 +122,36 @@ export class CouponService {
       // The balance row first, then the clock: another writer of this account (a
       // settlement payout, another wallet write) may have committed while this transaction waited
       // on that row, and the ledger row written below must sort after it — `now()` is the
-      // transaction start and would sort before work its own balance_after_coin includes
-      // (clock.ts, A-M3-14). The lock is what the UPDATE below would take anyway, so no
-      // writer's lock order changes; the result is discarded, and a vanished row still falls
-      // through to the check the UPDATE already had.
-      await tx
-        .select({ userId: schema.balances.userId })
-        .from(schema.balances)
-        .where(eq(schema.balances.userId, userId))
-        .limit(1)
-        .for('update');
+      // transaction start and would sort before work its own total after includes (clock.ts,
+      // A-M3-14). The lock is the one `recordLedgerEntry` takes anyway (a no-op there), so no
+      // writer's lock order changes.
+      await lockLedgerAccounts(tx, [{ kind: 'user', userId }]);
       const redeemedAt = await clockTimestamp(tx);
+      if (!updated || !redemption) throw new AppError('INTERNAL', { message: 'Coupon not saved' });
 
-      const [balance] = await tx
-        .update(schema.balances)
-        .set({
-          availableCoin: sql`${schema.balances.availableCoin} + ${coupon.amountCoin}`,
-          // Explicit on purpose: the column's `$onUpdate` would write the API host's clock.
-          updatedAt: redeemedAt,
-        })
-        .where(eq(schema.balances.userId, userId))
-        .returning();
-      if (!updated || !balance) throw new AppError('NOT_FOUND', { message: 'Balance not found' });
-
-      const [redemption] = await tx
-        .select({ id: schema.couponRedemptions.id })
-        .from(schema.couponRedemptions)
-        .where(
-          and(
-            eq(schema.couponRedemptions.couponId, coupon.id),
-            eq(schema.couponRedemptions.userId, userId),
-          ),
-        )
-        .limit(1);
-      const [entry] = await tx
-        .insert(schema.ledgerEntries)
-        .values({
-          userId,
-          type: 'BONUS',
-          amountCoin: coupon.amountCoin,
-          balanceAfterCoin: balance.availableCoin,
-          refType: 'coupon',
-          refId: redemption?.id ?? coupon.id,
-          memo: `쿠폰 ${coupon.code}`,
-          createdAt: redeemedAt,
-        })
-        .returning();
-      if (!entry) throw new AppError('INTERNAL', { message: 'Ledger insert failed' });
+      // BONUS: a mint into the account's user ledger account, kept as an inactive type (#116,
+      // ADR-0107 결정 2 #73 2항), keyed by the redemption.
+      const recorded = await recordLedgerEntry(tx, {
+        type: 'BONUS',
+        amountCoin: coupon.amountCoin,
+        from: null,
+        to: { kind: 'user', userId },
+        refType: 'coupon',
+        refId: redemption.id,
+        idempotencyKey: ledgerKeys.couponRedemption(redemption.id),
+        memo: `쿠폰 ${coupon.code}`,
+        at: redeemedAt,
+      });
+      // The redemption is new in this transaction, so its key cannot have been recorded.
+      if (recorded.outcome !== 'recorded' || !recorded.to) {
+        throw new AppError('INTERNAL', { message: 'Ledger insert failed' });
+      }
+      const { entry, to: balance } = recorded;
 
       return {
         coupon: toCoupon(updated),
         balance: toBalance(balance),
-        ledgerEntry: toLedgerEntry(entry),
+        ledgerEntry: toLedgerEntry(entry, balance.accountId),
       };
     });
   }

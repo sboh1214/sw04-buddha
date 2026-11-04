@@ -1,7 +1,6 @@
-import type { APIResponse, Locator, Page } from '@playwright/test';
-import type { Me } from '@buddha/shared';
+import type { Locator, Page } from '@playwright/test';
 import { copy } from '../src/copy';
-import { accountIdOf, createOpenMarket, expect, freshEmail, signUp, test } from './helpers';
+import { createOpenMarket, expect, freshEmail, signUp, startCoinText, test } from './helpers';
 
 /**
  * 금액 표기 (#13, ADR-0051): `formatCoin` writes '12,345 Coin' with an ORDINARY space before the
@@ -10,10 +9,12 @@ import { accountIdOf, createOpenMarket, expect, freshEmail, signUp, test } from 
  * names are measured at 375px: the header's balance chip (and the row it shares with the wordmark
  * and the search), a market's 거래량 and the wallet's balance.
  *
- * The balance is raised to 1,000,000 Coin first — seven digits, the largest single adjustment an
- * admin can make (`ADJUST_MAX_ABS_COIN`) — so the chip is measured with a long amount rather than
- * the 0 a new account starts with (#70, ADR-0071). The account is a fresh one: the seed admin's
- * balance is read by other specs running alongside this one.
+ * The balance is the new account's start Coin (#116: no admin adjusts a balance any more, and the
+ * e2e database pays the start Coin, global-setup.ts): 1,000,000 Coin — seven digits, the largest
+ * the setting takes — as the global setup enters it, so the chip is measured with a long amount.
+ * The amount is read rather than assumed (`startCoinText`), since a database may hold another
+ * value. The account is a fresh one: the seed admin's balance is read by other specs running
+ * alongside this one.
  *
  * The 거래량 is the detail header's. #13 named the card's, but the card shows none since ADR-0062
  * (ADR-0061 decision 1, item 4: volume on the detail only), so the measurement moved to the one
@@ -23,15 +24,6 @@ import { accountIdOf, createOpenMarket, expect, freshEmail, signUp, test } from 
  * then with a nine-digit figure written into the same element, which keeps the header's own
  * styles.
  */
-
-/** `{ data }` out of the success envelope, with the body in the message on a failure. */
-async function dataOf<T>(response: APIResponse): Promise<T> {
-  const body = await response.text();
-  if (!response.ok()) {
-    throw new Error(`${response.url()} -> ${String(response.status())} ${body}`);
-  }
-  return (JSON.parse(body) as { data: T }).data;
-}
 
 /**
  * How an element's text lies on screen: how many lines its glyphs take (two fragments share a
@@ -102,27 +94,14 @@ test.describe('금액 표기 · 375px', () => {
 
   test('잔고 칩·시장 거래량·지갑 잔고가 한 줄에 잘리지 않고 보인다', async ({ admin, page }) => {
     const market = await createOpenMarket(admin);
+    const balance = await startCoinText(admin);
     await signUp(page, freshEmail());
-
-    const me = await dataOf<Me>(await page.request.get('/api/v1/me'));
-    const delta = 1_000_000n - BigInt(me.balance.availableCoin);
-    if (delta !== 0n) {
-      await dataOf(
-        await admin.post(`/api/v1/admin/users/${me.id}/balance-adjust`, {
-          data: {
-            amountCoin: delta.toString(),
-            memo: 'e2e 금액 표기',
-            expectedAccountId: await accountIdOf(admin),
-          },
-        }),
-      );
-    }
 
     // --- the header chip, on the search screen holding exactly this market's card (`/?q=`
     // until the search moved off the home, ADR-0066).
     await page.goto(`/search?q=${market.tag}`);
     const chip = page.getByTestId('balance-chip');
-    await expect(chip).toContainText('1,000,000 Coin');
+    await expect(chip).toContainText(balance);
     await expectOneLineOnScreen(page, chip, 'balance chip');
     // Nothing in the row covers its neighbour: each item ends before the next one starts.
     const row = await headerRow(page);
@@ -144,7 +123,7 @@ test.describe('금액 표기 · 375px', () => {
     // signal: it shows the amount only once `useSession` has seen the tab hydrated and the
     // client has fetched `/me` (auth-buttons.tsx), and the header and the detail hydrate in the
     // same pass — no Suspense boundary stands between them.
-    await expect(page.getByTestId('balance-chip')).toContainText('1,000,000 Coin');
+    await expect(page.getByTestId('balance-chip')).toContainText(balance);
     const volume = page.getByTestId('market-detail-volume');
     // No fill yet, so nothing has traded: the volume is 0, written the same way as any other.
     await expect(volume).toHaveText(`${copy.marketVolume} 0 Coin`);
@@ -159,7 +138,7 @@ test.describe('금액 표기 · 375px', () => {
     // --- the wallet's balance, the largest type an amount is set in.
     await page.goto('/my/wallet');
     const available = page.getByTestId('wallet-available');
-    await expect(available).toHaveText('1,000,000 Coin');
+    await expect(available).toHaveText(balance);
     await expectOneLineOnScreen(page, available, 'wallet balance');
   });
 });

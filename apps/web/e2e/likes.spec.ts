@@ -38,8 +38,8 @@ import {
  * afresh, before they can be pressed (ADR-0091). The once-per-person rule, the refusals, the
  * onboarding and the concurrency are the API's tests
  * (likes.controller.test.ts), and so is that a like moves no Coin and writes no ledger entry (a
- * balance read here could move under a start Coin the worker pays meanwhile); this walks the
- * screens.
+ * balance read here could move under a waiting start Coin the worker pays meanwhile); this walks
+ * the screens.
  */
 
 /** A post straight at the API with the context's cookie: this spec's subject is its likes. */

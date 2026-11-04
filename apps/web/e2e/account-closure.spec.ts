@@ -1,5 +1,5 @@
 import { type APIRequestContext, type Locator, type Page } from '@playwright/test';
-import type { AccountClosureCheck, Me } from '@buddha/shared';
+import type { Me } from '@buddha/shared';
 import { copy } from '../src/copy';
 import {
   E2E_PASSWORD,
@@ -17,6 +17,8 @@ import {
   setFirstPassword,
   signIn,
   signUp,
+  startCoinText,
+  startCoinValue,
   swapCookieUnderScreen,
   switchAccountUnderScreen,
   test,
@@ -35,15 +37,15 @@ import {
  *   browser is home and signed out; the post and the comment are bylined '탈퇴한 사용자' with no
  *   profile link — on the post page and its community card — and the profile's address is a 404
  *   like an account that never was; the old email and password sign nobody in, and the same email
- *   and number sign up again at once — the number free again, its start Coin waiting as for any
- *   (the closed account's own was still waiting and was cancelled, owner decision 2026-10-18 on
- *   #70); the operators find the closed account named '탈퇴한 사용자' and marked '탈퇴' with no Coin
- *   and no balance adjustment, its page — and its post's and comment's moderation pages, which
- *   still offer hiding them — offering no warning or restriction (the API refusing one,
- *   `closed`), the admin grant's search not finding it at all, and the waiting request rejected by
- *   the closure, reason '탈퇴', no admin named (owner decisions 2026-10-23 (2차) 1 and 5) — the
- *   screen having said what goes, that the 본인확인 record is kept for the retention period, what
- *   stays, and nothing of the start Coin, which was still waiting ((3차) 7 and 9);
+ *   and number sign up again at once — the number free again, but its start Coin already given
+ *   (`number_used`, #57-1·#57-17: the closed account's was paid); the operators find the closed
+ *   account named '탈퇴한 사용자' and marked '탈퇴' with no Coin (no admin adjusts a balance since
+ *   #116), its page — and its post's and comment's moderation pages, which still offer hiding them
+ *   — offering no warning or restriction (the API refusing one, `closed`), the admin grant's
+ *   search not finding it at all, and the waiting request rejected by the closure, reason '탈퇴',
+ *   no admin named (owner decisions 2026-10-23 (2차) 1 and 5) — the screen having said what goes,
+ *   that the 본인확인 record is kept for the retention period, what stays, and that the same
+ *   number gets no start Coin again ((3차) 7 and 9);
  * - an account that has not finished its onboarding follows the small '탈퇴하기' link at the very
  *   bottom of its consent step to the screen — the gate leaves it alone, while MY 설정 stays gated
  *   and the screen's way back to it goes through the steps left — and closes itself (owner decisions
@@ -52,8 +54,7 @@ import {
  *   typing in the tab on the way to the step, closes the account from that step's '탈퇴하기': the
  *   tab keeps none of it, as after 로그아웃 (ADR-0086 7-20);
  * - an account whose start Coin was paid reads, right under what stays, that the same number gets
- *   no start Coin again ((3차) 9) — the check's answer rewritten in the browser, as this database
- *   pays none;
+ *   no start Coin again ((3차) 9), and above the irreversibility;
  * - a member under a writing restriction, and an admin, find the screen saying why it cannot close
  *   now — the restriction with its end and the way to 조치·신고 내역, the admin role until it is
  *   revoked — with the field and the button off, and the API refuses it as well; lifted, the
@@ -68,11 +69,10 @@ import {
  * Every rule's branch (the deletion and the kept set, the forfeiture's ledger, each refusal, the
  * locks, the database's own checks, the private-data guard) is the API's and the database's tests
  * (account-closure.controller.test.ts, schema.test.ts); the wording's is the web's unit tests
- * (lib/account-closure.test.ts, lib/restriction.test.ts). This database has no start amount, so no
- * start Coin is ever paid here (start-grant.spec.ts), and setting one would pay every other spec's
- * accounts meanwhile: which grant states set `startGrantReceived` is the API's tests', and the
- * screen is shown the paid state by a rewritten answer. Every restriction a test gives ends before
- * it does.
+ * (lib/account-closure.test.ts, lib/restriction.test.ts). This database pays the start Coin (the
+ * suite's global setup enters the amount, global-setup.ts, #116), so a member's Coin to forfeit is
+ * its start Coin; which other grant states set `startGrantReceived` is the API's tests'. Every
+ * restriction a test gives ends before it does.
  */
 
 /** A post straight at the API with the context's cookie. */
@@ -190,12 +190,12 @@ test.describe('탈퇴', () => {
     const member: Me = await meOf(page.request);
     const adminMe = await meOf(admin);
 
-    // Coin to forfeit: the start Coin waits in this database (start-grant.spec.ts), so an
-    // operator's adjustment gives the member some.
-    const adjusted = await admin.post(`/api/v1/admin/users/${member.id}/balance-adjust`, {
-      data: { amountCoin: '1234', memo: `탈퇴 시험 ${tag}`, expectedAccountId: adminMe.id },
-    });
-    expect(adjusted.status(), await adjusted.text()).toBe(200);
+    // Coin to forfeit: the start Coin, paid at the nickname step (no admin adjusts a balance since
+    // #116; the global setup gives the setting its value).
+    const startCoin = await startCoinValue(admin);
+    const startCoinShown = await startCoinText(admin);
+    expect(member.startGrant?.status).toBe('granted');
+    expect(member.balance.availableCoin).toBe(String(startCoin));
     const postId = await postThroughApi(page.request, market.id, `탈퇴할 글 ${tag}`, `본문 ${tag}`);
     const commentId = await commentThroughApi(page.request, postId, `탈퇴할 댓글 ${tag}`);
     // An operator's account restriction request about the member, waiting for another admin: it
@@ -229,16 +229,15 @@ test.describe('탈퇴', () => {
 
     // --- one screen: the Coin left and its forfeiture, the irreversibility, nothing refusing it
     // (decision 4 #140 «마지막 확인»).
-    await expect(page.getByTestId('closure-coin')).toHaveText('1,234 Coin');
+    await expect(page.getByTestId('closure-coin')).toHaveText(startCoinShown);
     await expect(page.getByTestId('closure-forfeit')).toHaveText(copy.closureForfeit);
     await expect(page.getByTestId('closure-irreversible')).toHaveText(copy.closureIrreversible);
     // What goes, the 본인확인 record right under it, and what stays (owner decision 2026-10-23 (3차)
-    // 7). The start Coin waits in this database, so nothing is said of it: the closure cancels it
-    // and the number may receive it again (owner decision 2026-10-23 (3차) 9).
+    // 7). The start Coin was paid, so the number gets none again ((3차) 9).
     await expect(page.getByTestId('closure-deleted')).toHaveText(copy.closureDeleted);
     await expect(page.getByTestId('closure-phone-records')).toHaveText(copy.closurePhoneRecords);
     await expect(page.getByTestId('closure-kept')).toHaveText(copy.closureKept);
-    await expect(page.getByTestId('closure-start-grant')).toHaveCount(0);
+    await expect(page.getByTestId('closure-start-grant')).toHaveText(copy.closureStartGrant);
     // Nothing proposed, so nothing of proposals (#77, owner decision 2026-10-24 — proposals.spec.ts
     // shows the line to an account with one waiting).
     await expect(page.getByTestId('closure-proposals')).toHaveCount(0);
@@ -261,7 +260,7 @@ test.describe('탈퇴', () => {
     const closed = await answer;
     expect(closed.status(), await closed.text()).toBe(200);
     expect(((await closed.json()) as { data: { forfeitedCoin: string } }).data.forfeitedCoin).toBe(
-      '1234',
+      String(startCoin),
     );
     await expect(page).toHaveURL('/');
     await expect(page.getByText(copy.closureDone).first()).toBeVisible();
@@ -301,7 +300,8 @@ test.describe('탈퇴', () => {
     await expect(page).toHaveURL(/\/login/);
 
     // --- the same email and number sign up again at once (#57-17): another account, verified
-    // with the number the closure freed, whose start Coin waits for its amount as any does here.
+    // with the number the closure freed, which gets no start Coin: the number's went to the closed
+    // account (#57-1, ADR-0072 `number_used`).
     await openSetPassword(page, email);
     await setFirstPassword(page);
     await expect(page).toHaveURL('/onboarding');
@@ -309,13 +309,13 @@ test.describe('탈퇴', () => {
     expect(again.id).not.toBe(member.id);
     expect(again.email).toBe(email);
     expect(again.profile.publicId).not.toBe(member.profile.publicId);
-    expect(again.startGrant?.status).toBe('pending');
+    expect(again.startGrant?.status).toBe('number_used');
     expect(again.balance.availableCoin).toBe('0');
 
     // --- the operators: the closed account under its placeholder address, named '탈퇴한
-    // 사용자' and marked '탈퇴', no Coin, no adjustment, no new action; left out of the admin
-    // grant's search; the waiting request closed by the closure (owner decision 2026-10-23 (2차)
-    // 1 and 5).
+    // 사용자' and marked '탈퇴', no Coin, no balance form (none since #116), no new action; left
+    // out of the admin grant's search; the waiting request closed by the closure (owner decision
+    // 2026-10-23 (2차) 1 and 5).
     const adminContext = await browser.newContext();
     try {
       const adminPage = await adminContext.newPage();
@@ -328,7 +328,6 @@ test.describe('탈퇴', () => {
       await expect(user.getByTestId('admin-closed-badge')).toHaveText(copy.adminClosedBadge);
       await expect(user).not.toContainText(email);
       await expect(user.getByTestId('admin-user-balance')).toHaveText('0 Coin');
-      await expect(user.getByTestId('admin-user-closed')).toHaveText(copy.adminAdjustClosed);
       await expect(user.getByTestId('adjust-submit')).toHaveCount(0);
       // The member's page: named and marked as on the list, no warning or restriction offered,
       // and the server refuses one all the same.
@@ -531,18 +530,11 @@ test.describe('탈퇴', () => {
   test('시작 Coin이 지급된 계정의 확인 화면은 남는 것의 줄 바로 아래에 같은 번호로는 시작 Coin을 다시 받지 못한다고 말한다', async ({
     page,
   }) => {
+    // This database pays the start Coin at the nickname step (global-setup.ts, #116), so the
+    // check's answer is the real one. The closure itself is never sent; the API's tests cover each
+    // grant state.
     await signUp(page, freshEmail());
-    // This database pays no start Coin (start-grant.spec.ts), and an amount set for this test
-    // would pay every other spec's accounts meanwhile: the check's answer is rewritten in this
-    // browser alone to say the account's start Coin was paid, as start-grant.spec.ts rewrites
-    // `GET /me`. The closure itself is never sent; the API's tests cover each grant state.
-    await page.route('**/api/v1/me/closure', async (route) => {
-      if (route.request().method() !== 'GET') return route.fallback();
-      const response = await route.fetch();
-      const body = (await response.json()) as { data: AccountClosureCheck };
-      body.data.startGrantReceived = true;
-      await route.fulfill({ response, json: body });
-    });
+    expect((await meOf(page.request)).startGrant?.status).toBe('granted');
 
     // Owner decision 2026-10-23 (3차) 9: the line, for an account whose start Coin was paid, under
     // what stays and above the irreversibility (ADR-0086 7-33).

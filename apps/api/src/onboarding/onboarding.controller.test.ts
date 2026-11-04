@@ -21,6 +21,7 @@ import {
   createPhoneVerification,
   createStartGrant,
   createUser,
+  ledgerOf as accountLedgerOf,
 } from '@buddha/db/test';
 import {
   CONSENT_ITEMS,
@@ -177,12 +178,8 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
       .select({ nickname: schema.nicknameHolds.nickname, userId: schema.nicknameHolds.userId })
       .from(schema.nicknameHolds)
       .orderBy(asc(schema.nicknameHolds.id));
-  const ledgerOf = (userId: string) =>
-    t.db
-      .select()
-      .from(schema.ledgerEntries)
-      .where(eq(schema.ledgerEntries.userId, userId))
-      .orderBy(asc(schema.ledgerEntries.id));
+  /** The account's ledger, each event from its side (`ledgerOf` of @buddha/db/test, #116). */
+  const ledgerOf = (userId: string) => accountLedgerOf(t.db, userId);
 
   /** The release setting `grant.start_coin`, changed as an admin does it, with a reason. */
   async function setAmount(value: number) {

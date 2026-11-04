@@ -7,6 +7,7 @@ import {
   ACCOUNT_TYPES,
   APPROVAL_STATUSES,
   COUNTERPARTY_TYPES,
+  LEDGER_ACCOUNT_KINDS,
   LEDGER_ENTRY_TYPES,
   MARKET_RESULTS,
   MARKET_STATUSES,
@@ -32,6 +33,8 @@ export const roleEnum = pgEnum('role', ROLES);
 /** '일반 사용자' or '운영 마켓메이커' (#115, ADR-0107 결정 4): `user.account_type`, migration 0059. */
 export const accountTypeEnum = pgEnum('account_type', ACCOUNT_TYPES);
 export const ledgerEntryTypeEnum = pgEnum('ledger_entry_type', LEDGER_ENTRY_TYPES);
+/** A ledger account's kind (#116, ADR-0109): `ledger_accounts.kind`, migration 0060. */
+export const ledgerAccountKindEnum = pgEnum('ledger_account_kind', LEDGER_ACCOUNT_KINDS);
 export const paymentStatusEnum = pgEnum('payment_status', PAYMENT_STATUSES);
 export const marketStatusEnum = pgEnum('market_status', MARKET_STATUSES);
 export const marketVisibilityEnum = pgEnum('market_visibility', MARKET_VISIBILITIES);

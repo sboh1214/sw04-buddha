@@ -1,5 +1,5 @@
 import { copy } from '../src/copy';
-import { adminAccount, expect, freshEmail, signIn, signUp, test } from './helpers';
+import { adminAccount, expect, freshEmail, signIn, signUp, startCoinText, test } from './helpers';
 
 /**
  * MY (#16, owner decision 2026-10-13): the reader's own screens under `/my` — a summary and eight
@@ -50,14 +50,15 @@ test.describe('MY', () => {
     }
   });
 
-  test('로그인하면 요약과 여덟 탭이 보이고, 로그아웃은 MY 안에 있다', async ({ page }) => {
+  test('로그인하면 요약과 여덟 탭이 보이고, 로그아웃은 MY 안에 있다', async ({ page, admin }) => {
     await signUp(page, freshEmail());
     await page.goto('/my');
 
-    // The summary: 잔고 요약 with a new account's 0 (creating an account grants nothing since #70,
-    // ADR-0071), a preview per tab with content, 준비 중 for the rest. 관심 시장 has its content
-    // since #89 (ADR-0064) and 내 글 since #51 (ADR-0080): a fresh account's are empty.
-    await expect(page.getByTestId('portfolio-available')).toHaveText('0 Coin');
+    // The summary: 잔고 요약 with a new account's start Coin (creating an account grants nothing
+    // since #70, ADR-0071; the nickname step pays it from the value the e2e database holds,
+    // global-setup.ts, #116), a preview per tab with content, 준비 중 for the rest. 관심 시장 has its
+    // content since #89 (ADR-0064) and 내 글 since #51 (ADR-0080): a fresh account's are empty.
+    await expect(page.getByTestId('portfolio-available')).toHaveText(await startCoinText(admin));
     for (const key of ['positions', 'orders', 'history', 'wallet', 'posts', 'watchlist']) {
       const preview = page.getByTestId(`my-preview-${key}`);
       await expect(preview).toBeVisible();

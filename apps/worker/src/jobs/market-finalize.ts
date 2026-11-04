@@ -1,4 +1,15 @@
-import { clockTimestamp, lockMarket, schema, transitionMarket, type Db } from '@buddha/db';
+import {
+  clockTimestamp,
+  holderLedgerAccount,
+  ledgerKeys,
+  lockLedgerAccounts,
+  lockMarket,
+  recordLedgerEntry,
+  schema,
+  transitionMarket,
+  type Db,
+  type LedgerAccountRef,
+} from '@buddha/db';
 import {
   MARKET_SCAN_BATCH_MAX,
   SETTLEMENT_STEP_ERROR_MAX,
@@ -61,7 +72,11 @@ export interface FinalizeScanResult {
   failures: ScanFailure[];
 }
 
-/** One closed-out row and, when it won something, the balance and ledger row of its payout. */
+/**
+ * One closed-out row of a person's and, when it won something, that person's balance and the
+ * payout's ledger row. The 운영 마켓메이커's rows are closed out too, but published nothing: no
+ * client of its exists, and its payout goes to a 마켓메이커 자금, which is no one's wallet.
+ */
 interface Settlement {
   position: PositionRow;
   balance?: BalanceRow;
@@ -80,23 +95,28 @@ interface CoinStep {
 /**
  * The `coin` settlement step (PLAN 5.5 정산): every unsettled position of the market is closed
  * out with the shared `settle()` accounting (PLAN 5.4 — the winning outcome is paid qty × 100 Coin,
- * both outcomes end at qty 0, cost 0, `settled`), and each payout is one SETTLEMENT_PAYOUT
- * ledger row written with its balance change:
+ * both outcomes end at qty 0, cost 0, `settled`), and each payout is one SETTLEMENT_PAYOUT event
+ * from the market's collateral to the holder's ledger account (#116, ADR-0109: a person's own, or
+ * the market's 마켓메이커 자금 for the 운영 마켓메이커's rows — `holderLedgerAccount`), written by
+ * `recordLedgerEntry` with its balance changes. The interim payout until #126 reworks it (VOID's
+ * 50/50, the settlement records); with no pair minted before #118 it pays nothing in production.
  *
- *  - positions FOR UPDATE in (user_id, outcome) order — one fixed order, so two close-outs
- *    touching one account's balance cannot deadlock (they cannot run at once on one market
- *    anyway, but the order is what makes that mechanical);
- *  - the market's own instant read after those locks (tx-helpers.ts), and each payout's
- *    instant read after that ACCOUNT's balance lock: another write of this account (a charge,
- *    a payout on another market) may have committed while this transaction waited, and the
- *    payout's ledger row must sort after it or `/me/ledger`'s `balance_after_coin` chain reads
- *    inverted (ADR-0027 addendum, A-M3-14);
- *  - the ledger row and the balance UPDATE in the same transaction (PLAN 0.2), the balance
- *    UPDATE conditional on nothing — a payout only adds.
+ *  - positions FOR UPDATE in (user_id, outcome) order, then every ledger account the step pays
+ *    from or into locked at once, ascending (`lockLedgerAccounts`, the write API's lock order),
+ *    then the clock once after the last lock — so every payout sorts after any other write of
+ *    its account that committed while this transaction waited (A-M3-14), and the step, its
+ *    payouts and the `settled` transition share one instant;
+ *  - the collateral must hold every payout before the first is made: a short collateral (a
+ *    position the ledger never collateralised, or Coin taken out of it) fails the step whole,
+ *    rather than paying some holders and leaving the rest — a partial settlement nothing else
+ *    understands. The step is recorded `failed` with the reason (`finalizeMarket`) and #93's
+ *    대사 정정 is what closes the gap;
+ *  - each payout keyed by the settlement key (market, judgement version, holder, outcome —
+ *    `ledgerKeys.settlement`), so a payout recorded once is never made twice even if the
+ *    `settled = false` filter, the step's own guard, were ever bypassed.
  *
- * The `settled = false` filter is the step's own idempotency guard: a row is paid at most once
- * even if the step were ever run twice. Returns the step's instant — the market's, read after
- * the position locks — which the step row's `completed_at` and the `settled` transition carry.
+ * Returns the step's instant, which the step row's `completed_at` and the `settled` transition
+ * carry.
  */
 async function runCoinStep(
   tx: Tx,
@@ -105,65 +125,80 @@ async function runCoinStep(
 ): Promise<CoinStep & { at: Date }> {
   const marketId = market.id;
   // Held FOR UPDATE for the rest of the transaction; only ever written under this market's
-  // lock, so the SELECT never waits, but the clock is read after it all the same (the rule
-  // is "after the last lock", mechanically).
+  // lock, so the SELECT never waits.
   const holders = await tx
     .select()
     .from(schema.positions)
     .where(and(eq(schema.positions.marketId, marketId), eq(schema.positions.settled, false)))
     .orderBy(asc(schema.positions.userId), asc(schema.positions.outcome))
     .for('update');
+  const closing = holders.map((position) => ({
+    position,
+    after: settle(position, position.outcome === result),
+  }));
+  const winners = closing.filter(({ after }) => after.payoutCoin > 0n);
+
+  const collateral: LedgerAccountRef = { kind: 'market_collateral', marketId };
+  // Each holder's ledger account: a person's own, or the market's 마켓메이커 자금.
+  const holderAccounts = new Map<string, LedgerAccountRef>();
+  for (const { position } of closing) {
+    if (!holderAccounts.has(position.userId)) {
+      holderAccounts.set(position.userId, await holderLedgerAccount(tx, position.userId, marketId));
+    }
+  }
+  const payTo = new Map(
+    winners.map(({ position }) => [position.userId, holderAccounts.get(position.userId)!]),
+  );
+  const owedCoin = winners.reduce((sum, { after }) => sum + after.payoutCoin, 0n);
+  // A market judged by ADR-0046's interim route before #152 has no judgement version (D4); none
+  // is left after #116's wipe, and the key needs one.
+  const judgementVersion = market.judgementVersion;
+  if (winners.length > 0) {
+    if (judgementVersion === null) {
+      throw new Error(`Market ${marketId} has no judgement version to key its payouts by`);
+    }
+    const [held] = await lockLedgerAccounts(tx, [collateral, ...payTo.values()]);
+    if (held!.balance.availableCoin < owedCoin) {
+      throw new Error(
+        `Market ${marketId}'s collateral holds ${String(held!.balance.availableCoin)} Coin, short of its ${String(owedCoin)} Coin payout`,
+      );
+    }
+  }
   const now = await clockTimestamp(tx);
 
   const settlements: Settlement[] = [];
   const settledAccounts = new Set<string>();
   const paidAccounts = new Set<string>();
   let paidCoin = 0n;
-  for (const position of holders) {
-    const after = settle(position, position.outcome === result);
+  for (const { position, after } of closing) {
     settledAccounts.add(position.userId);
     let balance: BalanceRow | undefined;
     let ledgerEntryId: number | undefined;
     if (after.payoutCoin > 0n) {
-      const [locked] = await tx
-        .select({ userId: schema.balances.userId })
-        .from(schema.balances)
-        .where(eq(schema.balances.userId, position.userId))
-        .limit(1)
-        .for('update');
-      // A missing balance row is a broken account (the "user" trigger creates it at
-      // sign-up). Failing the whole settlement is deliberate: paying everyone else and
-      // leaving this holder's row unsettled would need a partial-settlement state nothing
-      // else understands. The step is recorded `failed` with this message (`finalizeMarket`),
-      // and the failed job is visible in the BullMQ failed set.
-      if (!locked) throw new Error(`Balance not found for account ${position.userId}`);
-      const paidAt = await clockTimestamp(tx);
-      [balance] = await tx
-        .update(schema.balances)
-        .set({
-          availableCoin: sql`${schema.balances.availableCoin} + ${after.payoutCoin}`,
-          updatedAt: paidAt,
-        })
-        .where(eq(schema.balances.userId, position.userId))
-        .returning();
-      if (!balance) throw new Error(`Balance not found for account ${position.userId}`);
-      const [entry] = await tx
-        .insert(schema.ledgerEntries)
-        .values({
-          userId: position.userId,
-          type: 'SETTLEMENT_PAYOUT',
-          amountCoin: after.payoutCoin,
-          balanceAfterCoin: balance.availableCoin,
-          refType: 'market',
-          refId: marketId,
-          memo: `정산 지급: ${market.title}`,
-          createdAt: paidAt,
-        })
-        .returning({ id: schema.ledgerEntries.id });
-      if (!entry) throw new Error('Ledger insert failed');
-      ledgerEntryId = entry.id;
-      paidAccounts.add(position.userId);
-      paidCoin += after.payoutCoin;
+      const paid = await recordLedgerEntry(tx, {
+        type: 'SETTLEMENT_PAYOUT',
+        amountCoin: after.payoutCoin,
+        from: collateral,
+        to: payTo.get(position.userId)!,
+        refType: 'market',
+        refId: marketId,
+        idempotencyKey: ledgerKeys.settlement(
+          marketId,
+          judgementVersion!,
+          position.userId,
+          position.outcome,
+        ),
+        memo: `정산 지급: ${market.title}`,
+        at: now,
+      });
+      // `duplicate`: this key was paid before (a row put back to unsettled by hand) — nothing
+      // moves again, and the row is closed out below all the same.
+      if (paid.outcome === 'recorded') {
+        balance = paid.to!;
+        ledgerEntryId = paid.entry.id;
+        paidAccounts.add(position.userId);
+        paidCoin += after.payoutCoin;
+      }
     }
     // `version` bumps by itself (`$onUpdate` on the column): this UPDATE goes through the
     // ORM, and the returned row carries the new value the `user:position` event needs.
@@ -185,7 +220,9 @@ async function runCoinStep(
       )
       .returning();
     if (!updated) throw new Error('Position update failed');
-    settlements.push({ position: updated, balance, ledgerEntryId });
+    if (holderAccounts.get(position.userId)!.kind === 'user') {
+      settlements.push({ position: updated, balance, ledgerEntryId });
+    }
   }
 
   return {
@@ -385,7 +422,7 @@ async function startSettling(db: Db, marketId: string): Promise<MarketStatusEven
  * Every transition goes through `transitionMarket`, whose event row carries its id to the
  * market row as `statusEventId` (A-M3-19); `actorId` is null: the worker acted. Everything is
  * published after COMMIT — `settling` after its own transaction, then once settled the status
- * to the market's room, then per account its last balance (a holder of both outcomes is
+ * to the market's room, then per person its last balance (a holder of both outcomes is
  * credited once per winning row; the later ledger row is the greater key) and every closed-out
  * row.
  */
@@ -581,7 +618,7 @@ export async function finalizeMarket(
  * `resolved` (its resolved → settling never committed) as well as one left `settling` by a failed
  * step (ADR-0093 decision 1 item 14).
  * One market at a time and each rejection caught (`runScan`), so a settlement that fails — the
- * "no balance row", "no result" and VOID throws above, a transient DB error — rolls back that
+ * short-collateral, "no result" and VOID throws above, a transient DB error — rolls back that
  * market's steps alone (its step recorded `failed`) and the markets after it are still settled
  * this run. Without the catch the failing market, first by judgement time, would stop every
  * later scan at itself. See `closeDueMarkets` for the batch bound and the re-check.

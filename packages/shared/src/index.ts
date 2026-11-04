@@ -28,6 +28,7 @@ export * from './guards/realtime-events.js';
 export * from './jobs.js';
 export * from './like.js';
 export * from './link-review.js';
+export * from './ledger.js';
 export * from './lmsr.js';
 export * from './market.js';
 export * from './market-dispute.js';

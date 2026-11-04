@@ -1,5 +1,5 @@
-import type { APIRequestContext, APIResponse, Locator, Page, Route } from '@playwright/test';
-import type { Category, Me, ReleaseSetting, StartGrant } from '@buddha/shared';
+import type { APIResponse, Locator, Page, Route } from '@playwright/test';
+import type { Category, Me, StartGrant } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { E2E_CONSENT_VERSIONS } from './consent-versions';
 import {
@@ -21,6 +21,8 @@ import {
   setFirstPassword,
   signIn,
   signUp,
+  startCoinText,
+  startCoinValue,
   switchAccountUnderScreen,
   test,
   verificationLink,
@@ -44,30 +46,20 @@ import {
  * no database access. The codes come from the API's development SMS sender, which mails them to
  * Mailpit (helpers.ts `smsCode`); phone-verification.spec.ts covers the 본인확인 step's refusals.
  *
- * The start Coin the nickname step grants waits while the release setting 시작 지급액 has no value
- * (ADR-0071) — the e2e database's state, which no spec changes: a value entered here would be paid
- * by the worker to every account any spec made. So the notice screen's waiting form is the real
- * one, and its amount form is drawn from the nickname step's own answer rewritten in the browser
- * (`page.route`), the way start-grant.spec.ts draws the paid wallet.
+ * The start Coin the nickname step grants is paid from the release setting 시작 지급액 (ADR-0071),
+ * which the suite's global setup enters while it is 미정 (global-setup.ts, #116: the e2e database's
+ * accounts get their Coin from it, ADR-0107 결정 2 #73 7항). So the notice screen's amount form is
+ * the real one, and its waiting form is drawn from the nickname step's own answer rewritten in the
+ * browser (`page.route`), the way start-grant.spec.ts draws the waiting wallet.
  *
  * Messages are matched `exact` where a step's intro could contain them as a phrase.
  */
-
-const START_COIN_KEY = 'grant.start_coin';
 
 /** `{ data }` out of the success envelope, with the body in the message on a failure. */
 async function dataOf<T>(response: APIResponse): Promise<T> {
   const body = await response.text();
   if (!response.ok()) throw new Error(`${response.url()} -> ${body}`);
   return (JSON.parse(body) as { data: T }).data;
-}
-
-/** The value of the release setting 시작 지급액 as the admin API reads it (null: 미정). */
-async function startCoinValue(admin: APIRequestContext): Promise<number | null> {
-  const items = await dataOf<ReleaseSetting[]>(await admin.get('/api/v1/admin/release-settings'));
-  const item = items.find((setting) => setting.key === START_COIN_KEY);
-  if (item === undefined) throw new Error(`${START_COIN_KEY} is not registered`);
-  return typeof item.value === 'number' ? item.value : null;
 }
 
 /** An error envelope's code and details. */
@@ -526,7 +518,7 @@ test.describe('가입 직후 온보딩 (#58)', () => {
 
   /**
    * The nickname step's answer and `GET /me` with `startGrant` rewritten: the step asks `GET /me`
-   * again after the grant (for the balance), and that answer would otherwise put the real waiting
+   * again after the grant (for the balance), and that answer would otherwise put the real paid
    * grant back on the screen.
    */
   async function rewriteStartGrant(page: Page, startGrant: StartGrant): Promise<void> {
@@ -542,20 +534,33 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     );
   }
 
-  test('시작 Coin이 지급되면 안내 화면은 대기 문장 대신 지급액을 보인다', async ({ page }) => {
+  test('시작 Coin이 지급되면 안내 화면은 대기 문장 대신 지급액을 보인다', async ({
+    page,
+    admin,
+  }) => {
+    // The amount form of the notice (#57-10), the real one: this database pays the start Coin.
+    const amount = await startCoinText(admin);
     await atNicknameStep(page);
-    // The amount form of the notice (#57-10), from the nickname step's own answer rewritten: a
-    // value entered for real would be paid to every waiting account of every spec (see above).
-    await rewriteStartGrant(page, {
-      status: 'granted',
-      amountCoin: '10000',
-      grantedAt: new Date().toISOString(),
-    });
     await page.getByTestId('nickname-step-submit').click();
 
     await expect(page.getByTestId('notice-granted')).toContainText(copy.onboardingNoticeGranted);
-    await expect(page.getByTestId('notice-amount')).toHaveText('10,000 Coin');
+    await expect(page.getByTestId('notice-amount')).toHaveText(amount);
     await expect(page.getByTestId('notice-pending')).toHaveCount(0);
+    await expect(page.getByTestId('notice-number-used')).toHaveCount(0);
+    await expect(page.getByTestId('notice-facts')).toContainText(copy.onboardingNoticeNoCash);
+  });
+
+  test('시작 Coin이 지급액을 기다리면 안내 화면은 지급액 대신 대기 문장을 보인다', async ({
+    page,
+  }) => {
+    await atNicknameStep(page);
+    // The waiting form of the notice (#57-10), while 시작 지급액 is 미정: from the nickname step's
+    // own answer rewritten, since this database holds a value (see above).
+    await rewriteStartGrant(page, { status: 'pending', amountCoin: null, grantedAt: null });
+    await page.getByTestId('nickname-step-submit').click();
+
+    await expect(page.getByTestId('notice-pending')).toHaveText(copy.walletStartGrantPending);
+    await expect(page.getByTestId('notice-amount')).toHaveCount(0);
     await expect(page.getByTestId('notice-number-used')).toHaveCount(0);
     await expect(page.getByTestId('notice-facts')).toContainText(copy.onboardingNoticeNoCash);
     // A `GET /me` still in flight (a focus refetch) must not outlive the page's routes.

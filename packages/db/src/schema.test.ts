@@ -57,6 +57,7 @@ import {
   commentLikes,
   consentRecords,
   fills,
+  ledgerAccounts,
   ledgerEntries,
   linkFlags,
   linkUses,
@@ -164,6 +165,7 @@ import {
   randomPhoneHash,
 } from './test/factories.js';
 import { connectTestDb, hasTestDb, testDbUrls, type TestDb } from './test/harness.js';
+import { ledgerOf } from './test/ledger.js';
 import {
   hasStandingConsent,
   isNicknameHeld,
@@ -180,6 +182,7 @@ import {
   recordStartGrant,
   startGrantHoldsNumber,
 } from './start-grants.js';
+import { recordLedgerEntry, type LedgerEntryInput } from './ledger.js';
 import { clockTimestamp, lockAdminRoles, lockMarket } from './tx-helpers.js';
 
 /**
@@ -195,6 +198,22 @@ function sqlState(error: unknown): string | undefined {
 function sqlConstraint(error: unknown): string | undefined {
   const e = error as { constraint?: string; cause?: { constraint?: string } } | null;
   return e?.cause?.constraint ?? e?.constraint;
+}
+
+/**
+ * The ON DELETE action (`pg_constraint.confdeltype`: 'r' restrict, 'c' cascade, 'n' set null) of
+ * each named foreign key. A test of a table's RESTRICT on `user` reads it here rather than from a
+ * refused `DELETE FROM "user"`: since 0060 every person has a `ledger_accounts` row that RESTRICTs
+ * that delete on its own (#116, ADR-0109), so the refusal no longer says which key refused it.
+ */
+async function deleteActions(
+  db: TestDb['db'],
+  ...names: string[]
+): Promise<Record<string, string>> {
+  const { rows } = await db.execute<{ name: string; action: string }>(sql`
+    SELECT conname AS name, confdeltype AS action FROM pg_constraint
+    WHERE contype = 'f' AND conname IN ${names}`);
+  return Object.fromEntries(rows.map((row) => [row.name, row.action]));
 }
 
 /** The Postgres message (a trigger's RAISE), wrapped or bare like `sqlState`. */
@@ -251,12 +270,17 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     expect(nicknameSchema.safeParse(profile?.nickname).success).toBe(true);
     expect(profile?.role).toBe('user');
     // Migration 0031 (#70): creating an account grants nothing — a zero balance and no ledger
-    // entry, whatever the sign-up path. The start Coin comes from the start grant.
+    // entry, whatever the sign-up path. The start Coin comes from the start grant. The balance is
+    // the person's own user ledger account's (#116, migration 0060), born with it.
     expect(balance?.availableCoin).toBe(0n);
     expect(balance?.lockedCoin).toBe(0n);
-    expect(
-      await t.db.select().from(ledgerEntries).where(eq(ledgerEntries.userId, 'u-trigger')),
-    ).toEqual([]);
+    const own = await t.db
+      .select()
+      .from(ledgerAccounts)
+      .where(eq(ledgerAccounts.ownerId, 'u-trigger'));
+    expect(own).toEqual([expect.objectContaining({ kind: 'user', marketId: null })]);
+    expect(balance?.accountId).toBe(own[0]!.id);
+    expect(await ledgerOf(t.db, 'u-trigger')).toEqual([]);
   });
 
   it('createUser applies nickname/role/balance and keeps the ledger invariant', async () => {
@@ -274,11 +298,10 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     expect(profile.role).toBe('admin');
     expect(balance.availableCoin).toBe(10_000n);
     expect(balance.lockedCoin).toBe(0n);
-    const [sum] = await t.db
-      .select({ total: sql<string>`coalesce(sum(${ledgerEntries.amountCoin}), 0)` })
-      .from(ledgerEntries)
-      .where(eq(ledgerEntries.userId, u.id));
-    expect(BigInt(sum!.total)).toBe(10_000n);
+    // Paid as its start grant, the one way Coin comes to a new account (#116): one START_GRANT.
+    expect(
+      (await ledgerOf(t.db, u.id)).map((e) => [e.type, e.amountCoin, e.balanceAfterCoin]),
+    ).toEqual([['START_GRANT', 10_000n, 10_000n]]);
   });
 
   it('round-trips bigint amounts beyond 2^53 exactly', async () => {
@@ -290,8 +313,12 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
 
   it('rejects negative balances via CHECK', async () => {
     const { user: u } = await createUser(t.db);
+    // A lock move (the total kept, so migration 0060's ledger guards let it through) past 0.
     await expect(
-      t.db.update(balances).set({ availableCoin: -1n }).where(eq(balances.userId, u.id)),
+      t.db
+        .update(balances)
+        .set({ availableCoin: -1n, lockedCoin: 1n })
+        .where(eq(balances.userId, u.id)),
     ).rejects.toSatisfy((e) => sqlState(e) === '23514');
   });
 
@@ -490,9 +517,9 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'consent_records_item_check',
       );
       // Kept past the account (restrict): a withdrawal keeps the user row (#140).
-      await expect(t.db.delete(user).where(eq(user.id, u.id))).rejects.toSatisfy(
-        (e) => sqlState(e) === '23503',
-      );
+      expect(await deleteActions(t.db, 'consent_records_user_id_user_id_fk')).toEqual({
+        consent_records_user_id_user_id_fk: 'r',
+      });
       // DELETE stays for the retention work (#184).
       await t.db.delete(consentRecords).where(eq(consentRecords.userId, u.id));
       expect(await t.db.select().from(consentRecords)).toEqual([]);
@@ -4420,18 +4447,18 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       ]);
     });
 
-    it('gives the 운영 마켓메이커 a zero balance and no profile, and makes one only', async () => {
+    it('gives the 운영 마켓메이커 no profile and no ledger account of its own, and makes one only', async () => {
       // ADR-0107 결정 2 #73 11항: no auto nickname, no 소개, no public profile, no admin role — none
-      // exists without a profile row — and no Coin but what its ledger will say (#116).
+      // exists without a profile row — and its Coin only in each market's 마켓메이커 자금 (#116).
       const marketMaker = await createMarketMakerAccount(t.db);
-      expect(await t.db.select().from(balances).where(eq(balances.userId, marketMaker))).toEqual([
-        expect.objectContaining({ availableCoin: 0n, lockedCoin: 0n }),
-      ]);
+      expect(await t.db.select().from(balances).where(eq(balances.userId, marketMaker))).toEqual(
+        [],
+      );
       expect(await t.db.select().from(profiles).where(eq(profiles.userId, marketMaker))).toEqual(
         [],
       );
       expect(
-        await t.db.select().from(ledgerEntries).where(eq(ledgerEntries.userId, marketMaker)),
+        await t.db.select().from(ledgerAccounts).where(eq(ledgerAccounts.ownerId, marketMaker)),
       ).toEqual([]);
       expect(
         await refusal(
@@ -4876,9 +4903,9 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       ).rejects.toSatisfy(
         (e) => sqlState(e) === '23505' && sqlConstraint(e) === 'post_images_media_id_unique',
       );
-      await expect(t.db.delete(user).where(eq(user.id, author.id))).rejects.toSatisfy(
-        (e) => sqlState(e) === '23503',
-      );
+      expect(await deleteActions(t.db, 'posts_author_id_user_id_fk')).toEqual({
+        posts_author_id_user_id_fk: 'r',
+      });
       await expect(t.db.delete(markets).where(eq(markets.id, market.id))).rejects.toSatisfy(
         (e) => sqlState(e) === '23503',
       );
@@ -5116,9 +5143,9 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       await expect(t.db.delete(posts).where(eq(posts.id, post.id))).rejects.toSatisfy(
         (e) => sqlState(e) === '23503',
       );
-      await expect(t.db.delete(user).where(eq(user.id, author.id))).rejects.toSatisfy(
-        (e) => sqlState(e) === '23503',
-      );
+      expect(await deleteActions(t.db, 'post_comments_author_id_user_id_fk')).toEqual({
+        post_comments_author_id_user_id_fk: 'r',
+      });
     });
 
     it('keeps an edit’s history append-only, deletable later by the retention work', async () => {
@@ -5513,9 +5540,13 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       await createCommentLike(t.db, { commentId: comment.id, userId: a.id });
       // RESTRICT: a withdrawn account's likes stay and keep counting (#37-17), and nothing deletes
       // a liked post or comment.
-      await expect(t.db.delete(user).where(eq(user.id, a.id))).rejects.toSatisfy(
-        (e) => sqlState(e) === '23503',
-      );
+      expect(
+        await deleteActions(
+          t.db,
+          'post_likes_user_id_user_id_fk',
+          'comment_likes_user_id_user_id_fk',
+        ),
+      ).toEqual({ post_likes_user_id_user_id_fk: 'r', comment_likes_user_id_user_id_fk: 'r' });
       await expect(
         t.db.delete(postComments).where(eq(postComments.id, comment.id)),
       ).rejects.toSatisfy((e) => sqlState(e) === '23503');
@@ -7052,7 +7083,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         value: member.id,
         expiresAt: new Date(Date.now() + 60_000),
       });
-      await createPhoneVerification(t.db, { userId: member.id });
+      // Its 본인확인 record came with its Coin: `balanceCoin` pays it as the start grant (#116).
       await createWatch(t.db, { userId: member.id, marketId: market.id });
       await createSearch(t.db, { userId: member.id, query: '금리' });
       await t.db
@@ -7095,7 +7126,6 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     /** A forfeiture entry of the wrong shape, written in place of the closure's own. */
     interface BadForfeiture {
       amountCoin?: bigint;
-      balanceAfterCoin?: bigint;
       refId?: string;
     }
 
@@ -7128,16 +7158,25 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           .for('update');
         const closedAt = new Date();
         if (keep !== 'coin' && balance!.availableCoin > 0n) {
+          // Written as rows, not through `recordLedgerEntry`, so a wrong shape reaches the
+          // database.
+          const amountCoin = options.forfeiture?.amountCoin ?? balance!.availableCoin;
           await tx.insert(ledgerEntries).values({
-            userId,
             type: 'CLOSURE_FORFEIT',
-            amountCoin: -balance!.availableCoin,
-            balanceAfterCoin: 0n,
+            amountCoin,
+            fromAccountId: balance!.accountId,
+            fromBalanceAfterCoin: balance!.ledgerCoin - amountCoin,
             refType: 'account_closure',
-            refId: userId,
-            ...options.forfeiture,
+            refId: options.forfeiture?.refId ?? userId,
+            idempotencyKey: userId,
           });
-          await tx.update(balances).set({ availableCoin: 0n }).where(eq(balances.userId, userId));
+          await tx
+            .update(balances)
+            .set({
+              availableCoin: sql`${balances.availableCoin} - ${amountCoin}`,
+              ledgerCoin: sql`${balances.ledgerCoin} - ${amountCoin}`,
+            })
+            .where(eq(balances.accountId, balance!.accountId));
         }
         if (keep !== 'hold') {
           await tx
@@ -7244,16 +7283,17 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           t.db.update(profiles).set(change).where(eq(profiles.userId, member.id)),
         ).rejects.toSatisfy((e) => errorMessage(e).includes('never changes again'));
       }
-      // The ledger sums to the balance, now 0, and ends with the forfeiture.
-      const entries = await t.db
-        .select()
-        .from(ledgerEntries)
-        .where(eq(ledgerEntries.userId, member.id))
-        .orderBy(ledgerEntries.id);
+      // The ledger sums to the balance, now 0, and ends with the forfeiture: a burn (#73 16항).
+      const entries = await ledgerOf(t.db, member.id);
       expect(entries.map((e) => [e.type, e.amountCoin, e.balanceAfterCoin])).toEqual([
-        ['ADMIN_ADJUST', 5_000n, 5_000n],
+        ['START_GRANT', 5_000n, 5_000n],
         ['CLOSURE_FORFEIT', -5_000n, 0n],
       ]);
+      const [forfeiture] = await t.db
+        .select()
+        .from(ledgerEntries)
+        .where(eq(ledgerEntries.type, 'CLOSURE_FORFEIT'));
+      expect(forfeiture).toMatchObject({ toAccountId: null, toBalanceAfterCoin: null });
     });
 
     it('refuses the commit of a closure that left anything behind (profiles_closed_completely)', async () => {
@@ -7346,41 +7386,55 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     it('ends a closed account’s ledger with its forfeiture, the closing account’s own and once', async () => {
       const { member, requestIds } = await closable();
       await closeInDb(member.id, requestIds);
-      // Nothing after the closure — checked at the commit.
+      // Nothing after the closure, to it or from it (#126 relies on it) — checked at the commit.
+      const record = (input: Omit<LedgerEntryInput, 'idempotencyKey'>) =>
+        t.db.transaction((tx) => recordLedgerEntry(tx, { ...input, idempotencyKey: randomUUID() }));
       await expect(
-        t.db.insert(ledgerEntries).values({
-          userId: member.id,
-          type: 'ADMIN_ADJUST',
-          amountCoin: 0n,
-          balanceAfterCoin: 0n,
+        record({
+          type: 'START_GRANT',
+          amountCoin: 1n,
+          from: null,
+          to: { kind: 'user', userId: member.id },
+          refType: 'start_grant',
+          refId: randomUUID(),
         }),
       ).rejects.toSatisfy((e) => errorMessage(e).includes('takes no entry after the closure'));
-      // One forfeiture per account.
+      // One forfeiture per account: no other entry may refer to the closure again.
+      const { user: open } = await createUser(t.db, { balanceCoin: 100n });
       await expect(
-        t.db.insert(ledgerEntries).values({
-          userId: member.id,
-          type: 'CLOSURE_FORFEIT',
-          amountCoin: -1n,
-          balanceAfterCoin: 0n,
+        record({
+          type: 'START_GRANT',
+          amountCoin: 1n,
+          from: null,
+          to: { kind: 'user', userId: open.id },
           refType: 'account_closure',
           refId: member.id,
         }),
       ).rejects.toSatisfy((e) => sqlConstraint(e) === 'ledger_entries_account_closure_unique');
       // An open account takes no forfeiture, nor any entry that refers to a closure.
-      const { user: open } = await createUser(t.db, { balanceCoin: 100n });
       for (const entry of [
-        { type: 'CLOSURE_FORFEIT' as const, refType: null, refId: null },
-        { type: 'CLOSURE_FORFEIT' as const, refType: 'account_closure', refId: open.id },
-        { type: 'ADMIN_ADJUST' as const, refType: 'account_closure', refId: open.id },
-      ]) {
-        await expect(
-          t.db.insert(ledgerEntries).values({
-            userId: open.id,
-            amountCoin: -100n,
-            balanceAfterCoin: 0n,
-            ...entry,
-          }),
-        ).rejects.toSatisfy((e) => errorMessage(e).includes('is a forfeiture only as'));
+        {
+          type: 'CLOSURE_FORFEIT',
+          from: { kind: 'user', userId: open.id },
+          to: null,
+          refType: 'payment',
+        },
+        {
+          type: 'CLOSURE_FORFEIT',
+          from: { kind: 'user', userId: open.id },
+          to: null,
+          refType: 'account_closure',
+        },
+        {
+          type: 'START_GRANT',
+          from: null,
+          to: { kind: 'user', userId: open.id },
+          refType: 'account_closure',
+        },
+      ] as const) {
+        await expect(record({ ...entry, amountCoin: 100n, refId: open.id })).rejects.toSatisfy(
+          (e) => errorMessage(e).includes('is a forfeiture only as'),
+        );
       }
     });
 
@@ -7511,8 +7565,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     it('takes a forfeiture only of the closing account’s whole balance, to 0 and naming itself (#57-16)', async () => {
       const { user: elsewhere } = await createUser(t.db);
       const bad: [string, BadForfeiture][] = [
-        ['a balance left after it', { balanceAfterCoin: 500n }],
-        ['a credit', { amountCoin: 5_000n }],
+        ['a balance left after it', { amountCoin: 4_500n }],
         ['another account named', { refId: elsewhere.id }],
       ];
       for (const [what, forfeiture] of bad) {
@@ -8173,6 +8226,9 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           'balances.locked_coin',
           'balances_available_coin_check',
           'balances_locked_coin_check',
+          // #116 (migration 0060): the account's total as its ledger says.
+          'balances.ledger_coin',
+          'balances_ledger_coin_check',
           'charge_packages.amount_coin',
           'charge_packages_amount_coin_check',
           'coupon_redemptions.amount_coin',
@@ -8182,8 +8238,11 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           'fills.fee_coin',
           'fills_amount_coin_check',
           'fills_fee_coin_check',
+          // #116 (migration 0060): one positive amount per event, and each side's total after it.
           'ledger_entries.amount_coin',
-          'ledger_entries.balance_after_coin',
+          'ledger_entries.from_balance_after_coin',
+          'ledger_entries.to_balance_after_coin',
+          'ledger_entries_amount_coin_check',
           'markets.volume_coin',
           // `markets_status_volume_coin_id_idx` went with the volume order (migration 0024,
           // ADR-0065); #132 brings both back.
@@ -8389,8 +8448,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
     expect(await t.db.select().from(positions)).toHaveLength(1);
     // No ledger entry at all: the trigger grants nothing (migration 0031), and neither does this.
-    const entries = await t.db.select().from(ledgerEntries).where(eq(ledgerEntries.userId, u.id));
-    expect(entries).toEqual([]);
+    expect(await ledgerOf(t.db, u.id)).toEqual([]);
   });
 
   it('positions.version starts at 1 and every ORM update bumps it (migration 0010)', async () => {
@@ -8957,9 +9015,9 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       const { user: u } = await createUser(t.db);
       const market = await createMarket(t.db);
       await createProposal(t.db, { userId: u.id, status: 'adopted', marketId: market.id });
-      await expect(t.db.delete(user).where(eq(user.id, u.id))).rejects.toSatisfy(
-        (e) => sqlState(e) === '23503',
-      );
+      expect(await deleteActions(t.db, 'market_proposals_user_id_user_id_fk')).toEqual({
+        market_proposals_user_id_user_id_fk: 'r',
+      });
     });
   });
 
@@ -9725,13 +9783,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     const amountOf = (amount: bigint | null) => () => Promise.resolve(amount);
     const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-    async function ledgerOf(userId: string) {
-      return t.db
-        .select()
-        .from(ledgerEntries)
-        .where(eq(ledgerEntries.userId, userId))
-        .orderBy(ledgerEntries.id);
-    }
+    const entriesOf = (userId: string) => ledgerOf(t.db, userId);
 
     async function numbersOf(grantId: string) {
       return t.db
@@ -9863,7 +9915,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         expect(await record(later.id, hash)).toEqual({ outcome: 'number_already_used' });
       }
       expect(await t.db.select().from(startGrants)).toEqual([grant]);
-      expect((await ledgerOf(a.id)).map((e) => e.type)).toEqual(['START_GRANT']);
+      expect((await entriesOf(a.id)).map((e) => e.type)).toEqual(['START_GRANT']);
     });
 
     it('records once when calls for one account, or for one number, come at the same time', async () => {
@@ -9903,15 +9955,20 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       const first = await t.db.transaction((tx) => payStartGrant(tx, grant.id, amountOf(10_000n)));
       expect(first.outcome).toBe('granted');
       if (first.outcome !== 'granted') throw new Error('not granted');
+      // A mint into the account's own ledger account (ADR-0107 결정 5), keyed by the grant.
       expect(first.ledgerEntry).toMatchObject({
-        userId: u.id,
         type: 'START_GRANT',
         amountCoin: 10_000n,
-        balanceAfterCoin: 10_000n,
+        fromAccountId: null,
+        toAccountId: first.balance.accountId,
+        toBalanceAfterCoin: 10_000n,
+        marketId: null,
         refType: 'start_grant',
         refId: grant.id,
+        idempotencyKey: grant.id,
         memo: null,
       });
+      expect(first.balance.userId).toBe(u.id);
       expect(first.grant).toMatchObject({
         amountCoin: 10_000n,
         ledgerEntryId: first.ledgerEntry.id,
@@ -9922,7 +9979,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       // Again, with another amount: paid already, nothing written, the amount it got stays.
       const again = await t.db.transaction((tx) => payStartGrant(tx, grant.id, amountOf(5_000n)));
       expect(again).toEqual({ outcome: 'already_granted', grant: first.grant });
-      expect((await ledgerOf(u.id)).map((e) => [e.type, e.amountCoin])).toEqual([
+      expect((await entriesOf(u.id)).map((e) => [e.type, e.amountCoin])).toEqual([
         ['START_GRANT', 10_000n],
       ]);
     });
@@ -9932,7 +9989,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       const grant = await createStartGrant(t.db, { userId: u.id });
       const waiting = await t.db.transaction((tx) => payStartGrant(tx, grant.id, amountOf(null)));
       expect(waiting).toEqual({ outcome: 'pending', grant });
-      expect(await ledgerOf(u.id)).toEqual([]);
+      expect(await entriesOf(u.id)).toEqual([]);
       expect(await pendingStartGrantIds(t.db, 10)).toEqual([grant.id]);
       const paid = await t.db.transaction((tx) => payStartGrant(tx, grant.id, amountOf(3_000n)));
       expect(paid.outcome).toBe('granted');
@@ -9953,7 +10010,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         'already_granted',
         'granted',
       ]);
-      expect((await ledgerOf(u.id)).map((e) => e.type)).toEqual(['START_GRANT']);
+      expect((await entriesOf(u.id)).map((e) => e.type)).toEqual(['START_GRANT']);
       const [balance] = await t.db.select().from(balances).where(eq(balances.userId, u.id));
       expect(balance!.availableCoin).toBe(10_000n);
     });
@@ -9973,9 +10030,28 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(await pendingStartGrantIds(t.db, 2)).toEqual(ids.slice(0, 2));
     });
 
+    /** A START_GRANT-like event for `userId`, recorded through the write API (#116). */
+    async function grantEntry(userId: string, overrides: Partial<LedgerEntryInput> = {}) {
+      const done = await t.db.transaction((tx) =>
+        recordLedgerEntry(tx, {
+          type: 'START_GRANT',
+          amountCoin: 100n,
+          from: null,
+          to: { kind: 'user', userId },
+          refType: 'start_grant',
+          refId: randomUUID(),
+          idempotencyKey: randomUUID(),
+          ...overrides,
+        }),
+      );
+      return done.entry;
+    }
+
     it('records a grant pending only, and pays it through the CHECKs: all three columns, a positive amount', async () => {
-      const { user: u } = await createUser(t.db, { balanceCoin: 100n });
-      const [entry] = await ledgerOf(u.id);
+      const { user: u } = await createUser(t.db);
+      // Another account's paid grant's entry: an entry id to name.
+      await createUser(t.db, { balanceCoin: 100n });
+      const [entry] = await t.db.select().from(ledgerEntries);
       // Inserted with anything paid or cancelled: refused by migration 0031's insert trigger,
       // before the CHECKs (a BEFORE ROW trigger runs first) — a payment is the checked UPDATE.
       const insertRefused = (e: unknown) =>
@@ -10001,44 +10077,45 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'start_grants_paid_check',
         );
       }
-      // A zero payment by an entry that is otherwise its own: only the amount's CHECK refuses it.
-      const [zero] = await t.db
-        .insert(ledgerEntries)
-        .values({
-          userId: u.id,
+      // The amount's own CHECK, on the pending row: CHECKs run in name order, so it answers before
+      // `start_grants_paid_check`, and the trigger looks for an entry only once `granted_at` is
+      // set.
+      for (const amountCoin of [0n, -5n]) {
+        await expect(
+          t.db.update(startGrants).set({ amountCoin }).where(eq(startGrants.id, pending.id)),
+        ).rejects.toSatisfy(
+          (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'start_grants_amount_coin_check',
+        );
+      }
+      // A zero payment: no entry of 0 exists to pay it with (#116: an event moves a positive
+      // amount), and the grant's trigger finds none — the amount's CHECK stands behind both.
+      await expect(
+        t.db.insert(ledgerEntries).values({
           type: 'START_GRANT',
           amountCoin: 0n,
-          balanceAfterCoin: 100n,
+          toAccountId: entry!.toAccountId,
+          toBalanceAfterCoin: 100n,
           refType: 'start_grant',
           refId: pending.id,
-        })
-        .returning();
+          idempotencyKey: randomUUID(),
+        }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'ledger_entries_amount_coin_check',
+      );
       await expect(
         t.db
           .update(startGrants)
-          .set({ amountCoin: 0n, ledgerEntryId: zero!.id, grantedAt: new Date() })
+          .set({ amountCoin: 0n, ledgerEntryId: entry!.id, grantedAt: new Date() })
           .where(eq(startGrants.id, pending.id)),
-      ).rejects.toSatisfy(
-        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'start_grants_amount_coin_check',
-      );
+      ).rejects.toSatisfy((e) => /is paid only by its own START_GRANT/.test(errorMessage(e)));
       // Paid and cancelled at once, by an entry that would pay it: the settled CHECK.
-      const [own] = await t.db
-        .insert(ledgerEntries)
-        .values({
-          userId: u.id,
-          type: 'START_GRANT',
-          amountCoin: 100n,
-          balanceAfterCoin: 200n,
-          refType: 'start_grant',
-          refId: pending.id,
-        })
-        .returning();
+      const own = await grantEntry(u.id, { refId: pending.id });
       await expect(
         t.db
           .update(startGrants)
           .set({
             amountCoin: 100n,
-            ledgerEntryId: own!.id,
+            ledgerEntryId: own.id,
             grantedAt: new Date(),
             cancelledAt: new Date(),
           })
@@ -10053,9 +10130,9 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       const { user: b } = await createUser(t.db, { balanceCoin: 100n });
       const refused = (e: unknown) =>
         sqlState(e) === '23000' && /must be inserted pending/.test(errorMessage(e));
-      // B's ADMIN_ADJUST entry of the same amount: the grant would say A got Coin B holds, and the
-      // number would count as paid with no START_GRANT entry — for good, as the app cannot fix it.
-      const [adjust] = await ledgerOf(b.id);
+      // B's own START_GRANT of the same amount: the grant would say A got Coin B holds, and the
+      // number would count as paid with no entry of A's — for good, as the app cannot fix it.
+      const [adjust] = await entriesOf(b.id);
       await expect(
         t.db.insert(startGrants).values({
           userId: a.id,
@@ -10066,34 +10143,24 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       ).rejects.toSatisfy(refused);
       // A's own START_GRANT entry naming the row to be: still refused, the row starts pending.
       const id = randomUUID();
-      const [own] = await t.db
-        .insert(ledgerEntries)
-        .values({
-          userId: a.id,
-          type: 'START_GRANT',
-          amountCoin: 100n,
-          balanceAfterCoin: 100n,
-          refType: 'start_grant',
-          refId: id,
-        })
-        .returning();
+      const own = await grantEntry(a.id, { refId: id });
       await expect(
         t.db.insert(startGrants).values({
           id,
           userId: a.id,
           amountCoin: 100n,
-          ledgerEntryId: own!.id,
+          ledgerEntryId: own.id,
           grantedAt: new Date(),
         }),
       ).rejects.toSatisfy(refused);
-      expect(await t.db.select().from(startGrants)).toEqual([]);
+      expect(await t.db.select().from(startGrants).where(eq(startGrants.userId, a.id))).toEqual([]);
     });
 
     it('never rewrites a record, nor pays it with an entry that is not its own START_GRANT', async () => {
       const { user: a } = await createUser(t.db);
-      const { user: b } = await createUser(t.db, { balanceCoin: 700n });
+      const { user: b } = await createUser(t.db);
       const pending = await createStartGrant(t.db, { userId: a.id });
-      const another = await createStartGrant(t.db, { userId: b.id });
+      const another = await createStartGrant(t.db, { userId: b.id, amountCoin: 700n });
       // Each refusal is matched by its own message, so a case cannot pass on another check's.
       const identityRefused = (e: unknown) =>
         sqlState(e) === '23000' &&
@@ -10112,40 +10179,27 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
 
       // Paid by an entry that is this grant's own START_GRANT in every field but one: each
       // condition of the trigger's check, on its own (ledger_entry_id is UNIQUE, so one entry each).
-      const entry = async (values: Partial<typeof ledgerEntries.$inferInsert>) => {
-        const [row] = await t.db
-          .insert(ledgerEntries)
-          .values({
-            userId: a.id,
-            type: 'START_GRANT',
-            amountCoin: 700n,
-            balanceAfterCoin: 700n,
-            refType: 'start_grant',
-            refId: pending.id,
-            ...values,
-          })
-          .returning();
-        return row!;
-      };
+      const entry = (values: Partial<LedgerEntryInput>) =>
+        grantEntry(a.id, { amountCoin: 700n, refId: pending.id, ...values });
       const payWith = (ledgerEntryId: number) =>
         t.db
           .update(startGrants)
           .set({ amountCoin: 700n, ledgerEntryId, grantedAt: new Date() })
           .where(eq(startGrants.id, pending.id));
-      const [adjust] = await ledgerOf(b.id);
-      const oneFieldOff: Partial<typeof ledgerEntries.$inferInsert>[] = [
-        { userId: b.id }, // another account's: the grant would say A got Coin that B holds
-        { type: 'ADMIN_ADJUST' }, // not a start grant
-        { refType: 'admin_action' }, // pointing at something else
+      const [adjust] = await entriesOf(b.id);
+      const oneFieldOff: Partial<LedgerEntryInput>[] = [
+        { to: { kind: 'user', userId: b.id } }, // another account's: A would get Coin B holds
+        { type: 'DEPOSIT' }, // not a start grant (a mint into A's account all the same)
+        { refType: 'payment' }, // pointing at something else
         { refId: another.id }, // another grant's
-        { amountCoin: 50n, balanceAfterCoin: 50n }, // another amount
+        { amountCoin: 50n }, // another amount
       ];
       for (const values of oneFieldOff) {
         await expect(payWith((await entry(values)).id)).rejects.toSatisfy(notItsOwn);
       }
       await expect(payWith(adjust!.id)).rejects.toSatisfy(notItsOwn);
       // The entry named is the one checked: with A's own START_GRANT entry in the ledger, naming
-      // B's ADMIN_ADJUST of the same amount is still refused…
+      // B's START_GRANT of the same amount is still refused…
       const own = await entry({});
       await expect(payWith(adjust!.id)).rejects.toSatisfy(notItsOwn);
       // …and naming its own pays it (the check is not blind).
@@ -10207,7 +10261,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       const paid = await t.db.transaction((tx) => payStartGrant(tx, grant.id, amountOf(10_000n)));
       expect(paid).toEqual({ outcome: 'cancelled', grant: result.grant });
       expect(await pendingStartGrantIds(t.db, 10)).toEqual([]);
-      expect(await ledgerOf(a.id)).toEqual([]);
+      expect(await entriesOf(a.id)).toEqual([]);
       // Again: nothing more.
       expect(await t.db.transaction((tx) => cancelStartGrant(tx, a.id))).toEqual({
         outcome: 'already_cancelled',
@@ -10224,7 +10278,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           payStartGrant(tx, again.grantId, amountOf(10_000n)),
         );
         expect(pay.outcome).toBe('granted');
-        expect((await ledgerOf(next.id)).map((e) => [e.type, e.amountCoin])).toEqual([
+        expect((await entriesOf(next.id)).map((e) => [e.type, e.amountCoin])).toEqual([
           ['START_GRANT', 10_000n],
         ]);
       }
@@ -10347,7 +10401,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       resume();
       await withdrawal;
       expect((await payment).outcome).toBe('cancelled');
-      expect(await ledgerOf(a.id)).toEqual([]);
+      expect(await entriesOf(a.id)).toEqual([]);
 
       // The payment first: the withdrawal's cancellation waits, then finds it paid.
       const { user: b } = await createUser(t.db);
@@ -10371,7 +10425,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       release();
       await payer;
       expect((await cancel).outcome).toBe('granted');
-      expect((await ledgerOf(b.id)).map((e) => e.type)).toEqual(['START_GRANT']);
+      expect((await entriesOf(b.id)).map((e) => e.type)).toEqual(['START_GRANT']);
 
       // Two withdrawals' cancellations of one grant: one cancels.
       const { user: c } = await createUser(t.db);
@@ -10427,7 +10481,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(await endings(withdrawal, payment)).toEqual(['ok', 'ok']);
       expect(waited).toBe(true);
       expect((await payment).outcome).toBe('cancelled');
-      expect(await ledgerOf(a.id)).toEqual([]);
+      expect(await entriesOf(a.id)).toEqual([]);
 
       // A withdrawal that takes the record before anything else: the payment waits on the record,
       // not on the grant. Were the payment to lock the grant first (the first commit's order), the
@@ -10458,7 +10512,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(await endings(withdrawing, paying)).toEqual(['ok', 'ok']);
       expect(blocked).toBe(true);
       expect((await paying).outcome).toBe('cancelled');
-      expect(await ledgerOf(b.id)).toEqual([]);
+      expect(await entriesOf(b.id)).toEqual([]);
     });
 
     it('orders an operator number and a cancellation of its grant: refused after, released if before', async () => {
@@ -10621,7 +10675,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(await pendingStartGrantIds(t.db, 1)).toEqual([waiting.id]);
       const result = await t.db.transaction((tx) => payStartGrant(tx, left.id, amountOf(10_000n)));
       expect(result).toEqual({ outcome: 'unverified', grant: left });
-      expect(await ledgerOf(gone.id)).toEqual([]);
+      expect(await entriesOf(gone.id)).toEqual([]);
       const [balance] = await t.db.select().from(balances).where(eq(balances.userId, gone.id));
       expect(balance!.availableCoin).toBe(0n);
       // Still pending, still holding its number.
@@ -10688,14 +10742,10 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
 
   describe('buddha_app privileges (PLAN 6.4)', () => {
     it('can INSERT and SELECT ledger_entries but not UPDATE or DELETE', async () => {
-      const { user: u } = await createUser(t.db, { balanceCoin: 500n });
-      const rows = await t.db
-        .select()
-        .from(ledgerEntries)
-        .where(eq(ledgerEntries.userId, u.id))
-        .orderBy(ledgerEntries.id);
-      // The factory's 500 Coin (the trigger writes no entry since migration 0031).
-      expect(rows.map((row) => row.type)).toEqual(['ADMIN_ADJUST']);
+      await createUser(t.db, { balanceCoin: 500n });
+      const rows = await t.db.select().from(ledgerEntries).orderBy(ledgerEntries.id);
+      // The factory's 500 Coin, its start grant (the trigger writes no entry since migration 0031).
+      expect(rows.map((row) => row.type)).toEqual(['START_GRANT']);
       await expect(
         t.db.update(ledgerEntries).set({ memo: 'x' }).where(eq(ledgerEntries.id, rows[0]!.id)),
       ).rejects.toSatisfy((e) => sqlState(e) === '42501');
@@ -10710,7 +10760,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         FROM information_schema.role_table_grants
         WHERE grantee = 'buddha_app' AND table_schema = 'public'
           AND table_name IN ('ledger_entries', 'market_events', 'admin_actions', 'payment_events',
-            'balances', 'payments', 'phone_verifications', 'phone_verification_codes',
+            'balances', 'ledger_accounts', 'payments', 'phone_verifications', 'phone_verification_codes',
             'phone_verification_refused_sends',
             'market_settlement_steps', 'release_settings',
             'approval_requests', 'market_watches', 'market_watch_events', 'market_searches',
@@ -10727,7 +10777,10 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(privs('admin_actions')).toEqual(['INSERT', 'SELECT']);
       // Migration 0015: the PG exchange log is append-only too.
       expect(privs('payment_events')).toEqual(['INSERT', 'SELECT']);
-      expect(privs('balances')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+      // Migration 0060 (#116): a ledger account is never changed or removed, and a balance row is
+      // opened by its trigger and never removed; its amounts are updated by column only.
+      expect(privs('ledger_accounts')).toEqual(['INSERT', 'SELECT']);
+      expect(privs('balances')).toEqual(['SELECT']);
       expect(privs('payments')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       // Migration 0028 (#183): the real name changes in place and the row goes with the account;
       // a code's wrong entries, its use and what the provider said (0030) are written in place,

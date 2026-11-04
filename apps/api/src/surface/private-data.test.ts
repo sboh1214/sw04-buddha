@@ -68,7 +68,7 @@
  * fails the run until a case is written here.
  */
 import { randomInt, randomUUID } from 'node:crypto';
-import { schema } from '@buddha/db';
+import { ledgerKeys, recordLedgerEntry, schema } from '@buddha/db';
 import {
   completeOnboarding,
   createApprovalRequest,
@@ -1235,26 +1235,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       'image/png',
     );
 
-    // The balance as the books would have it: the change is an ADMIN_ADJUST entry.
-    const [before] = await t.db
-      .select()
-      .from(schema.balances)
-      .where(eq(schema.balances.userId, a.id));
     const memo = `leak-memo-${tag}`;
-    await t.db
-      .update(schema.balances)
-      .set({ availableCoin: AMOUNTS.available, lockedCoin: AMOUNTS.locked })
-      .where(eq(schema.balances.userId, a.id));
-    const [entry] = await t.db
-      .insert(schema.ledgerEntries)
-      .values({
-        userId: a.id,
-        type: 'ADMIN_ADJUST',
-        amountCoin: AMOUNTS.available - before!.availableCoin,
-        balanceAfterCoin: AMOUNTS.available,
-        memo,
-      })
-      .returning();
 
     // The market every public call reads opened at its scheduled open with rule v1 and was
     // supplemented once (#80): A asked for the supplement — A holds no admin role; the records
@@ -1274,6 +1255,42 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
           approvalReason: supplementApproval,
         },
       ],
+    });
+
+    // The balance as the books would have it (#116): A's start grant above, a DEPOSIT carrying the
+    // memo sentinel (a kept type, a mint into A's account; its payment reference made up — nothing
+    // reads it back), a fill's payment to B (TRADE_FILL, the one move between two people: B's
+    // ledger shows its own +amount and nothing of A's — no account id, no counterparty), and an
+    // order's lock, available → locked within the total and no event (ADR-0107 결정 2 #73 1항).
+    const paidToB = 1_234n;
+    const fillId = randomUUID();
+    const entry = await t.db.transaction(async (tx) => {
+      const paymentRef = randomUUID();
+      await recordLedgerEntry(tx, {
+        type: 'DEPOSIT',
+        amountCoin: AMOUNTS.available + AMOUNTS.locked + paidToB - AMOUNTS.startGrant,
+        from: null,
+        to: { kind: 'user', userId: a.id },
+        refType: 'payment',
+        refId: paymentRef,
+        idempotencyKey: ledgerKeys.deposit(paymentRef),
+        memo,
+      });
+      const paid = await recordLedgerEntry(tx, {
+        type: 'TRADE_FILL',
+        amountCoin: paidToB,
+        from: { kind: 'user', userId: a.id },
+        to: { kind: 'user', userId: b.id },
+        marketId: market.id,
+        refType: 'fill',
+        refId: fillId,
+        idempotencyKey: ledgerKeys.fill(fillId),
+      });
+      await tx
+        .update(schema.balances)
+        .set({ availableCoin: AMOUNTS.available, lockedCoin: AMOUNTS.locked })
+        .where(eq(schema.balances.userId, a.id));
+      return paid.entry;
     });
     // Two later supplements A asked for against v2, never approved: one the admin rejected with a
     // reason, then one waiting. The public history is the approved versions' alone, so an answer
@@ -2010,7 +2027,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       categoryId,
       paymentId: payment!.id,
       cursors: {
-        ledger: cursorAfter(entry!),
+        ledger: cursorAfter(entry),
         // The later of A's two orders, so the page holds both.
         orders: cursorAfter(open.createdAt >= filled.createdAt ? open : filled),
         payments: cursorAfter(payment!),
@@ -2894,6 +2911,52 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       judgementVersion: 1,
       dispute: { id: f.disputeId, status: 'pending', retractable: true },
     });
+  });
+
+  it('lists the fill between A and B on both ledgers, each from its own side, naming no account', async () => {
+    // One event, two readers (#116): `/me/ledger` reads either side of the caller's account and
+    // signs the amount from it — A paid (−) and is left with its total, B was paid (+) and is
+    // left with its own — and never names the other side's account or its owner.
+    const [fill] = await t.db
+      .select()
+      .from(schema.ledgerEntries)
+      .where(eq(schema.ledgerEntries.type, 'TRADE_FILL'));
+    const ledger = routeOf('GET /me/ledger');
+    const fillSeenBy = async (cookie: string) => {
+      const res = await call(ledger, { query: { limit: LIMIT() }, cookie });
+      expect(res.statusCode).toBe(200);
+      const rows = res
+        .json<{ data: { id: string }[] }>()
+        .data.filter((row) => row.id === String(fill!.id));
+      expect(rows).toHaveLength(1);
+      return rows[0]!;
+    };
+    const asA = await fillSeenBy(f.a.cookie);
+    const asB = await fillSeenBy(f.b.cookie);
+    expect(asA).toMatchObject({
+      type: 'TRADE_FILL',
+      amountCoin: '-1234',
+      balanceAfterCoin: String(AMOUNTS.available + AMOUNTS.locked),
+    });
+    expect(asB).toMatchObject({
+      type: 'TRADE_FILL',
+      amountCoin: '1234',
+      balanceAfterCoin: String(fill!.toBalanceAfterCoin),
+    });
+    for (const seen of [asA, asB]) {
+      expect(Object.keys(seen).sort()).toEqual([
+        'amountCoin',
+        'balanceAfterCoin',
+        'createdAt',
+        'id',
+        'memo',
+        'refId',
+        'refType',
+        'type',
+      ]);
+      expect(JSON.stringify(seen)).not.toContain(f.a.id);
+      expect(JSON.stringify(seen)).not.toContain(f.b.id);
+    }
   });
 
   // ---- the market room --------------------------------------------------------------------

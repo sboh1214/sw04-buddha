@@ -21,9 +21,11 @@ import { accountIdOf, adminAccount, expect, freshEmail, signIn, signUp, test } f
  * worker's next daily run; for the lead-close gap, decide which markets with an announcement time
  * may open — and stay for the runs after it, so the spec reads the status the database holds —
  * 미정 on a fresh one, as no migration or seed writes a value (docs/SETTINGS.md) — and checks the
- * screen against it. The one value the suite writes is the dispute window's, by its global setup
- * before any test (global-setup.ts: 1분 as a 시험값 while it is 미정), so it is never 미정 here and
- * never changes while this spec reads the list. The change dialogs are opened and cancelled only.
+ * screen against it. The two values the suite writes are the dispute window's and the start
+ * Coin's, by its global setup before any test (global-setup.ts: 1분 and 1,000,000 Coin as 시험값
+ * while each is 미정; the start Coin since #116, the e2e accounts' only Coin), so neither is 미정
+ * here and neither changes while this spec reads the list. The change dialogs are opened and
+ * cancelled only.
  */
 
 const LIST = '/api/v1/admin/release-settings';
@@ -108,6 +110,8 @@ test.describe('출시 설정 (#170)', () => {
     if (startCoin === undefined) throw new Error('unreachable');
     expect(startCoin).toMatchObject({ key: START_COIN_KEY, label: '시작 지급액', unit: 'Coin' });
     expect(startCoin.valueSchema.type).toBe('integer');
+    // Like the dispute window below, it has a value whatever the database (global-setup.ts, #116).
+    expect(startCoin.status).not.toBe('undecided');
     const leadCloseGap = items.find((item) => item.key === LEAD_CLOSE_GAP_KEY);
     expect(leadCloseGap).toMatchObject({ label: '선행 마감 최소 간격', unit: '분' });
     expect(leadCloseGap?.valueSchema.type).toBe('integer');

@@ -7,8 +7,8 @@ import * as z from 'zod';
  * API refuses a mismatch before anything is read, locked or written (403 FORBIDDEN naming the
  * field, `assertExpectedAccount`). Every owner write carries it, and so does every admin write —
  * the admin on screen (`useOperatorId`), so a change is never recorded under an admin the user is
- * not looking at (ADR-0092; the balance adjustment and the refund too since the owner closed Q-PG-8
- * ①, «이 PR에서 더함» — its third route, the manual settlement, ADR-0049 removed).
+ * not looking at (ADR-0092; the refund too since the owner closed Q-PG-8 ①, «이 PR에서 더함» — the
+ * balance adjustment went with #116, ADR-0109, and the manual settlement with ADR-0049).
  */
 export const expectedAccountIdSchema = z.string().min(1).max(255);
 

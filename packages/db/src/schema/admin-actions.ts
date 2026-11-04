@@ -5,7 +5,8 @@ import { createdAt } from './columns.js';
 
 /**
  * Append-only admin audit log (PLAN 6.2, 12). buddha_app holds INSERT/SELECT only.
- * `type`: ADMIN_ACTION_TYPES in @buddha/shared. ADMIN_ADJUST ledger entries reference `id`.
+ * `type`: ADMIN_ACTION_TYPES in @buddha/shared. A refund's PAYMENT_CANCEL entry is keyed by the
+ * refund's `id` (`ledgerKeys.paymentCancel`, #116).
  */
 export const adminActions = pgTable(
   'admin_actions',

@@ -1,16 +1,27 @@
 import { readFileSync } from 'node:fs';
-import { LEDGER_ENTRY_TYPES } from '@buddha/shared';
+import { LEDGER_ENTRY_TYPES, MEMBER_LEDGER_ENTRY_TYPES } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { type Me } from './api';
 import { LEDGER_TYPE_LABEL, startGrantPending } from './wallet';
 
 describe('LEDGER_TYPE_LABEL', () => {
-  it('names every ledger type, each with a word of its own', () => {
-    expect(Object.keys(LEDGER_TYPE_LABEL).sort()).toEqual([...LEDGER_ENTRY_TYPES].sort());
+  it("names every type a person's ledger can hold, each with a word of its own", () => {
+    expect(Object.keys(LEDGER_TYPE_LABEL).sort()).toEqual([...MEMBER_LEDGER_ENTRY_TYPES].sort());
     const labels = Object.values(LEDGER_TYPE_LABEL);
     // Two types under one word would make 이용 내역 tell two sources of Coin as one (N04 §5).
     expect(new Set(labels).size).toBe(labels.length);
+  });
+
+  it("has no word for the treasury's or the 마켓메이커's own types (#116, ADR-0109)", () => {
+    // A member's `GET /me/ledger` never answers with them, so the wallet names none of them.
+    const own = LEDGER_ENTRY_TYPES.filter(
+      (type) => !(MEMBER_LEDGER_ENTRY_TYPES as readonly string[]).includes(type),
+    );
+    expect(own.sort()).toEqual(
+      ['BOT_ALLOCATION', 'BOT_RECALL', 'PAIR_BURN_RETURN', 'TREASURY_MINT'].sort(),
+    );
+    for (const type of own) expect(LEDGER_TYPE_LABEL).not.toHaveProperty(type);
   });
 
   it("calls the start Coin '시작 지급', never the coupon's 보너스 (ADR-0069 decision 4 #70)", () => {
