@@ -191,9 +191,10 @@ export class LikesService {
    * hash is of the number the account has until the commit — and the onboarding (#57-8), which
    * OnboardedGuard checked before the body was read, held to the commit here. Deliberately not
    * CommentsService's `checkWriter` or PostsService's: a writing restriction (#185) does not stop
-   * a like (#45-12), and #187's frequency limits are the writers'. Bot and system accounts (#115)
-   * do not exist yet; the check that keeps their likes out of a count goes here when they do
-   * (ADR-0069 decision 4 #49: «아직 없어 묻지 않았다»).
+   * a like (#45-12), and #187's frequency limits are the writers'. An operating account (the 운영
+   * 마켓메이커, #115) never likes, so no count has one to leave out (ADR-0076's «막거나 수에서
+   * 뺀다» is «막는다», ADR-0107 결정 2 #73 11항): it has no session and no profile, so no
+   * onboarding — refused here — and the database refuses its like rows (migration 0059).
    */
   private async lockLiker(tx: Tx, userId: string): Promise<Liker & { phoneHash: string }> {
     const [verified] = await tx

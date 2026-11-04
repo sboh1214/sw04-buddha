@@ -678,8 +678,8 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
 
     it('says nothing of a number no grant holds, however the onboarding was completed', async () => {
       // An onboarded account with no record and a number no record holds (a test factory's
-      // account; later a bot, #115) is not told its number was used — not even while another
-      // account's grant holds another number.
+      // account — the 운영 마켓메이커 has no onboarding, #115) is not told its number was used —
+      // not even while another account's grant holds another number.
       const other = await signUpTestUser(t);
       await createStartGrant(t.db, { userId: other.id });
       await completeOnboarding(t.db, { userId: user.id });

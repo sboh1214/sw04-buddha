@@ -67,7 +67,9 @@ const HOUR_MS = 60 * 60 * 1_000;
  *    until the report commits, as a like holds it, ADR-0076), the onboarding again (#57-8:
  *    OnboardedGuard asked before the body was read; this holds it to the commit), and the
  *    number's own lock (`buddha:reports`, the hash): two reports of one person — two tabs, or the
- *    accounts a number verified one after another — are counted one after the other.
+ *    accounts a number verified one after another — are counted one after the other. An
+ *    operating account (#115) reports nothing (ADR-0107 결정 2 #73 11항): the onboarding refuses
+ *    it (no profile) and the database refuses its report row (migration 0059).
  * 2. The target, held shared (`FOR SHARE`): the author's deletion and an operator's hiding update
  *    its row and so wait for the report, or it for them — a report never lands on an item whose
  *    hiding committed without seeing it, and an operator's action resolves every report committed

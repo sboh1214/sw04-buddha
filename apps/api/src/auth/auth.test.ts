@@ -4,7 +4,8 @@
  * (fails under CI=true, see the harness).
  */
 import { schema } from '@buddha/db';
-import { AUTH_USER_NAME } from '@buddha/shared';
+import { createMarketMakerAccount } from '@buddha/db/test';
+import { AUTH_USER_NAME, MARKET_MAKER_ACCOUNT_EMAIL } from '@buddha/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { type Redis } from 'ioredis';
@@ -441,6 +442,9 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     });
     expect(session.statusCode).toBe(200);
     expect(session.json()).toMatchObject({ user: { email, emailVerified: true } });
+    // The account type (#115) is a private field (PRIVATE_DATA `account-type`): better-auth reads
+    // the whole "user" row but answers only its own fields.
+    expect(session.json<{ user: object }>().user).not.toHaveProperty('accountType');
 
     const me = await t.app.inject({ method: 'GET', url: '/api/v1/me', headers: { cookie } });
     expect(me.statusCode).toBe(200);
@@ -621,6 +625,52 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     expect(t.mailer.messages).toHaveLength(0);
     const rows = await t.db.select().from(schema.user).where(eq(schema.user.email, synthetic));
     expect(rows).toHaveLength(0);
+  });
+
+  it('keeps every sign-in and recovery route from the 운영 마켓메이커 account (#115)', async () => {
+    // ADR-0107 결정 2 #73 11항: no login method. Its address is on the no-email domain, so each
+    // credential route refuses it as above, before anything is looked up or mailed.
+    const marketMaker = await createMarketMakerAccount(t.db);
+    const registered = await register({ email: MARKET_MAKER_ACCOUNT_EMAIL });
+    expect(registered.statusCode).toBe(400);
+    expect(registered.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
+    for (const [url, payload] of [
+      ['/api/auth/sign-in/email', { email: MARKET_MAKER_ACCOUNT_EMAIL, password }],
+      ['/api/auth/request-password-reset', { email: MARKET_MAKER_ACCOUNT_EMAIL }],
+      ['/api/auth/send-verification-email', { email: MARKET_MAKER_ACCOUNT_EMAIL }],
+    ] as const) {
+      const res = await t.app.inject({ method: 'POST', url, headers: browserHeaders, payload });
+      expect({ url, status: res.statusCode }).toEqual({ url, status: 400 });
+      expect(res.json()).toMatchObject({ code: 'INVALID_EMAIL' });
+    }
+    expect(t.mailer.messages).toHaveLength(0);
+    expect(sessionCookieOf(registered.headers['set-cookie'])).toBeUndefined();
+    const [row] = await t.db
+      .select({
+        emailVerified: schema.user.emailVerified,
+        accountType: schema.user.accountType,
+      })
+      .from(schema.user)
+      .where(eq(schema.user.id, marketMaker));
+    expect(row).toEqual({ emailVerified: false, accountType: 'market_maker' });
+    expect(
+      await t.db.select().from(schema.account).where(eq(schema.account.userId, marketMaker)),
+    ).toEqual([]);
+    expect(
+      await t.db.select().from(schema.session).where(eq(schema.session.userId, marketMaker)),
+    ).toEqual([]);
+  });
+
+  it('makes every sign-up a person’s account, whatever the body says of its type (#115)', async () => {
+    // The type is the database default, not a better-auth field: no input can pick it.
+    const address = 'it-auth-type@test.local';
+    const res = await register({ email: address, accountType: 'market_maker' });
+    expect(res.statusCode).toBe(200);
+    const [row] = await t.db
+      .select({ accountType: schema.user.accountType })
+      .from(schema.user)
+      .where(eq(schema.user.email, address));
+    expect(row).toEqual({ accountType: 'member' });
   });
 
   it('an account whose CURRENT address is synthetic still registers a real one through /change-email (PLAN 17 Q5)', async () => {

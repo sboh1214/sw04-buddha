@@ -1,3 +1,10 @@
+export {
+  ensureMarketMakerAccount,
+  isHumanAccount,
+  isHumanAccountSql,
+  isHumanAccountTypeSql,
+  marketMakerAccountId,
+} from './account-types.js';
 export { closeDb, createDb, type CreateDbOptions, type Db } from './client.js';
 export {
   confirmationHold,

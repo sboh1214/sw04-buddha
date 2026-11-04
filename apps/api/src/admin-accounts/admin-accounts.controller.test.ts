@@ -9,7 +9,11 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { schema } from '@buddha/db';
-import { completeOnboarding, createPhoneVerification } from '@buddha/db/test';
+import {
+  completeOnboarding,
+  createMarketMakerAccount,
+  createPhoneVerification,
+} from '@buddha/db/test';
 import { type AdminAccount, type AdminRoleChange } from '@buddha/shared';
 import { asc, eq, inArray, sql } from 'drizzle-orm';
 import { type Redis } from 'ioredis';
@@ -155,6 +159,14 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
     }
     throw new Error(`neither a lock wait on ${pattern} nor the end came`);
   }
+  /** The account's type (#115): admin rights are apart from it, so no role change touches it. */
+  async function accountTypeOf(userId: string) {
+    const [row] = await t.db
+      .select({ accountType: schema.user.accountType })
+      .from(schema.user)
+      .where(eq(schema.user.id, userId));
+    return row!.accountType;
+  }
   async function nicknameOf(userId: string) {
     const [row] = await t.db
       .select({ nickname: schema.profiles.nickname })
@@ -218,6 +230,14 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
     }
     const unknown = await grant({ userId: 'no-such-user', reason: '시험' });
     expect(unknown.statusCode).toBe(404);
+    // The 운영 마켓메이커 account (#115) is never an admin, even with a verified phone: NOT_FOUND
+    // as for no account — not `email_not_verified`, which would tell the operator to wait.
+    const marketMaker = await createMarketMakerAccount(t.db);
+    await verifyPhone(marketMaker);
+    const operating = await grant({ userId: marketMaker, reason: '시험' });
+    expect(operating.statusCode).toBe(404);
+    expect(errorOf(operating).code).toBe('NOT_FOUND');
+    expect(await roleOf(marketMaker)).toBeUndefined(); // no profile, so no role
     // The reason is required.
     const c = await candidate();
     for (const payload of [{ userId: c.id }, { userId: c.id, reason: '   ' }]) {
@@ -284,6 +304,8 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
       reason: '담당 종료',
     });
     expect(await roleOf(c.id)).toBe('user');
+    // A person's account through a grant and a revoke (ADR-0107 결정 4 #115: rights apart from it).
+    expect(await accountTypeOf(c.id)).toBe('member');
     expect((await records()).map((row) => [row.type, row.adminId, row.targetId])).toEqual([
       ['admin_grant', a.id, c.id],
       ['admin_revoke', a.id, c.id],

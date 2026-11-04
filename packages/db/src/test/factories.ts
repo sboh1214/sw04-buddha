@@ -66,6 +66,7 @@ import {
   type WriteLimitAction,
 } from '@buddha/shared';
 import { and, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
+import { ensureMarketMakerAccount } from '../account-types.js';
 import type { Db } from '../client.js';
 import { confirmationHold, type MarketDisputeRow } from '../market-dispute.js';
 import { recordJudgementDelay, type MarketJudgementDelayRow } from '../market-judgement-delay.js';
@@ -209,6 +210,15 @@ export async function createUser(db: Db, input: CreateUserInput = {}) {
     }
     return { user: userRow, profile, balance: balance! };
   });
+}
+
+/**
+ * The 운영 마켓메이커 account (#115), made the seed's way (`ensureMarketMakerAccount`): one `user`
+ * row of its type and a zero balance — no profile, no sign-in method, no grant, no ledger entry.
+ * Its id; the same one however often a test asks (one per database, `user_market_maker_uidx`).
+ */
+export async function createMarketMakerAccount(db: Db): Promise<string> {
+  return (await db.transaction((tx) => ensureMarketMakerAccount(tx))).id;
 }
 
 export interface CreateCategoryInput {

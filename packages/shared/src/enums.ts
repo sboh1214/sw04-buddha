@@ -15,6 +15,17 @@ export const ROLES = ['user', 'admin'] as const;
 export type Role = (typeof ROLES)[number];
 export const roleSchema = z.enum(ROLES).meta({ id: 'UserRole' });
 
+/**
+ * Account types (ADR-0107 결정 4 #115): '일반 사용자' (`member`) and '운영 마켓메이커'
+ * (`market_maker`), nothing else — no test-account type and no system type (the treasury and the
+ * collateral are ledger accounts, #116, not accounts of a kind). Fixed when the account is made
+ * (`user.account_type`, migration 0059) and separate from the admin role above: an admin is a
+ * member. Whether an account is a person's is asked of `isHumanAccountType` (account-types.ts),
+ * never of a value here. No public or admin answer carries it (PRIVATE_DATA `account-type`).
+ */
+export const ACCOUNT_TYPES = ['member', 'market_maker'] as const;
+export type AccountType = (typeof ACCOUNT_TYPES)[number];
+
 // ---- ledger (PLAN 5.6) --------------------------------------------------------------
 export const LEDGER_ENTRY_TYPES = [
   'DEPOSIT',

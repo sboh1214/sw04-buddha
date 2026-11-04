@@ -177,7 +177,8 @@ export async function assertCanTrade(tx: Tx, userId: string): Promise<void> {
  *    so every lock order is the profile's and then the item's, the order an operator's restriction
  *    or warning takes them in (no deadlock with an edit of the item it names).
  * 2. The onboarding (#57-8), which OnboardedGuard checked before the body was read, held to the
- *    commit here.
+ *    commit here. The 운영 마켓메이커 account (#115) has no profile and so no step done: refused
+ *    here (ONBOARDING_REQUIRED), and the database refuses its rows (migration 0059).
  * 3. The writing restriction (#185, ADR-0069 decision 2 #45-12: «글·댓글 쓰기와 자기 글·댓글 수정»):
  *    RESTRICTED with its end. Deleting one's own, likes and reports never come here — they stay
  *    open under it. An account restriction is not asked (#57-12: community writing stays open).

@@ -3,8 +3,12 @@
  * profile. Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
-import { completeOnboarding } from '@buddha/db/test';
-import { type AdminBalanceAdjustResult, type AdminUser } from '@buddha/shared';
+import { completeOnboarding, createMarketMakerAccount } from '@buddha/db/test';
+import {
+  MARKET_MAKER_ACCOUNT_EMAIL,
+  type AdminBalanceAdjustResult,
+  type AdminUser,
+} from '@buddha/shared';
 import { asc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
@@ -194,6 +198,21 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
     const res = await adjust({ amountCoin: '1000', memo: '없는 사용자' }, admin, 'no-such-user');
     expect(res.statusCode).toBe(404);
     expect(await t.db.select().from(schema.adminActions)).toHaveLength(0);
+  });
+
+  it('neither lists nor adjusts the 운영 마켓메이커 account, which has no profile (#115)', async () => {
+    const marketMaker = await createMarketMakerAccount(t.db);
+    const search = await t.app.inject({
+      method: 'GET',
+      url: `/api/v1/admin/users?q=${encodeURIComponent(MARKET_MAKER_ACCOUNT_EMAIL)}`,
+      headers: { cookie: admin.cookie },
+    });
+    expect(search.statusCode).toBe(200);
+    expect(search.json<{ data: AdminUser[] }>().data).toEqual([]);
+    const res = await adjust({ amountCoin: '1000', memo: '운영 계정' }, admin, marketMaker);
+    expect(res.statusCode).toBe(404);
+    expect(await t.db.select().from(schema.adminActions)).toHaveLength(0);
+    expect(await balanceOf(marketMaker)).toMatchObject({ availableCoin: 0n, lockedCoin: 0n });
   });
 
   it('is closed to members and to anonymous callers', async () => {

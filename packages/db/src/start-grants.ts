@@ -25,7 +25,9 @@ type BalanceRow = typeof balances.$inferSelect;
  * transaction that confirms it, and `recordStartGrant` then answered `number_already_used`), and
  * the notice screen then says the number cannot receive its start Coin (오너 결정 2026-10-19,
  * ADR-0072). Asking the record rather than inferring it from a missing row keeps that answer true
- * of an account that got no grant another way (a test's onboarded account; later a bot, #115).
+ * of an account that got no grant another way (a test's onboarded account). The 운영 마켓메이커
+ * never gets one: the database refuses its grant row (`start_grants_human_account`, migration
+ * 0059, #115), and it has no `GET /me` to ask.
  *
  * The account's own grant never counts: `GET /me` reads its rows in separate statements, so one
  * that overlaps the nickname step's commit can see no grant of its own in the first and that very

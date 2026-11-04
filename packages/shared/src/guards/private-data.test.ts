@@ -49,6 +49,7 @@ describe('PRIVATE_DATA (#113)', () => {
         'moderation',
         'reports',
         'market-maker',
+        'account-type',
       ]),
     );
     expect(
@@ -190,6 +191,13 @@ describe('findPrivateField', () => {
     ['allocatedCoin', 'market-maker'],
     ['vaultBalance', 'market-maker'],
     ['topHolderConcentration', 'market-maker'],
+    ['accountType', 'account-type'],
+    ['account_type', 'account-type'],
+    ['counterpartyAccountTypes', 'account-type'],
+    ['accountKind', 'account-type'],
+    ['isHuman', 'account-type'],
+    ['humanAccount', 'account-type'],
+    ['humans', 'account-type'],
   ])('finds %s (%s)', (name, item) => {
     expect(items(name)).toContain(item);
   });
@@ -306,6 +314,12 @@ describe('findPrivateField', () => {
     'judgementDelay',
     'nextReviewAt',
     'nextReviewPassed',
+    // An author's `kind` (member or closed, ADR-0069 decision 5) is a profile's state, and a bare
+    // `type` or `kind` is an item's: only an account's type is the account's (#115, ADR-0108).
+    'kind',
+    'authorKind',
+    'type',
+    'targetType',
   ])('lets %s through', (name) => {
     expect(findPrivateField(name)).toEqual([]);
   });

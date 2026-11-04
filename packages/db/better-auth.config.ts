@@ -4,7 +4,8 @@
 // because only those affect the generated tables (providers and hooks do not).
 // After regenerating: re-apply `{ withTimezone: true, mode: 'date', precision: 3 }` on every
 // timestamp, delete the relations block, and add back account's unique (providerId, accountId),
-// which the generator does not emit (ADR-0094; see src/schema/auth.ts header).
+// which the generator does not emit (ADR-0094; see src/schema/auth.ts header), and
+// `user.account_type` with its partial unique index, ours (#115, ADR-0108).
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { drizzle } from 'drizzle-orm/node-postgres';

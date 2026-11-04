@@ -1,6 +1,6 @@
 # 운영 절차
 
-배포 환경(buddha.sboh.dev)에서 운영자가 앱의 화면 없이 손으로 하는 일 — DB에서 하는 일과 고객센터 이메일로 받는 일 — 과 API 컨테이너의 메모리 확인의 절차다. 앱 안에서 처리하는 판정 이의(#175)는 화면 밖에서 알아 둘 것 — 결정할 관리자가 모자랄 때 — 만 제재 이의 처리 앞에 적는다. 판정 정정(#176)과 판정 지연 기록(#142 — 언제 기록하고 공개되는 사유에 무엇을 쓰지 않는지, 다음 검토 시각과 갱신 대기, 장기 지연 경고)도 화면에서 하는 일이고 그 앞에 운영 메모만 적는다. 운영 DB 초기화는 [RESET.md](RESET.md), 셸·시크릿·덤프 같은 인프라 일은 [terraform/README.md](../terraform/README.md)에 있다.
+배포 환경(buddha.sboh.dev)에서 운영자가 앱의 화면 없이 손으로 하는 일 — DB에서 하는 일과 고객센터 이메일로 받는 일 — 과 운영 마켓메이커 계정의 확인, API 컨테이너의 메모리 확인의 절차다. 앱 안에서 처리하는 판정 이의(#175)는 화면 밖에서 알아 둘 것 — 결정할 관리자가 모자랄 때 — 만 제재 이의 처리 앞에 적는다. 판정 정정(#176)과 판정 지연 기록(#142 — 언제 기록하고 공개되는 사유에 무엇을 쓰지 않는지, 다음 검토 시각과 갱신 대기, 장기 지연 경고)도 화면에서 하는 일이고 그 앞에 운영 메모만 적는다. 운영 DB 초기화는 [RESET.md](RESET.md), 셸·시크릿·덤프 같은 인프라 일은 [terraform/README.md](../terraform/README.md)에 있다.
 
 ## 회원의 휴대전화 번호 바꾸기 (#57 3항)
 
@@ -294,6 +294,31 @@ corepack pnpm --filter api run phone-hash --psql
 corepack pnpm --filter api run phone-hash --psql-old
 docker compose exec -e PSQL_HISTORY=/dev/null postgres psql -U buddha_app -d buddha
 ```
+
+## 운영 마켓메이커 계정 (#115, ADR-0108)
+
+운영 마켓메이커 계정은 봇(M10 #129)이 주문하는 계정 하나다(ADR-0107 결정 2 #73 11항). 계정 유형은 '일반 사용자'와 '운영 마켓메이커' 둘이고(결정 4 #115 행), 이 계정만 '운영 마켓메이커'다. 운영자가 할 일은 없다 — 아래는 알아 둘 것과 읽기만 하는 확인이다.
+
+- **누가 만드나.** 시드만 만든다. 배포의 `migrate`가 도는 시드가 그 계정이 없을 때만 하나 만들고(`[db:seed] market maker account: created`), 있으면 그대로 둔다(`… exists`). `SEED_ADMIN_*`와 상관없다. 둘째는 DB가 거절한다(`user_market_maker_uidx`). 운영 DB를 비우면(#116, [RESET.md](RESET.md)) 다음 시드가 새 id로 다시 만든다 — 그 id를 어디에 적어 두지 않는다.
+- **로그인하지 않는다.** 비밀번호·소셜 로그인·세션이 없고, 주소(`market-maker@noemail.buddha.local`)는 메일이 가지 않는 서비스의 주소라 로그인·비밀번호 재설정·인증 메일이 모두 거절한다. DB도 그 계정의 세션·로그인 수단·비밀번호 재설정 행을 받지 않는다.
+- **프로필이 없다.** 닉네임·소개·이미지·공개 id가 없어 공개 프로필은 없는 계정처럼 404다. 글·댓글·좋아요·신고·시장 제안을 서버가 거절하고 DB도 그 행을 받지 않는다. 그래서 `/admin/users`와 운영자 화면에도 보이지 않는다 — 관리자 화면에 '운영 마켓메이커'라는 이름으로 보이는 것은 봇 관리 화면(M10 #182)부터다.
+- **관리자가 될 수 없다.** 관리자 권한(`profiles.role`)은 계정 유형과 따로 있고 프로필에 있다. 프로필이 없으니 `/admin/admins`의 부여는 그 계정을 찾지 못하고(없는 계정처럼 404), 시드도 그 주소를 관리자로 받지 않는다. 계정 제한·경고·잔고 조정도 같은 까닭으로 404다 — 봇을 멈추는 것은 계정 조치가 아니라 봇의 중단 스위치(M10 #130)다.
+- **Coin.** 시작 Coin을 받지 않고(API와 DB가 거절한다) 잔고는 0이다. 봇이 쓸 Coin은 이 계정의 잔고가 아니라 시장마다의 '마켓메이커 자금' 원장 계정에 둔다(#116).
+- **사람 수에서 빠진다.** 참여자 수·거래량·'사용자 체결 0건'과 판정 이의의 자격은 사람 계정만 센다(ADR-0107 결정 1 #177 13항). 사람 계정인지는 한 규칙(`isHumanAccountType`, SQL `is_human_account`)으로만 가린다.
+
+**확인(읽기만).** [휴대전화 번호 바꾸기](#회원의-휴대전화-번호-바꾸기-57-3항)의 2단계(셸)와 4단계(psql)로 붙어 돌린다. 줄이 하나이고 `profiles`·`sign_ins`·`sessions`가 0, 잔고가 0이어야 한다. 줄이 아예 없을 때만 아직 시드가 돌지 않은 DB다 — 손으로 만들지 않고 호스트 셸에서 시드를 돌린다(`sudo docker compose -f /data/buddha/compose.yaml run --rm migrate`, 초기화가 [RESET.md](RESET.md) 8단계에서 도는 것과 같은 일). 줄은 있는데 `available_coin`·`locked_coin`이 비어 있으면(NULL) 시드가 아니라 잔고 행을 잃은 계정이다 — 시드는 있는 계정을 그대로 두어 고치지 못하고, 장부 대조(`ledger-audit`의 `balance_missing`)가 같은 것을 알린다. 손으로 고치지 않고 오너에게 알린다.
+
+```sql
+SELECT u.id, u.created_at, u.email_verified,
+  (SELECT count(*) FROM profiles p WHERE p.user_id = u.id) AS profiles,
+  (SELECT count(*) FROM account a WHERE a.user_id = u.id) AS sign_ins,
+  (SELECT count(*) FROM session s WHERE s.user_id = u.id) AS sessions,
+  b.available_coin, b.locked_coin
+FROM "user" u LEFT JOIN balances b ON b.user_id = u.id
+WHERE NOT is_human_account_type(u.account_type);
+```
+
+계정 유형은 고치지 않는다 — 어느 롤로도 DB 트리거(`user_keep_account_type`)가 거절한다.
 
 ## API 컨테이너의 메모리 확인 (#46, ADR-0073 9-46)
 

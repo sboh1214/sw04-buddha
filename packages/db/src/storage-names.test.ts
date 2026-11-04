@@ -634,6 +634,26 @@ describe('excluded features in stored data (#113)', () => {
     expect(personalTables().map((table) => table.name)).toContain('market_judgement_delays');
   });
 
+  it('names the account type, its values and its index, each read above (#115)', () => {
+    // ADR-0108, migration 0059: better-auth's "user" row carries the type (an enum of two values,
+    // no varchar list), and the partial unique index keeps one 운영 마켓메이커. The test above reads
+    // each for an excluded feature ('member', 'market maker' name none).
+    const users = TABLES.find((table) => table.name === 'user');
+    const column = users?.columns.find((c) => c.name === 'account_type');
+    expect(column?.getSQLType()).toBe('account_type');
+    expect(column?.notNull).toBe(true);
+    expect(storageNames()).toEqual(
+      expect.arrayContaining([
+        { where: 'user column', name: 'account_type' },
+        { where: 'user constraint', name: 'user_market_maker_uidx' },
+        { where: 'enum', name: 'account_type' },
+        { where: 'account_type value', name: 'member' },
+        { where: 'account_type value', name: 'market_maker' },
+      ]),
+    );
+    expect(Object.keys(VARCHAR_VALUES).filter((key) => key.startsWith('user.'))).toEqual([]);
+  });
+
   it('passes with the payment and coupon structures kept for paid Coin (D9)', () => {
     const tables = TABLES.map((table) => table.name);
     expect(tables).toEqual(

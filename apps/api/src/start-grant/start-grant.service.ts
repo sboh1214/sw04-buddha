@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  isHumanAccount,
   payStartGrant,
   recordStartGrant,
   schema,
@@ -105,9 +106,9 @@ export function toStartGrant(
  * Step 1 reads the row itself rather than `isPhoneVerified` (@buddha/db) because it needs the number
  * and a lock that keeps it: the same test of the same row (ADR-0070 decision 2).
  *
- * Operator accounts get it under the same conditions (decision 4 #70). Bot and system accounts
- * (#115) do not exist yet; when they do, they get no grant record — the place for that check is
- * marked in `grantIn`.
+ * Operator accounts get it under the same conditions (decision 4 #70). The 운영 마켓메이커 account
+ * (#115, ADR-0108) gets none: `grantIn` refuses it (FORBIDDEN) before step 2, and the database
+ * refuses its grant row (`start_grants_human_account`, migration 0059).
  *
  * Not trading profit (N02 §8): PnL lives on `positions` (realized_pnl_coin) and nothing that
  * computes it reads ledger entries.
@@ -151,8 +152,12 @@ export class StartGrantService {
         message: 'The start Coin needs a verified mobile number',
       });
     }
-    // #115: a bot or system account gets no start grant (#70 본문). No such account exists yet;
-    // the check that tells one apart goes here, before anything is recorded.
+    // An operating account gets no start grant (#70 본문, ADR-0107 결정 2 #73 11항): the one rule
+    // (#115) asked before anything is recorded. Unreachable over HTTP — the onboarding's nickname
+    // step needs a session the 운영 마켓메이커 never has — so no route documents it.
+    if (!(await isHumanAccount(tx, userId))) {
+      throw new AppError('FORBIDDEN', { message: 'An operating account takes no start grant' });
+    }
     const recorded = await recordStartGrant(tx, userId, this.hasher.hash(verified.phone));
     if (recorded.outcome === 'number_already_used') return recorded;
     const paid = await payStartGrant(tx, recorded.grantId, (inner) => this.amount(inner)).catch(

@@ -9,16 +9,19 @@ import {
   ALL_CATEGORY_SLUGS,
   AUTH_USER_NAME,
   MARKET_TAGS_MIN,
+  NO_EMAIL_DOMAIN,
   type MarketStatus,
   SEED_ADMIN_GRANT_REASON,
   type CategorySlug,
   SUBCATEGORY_SLUGS,
   type SubcategorySlug,
+  isNoEmailAddress,
   marketTagsSchema,
   tagKey,
 } from '@buddha/shared';
 import { hashPassword } from 'better-auth/crypto';
 import { and, eq, inArray, sql } from 'drizzle-orm';
+import { ensureMarketMakerAccount } from './account-types.js';
 import { closeDb, createDb, type Db } from './client.js';
 import { loadRootEnv } from './env.js';
 import { SEED_MARKETS, type SeedMarket, seedScheduledOpenAt } from './seed-markets.js';
@@ -229,6 +232,19 @@ async function seedChargePackages(db: Db): Promise<void> {
   );
 }
 
+/**
+ * The 운영 마켓메이커 account (#115, ADR-0107 결정 2 #73 11항: 시드가 없을 때만 만들고): made on the
+ * first seed of a database — whatever SEED_ADMIN_* says — and left alone on every later one, the
+ * one place outside tests that makes it (`ensureMarketMakerAccount`: one `user` row of its type and
+ * the zero balance the trigger gives it — no profile, no sign-in method, no grant, no ledger
+ * entry). Its own transaction, before the admins: the unique address and type make two seeds at
+ * once end with one, no seed lock needed. Logs no id and no address.
+ */
+async function seedMarketMakerAccount(db: Db): Promise<void> {
+  const { created } = await db.transaction((tx) => ensureMarketMakerAccount(tx));
+  console.log(`[db:seed] market maker account: ${created ? 'created' : 'exists'}`);
+}
+
 interface AdminInput {
   email: string;
   password: string;
@@ -239,8 +255,8 @@ type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 /**
  * One bootstrap admin, the way better-auth's email sign-up makes an account: a `user` row plus a
  * credential `account` row (providerId 'credential', accountId = user id, scrypt hash from
- * better-auth/crypto). The "user" AFTER INSERT trigger (migrations 0002 and 0031) creates the
- * profile (auto nickname) and a zero balance with no ledger entry, like every account: the
+ * better-auth/crypto). The "user" AFTER INSERT trigger (migrations 0032 and 0059) creates the
+ * profile (auto nickname) and a zero balance with no ledger entry, like every person's account: the
  * operator account gets its start Coin as everyone does, after its 본인확인 and onboarding (#70,
  * ADR-0069 decision 4 #70), never from the seed. A fresh account keeps the trigger's auto nickname
  * — the seed no longer renames it 관리자, a reserved word the nickname rules refuse (#57-6): the admin
@@ -980,6 +996,11 @@ function adminPair(emailVariable: string, passwordVariable: string): AdminInput 
     );
   }
   if (!hasEmail) return undefined;
+  // An address on the service's own unroutable domain signs in nowhere — and the 운영 마켓메이커's
+  // (#115), which is one, is never an admin (ADR-0108): the seed promotes none.
+  if (isNoEmailAddress(email.trim())) {
+    configError(`${emailVariable} must be an address mail reaches, not one on ${NO_EMAIL_DOMAIN}`);
+  }
   if (password.length < 8 || password.length > 128) {
     configError(`${passwordVariable} must be 8-128 characters (better-auth defaults)`);
   }
@@ -1004,6 +1025,7 @@ const db = createDb(url, { max: 1, applicationName: 'buddha-seed' });
 try {
   await seedCategories(db);
   await seedChargePackages(db);
+  await seedMarketMakerAccount(db);
   if (firstAdmin) {
     const adminId = await seedAdmins(db, firstAdmin, secondAdmin);
     if (adminId) {

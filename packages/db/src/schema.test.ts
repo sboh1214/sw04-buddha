@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   ACCOUNT_RESTRICTION_REASONS,
+  ACCOUNT_TYPES,
   APPROVAL_STATUSES,
   CONSENT_ITEMS,
   COUNTERPARTY_TYPES,
@@ -31,6 +32,7 @@ import {
   DEFAULT_JUDGEMENT_TIME_ZONE,
   closedAccountEmail,
   currentConsentVersion,
+  isHumanAccountType,
   missingOpenItems,
   missingRuleItems,
   missingTimeItems,
@@ -43,6 +45,7 @@ import {
   type TimeRuleInput,
 } from '@buddha/shared';
 import { TransactionRollbackError, and, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   account,
@@ -112,6 +115,7 @@ import {
   verification,
   writeLimitEvents,
 } from './schema/index.js';
+import { isHumanAccountSql, isHumanAccountTypeSql } from './account-types.js';
 import { closeDb, createDb } from './client.js';
 import { dueProvisionalMarkets, setCorrectionPending } from './market-judgement.js';
 import { openScheduledMarket } from './market-open.js';
@@ -126,9 +130,11 @@ import {
   createCorrectedMarket,
   createCorrectionRequest,
   createDispute,
+  createFill,
   createMarket,
   createMarketInReview,
   createMarketLink,
+  createMarketMakerAccount,
   createOpenedMarket,
   createComment,
   createCommentLike,
@@ -4322,6 +4328,346 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         { privilege: 'UPDATE', held: false },
         { privilege: 'DELETE', held: false },
       ]);
+    });
+  });
+
+  describe('account types (migration 0059, #115)', () => {
+    /** The refusal a guard raises: its SQLSTATE, the constraint it names and its message. */
+    async function guarded(write: Promise<unknown>) {
+      const error = await write.then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      return {
+        state: sqlState(error),
+        constraint: sqlConstraint(error),
+        message: errorMessage(error),
+      };
+    }
+
+    /** The account's stored type, read as the column. */
+    async function typeOf(userId: string) {
+      const [row] = await t.db
+        .select({ accountType: user.accountType })
+        .from(user)
+        .where(eq(user.id, userId));
+      return row?.accountType;
+    }
+
+    it('makes every account 일반 사용자 unless it is made otherwise, and takes no other type', async () => {
+      // The default labels a sign-up (better-auth names no type) and a factory account alike,
+      // an admin too (ADR-0107 결정 4 #115: the admin role is apart from the type).
+      await t.db.insert(user).values({ id: 'u-plain', name: '', email: 'plain@test.local' });
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      expect(await typeOf('u-plain')).toBe('member');
+      expect(admin.accountType).toBe('member');
+      await t.db.update(profiles).set({ role: 'user' }).where(eq(profiles.userId, admin.id));
+      expect(await typeOf(admin.id)).toBe('member');
+      // Two types only (no test-account, no system type), and never none.
+      expect(
+        (
+          await guarded(
+            t.db.execute(sql`INSERT INTO "user" (id, name, email, account_type)
+              VALUES ('u-bot', '', 'bot@test.local', 'bot')`),
+          )
+        ).state,
+      ).toBe('22P02');
+      expect(
+        (
+          await guarded(
+            t.db.execute(sql`INSERT INTO "user" (id, name, email, account_type)
+              VALUES ('u-none', '', 'none@test.local', NULL)`),
+          )
+        ).state,
+      ).toBe('23502');
+      const { rows } = await t.db.execute<{ value: string }>(
+        sql`SELECT unnest(enum_range(NULL::account_type))::text AS value`,
+      );
+      expect(rows.map((row) => row.value)).toEqual([...ACCOUNT_TYPES]);
+    });
+
+    it('keeps an account’s type from its creation: no change either way, whoever writes', async () => {
+      const { user: member } = await createUser(t.db);
+      const marketMaker = await createMarketMakerAccount(t.db);
+      const owner = createDb(testDbUrls()!.migrateUrl, { max: 1 });
+      try {
+        for (const db of [t.db, owner]) {
+          for (const [id, from, to] of [
+            [member.id, 'member', 'market_maker'],
+            [marketMaker, 'market_maker', 'member'],
+          ] as const) {
+            expect(
+              await guarded(db.update(user).set({ accountType: to }).where(eq(user.id, id))),
+            ).toEqual({
+              state: '23000',
+              constraint: undefined,
+              message: `account ${id} is ${from} from its creation: its type takes no change to ${to}`,
+            });
+          }
+        }
+      } finally {
+        await closeDb(owner);
+      }
+      // What better-auth and a closure write pass, and so does the same type written again.
+      await t.db
+        .update(user)
+        .set({ email: 'moved@test.local', emailVerified: false, accountType: 'member' })
+        .where(eq(user.id, member.id));
+      await t.db.update(user).set({ emailVerified: false }).where(eq(user.id, marketMaker));
+      expect([await typeOf(member.id), await typeOf(marketMaker)]).toEqual([
+        'member',
+        'market_maker',
+      ]);
+    });
+
+    it('gives the 운영 마켓메이커 a zero balance and no profile, and makes one only', async () => {
+      // ADR-0107 결정 2 #73 11항: no auto nickname, no 소개, no public profile, no admin role — none
+      // exists without a profile row — and no Coin but what its ledger will say (#116).
+      const marketMaker = await createMarketMakerAccount(t.db);
+      expect(await t.db.select().from(balances).where(eq(balances.userId, marketMaker))).toEqual([
+        expect.objectContaining({ availableCoin: 0n, lockedCoin: 0n }),
+      ]);
+      expect(await t.db.select().from(profiles).where(eq(profiles.userId, marketMaker))).toEqual(
+        [],
+      );
+      expect(
+        await t.db.select().from(ledgerEntries).where(eq(ledgerEntries.userId, marketMaker)),
+      ).toEqual([]);
+      expect(
+        await refusal(
+          t.db.insert(user).values({
+            id: 'u-second-mm',
+            name: '',
+            email: 'second-mm@test.local',
+            accountType: 'market_maker',
+          }),
+        ),
+      ).toEqual({ state: '23505', constraint: 'user_market_maker_uidx' });
+    });
+
+    it('refuses the 운영 마켓메이커 a profile, a login method, a start grant and public activity', async () => {
+      // ADR-0107 결정 2 #73 11항: 로그인 수단 없음; 글·댓글·좋아요·신고·시장 제안은 서버가 거절.
+      const marketMaker = await createMarketMakerAccount(t.db);
+      const { user: member } = await createUser(t.db);
+      const market = await createMarket(t.db);
+      const post = await createPost(t.db, { marketId: market.id, authorId: member.id });
+      const comment = await createComment(t.db, { postId: post.id, authorId: member.id });
+      const now = new Date();
+      const rowsOf = (accountId: string) =>
+        [
+          [
+            'profiles',
+            () => t.db.insert(profiles).values({ userId: accountId, nickname: 'mm_profile' }),
+          ],
+          [
+            'session',
+            () =>
+              t.db.insert(session).values({
+                id: randomUUID(),
+                token: randomUUID(),
+                expiresAt: new Date(now.getTime() + 60_000),
+                updatedAt: now,
+                userId: accountId,
+              }),
+          ],
+          [
+            'account',
+            () =>
+              t.db.insert(account).values({
+                id: randomUUID(),
+                accountId,
+                providerId: 'credential',
+                userId: accountId,
+                password: 'not-a-hash',
+                updatedAt: now,
+              }),
+          ],
+          [
+            'verification',
+            () =>
+              t.db.insert(verification).values({
+                id: randomUUID(),
+                identifier: `reset-password:${randomUUID()}`,
+                value: accountId,
+                expiresAt: new Date(now.getTime() + 60_000),
+              }),
+          ],
+          ['start_grants', () => createStartGrant(t.db, { userId: accountId })],
+          ['posts', () => createPost(t.db, { marketId: market.id, authorId: accountId })],
+          ['post_comments', () => createComment(t.db, { postId: post.id, authorId: accountId })],
+          ['post_likes', () => createPostLike(t.db, { userId: accountId, postId: post.id })],
+          [
+            'comment_likes',
+            () => createCommentLike(t.db, { userId: accountId, commentId: comment.id }),
+          ],
+          [
+            'reports',
+            () =>
+              createReport(t.db, {
+                reporterId: accountId,
+                reportedUserId: member.id,
+                postId: post.id,
+              }),
+          ],
+          ['market_proposals', () => createProposal(t.db, { userId: accountId })],
+        ] as const;
+      for (const [table, write] of rowsOf(marketMaker)) {
+        expect(await guarded(write()), table).toEqual({
+          state: '23000',
+          constraint: `${table}_human_account`,
+          message: `account ${marketMaker} is an operating account (#115): ${table} takes no row of it`,
+        });
+      }
+      // A password-reset row is the only `verification` row read: an email's names no account.
+      await t.db.insert(verification).values({
+        id: randomUUID(),
+        identifier: `email-verification:${randomUUID()}`,
+        value: marketMaker,
+        expiresAt: new Date(now.getTime() + 60_000),
+      });
+      // A person writes each of the others (its profile the trigger wrote, as for every person).
+      const { user: other } = await createUser(t.db);
+      for (const [table, write] of rowsOf(other.id).filter(([table]) => table !== 'profiles')) {
+        expect(await guarded(write().then(() => 'written')), table).toEqual({
+          state: undefined,
+          constraint: undefined,
+          message: '',
+        });
+      }
+      // And an account that is not there meets its foreign key, as before.
+      expect(
+        await refusal(
+          t.db.insert(postLikes).values({
+            userId: 'no-such-account',
+            postId: post.id,
+            phoneHash: randomPhoneHash(),
+          }),
+        ),
+      ).toEqual({ state: '23503', constraint: 'post_likes_user_id_user_id_fk' });
+      // Nothing of the 운영 마켓메이커's was written.
+      expect(
+        await t.db.select().from(startGrants).where(eq(startGrants.userId, marketMaker)),
+      ).toEqual([]);
+      expect(await t.db.select().from(posts).where(eq(posts.authorId, marketMaker))).toEqual([]);
+    });
+
+    it('says the same in SQL as `isHumanAccountType`, by type and by account (one rule)', async () => {
+      for (const type of ACCOUNT_TYPES) {
+        const { rows } = await t.db.execute<{ human: boolean }>(
+          sql`SELECT is_human_account_type(${type}::account_type) AS human`,
+        );
+        expect(rows[0]?.human, type).toBe(isHumanAccountType(type));
+      }
+      const { user: member } = await createUser(t.db);
+      const { user: closed } = await createUser(t.db);
+      await closeAccount(t.db, closed.id);
+      const marketMaker = await createMarketMakerAccount(t.db);
+      const { rows } = await t.db.execute<{ id: string | null; human: boolean }>(sql`
+        SELECT id, is_human_account(id) AS human
+        FROM unnest(ARRAY[${member.id}, ${closed.id}, ${marketMaker}, 'no-such-account', NULL]::text[])
+          AS id`);
+      // A closed account stays a person (#177 13항). No owner (a ledger account of the
+      // system's, #116) and no account are no person.
+      expect(rows).toEqual([
+        { id: member.id, human: true },
+        { id: closed.id, human: true },
+        { id: marketMaker, human: false },
+        { id: 'no-such-account', human: false },
+        { id: null, human: false },
+      ]);
+      // By type, the planner inlines the rule into a join over "user" (#121, #20).
+      const { rows: plan } = await t.db.execute<{ 'QUERY PLAN': string }>(sql`
+        EXPLAIN (VERBOSE, COSTS OFF)
+        SELECT u.id FROM "user" u WHERE is_human_account_type(u.account_type)`);
+      const text = plan.map((row) => row['QUERY PLAN']).join('\n');
+      expect(text).toContain("(u.account_type = 'member'::account_type)");
+      expect(text).not.toContain('is_human_account_type');
+    });
+
+    it('tells whose an order, a fill or a position is by the rule, and counts people the same', async () => {
+      // N04 §5: the owner's type of every order, fill and holding is derivable — through its
+      // account, both sides of a fill. ADR-0107 결과 4: the 운영 마켓메이커 is never counted.
+      const market = await createMarket(t.db);
+      const countPeople = async () => {
+        const [row] = await t.db
+          .select({ people: sql<number>`count(*)::int` })
+          .from(user)
+          .where(isHumanAccountTypeSql(user.accountType));
+        return row?.people ?? 0;
+      };
+      const before = await countPeople();
+      const { user: member } = await createUser(t.db);
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      // An admin is a person (#177 13항); the 운영 마켓메이커 adds nobody.
+      expect(await countPeople()).toBe(before + 2);
+      const marketMaker = await createMarketMakerAccount(t.db);
+      expect(await countPeople()).toBe(before + 2);
+      // A closure takes nobody off the count (#177 13항).
+      const { user: closed } = await createUser(t.db);
+      await closeAccount(t.db, closed.id);
+      expect(await countPeople()).toBe(before + 3);
+      await createFill(t.db, {
+        marketId: market.id,
+        amountCoin: 50n,
+        userId: member.id,
+        makerId: marketMaker,
+      });
+      await createFill(t.db, {
+        marketId: market.id,
+        amountCoin: 50n,
+        userId: marketMaker,
+        makerId: admin.id,
+      });
+      await createPosition(t.db, {
+        userId: marketMaker,
+        marketId: market.id,
+        outcome: 'YES',
+        qty: 1,
+      });
+      await createPosition(t.db, { userId: member.id, marketId: market.id, outcome: 'NO', qty: 1 });
+      const orderOwners = await t.db
+        .select({ userId: orders.userId, human: isHumanAccountSql(orders.userId) })
+        .from(orders)
+        .where(eq(orders.marketId, market.id));
+      expect(new Set(orderOwners.map((row) => `${row.userId}:${String(row.human)}`))).toEqual(
+        new Set([`${member.id}:true`, `${admin.id}:true`, `${marketMaker}:false`]),
+      );
+      // A fill's two sides: the taker's order and the resting one.
+      const resting = alias(orders, 'resting');
+      const sides = await t.db
+        .select({
+          taker: orders.userId,
+          takerHuman: isHumanAccountSql(orders.userId),
+          maker: resting.userId,
+          makerHuman: isHumanAccountSql(resting.userId),
+        })
+        .from(fills)
+        .innerJoin(orders, eq(orders.id, fills.orderId))
+        .innerJoin(resting, eq(resting.id, fills.counterpartyOrderId))
+        .where(eq(fills.marketId, market.id));
+      expect(sides).toEqual(
+        expect.arrayContaining([
+          { taker: member.id, takerHuman: true, maker: marketMaker, makerHuman: false },
+          { taker: marketMaker, takerHuman: false, maker: admin.id, makerHuman: true },
+        ]),
+      );
+      const holders = await t.db
+        .select({ userId: positions.userId, human: isHumanAccountSql(positions.userId) })
+        .from(positions)
+        .where(eq(positions.marketId, market.id));
+      expect(holders).toEqual(
+        expect.arrayContaining([
+          { userId: marketMaker, human: false },
+          { userId: member.id, human: true },
+        ]),
+      );
+      // The people who traded the market: the member and the admin, not the 운영 마켓메이커.
+      const [traders] = await t.db
+        .select({ people: sql<number>`count(DISTINCT ${orders.userId})::int` })
+        .from(orders)
+        .innerJoin(user, eq(user.id, orders.userId))
+        .where(and(eq(orders.marketId, market.id), isHumanAccountTypeSql(user.accountType)));
+      expect(traders?.people).toBe(2);
     });
   });
 

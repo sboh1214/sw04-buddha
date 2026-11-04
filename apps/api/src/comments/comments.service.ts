@@ -452,6 +452,8 @@ export class CommentsService {
    * count the person, decision 7). Answers the writer, whose write the caller counts
    * (`WriteLimitsService.take`: comments 5 a minute and 200 a day, edits 10 in 10 minutes and 50 a
    * day, admins exempt, #45-15 and decision 7) once it is certain, and whose links it records.
+   * An operating account (#115, ADR-0107 결정 2 #73 11항) never writes: `assertWriter` refuses it
+   * (no profile, no onboarding) and so does the database.
    */
   private async checkWriter(tx: Tx, authorId: string): Promise<Writer> {
     await assertWriter(tx, authorId);

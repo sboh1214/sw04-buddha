@@ -116,7 +116,9 @@ const marketSummaryFields = {
   tradeCount: countSchema,
   /**
    * The 사용자 참여자 the card and the detail header show, 0 included (ADR-0061 decision 1, item
-   * 4). Who counts is #177's to decide; leaving the operator's bot out is #121's and #115's.
+   * 4). Who counts is #177's to decide (13항: 사람 계정, admins included); #121 counts them with the
+   * account-type rule (`isHumanAccountType`, `is_human_account` in SQL, #115), which leaves the
+   * 운영 마켓메이커 out.
    */
   traderCount: countSchema,
   closeAt: z.iso.datetime(),

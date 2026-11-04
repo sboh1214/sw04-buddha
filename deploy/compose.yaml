@@ -211,9 +211,9 @@ services:
 
   # One-shot: `docker compose run --rm migrate` (the profile keeps `up` from starting it). Runs the
   # committed drizzle migrations as buddha_migrate, then the idempotent seed as buddha_app
-  # (categories, off-sale charge packages, the two bootstrap admins while no admin exists, draft
-  # markets — safe on every deploy). The second admin is optional (`:-`): a host .env rendered
-  # before #171 has no such line.
+  # (categories, off-sale charge packages, the 운영 마켓메이커 account when it is missing (#115),
+  # the two bootstrap admins while no admin exists, draft markets — safe on every deploy). The
+  # second admin is optional (`:-`): a host .env rendered before #171 has no such line.
   # reset-db.sh also runs it as `migrate node packages/db/dist/wipe-cli.js --yes` (docs/RESET.md).
   migrate:
     image: ${ECR_REGISTRY}/tf-buddha-api:${IMAGE_TAG}
