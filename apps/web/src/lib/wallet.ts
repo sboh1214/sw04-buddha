@@ -1,4 +1,4 @@
-import { type LedgerEntryType } from '@buddha/shared';
+import { type MemberLedgerEntryType } from '@buddha/shared';
 import { copy } from '@/copy';
 import { type Me } from './api';
 
@@ -9,27 +9,28 @@ import { type Me } from './api';
 
 /**
  * What 이용 내역 calls each ledger type. PLAN Appendix A: never "베팅"; every type gets plain Korean.
- * A Record, so a type added to LEDGER_ENTRY_TYPES without a label fails the typecheck.
+ * A Record over the types a person's ledger can hold (MEMBER_LEDGER_ENTRY_TYPES, #116, ADR-0109):
+ * a type added there without a label fails the typecheck, and the operating treasury's and the
+ * 마켓메이커's own types (TREASURY_MINT, BOT_*, PAIR_BURN_RETURN) never reach a member's screen.
  *
  * The start Coin (#70) is `START_GRANT`, '시작 지급' — its own type and its own word (ADR-0069
  * decision 4 #70), never the coupon's `BONUS` '보너스', so the wallet tells the two sources apart
- * (N04 §5). Accounts created before #70 still show their old sign-up grant as '보너스' (D4: not
- * migrated).
+ * (N04 §5). The 담보, 체결 and 대사 정정 words are provisional until the wallet screens (#69) name
+ * them; nothing writes them before #118, #119 and #93.
  */
-export const LEDGER_TYPE_LABEL: Readonly<Record<LedgerEntryType, string>> = {
-  DEPOSIT: copy.ledgerTypeDeposit,
-  TRADE_BUY: copy.ledgerTypeTradeBuy,
-  TRADE_SELL: copy.ledgerTypeTradeSell,
-  FEE: copy.ledgerTypeFee,
-  SETTLEMENT_PAYOUT: copy.ledgerTypeSettlement,
-  ADMIN_ADJUST: copy.ledgerTypeAdminAdjust,
-  BONUS: copy.ledgerTypeBonus,
-  PAYMENT_CANCEL: copy.ledgerTypePaymentCancel,
-  PAYMENT_CANCEL_REVERSAL: copy.ledgerTypePaymentCancelReversal,
+export const LEDGER_TYPE_LABEL: Readonly<Record<MemberLedgerEntryType, string>> = {
   START_GRANT: copy.ledgerTypeStartGrant,
+  PAIR_MINT_COLLATERAL: copy.ledgerTypePairMintCollateral,
+  TRADE_FILL: copy.ledgerTypeTradeFill,
+  SETTLEMENT_PAYOUT: copy.ledgerTypeSettlement,
   // 탈퇴 소멸 (#140): written as the account closes, so no member's wallet ever lists it — the
   // label is for completeness of the Record (an operator reads the ledger elsewhere).
   CLOSURE_FORFEIT: copy.ledgerTypeClosureForfeit,
+  RECONCILIATION_CORRECTION: copy.ledgerTypeReconciliationCorrection,
+  DEPOSIT: copy.ledgerTypeDeposit,
+  BONUS: copy.ledgerTypeBonus,
+  PAYMENT_CANCEL: copy.ledgerTypePaymentCancel,
+  PAYMENT_CANCEL_REVERSAL: copy.ledgerTypePaymentCancelReversal,
 };
 
 /**

@@ -1,6 +1,15 @@
 import type { Locator, Page } from '@playwright/test';
 import { copy } from '../src/copy';
-import { createOpenMarket, expect, freshEmail, logOut, signUp, test } from './helpers';
+import {
+  coinText,
+  createOpenMarket,
+  expect,
+  freshEmail,
+  logOut,
+  meOf,
+  signUp,
+  test,
+} from './helpers';
 
 /**
  * 최상위 IA (#16, owner decision 2026-10-13): the desktop header's row 1 and the mobile tab bar
@@ -76,9 +85,11 @@ test.describe('최상위 메뉴', () => {
 
     // The balance chip is the header's way into 지갑; nothing else of the account is up there. It
     // shows the available Coin alone, under the label 잔고 (owner decisions 2026-10-13).
-    // A new account's 0 (#70, ADR-0071), matched whole: '0 Coin' is also inside '10,000 Coin'.
+    // A new account's start Coin, paid at its nickname step (#70; the e2e database holds a value,
+    // global-setup.ts, #116), matched whole: a shorter figure could be inside a longer one.
+    const me = await meOf(page.request);
     await expect(page.getByTestId('balance-chip')).toHaveText(
-      new RegExp(`^${copy.balance}\\s*0 Coin$`),
+      new RegExp(`^${copy.balance}\\s*${coinText(me.balance.availableCoin)}$`),
     );
     await page.getByTestId('balance-chip').click();
     await expect(page).toHaveURL('/my/wallet');

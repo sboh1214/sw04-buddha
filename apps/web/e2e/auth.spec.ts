@@ -10,6 +10,7 @@ import type { Me } from '@buddha/shared';
 import { copy } from '../src/copy';
 import {
   E2E_PASSWORD,
+  coinText,
   freshEmail,
   freshTag,
   logOut,
@@ -33,12 +34,16 @@ test.describe('signup -> login -> settings', () => {
   test('email signup, logout, login, /me visible in settings', async ({ page }) => {
     const email = freshEmail();
     await signUp(page, email);
-    // Nav shows the balance chip once `GET /me` resolves: 0, since creating an account grants
-    // nothing and the start Coin the onboarding records waits for its amount (#70, ADR-0071) — the
-    // sign-up trigger's 10,000 Coin is gone. The whole chip is matched, label and amount: '0 Coin'
-    // alone is also inside '10,000 Coin' and could not fail.
+    // Nav shows the balance chip once `GET /me` resolves: the start Coin alone, since creating an
+    // account grants nothing and the onboarding's nickname step pays the start Coin (#70, ADR-0071)
+    // from the value this database holds (global-setup.ts, #116) — the sign-up trigger's 10,000
+    // Coin is gone. The whole chip is matched, label and amount: a shorter figure could be inside
+    // a longer one.
+    const me = await meOf(page.request);
+    expect(me.startGrant?.status).toBe('granted');
+    const startCoin = coinText(me.startGrant?.amountCoin ?? '0');
     await expect(page.getByTestId('balance-chip')).toHaveText(
-      new RegExp(`^${copy.balance}\\s*0 Coin$`),
+      new RegExp(`^${copy.balance}\\s*${startCoin}$`),
     );
 
     await logOut(page);

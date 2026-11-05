@@ -1801,23 +1801,6 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/admin/users/{id}/balance-adjust": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Credit or debit Coin with a mandatory reason (ADMIN_ADJUST) */
-        post: operations["adminAdjustBalance"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/auth/register": {
         parameters: {
             query?: never;
@@ -3173,10 +3156,6 @@ export type components = {
             id: string;
             nickname: string | null;
         };
-        AdminBalanceAdjustResult: {
-            ledgerEntry: components["schemas"]["LedgerEntry"];
-            user: components["schemas"]["AdminUser"];
-        };
         AdminCategory: {
             id: number;
             isActive: boolean;
@@ -4073,11 +4052,6 @@ export type components = {
             availableCoin: components["schemas"]["CoinAmount"];
             lockedCoin: components["schemas"]["CoinAmount"];
         };
-        BalanceAdjustBody: {
-            amountCoin: components["schemas"]["CoinAmount"];
-            expectedAccountId: string;
-            memo: string;
-        };
         CancelModerationBody: {
             expectedAccountId: string;
             reason: string;
@@ -4396,11 +4370,11 @@ export type components = {
             createdAt: string;
             id: string;
             memo: string | null;
-            refId: string | null;
-            /** @enum {string|null} */
-            refType: "payment" | "fill" | "market" | "admin_action" | "coupon" | "start_grant" | "account_closure" | null;
+            refId: string;
             /** @enum {string} */
-            type: "DEPOSIT" | "TRADE_BUY" | "TRADE_SELL" | "FEE" | "SETTLEMENT_PAYOUT" | "ADMIN_ADJUST" | "BONUS" | "PAYMENT_CANCEL" | "PAYMENT_CANCEL_REVERSAL" | "START_GRANT" | "CLOSURE_FORFEIT";
+            refType: "payment" | "fill" | "market" | "coupon" | "start_grant" | "account_closure" | "approval_request" | "audit_failure";
+            /** @enum {string} */
+            type: "START_GRANT" | "PAIR_MINT_COLLATERAL" | "TRADE_FILL" | "SETTLEMENT_PAYOUT" | "CLOSURE_FORFEIT" | "RECONCILIATION_CORRECTION" | "DEPOSIT" | "BONUS" | "PAYMENT_CANCEL" | "PAYMENT_CANCEL_REVERSAL";
         };
         LiftRestrictionBody: {
             expectedAccountId: string;
@@ -15100,87 +15074,6 @@ export interface operations {
                 };
             };
             /** @description ONBOARDING_REQUIRED */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description RATE_LIMITED */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    adminAdjustBalance: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BalanceAdjustBody"];
-            };
-        };
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        data: components["schemas"]["AdminBalanceAdjustResult"];
-                    };
-                };
-            };
-            /** @description VALIDATION_ERROR */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description UNAUTHENTICATED */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description FORBIDDEN */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description NOT_FOUND */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description ONBOARDING_REQUIRED | INSUFFICIENT_BALANCE | ACCOUNT_CLOSED */
             409: {
                 headers: {
                     [name: string]: unknown;

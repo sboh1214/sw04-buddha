@@ -4,7 +4,7 @@
  * (fails under CI=true, see the harness).
  */
 import { schema } from '@buddha/db';
-import { createMarketMakerAccount } from '@buddha/db/test';
+import { createMarketMakerAccount, ledgerOf } from '@buddha/db/test';
 import { AUTH_USER_NAME, MARKET_MAKER_ACCOUNT_EMAIL } from '@buddha/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -178,7 +178,8 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
   it('created profile (user_XXXX) and a zero balance in the same transaction (trigger)', async () => {
     const rows = await t.db.execute<{ nickname: string; available_coin: string; entries: string }>(
       sql`select p.nickname, b.available_coin,
-            (select count(*) from ledger_entries l where l.user_id = u.id) as entries
+            (select count(*) from ledger_entries l
+              where b.account_id in (l.from_account_id, l.to_account_id)) as entries
           from profiles p join balances b using (user_id)
           join "user" u on u.id = p.user_id where u.email = ${email}`,
     );
@@ -206,12 +207,7 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
       .from(schema.balances)
       .where(eq(schema.balances.userId, created.user.id));
     expect(balance).toMatchObject({ availableCoin: 0n, lockedCoin: 0n });
-    expect(
-      await t.db
-        .select()
-        .from(schema.ledgerEntries)
-        .where(eq(schema.ledgerEntries.userId, created.user.id)),
-    ).toEqual([]);
+    expect(await ledgerOf(t.db, created.user.id)).toEqual([]);
   });
 
   /** The better-auth `user` row's name and photo. */

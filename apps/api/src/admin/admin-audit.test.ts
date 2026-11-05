@@ -2,10 +2,9 @@
  * PLAN M6 "보안: … 관리자 라우트 감사 로그 완전성 확인".
  *
  * The individual suites already prove that each admin write leaves the RIGHT `admin_actions`
- * row — `admin.controller.test.ts` for the balance adjustment, `charge-package.controller.test`
- * and `coupon.controller.test` for the catalogue, `admin-markets.controller.test` and
- * `admin-markets-lifecycle.controller.test` for the market transitions,
- * `admin-markets-review.controller.test` for the market review (#78),
+ * row — `charge-package.controller.test` and `coupon.controller.test` for the catalogue,
+ * `admin-markets.controller.test` and `admin-markets-lifecycle.controller.test` for the market
+ * transitions, `admin-markets-review.controller.test` for the market review (#78),
  * `admin-markets-supplement.controller.test` for the rule supplements (#80),
  * `admin-market-pauses.controller.test` for the pauses and their next paths (#114),
  * `admin-market-judgements.controller.test` for the judgements (#152),
@@ -47,7 +46,6 @@ import { discoverRoutes, isAdminPath } from '../test/routes.js';
  * call site.
  */
 const AUDITED: Readonly<Record<string, AdminActionType>> = {
-  'POST /admin/users/:id/balance-adjust': 'balance_adjust',
   'POST /admin/charge-packages': 'charge_package_create',
   'PATCH /admin/charge-packages/:id': 'charge_package_update',
   'DELETE /admin/charge-packages/:id': 'charge_package_delete',

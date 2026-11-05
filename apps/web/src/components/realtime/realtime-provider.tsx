@@ -634,11 +634,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         const parsed = userBalanceEventSchema.safeParse(raw);
         if (!parsed.success || !balanceOrder.accept(parsed.data)) return;
         // 원장 is the other half of this event, and it was the one balance writer that moved the
-        // chip and left the history behind: `useCharge`, `useRedeemCoupon` and the admin
-        // adjustment all refresh `['me']` and `['ledger']` together ("the nav chip and the ledger
-        // must never disagree", use-wallet.ts). A tab parked on /my/wallet showed the post-payout
-        // balance above a newest row still asserting the pre-payout 잔고 후, with 정산 지급 absent
-        // — self-contradicting rather than merely behind, which is what makes it worth a request.
+        // chip and left the history behind: `useCharge` and `useRedeemCoupon` both refresh
+        // `['me']` and `['ledger']` together ("the nav chip and the ledger must never disagree",
+        // use-wallet.ts). A tab parked on /my/wallet showed the post-payout balance above a
+        // newest row still asserting the pre-payout 잔고 후, with 정산 지급 absent —
+        // self-contradicting rather than merely behind, which is what makes it worth a request.
         //
         // Both kinds of the RULE above, and the first one literally: the event carries the ID of
         // the row it cannot draw (a `LedgerEntry` is type, amount, 잔고 후, memo and instant; a

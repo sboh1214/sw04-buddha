@@ -10,11 +10,13 @@
  */
 import { cancelStartGrant, schema } from '@buddha/db';
 import {
+  ledgerOf as accountLedgerOf,
   connectTestDb,
   createStartGrant,
   createUser,
   hasTestDb,
   setReleaseSetting,
+  withLedgerGuardsOff,
   type TestDb,
 } from '@buddha/db/test';
 import {
@@ -24,7 +26,7 @@ import {
   type ReleaseSettingStatus,
   type UserRealtimeEvent,
 } from '@buddha/shared';
-import { asc, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { type Publish } from '../realtime.js';
 import { runLedgerAudit } from './ledger-audit.js';
@@ -68,11 +70,7 @@ describe.skipIf(!hasTestDb())('start_grant.pay (integration)', () => {
   }
 
   async function ledgerOf(userId: string) {
-    return t.db
-      .select()
-      .from(schema.ledgerEntries)
-      .where(eq(schema.ledgerEntries.userId, userId))
-      .orderBy(asc(schema.ledgerEntries.id));
+    return accountLedgerOf(t.db, userId);
   }
 
   it('pays nothing while the amount is undecided, and does not even look', async () => {
@@ -200,8 +198,11 @@ describe.skipIf(!hasTestDb())('start_grant.pay (integration)', () => {
 
   it('goes on past a grant it cannot pay, and pays at most a batch per run', async () => {
     const broken = await waiting();
-    // A broken account: no balance row (a fault for the ledger audit to report).
-    await t.db.delete(schema.balances).where(eq(schema.balances.userId, broken.userId));
+    // A broken account: no balance row (a fault for the ledger audit to report). buddha_app
+    // holds no DELETE of balances since 0060, so it takes the migrate role.
+    await withLedgerGuardsOff((client) =>
+      client.query('delete from balances where user_id = $1', [broken.userId]),
+    );
     const healthy = [await waiting(), await waiting(), await waiting()];
     await setAmount(10_000);
 

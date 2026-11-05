@@ -100,7 +100,6 @@ import {
   commentLikes,
   consentRecords,
   fills,
-  ledgerEntries,
   linkFlags,
   linkUses,
   marketDisputes,
@@ -144,6 +143,7 @@ import {
   verification,
   writeLimitEvents,
 } from '../schema/index.js';
+import { ledgerKeys, lockLedgerAccounts, recordLedgerEntry } from '../ledger.js';
 import { storedReleaseSettingValue } from '../release-settings.js';
 import { payStartGrant, recordStartGrant } from '../start-grants.js';
 import { clockTimestamp, lockMarket } from '../tx-helpers.js';
@@ -159,16 +159,19 @@ export interface CreateUserInput {
   role?: Role;
   /**
    * Balance the user should end up with. Every account is created with 0 and no ledger entry by
-   * the trigger (migration 0031: no sign-up grant, #70); asking for more writes it as an
-   * ADMIN_ADJUST entry, so the PLAN 5.6 invariant keeps holding. Omit to keep 0, as a new account.
+   * the trigger (migration 0031: no sign-up grant, #70); asking for more pays it as the account's
+   * start grant, the one way Coin comes to a new person's account (ADR-0107 결정 2 #73 3·7항): a
+   * 본인확인 record (a random number), the grant recorded and paid with this amount — a real
+   * START_GRANT. So such an account has its grant already (`createStartGrant` on it throws) and a
+   * verified number. Omit to keep 0, as a new account, with neither.
    */
   balanceCoin?: bigint;
 }
 
 /**
- * Inserts a `user` row (better-auth table). The AFTER INSERT trigger (migration
- * 0002_user_profile_trigger) creates `profiles` + `balances` in the same transaction, exactly
- * as a real sign-up does; the factory then applies the requested nickname/role/balance.
+ * Inserts a `user` row (better-auth table). The AFTER INSERT trigger (migrations 0002, 0060)
+ * creates `profiles`, the user ledger account and its `balances` row in the same transaction,
+ * exactly as a real sign-up does; the factory then applies the requested nickname/role/balance.
  */
 export async function createUser(db: Db, input: CreateUserInput = {}) {
   const id = input.id ?? randomUUID();
@@ -191,24 +194,20 @@ export async function createUser(db: Db, input: CreateUserInput = {}) {
       .returning();
     let [balance] = await tx.select().from(balances).where(eq(balances.userId, id));
     if (!userRow || !profile || !balance) {
-      throw new Error('user trigger did not create profiles/balances (migration 0002 missing?)');
+      throw new Error('user trigger did not create profiles/balances (migration 0060 missing?)');
     }
-    if (balanceCoin !== balance.availableCoin) {
-      const delta = balanceCoin - balance.availableCoin;
-      [balance] = await tx
-        .update(balances)
-        .set({ availableCoin: balanceCoin })
-        .where(eq(balances.userId, id))
-        .returning();
-      await tx.insert(ledgerEntries).values({
-        userId: id,
-        type: 'ADMIN_ADJUST',
-        amountCoin: delta,
-        balanceAfterCoin: balanceCoin,
-        memo: 'test factory: initial balance',
-      });
+    if (balanceCoin < 0n) throw new Error('createUser: a balance is never negative');
+    if (balanceCoin > 0n) {
+      await tx
+        .insert(phoneVerifications)
+        .values({ userId: id, phone: randomPhone(), realName: '홍길동' });
+      const recorded = await recordStartGrant(tx, id, randomPhoneHash());
+      if (recorded.outcome !== 'recorded') throw new Error(`start grant: ${recorded.outcome}`);
+      const paid = await payStartGrant(tx, recorded.grantId, () => Promise.resolve(balanceCoin));
+      if (paid.outcome !== 'granted') throw new Error(`start grant not paid: ${paid.outcome}`);
+      balance = paid.balance;
     }
-    return { user: userRow, profile, balance: balance! };
+    return { user: userRow, profile, balance };
   });
 }
 
@@ -3267,22 +3266,19 @@ export async function closeAccount(db: Db, userId: string): Promise<Date> {
           sql`${startGrants.grantedAt} IS NULL AND ${startGrants.cancelledAt} IS NULL`,
         ),
       );
-    const [balance] = await tx
-      .select()
-      .from(balances)
-      .where(eq(balances.userId, userId))
-      .for('update');
-    if (balance!.availableCoin > 0n) {
-      await tx.insert(ledgerEntries).values({
-        userId,
+    const [held] = await lockLedgerAccounts(tx, [{ kind: 'user', userId }]);
+    const balance = held!.balance;
+    if (balance.availableCoin > 0n) {
+      await recordLedgerEntry(tx, {
         type: 'CLOSURE_FORFEIT',
-        amountCoin: -balance!.availableCoin,
-        balanceAfterCoin: 0n,
+        amountCoin: balance.availableCoin,
+        from: { kind: 'user', userId },
+        to: null,
         refType: 'account_closure',
         refId: userId,
-        createdAt: at,
+        idempotencyKey: ledgerKeys.closure(userId),
+        at,
       });
-      await tx.update(balances).set({ availableCoin: 0n }).where(eq(balances.userId, userId));
     }
     await tx.update(nicknameHolds).set({ userId: null }).where(eq(nicknameHolds.userId, userId));
     await tx

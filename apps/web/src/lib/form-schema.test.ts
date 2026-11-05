@@ -20,7 +20,7 @@ describe('boundedInteger', () => {
     expect(schema.safeParse(' 5000 ')).toMatchObject({ success: true, data: '5000' });
   });
 
-  it('accepts a signed pattern, as the balance adjustment needs', () => {
+  it('accepts a signed pattern, its range check deciding about zero and the sign', () => {
     const schema = boundedInteger(
       /^-?\d+$/,
       'format',

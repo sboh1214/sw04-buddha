@@ -18,8 +18,8 @@ import { coinAmountSchema } from './api/coin-amount.js';
 
 /**
  * The highest start grant the release setting takes: the same ceiling as a coupon
- * (COUPON_MAX_COIN) and an admin adjustment (ADJUST_MAX_ABS_COIN). A bound against a typo in the
- * admin screen, not a decided amount (#133 decides the amount).
+ * (COUPON_MAX_COIN). A bound against a typo in the admin screen, not a decided amount (#133
+ * decides the amount).
  */
 export const START_GRANT_MAX_COIN = 1_000_000;
 

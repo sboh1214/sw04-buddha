@@ -2124,6 +2124,113 @@ export async function skipUnlessResolvable(admin: APIRequestContext): Promise<vo
   );
 }
 
+// ---- 시작 지급액 (#70, #116, 출시 설정) ------------------------------------------------------
+
+/**
+ * The release setting the start Coin is paid from (#70, ADR-0071; `START_COIN_SETTING`, restated:
+ * these specs import only types from `@buddha/shared`).
+ */
+export const START_COIN_KEY = 'grant.start_coin';
+
+/**
+ * The start Coin the suite enters while the setting is 미정 (`ensureStartCoin`): the largest the
+ * setting takes (`START_GRANT_MAX_COIN`), seven digits, so a header chip or a wallet is measured
+ * with a long amount (coin.spec.ts).
+ */
+export const E2E_START_COIN = 1_000_000;
+
+/** Why the suite entered it, as the change record keeps it (1..500 characters). */
+const E2E_START_COIN_REASON = 'e2e: 시험 DB의 시작 지급액';
+
+/**
+ * The start Coin as `context`'s admin reads it through `GET /admin/release-settings`: its amount
+ * whatever the status (설계 제안, 시험값 and 승인됨 are all paid, ADR-0071 decision 7), or null
+ * while it is 미정 — when every grant waits.
+ */
+export async function startCoinValue(context: APIRequestContext): Promise<number | null> {
+  const items = await unwrap<ReleaseSetting[]>(await context.get('/api/v1/admin/release-settings'));
+  const item = items.find((entry) => entry.key === START_COIN_KEY);
+  if (item === undefined) throw new Error(`no release setting ${START_COIN_KEY} is registered`);
+  return item.status === 'undecided' || typeof item.value !== 'number' ? null : item.value;
+}
+
+/**
+ * Makes sure the start Coin has a value, for the suite's global setup (global-setup.ts): no admin
+ * adjusts a balance since #116 (ADR-0107 결정 2 #73 7항: "e2e는 시험 DB의 시작 지급 설정값으로 Coin을
+ * 받는다"), so the start grant is how every account a spec makes gets its Coin. While it is 미정,
+ * `context`'s admin enters E2E_START_COIN as a 시험값 with its reason; a value already there is
+ * left as it is. Safe to run twice at once, as `ensureDisputeWindow` is. Returns the amount in
+ * force; a spec reads it (`startCoinValue`) rather than assuming this one.
+ */
+export async function ensureStartCoin(context: APIRequestContext): Promise<number> {
+  const before = await startCoinValue(context);
+  if (before !== null) return before;
+  const entered = await context.patch(`/api/v1/admin/release-settings/${START_COIN_KEY}`, {
+    data: {
+      status: 'test',
+      value: E2E_START_COIN,
+      reason: E2E_START_COIN_REASON,
+      expectedAccountId: await accountIdOf(context),
+    },
+  });
+  if (entered.ok()) return E2E_START_COIN;
+  const after = await startCoinValue(context);
+  if (after !== null) return after;
+  throw new Error(
+    `entering ${START_COIN_KEY} failed (${String(entered.status())}): ${await entered.text()}`,
+  );
+}
+
+/**
+ * How long the global setup waits for the worker to pay the first seed admin's waiting start
+ * Coin (`awaitOwnStartGrant`): the every-minute `start_grant.pay` run, plus a margin.
+ */
+const OWN_START_GRANT_MS = 90_000;
+
+/** How often it asks `GET /me` again meanwhile. */
+const OWN_START_GRANT_POLL_MS = 2_000;
+
+/**
+ * Waits until `context`'s account has no start grant waiting, for the suite's global setup: on a
+ * fresh database the first seed admin onboards (`signInFirstSeedAdmin`) before `ensureStartCoin`
+ * enters the amount, so its grant waits and the worker's every-minute `start_grant.pay` pays it.
+ * Without this wait that payment lands while the specs run and moves the admin's header chip under
+ * a spec that holds it still (market.spec.ts AC 1). Nothing to wait for when the grant was paid at
+ * once (a database where the amount was already entered) or when no worker runs
+ * (`workerProbeDisabled`: then nothing pays it, and nothing moves the chip either).
+ */
+export async function awaitOwnStartGrant(context: APIRequestContext): Promise<void> {
+  if (workerProbeDisabled()) return;
+  const deadline = Date.now() + OWN_START_GRANT_MS;
+  while (Date.now() < deadline) {
+    const me = await unwrap<Me>(await context.get('/api/v1/me'));
+    if (me.startGrant?.status !== 'pending') return;
+    await new Promise((resolve) => setTimeout(resolve, OWN_START_GRANT_POLL_MS));
+  }
+  throw new Error(
+    `the start grant of the first seed admin still waits after ${String(OWN_START_GRANT_MS)} ms: ` +
+      'is the worker (start_grant.pay) running?',
+  );
+}
+
+/**
+ * A whole Coin amount as `formatCoin` writes it ('1,000,000 Coin'): restated, as these specs import
+ * no value from `@buddha/shared`.
+ */
+export function coinText(amount: number | string): string {
+  return `${BigInt(amount).toLocaleString('en-US')} Coin`;
+}
+
+/**
+ * The start Coin as `formatCoin` writes it, for the specs that read a new account's balance. Fails
+ * when the setting is 미정, which the global setup never leaves it.
+ */
+export async function startCoinText(context: APIRequestContext): Promise<string> {
+  const amount = await startCoinValue(context);
+  if (amount === null) throw new Error(`${START_COIN_KEY} is 미정: global-setup.ts enters it`);
+  return coinText(amount);
+}
+
 // ---- 판정 (#152) ---------------------------------------------------------------------------
 
 /**

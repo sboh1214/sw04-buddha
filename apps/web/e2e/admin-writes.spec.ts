@@ -11,6 +11,7 @@ import {
   accountIdOf,
   adminAccount,
   closeMarket,
+  coinText,
   createDraftMarket,
   createOpenMarket,
   expect,
@@ -247,15 +248,6 @@ async function availableCoinOf(
   const row = users.find((user) => user.id === member.id);
   expect(row, member.email).toBeDefined();
   return row!.balance.availableCoin;
-}
-
-/** 사용자: searches `member`'s address and answers its card once its 조정 can be pressed. */
-async function memberCard(page: Page, member: { id: string; email: string }) {
-  await page.getByTestId('admin-user-search').fill(member.email);
-  await page.getByTestId('admin-user-search').press('Enter');
-  const card = page.getByTestId(`admin-user-${member.id}`);
-  await expect(card.getByTestId('adjust-submit')).toBeEnabled();
-  return card;
 }
 
 /** The row of 반복 링크's default list that holds `url`, read on through 더 보기 until it shows. */
@@ -862,49 +854,39 @@ test.describe('탭의 계정이 바뀌는 틈의 관리자 쓰기 (ADR-0092)', (
     }
   });
 
-  test('잔고 조정은 그 화면의 관리자를 대어 거절되고, 회원의 잔고는 그대로다 (Q-PG-8 ①)', async ({
+  test('사용자 화면에는 잔고 조정이 없고, 그 경로는 어느 방향으로도 없어 회원의 잔고는 그대로다 (#116)', async ({
     browser,
     page,
     admin,
-    secondAdmin,
   }) => {
-    // Owner decision 2026-10-26 17:21 answer 4 «이 PR에서 더함»: the adjustment Q-PG-8 ① held back
-    // names the admin on screen too. Before, B's cookie moved the member's Coin and the audit row
-    // named B. (The refund, its pair, is closed while paid Coin is off — ADR-0049 — so no screen
-    // offers it here; the API suite drives it with sales open.)
+    // ADR-0107 결정 2 #73 7항 (ADR-0109): the adjustment Q-PG-8 ① had made name the admin on
+    // screen is gone in both directions — the form, the route and the ledger type. A member's Coin
+    // moves only by the ledger's own events; a gap the audit finds waits for #93's 대사 정정.
     const member = await freshMember(browser);
     const before = await availableCoinOf(admin, member);
-    let card = page.getByTestId(`admin-user-${member.id}`);
-    const { a, close } = await underTheSecondAdmin(
-      browser,
-      page,
-      secondAdmin,
-      '/admin/users',
-      async () => {
-        card = await memberCard(page, member);
-      },
-    );
-    try {
-      // Drawn again after the guard's reset, for A.
-      await expect(card.getByTestId('adjust-submit')).toBeEnabled();
-      const memo = `E2E 화면의 관리자 ${freshTag()}`;
-      await card.getByTestId('adjust-amount').fill('1234');
-      await card.getByTestId('adjust-memo').fill(memo);
-      const writes = adminWrites(page);
-      const path = `/api/v1/admin/users/${member.id}/balance-adjust`;
-      const answered = answerOf(page, 'POST', path);
-      await card.getByTestId('adjust-submit').click();
-      expect(await answered).toBe(403);
-      await expect(sessionChangedToast(page)).toBeVisible();
-      expect(writes).toHaveLength(1);
-      expect(writes[0]).toMatchObject({
-        path,
-        body: { amountCoin: '1234', memo, expectedAccountId: a.id },
-      });
-      expect(await availableCoinOf(admin, member)).toBe(before);
-    } finally {
-      await close();
+    await signIn(page, adminAccount.email, adminAccount.password);
+    await page.goto('/admin/users');
+    await page.getByTestId('admin-user-search').fill(member.email);
+    await page.getByTestId('admin-user-search').press('Enter');
+    const card = page.getByTestId(`admin-user-${member.id}`);
+    await expect(card.getByTestId('admin-user-balance')).toHaveText(coinText(before));
+    // An open account's card: its balance and the way to its moderation page, and no form.
+    await expect(card.getByTestId('admin-user-moderation')).toBeVisible();
+    for (const testId of ['adjust-amount', 'adjust-memo', 'adjust-submit', 'admin-user-closed']) {
+      await expect(card.getByTestId(testId), testId).toHaveCount(0);
     }
+    await expect(card).not.toContainText('잔고 조정');
+    await expect(card.locator('form')).toHaveCount(0);
+
+    // The route answers as one that never was, a credit and a debit alike.
+    const expectedAccountId = await accountIdOf(admin);
+    for (const amountCoin of ['1234', '-1234']) {
+      const sent = await admin.post(`/api/v1/admin/users/${member.id}/balance-adjust`, {
+        data: { amountCoin, memo: `E2E 조정 없음 ${freshTag()}`, expectedAccountId },
+      });
+      expect(sent.status(), amountCoin).toBe(404);
+    }
+    expect(await availableCoinOf(admin, member)).toBe(before);
   });
 });
 
@@ -1318,43 +1300,6 @@ test.describe('탭의 세션이 아직 앞 관리자를 말하는데 `GET /me`�
       await expect(price).toHaveValue('');
       await expect(amount).toBeEnabled();
       expect(writes).toEqual([]);
-    } finally {
-      await close();
-    }
-  });
-
-  test('잔고 조정 양식에 앞 관리자가 적던 것은 다른 관리자의 것으로 비어 다시 그려지고, 아무것도 보내지 않는다 (Q-PG-8 ①)', async ({
-    browser,
-    page,
-    admin,
-    secondAdmin,
-  }) => {
-    const member = await freshMember(browser);
-    const before = await availableCoinOf(admin, member);
-    let card = page.getByTestId(`admin-user-${member.id}`);
-    const { toB, close } = await aThenBInPlace(
-      browser,
-      page,
-      secondAdmin,
-      '/admin/users',
-      async () => {
-        card = await memberCard(page, member);
-      },
-    );
-    try {
-      const amount = card.getByTestId('adjust-amount');
-      const memo = card.getByTestId('adjust-memo');
-      await amount.fill('1234');
-      await memo.fill('앞 관리자가 적던 조정 사유');
-      const writes = adminWrites(page);
-
-      await toB();
-      // B's form: empty, and on — B is known.
-      await expect(amount).toHaveValue('');
-      await expect(memo).toHaveValue('');
-      await expect(amount).toBeEnabled();
-      expect(writes).toEqual([]);
-      expect(await availableCoinOf(admin, member)).toBe(before);
     } finally {
       await close();
     }

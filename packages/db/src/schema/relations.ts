@@ -15,6 +15,7 @@ import { consentRecords } from './consent-records.js';
 import { couponRedemptions, coupons } from './coupons.js';
 import { fills } from './fills.js';
 import { profileInterestCategories } from './interest-categories.js';
+import { ledgerAccounts } from './ledger-accounts.js';
 import { ledgerEntries } from './ledger.js';
 import { commentLikes, postLikes } from './likes.js';
 import { linkFlags } from './link-review.js';
@@ -79,12 +80,27 @@ export const nicknameHoldsRelations = relations(nicknameHolds, ({ one }) => ({
 }));
 
 export const balancesRelations = relations(balances, ({ one }) => ({
+  account: one(ledgerAccounts, { fields: [balances.accountId], references: [ledgerAccounts.id] }),
   user: one(user, { fields: [balances.userId], references: [user.id] }),
   profile: one(profiles, { fields: [balances.userId], references: [profiles.userId] }),
 }));
 
+export const ledgerAccountsRelations = relations(ledgerAccounts, ({ one }) => ({
+  owner: one(user, { fields: [ledgerAccounts.ownerId], references: [user.id] }),
+  market: one(markets, { fields: [ledgerAccounts.marketId], references: [markets.id] }),
+  balance: one(balances, { fields: [ledgerAccounts.id], references: [balances.accountId] }),
+}));
+
 export const ledgerEntriesRelations = relations(ledgerEntries, ({ one }) => ({
-  user: one(user, { fields: [ledgerEntries.userId], references: [user.id] }),
+  fromAccount: one(ledgerAccounts, {
+    fields: [ledgerEntries.fromAccountId],
+    references: [ledgerAccounts.id],
+  }),
+  toAccount: one(ledgerAccounts, {
+    fields: [ledgerEntries.toAccountId],
+    references: [ledgerAccounts.id],
+  }),
+  market: one(markets, { fields: [ledgerEntries.marketId], references: [markets.id] }),
 }));
 
 export const paymentsRelations = relations(payments, ({ one, many }) => ({
@@ -541,7 +557,7 @@ export const userRelations = relations(user, ({ one, many }) => ({
   startGrant: one(startGrants, { fields: [user.id], references: [startGrants.userId] }),
   consentRecords: many(consentRecords),
   nicknameHolds: many(nicknameHolds),
-  ledgerEntries: many(ledgerEntries),
+  ledgerAccounts: many(ledgerAccounts),
   payments: many(payments),
   orders: many(orders),
   positions: many(positions),

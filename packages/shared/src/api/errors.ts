@@ -184,9 +184,9 @@ export const ERROR_CODES = [
    */
   'CLOSURE_NOT_ALLOWED',
   /**
-   * The account was closed by its member, #140: an operator write that would give it Coin or take
-   * Coin from it is refused, as the ledger of a closed account takes no entry after the closure,
-   * and so is an admin grant, as a closed account signs in no more and its profile never changes.
+   * The account was closed by its member, #140: an admin grant is refused, as a closed account
+   * signs in no more and its profile never changes. No operator path gives or takes Coin (#116,
+   * ADR-0109); the database takes no ledger entry of a closed account after its closure.
    */
   'ACCOUNT_CLOSED',
   /**

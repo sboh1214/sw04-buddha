@@ -309,11 +309,11 @@ export const copy = {
   ledgerEmpty: '아직 내역이 없습니다.',
   ledgerBalanceAfter: '거래 후 잔고',
   ledgerTypeDeposit: '충전',
-  ledgerTypeTradeBuy: '매수',
-  ledgerTypeTradeSell: '매도',
-  ledgerTypeFee: '수수료',
+  // 원장의 담보·체결·대사 정정 유형(#116, ADR-0109): 지갑 화면(#69)이 이름을 정할 때까지의 임시 이름이다.
+  ledgerTypePairMintCollateral: '쌍 발행 담보',
+  ledgerTypeTradeFill: '체결 대금',
+  ledgerTypeReconciliationCorrection: '대사 정정',
   ledgerTypeSettlement: '정산 지급',
-  ledgerTypeAdminAdjust: '관리자 조정',
   ledgerTypeBonus: '보너스',
   ledgerTypePaymentCancel: '결제 취소(환불)',
   ledgerTypePaymentCancelReversal: '결제 취소 복원',
@@ -352,18 +352,6 @@ export const copy = {
   adminCouponEnable: '재개',
   adminCouponUnlimited: '무제한',
   adminCouponUsage: '사용',
-  adminAdjust: '잔고 조정',
-  adminAdjustAmount: '조정 금액 (음수는 차감)',
-  adminAdjustMemo: '사유',
-  adminAdjustSubmit: '조정 적용',
-  adminAdjustDone: '잔고를 조정했습니다.',
-  errAdjustRange: '0이 아닌 금액을 1,000,000 Coin 이내로 입력해 주세요.',
-  errAdjustMemo: '사유를 입력해 주세요.',
-  errAdjustNegative: '잔고가 음수가 되는 조정은 할 수 없습니다.',
-  // 탈퇴한 계정(#140, ADR-0086): 탈퇴의 '탈퇴 소멸' 뒤로는 그 원장에 아무것도 쓰지 않으므로(마이그레이션
-  // 0043) 잔고 조정을 받지 않는다(ACCOUNT_CLOSED). 카드에는 조정 양식 대신 이 줄이 있고, 목록을 읽은 뒤
-  // 탈퇴한 계정의 조정도 이 문장으로 거절된다.
-  adminAdjustClosed: '탈퇴한 계정이라 잔고를 조정할 수 없습니다.',
   // 탈퇴한 계정의 표시(#140, 오너 결정 2026-10-23 (2차) 5): 계정 목록의 카드와 회원 화면의 제목 옆. 계정은
   // 목록과 회원 화면에 남고 이름은 '탈퇴한 사용자'다.
   adminClosedBadge: '탈퇴',

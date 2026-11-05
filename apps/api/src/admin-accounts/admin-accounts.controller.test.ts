@@ -719,10 +719,10 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
     // Another kind of record never shows up here.
     await t.db.insert(schema.adminActions).values({
       adminId: a.id,
-      type: 'balance_adjust',
+      type: 'moderation_warning',
       targetType: 'user',
       targetId: c.id,
-      payload: { amountCoin: '1', memo: '시험' },
+      payload: { memo: '시험' },
     });
 
     const first = await get(`${BASE}/changes?limit=2`, b.cookie);
@@ -748,7 +748,7 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
       'admin_revoke',
       'admin_grant',
     ]);
-    // The balance adjustment names C too, and stays out of its role history.
+    // The warning names C too, and stays out of its role history.
     const ofCAll = await t.db
       .select()
       .from(schema.adminActions)

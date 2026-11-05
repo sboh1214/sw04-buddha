@@ -5,9 +5,9 @@
  * when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
-import { completeOnboarding } from '@buddha/db/test';
+import { completeOnboarding, ledgerOf as accountLedgerOf } from '@buddha/db/test';
 import { type Coupon } from '@buddha/shared';
-import { asc, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
@@ -62,13 +62,8 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
       payload: { code, expectedAccountId: as.id },
     });
 
-  async function ledgerOf(userId: string) {
-    return t.db
-      .select()
-      .from(schema.ledgerEntries)
-      .where(eq(schema.ledgerEntries.userId, userId))
-      .orderBy(asc(schema.ledgerEntries.id));
-  }
+  /** The account's ledger, each event from its side (`ledgerOf` of @buddha/db/test, #116). */
+  const ledgerOf = (userId: string) => accountLedgerOf(t.db, userId);
 
   async function balanceOf(userId: string) {
     const [row] = await t.db
@@ -112,12 +107,22 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
     expect(redemption).toMatchObject({ userId: member.id, amountCoin: 5_000n });
     const [coupon] = await t.db.select().from(schema.coupons);
     expect(coupon?.redeemedCount).toBe(1);
+    // A kept type on the ledger accounts (#116, ADR-0107 결정 2 #73 2항): a mint into the
+    // account, referring to and keyed by the redemption.
+    const [entry] = await t.db.select().from(schema.ledgerEntries);
+    expect(entry).toMatchObject({
+      type: 'BONUS',
+      fromAccountId: null,
+      refType: 'coupon',
+      refId: redemption!.id,
+      idempotencyKey: redemption!.id,
+    });
   });
 
   it('stamps the BONUS after the balance lock, not at transaction start (A-M3-14)', async () => {
     // The redemption transaction begins (coupon row, redemption row, coupon update) and only
     // then reaches this account's balance row, which this connection holds. Whatever
-    // committed against the account meanwhile is already in its balance_after_coin, so the
+    // committed against the account meanwhile is already in its total after, so the
     // BONUS row must sort after it — the column default `now()` is the transaction start.
     expect((await issue({ code: 'LOCK-WAIT', amountCoin: '3000' })).statusCode).toBe(201);
     const holder = await t.db.$client.connect();

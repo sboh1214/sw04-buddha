@@ -89,8 +89,8 @@ export class SessionGuard implements CanActivate {
    * The session cookie is SameSite=Lax and ADR-0017 puts the web and the API on sibling hosts
    * of one site, so a page on any other host of that site can submit a form with the cookie
    * attached — and the better-auth Nest module parses `application/x-www-form-urlencoded`
-   * bodies, so such a form reaches these handlers with a body zod accepts (a balance
-   * adjustment is two fields). better-auth checks `Origin` on its own /api/auth/* routes only;
+   * bodies, so such a form reaches these handlers with a body zod accepts (a payment
+   * refund is two fields). better-auth checks `Origin` on its own /api/auth/* routes only;
    * PLAN M6's "CSRF(better-auth 기본)" holds for those alone. Browsers send `Origin` on every
    * POST, form or fetch, same-origin or not, so an untrusted value is refused; a request without
    * one came from no browser and cannot be a cross-site request forgery, so it passes (curl,

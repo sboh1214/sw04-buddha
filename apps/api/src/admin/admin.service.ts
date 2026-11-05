@@ -4,19 +4,17 @@ import {
   decodeKeyset,
   encodeKeyset,
   serializeCoinAmount,
-  type AdminBalanceAdjustResult,
   type AdminPayment,
   type AdminUser,
   type AdminUserStatus,
   type AuditFailure,
   type Role,
 } from '@buddha/shared';
-import { and, desc, eq, ilike, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import { and, desc, eq, ilike, isNotNull, isNull, or } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
-import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
-import { paymentColumns, toLedgerEntry, toBalance, type Page } from '../wallet/wallet.service.js';
+import { paymentColumns, toBalance, type Page } from '../wallet/wallet.service.js';
 
 const userColumns = {
   id: schema.user.id,
@@ -95,7 +93,7 @@ function toAdminPayment(row: AdminPaymentRow): AdminPayment {
   };
 }
 
-/** Admin reads and the balance adjustment (PLAN 7.3, 12; M2). */
+/** Admin reads (PLAN 7.3, 12; M2). The balance adjustment went with #116 (ADR-0109). */
 @Injectable()
 export class AdminService {
   constructor(@Inject(DB) private readonly db: Db) {}
@@ -157,100 +155,6 @@ export class AdminService {
       .limit(1);
     if (!row) throw new AppError('NOT_FOUND', { message: 'User not found' });
     return toAdminUser(row);
-  }
-
-  /**
-   * ADMIN_ADJUST (PLAN 5.6): one transaction writes the audit row, moves the balance and
-   * appends the ledger entry. The UPDATE carries the non-negative guard, so an adjustment
-   * that would overdraw the account matches no row and is refused — the CHECK constraint
-   * would abort the transaction anyway, but this reports the reason.
-   */
-  async adjustBalance(
-    adminId: string,
-    userId: string,
-    amountCoin: bigint,
-    memo: string,
-  ): Promise<AdminBalanceAdjustResult> {
-    await this.getUser(userId); // 404 before writing anything
-
-    const ledgerEntry = await this.db.transaction(async (tx) => {
-      // The balance row first, then the clock: another writer of this account (a
-      // settlement payout, a charge) may have committed while this transaction waited on that row,
-      // and the rows written below must sort after it — `now()` is the transaction start and
-      // would sort before work their own balance_after_coin includes (clock.ts, A-M3-14). The
-      // lock is what the UPDATE below would take anyway, so no writer's lock order changes;
-      // the result is discarded, and a vanished row still falls through to the guard's own
-      // zero-row branch (INSUFFICIENT_BALANCE).
-      await tx
-        .select({ userId: schema.balances.userId })
-        .from(schema.balances)
-        .where(eq(schema.balances.userId, userId))
-        .limit(1)
-        .for('update');
-      // A closed account takes no ledger entry after its forfeiture (#140, migration 0043): read
-      // after the balance's lock, which a closure holds until it commits, so one in flight is seen.
-      const [profile] = await tx
-        .select({ closedAt: schema.profiles.closedAt })
-        .from(schema.profiles)
-        .where(eq(schema.profiles.userId, userId))
-        .limit(1);
-      if (profile?.closedAt != null) {
-        throw new AppError('ACCOUNT_CLOSED', { message: 'The account was closed by its member' });
-      }
-      const adjustedAt = await clockTimestamp(tx);
-
-      const [action] = await tx
-        .insert(schema.adminActions)
-        .values({
-          adminId,
-          type: 'balance_adjust',
-          targetType: 'user',
-          targetId: userId,
-          payload: { amountCoin: serializeCoinAmount(amountCoin), memo },
-          createdAt: adjustedAt,
-        })
-        .returning();
-      if (!action) throw new AppError('INTERNAL', { message: 'Admin action insert failed' });
-
-      const [balance] = await tx
-        .update(schema.balances)
-        .set({
-          availableCoin: sql`${schema.balances.availableCoin} + ${amountCoin}`,
-          // Explicit on purpose: the column's `$onUpdate` would write the API host's clock.
-          updatedAt: adjustedAt,
-        })
-        .where(
-          and(
-            eq(schema.balances.userId, userId),
-            sql`${schema.balances.availableCoin} + ${amountCoin} >= 0`,
-          ),
-        )
-        .returning();
-      if (!balance) {
-        throw new AppError('INSUFFICIENT_BALANCE', {
-          message: 'The adjustment would make the balance negative',
-          details: [{ path: ['amountCoin'], message: 'balance would go negative' }],
-        });
-      }
-
-      const [entry] = await tx
-        .insert(schema.ledgerEntries)
-        .values({
-          userId,
-          type: 'ADMIN_ADJUST',
-          amountCoin,
-          balanceAfterCoin: balance.availableCoin,
-          refType: 'admin_action',
-          refId: action.id,
-          memo,
-          createdAt: adjustedAt,
-        })
-        .returning();
-      if (!entry) throw new AppError('INTERNAL', { message: 'Ledger insert failed' });
-      return entry;
-    });
-
-    return { user: await this.getUser(userId), ledgerEntry: toLedgerEntry(ledgerEntry) };
   }
 
   async listPayments(cursor: string | undefined, limit: number): Promise<Page<AdminPayment>> {

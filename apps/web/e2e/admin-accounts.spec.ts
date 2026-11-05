@@ -369,7 +369,8 @@ test('시드가 만든 운영 마켓메이커 계정은 관리자의 사용자 �
 }) => {
   // ADR-0107 결정 2 #73 11항, ADR-0108: the seed made the one 운영 마켓메이커 account (every e2e
   // database is seeded), with no profile — so no admin list, the grant search included, has a row
-  // for it, and nothing an admin could grant or adjust — and with no login method.
+  // for it, and nothing an admin could grant (no admin adjusts any balance since #116) — and with
+  // no login method.
   for (const query of ['', '&status=open']) {
     const users = await dataOf<{ email: string }[]>(
       await admin.get(

@@ -64,7 +64,7 @@ export interface CloseScanResult {
  * finds it neither OPEN nor PAUSED and skips; a PAUSED market keeps its job, which closes it on
  * schedule; two workers racing on one market serialise on `lockMarket` and the second sees the
  * first's status. Never 'not_found': no path deletes one market (every FK is RESTRICT); only a
- * whole-database wipe does (migrations 0017 and 0048, deploy/reset-db.sh). An unknown id is
+ * whole-database wipe does (migrations 0017, 0048 and 0060, deploy/reset-db.sh). An unknown id is
  * therefore a job left over from before such a wipe — expected, it runs out of attempts
  * (docs/RESET.md) — or a broken producer, and either way the job fails loudly rather than being
  * retried into silence.

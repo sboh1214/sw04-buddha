@@ -421,6 +421,13 @@
       "when": 1793781048404,
       "tag": "0059_account_types",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1793792678945,
+      "tag": "0060_ledger_accounts",
+      "breakpoints": true
     }
   ]
 }

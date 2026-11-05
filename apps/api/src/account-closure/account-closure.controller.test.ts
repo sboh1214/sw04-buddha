@@ -40,6 +40,8 @@ import {
   createSearch,
   createStartGrant,
   createWatch,
+  ledgerOf as accountLedgerOf,
+  withLedgerGuardsOff,
 } from '@buddha/db/test';
 import {
   ORPHAN_MEDIA_RETRY_SLACK_MINUTES,
@@ -71,6 +73,7 @@ import { Logger } from '@nestjs/common';
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
+import { AppError } from '../common/errors/app-error.js';
 import { PhoneHasher } from '../identity/phone-hash.js';
 import { PhoneVerificationService } from '../phone-verification/phone-verification.service.js';
 import { ReleaseSettingsService } from '../release-settings/release-settings.service.js';
@@ -80,6 +83,7 @@ import { expectLedgerChain } from '../test/ledger.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { waitForLockWaiter } from '../test/wait.js';
 import { WatchlistService } from '../watchlist/watchlist.service.js';
+import { AccountClosureService } from './account-closure.service.js';
 
 /** setup-env.ts fixes WEB_ORIGIN to this. */
 const TRUSTED_ORIGIN = 'http://localhost:3000';
@@ -170,12 +174,8 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       .where(eq(schema.balances.userId, userId));
     return balance!;
   }
-  const ledgerOf = (userId: string) =>
-    t.db
-      .select()
-      .from(schema.ledgerEntries)
-      .where(eq(schema.ledgerEntries.userId, userId))
-      .orderBy(asc(schema.ledgerEntries.id));
+  /** The account's ledger, each event from its side (`ledgerOf` of @buddha/db/test, #116). */
+  const ledgerOf = (userId: string) => accountLedgerOf(t.db, userId);
   async function setAmount(value: number) {
     await t.app
       .get(ReleaseSettingsService)
@@ -1387,21 +1387,47 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       });
       await expectOpen(member);
     });
+
+    it('refuses an account whose balance left its ledger until the gap is closed (ADR-0109 12-8)', async () => {
+      // Only an owner-level write makes one (the ledger audit reports it). A forfeiture moves the
+      // buckets and the ledger total by one amount and cannot take both to 0 (migration 0060), so
+      // the closure waits for #93's 대사 정정 — refused before anything is written. Without the
+      // service's own check the forfeiture or the COMMIT would still refuse it with a 500, so the
+      // service is also asked directly for its reason, in both directions of the gap.
+      const service = t.app.get(AccountClosureService);
+      const gapped = (set: string) =>
+        withLedgerGuardsOff((client) =>
+          client.query(`UPDATE balances SET ${set} WHERE user_id = $1`, [member.id]),
+        );
+      const refusedBeforeWriting = (e: unknown) =>
+        e instanceof AppError &&
+        e.code === 'INTERNAL' &&
+        e.message === 'The balance differs from its ledger';
+      // The buckets above the ledger, then the ledger above the buckets.
+      await gapped('available_coin = available_coin + 30');
+      const before = await balanceOf(member.id);
+      expect(before.availableCoin - before.ledgerCoin).toBe(30n);
+      expect(await checkOf(member)).toMatchObject({ refusals: [] });
+      errorOf(await close(member), 500, 'INTERNAL');
+      await expect(service.close(member.id)).rejects.toSatisfy(refusedBeforeWriting);
+      await expectOpen(member);
+      expect(await balanceOf(member.id)).toEqual(before);
+      await gapped('available_coin = 0, ledger_coin = ledger_coin + 30');
+      const after = await balanceOf(member.id);
+      expect(after).toMatchObject({ availableCoin: 0n, ledgerCoin: before.ledgerCoin + 30n });
+      await expect(service.close(member.id)).rejects.toSatisfy(refusedBeforeWriting);
+      errorOf(await close(member), 500, 'INTERNAL');
+      await expectOpen(member);
+      expect(await balanceOf(member.id)).toEqual(after);
+      expect((await ledgerOf(member.id)).map((entry) => entry.type)).not.toContain(
+        'CLOSURE_FORFEIT',
+      );
+    });
   });
 
   describe('after the closure', () => {
-    it('takes no balance adjustment or admin grant of an operator', async () => {
+    it('takes no admin grant of an operator (and no balance adjustment exists to take, #116)', async () => {
       await closed(member);
-      errorOf(
-        await post(
-          `/admin/users/${member.id}/balance-adjust`,
-          { amountCoin: '100', memo: '보정' },
-          admin,
-        ),
-        409,
-        'ACCOUNT_CLOSED',
-      );
-      expect(await ledgerOf(member.id)).toEqual([]);
       // Not `email_not_verified` (its address is unverified now): the account is closed for good.
       errorOf(
         await post('/admin/admins', { userId: member.id, reason: '운영 인원 추가' }, admin),

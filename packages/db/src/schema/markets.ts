@@ -90,9 +90,6 @@ export const markets = pgTable(
       .default(sql`0`),
     tradeCount: integer().notNull().default(0),
     traderCount: integer().notNull().default(0),
-    // fees (schema only, PLAN 5.7)
-    takerFeeBps: smallint().notNull().default(0),
-    settlementFeeBps: smallint().notNull().default(0),
     // schedule / resolution
     /**
      * The ACTUAL open: the instant of the SCHEDULED → OPEN transition (`openScheduledMarket`, #21,
@@ -356,10 +353,6 @@ export const markets = pgTable(
     check(
       'markets_correction_pending_status_check',
       sql`NOT ${t.correctionPending} OR ${t.status} = 'provisional'`,
-    ),
-    check(
-      'markets_fee_bps_check',
-      sql`${t.takerFeeBps} BETWEEN 0 AND 10000 AND ${t.settlementFeeBps} BETWEEN 0 AND 10000`,
     ),
   ],
 );

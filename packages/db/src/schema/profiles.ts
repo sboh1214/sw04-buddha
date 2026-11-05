@@ -15,8 +15,9 @@ import { roleEnum } from './enums.js';
 import { mediaObjects } from './media-objects.js';
 
 /**
- * One row per better-auth user. Created together with `balances` by the AFTER INSERT
- * trigger on "user" (migration 0002_user_profile_trigger, PLAN 10.4: same transaction).
+ * One row per person's account. Created together with the account's user ledger account and its
+ * `balances` row by the AFTER INSERT trigger on "user" (migrations 0002, 0060; PLAN 10.4: same
+ * transaction); the 운영 마켓메이커 gets neither (0059, 0060).
  * Nickname is mandatory from day one (PLAN 6.3); charset: nicknameSchema in @buddha/shared.
  * Unique ignoring case (#58, ADR-0069 decision 1 #57-6): the unique index is on `lower(nickname)`,
  * so 'Abc' keeps 'abc' out (`nicknameKey` in @buddha/shared is the same comparison).

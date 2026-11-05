@@ -1,7 +1,7 @@
 import type { Route } from '@playwright/test';
 import type { LedgerEntry, Me, StartGrant } from '@buddha/shared';
 import { copy } from '../src/copy';
-import { expect, freshEmail, signUp, test } from './helpers';
+import { expect, freshEmail, signUp, startCoinText, startCoinValue, test } from './helpers';
 
 /**
  * 시작 Coin (#70, ADR-0071) as a member sees it: creating an account grants nothing, and the
@@ -10,11 +10,13 @@ import { expect, freshEmail, signUp, test } from './helpers';
  * wallet preview (owner decision 2026-10-18) — says the start Coin is on its way only while it
  * waits (ADR-0069 decision 4 #70).
  *
- * The e2e database has no value for 시작 지급액 and no spec enters one: a value entered here would
- * be paid by the worker to every account any spec made, which would break every spec that counts
- * a new account's Coin. So the waiting wallet is the real one, and the paid wallet is drawn from the
+ * The e2e database has a value for 시작 지급액 since #116: the suite's global setup enters one as a
+ * 시험값 while it is 미정 (global-setup.ts; ADR-0107 결정 2 #73 7항 "e2e는 시험 DB의 시작 지급
+ * 설정값으로 Coin을 받는다" — no admin adjusts a balance any more). So the paid wallet is the real
+ * one, its amount the value in force (`startCoinValue`), and the waiting wallet is drawn from the
  * API's answers rewritten in the browser (`page.route`), the way phone-verification.spec.ts rewrites
- * a send's answer; paying once a value is entered is pinned by the API, db and worker suites.
+ * a send's answer; waiting while the value is 미정, and the worker paying once it is entered, are
+ * pinned by the API, db and worker suites.
  */
 
 /** `{ data }` out of the success envelope. */
@@ -42,29 +44,27 @@ async function rewriteMe(
 }
 
 test.describe('시작 Coin (#70)', () => {
-  test('온보딩을 마친 계정의 시작 Coin은 지급액이 정해질 때까지 기다리고, 지갑과 MY 요약의 지갑 미리보기에 그 안내가 보인다', async ({
+  test('시작 Coin이 지급액을 기다리는 동안에는 지갑과 MY 요약의 지갑 미리보기에 그 안내가 보인다', async ({
     page,
-    admin,
   }) => {
-    // The state every spec relies on: no value, so every grant waits.
-    const settings = await dataOf<{ key: string; value: unknown }[]>(
-      await admin.get('/api/v1/admin/release-settings'),
-    );
-    expect(settings.find((item) => item.key === 'grant.start_coin')?.value ?? null).toBeNull();
-
+    // A grant waiting for its amount (the setting 미정), drawn from the API's own answers
+    // rewritten: this database has a value, so the account below is paid at once.
     await signUp(page, freshEmail());
-
-    // The API: one grant record, waiting; nothing paid, so a zero balance and an empty ledger — the
-    // sign-up trigger's 10,000 Coin and its BONUS entry are gone (migration 0031).
-    const me = await dataOf<Me>(await page.request.get('/api/v1/me'));
-    expect(me.startGrant).toEqual({ status: 'pending', amountCoin: null, grantedAt: null });
-    expect(me.balance).toEqual({ availableCoin: '0', lockedCoin: '0' });
-    expect(await dataOf<LedgerEntry[]>(await page.request.get('/api/v1/me/ledger'))).toEqual([]);
+    await page.route('**/api/v1/me', (route) =>
+      route.request().method() === 'GET'
+        ? rewriteMe(route, { status: 'pending', amountCoin: null, grantedAt: null }, '0')
+        : route.fallback(),
+    );
+    await page.route('**/api/v1/me/ledger*', async (route) => {
+      const response = await route.fetch();
+      const body = (await response.json()) as { data: LedgerEntry[] };
+      await route.fulfill({ response, json: { ...body, data: [] } });
+    });
 
     await page.goto('/my/wallet');
     const notice = page.getByTestId('wallet-start-grant-pending');
     await expect(notice).toHaveText(copy.walletStartGrantPending);
-    // Under the balance it explains, which is the real 0.
+    // Under the balance it explains, the 0 of an account paid nothing yet.
     await expect(page.getByTestId('wallet-balance')).toContainText(copy.walletStartGrantPending);
     await expect(page.getByTestId('wallet-available')).toHaveText('0 Coin');
     await expect(page.getByTestId('ledger-list')).toContainText(copy.ledgerEmpty);
@@ -89,10 +89,11 @@ test.describe('시작 Coin (#70)', () => {
     // An account whose verified number's start Coin went to an earlier account (#57-1): the API
     // says `number_used` (ADR-0072), drawn from its own answer rewritten, as nothing in a spec can
     // make that account. Only the onboarding's notice says so; the wallet has nothing to wait for.
+    // Its balance is drawn as the 0 such an account holds (this database pays the start Coin).
     await signUp(page, freshEmail());
     await page.route('**/api/v1/me', (route) =>
       route.request().method() === 'GET'
-        ? rewriteMe(route, { status: 'number_used', amountCoin: null, grantedAt: null })
+        ? rewriteMe(route, { status: 'number_used', amountCoin: null, grantedAt: null }, '0')
         : route.fallback(),
     );
     await page.goto('/my/wallet');
@@ -104,45 +105,45 @@ test.describe('시작 Coin (#70)', () => {
     await expect(page.getByTestId('my-preview-wallet-start-grant-pending')).toHaveCount(0);
   });
 
-  test('지급되면 지갑과 MY 요약의 안내 대신 원장의 시작 지급이 보인다', async ({ page }) => {
-    await signUp(page, freshEmail());
-    const notice = page.getByTestId('wallet-start-grant-pending');
+  test('온보딩을 마친 계정은 시작 Coin을 받고, 지갑과 MY 요약에는 안내 대신 원장의 시작 지급이 보인다', async ({
+    page,
+    admin,
+  }) => {
+    // The value the global setup entered (or one already there): every grant is paid with it.
+    const startCoin = await startCoinValue(admin);
+    expect(startCoin).not.toBeNull();
+    const amount = String(startCoin);
+    const shown = await startCoinText(admin);
 
-    // --- paid: the profile says granted and the ledger holds the one START_GRANT entry.
-    const grantedAt = new Date().toISOString();
-    await page.route('**/api/v1/me', (route) =>
-      route.request().method() === 'GET'
-        ? rewriteMe(route, { status: 'granted', amountCoin: '10000', grantedAt }, '10000')
-        : route.fallback(),
-    );
-    await page.route('**/api/v1/me/ledger*', async (route) => {
-      const response = await route.fetch();
-      const body = (await response.json()) as { data: LedgerEntry[] };
-      const entry: LedgerEntry = {
-        id: '1',
-        type: 'START_GRANT',
-        amountCoin: '10000',
-        balanceAfterCoin: '10000',
-        refType: 'start_grant',
-        refId: '00000000-0000-4000-8000-000000000000',
-        memo: null,
-        createdAt: grantedAt,
-      };
-      await route.fulfill({ response, json: { ...body, data: [entry] } });
+    await signUp(page, freshEmail());
+
+    // The API: one grant record, paid at the nickname step; the balance is the start Coin and the
+    // ledger holds the one START_GRANT entry (#116: minted into the account's own ledger account).
+    const me = await dataOf<Me>(await page.request.get('/api/v1/me'));
+    expect(me.startGrant).toMatchObject({ status: 'granted', amountCoin: amount });
+    expect(me.balance).toEqual({ availableCoin: amount, lockedCoin: '0' });
+    const ledger = await dataOf<LedgerEntry[]>(await page.request.get('/api/v1/me/ledger'));
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0]).toMatchObject({
+      type: 'START_GRANT',
+      amountCoin: amount,
+      balanceAfterCoin: amount,
+      refType: 'start_grant',
     });
+
     await page.goto('/my/wallet');
-    await expect(page.getByTestId('wallet-available')).toHaveText('10,000 Coin');
-    await expect(notice).toHaveCount(0);
+    await expect(page.getByTestId('wallet-available')).toHaveText(shown);
+    await expect(page.getByTestId('wallet-start-grant-pending')).toHaveCount(0);
     const row = page.getByTestId('ledger-list').getByTestId('ledger-type');
     await expect(row).toHaveText(copy.ledgerTypeStartGrant);
-    await expect(page.getByTestId('ledger-amount')).toHaveText('+10,000 Coin');
+    await expect(page.getByTestId('ledger-amount')).toHaveText(`+${shown}`);
     // And the preview: the balance and the 시작 지급 row, no notice.
     await page.goto('/my');
     const preview = page.getByTestId('my-preview-wallet');
-    // The 가용 figure itself, not the ledger row's '+10,000 Coin' beside it.
-    await expect(preview.getByTestId('my-preview-wallet-available')).toHaveText('10,000 Coin');
+    // The 가용 figure itself, not the ledger row's '+…' beside it.
+    await expect(preview.getByTestId('my-preview-wallet-available')).toHaveText(shown);
     await expect(preview.getByTestId('ledger-type')).toHaveText(copy.ledgerTypeStartGrant);
-    await expect(preview.getByTestId('ledger-amount')).toHaveText('+10,000 Coin');
+    await expect(preview.getByTestId('ledger-amount')).toHaveText(`+${shown}`);
     await expect(preview.getByTestId('my-preview-wallet-start-grant-pending')).toHaveCount(0);
   });
 });

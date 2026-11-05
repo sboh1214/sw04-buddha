@@ -12,7 +12,6 @@ import {
 } from '@nestjs/common';
 import { ApiCookieAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import {
-  adminBalanceAdjustResultSchema,
   chargePackageSchema,
   couponSchema,
   createChargePackageBodySchema,
@@ -24,17 +23,14 @@ import {
   adminUserQuerySchema,
   adminUserSchema,
   auditFailureSchema,
-  balanceAdjustBodySchema,
   cursorQuerySchema,
   expectedAccountQuerySchema,
   refundPaymentBodySchema,
   uuidParamSchema,
-  type AdminBalanceAdjustResult,
   type AdminPayment,
   type AdminUser,
   type AdminUserQuery,
   type AuditFailure,
-  type BalanceAdjustBody,
   type ChargePackage,
   type Coupon,
   type CreateChargePackageBody,
@@ -70,9 +66,10 @@ import { PaymentRefundService } from './payment-refund.service.js';
  * Every write here names the admin the screen shows (`expectedAccountId` — in the body, or the
  * query of a package's removal, whose DELETE has no body; assertExpectedAccount, ADR-0092): a
  * mismatch with the cookie is refused (403 FORBIDDEN naming the field) before anything is read or
- * written. The balance adjustment and the refund too, since the owner closed Q-PG-8 ① («이 PR에서
- * 더함», ADR-0092) — a write from a tab whose cookie turned to another admin would otherwise be
- * audited as that admin.
+ * written. The refund too, since the owner closed Q-PG-8 ① («이 PR에서 더함», ADR-0092) — a
+ * write from a tab whose cookie turned to another admin would otherwise be audited as that admin.
+ * No route changes a balance at an admin's discretion: the balance adjustment went with #116
+ * (ADR-0107 결정 2 #73 7항, ADR-0109).
  */
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -218,33 +215,6 @@ export class AdminController {
       query.limit,
     );
     return new ApiPage(items, { nextCursor });
-  }
-
-  @Post('users/:id/balance-adjust')
-  @HttpCode(200)
-  @ApiOperation({
-    operationId: 'adminAdjustBalance',
-    summary: 'Credit or debit Coin with a mandatory reason (ADMIN_ADJUST)',
-  })
-  @ApiData(adminBalanceAdjustResultSchema)
-  // ACCOUNT_CLOSED: its member closed the account (#140) — its ledger ended with the forfeiture.
-  @ApiErrors(
-    'UNAUTHENTICATED',
-    'FORBIDDEN',
-    'ONBOARDING_REQUIRED',
-    'NOT_FOUND',
-    'VALIDATION_ERROR',
-    'INSUFFICIENT_BALANCE',
-    'ACCOUNT_CLOSED',
-  )
-  adjustBalance(
-    @CurrentUser() admin: SessionUser,
-    @Param('id') userId: string,
-    @Body({ schema: balanceAdjustBodySchema }) body: BalanceAdjustBody,
-  ): Promise<AdminBalanceAdjustResult> {
-    const { expectedAccountId, amountCoin, memo } = body;
-    assertExpectedAccount(admin.id, expectedAccountId);
-    return this.admin.adjustBalance(admin.id, userId, amountCoin, memo);
   }
 
   @Get('payments')

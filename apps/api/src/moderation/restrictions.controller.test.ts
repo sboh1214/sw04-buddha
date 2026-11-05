@@ -27,6 +27,8 @@ import {
   createNotice,
   createPosition,
   createPost,
+  createStartGrant,
+  ledgerOf,
 } from '@buddha/db/test';
 import {
   WRITE_LIMITS,
@@ -609,21 +611,8 @@ describe.skipIf(!hasTestInfra)('/api/v1 writing restriction (integration)', () =
     });
 
     it('leaves trading as it was: the balance, the ledger, the orders and the holdings read as before, untouched by restricting, 감경, lifting and cancelling (#185 acceptance; orders are placed from M9)', async () => {
-      const [balance] = await t.db
-        .select()
-        .from(schema.balances)
-        .where(eq(schema.balances.userId, member.id));
-      await t.db
-        .update(schema.balances)
-        .set({ availableCoin: balance!.availableCoin + 12_345n })
-        .where(eq(schema.balances.userId, member.id));
-      await t.db.insert(schema.ledgerEntries).values({
-        userId: member.id,
-        type: 'ADMIN_ADJUST',
-        amountCoin: 12_345n,
-        balanceAfterCoin: balance!.availableCoin + 12_345n,
-        memo: '작성 제한 시험',
-      });
+      // Coin and its ledger event: the start grant (#116: no other way in for a test).
+      await createStartGrant(t.db, { userId: member.id, amountCoin: 12_345n });
       await createFill(t.db, { marketId: market.id, amountCoin: 610n, userId: member.id, qty: 10 });
       await createPosition(t.db, {
         userId: member.id,
@@ -639,12 +628,12 @@ describe.skipIf(!hasTestInfra)('/api/v1 writing restriction (integration)', () =
           expect(res.statusCode, `${url} ${res.body}`).toBe(200);
           answers.push(res.body);
         }
-        const { balances, ledgerEntries, orders, positions } = schema;
+        const { balances, orders, positions } = schema;
         return {
           answers,
           rows: await Promise.all([
             t.db.select().from(balances).where(eq(balances.userId, member.id)),
-            t.db.select().from(ledgerEntries).where(eq(ledgerEntries.userId, member.id)),
+            ledgerOf(t.db, member.id),
             t.db.select().from(orders).where(eq(orders.userId, member.id)),
             t.db.select().from(positions).where(eq(positions.userId, member.id)),
           ]),

@@ -15,7 +15,7 @@ import { type LegalDocument, bullets, numbered, paragraph } from './document';
  * - then the whole amount actually paid (the discounted price) is card-cancelled and the whole
  *   Coin is taken back; otherwise no refund. No partial refunds, no other channel than the card.
  *
- * Coin obtained without paying (쿠폰 BONUS, 정산 지급, 관리자 조정) is never refundable, and Coin
+ * Coin obtained without paying (시작 지급, 쿠폰 BONUS, 정산 지급) is never refundable, and Coin
  * never converts to cash (PLAN Appendix A — `LEGAL_CASH_NOTICE` is quoted verbatim). The 기타 section
  * points at the statutory right to cancel a minor's payment made without a guardian's consent
  * (민법 제5조) — a statute, not a case this rule adds — and defers to statute wherever statute

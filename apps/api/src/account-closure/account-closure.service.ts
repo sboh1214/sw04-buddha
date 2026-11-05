@@ -1,5 +1,14 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { cancelStartGrant, lockAdminRoles, lockNicknames, schema, type Db } from '@buddha/db';
+import {
+  cancelStartGrant,
+  ledgerKeys,
+  lockAdminRoles,
+  lockLedgerAccounts,
+  lockNicknames,
+  recordLedgerEntry,
+  schema,
+  type Db,
+} from '@buddha/db';
 import {
   ACCOUNT_CLOSURE_DECISION_REASON,
   ACCOUNT_RESTRICTION_APPROVAL_KINDS,
@@ -203,7 +212,7 @@ export class AccountClosureService {
   }
 
   private async closeIn(tx: Tx, userId: string): Promise<Closed> {
-    const { profiles, balances, phoneVerifications } = schema;
+    const { profiles, phoneVerifications } = schema;
     await lockAdminRoles(tx, 'shared');
     const [profile] = await tx
       .select({
@@ -239,13 +248,9 @@ export class AccountClosureService {
       .from(schema.startGrants)
       .where(eq(schema.startGrants.userId, userId))
       .for('update');
-    const [balance] = await tx
-      .select({ availableCoin: balances.availableCoin, lockedCoin: balances.lockedCoin })
-      .from(balances)
-      .where(eq(balances.userId, userId))
-      .limit(1)
-      .for('update');
-    if (!balance) throw new AppError('NOT_FOUND', { message: 'Balance not found' });
+    // The account's user ledger account (`lockLedgerAccounts`, migration 0060).
+    const [held] = await lockLedgerAccounts(tx, [{ kind: 'user', userId }]);
+    const balance = held!.balance;
 
     if (profile.role === 'admin') throw closureNotAllowed('admin');
     await assertNotRestricted(tx, userId);
@@ -258,6 +263,12 @@ export class AccountClosureService {
     // or leave behind (#178 cancels the orders and frees it first).
     if (balance.lockedCoin !== 0n) {
       throw new AppError('INTERNAL', { message: 'Reserved Coin with no order waiting' });
+    }
+    // A closed account ends at 0 on both sides of its balance row (migration 0060): one whose
+    // total left its ledger (an owner-level write; the ledger audit reports it) closes only after
+    // #93's 대사 정정 closes the gap — a forfeiture moves both by one amount and keeps the gap.
+    if (balance.availableCoin !== balance.ledgerCoin) {
+      throw new AppError('INTERNAL', { message: 'The balance differs from its ledger' });
     }
 
     const closedAt = await clockTimestamp(tx);
@@ -323,9 +334,10 @@ export class AccountClosureService {
   }
 
   /**
-   * '탈퇴 소멸' (#57-16): the whole available balance forfeited by one CLOSURE_FORFEIT entry that
-   * refers to the account itself, and the balance taken to 0 with it — an entry and its balance in
-   * one transaction, never an overwrite (PLAN 5.6). Nothing is written when nothing is left.
+   * '탈퇴 소멸' (#57-16): the whole available balance forfeited by one CLOSURE_FORFEIT event — a
+   * burn out of the account's user ledger account, the only burn (ADR-0107 결정 2 #73 1항) — that
+   * refers to the account itself and is keyed by it (`recordLedgerEntry`), the balance taken to 0
+   * with it, never an overwrite (PLAN 5.6). Nothing is written when nothing is left.
    */
   private async forfeit(
     tx: Tx,
@@ -334,35 +346,32 @@ export class AccountClosureService {
     closedAt: Date,
   ): Promise<bigint> {
     if (availableCoin === 0n) return 0n;
-    await tx.insert(schema.ledgerEntries).values({
-      userId,
+    await recordLedgerEntry(tx, {
       type: 'CLOSURE_FORFEIT',
-      amountCoin: -availableCoin,
-      balanceAfterCoin: 0n,
+      amountCoin: availableCoin,
+      from: { kind: 'user', userId },
+      to: null,
       refType: 'account_closure',
       refId: userId,
-      createdAt: closedAt,
+      idempotencyKey: ledgerKeys.closure(userId),
+      at: closedAt,
     });
-    await tx
-      .update(schema.balances)
-      .set({ availableCoin: 0n })
-      .where(eq(schema.balances.userId, userId));
     return availableCoin;
   }
 
-  /** What an earlier closure of the account forfeited: its entry's amount, or 0 for none. */
+  /** What an earlier closure of the account forfeited: its event's amount, or 0 for none. */
   private async forfeitedBy(executor: Executor, userId: string): Promise<bigint> {
     const [entry] = await executor
       .select({ amountCoin: schema.ledgerEntries.amountCoin })
       .from(schema.ledgerEntries)
       .where(
         and(
-          eq(schema.ledgerEntries.refType, 'account_closure'),
-          eq(schema.ledgerEntries.refId, userId),
+          eq(schema.ledgerEntries.type, 'CLOSURE_FORFEIT'),
+          eq(schema.ledgerEntries.idempotencyKey, ledgerKeys.closure(userId)),
         ),
       )
       .limit(1);
-    return entry === undefined ? 0n : -entry.amountCoin;
+    return entry === undefined ? 0n : entry.amountCoin;
   }
 
   /**

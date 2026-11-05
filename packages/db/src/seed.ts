@@ -235,10 +235,11 @@ async function seedChargePackages(db: Db): Promise<void> {
 /**
  * The 운영 마켓메이커 account (#115, ADR-0107 결정 2 #73 11항: 시드가 없을 때만 만들고): made on the
  * first seed of a database — whatever SEED_ADMIN_* says — and left alone on every later one, the
- * one place outside tests that makes it (`ensureMarketMakerAccount`: one `user` row of its type and
- * the zero balance the trigger gives it — no profile, no sign-in method, no grant, no ledger
- * entry). Its own transaction, before the admins: the unique address and type make two seeds at
- * once end with one, no seed lock needed. Logs no id and no address.
+ * one place outside tests that makes it (`ensureMarketMakerAccount`: one `user` row of its type —
+ * no profile, no sign-in method, no grant, no ledger account of its own: its Coin is in each
+ * market's 마켓메이커 자금, made when #129 first allocates to it, #116). Its own transaction, before
+ * the admins: the unique address and type make two seeds at once end with one, no seed lock
+ * needed. Logs no id and no address.
  */
 async function seedMarketMakerAccount(db: Db): Promise<void> {
   const { created } = await db.transaction((tx) => ensureMarketMakerAccount(tx));
@@ -255,8 +256,8 @@ type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 /**
  * One bootstrap admin, the way better-auth's email sign-up makes an account: a `user` row plus a
  * credential `account` row (providerId 'credential', accountId = user id, scrypt hash from
- * better-auth/crypto). The "user" AFTER INSERT trigger (migrations 0032 and 0059) creates the
- * profile (auto nickname) and a zero balance with no ledger entry, like every person's account: the
+ * better-auth/crypto). The "user" AFTER INSERT trigger (migrations 0032, 0059 and 0060) creates the
+ * profile (auto nickname) and a user ledger account at 0 with no entry, like every person's: the
  * operator account gets its start Coin as everyone does, after its 본인확인 and onboarding (#70,
  * ADR-0069 decision 4 #70), never from the seed. A fresh account keeps the trigger's auto nickname
  * — the seed no longer renames it 관리자, a reserved word the nickname rules refuse (#57-6): the admin
@@ -352,9 +353,10 @@ async function seedOneAdmin(tx: Tx, input: AdminInput, at: Date): Promise<string
     createdAt: at,
   });
 
-  // The trigger created the balance, at 0 (migration 0031) — like every account. Never
-  // touched: balances change only together with a ledger entry (PLAN 0.2), and a missing row is
-  // a broken account for the ledger audit to report, not something the seed papers over.
+  // The trigger created the user ledger account and its balance, at 0 (migration 0060) — like
+  // every person's account. Never touched: a balance changes only with its ledger event (PLAN
+  // 0.2, `recordLedgerEntry`), and a missing row is a broken account for the ledger audit to
+  // report, not something the seed papers over.
   const [balance] = await tx
     .select({ userId: balances.userId })
     .from(balances)

@@ -56,9 +56,12 @@ const EXPECT_TIMEOUT_MS = 15_000;
 
 export default defineConfig({
   testDir: './e2e',
-  // Once per invocation, after `webServer` answers and before any test: gives the release setting
-  // `market.dispute_window` a short 시험값 while it is 미정, so a judgement can be approved and its
-  // dispute window waited out (#152, ADR-0103). `--list` runs no setup.
+  // Once per invocation, after `webServer` answers and before any test (e2e/global-setup.ts): while
+  // each is 미정, gives the release setting `market.dispute_window` 1분, so a judgement can be
+  // approved and its dispute window waited out (#152, ADR-0103), and `grant.start_coin` 1,000,000
+  // Coin, so a new account is paid its start Coin (#116, ADR-0109) — both 시험값 that stay in the
+  // database. Then it waits up to 90 s for the worker (`start_grant.pay`) to pay the first seed
+  // admin's own grant, which waits on a fresh database. `--list` runs no setup.
   globalSetup: './e2e/global-setup.ts',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,

@@ -1,9 +1,18 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { schema, type Db } from '@buddha/db';
+import {
+  findLedgerAccount,
+  ledgerEntryForAccount,
+  ledgerKeys,
+  lockLedgerAccounts,
+  recordLedgerEntry,
+  schema,
+  type Db,
+} from '@buddha/db';
 import {
   decodeKeyset,
   encodeKeyset,
+  memberLedgerEntryTypeSchema,
   serializeCoinAmount,
   type Balance,
   type ChargeBody,
@@ -14,7 +23,7 @@ import {
   type UserBalanceEvent,
 } from '@buddha/shared';
 import { ChargePackageService } from './charge-package.service.js';
-import { and, desc, eq, getTableColumns, sql } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, or, sql } from 'drizzle-orm';
 import { assertExpectedAccount } from '../auth/expected-account.js';
 import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
@@ -41,14 +50,20 @@ function paymentRefused(reason?: string): AppError {
 /** The handle `db.transaction` hands its callback; @buddha/db exports no alias for it. */
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
-export function toLedgerEntry(row: LedgerRow): LedgerEntry {
+/**
+ * One ledger event as the person whose user ledger account is `accountId` sees it (#116): signed
+ * from that account's side, its total after it — never the other side of the move.
+ */
+export function toLedgerEntry(row: LedgerRow, accountId: number): LedgerEntry {
+  const seen = ledgerEntryForAccount(row, accountId);
   return {
     id: row.id.toString(),
-    type: row.type,
-    amountCoin: serializeCoinAmount(row.amountCoin),
-    balanceAfterCoin: serializeCoinAmount(row.balanceAfterCoin),
+    // A person's account takes only these (MEMBER_LEDGER_ENTRY_TYPES; migration 0060's pairs).
+    type: memberLedgerEntryTypeSchema.parse(row.type),
+    amountCoin: serializeCoinAmount(seen.amountCoin),
+    balanceAfterCoin: serializeCoinAmount(seen.balanceAfterCoin),
     // The column is a plain varchar; the DTO narrows it to the known ref types.
-    refType: (row.refType ?? null) as LedgerEntry['refType'],
+    refType: row.refType as LedgerEntry['refType'],
     refId: row.refId,
     memo: row.memo,
     createdAt: row.createdAt.toISOString(),
@@ -155,9 +170,9 @@ export type CreditTxOutcome =
 /**
  * Charging and reading the wallet (PLAN 5.1, 5.6, M2).
  *
- * Every balance change happens in the same transaction as its `ledger_entries` INSERT
- * (PLAN 0.2), and the balance moves with a conditional UPDATE rather than read-modify-write,
- * so concurrent charges add up instead of overwriting each other.
+ * Every balance change is one ledger event in the same transaction (`recordLedgerEntry`, PLAN
+ * 0.2, #116), which moves the balance under its row lock with an UPDATE relative to the row
+ * rather than read-modify-write, so concurrent charges add up instead of overwriting each other.
  */
 @Injectable()
 export class WalletService {
@@ -311,9 +326,10 @@ export class WalletService {
 
   /**
    * Credits a payment the provider has accepted, in ONE transaction: the payment moves to
-   * `succeeded` (with the provider's reference, method and message, and `approved_at`), the
-   * balance grows by its Coin, and a DEPOSIT ledger row records it — the one place that can credit
-   * a payment.
+   * `succeeded` (with the provider's reference, method and message, and `approved_at`), and a
+   * DEPOSIT event — a mint into the account's user ledger account, kept as an inactive type (#116,
+   * ADR-0107 결정 2 #73 2항), keyed by the payment — grows the balance by its Coin
+   * (`recordLedgerEntry`): the one place that can credit a payment.
    *
    * NEVER TWICE: the payment UPDATE is guarded by `status = 'pending'`, so of two callers racing
    * on one payment exactly one matches the row; the other gets `credited: false` and the status
@@ -324,7 +340,7 @@ export class WalletService {
    * credit and a refund of one account deadlock. The clock is read after the balance lock:
    * another writer of this account may have committed while this transaction waited, and the
    * ledger row written below must sort after it — `now()` is the transaction start and would
-   * sort before work its own balance_after_coin includes (clock.ts, A-M3-14).
+   * sort before work its own total after includes (clock.ts, A-M3-14).
    *
    * `user:balance` is published after COMMIT (PLAN 8), like every other balance change.
    */
@@ -337,14 +353,25 @@ export class WalletService {
 
   /** creditPayment's transaction; the caller publishes the returned `event` after COMMIT. */
   private async creditWithin(tx: Tx, input: CreditInput): Promise<CreditTxOutcome> {
-    // The lock is what the balance UPDATE below would take anyway; the result is discarded,
-    // and a vanished row still falls through to the check that UPDATE has.
-    await tx
-      .select({ userId: schema.balances.userId })
-      .from(schema.balances)
-      .where(eq(schema.balances.userId, input.userId))
-      .limit(1)
-      .for('update');
+    // The lock `recordLedgerEntry` below takes again (a no-op then), held from here. The balance
+    // row was seen before the reservation, so a miss here (no ledger account or balance row: a
+    // broken database since migration 0060, which lets the app delete neither) is a 500, not a
+    // client error, which the web answers by keeping its key, so the retry replays the
+    // reservation as in progress instead of buying again. The rollback leaves the payment
+    // pending; the provider has accepted, so that row is the only record that this account is
+    // owed Coin.
+    try {
+      await lockLedgerAccounts(tx, [{ kind: 'user', userId: input.userId }]);
+    } catch (error) {
+      // Loud, with the provider's reference: the row that would carry it rolls back here.
+      this.logger.error(
+        `payment ${input.paymentId} accepted (${input.providerRef}) but not credited: ${error instanceof Error ? error.message : 'balance row not locked'}; payment left pending`,
+      );
+      throw new AppError('INTERNAL', {
+        message: 'Balance row missing after the provider accepted',
+        cause: error,
+      });
+    }
     const creditedAt = await clockTimestamp(tx);
 
     // Approved at the instant it is credited: the same clock as the ledger row, so the admin
@@ -376,50 +403,28 @@ export class WalletService {
       return { status: current?.status };
     }
 
-    const [balance] = await tx
-      .update(schema.balances)
-      .set({
-        availableCoin: sql`${schema.balances.availableCoin} + ${input.amountCoin}`,
-        // Explicit on purpose: the column's `$onUpdate` would write the API host's clock.
-        updatedAt: creditedAt,
-      })
-      .where(eq(schema.balances.userId, input.userId))
-      .returning();
-    // The balance row was seen before the reservation, so a miss here is a race with a
-    // DELETE, not a client error: a 500, which the web answers by keeping its key, so the
-    // retry replays the reservation as in progress instead of buying again. The rollback
-    // leaves the payment where it was; the provider has accepted, so that row is the only
-    // record that this account is owed Coin.
-    if (!balance) {
-      // Loud, with the provider's reference: the row that would carry it rolls back here.
-      this.logger.error(
-        `payment ${input.paymentId} accepted (${input.providerRef}) but not credited: balance row vanished; payment left pending`,
-      );
-      throw new AppError('INTERNAL', {
-        message: 'Balance row vanished after the provider accepted',
-      });
+    const recorded = await recordLedgerEntry(tx, {
+      type: 'DEPOSIT',
+      amountCoin: input.amountCoin,
+      from: null,
+      to: { kind: 'user', userId: input.userId },
+      refType: 'payment',
+      refId: payment.id,
+      idempotencyKey: ledgerKeys.deposit(payment.id),
+      at: creditedAt,
+    });
+    // The payment was pending under its own UPDATE above, so its key cannot have been recorded.
+    if (recorded.outcome !== 'recorded' || !recorded.to) {
+      throw new AppError('INTERNAL', { message: 'Ledger insert failed' });
     }
-
-    const [entry] = await tx
-      .insert(schema.ledgerEntries)
-      .values({
-        userId: input.userId,
-        type: 'DEPOSIT',
-        amountCoin: input.amountCoin,
-        balanceAfterCoin: balance.availableCoin,
-        refType: 'payment',
-        refId: payment.id,
-        createdAt: creditedAt,
-      })
-      .returning();
-    if (!entry) throw new AppError('INTERNAL', { message: 'Ledger insert failed' });
+    const { entry, to: balance } = recorded;
 
     return {
       result: {
         // Just credited: `succeeded`, so there is no cancel to confirm.
         payment: toPayment({ ...payment, cancelConfirmed: null }),
         balance: toBalance(balance),
-        ledgerEntry: toLedgerEntry(entry),
+        ledgerEntry: toLedgerEntry(entry, balance.accountId),
       },
       event: balanceEvent(balance, entry),
     };
@@ -483,29 +488,29 @@ export class WalletService {
     if (earlier.status === 'failed') throw paymentRefused();
 
     // Written in the same transaction as the `succeeded` status, so a miss is corruption, not
-    // a race. Filtered by user first: that is the indexed half of the lookup. The DEPOSIT only:
-    // an admin refund writes PAYMENT_CANCEL (and, if the PG refused, PAYMENT_CANCEL_REVERSAL)
-    // under the same reference, and the charge's answer is the credit, never the claw-back.
+    // a race. By its key (unique per type): the DEPOSIT only — an admin refund writes
+    // PAYMENT_CANCEL (and, if the PG refused, PAYMENT_CANCEL_REVERSAL) under the same reference,
+    // and the charge's answer is the credit, never the claw-back.
     const [entry] = await this.db
       .select()
       .from(schema.ledgerEntries)
       .where(
         and(
-          eq(schema.ledgerEntries.userId, earlier.userId),
-          eq(schema.ledgerEntries.refType, 'payment'),
-          eq(schema.ledgerEntries.refId, earlier.id),
           eq(schema.ledgerEntries.type, 'DEPOSIT'),
+          eq(schema.ledgerEntries.idempotencyKey, ledgerKeys.deposit(earlier.id)),
         ),
       )
       .limit(1);
-    if (!entry) throw new AppError('INTERNAL', { message: 'Ledger entry missing for payment' });
+    if (!entry?.toAccountId) {
+      throw new AppError('INTERNAL', { message: 'Ledger entry missing for payment' });
+    }
     // Rebuilt from the rows the first request wrote — never from the catalogue, which an admin
     // may have re-priced since (ADR-0026); the payment carries the terms actually bought.
     return {
       // Credited once (its DEPOSIT is above): never `cancelled`, so no cancel to confirm.
       payment: toPayment({ ...earlier, cancelConfirmed: null }),
       balance: await this.getBalance(earlier.userId),
-      ledgerEntry: toLedgerEntry(entry),
+      ledgerEntry: toLedgerEntry(entry, entry.toAccountId),
     };
   }
 
@@ -542,19 +547,29 @@ export class WalletService {
     return row?.id ?? null;
   }
 
-  /** Newest first, keyset-paginated over (created_at, id) — see @buddha/shared pagination. */
+  /**
+   * The events of the caller's own user ledger account, either side (#116), newest first,
+   * keyset-paginated over (created_at, id) — see @buddha/shared pagination. Each is shown from
+   * that account's side (`toLedgerEntry`). An account with no ledger account has none.
+   */
   async listLedger(
     userId: string,
     cursor: string | undefined,
     limit: number,
   ): Promise<Page<LedgerEntry>> {
     const keyset = decodeKeyset(cursor, 'int');
+    const account = await findLedgerAccount(this.db, { kind: 'user', userId });
+    if (!account) return { items: [], nextCursor: null };
     const rows = await this.db
       .select()
       .from(schema.ledgerEntries)
       .where(
         and(
-          eq(schema.ledgerEntries.userId, userId),
+          // Each side has its own (account, created_at, id) index (migration 0060).
+          or(
+            eq(schema.ledgerEntries.fromAccountId, account.id),
+            eq(schema.ledgerEntries.toAccountId, account.id),
+          ),
           keyset
             ? keysetPredicate(
                 schema.ledgerEntries.createdAt,
@@ -571,7 +586,7 @@ export class WalletService {
       rows,
       limit,
       (row) => ({ createdAt: row.createdAt, id: row.id.toString() }),
-      toLedgerEntry,
+      (row) => toLedgerEntry(row, account.id),
     );
   }
 

@@ -24,6 +24,7 @@ import {
   balances,
   categories,
   chargePackages,
+  ledgerAccounts,
   ledgerEntries,
   marketEvents,
   marketSources,
@@ -46,6 +47,7 @@ import {
 } from './seed-markets.js';
 import { createMarket, createUser } from './test/factories.js';
 import { connectTestDb, hasTestDb, testDbUrls, type TestDb } from './test/harness.js';
+import { ledgerOf } from './test/ledger.js';
 
 /**
  * `pnpm db:seed` against the docker `test` profile database (PLAN 14). seed.ts is a CLI entry
@@ -253,7 +255,9 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
         ...(await t.db.select().from(account).where(eq(account.userId, id))),
         ...(await t.db.select().from(session).where(eq(session.userId, id))),
         ...(await t.db.select().from(startGrants).where(eq(startGrants.userId, id))),
-        ...(await t.db.select().from(ledgerEntries).where(eq(ledgerEntries.userId, id))),
+        // No ledger account of its own (#116): its Coin is in each market's 마켓메이커 자금,
+        // made when #129 first allocates to it — so neither does any event name it.
+        ...(await t.db.select().from(ledgerAccounts).where(eq(ledgerAccounts.ownerId, id))),
         ...(await t.db.select().from(adminActions).where(eq(adminActions.targetId, id))),
       ],
     };
@@ -327,8 +331,8 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     // (ADR-0069 decision 4, #58; ADR-0070).
     expect(await t.db.select().from(phoneVerifications)).toEqual([]);
     // The 운영 마켓메이커 account, made once (ADR-0107 결정 2 #73 11항): its type, an address no
-    // mail and no sign-in reaches, and a zero balance — no profile, no sign-in method, no session,
-    // no grant, no ledger entry and no admin record.
+    // mail and no sign-in reaches — no profile, no sign-in method, no session, no grant, no
+    // ledger account of its own, no ledger entry and no admin record (#116).
     const marketMaker = await marketMakerState();
     expect(marketMaker.row).toMatchObject({
       accountType: 'market_maker',
@@ -336,8 +340,9 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       name: AUTH_USER_NAME,
       image: null,
     });
-    expect(marketMaker.balances).toEqual([{ available: 0n, locked: 0n }]);
+    expect(marketMaker.balances).toEqual([]);
     expect(marketMaker.held).toEqual([]);
+    expect(await t.db.select().from(ledgerEntries)).toEqual([]);
   });
 
   it('creates one admin when no second is configured', async () => {
@@ -525,15 +530,17 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     const { id } = await adminState();
     async function wallet() {
       const [balance] = await t.db.select().from(balances).where(eq(balances.userId, id));
-      const entries = await t.db
-        .select()
-        .from(ledgerEntries)
-        .where(eq(ledgerEntries.userId, id))
-        .orderBy(ledgerEntries.id);
-      return { balance, entries: entries.map((entry) => [entry.type, entry.amountCoin]) };
+      const [own] = await t.db
+        .select({ kind: ledgerAccounts.kind })
+        .from(ledgerAccounts)
+        .where(eq(ledgerAccounts.ownerId, id));
+      const entries = await ledgerOf(t.db, id);
+      return { balance, own, entries: entries.map((entry) => [entry.type, entry.amountCoin]) };
     }
     const first = await wallet();
     expect(first.balance).toMatchObject({ availableCoin: 0n, lockedCoin: 0n });
+    // Its own user ledger account, made with the account (#116).
+    expect(first.own).toEqual({ kind: 'user' });
     expect(first.entries).toEqual([]);
     // Re-running touches neither the balance nor the ledger.
     runSeed();

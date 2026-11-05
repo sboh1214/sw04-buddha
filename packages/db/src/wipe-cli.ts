@@ -1,9 +1,8 @@
 // CLI entry: `pnpm --filter @buddha/db run db:wipe --yes` (tsx src/wipe-cli.ts), and on the
 // deployed host `node packages/db/dist/wipe-cli.js --yes` inside the migrate container, which
 // deploy/reset-db.sh runs (docs/RESET.md). Empties every table in schema `public`, accounts
-// included, with WIPE_PUBLIC_TABLES_SQL: the statement migrations 0017 and 0048 ran once each
-// (#125, #174). Run
-// db:migrate and db:seed afterwards to refill the database.
+// included, with WIPE_PUBLIC_TABLES_SQL: the statement migrations 0017, 0048 and 0060 ran once
+// each (#125, #174, #116). Run db:migrate and db:seed afterwards to refill the database.
 import { sql } from 'drizzle-orm';
 import { closeDb, createDb } from './client.js';
 import { loadRootEnv } from './env.js';

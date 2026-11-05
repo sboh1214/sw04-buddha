@@ -5,6 +5,8 @@ import {
   AUDIT_FAILURE_KINDS,
   CONSENT_ITEMS,
   IMAGE_CONTENT_TYPES,
+  LEDGER_ACCOUNT_KINDS,
+  LEDGER_ENTRY_TYPES,
   LEDGER_REF_TYPES,
   LINK_FLAG_REASONS,
   MARKET_DISPUTE_STATUSES,
@@ -144,8 +146,9 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
  */
 const BONUS_NAMES: Readonly<Record<string, string>> = {
   'ledger_entry_type value BONUS':
-    'the kept coupon redemption (D9, ADR-0049), and the sign-up grant of accounts created before ' +
-    '#70. The start Coin has its own START_GRANT type (ADR-0069 decision 4 #70, ADR-0071)',
+    'the kept coupon redemption (D9, ADR-0049; ADR-0107 결정 2 #73 2항: 보존·비활성, a mint into ' +
+    'the user ledger account). The start Coin has its own START_GRANT type (ADR-0069 decision 4 ' +
+    '#70, ADR-0071)',
 };
 const BONUS_FORMS = tokenForms('bonus');
 
@@ -652,6 +655,55 @@ describe('excluded features in stored data (#113)', () => {
       ]),
     );
     expect(Object.keys(VARCHAR_VALUES).filter((key) => key.startsWith('user.'))).toEqual([]);
+  });
+
+  it('names the ledger accounts, their kinds, the events’ columns and types, each read above (#116)', () => {
+    // ADR-0109, migration 0060: the ledger moves Coin between ledger accounts of four kinds, and
+    // each type names its source — no `transfer`, `reward` or other excluded token (ADR-0107
+    // 결정 2 #73 1항 '기획의 말과 이름'), and the 마켓메이커 자금 never as the bare account type.
+    const accounts = TABLES.find((table) => table.name === 'ledger_accounts');
+    expect(accounts?.columns.map((column) => column.name)).toEqual([
+      'id',
+      'kind',
+      'ownerId',
+      'marketId',
+      'createdAt',
+    ]);
+    const entries = TABLES.find((table) => table.name === 'ledger_entries');
+    expect(entries?.columns.map((column) => column.name)).toEqual([
+      'id',
+      'type',
+      'amountCoin',
+      'fromAccountId',
+      'toAccountId',
+      'fromBalanceAfterCoin',
+      'toBalanceAfterCoin',
+      'marketId',
+      'refType',
+      'refId',
+      'idempotencyKey',
+      'memo',
+      'createdAt',
+    ]);
+    expect(storageNames()).toEqual(
+      expect.arrayContaining([
+        { where: 'table', name: 'ledger_accounts' },
+        ...[
+          'ledger_accounts_shape_check',
+          'ledger_accounts_user_uidx',
+          'ledger_accounts_treasury_uidx',
+          'ledger_accounts_market_uidx',
+        ].map((name) => ({ where: 'ledger_accounts constraint', name })),
+        { where: 'enum', name: 'ledger_account_kind' },
+        ...LEDGER_ACCOUNT_KINDS.map((name) => ({ where: 'ledger_account_kind value', name })),
+        ...LEDGER_ENTRY_TYPES.map((name) => ({ where: 'ledger_entry_type value', name })),
+        { where: 'balances column', name: 'accountId' },
+        { where: 'balances column', name: 'ledgerCoin' },
+      ]),
+    );
+    expect(storageNames()).not.toEqual(
+      expect.arrayContaining([{ where: 'markets column', name: 'takerFeeBps' }]),
+    );
   });
 
   it('passes with the payment and coupon structures kept for paid Coin (D9)', () => {

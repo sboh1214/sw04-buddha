@@ -21,6 +21,7 @@ import {
   hasTestDb,
   resolveMarketNow,
   setReleaseSetting,
+  spendCoin,
   type TestDb,
 } from '@buddha/db/test';
 import {
@@ -332,6 +333,9 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
     const market = await judged();
     const alice = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
     await createPosition(t.db, { userId: alice, marketId: market.id, outcome: 'YES', qty: 3 });
+    // The 300 Coin her 3 contracts are paid, put into the market's collateral (#116) as a pair
+    // mint moves it — here all from her, with no other side's row, as only the shape is tested.
+    await spendCoin(t.db, alice, 300n, { marketId: market.id });
 
     const result = await run({ name: JOB_NAMES.marketFinalize, data: { marketId: market.id } });
     expect(() => JSON.stringify(result)).not.toThrow();
@@ -372,12 +376,12 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
   });
 
   it('market.finalize scan with a failing market: JSON-safe counts, and one error line per failure', async () => {
-    // A winning holder without a balance row poisons the market (market-finalize.ts throws,
-    // the transaction rolls back); the scan reports it instead of failing the job.
+    // A winning holder the collateral cannot pay — a position the ledger never collateralised —
+    // poisons the market (market-finalize.ts throws, the transaction rolls back); the scan
+    // reports it instead of failing the job.
     const poisoned = await judged();
     const alice = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
     await createPosition(t.db, { userId: alice, marketId: poisoned.id, outcome: 'YES', qty: 2 });
-    await t.db.delete(schema.balances).where(eq(schema.balances.userId, alice));
     const healthy = await judged();
 
     const result = await run({ name: JOB_NAMES.marketFinalize, data: {} });
@@ -387,7 +391,10 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
       skipped: 0,
       failed: 1,
       failures: [
-        { marketId: poisoned.id, message: expect.stringMatching(/Balance not found/) as string },
+        {
+          marketId: poisoned.id,
+          message: expect.stringMatching(/collateral holds 0 Coin/) as string,
+        },
       ],
     });
     expect(() => JSON.stringify(result)).not.toThrow();
@@ -404,7 +411,7 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
     expect(errors[0]).toMatchObject({
       msg: 'market finalize failed in scan',
       marketId: poisoned.id,
-      err: { message: expect.stringMatching(/Balance not found/) as string },
+      err: { message: expect.stringMatching(/collateral holds 0 Coin/) as string },
     });
     // The counts line is promoted to info when something failed, even with nothing settled.
     expect(logs.at(-1)).toMatchObject({ level: 30, msg: 'market finalize scan', failed: 1 });

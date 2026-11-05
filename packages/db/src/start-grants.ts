@@ -1,8 +1,13 @@
 import { and, asc, eq, exists, isNull, ne, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
 import { isPhoneVerified } from './phone-verification.js';
-import { balances } from './schema/balances.js';
-import { ledgerEntries } from './schema/ledger.js';
+import {
+  ledgerKeys,
+  lockLedgerAccounts,
+  recordLedgerEntry,
+  type BalanceRow,
+  type LedgerEntryRow,
+} from './ledger.js';
 import { phoneVerifications } from './schema/phone-verifications.js';
 import { startGrantNumbers, startGrants } from './schema/start-grants.js';
 import { clockTimestamp } from './tx-helpers.js';
@@ -11,8 +16,6 @@ type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
 export type StartGrantRow = typeof startGrants.$inferSelect;
 export type StartGrantNumberRow = typeof startGrantNumbers.$inferSelect;
-type LedgerRow = typeof ledgerEntries.$inferSelect;
-type BalanceRow = typeof balances.$inferSelect;
 
 /**
  * Whether ANOTHER account's start grant holds the number whose keyed hash is `phoneHash`: a live
@@ -151,7 +154,7 @@ export async function recordStartGrant(
  * - `pending`: the amount is undecided (`readAmount` gave null), nothing written: it waits.
  */
 export type PayStartGrantResult =
-  | { outcome: 'granted'; grant: StartGrantRow; balance: BalanceRow; ledgerEntry: LedgerRow }
+  | { outcome: 'granted'; grant: StartGrantRow; balance: BalanceRow; ledgerEntry: LedgerEntryRow }
   | { outcome: 'already_granted'; grant: StartGrantRow }
   | { outcome: 'cancelled'; grant: StartGrantRow }
   | { outcome: 'unverified'; grant: StartGrantRow }
@@ -179,13 +182,15 @@ export type PayStartGrantResult =
  *    and kept): the release setting `grant.start_coin`, whatever its status (ADR-0069 decision 7),
  *    or null while it is undecided, which leaves the grant pending (decision 4 #70). A changed
  *    value therefore applies to the grants paid after the change only (#57-2).
- * 4. The account's balance row FOR UPDATE, then the clock (`clockTimestamp`, after the last lock:
- *    the entry sorts after whatever committed while this waited), the balance, the START_GRANT
- *    entry (ref `start_grant` → the grant) and the grant row, all at that instant. No other balance
- *    writer locks the record or a grant row, and a withdrawal takes the record before the balance
- *    too, so a payment cannot deadlock with another balance writer.
+ * 4. The account's user ledger account FOR UPDATE (`lockLedgerAccounts`), then the clock
+ *    (`clockTimestamp`, after the last lock: the entry sorts after whatever committed while this
+ *    waited), the START_GRANT event — a mint into that account (ADR-0107 결정 5), ref and key the
+ *    grant (`recordLedgerEntry`) — and the grant row, all at that instant. No other balance writer
+ *    locks the record or a grant row, and a withdrawal takes the record before the balance too, so
+ *    a payment cannot deadlock with another balance writer.
  *
- * Throws a plain Error when the grant or the balance row does not exist (a broken account).
+ * Throws a plain Error when the grant does not exist, and LedgerEntryError `account_missing` when
+ * its account has no ledger account (a broken account).
  */
 export async function payStartGrant(
   tx: Tx,
@@ -215,42 +220,29 @@ export async function payStartGrant(
   if (amountCoin === null) return { outcome: 'pending', grant };
   if (amountCoin <= 0n) throw new Error(`start grant amount must be positive, got ${amountCoin}`);
 
-  const [locked] = await tx
-    .select({ userId: balances.userId })
-    .from(balances)
-    .where(eq(balances.userId, grant.userId))
-    .limit(1)
-    .for('update');
-  if (!locked) throw new Error(`account ${grant.userId} has no balance row`);
+  await lockLedgerAccounts(tx, [{ kind: 'user', userId: grant.userId }]);
   const grantedAt = await clockTimestamp(tx);
-
-  const [balance] = await tx
-    .update(balances)
-    .set({
-      availableCoin: sql`${balances.availableCoin} + ${amountCoin}`,
-      // Explicit: the column's `$onUpdate` would write this host's clock, not the database's.
-      updatedAt: grantedAt,
-    })
-    .where(eq(balances.userId, grant.userId))
-    .returning();
-  const [ledgerEntry] = await tx
-    .insert(ledgerEntries)
-    .values({
-      userId: grant.userId,
-      type: 'START_GRANT',
-      amountCoin,
-      balanceAfterCoin: balance!.availableCoin,
-      refType: 'start_grant',
-      refId: grant.id,
-      // The type says what it is ('시작 지급' on the wallet); nothing else to note.
-      memo: null,
-      createdAt: grantedAt,
-    })
-    .returning();
-  // Migration 0031's trigger refuses this unless the entry above is this grant's own.
+  const recorded = await recordLedgerEntry(tx, {
+    type: 'START_GRANT',
+    amountCoin,
+    from: null,
+    to: { kind: 'user', userId: grant.userId },
+    refType: 'start_grant',
+    refId: grant.id,
+    idempotencyKey: ledgerKeys.startGrant(grant.id),
+    // The type says what it is ('시작 지급' on the wallet); nothing else to note.
+    memo: null,
+    at: grantedAt,
+  });
+  // The grant row is FOR UPDATE and still pending, so its key cannot have been recorded.
+  if (recorded.outcome !== 'recorded') {
+    throw new Error(`start grant ${grant.id} has a ledger entry but is not paid`);
+  }
+  const { entry: ledgerEntry, to: balance } = recorded;
+  // Migration 0031's trigger (0060's body) refuses this unless the entry above is this grant's own.
   const [paid] = await tx
     .update(startGrants)
-    .set({ amountCoin, ledgerEntryId: ledgerEntry!.id, grantedAt })
+    .set({ amountCoin, ledgerEntryId: ledgerEntry.id, grantedAt })
     .where(
       and(
         eq(startGrants.id, grant.id),
@@ -259,7 +251,7 @@ export async function payStartGrant(
       ),
     )
     .returning();
-  if (!balance || !ledgerEntry || !paid) {
+  if (!balance || !paid) {
     throw new Error(`start grant ${grant.id} could not be paid`);
   }
   return { outcome: 'granted', grant: paid, balance, ledgerEntry };

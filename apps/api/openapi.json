@@ -2276,121 +2276,6 @@
         ]
       }
     },
-    "/api/v1/admin/users/{id}/balance-adjust": {
-      "post": {
-        "operationId": "adminAdjustBalance",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/BalanceAdjustBody"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/AdminBalanceAdjustResult"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "VALIDATION_ERROR",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "UNAUTHENTICATED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "FORBIDDEN",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NOT_FOUND",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "ONBOARDING_REQUIRED | INSUFFICIENT_BALANCE | ACCOUNT_CLOSED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "RATE_LIMITED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "summary": "Credit or debit Coin with a mandatory reason (ADMIN_ADJUST)",
-        "tags": [
-          "admin"
-        ]
-      }
-    },
     "/api/v1/admin/payments": {
       "get": {
         "operationId": "adminListPayments",
@@ -22646,17 +22531,16 @@
           "type": {
             "type": "string",
             "enum": [
-              "DEPOSIT",
-              "TRADE_BUY",
-              "TRADE_SELL",
-              "FEE",
+              "START_GRANT",
+              "PAIR_MINT_COLLATERAL",
+              "TRADE_FILL",
               "SETTLEMENT_PAYOUT",
-              "ADMIN_ADJUST",
+              "CLOSURE_FORFEIT",
+              "RECONCILIATION_CORRECTION",
+              "DEPOSIT",
               "BONUS",
               "PAYMENT_CANCEL",
-              "PAYMENT_CANCEL_REVERSAL",
-              "START_GRANT",
-              "CLOSURE_FORFEIT"
+              "PAYMENT_CANCEL_REVERSAL"
             ]
           },
           "amountCoin": {
@@ -22666,20 +22550,19 @@
             "$ref": "#/components/schemas/CoinAmount"
           },
           "refType": {
-            "nullable": true,
             "type": "string",
             "enum": [
               "payment",
               "fill",
               "market",
-              "admin_action",
               "coupon",
               "start_grant",
-              "account_closure"
+              "account_closure",
+              "approval_request",
+              "audit_failure"
             ]
           },
           "refId": {
-            "nullable": true,
             "type": "string"
           },
           "memo": {
@@ -23059,50 +22942,6 @@
           "role",
           "balance",
           "createdAt"
-        ],
-        "additionalProperties": false
-      },
-      "BalanceAdjustBody": {
-        "type": "object",
-        "properties": {
-          "amountCoin": {
-            "maxLength": 17,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/CoinAmount"
-              }
-            ]
-          },
-          "memo": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "expectedAccountId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 255
-          }
-        },
-        "required": [
-          "amountCoin",
-          "memo",
-          "expectedAccountId"
-        ]
-      },
-      "AdminBalanceAdjustResult": {
-        "type": "object",
-        "properties": {
-          "user": {
-            "$ref": "#/components/schemas/AdminUser"
-          },
-          "ledgerEntry": {
-            "$ref": "#/components/schemas/LedgerEntry"
-          }
-        },
-        "required": [
-          "user",
-          "ledgerEntry"
         ],
         "additionalProperties": false
       },

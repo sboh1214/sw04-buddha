@@ -1,6 +1,9 @@
 import { AdminUsers } from './admin-users';
 
-/** PLAN 12 "사용자": search, balance, and the ADMIN_ADJUST form. Access is checked in the layout. */
+/**
+ * PLAN 12 "사용자": search and balance; no balance adjustment since #116 (ADR-0109). Access is
+ * checked in the layout.
+ */
 export default function AdminUsersPage() {
   return <AdminUsers />;
 }

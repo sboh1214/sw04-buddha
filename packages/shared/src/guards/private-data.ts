@@ -122,12 +122,18 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
     // The start Coin an account got or awaits (#70) is its wallet's: a public shape never says
     // whether, how much or when an account was granted it, nor which numbers count for it
     // (`startGrant`, `startGrants`, `start_grant_numbers`). The account's own `GET /me` is an
-    // owner-only route, which this list does not read.
+    // owner-only route, which this list does not read. Nor a ledger account (#116): whose Coin
+    // sits where is the account's own, and a 마켓메이커 자금 would say the bot trades. Nor its
+    // total as the ledger says (`balances.ledger_coin`, #116), the third balance column: a market's
+    // collateral total is no public field of that name either.
     fields: [
       ['balance'],
       ['balances'],
+      ['ledger', 'account'],
+      ['ledger', 'accounts'],
       ['available', 'coin'],
       ['locked', 'coin'],
+      ['ledger', 'coin'],
       ['start', 'grant'],
       ['start', 'grants'],
     ],

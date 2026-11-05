@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { Client } from 'pg';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ledgerEntries } from './schema/index.js';
+import { ledgerAccounts, ledgerEntries } from './schema/index.js';
 import { createMarket, createUser } from './test/factories.js';
 import { connectTestDb, hasTestDb, testDbUrls, type TestDb } from './test/harness.js';
 import { WIPE_PUBLIC_TABLES_SQL } from './wipe.js';
@@ -20,13 +20,14 @@ function withoutLeadingComments(statement: string): string {
   return lines.join('\n').trim();
 }
 
-describe('the wipe statement (#125, #149, #174)', () => {
-  it.each(['0017_remove_direct_amm', '0048_market_lifecycle'])(
+describe('the wipe statement (#125, #149, #174, #116)', () => {
+  it.each(['0017_remove_direct_amm', '0048_market_lifecycle', '0060_ledger_accounts'])(
     'is the first statement of migration %s, verbatim',
     (tag) => {
       // deploy/reset-db.sh re-runs WIPE_PUBLIC_TABLES_SQL; it must be the very statement the
-      // deploys of #125 and #174 ran once each, and it must run before the migration drops the
-      // enum values a row could still hold (0017 the AMM's, 0048 the `voided` status).
+      // deploys of #125, #174 and #116 ran once each, and it must run before the migration drops
+      // the enum values a row could still hold (0017 the AMM's, 0048 the `voided` status, 0060
+      // the ledger types #116 replaced).
       const [first] = migrationSql(tag).split(STATEMENT_BREAKPOINT);
       expect(withoutLeadingComments(first ?? '')).toBe(WIPE_PUBLIC_TABLES_SQL);
     },
@@ -101,11 +102,14 @@ describe.skipIf(!hasTestDb())('the wipe statement (integration, docker test prof
     for (const [table, count] of Object.entries(after)) expect(count, table).toBe(0);
     // The migration journal lives in another schema and is left alone.
     expect(await appliedMigrations()).toBe(migrations);
-    // RESTART IDENTITY: the next account's first ledger entry is row 1 again.
+    // RESTART IDENTITY: the next account's first ledger account and entry are row 1 again.
     const { user: u } = await createUser(t.db, { balanceCoin: 100n });
     const entries = await t.db.select().from(ledgerEntries);
     expect(entries).toEqual([
-      expect.objectContaining({ id: 1, userId: u.id, type: 'ADMIN_ADJUST' }),
+      expect.objectContaining({ id: 1, type: 'START_GRANT', fromAccountId: null, toAccountId: 1 }),
+    ]);
+    expect(await t.db.select().from(ledgerAccounts)).toEqual([
+      expect.objectContaining({ id: 1, kind: 'user', ownerId: u.id }),
     ]);
   });
 });

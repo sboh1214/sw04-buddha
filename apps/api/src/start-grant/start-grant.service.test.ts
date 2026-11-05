@@ -10,7 +10,12 @@
  */
 import { MODULE_METADATA } from '@nestjs/common/constants.js';
 import { cancelStartGrant, schema } from '@buddha/db';
-import { createMarketMakerAccount, createPhoneVerification, createUser } from '@buddha/db/test';
+import {
+  createMarketMakerAccount,
+  createPhoneVerification,
+  createUser,
+  ledgerOf as accountLedgerOf,
+} from '@buddha/db/test';
 import {
   START_COIN_SETTING,
   meSchema,
@@ -79,13 +84,8 @@ describe.skipIf(!hasTestInfra)('StartGrantService (integration)', () => {
     return user;
   }
 
-  async function ledgerOf(userId: string) {
-    return t.db
-      .select()
-      .from(schema.ledgerEntries)
-      .where(eq(schema.ledgerEntries.userId, userId))
-      .orderBy(asc(schema.ledgerEntries.id));
-  }
+  /** The account's ledger, each event from its side (`ledgerOf` of @buddha/db/test, #116). */
+  const ledgerOf = (userId: string) => accountLedgerOf(t.db, userId);
 
   async function balanceOf(userId: string) {
     const [row] = await t.db
@@ -150,8 +150,11 @@ describe.skipIf(!hasTestInfra)('StartGrantService (integration)', () => {
     await expect(grants.grant(marketMaker)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(await t.db.select().from(schema.startGrants)).toEqual([]);
     expect(await t.db.select().from(schema.startGrantNumbers)).toEqual([]);
+    // The 운영 마켓메이커 has no user ledger account at all (#116): no balance row, no event.
     expect(await ledgerOf(marketMaker)).toEqual([]);
-    expect(await balanceOf(marketMaker)).toBe(0n);
+    expect(
+      await t.db.select().from(schema.balances).where(eq(schema.balances.userId, marketMaker)),
+    ).toEqual([]);
   });
 
   it('grants the set amount once: the balance, one START_GRANT entry, the record and the event', async () => {

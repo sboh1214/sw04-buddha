@@ -2386,6 +2386,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     }
     const count = async () => ({
       ledger: (await t.db.select().from(schema.ledgerEntries)).length,
+      ledgerAccounts: (await t.db.select().from(schema.ledgerAccounts)).length,
       watchEvents: (await t.db.select().from(schema.marketWatchEvents)).length,
       likes: (await t.db.select().from(schema.postLikes)).length,
       adminActions: (await t.db.select().from(schema.adminActions)).length,
@@ -2395,9 +2396,12 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     });
     const beforeRun = await count();
     const ledger = await t.db.select().from(schema.ledgerEntries);
+    // The closed account's ledger account and its balance row stay too (#116): its events name it.
+    const balances = await t.db.select().from(schema.balances);
     await run(after(closedAt, 10));
     expect(await count()).toEqual(beforeRun);
     expect(await t.db.select().from(schema.ledgerEntries)).toEqual(ledger);
+    expect(await t.db.select().from(schema.balances)).toEqual(balances);
     expect(await postOf(live.id)).toMatchObject({ title: '남는 글', purgedAt: null });
     expect((await postOf(post.id)).purgedAt).not.toBeNull();
     expect(await t.db.select().from(schema.consentRecords)).toEqual([]);

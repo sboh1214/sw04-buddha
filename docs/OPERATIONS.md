@@ -1,6 +1,6 @@
 # 운영 절차
 
-배포 환경(buddha.sboh.dev)에서 운영자가 앱의 화면 없이 손으로 하는 일 — DB에서 하는 일과 고객센터 이메일로 받는 일 — 과 운영 마켓메이커 계정의 확인, API 컨테이너의 메모리 확인의 절차다. 앱 안에서 처리하는 판정 이의(#175)는 화면 밖에서 알아 둘 것 — 결정할 관리자가 모자랄 때 — 만 제재 이의 처리 앞에 적는다. 판정 정정(#176)과 판정 지연 기록(#142 — 언제 기록하고 공개되는 사유에 무엇을 쓰지 않는지, 다음 검토 시각과 갱신 대기, 장기 지연 경고)도 화면에서 하는 일이고 그 앞에 운영 메모만 적는다. 운영 DB 초기화는 [RESET.md](RESET.md), 셸·시크릿·덤프 같은 인프라 일은 [terraform/README.md](../terraform/README.md)에 있다.
+배포 환경(buddha.sboh.dev)에서 운영자가 앱의 화면 없이 손으로 하는 일 — DB에서 하는 일과 고객센터 이메일로 받는 일 — 과 운영 마켓메이커 계정과 원장 계정의 확인, API 컨테이너의 메모리 확인의 절차다. 앱 안에서 처리하는 판정 이의(#175)는 화면 밖에서 알아 둘 것 — 결정할 관리자가 모자랄 때 — 만 제재 이의 처리 앞에 적는다. 판정 정정(#176)과 판정 지연 기록(#142 — 언제 기록하고 공개되는 사유에 무엇을 쓰지 않는지, 다음 검토 시각과 갱신 대기, 장기 지연 경고)도 화면에서 하는 일이고 그 앞에 운영 메모만 적는다. 운영 DB 초기화는 [RESET.md](RESET.md), 셸·시크릿·덤프 같은 인프라 일은 [terraform/README.md](../terraform/README.md)에 있다.
 
 ## 회원의 휴대전화 번호 바꾸기 (#57 3항)
 
@@ -302,23 +302,61 @@ docker compose exec -e PSQL_HISTORY=/dev/null postgres psql -U buddha_app -d bud
 - **누가 만드나.** 시드만 만든다. 배포의 `migrate`가 도는 시드가 그 계정이 없을 때만 하나 만들고(`[db:seed] market maker account: created`), 있으면 그대로 둔다(`… exists`). `SEED_ADMIN_*`와 상관없다. 둘째는 DB가 거절한다(`user_market_maker_uidx`). 운영 DB를 비우면(#116, [RESET.md](RESET.md)) 다음 시드가 새 id로 다시 만든다 — 그 id를 어디에 적어 두지 않는다.
 - **로그인하지 않는다.** 비밀번호·소셜 로그인·세션이 없고, 주소(`market-maker@noemail.buddha.local`)는 메일이 가지 않는 서비스의 주소라 로그인·비밀번호 재설정·인증 메일이 모두 거절한다. DB도 그 계정의 세션·로그인 수단·비밀번호 재설정 행을 받지 않는다.
 - **프로필이 없다.** 닉네임·소개·이미지·공개 id가 없어 공개 프로필은 없는 계정처럼 404다. 글·댓글·좋아요·신고·시장 제안을 서버가 거절하고 DB도 그 행을 받지 않는다. 그래서 `/admin/users`와 운영자 화면에도 보이지 않는다 — 관리자 화면에 '운영 마켓메이커'라는 이름으로 보이는 것은 봇 관리 화면(M10 #182)부터다.
-- **관리자가 될 수 없다.** 관리자 권한(`profiles.role`)은 계정 유형과 따로 있고 프로필에 있다. 프로필이 없으니 `/admin/admins`의 부여는 그 계정을 찾지 못하고(없는 계정처럼 404), 시드도 그 주소를 관리자로 받지 않는다. 계정 제한·경고·잔고 조정도 같은 까닭으로 404다 — 봇을 멈추는 것은 계정 조치가 아니라 봇의 중단 스위치(M10 #130)다.
-- **Coin.** 시작 Coin을 받지 않고(API와 DB가 거절한다) 잔고는 0이다. 봇이 쓸 Coin은 이 계정의 잔고가 아니라 시장마다의 '마켓메이커 자금' 원장 계정에 둔다(#116).
+- **관리자가 될 수 없다.** 관리자 권한(`profiles.role`)은 계정 유형과 따로 있고 프로필에 있다. 프로필이 없으니 `/admin/admins`의 부여는 그 계정을 찾지 못하고(없는 계정처럼 404), 시드도 그 주소를 관리자로 받지 않는다. 계정 제한·경고도 같은 까닭으로 404다(잔고 조정은 #116이 모든 계정에서 없앴다) — 봇을 멈추는 것은 계정 조치가 아니라 봇의 중단 스위치(M10 #130)다.
+- **Coin.** 시작 Coin을 받지 않고(API와 DB가 거절한다) 사용자 원장 계정도 잔고 행도 없다 — 사용자 원장 계정은 사람 계정의 것이고 DB가 이 계정의 것을 거절한다(#116, ADR-0109). 봇이 쓸 Coin은 시장마다의 '마켓메이커 자금' 원장 계정(`ledger_accounts`의 `market_maker_funds`, 주인이 이 계정)에 두고, 그 원장 계정은 봇이 그 시장에 처음 배정받을 때(M10 #129) 생긴다. 아래 [원장 계정](#원장-계정-116-adr-0109).
 - **사람 수에서 빠진다.** 참여자 수·거래량·'사용자 체결 0건'과 판정 이의의 자격은 사람 계정만 센다(ADR-0107 결정 1 #177 13항). 사람 계정인지는 한 규칙(`isHumanAccountType`, SQL `is_human_account`)으로만 가린다.
 
-**확인(읽기만).** [휴대전화 번호 바꾸기](#회원의-휴대전화-번호-바꾸기-57-3항)의 2단계(셸)와 4단계(psql)로 붙어 돌린다. 줄이 하나이고 `profiles`·`sign_ins`·`sessions`가 0, 잔고가 0이어야 한다. 줄이 아예 없을 때만 아직 시드가 돌지 않은 DB다 — 손으로 만들지 않고 호스트 셸에서 시드를 돌린다(`sudo docker compose -f /data/buddha/compose.yaml run --rm migrate`, 초기화가 [RESET.md](RESET.md) 8단계에서 도는 것과 같은 일). 줄은 있는데 `available_coin`·`locked_coin`이 비어 있으면(NULL) 시드가 아니라 잔고 행을 잃은 계정이다 — 시드는 있는 계정을 그대로 두어 고치지 못하고, 장부 대조(`ledger-audit`의 `balance_missing`)가 같은 것을 알린다. 손으로 고치지 않고 오너에게 알린다.
+**확인(읽기만).** [휴대전화 번호 바꾸기](#회원의-휴대전화-번호-바꾸기-57-3항)의 2단계(셸)와 4단계(psql)로 붙어 돌린다. 줄이 하나이고 `profiles`·`sign_ins`·`sessions`·`user_ledger_accounts`가 0이어야 한다. `funds_accounts`는 봇이 자금을 둔 시장의 수다(#129 전에는 0). 줄이 아예 없을 때만 아직 시드가 돌지 않은 DB다 — 손으로 만들지 않고 호스트 셸에서 시드를 돌린다(`sudo docker compose -f /data/buddha/compose.yaml run --rm migrate`, 초기화가 [RESET.md](RESET.md) 8단계에서 도는 것과 같은 일).
 
 ```sql
 SELECT u.id, u.created_at, u.email_verified,
   (SELECT count(*) FROM profiles p WHERE p.user_id = u.id) AS profiles,
   (SELECT count(*) FROM account a WHERE a.user_id = u.id) AS sign_ins,
   (SELECT count(*) FROM session s WHERE s.user_id = u.id) AS sessions,
-  b.available_coin, b.locked_coin
-FROM "user" u LEFT JOIN balances b ON b.user_id = u.id
+  (SELECT count(*) FROM ledger_accounts l
+    WHERE l.owner_id = u.id AND l.kind = 'user') AS user_ledger_accounts,
+  (SELECT count(*) FROM ledger_accounts l
+    WHERE l.owner_id = u.id AND l.kind = 'market_maker_funds') AS funds_accounts
+FROM "user" u
 WHERE NOT is_human_account_type(u.account_type);
 ```
 
 계정 유형은 고치지 않는다 — 어느 롤로도 DB 트리거(`user_keep_account_type`)가 거절한다.
+
+## 원장 계정 (#116, ADR-0109)
+
+원장은 원장 계정 사이의 이동이다(ADR-0107 결정 2 #73 1·11항). 원장 계정은 넷이다: 사람 계정마다의 사용자 계정(`user`, 가입 트리거가 잔고 0으로 연다 — 관리자·탈퇴한 계정도 사람이다), 운영 금고 하나(`treasury`), 시장마다의 담보(`market_collateral`)와 마켓메이커 자금(`market_maker_funds`, 주인은 운영 마켓메이커). 금고·담보는 주인이 없다. 사용자 계정 밖의 셋은 처음 쓰일 때 생긴다 — 담보는 그 시장의 첫 쌍 발행(#118·#119), 금고와 마켓메이커 자금은 금고 발행과 봇 배정(M10 #129)이다. 그래서 #129 전에는 금고가 없다. 운영자가 할 일은 없다 — 아래는 알아 둘 것과 읽기만 하는 확인이다.
+
+- **손으로 바꾸지 않는다.** 원장 행은 어느 롤로도 고치거나 지우지 못하고(트리거 `ledger_entries_keep_record`), 원장 계정도 그렇다(`ledger_accounts_check`). 잔고 행은 원장이 말하는 그 계정의 합을 `ledger_coin`에 옮겨 적고, 원장 이벤트마다 내거나 받는 칸(가용·잠금)과 그것이 함께 움직인다. 잔고의 합(가용 + 잠금)만 바꾸는 UPDATE는 DB가 그 자리에서 거절하고(`balances_keep_ledger_gap` — 합과 `ledger_coin`의 차이는 어느 UPDATE로도 바뀌지 않는다), 이벤트 없이 둘을 함께 바꾸면 커밋 때 거절한다(`balances_follow_ledger`). `buddha_app`은 잔고 행을 넣거나 지우지 못하고 금액 열만 바꾼다.
+- **관리자의 잔고 조정은 없다**(증감 모두, ADR-0107 결정 2 #73 7항). 관리자가 회원에게 Coin을 주거나 거두는 길도, 운영 사고를 보상하는 길도 없다 — 판정 오류 보상(#144)과 재지급(#74) 전의 공백은 오너가 받아들였다(D4).
+- **불일치.** 원장 감사(`ledger.audit`, 매일 04:00 KST. 수동은 호스트에서 `sudo docker compose -f /data/buddha/compose.yaml exec worker node apps/worker/dist/scripts/run-ledger-audit.js`, 불일치가 있으면 종료 코드 1 — 로컬에서는 `pnpm --filter worker run job:ledger-audit`)가 원장 계정마다 잔고 = 원장 합(받은 것 − 보낸 것)을 보고, 사용자 원장 계정이 없는 사람 계정도 찾아 `/admin/audit-failures`에 남긴다(종류 `ledger_balance_mismatch`, 내용은 원장 계정 id·종류·회원·시장·가용·잠금·`ledgerCoin`(잔고 행의 원장 합 사본)·원장 합·차이·`ledgerCoinMismatch`(사본이 원장 합과 다름)). 감사는 기록만 하고 아무것도 멈추지 않는다. 차이는 #93의 '대사 정정'(금고 ↔ 그 계정, 감사 실패를 참조하고 다른 관리자가 승인한다, 10항)으로만 맞추고, 그 전까지는 차이를 그대로 둔다 — 손으로 고치지 않고 오너에게 알린다. **그동안에도 그 원장 계정은 원장 이벤트를 받고, 차이는 그대로 남는다**(ADR-0109 결정 12-8) — `ledgerCoinMismatch`가 거짓인 한, 곧 차이가 가용 + 잠금과 `ledger_coin` 사이에만 있을 때다: 이벤트마다 가용(또는 잠금)과 `ledger_coin`이 같은 금액만큼 함께 움직이고 거래 후 잔고는 원장 쪽(`ledger_coin`)에서 이어지므로, 시작 지급·정산 지급·체결과 주문의 잠금·해제가 그대로 되고 그 계정이 보유한 시장의 정산도 멈추지 않는다(10항 — 계정 불일치는 그 계정의 새 주문만 거절하고, 그 거절은 #93이 낸다). 원장이 가진 것보다 많이는 내지 못한다(차이로 더해진 Coin은 원장의 것이 아니다). 탈퇴만은 차이가 닫힐 때까지 거절된다 — 닫힌 계정은 가용·잠금과 `ledger_coin`이 모두 0이어야 하는데, 소멸 하나는 둘을 같은 금액만큼 줄여 함께 0으로 만들 수 없다. 이 상태는 트리거를 끈 오너 권한의 변경이나 트리거 없이 되살린 덤프에서만 생긴다(`buddha_app`은 만들지 못한다). 자동 중단·복구와 총량·담보·잠금의 대사는 #93이다.
+- **사본이 어긋났을 때(`ledgerCoinMismatch` 참).** `ledger_coin`마저 원장 합과 다르면 — 예컨대 트리거 없이 `balances`만 옛 백업에서 되살려 가용과 사본이 함께 옛 값일 때 — 그 원장 계정은 **어떤 원장 이벤트도 받지 못한다**(ADR-0109 결정 12-8): 이벤트의 거래 후 잔고는 원장에서 이어야 하고 커밋 때 `ledger_coin`이 그와 같아야 한다. 시작 지급과 체결이 거절되고, 그 계정이 보유한 시장은 지급 트랜잭션이 통째로 되돌아가 정산 중에 머문다(워커 로그에 `does not continue its accounts' totals`가 매 분 남는다). 이것만은 #93을 기다리지 않고 오너가 사본만 원장 합으로 되돌린다 — Coin은 움직이지 않고 원장도 그대로이며, 가용 + 잠금과 원장의 차이는 위의 차이로 남아 이벤트를 받는다. 호스트에서 postgres 롤로 붙어(`sudo docker compose -f /data/buddha/compose.yaml exec -e PSQL_HISTORY=/dev/null postgres psql -U postgres -d buddha`) 감사가 남긴 원장 계정 id를 `:id`로 넣고 한 트랜잭션으로 돌린다. 차이를 지키는 트리거를 그 트랜잭션에서만 끄므로 다른 줄을 더하지 않는다. `UPDATE 1`이 아니거나 `SET CONSTRAINTS`가 오류를 내면 `ROLLBACK`한다. 다음 감사에서 `ledgerCoinMismatch`가 거짓이 되고 차이(`differenceCoin`)만 남는다.
+
+  ```sql
+  \set id 123
+  BEGIN;
+  ALTER TABLE balances DISABLE TRIGGER balances_keep_ledger_gap;
+  UPDATE balances SET ledger_coin = ledger_account_last_after(account_id), updated_at = now()
+    WHERE account_id = :id;
+  SET CONSTRAINTS ALL IMMEDIATE;
+  ALTER TABLE balances ENABLE TRIGGER balances_keep_ledger_gap;
+  COMMIT;
+  ```
+
+**확인(읽기만).** 위와 같이 psql로 붙어 돌린다. 첫째는 사용자 계정 밖의 원장 계정과 그 잔고(가용·잠금과 원장 합 `ledger_coin`)다(#129와 #118 전에는 줄이 없다). 둘째는 전체의 보존이다: `carried`(원장 합의 합)가 `minted − burned`와 같아야 하고(발행은 보내는 계정이 없는 이벤트, 소각은 받는 계정이 없는 이벤트 — 소각은 탈퇴 소멸 하나다, 16항), 잔고가 원장과 어긋난 계정이 없으면 `held`도 같다. `held`와 `carried`가 다르면 그 차이가 어긋난 계정들의 차이의 합이다.
+
+```sql
+SELECT l.id, l.kind, l.market_id, b.available_coin, b.locked_coin, b.ledger_coin
+FROM ledger_accounts l LEFT JOIN balances b ON b.account_id = l.id
+WHERE l.kind <> 'user'
+ORDER BY l.kind, l.market_id;
+
+SELECT
+  (SELECT coalesce(sum(available_coin + locked_coin), 0) FROM balances) AS held,
+  (SELECT coalesce(sum(ledger_coin), 0) FROM balances) AS carried,
+  (SELECT coalesce(sum(amount_coin), 0) FROM ledger_entries WHERE from_account_id IS NULL) AS minted,
+  (SELECT coalesce(sum(amount_coin), 0) FROM ledger_entries WHERE to_account_id IS NULL) AS burned;
+```
 
 ## API 컨테이너의 메모리 확인 (#46, ADR-0073 9-46)
 
