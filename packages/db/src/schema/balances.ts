@@ -12,8 +12,9 @@ import { ledgerAccounts } from './ledger-accounts.js';
  * available_coin + locked_coin moves only together with it (0060's `balances_keep_ledger_gap`, at
  * every UPDATE), so the two are equal unless an owner-level write made them differ — an account
  * that then keeps its difference and still takes its events (ADR-0107 결정 2 #73 10항) until #93's
- * 대사 정정 closes it. `locked_coin` holds open orders' locks (#118), which move Coin between the
- * two buckets of one account and are no ledger event (ADR-0107 결정 2 #73 1항 주문 잠금).
+ * 대사 정정 closes it. `locked_coin` holds live orders' locks (#118, ADR-0110), which move Coin
+ * between the two buckets of one account (`lockCoin`, `releaseCoin`) and are no ledger event
+ * (ADR-0107 결정 2 #73 1항 주문 잠금).
  * buddha_app may UPDATE the three amounts and `updated_at` only, and never INSERT or DELETE a row.
  */
 export const balances = pgTable(

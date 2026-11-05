@@ -1,4 +1,4 @@
-import { PROPOSED_CONTRACT_TERMS, formatCoin } from '@buddha/shared';
+import { CONTRACT_TERMS, formatCoin } from '@buddha/shared';
 import { useForm } from 'react-hook-form';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
@@ -91,10 +91,10 @@ describe('MarketRuleFields', () => {
     const line = byTestId(html, 'market-void-payout');
     expect(line?.text).toContain(copy.rulesVoidPayout);
     expect(line?.text).toContain(
-      `YES 계약은 계약마다 ${formatCoin(PROPOSED_CONTRACT_TERMS.voidPayoutYesCoin)}`,
+      `YES 계약은 계약마다 ${formatCoin(CONTRACT_TERMS.voidPayoutYesCoin)}`,
     );
     expect(line?.text).toContain(
-      `NO 계약은 계약마다 ${formatCoin(PROPOSED_CONTRACT_TERMS.voidPayoutNoCoin)}`,
+      `NO 계약은 계약마다 ${formatCoin(CONTRACT_TERMS.voidPayoutNoCoin)}`,
     );
     // A rule, never a refund (N03 §6); and nothing the operator types.
     expect(line?.text).not.toMatch(/환불|원금/);

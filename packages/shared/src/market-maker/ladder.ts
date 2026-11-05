@@ -1,5 +1,6 @@
 import { yesUnitCostCoin } from '../lmsr.js';
-import { type ContractTerms, assertContractTerms } from './terms.js';
+import type { ContractTerms } from '../contract.js';
+import { assertContractTerms } from './terms.js';
 import { assertWhole } from './validate.js';
 
 /**

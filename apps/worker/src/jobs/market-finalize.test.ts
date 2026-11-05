@@ -4,19 +4,22 @@
  * through the packages/db harness, Redis through TEST_REDIS_URL. Skips when either is unset,
  * exactly like ledger-audit.test.ts.
  *
- * Holders are built as a pair mint will leave them (#118; `mintTestPairs`, #116): the person's
- * position and the 운영 마켓메이커's opposite one, each buyer's Coin moved into the market's
- * collateral account by a PAIR_MINT_COLLATERAL event — so the collateral holds unsettled pairs ×
- * 100 to pay from, and the audit (PLAN 5.6) can be run on the result.
+ * Holders are made by #118's pair mint (`mintTestPairs`: two buy locks and one
+ * `applyPairMintFill`): the person's position and the 운영 마켓메이커's opposite one, each buyer's
+ * Coin moved into the market's collateral account by a PAIR_MINT_COLLATERAL event — so the
+ * collateral holds unsettled pairs × 100 to pay from, and the audit (PLAN 5.6) can be run on the
+ * result.
  */
 import { randomUUID } from 'node:crypto';
 import {
   closeDb,
   createDb,
   ledgerKeys,
+  lockForOrder,
   lockLedgerAccounts,
   marketMakerAccountId,
   recordLedgerEntry,
+  releaseForOrder,
   schema,
   type Db,
   type LedgerAccountRef,
@@ -145,8 +148,8 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
   }
 
   /**
-   * A holder as a pair mint will leave it (#118): `qty` pairs between this person and the 운영
-   * 마켓메이커, the person's side bought for `costBasisCoin` (a whole Coin per contract) and the
+   * A holder as a pair mint leaves it (#118, `mintTestPairs`): `qty` pairs between this person and
+   * the 운영 마켓메이커, the person's side bought for `costBasisCoin` (a whole Coin per contract) and the
    * other side for the rest of 100 per pair out of the market's 마켓메이커 자금 (funded here by a
    * 금고 발행 and a 봇 배정) — both paid into the market's collateral, which then holds the qty ×
    * 100 the winning side is paid. So the 운영 마켓메이커 holds the opposite position, and is
@@ -1372,6 +1375,78 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     }
     expect((await marketRow(market.id)).status).toBe('settling');
     expect(await positionOf(alice, market.id, 'YES')).toMatchObject({ settled: false, version: 1 });
+    expect(logs).toEqual([]);
+  });
+
+  it('does not close out a row a live sell order still locks: the step fails on the CHECK, the market stays settling (#118)', async () => {
+    // ADR-0107 결정 4 #178 row: a lock left at settlement is refused, not dropped. Until #126 adds
+    // its own check, `positions_locked_qty_check` (0 ≤ locked_qty ≤ qty, migration 0061) refuses
+    // the qty-0 UPDATE, and the whole step — payouts first — rolls back.
+    const market = await resolved('YES');
+    const alice = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
+    await hold({
+      userId: alice,
+      marketId: market.id,
+      outcome: 'YES',
+      qty: 10,
+      costBasisCoin: 500n,
+    });
+    const bob = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
+    await hold({ userId: bob, marketId: market.id, outcome: 'NO', qty: 5, costBasisCoin: 300n });
+    const sell = { kind: 'contracts', outcome: 'YES', qty: 4 } as const;
+    const locked = await t.db.transaction((tx) =>
+      lockForOrder(tx, { marketId: market.id, ownerId: alice, lock: sell }),
+    );
+    expect(locked).toMatchObject({ locked: true, position: { qty: 10, lockedQty: 4 } });
+    const before = {
+      alice: { balance: await balanceOf(alice), ledger: await ledgerOf(alice) },
+      bob: { balance: await balanceOf(bob), ledger: await ledgerOf(bob) },
+      collateral: await coinOf(collateralOf(market.id)),
+      positions: await positionsOf(market.id),
+    };
+    expect(before.collateral).toBe(1_500n); // fifteen pairs × 100
+
+    const err = await finalizeMarket(t.db, market.id, publish, logger).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DrizzleQueryError);
+    const { message, cause } = err as DrizzleQueryError;
+    expect(message).toMatch(/^Failed query: update "positions"/);
+    expect(cause).toMatchObject({ code: '23514', constraint: 'positions_locked_qty_check' });
+    const [step] = await stepsOf(market.id);
+    expect(step).toMatchObject({ step: 'coin', status: 'failed', attempts: 1, completedAt: null });
+    expect(step!.lastError).toMatch(
+      /^23514 new row for relation "positions" violates check constraint "positions_locked_qty_check" — Failed query: update "positions"/,
+    );
+
+    // Nobody paid, nothing closed out, the collateral whole, the lock still held.
+    for (const [userId, was] of [
+      [alice, before.alice],
+      [bob, before.bob],
+    ] as const) {
+      expect(await balanceOf(userId)).toEqual(was.balance);
+      expect(await ledgerOf(userId)).toEqual(was.ledger);
+    }
+    expect(await coinOf(collateralOf(market.id))).toBe(before.collateral);
+    expect(await positionsOf(market.id)).toEqual(before.positions);
+    expect(await marketRow(market.id)).toMatchObject({ status: 'settling', settledAt: null });
+
+    // Once the lock is released (#120's expiry, #178's cancel), a rerun settles and pays.
+    await t.db.transaction((tx) =>
+      releaseForOrder(tx, { marketId: market.id, ownerId: alice, lock: sell }),
+    );
+    await finalizeMarket(t.db, market.id, publish, logger);
+    expect(await marketRow(market.id)).toMatchObject({ status: 'settled' });
+    expect(await positionOf(alice, market.id, 'YES')).toMatchObject({
+      qty: 0,
+      lockedQty: 0,
+      settled: true,
+    });
+    expect((await balanceOf(alice)).availableCoin).toBe(
+      before.alice.balance.availableCoin + 1_000n,
+    );
+    expect(await stepsOf(market.id)).toEqual([
+      expect.objectContaining({ step: 'coin', status: 'done', attempts: 2 }),
+    ]);
+    expect((await runLedgerAudit(t.db)).recorded).toBe(0);
     expect(logs).toEqual([]);
   });
 

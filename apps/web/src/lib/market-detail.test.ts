@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   MARKET_STATUSES,
-  PROPOSED_CONTRACT_TERMS,
+  CONTRACT_TERMS,
   PUBLIC_MARKET_STATUSES,
   formatCoin,
 } from '@buddha/shared';
@@ -640,7 +640,7 @@ describe('showsScheduledOpen (예정 개장 시각, #22)', () => {
 describe('voidPayoutText (무효 지급, #173 item 9)', () => {
   it('reads the amounts from the contract terms, 50/50 today', () => {
     expect(voidPayoutText()).toBe(
-      `무효로 판정되면 YES 계약은 계약마다 ${formatCoin(PROPOSED_CONTRACT_TERMS.voidPayoutYesCoin)}, NO 계약은 계약마다 ${formatCoin(PROPOSED_CONTRACT_TERMS.voidPayoutNoCoin)}을 지급합니다. 모든 시장에 같은 규칙입니다.`,
+      `무효로 판정되면 YES 계약은 계약마다 ${formatCoin(CONTRACT_TERMS.voidPayoutYesCoin)}, NO 계약은 계약마다 ${formatCoin(CONTRACT_TERMS.voidPayoutNoCoin)}을 지급합니다. 모든 시장에 같은 규칙입니다.`,
     );
     expect(voidPayoutText()).toContain('YES 계약은 계약마다 50 Coin, NO 계약은 계약마다 50 Coin을');
     // Other terms, other line: the amounts are never written into the copy.

@@ -5,11 +5,11 @@
  *   C(qY, qN) = P · b · ln(e^(qY/b) + e^(qN/b))
  *   pY        = σ(d / b),  d = qY − qN
  *
- * P is the normal payout of a contract (the plan's 100, a design proposal — N01 §3, #177), b the
- * liquidity in contracts. qY·qN are the bot's net sales; the bot counts them from what it holds,
- * qY − qN = held NO − held YES, starting at 0 (ADR-0058 결정 1의 7). Prices depend on d alone:
- * C(qY + t, qN + t) = C(qY, qN) + P·t, so minting or burning pairs and trades between users
- * leave every quote where it was.
+ * P is the normal payout of a contract (100, approved — `CONTRACT_TERMS`, ADR-0107 결정 1 #177
+ * 1항), b the liquidity in contracts. qY·qN are the bot's net sales; the bot counts them from
+ * what it holds, qY − qN = held NO − held YES, starting at 0 (ADR-0058 결정 1의 7). Prices depend
+ * on d alone: C(qY + t, qN + t) = C(qY, qN) + P·t, so minting or burning pairs and trades
+ * between users leave every quote where it was.
  *
  * The opening reference is 50% for every market (ADR-0058 결정 1의 2), so d = 0 at the open and
  * there is no initial-probability input. The direct-LMSR loss bound P·b·ln 2 is a reference

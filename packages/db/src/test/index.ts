@@ -1,4 +1,5 @@
 // Public test surface: `import { connectTestDb, createUser } from '@buddha/db/test'`.
+export * from './contracts.js';
 export * from './factories.js';
 export * from './harness.js';
 export * from './ledger.js';

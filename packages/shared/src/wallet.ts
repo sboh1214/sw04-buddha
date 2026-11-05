@@ -62,8 +62,8 @@ export const ledgerEntrySchema = z
     amountCoin: coinAmountSchema,
     /**
      * The account's total as its ledger says — available + locked, unless an owner-level write
-     * left a gap (ADR-0109 결정 12-8) — right after this event (#116). Equal to the available Coin
-     * until order locks exist (#118): a lock moves Coin within the total.
+     * left a gap (ADR-0109 결정 12-8) — right after this event (#116). Above the available Coin
+     * while orders hold locks (#118, ADR-0110): a lock moves Coin within the total, no event.
      */
     balanceAfterCoin: coinAmountSchema,
     /** The event's source (#116: every event names one — a payment, a grant, a fill …). */

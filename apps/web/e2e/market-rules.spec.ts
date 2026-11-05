@@ -1,5 +1,5 @@
 import { type APIResponse, type Page, type Request } from '@playwright/test';
-import { type MarketSource, PROPOSED_CONTRACT_TERMS, formatCoin } from '@buddha/shared';
+import { type MarketSource, CONTRACT_TERMS, formatCoin } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { formatKst } from '../src/lib/datetime';
 import {
@@ -73,8 +73,8 @@ const UNMARKED = /^\d{4}\. \d{1,2}\. \d{1,2}\. (오전|오후) \d{1,2}:\d{2}$/;
  * the market maker prices with — never a per-market input, never a refund (N03 §6).
  */
 const VOID_PAYOUT =
-  `${copy.rulesVoidPayoutYes} ${formatCoin(PROPOSED_CONTRACT_TERMS.voidPayoutYesCoin)}, ` +
-  `${copy.rulesVoidPayoutNo} ${formatCoin(PROPOSED_CONTRACT_TERMS.voidPayoutNoCoin)}` +
+  `${copy.rulesVoidPayoutYes} ${formatCoin(CONTRACT_TERMS.voidPayoutYesCoin)}, ` +
+  `${copy.rulesVoidPayoutNo} ${formatCoin(CONTRACT_TERMS.voidPayoutNoCoin)}` +
   copy.rulesVoidPayoutTail;
 
 /**

@@ -8442,6 +8442,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
     expect(row).toMatchObject({
       qty: 10,
+      lockedQty: 0,
       costBasisCoin: 550n,
       realizedPnlCoin: 0n,
       settled: false,
@@ -8449,6 +8450,33 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     expect(await t.db.select().from(positions)).toHaveLength(1);
     // No ledger entry at all: the trigger grants nothing (migration 0031), and neither does this.
     expect(await ledgerOf(t.db, u.id)).toEqual([]);
+  });
+
+  it('positions.locked_qty is 0 by default and never below 0 or above qty (migration 0061)', async () => {
+    // #118 (ADR-0110): the contracts live sell orders hold. A trade fill takes qty and locked_qty
+    // down together; settlement's qty-0 UPDATE fails on a row still locked.
+    const { user: u } = await createUser(t.db);
+    const market = await createMarket(t.db);
+    const where = and(
+      eq(positions.userId, u.id),
+      eq(positions.marketId, market.id),
+      eq(positions.outcome, 'NO'),
+    );
+    await t.db
+      .insert(positions)
+      .values({ userId: u.id, marketId: market.id, outcome: 'NO', qty: 4 });
+    expect((await t.db.select().from(positions).where(where))[0]).toMatchObject({ lockedQty: 0 });
+    for (const set of [{ lockedQty: -1 }, { lockedQty: 5 }, { lockedQty: 3, qty: 2 }]) {
+      await expect(
+        t.db.update(positions).set(set).where(where),
+        JSON.stringify(set),
+      ).rejects.toSatisfy((e) => sqlConstraint(e) === 'positions_locked_qty_check');
+    }
+    await t.db.update(positions).set({ lockedQty: 4 }).where(where);
+    await expect(t.db.update(positions).set({ qty: 0 }).where(where)).rejects.toSatisfy(
+      (e) => sqlConstraint(e) === 'positions_locked_qty_check',
+    );
+    await t.db.update(positions).set({ qty: 1, lockedQty: 1 }).where(where);
   });
 
   it('positions.version starts at 1 and every ORM update bumps it (migration 0010)', async () => {

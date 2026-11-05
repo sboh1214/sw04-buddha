@@ -51,11 +51,15 @@ export const LEDGER_ENTRY_TYPES = [
   'BOT_ALLOCATION',
   /** 봇 회수 (#73 1항, 운영금 이전): a market's 마켓메이커 자금 → treasury (#181). */
   'BOT_RECALL',
-  /** 쌍 발행 담보 (#73 1항): a buyer's Coin → the market's collateral, 100 per pair (#118/#119). */
+  /**
+   * 쌍 발행 담보 (#73 1항): a buyer's locked Coin → the market's collateral, 100 per pair between
+   * the two buyers (`applyPairMintFill`, #118; #119 calls it at a fill of two opposite buys).
+   */
   'PAIR_MINT_COLLATERAL',
   /**
    * 쌍 소각 반환 (#73 1·12항, #177 6항): collateral → the owner of the burned pair, which is only
-   * the bot's automatic burn today — so never a user ledger account (#118).
+   * the bot's automatic burn today (`burnMarketMakerPairs`, #118; #129 calls it) — so never a user
+   * ledger account.
    */
   'PAIR_BURN_RETURN',
   /** 체결 대금 (#73 1항): buyer → seller, the only move between two holders (#119). */

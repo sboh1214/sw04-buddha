@@ -4,24 +4,25 @@
  * writes a balance or an entry around it, and no test-only ledger type exists — except
  * `withLedgerGuardsOff`, the one door for a test that must break the books on purpose (the ledger
  * audit's mismatch cases). Coin comes to a person's account by its start grant (`createUser`'s
- * `balanceCoin`), goes out as pair-mint collateral (`spendCoin`, `mintTestPairs`), and comes to the
- * 운영 마켓메이커's funds through the treasury (`fundMarketMakerFunds`).
+ * `balanceCoin`), goes out as pair-mint collateral (`mintTestPairs`, the real pair mint of
+ * contracts.ts; `spendCoin`, one leg alone), and comes to the 운영 마켓메이커's funds through the
+ * treasury (`fundMarketMakerFunds`).
  */
 import { randomUUID } from 'node:crypto';
-import type { Outcome } from '@buddha/shared';
+import { pairPrices, type Outcome } from '@buddha/shared';
 import { asc, eq, isNull, or, sql } from 'drizzle-orm';
 import { Client } from 'pg';
 import type { Db } from '../client.js';
+import { applyPairMintFill, lockForOrder, lockOrderHolders } from '../contracts.js';
 import {
   findLedgerAccount,
-  holderLedgerAccount,
   ledgerEntryForAccount,
   ledgerKeys,
   lockLedgerAccounts,
   recordLedgerEntry,
   type LedgerAccountRef,
 } from '../ledger.js';
-import { balances, ledgerEntries, positions } from '../schema/index.js';
+import { balances, ledgerEntries } from '../schema/index.js';
 import { clockTimestamp } from '../tx-helpers.js';
 import { createMarket, createMarketMakerAccount } from './factories.js';
 import { testDbUrls } from './harness.js';
@@ -105,10 +106,11 @@ export interface SpendCoinOptions {
 }
 
 /**
- * Takes `amountCoin` out of a person's account the way a trade will (#118/#119): pair-mint
- * collateral into a market's collateral account, one event under a fresh key. For a test that
- * needs a person to have spent Coin — a refund's shortfall, a closure's balance — and nothing of
- * the trade itself (no order, fill or position is written). Returns the event.
+ * Takes `amountCoin` out of a person's available Coin as one pair-mint leg with no pair: a
+ * PAIR_MINT_COLLATERAL into a market's collateral under a fresh key, and no order, fill or
+ * position — collateral without contracts, which only a test makes (no production path records
+ * one leg alone: contract-writes.test.ts). For a test that needs a person to have spent Coin — a
+ * refund's shortfall, a closure's balance — and nothing of the trade itself. Returns the event.
  */
 export async function spendCoin(
   db: Db,
@@ -184,59 +186,40 @@ export interface MintTestPairsInput {
 }
 
 /**
- * Pairs as #118's pair mint will leave them: each buyer's collateral moved into the market's
- * collateral account (PAIR_MINT_COLLATERAL, 100 per pair between the two), and each one's
- * position (qty and cost added). So the collateral holds exactly unsettled pairs × 100, which a
- * settlement test pays out of. No order or fill row is written. The holders must hold the Coin.
- * Returns the fill id the two events refer to.
+ * Mints pairs the real way (#118, contracts.ts): both buyers' accounts locked first
+ * (`lockOrderHolders`), each buyer's lock of its price × qty (`lockForOrder`, as #119's intake will
+ * take it) and one `applyPairMintFill` at limits equal to the prices, in one transaction — each
+ * buyer's collateral moved into the market's collateral account (PAIR_MINT_COLLATERAL, 100 per pair
+ * between the two) and each one's position (qty and cost added). So the collateral holds exactly
+ * unsettled pairs × 100, which a settlement test pays out of. No order or fill row is written. The
+ * holders must hold the Coin, and be two owners. Returns the fill id the two events refer to.
  */
 export async function mintTestPairs(db: Db, input: MintTestPairsInput): Promise<string> {
-  const yesPrice = BigInt(input.yesPriceCoin ?? 50);
-  const qty = BigInt(input.qty);
+  const prices = pairPrices(input.yesPriceCoin ?? 50);
   const fillId = randomUUID();
-  const legs: [Outcome, string, bigint][] = [
-    ['YES', input.yesHolderId, yesPrice * qty],
-    ['NO', input.noHolderId, (100n - yesPrice) * qty],
+  const legs: [Outcome, string][] = [
+    ['YES', input.yesHolderId],
+    ['NO', input.noHolderId],
   ];
   await db.transaction(async (tx) => {
-    const payers = await Promise.all(
-      legs.map(([, holder]) => holderLedgerAccount(tx, holder, input.marketId)),
-    );
-    await lockLedgerAccounts(tx, [
-      { kind: 'market_collateral', marketId: input.marketId },
-      ...payers,
-    ]);
-    const at = await clockTimestamp(tx);
-    for (const [index, [outcome, holder, paid]] of legs.entries()) {
-      await recordLedgerEntry(tx, {
-        type: 'PAIR_MINT_COLLATERAL',
-        amountCoin: paid,
-        from: payers[index]!,
-        to: { kind: 'market_collateral', marketId: input.marketId },
-        refType: 'fill',
-        refId: fillId,
-        idempotencyKey: ledgerKeys.fillLeg(fillId, outcome),
-        at,
+    // Both owners' accounts first, ascending, as a processing must (`lockOrderHolders`).
+    await lockOrderHolders(tx, input.marketId, [input.yesHolderId, input.noHolderId]);
+    for (const [outcome, ownerId] of legs) {
+      const locked = await lockForOrder(tx, {
+        marketId: input.marketId,
+        ownerId,
+        lock: { kind: 'coin', amountCoin: BigInt(prices[outcome]) * BigInt(input.qty) },
       });
-      await tx
-        .insert(positions)
-        .values({
-          userId: holder,
-          marketId: input.marketId,
-          outcome,
-          qty: input.qty,
-          costBasisCoin: paid,
-        })
-        .onConflictDoUpdate({
-          target: [positions.userId, positions.marketId, positions.outcome],
-          set: {
-            qty: sql`${positions.qty} + ${input.qty}`,
-            costBasisCoin: sql`${positions.costBasisCoin} + ${paid}`,
-            // Qualified: the column's `$onUpdate` bump is ambiguous beside EXCLUDED.
-            version: sql`${positions.version} + 1`,
-          },
-        });
+      if (!locked.locked) throw new Error(`mintTestPairs: ${outcome} buyer ${locked.reason}`);
     }
+    await applyPairMintFill(tx, {
+      marketId: input.marketId,
+      fillId,
+      qty: input.qty,
+      yesPriceCoin: prices.YES,
+      yes: { ownerId: input.yesHolderId, limitPriceCoin: prices.YES },
+      no: { ownerId: input.noHolderId, limitPriceCoin: prices.NO },
+    });
   });
   return fillId;
 }

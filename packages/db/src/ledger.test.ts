@@ -10,13 +10,17 @@ import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import { Client } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { isHumanAccountSql } from './account-types.js';
+import { burnMarketMakerPairs } from './contracts.js';
 import {
   ensureLedgerAccount,
   findLedgerAccount,
+  findLedgerEntry,
   LedgerEntryError,
   ledgerKeys,
+  lockCoin,
   lockLedgerAccounts,
   recordLedgerEntry,
+  releaseCoin,
   type LedgerAccountRef,
   type LedgerEntryInput,
 } from './ledger.js';
@@ -558,6 +562,28 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
       ).rejects.toSatisfy((e) => sqlConstraint(e) === 'ledger_entries_type_idempotency_key_unique');
     });
 
+    it('finds an event by its type and key, and keys a burn by its market', async () => {
+      const market = await createMarket(t.db);
+      const burnId = randomUUID();
+      expect(ledgerKeys.pairBurn(market.id, burnId)).toBe(`${market.id}:${burnId}`);
+      // A burn id is the caller's (#129): the same one in two markets is two keys.
+      const other = await createMarket(t.db);
+      expect(ledgerKeys.pairBurn(other.id, burnId)).not.toBe(
+        ledgerKeys.pairBurn(market.id, burnId),
+      );
+      const key = randomUUID();
+      expect(await findLedgerEntry(t.db, 'TREASURY_MINT', key)).toBeNull();
+      const done = await record({
+        type: 'TREASURY_MINT',
+        amountCoin: 5n,
+        from: null,
+        to: { kind: 'treasury' },
+        idempotencyKey: key,
+      });
+      expect(await findLedgerEntry(t.db, 'TREASURY_MINT', key)).toEqual(done.entry);
+      expect(await findLedgerEntry(t.db, 'BOT_ALLOCATION', key)).toBeNull();
+    });
+
     it('records one event when the same key is recorded by two transactions at once', async () => {
       await fund({ kind: 'treasury' }, 1n);
       const requestId = randomUUID();
@@ -676,18 +702,91 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
       }
     });
 
+    it('locks and releases Coin within one account: no event, the total and the ledger stay', async () => {
+      // #118 (ADR-0110; ADR-0107 결정 2 #73 1항 주문 잠금): available ↔ locked of one ledger account
+      // — a person's own or a market's 마켓메이커 자금 — any positive amount, never below 0.
+      await createMarketMakerAccount(t.db);
+      const market = await createMarket(t.db);
+      const { user: a } = await createUser(t.db, { balanceCoin: 2_000n });
+      const own: LedgerAccountRef = { kind: 'user', userId: a.id };
+      const funds: LedgerAccountRef = { kind: 'market_maker_funds', marketId: market.id };
+      await fund(funds, 500n);
+      const entriesBefore = await t.db.select().from(ledgerEntries);
+      const lock = (ref: LedgerAccountRef, coin: bigint) =>
+        t.db.transaction((tx) => lockCoin(tx, ref, coin));
+      const release = (ref: LedgerAccountRef, coin: bigint) =>
+        t.db.transaction((tx) => releaseCoin(tx, ref, coin));
+
+      // An odd budget (#177 3항) as well as a limit × qty.
+      expect(await lock(own, 1_234n)).toMatchObject({
+        availableCoin: 766n,
+        lockedCoin: 1_234n,
+        ledgerCoin: 2_000n,
+      });
+      expect(await lock(own, 600n)).toMatchObject({ availableCoin: 166n, lockedCoin: 1_834n });
+      await expect(lock(own, 167n)).rejects.toSatisfy((e) => codeOf(e) === 'insufficient_coin');
+      expect(await release(own, 944n)).toMatchObject({ availableCoin: 1_110n, lockedCoin: 890n });
+      await expect(release(own, 891n)).rejects.toSatisfy((e) => codeOf(e) === 'refused');
+      for (const coin of [0n, -1n]) {
+        await expect(lock(own, coin)).rejects.toSatisfy((e) => codeOf(e) === 'refused');
+        await expect(release(own, coin)).rejects.toSatisfy((e) => codeOf(e) === 'refused');
+      }
+      expect(await release(own, 890n)).toMatchObject({
+        availableCoin: 2_000n,
+        lockedCoin: 0n,
+        ledgerCoin: 2_000n,
+      });
+      // The 운영 마켓메이커's Coin is locked in its market's funds (#73 11항).
+      expect(await lock(funds, 500n)).toMatchObject({ availableCoin: 0n, lockedCoin: 500n });
+      await expect(lock(funds, 1n)).rejects.toSatisfy((e) => codeOf(e) === 'insufficient_coin');
+      await release(funds, 500n);
+      // No event, and every account still agrees with its ledger.
+      expect(await t.db.select().from(ledgerEntries)).toEqual(entriesBefore);
+      expect(await accountsAgainstLedger()).toEqual([]);
+    });
+
+    it('bounds a lock by the ledger too on an account whose total left it, and keeps the gap', async () => {
+      // #73 10항: a lock or a release keeps available + locked, so the gap. A lock takes no more
+      // than the ledger's part not locked yet: Coin a gap added is not the ledger's to pay later.
+      const { user: up } = await createUser(t.db, { balanceCoin: 100n });
+      const { user: down } = await createUser(t.db, { balanceCoin: 100n });
+      await withLedgerGuardsOff(async (client) => {
+        await client.query(
+          'UPDATE balances SET available_coin = available_coin + 50 WHERE user_id = $1',
+          [up.id],
+        );
+        await client.query(
+          'UPDATE balances SET available_coin = available_coin - 50 WHERE user_id = $1',
+          [down.id],
+        );
+      });
+      const gap = async (userId: string) => {
+        const row = await balanceOf({ kind: 'user', userId });
+        return row.availableCoin + row.lockedCoin - row.ledgerCoin;
+      };
+      const lock = (userId: string, coin: bigint) =>
+        t.db.transaction((tx) => lockCoin(tx, { kind: 'user', userId }, coin));
+      // 150 available, a ledger of 100: at most 100.
+      await expect(lock(up.id, 101n)).rejects.toSatisfy((e) => codeOf(e) === 'insufficient_coin');
+      expect(await lock(up.id, 60n)).toMatchObject({ availableCoin: 90n, lockedCoin: 60n });
+      await expect(lock(up.id, 41n)).rejects.toSatisfy((e) => codeOf(e) === 'insufficient_coin');
+      expect(await lock(up.id, 40n)).toMatchObject({ availableCoin: 50n, lockedCoin: 100n });
+      expect(await gap(up.id)).toBe(50n);
+      // 50 available, a ledger of 100: at most 50.
+      await expect(lock(down.id, 51n)).rejects.toSatisfy((e) => codeOf(e) === 'insufficient_coin');
+      expect(await lock(down.id, 50n)).toMatchObject({ availableCoin: 0n, lockedCoin: 50n });
+      await t.db.transaction((tx) => releaseCoin(tx, { kind: 'user', userId: down.id }, 50n));
+      expect(await gap(down.id)).toBe(-50n);
+      await t.db.transaction((tx) => releaseCoin(tx, { kind: 'user', userId: up.id }, 100n));
+      expect(await gap(up.id)).toBe(50n);
+    });
+
     it('pays a fill or a pair mint out of a lock only where the type allows it', async () => {
       const market = await createMarket(t.db);
       const { user: a } = await createUser(t.db, { balanceCoin: 100n });
       // An order's lock (#118): available → locked of one account, no event — the total stays,
       // so the COMMIT check lets it through.
-      await t.db
-        .update(balances)
-        .set({
-          availableCoin: sql`${balances.availableCoin} - 60`,
-          lockedCoin: sql`${balances.lockedCoin} + 60`,
-        })
-        .where(eq(balances.userId, a.id));
+      await t.db.transaction((tx) => lockCoin(tx, { kind: 'user', userId: a.id }, 60n));
       const collateral = { kind: 'market_collateral', marketId: market.id } as const;
       const fromLock = {
         type: 'PAIR_MINT_COLLATERAL',
@@ -968,15 +1067,9 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
       await fill(own, other, 30n);
       await fill(other, own, 10n);
       // An order's lock and its release (#118): no event, neither the total nor the gap moves.
-      for (const coin of [100, -100]) {
-        await t.db
-          .update(balances)
-          .set({
-            availableCoin: sql`${balances.availableCoin} - ${coin}`,
-            lockedCoin: sql`${balances.lockedCoin} + ${coin}`,
-          })
-          .where(eq(balances.userId, a.id));
-      }
+      await t.db.transaction((tx) => lockCoin(tx, own, 100n));
+      expect(await gap()).toBe(50n);
+      await t.db.transaction((tx) => releaseCoin(tx, own, 100n));
       expect(await balanceOf(own)).toMatchObject({
         availableCoin: 331n,
         lockedCoin: 0n,
@@ -1465,6 +1558,11 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
     const { user: a } = await createUser(t.db, { balanceCoin: 1_000n });
     const { user: b } = await createUser(t.db, { balanceCoin: 1_000n });
     await check('start grants');
+    const userB = { kind: 'user', userId: b.id } as const;
+    await t.db.transaction((tx) => lockCoin(tx, userB, 400n));
+    await check('order lock (no event)');
+    await t.db.transaction((tx) => releaseCoin(tx, userB, 400n));
+    await check('order lock released');
     const marketMaker = await createMarketMakerAccount(t.db);
     await mintTestPairs(t.db, {
       marketId: market.id,
@@ -1475,6 +1573,14 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
     });
     pairs += 3n;
     await check('pair mint (a 60 × 3, the bot 40 × 3)');
+    await mintTestPairs(t.db, {
+      marketId: market.id,
+      yesHolderId: marketMaker,
+      noHolderId: b.id,
+      qty: 1,
+    });
+    pairs += 1n;
+    await check('pair mint (the bot 50 × 1, b 50 × 1)');
     await record({
       type: 'TRADE_FILL',
       amountCoin: 50n,
@@ -1483,9 +1589,12 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
       marketId: market.id,
     });
     await check('fill');
-    await record({ type: 'PAIR_BURN_RETURN', amountCoin: 100n, from: collateral, to: funds });
+    const burned = await t.db.transaction((tx) =>
+      burnMarketMakerPairs(tx, { marketId: market.id, burnId: randomUUID(), qty: 1 }),
+    );
+    expect(burned.outcome).toBe('burned');
     pairs -= 1n;
-    await check('pair burn');
+    await check('pair burn (the bot’s one YES·NO pair)');
     await record({
       type: 'SETTLEMENT_PAYOUT',
       amountCoin: 200n,
@@ -1506,7 +1615,6 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
       refType: 'audit_failure',
     });
     await check('correction');
-    const userB = { kind: 'user', userId: b.id } as const;
     await record({ type: 'DEPOSIT', amountCoin: 300n, from: null, to: userB, refType: 'payment' });
     await record({ type: 'BONUS', amountCoin: 20n, from: null, to: userB, refType: 'coupon' });
     const cancel = await record({

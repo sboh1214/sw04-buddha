@@ -8,11 +8,11 @@ import {
   quoteLadder,
   yesBidPriceCoin,
 } from './ladder.js';
-import { type ContractTerms, PROPOSED_CONTRACT_TERMS } from './terms.js';
+import { CONTRACT_TERMS, type ContractTerms } from '../contract.js';
 
 // New checks of the new rule (N01 §10): nothing from the direct-AMM era is reused.
 const RUNS = { numRuns: 500 };
-const T = PROPOSED_CONTRACT_TERMS;
+const T = CONTRACT_TERMS;
 
 const settings = (over: Partial<LadderSettings> = {}): LadderSettings => ({
   b: 10,
@@ -100,7 +100,7 @@ const curveCostOfYes = (d: number, n: number, b: number, payout: number) =>
 const curveCostOfNo = (d: number, n: number, b: number, payout: number) =>
   lmsrCost(d, 0, b, payout) - lmsrCost(d, -n, b, payout);
 
-describe('quoteLadder examples (design proposal: payout 100, tick 1, prices 1–99)', () => {
+describe('quoteLadder examples (CONTRACT_TERMS: payout 100, tick 1, prices 1–99)', () => {
   it('quotes both directions alike at the balanced opening', () => {
     // Per-contract curve costs from d = 0, b = 10: 48.75, 46.26, 43.78, … for the YES it buys.
     const ladder = quoteLadder(0, settings({ safetyTicks: 1, levels: 3 }), T);

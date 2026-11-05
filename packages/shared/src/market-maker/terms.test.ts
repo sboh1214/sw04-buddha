@@ -1,33 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { PAYOUT_PER_CONTRACT_COIN, PRICE_MAX, PRICE_MIN } from '../constants.js';
-import {
-  CONTRACT_PAYOUT_MAX_COIN,
-  type ContractTerms,
-  PROPOSED_CONTRACT_TERMS,
-  assertContractTerms,
-} from './terms.js';
-
-describe('PROPOSED_CONTRACT_TERMS', () => {
-  it("is the plan's design proposal, in step with the shared constants", () => {
-    expect(PROPOSED_CONTRACT_TERMS).toEqual({
-      payoutCoin: 100,
-      tickCoin: 1,
-      priceMinCoin: 1,
-      priceMaxCoin: 99,
-      voidPayoutYesCoin: 50,
-      voidPayoutNoCoin: 50,
-    });
-    expect(PROPOSED_CONTRACT_TERMS.payoutCoin).toBe(Number(PAYOUT_PER_CONTRACT_COIN));
-    expect([PROPOSED_CONTRACT_TERMS.priceMinCoin, PROPOSED_CONTRACT_TERMS.priceMaxCoin]).toEqual([
-      PRICE_MIN,
-      PRICE_MAX,
-    ]);
-    expect(() => assertContractTerms(PROPOSED_CONTRACT_TERMS)).not.toThrow();
-  });
-});
+import { CONTRACT_TERMS, type ContractTerms } from '../contract.js';
+import { CONTRACT_PAYOUT_MAX_COIN, assertContractTerms } from './terms.js';
 
 describe('assertContractTerms', () => {
-  const T = PROPOSED_CONTRACT_TERMS;
+  const T = CONTRACT_TERMS;
 
   it('accepts other grids that keep the rules', () => {
     const coarse: ContractTerms = {

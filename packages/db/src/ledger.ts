@@ -21,18 +21,24 @@ import { clockTimestamp } from './tx-helpers.js';
  * the settlement payout, and #118's pair mints, #119's fills, #93's corrections, #129's treasury
  * — calls `recordLedgerEntry` in its own transaction, and nothing else inserts a ledger entry or
  * changes a balance's total (ledger-writes.test.ts; the database checks it at every UPDATE and at
- * COMMIT, migration 0060). #118's order locks (available ↔ locked of one account, no event) are
- * added to this file.
+ * COMMIT, migration 0060). The order locks are here too (#118, ADR-0110): `lockCoin` and
+ * `releaseCoin` move Coin between available and locked of one account, which is no event and
+ * leaves the total and `ledger_coin` as they are (ADR-0107 결정 2 #73 1항 주문 잠금).
  *
  * Lock order, which every caller keeps so two writers never wait on each other in a circle:
  * `lockMarket` (a market's writers) → the source's own rows (the 본인확인 record and the grant, a
  * coupon, positions, an order or fill, an approval request) → the ledger accounts' balance rows
  * in ascending account id (`lockLedgerAccounts`, with EVERY account the transaction will touch
  * before its first event: a writer of several events pre-locks them all and passes `at`) → the
- * clock (`clockTimestamp`), read after the last lock. A payment is the one exception, kept from
+ * clock (`clockTimestamp`), read after the last lock. Two exceptions. A payment, kept from
  * ADR-0042: its writers (the deposit, a refund's claw-back and its restore) take the user's
  * balance row BEFORE the payment row, and so must any later writer that takes both — a payment
- * row first would wait in a circle with a refund of the same payment.
+ * row first would wait in a circle with a refund of the same payment. And a market's order
+ * processing (#118, `contracts.ts`, ADR-0110 결정 4): one that touches several accounts takes every
+ * owner's balance row first (`lockOrderHolders`), then positions — positions are only written under
+ * the market's `lockMarket`, which it holds, so locking them after the balance rows waits on
+ * nobody. An account's cancels across markets take every market's lock first (`lockMarkets`),
+ * then lock and release market by market: a later market adds no owner, only its collateral.
  */
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -56,8 +62,9 @@ export type LedgerAccountRef =
 /**
  * Why `recordLedgerEntry` (or a lock) refused, nothing written:
  * - `insufficient_coin`: the paying bucket, or the account's ledger total, holds less than the
- *   amount;
- * - `refused`: the event is not one its type allows (LEDGER_ENTRY_RULES) — a caller's bug;
+ *   amount — for `lockCoin`, available or the ledger's part not locked yet;
+ * - `refused`: the event is not one its type allows (LEDGER_ENTRY_RULES), or a lock or release of
+ *   no Coin or a release above the lock — a caller's bug;
  * - `key_conflict`: the key was recorded before with other accounts, amount or market;
  * - `account_missing`: a person's account with no user ledger account (an unknown id, the 운영
  *   마켓메이커), or a 마켓메이커 자금 before the 운영 마켓메이커 account exists.
@@ -190,8 +197,8 @@ export function ledgerEntryForAccount(
  * 중복 방지 키 (#116 수용 기준: 같은 요청 ID·주문 ID·체결 ID·정산 키를 두 번 기록해도 한 번만
  * 반영): unique per type (`ledger_entries_type_idempotency_key_unique`), so one source is one event.
  * Later writers follow the same rule — the source's own id, or its parts joined by ':' when one
- * source makes several events of a type: #118's PAIR_BURN_RETURN (a burn's id), #129's
- * BOT_ALLOCATION at an open (the review's approval request) and #181's BOT_RECALL.
+ * source makes several events of a type: #118's PAIR_BURN_RETURN (the market and a burn's id),
+ * #129's BOT_ALLOCATION at an open (the review's approval request) and #181's BOT_RECALL.
  */
 export const ledgerKeys = {
   /** START_GRANT: the grant (`start_grants.id`). */
@@ -216,6 +223,11 @@ export const ledgerKeys = {
   fill: (fillId: string) => fillId,
   /** PAIR_MINT_COLLATERAL: the fill that minted the pair, by the buyer's side (two buyers). */
   fillLeg: (fillId: string, outcome: Outcome) => `${fillId}:${outcome}`,
+  /**
+   * PAIR_BURN_RETURN: the market and the burn's id, which its caller (#129) gives — one burn of
+   * the 운영 마켓메이커's pairs in that market (`burnMarketMakerPairs`, contracts.ts).
+   */
+  pairBurn: (marketId: string, burnId: string) => `${marketId}:${burnId}`,
   /** TREASURY_MINT, BOT_ALLOCATION on 증액, RECONCILIATION_CORRECTION: the approved request. */
   approvalRequest: (approvalRequestId: string) => approvalRequestId,
 } as const;
@@ -302,16 +314,7 @@ export async function recordLedgerEntry(
   const from = input.from === null ? null : locked[0]!;
   const to = input.to === null ? null : locked[input.from === null ? 0 : 1]!;
 
-  const [earlier] = await tx
-    .select()
-    .from(ledgerEntries)
-    .where(
-      and(
-        eq(ledgerEntries.type, input.type),
-        eq(ledgerEntries.idempotencyKey, input.idempotencyKey),
-      ),
-    )
-    .limit(1);
+  const earlier = await findLedgerEntry(tx, input.type, input.idempotencyKey);
   if (earlier) {
     const same =
       earlier.fromAccountId === (from?.account.id ?? null) &&
@@ -393,4 +396,116 @@ export async function recordLedgerEntry(
     throw new Error(`${input.type} ${input.idempotencyKey} could not be recorded`);
   }
   return { outcome: 'recorded', entry, from: fromBalance ?? null, to: toBalance ?? null };
+}
+
+/**
+ * The event recorded under (`type`, `idempotencyKey`), or null: a writer's replay check, run under
+ * its locks before it judges anything else, so a replay answers as the first time did.
+ */
+export async function findLedgerEntry(
+  executor: Reader,
+  type: LedgerEntryType,
+  idempotencyKey: string,
+): Promise<LedgerEntryRow | null> {
+  const [entry] = await executor
+    .select()
+    .from(ledgerEntries)
+    .where(and(eq(ledgerEntries.type, type), eq(ledgerEntries.idempotencyKey, idempotencyKey)))
+    .limit(1);
+  return entry ?? null;
+}
+
+function assertLockAmount(action: string, amountCoin: bigint): void {
+  if (typeof amountCoin !== 'bigint' || amountCoin < 1n) {
+    throw new LedgerEntryError('refused', `${action} needs a positive amount, got ${amountCoin}`);
+  }
+}
+
+/**
+ * 주문 잠금 (#118, ADR-0110; ADR-0107 결정 2 #73 1항): moves `amountCoin` from available to locked
+ * of one ledger account — a person's own, or a market's 마켓메이커 자금 for the 운영 마켓메이커 (#73
+ * 11항) — in the caller's transaction. Any positive amount: a quantity buy's limit × qty, or a
+ * Coin-amount buy's whole budget (#177 3항). No event: the total and `ledger_coin` stay, so 0060's
+ * `balances_keep_ledger_gap` passes; the order row is the evidence (#93 sums
+ * `orderRemainingLock`). The row is locked first (`lockLedgerAccounts`, a no-op when the caller
+ * holds it), so two locks of one account from two markets wait on each other and the second sees
+ * what the first left (N01 §9; the CHECK `available_coin >= 0` backs it).
+ * `insufficient_coin`, nothing written, unless available holds the amount AND so does the
+ * ledger's part not locked yet (`ledger_coin − locked_coin`): Coin a gap added to the buckets is
+ * not the ledger's to lock, and so every later payment out of the lock can be paid. `refused` for
+ * an amount below 1. `at` as `recordLedgerEntry`'s.
+ */
+export async function lockCoin(
+  tx: Tx,
+  ref: LedgerAccountRef,
+  amountCoin: bigint,
+  options: { at?: Date } = {},
+): Promise<BalanceRow> {
+  assertLockAmount('A lock', amountCoin);
+  const [{ account, balance }] = (await lockLedgerAccounts(tx, [ref])) as [
+    { account: LedgerAccountRow; balance: BalanceRow },
+  ];
+  if (balance.availableCoin < amountCoin) {
+    throw new LedgerEntryError(
+      'insufficient_coin',
+      `ledger account ${account.id} holds ${balance.availableCoin} available Coin, short of ${amountCoin}`,
+    );
+  }
+  if (balance.ledgerCoin - balance.lockedCoin < amountCoin) {
+    throw new LedgerEntryError(
+      'insufficient_coin',
+      `ledger account ${account.id}'s ledger total has ${balance.ledgerCoin - balance.lockedCoin} Coin not locked, short of ${amountCoin}`,
+    );
+  }
+  return moveBetweenBuckets(tx, account.id, amountCoin, options.at);
+}
+
+/**
+ * 잠금 해제 (#118, ADR-0110): moves `amountCoin` from locked back to available of one ledger
+ * account — a fill's better price, a pair mint's excess limit, an IOC or budget remainder, a
+ * cancel, an expiry (#119, #178, #120, #20). Any market status, and an account whose buckets
+ * already left its ledger too: the sum available + locked stays, so the gap does (#73 10항).
+ * `refused`, nothing written, for an amount below 1 or above the lock.
+ */
+export async function releaseCoin(
+  tx: Tx,
+  ref: LedgerAccountRef,
+  amountCoin: bigint,
+  options: { at?: Date } = {},
+): Promise<BalanceRow> {
+  assertLockAmount('A release', amountCoin);
+  const [{ account, balance }] = (await lockLedgerAccounts(tx, [ref])) as [
+    { account: LedgerAccountRow; balance: BalanceRow },
+  ];
+  if (balance.lockedCoin < amountCoin) {
+    throw new LedgerEntryError(
+      'refused',
+      `ledger account ${account.id} has ${balance.lockedCoin} locked Coin, below the release of ${amountCoin}`,
+    );
+  }
+  return moveBetweenBuckets(tx, account.id, -amountCoin, options.at);
+}
+
+/**
+ * available −= `toLockedCoin`, locked += it, in one UPDATE at `at` (or the clock after the lock).
+ */
+async function moveBetweenBuckets(
+  tx: Tx,
+  accountId: number,
+  toLockedCoin: bigint,
+  at: Date | undefined,
+): Promise<BalanceRow> {
+  const instant = at ?? (await clockTimestamp(tx));
+  const [row] = await tx
+    .update(balances)
+    .set({
+      availableCoin: sql`${balances.availableCoin} - ${toLockedCoin}`,
+      lockedCoin: sql`${balances.lockedCoin} + ${toLockedCoin}`,
+      // Explicit: the column's `$onUpdate` would write this host's clock, not the database's.
+      updatedAt: instant,
+    })
+    .where(eq(balances.accountId, accountId))
+    .returning();
+  if (!row) throw new Error(`ledger account ${accountId} has no balance row`);
+  return row;
 }

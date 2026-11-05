@@ -1,6 +1,7 @@
 import { ORDER_SIDES, OUTCOMES, type OrderSide, type Outcome } from '../enums.js';
 import { type QuoteLadder, type QuoteLevel } from './ladder.js';
-import { type ContractTerms, assertContractTerms } from './terms.js';
+import type { ContractTerms } from '../contract.js';
+import { assertContractTerms } from './terms.js';
 import { assertWhole } from './validate.js';
 
 /**

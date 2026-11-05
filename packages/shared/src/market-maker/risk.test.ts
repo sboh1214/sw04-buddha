@@ -23,11 +23,11 @@ import {
   riskStage,
   worstLoss,
 } from './risk.js';
-import { type ContractTerms, PROPOSED_CONTRACT_TERMS } from './terms.js';
+import { CONTRACT_TERMS, type ContractTerms } from '../contract.js';
 
 // New checks of the new rules (N01 §10, ADR-0058): nothing from the direct-AMM era is reused.
 const RUNS = { numRuns: 400 };
-const T = PROPOSED_CONTRACT_TERMS;
+const T = CONTRACT_TERMS;
 const LIMITS: RiskLimits = {
   maxLoss: 1_000n,
   reduceAtBp: 7_000,

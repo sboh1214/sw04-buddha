@@ -1,6 +1,6 @@
 # 운영 절차
 
-배포 환경(buddha.sboh.dev)에서 운영자가 앱의 화면 없이 손으로 하는 일 — DB에서 하는 일과 고객센터 이메일로 받는 일 — 과 운영 마켓메이커 계정과 원장 계정의 확인, API 컨테이너의 메모리 확인의 절차다. 앱 안에서 처리하는 판정 이의(#175)는 화면 밖에서 알아 둘 것 — 결정할 관리자가 모자랄 때 — 만 제재 이의 처리 앞에 적는다. 판정 정정(#176)과 판정 지연 기록(#142 — 언제 기록하고 공개되는 사유에 무엇을 쓰지 않는지, 다음 검토 시각과 갱신 대기, 장기 지연 경고)도 화면에서 하는 일이고 그 앞에 운영 메모만 적는다. 운영 DB 초기화는 [RESET.md](RESET.md), 셸·시크릿·덤프 같은 인프라 일은 [terraform/README.md](../terraform/README.md)에 있다.
+배포 환경(buddha.sboh.dev)에서 운영자가 앱의 화면 없이 손으로 하는 일 — DB에서 하는 일과 고객센터 이메일로 받는 일 — 과 운영 마켓메이커 계정과 원장 계정의 확인, 계약과 담보의 확인, API 컨테이너의 메모리 확인의 절차다. 앱 안에서 처리하는 판정 이의(#175)는 화면 밖에서 알아 둘 것 — 결정할 관리자가 모자랄 때 — 만 제재 이의 처리 앞에 적는다. 판정 정정(#176)과 판정 지연 기록(#142 — 언제 기록하고 공개되는 사유에 무엇을 쓰지 않는지, 다음 검토 시각과 갱신 대기, 장기 지연 경고)도 화면에서 하는 일이고 그 앞에 운영 메모만 적는다. 운영 DB 초기화는 [RESET.md](RESET.md), 셸·시크릿·덤프 같은 인프라 일은 [terraform/README.md](../terraform/README.md)에 있다.
 
 ## 회원의 휴대전화 번호 바꾸기 (#57 3항)
 
@@ -304,6 +304,7 @@ docker compose exec -e PSQL_HISTORY=/dev/null postgres psql -U buddha_app -d bud
 - **프로필이 없다.** 닉네임·소개·이미지·공개 id가 없어 공개 프로필은 없는 계정처럼 404다. 글·댓글·좋아요·신고·시장 제안을 서버가 거절하고 DB도 그 행을 받지 않는다. 그래서 `/admin/users`와 운영자 화면에도 보이지 않는다 — 관리자 화면에 '운영 마켓메이커'라는 이름으로 보이는 것은 봇 관리 화면(M10 #182)부터다.
 - **관리자가 될 수 없다.** 관리자 권한(`profiles.role`)은 계정 유형과 따로 있고 프로필에 있다. 프로필이 없으니 `/admin/admins`의 부여는 그 계정을 찾지 못하고(없는 계정처럼 404), 시드도 그 주소를 관리자로 받지 않는다. 계정 제한·경고도 같은 까닭으로 404다(잔고 조정은 #116이 모든 계정에서 없앴다) — 봇을 멈추는 것은 계정 조치가 아니라 봇의 중단 스위치(M10 #130)다.
 - **Coin.** 시작 Coin을 받지 않고(API와 DB가 거절한다) 사용자 원장 계정도 잔고 행도 없다 — 사용자 원장 계정은 사람 계정의 것이고 DB가 이 계정의 것을 거절한다(#116, ADR-0109). 봇이 쓸 Coin은 시장마다의 '마켓메이커 자금' 원장 계정(`ledger_accounts`의 `market_maker_funds`, 주인이 이 계정)에 두고, 그 원장 계정은 봇이 그 시장에 처음 배정받을 때(M10 #129) 생긴다. 아래 [원장 계정](#원장-계정-116-adr-0109).
+- **쌍 소각.** 이 계정이 한 시장에서 잠기지 않은 YES와 NO를 함께 가지면 봇(M10 #129)이 그 수만큼 바로 소각하고, 쌍마다 100 Coin이 그 시장의 담보에서 마켓메이커 자금으로 돌아온다('쌍 소각 반환', ADR-0107 결정 2 #73 12항). 거래 중·거래 일시 중단인 시장에서 거래 마감 시각 전에만 하고, 마감 뒤와 '담보·원장 장애' 일시 중단 동안에는 하지 않는다(이미 다른 사유로 일시 중단된 시장에 기록된 원장 장애는 아직 막지 않는다 — 그 기록을 만드는 #93이 소각 거절에 더한다). 운영자가 할 일은 없다. 아래 [계약과 담보](#계약과-담보-118-adr-0110).
 - **사람 수에서 빠진다.** 참여자 수·거래량·'사용자 체결 0건'과 판정 이의의 자격은 사람 계정만 센다(ADR-0107 결정 1 #177 13항). 사람 계정인지는 한 규칙(`isHumanAccountType`, SQL `is_human_account`)으로만 가린다.
 
 **확인(읽기만).** [휴대전화 번호 바꾸기](#회원의-휴대전화-번호-바꾸기-57-3항)의 2단계(셸)와 4단계(psql)로 붙어 돌린다. 줄이 하나이고 `profiles`·`sign_ins`·`sessions`·`user_ledger_accounts`가 0이어야 한다. `funds_accounts`는 봇이 자금을 둔 시장의 수다(#129 전에는 0). 줄이 아예 없을 때만 아직 시드가 돌지 않은 DB다 — 손으로 만들지 않고 호스트 셸에서 시드를 돌린다(`sudo docker compose -f /data/buddha/compose.yaml run --rm migrate`, 초기화가 [RESET.md](RESET.md) 8단계에서 도는 것과 같은 일).
@@ -325,7 +326,7 @@ WHERE NOT is_human_account_type(u.account_type);
 
 ## 원장 계정 (#116, ADR-0109)
 
-원장은 원장 계정 사이의 이동이다(ADR-0107 결정 2 #73 1·11항). 원장 계정은 넷이다: 사람 계정마다의 사용자 계정(`user`, 가입 트리거가 잔고 0으로 연다 — 관리자·탈퇴한 계정도 사람이다), 운영 금고 하나(`treasury`), 시장마다의 담보(`market_collateral`)와 마켓메이커 자금(`market_maker_funds`, 주인은 운영 마켓메이커). 금고·담보는 주인이 없다. 사용자 계정 밖의 셋은 처음 쓰일 때 생긴다 — 담보는 그 시장의 첫 쌍 발행(#118·#119), 금고와 마켓메이커 자금은 금고 발행과 봇 배정(M10 #129)이다. 그래서 #129 전에는 금고가 없다. 운영자가 할 일은 없다 — 아래는 알아 둘 것과 읽기만 하는 확인이다.
+원장은 원장 계정 사이의 이동이다(ADR-0107 결정 2 #73 1·11항). 원장 계정은 넷이다: 사람 계정마다의 사용자 계정(`user`, 가입 트리거가 잔고 0으로 연다 — 관리자·탈퇴한 계정도 사람이다), 운영 금고 하나(`treasury`), 시장마다의 담보(`market_collateral`)와 마켓메이커 자금(`market_maker_funds`, 주인은 운영 마켓메이커). 금고·담보는 주인이 없다. 사용자 계정 밖의 셋은 처음 쓰일 때 생긴다 — 담보는 그 시장의 첫 쌍 발행(#118의 처리를 #119의 체결이 부른다), 금고와 마켓메이커 자금은 금고 발행과 봇 배정(M10 #129)이다. 그래서 #129 전에는 금고가 없다. 운영자가 할 일은 없다 — 아래는 알아 둘 것과 읽기만 하는 확인이다.
 
 - **손으로 바꾸지 않는다.** 원장 행은 어느 롤로도 고치거나 지우지 못하고(트리거 `ledger_entries_keep_record`), 원장 계정도 그렇다(`ledger_accounts_check`). 잔고 행은 원장이 말하는 그 계정의 합을 `ledger_coin`에 옮겨 적고, 원장 이벤트마다 내거나 받는 칸(가용·잠금)과 그것이 함께 움직인다. 잔고의 합(가용 + 잠금)만 바꾸는 UPDATE는 DB가 그 자리에서 거절하고(`balances_keep_ledger_gap` — 합과 `ledger_coin`의 차이는 어느 UPDATE로도 바뀌지 않는다), 이벤트 없이 둘을 함께 바꾸면 커밋 때 거절한다(`balances_follow_ledger`). `buddha_app`은 잔고 행을 넣거나 지우지 못하고 금액 열만 바꾼다.
 - **관리자의 잔고 조정은 없다**(증감 모두, ADR-0107 결정 2 #73 7항). 관리자가 회원에게 Coin을 주거나 거두는 길도, 운영 사고를 보상하는 길도 없다 — 판정 오류 보상(#144)과 재지급(#74) 전의 공백은 오너가 받아들였다(D4).
@@ -343,7 +344,7 @@ WHERE NOT is_human_account_type(u.account_type);
   COMMIT;
   ```
 
-**확인(읽기만).** 위와 같이 psql로 붙어 돌린다. 첫째는 사용자 계정 밖의 원장 계정과 그 잔고(가용·잠금과 원장 합 `ledger_coin`)다(#129와 #118 전에는 줄이 없다). 둘째는 전체의 보존이다: `carried`(원장 합의 합)가 `minted − burned`와 같아야 하고(발행은 보내는 계정이 없는 이벤트, 소각은 받는 계정이 없는 이벤트 — 소각은 탈퇴 소멸 하나다, 16항), 잔고가 원장과 어긋난 계정이 없으면 `held`도 같다. `held`와 `carried`가 다르면 그 차이가 어긋난 계정들의 차이의 합이다.
+**확인(읽기만).** 위와 같이 psql로 붙어 돌린다. 첫째는 사용자 계정 밖의 원장 계정과 그 잔고(가용·잠금과 원장 합 `ledger_coin`)다(주문 접수가 열리기 전과 #129 전에는 줄이 없다). 둘째는 전체의 보존이다: `carried`(원장 합의 합)가 `minted − burned`와 같아야 하고(발행은 보내는 계정이 없는 이벤트, 소각은 받는 계정이 없는 이벤트 — 소각은 탈퇴 소멸 하나다, 16항), 잔고가 원장과 어긋난 계정이 없으면 `held`도 같다. `held`와 `carried`가 다르면 그 차이가 어긋난 계정들의 차이의 합이다.
 
 ```sql
 SELECT l.id, l.kind, l.market_id, b.available_coin, b.locked_coin, b.ledger_coin
@@ -356,6 +357,39 @@ SELECT
   (SELECT coalesce(sum(ledger_coin), 0) FROM balances) AS carried,
   (SELECT coalesce(sum(amount_coin), 0) FROM ledger_entries WHERE from_account_id IS NULL) AS minted,
   (SELECT coalesce(sum(amount_coin), 0) FROM ledger_entries WHERE to_account_id IS NULL) AS burned;
+```
+
+## 계약과 담보 (#118, ADR-0110)
+
+계약은 완전 담보다(ADR-0107 결정 1 #177 1항). YES·NO 한 쌍의 담보는 계약당 정상 지급과 같은 100 Coin이고, 시장마다 정산되지 않은 YES의 수와 NO의 수가 같으며, 그 시장의 담보는 정산되지 않은 쌍 × 100 Coin이다. 계약 값(정수 1계약, 지급 100 Coin, 틱 1 Coin, 가격 1–99 Coin, 무효면 계약마다 50 Coin)은 모든 시장에 같은 코드 고정값이라 운영자가 넣거나 바꾸는 값이 아니다([SETTINGS.md](SETTINGS.md) '출시 설정이 아닌 것'). 주문 접수(`order.accepting`)가 열리기 전에는 운영에 계약도 주문 잠금도 없다 — #119가 그 설정을 닫힌 채로 등록하고, 오너가 #126·#93이 운영에 배포된 뒤 관리자 화면에서 연다(ADR-0107 결정 3). 운영자가 할 일은 없다 — 아래는 알아 둘 것과 읽기만 하는 확인이다.
+
+- **계약이 생기고 없어지는 길.** 계약은 반대 결과의 두 매수가 맞물린 체결(쌍 발행, D17)로만 생긴다: YES 매수자의 잠금에서 YES 가격 × 수량이, NO 매수자의 잠금에서 (100 − YES 가격) × 수량이 그 시장의 담보로 간다('쌍 발행 담보' 두 줄). 같은 계약의 체결은 주인만 바꾸고(매수자의 잠금에서 매도자에게 '체결 대금', 담보는 그대로), 계약은 운영 마켓메이커의 쌍 소각과 정산으로만 없어진다. 한쪽 결과만 만들거나 없애는 길은 없다. 회원에게는 쌍 발행·상환(소각)의 화면도 API도 없어(#177 6항) YES와 NO를 함께 가진 회원은 정산까지 보유한다 — 한 쌍은 어느 결과에서나 100 Coin이다.
+- **주문 잠금.** 매수는 한도가격 × 수량의 Coin을(금액으로 낸 즉시 매수는 예산 전체를, #177 3항), 매도는 그 수량의 계약을 잠근다. Coin 잠금은 같은 원장 계정의 가용 → 잠금(`balances.locked_coin`)이고, 계약 잠금은 보유 행의 `positions.locked_qty`(보유 수량을 넘지 못한다)다. 둘 다 원장 이벤트가 아니고 주문 행이 근거다(#73 1항). 운영 마켓메이커의 Coin 잠금은 그 시장의 마켓메이커 자금에서 한다. 더 나은 가격의 차액, 남은 예산, 취소·만료는 잠금을 그 계정의 가용으로 푼다. 한 계정의 여러 시장 잠금이 가용을 넘지 못한다. '잠금 = 살아 있는 주문의 남은 잠금 합'의 대사는 #93이다.
+- **봇의 쌍 소각.** 위 [운영 마켓메이커 계정](#운영-마켓메이커-계정-115-adr-0108)의 '쌍 소각'. 잠긴(대기 매도에 걸린) 계약은 소각하지 않고, 회원의 보유도 소각하지 않는다. 체결이 아니라서 시장가격·거래량·차트에 들지 않는다.
+- **손으로 바꾸지 않는다.** 보유(`positions`)의 수량과 잠금, 담보의 잔고를 손으로 고치지 않는다. 아래 확인에서 어긋난 줄이 보이면 오너에게 알린다 — 대사와 대사 정정은 #93이다. 정산은 잠금이 남은 보유 행을 닫지 못해(`positions_locked_qty_check`) 그 시장이 정산 중(SETTLING)에 머물고 매 분 다시 시도한다 — 대기 매도가 남은 채 정산에 이른 경우이고, 마감의 만료(#120)나 취소(#178)가 잠금을 풀면 다음 시도가 끝낸다.
+
+**확인(읽기만).** [원장 계정](#원장-계정-116-adr-0109)과 같이 psql로 붙어 돌린다. 보유나 담보 원장 계정이 있는 시장마다 한 줄이다(주문 접수가 열리기 전에는 줄이 없다). `yes`·`no`는 정산되지 않은 보유의 합, `locked_yes`·`locked_no`는 그 가운데 대기 매도가 잠근 것, `collateral`은 그 시장 담보의 원장 합(`ledger_coin`)이다. 줄마다 `balanced`가 참이어야 한다(`yes` = `no`이고 `collateral` = `yes` × 100). 정산을 마친 시장은 모두 0이다. 거짓인 줄은 차례의 맨 앞에 온다.
+
+```sql
+SELECT m.id, m.status,
+  coalesce(p.yes, 0) AS yes, coalesce(p.no, 0) AS no,
+  coalesce(p.locked_yes, 0) AS locked_yes, coalesce(p.locked_no, 0) AS locked_no,
+  coalesce(b.ledger_coin, 0) AS collateral,
+  coalesce(p.yes, 0) = coalesce(p.no, 0)
+    AND coalesce(b.ledger_coin, 0) = coalesce(p.yes, 0) * 100 AS balanced
+FROM markets m
+LEFT JOIN (
+  SELECT market_id,
+    sum(qty) FILTER (WHERE outcome = 'YES') AS yes,
+    sum(qty) FILTER (WHERE outcome = 'NO') AS no,
+    sum(locked_qty) FILTER (WHERE outcome = 'YES') AS locked_yes,
+    sum(locked_qty) FILTER (WHERE outcome = 'NO') AS locked_no
+  FROM positions WHERE NOT settled GROUP BY market_id
+) p ON p.market_id = m.id
+LEFT JOIN ledger_accounts l ON l.market_id = m.id AND l.kind = 'market_collateral'
+LEFT JOIN balances b ON b.account_id = l.id
+WHERE p.market_id IS NOT NULL OR l.id IS NOT NULL
+ORDER BY balanced, m.id;
 ```
 
 ## API 컨테이너의 메모리 확인 (#46, ADR-0073 9-46)

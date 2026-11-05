@@ -26,7 +26,7 @@ import {
  *   CANCELLED status.
  *
  * VOID's 50/50 payout is no item: one rule for every market (#173 item 9, ADR-0093 result 1), shown
- * from `PROPOSED_CONTRACT_TERMS`. The title and #22's time items (`TIME_ITEMS`, market-times.ts)
+ * from `CONTRACT_TERMS`. The title and #22's time items (`TIME_ITEMS`, market-times.ts)
  * join these items in #80's versions (#172 item 7, `RULE_VERSION_ITEMS`) but are not rule items;
  * of the times, the announcement and the judgement time zone join them in the `rules_edited` event
  * too (`RULES_EDITED_ITEMS`, market-edits.ts).
