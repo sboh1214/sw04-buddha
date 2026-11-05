@@ -99,7 +99,12 @@ interface CoinStep {
  * from the market's collateral to the holder's ledger account (#116, ADR-0109: a person's own, or
  * the market's 마켓메이커 자금 for the 운영 마켓메이커's rows — `holderLedgerAccount`), written by
  * `recordLedgerEntry` with its balance changes. The interim payout until #126 reworks it (VOID's
- * 50/50, the settlement records); with no pair minted before #118 it pays nothing in production.
+ * 50/50, the settlement records); with no pair minted before order intake opens it pays nothing in
+ * production (#119 registers `order.accepting` closed, and the owner opens it once #126 and #93 are
+ * deployed, ADR-0107 결정 3). A row a live sell order still locks (`locked_qty`, #118) is not closed
+ * out: the qty-0 UPDATE fails `positions_locked_qty_check`, the step fails whole, and the market
+ * stays SETTLING until #120 or #178 releases the lock (ADR-0107 결정 4 #178 row). #126 replaces this
+ * with its own check.
  *
  *  - positions FOR UPDATE in (user_id, outcome) order, then every ledger account the step pays
  *    from or into locked at once, ascending (`lockLedgerAccounts`, the write API's lock order),

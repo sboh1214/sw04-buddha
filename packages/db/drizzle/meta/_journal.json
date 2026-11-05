@@ -428,6 +428,13 @@
       "when": 1793792678945,
       "tag": "0060_ledger_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1793831795198,
+      "tag": "0061_position_locks",
+      "breakpoints": true
     }
   ]
 }

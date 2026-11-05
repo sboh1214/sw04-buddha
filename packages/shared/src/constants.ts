@@ -3,11 +3,20 @@
  * DTOs use the same values.
  */
 
-/** Displayed YES price in Coin per contract: integer 1..99 (PLAN 5.3 displayPrice). */
+/**
+ * A contract's price in Coin: integer 1..99 (PLAN 5.3 displayPrice; approved, ADR-0107 결정 1 #177
+ * 1항 — `CONTRACT_TERMS`, contract.ts).
+ */
 export const PRICE_MIN = 1;
 export const PRICE_MAX = 99;
 
-/** A winning contract pays out this many Coin (PLAN 5.4: payout = qty * 100). */
+/** The price step in Coin (approved, ADR-0107 결정 1 #177 1항 — `CONTRACT_TERMS`, contract.ts). */
+export const TICK_COIN = 1;
+
+/**
+ * A winning contract pays out this many Coin (PLAN 5.4: payout = qty * 100), which is also the
+ * collateral of one YES·NO pair (approved, ADR-0107 결정 1 #177 1항 — `CONTRACT_TERMS`, contract.ts).
+ */
 export const PAYOUT_PER_CONTRACT_COIN = 100n;
 
 /** Basis points: probability 0..1 is stored as 0..10000 (price_ticks.p_yes_bp). */

@@ -102,7 +102,7 @@ sudo bash /data/buddha/reset-db.sh --yes
 2. (선택) 이미지 버킷과 Redis까지 비우려면 배포 직후, 관리자 온보딩과 출시 설정보다 먼저 `deploy/reset-db.sh`를 돌린다(위). 이 스크립트는 Postgres도 다시 비우고 시드하므로, 3·4단계 뒤에 돌리면 관리자 온보딩·출시 설정 값과 그 기록·그동안 다시 가입한 테스터가 다시 사라져 3·4단계를 또 해야 한다.
 3. 시드 관리자 둘이 다시 로그인해 온보딩(약관 동의·본인확인·닉네임)을 마친다. 시장을 열려면 관리자 둘이 필요하므로 호스트 `.env`에 `SEED_SECOND_ADMIN_*`가 있는지 확인한다.
 4. `/admin/settings`에서 출시 설정을 사유와 함께 다시 넣는다(초기화가 값과 기록을 지웠다): `grant.start_coin`(시작 지급액 — 값을 넣기 전에 온보딩을 마친 계정의 지급은 기다렸다가 워커가 준다), `market.lead_close_gap`(제안 60분), `market.dispute_window`(1,440분), `retention.consent_records`, `retention.phone_verification_records`, `retention.deleted_posts`, `retention.moderation_records`, `retention.removed_profile_items`, `retention.market_proposals`. #116은 새 출시 설정을 등록하지 않는다. 그 뒤에 배포된 M9 항목이 있으면 그것도 넣는다.
-5. (선택) [OPERATIONS.md의 원장 계정](OPERATIONS.md#원장-계정-116-adr-0109) 확인 SQL로 원장을 본다: 사용자 계정 밖의 원장 계정이 없고(#129·#118 전), `held` = `minted` − `burned`이며 `burned` = 0, `minted`는 온보딩을 마친 계정의 '시작 지급' 합이다 — 3·4단계 뒤에는 관리자 둘의 시작 지급(시작 지급액 × 2)이 들어 있어 0이 아니다. 0은 아직 아무도 온보딩을 마치지 않았을 때뿐이다. 운영 마켓메이커 계정이 하나인지는 [OPERATIONS.md의 운영 마켓메이커 계정](OPERATIONS.md#운영-마켓메이커-계정-115-adr-0108) 확인 SQL로 본다(줄 하나).
+5. (선택) [OPERATIONS.md의 원장 계정](OPERATIONS.md#원장-계정-116-adr-0109) 확인 SQL로 원장을 본다: 사용자 계정 밖의 원장 계정이 없고(주문 접수가 열리기 전과 #129 전), `held` = `minted` − `burned`이며 `burned` = 0, `minted`는 온보딩을 마친 계정의 '시작 지급' 합이다 — 3·4단계 뒤에는 관리자 둘의 시작 지급(시작 지급액 × 2)이 들어 있어 0이 아니다. 0은 아직 아무도 온보딩을 마치지 않았을 때뿐이다. 운영 마켓메이커 계정이 하나인지는 [OPERATIONS.md의 운영 마켓메이커 계정](OPERATIONS.md#운영-마켓메이커-계정-115-adr-0108) 확인 SQL로 본다(줄 하나).
 
 **확인.** [운영 호스트에서](#운영-호스트에서)의 '확인'과 같다. 테스터 계정은 가입하면 잔고 0, 원장 0줄이고, 시작 지급액을 넣은 뒤 온보딩을 마치면 원장에 '시작 지급' 한 줄이 생긴다. `/admin/users`에는 잔고 조정 양식이 없다.
 

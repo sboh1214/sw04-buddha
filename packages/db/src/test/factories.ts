@@ -614,6 +614,8 @@ export interface CreatePositionInput {
   realizedPnlCoin?: bigint;
   /** Default false. */
   settled?: boolean;
+  /** Contracts live sell orders hold (#118), 0..qty. Default 0. */
+  lockedQty?: number;
 }
 
 /**
@@ -633,6 +635,7 @@ export async function createPosition(db: Db, input: CreatePositionInput) {
       costBasisCoin: input.costBasisCoin ?? 0n,
       realizedPnlCoin: input.realizedPnlCoin ?? 0n,
       settled: input.settled ?? false,
+      lockedQty: input.lockedQty ?? 0,
     })
     .returning();
   return row!;

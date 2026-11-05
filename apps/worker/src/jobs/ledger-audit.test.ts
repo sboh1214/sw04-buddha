@@ -6,7 +6,15 @@
  * mismatch here is made the one way a test may break the books on purpose: `withLedgerGuardsOff`
  * (the migrate role, the guards switched off inside one transaction).
  */
-import { findLedgerAccount, schema, type LedgerAccountRef } from '@buddha/db';
+import {
+  applyTradeFill,
+  burnMarketMakerPairs,
+  findLedgerAccount,
+  lockForOrder,
+  lockOrderHolders,
+  schema,
+  type LedgerAccountRef,
+} from '@buddha/db';
 import {
   closeAccount,
   connectTestDb,
@@ -431,7 +439,7 @@ describe.skipIf(!hasTestDb())('ledger.audit (integration)', () => {
     expect(result).toMatchObject({ checked: 1, recorded: 0 });
   });
 
-  it('finds a clean mixed ledger clean: grants, a treasury, pairs in the collateral (#116)', async () => {
+  it('finds a clean mixed ledger clean: grants, a treasury, pairs, a fill, a burn, live locks (#116, #118)', async () => {
     const market = await createMarket(t.db, { status: 'open' });
     const maker = await fundMarketMakerFunds(t.db, market.id, 5_000n);
     const alice = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
@@ -452,10 +460,43 @@ describe.skipIf(!hasTestDb())('ledger.audit (integration)', () => {
       qty: 1,
       yesPriceCoin: 70,
     });
-    expect(
-      (await ledgerAccountBalance(t.db, { kind: 'market_collateral', marketId: market.id }))
-        ?.availableCoin,
-    ).toBe(600n); // six pairs × 100
+    const collateral: LedgerAccountRef = { kind: 'market_collateral', marketId: market.id };
+    expect((await ledgerAccountBalance(t.db, collateral))?.availableCoin).toBe(600n); // 6 pairs
+
+    // #118's other moves: alice sells bob a YES at 60 from her sell lock, bob's buy limit 65
+    // giving 5 back (TRADE_FILL); the 운영 마켓메이커 burns its one pair back into its 마켓메이커
+    // 자금 (PAIR_BURN_RETURN); and alice keeps a buy lock of 300 and a sell lock of one YES — no
+    // event, so the audit counts both buckets and finds nothing.
+    await t.db.transaction(async (tx) => {
+      // Every account the processing touches first, ascending (ADR-0110 결정 4).
+      await lockOrderHolders(tx, market.id, [alice, bob, maker]);
+      const lock = { marketId: market.id, ownerId: alice };
+      await lockForOrder(tx, { ...lock, lock: { kind: 'contracts', outcome: 'YES', qty: 2 } });
+      await lockForOrder(tx, { ...lock, ownerId: bob, lock: { kind: 'coin', amountCoin: 65n } });
+      await applyTradeFill(tx, {
+        marketId: market.id,
+        fillId: 'audit-fill',
+        outcome: 'YES',
+        qty: 1,
+        priceCoin: 60,
+        buyer: { ownerId: bob, limitPriceCoin: 65 },
+        sellerId: alice,
+      });
+      await lockForOrder(tx, { ...lock, lock: { kind: 'coin', amountCoin: 300n } });
+      const burned = await burnMarketMakerPairs(tx, {
+        marketId: market.id,
+        burnId: 'audit-burn',
+        qty: 1,
+      });
+      expect(burned.outcome).toBe('burned');
+    });
+    expect((await ledgerAccountBalance(t.db, collateral))?.availableCoin).toBe(500n);
+    expect(await ledgerAccountBalance(t.db, { kind: 'user', userId: alice })).toMatchObject({
+      lockedCoin: 300n,
+    });
+    expect(await ledgerAccountBalance(t.db, { kind: 'user', userId: bob })).toMatchObject({
+      lockedCoin: 0n,
+    });
 
     const result = await runLedgerAudit(t.db);
     // alice, bob, the market's creator, the treasury, the collateral, the 마켓메이커 자금.

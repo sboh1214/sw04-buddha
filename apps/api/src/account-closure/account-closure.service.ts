@@ -13,6 +13,7 @@ import {
   ACCOUNT_CLOSURE_DECISION_REASON,
   ACCOUNT_RESTRICTION_APPROVAL_KINDS,
   AUTH_USER_NAME,
+  LIVE_ORDER_STATUSES,
   PENDING_PROPOSAL_STATUSES,
   closedAccountEmail,
   serializeCoinAmount,
@@ -44,9 +45,6 @@ export function closureNotAllowed(reason: AccountClosureRefusal): AppError {
   };
   return new AppError('CLOSURE_NOT_ALLOWED', { message: messages[reason], details: { reason } });
 }
-
-/** The order statuses of an order still waiting (#178 cancels them before a closure). */
-const WAITING_ORDER_STATUSES = ['open', 'partially_filled'] as const;
 
 /** The payment statuses a closure waits for (ADR-0069 decision 7: «진행 중인 결제·환불»). */
 const PAYMENT_IN_PROGRESS_STATUSES = ['pending', 'refunding'] as const;
@@ -248,19 +246,27 @@ export class AccountClosureService {
       .from(schema.startGrants)
       .where(eq(schema.startGrants.userId, userId))
       .for('update');
+    // #178's hook: N02 §9 cancels the waiting orders first («대기 주문을 취소하고 … 계정 폐쇄»). Its
+    // cancellation goes HERE, before the balance row below (ADR-0110 결정 4, 결과 5 #178): the
+    // account's markets with `lockMarkets`, then each market's `lockOrderHolders` and
+    // `releaseForOrder` — from the second market on that call re-locks this person's row and adds
+    // only the market's collateral, held under `lockMarkets`, so it never waits (the exception in
+    // ADR-0110 결정 4: this one person, no new owner). Holding the row first, it would wait on a
+    // market whose processing holds `lockMarket` and waits on this row (40P01). The balance is
+    // then read after the cancels, and `pending_orders` leaves the refusals.
     // The account's user ledger account (`lockLedgerAccounts`, migration 0060).
     const [held] = await lockLedgerAccounts(tx, [{ kind: 'user', userId }]);
     const balance = held!.balance;
 
     if (profile.role === 'admin') throw closureNotAllowed('admin');
     await assertNotRestricted(tx, userId);
-    // #178's hook: N02 §9 cancels the waiting orders first («대기 주문을 취소하고 … 계정 폐쇄») — its
-    // cancellation, under the order's own locks, goes here and `pending_orders` leaves the refusals.
-    // Until the cancellation exists a waiting order refuses the closure instead.
+    // Until #178's cancellation exists (above the balance row) a waiting order refuses the closure.
     const [refusal] = await this.refusalsOf(tx, userId, profile.role);
     if (refusal !== undefined) throw closureNotAllowed(refusal);
-    // Reserved Coin exists only for a waiting order, refused above: nothing a closure may forfeit
-    // or leave behind (#178 cancels the orders and frees it first).
+    // Reserved Coin exists only for a waiting order (`LIVE_ORDER_STATUSES`, the one rule of which
+    // orders hold a lock — #118), refused above: nothing a closure may forfeit or leave behind
+    // (#178 cancels the orders and frees it first). A sell's locked contracts are a holding, so
+    // `unsettled_contracts` refused them already.
     if (balance.lockedCoin !== 0n) {
       throw new AppError('INTERNAL', { message: 'Reserved Coin with no order waiting' });
     }
@@ -322,7 +328,7 @@ export class AccountClosureService {
       executor
         .select({ one: sql`1` })
         .from(orders)
-        .where(and(eq(orders.userId, userId), inArray(orders.status, [...WAITING_ORDER_STATUSES])))
+        .where(and(eq(orders.userId, userId), inArray(orders.status, [...LIVE_ORDER_STATUSES])))
         .limit(1),
     );
     const refusals: AccountClosureRefusal[] = [];

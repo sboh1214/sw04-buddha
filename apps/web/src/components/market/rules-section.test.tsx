@@ -1,9 +1,4 @@
-import {
-  MARKET_STATUSES,
-  PROPOSED_CONTRACT_TERMS,
-  formatCoin,
-  longDelayDeadline,
-} from '@buddha/shared';
+import { MARKET_STATUSES, CONTRACT_TERMS, formatCoin, longDelayDeadline } from '@buddha/shared';
 import { type ReactNode } from 'react';
 import { describe, expect, it } from 'vitest';
 import { KstTimeZone, TimeZoneScope } from '@/components/time-zone/time-zone-provider';
@@ -348,7 +343,7 @@ describe('RulesSection', () => {
   it("states VOID's 50/50 from the contract terms, as a rule and never as a refund", () => {
     const text = value(draw(FULL), 'void-payout') ?? '';
     expect(text).toBe(
-      `무효로 판정되면 YES 계약은 계약마다 ${formatCoin(PROPOSED_CONTRACT_TERMS.voidPayoutYesCoin)}, NO 계약은 계약마다 ${formatCoin(PROPOSED_CONTRACT_TERMS.voidPayoutNoCoin)}을 지급합니다. 모든 시장에 같은 규칙입니다.`,
+      `무효로 판정되면 YES 계약은 계약마다 ${formatCoin(CONTRACT_TERMS.voidPayoutYesCoin)}, NO 계약은 계약마다 ${formatCoin(CONTRACT_TERMS.voidPayoutNoCoin)}을 지급합니다. 모든 시장에 같은 규칙입니다.`,
     );
     expect(text).toContain('50 Coin');
     for (const word of ['환불', '원금', '돌려']) expect(text).not.toContain(word);

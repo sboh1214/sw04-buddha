@@ -1,4 +1,4 @@
-import { sql } from 'drizzle-orm';
+import { sql, type SQL } from 'drizzle-orm';
 
 /** Anything that can run a statement inside the current transaction (a drizzle `tx` or `Db`). */
 export interface StatementExecutor {
@@ -12,6 +12,12 @@ export interface StatementExecutor {
  * why they live here rather than beside the API's transaction code. Neither throws a framework
  * error: the API wraps `clockTimestamp` to answer INTERNAL, the worker fails the job.
  */
+
+/**
+ * The advisory key of a market's lock: a 32-bit hash of its canonical id, so two markets can
+ * share one (`lockMarkets` orders by it).
+ */
+const marketLockKey = (marketId: SQL) => sql`hashtext((${marketId})::uuid::text)`;
 
 /**
  * Serialises every writer of one market (PLAN 0.2): open, close, judge, resolve and finalize all
@@ -31,7 +37,39 @@ export interface StatementExecutor {
  * loudly (22P02) instead of locking a phantom key.
  */
 export async function lockMarket(tx: StatementExecutor, marketId: string): Promise<void> {
-  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext((${marketId})::uuid::text))`);
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(${marketLockKey(sql`${marketId}`)})`);
+}
+
+/**
+ * `lockMarket` for every market one processing touches (an account's cancels across markets,
+ * #178/#143; ADR-0110 결정 4), taken in ascending order of the lock KEY — never of the id. The
+ * key is a 32-bit hash, so two markets can share one, and ids in order are not keys in order:
+ * with hashtext(A) = hashtext(C), "A then B" and "B then C" take the same two keys in opposite
+ * orders and wait in a circle (40P01). One statement works out the distinct keys in order (a
+ * key two markets share once), and each is taken in turn. Call it before any balance row, on the
+ * transaction handle; a market locked again later (`lockMarket` inside a contracts.ts call) is a
+ * no-op.
+ */
+export async function lockMarkets(
+  tx: StatementExecutor,
+  marketIds: readonly string[],
+): Promise<void> {
+  if (marketIds.length === 0) return;
+  const listed = sql.join(
+    marketIds.map((id) => sql`(${id})`),
+    sql`, `,
+  );
+  const result = await tx.execute(sql`
+    SELECT k.key::text AS key
+    FROM (
+      SELECT DISTINCT ${marketLockKey(sql.raw('m.id'))} AS key FROM (VALUES ${listed}) AS m(id)
+    ) AS k
+    ORDER BY k.key`);
+  const rows = (result as { rows?: { key?: unknown }[] }).rows ?? [];
+  // The int4 key, as `lockMarket` takes it (widened to the bigint form the same way).
+  for (const { key } of rows) {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(${String(key)}::int)`);
+  }
 }
 
 /**

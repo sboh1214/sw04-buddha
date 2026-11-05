@@ -22,7 +22,10 @@ import { markets } from './markets.js';
 
 /**
  * CLOB-ready order log (PLAN 6.2, 16). Nothing writes it until the CLOB does (#119, which also
- * reshapes it); the direct AMM trade that wrote filled market orders is gone (#125).
+ * reshapes it); the direct AMM trade that wrote filled market orders is gone (#125). The lock an
+ * order holds is `orderRemainingLock` (@buddha/shared contract.ts) over these columns, with no
+ * stored copy (#118, ADR-0110): the balance's `locked_coin` and the position's `locked_qty` sum
+ * the live orders' locks.
  */
 export const orders = pgTable(
   'orders',

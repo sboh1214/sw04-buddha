@@ -2153,7 +2153,7 @@ export const copy = {
   rulesLongDelayTail: '일 뒤',
   rulesDelayHandling: '지연·취소·무효 처리',
   // 무효 지급은 모든 시장에 같은 한 줄이다(#173 9항, ADR-0093 결과 1): 'YES 계약은 계약마다 50 Coin, NO
-  // 계약은 계약마다 50 Coin을 지급합니다.' 두 금액은 PROPOSED_CONTRACT_TERMS의 voidPayoutYesCoin·
+  // 계약은 계약마다 50 Coin을 지급합니다.' 두 금액은 CONTRACT_TERMS의 voidPayoutYesCoin·
   // voidPayoutNoCoin을 formatCoin한 값이고, 조각 사이에 들어간다(금액은 늘 'Coin'으로 끝나 '을'이 맞다).
   // 원금 환불을 약속하지 않는다(N03 §6). 지급 자체는 #126의 것이다.
   rulesVoidPayout: '무효 지급',

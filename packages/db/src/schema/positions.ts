@@ -18,6 +18,9 @@ import { markets } from './markets.js';
 /**
  * Per (user, market, outcome) holdings with cost-basis accounting (PLAN 5.4). Settlement
  * sets qty = 0, cost_basis_coin = 0, settled = true; finalize skips settled rows (idempotent).
+ * `qty` changes only by a pair-mint fill, a trade fill, the 운영 마켓메이커's pair burn (@buddha/db
+ * contracts.ts) and settlement (`market-finalize`), all under `lockMarket`
+ * (contract-writes.test.ts; #118, ADR-0110).
  */
 export const positions = pgTable(
   'positions',
@@ -30,6 +33,12 @@ export const positions = pgTable(
       .references(() => markets.id, { onDelete: 'restrict' }),
     outcome: outcomeEnum().notNull(),
     qty: integer().notNull().default(0),
+    /**
+     * Contracts of this row that live sell orders hold (#118, ADR-0110), never more than `qty`:
+     * only `qty − locked_qty` can be locked again, burned or sold. A trade fill takes `qty` and
+     * `locked_qty` down together, and settlement needs it 0 (the CHECK fails its qty-0 UPDATE).
+     */
+    lockedQty: integer().notNull().default(0),
     costBasisCoin: bigint({ mode: 'bigint' })
       .notNull()
       .default(sql`0`),
@@ -53,6 +62,7 @@ export const positions = pgTable(
     primaryKey({ columns: [t.userId, t.marketId, t.outcome] }),
     index('positions_market_id_settled_idx').on(t.marketId, t.settled),
     check('positions_qty_check', sql`${t.qty} >= 0`),
+    check('positions_locked_qty_check', sql`${t.lockedQty} >= 0 AND ${t.lockedQty} <= ${t.qty}`),
     check('positions_cost_basis_coin_check', sql`${t.costBasisCoin} >= 0`),
   ],
 );

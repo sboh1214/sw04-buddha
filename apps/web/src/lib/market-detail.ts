@@ -3,7 +3,7 @@ import {
   type MarketResult,
   type MarketStatus,
   type Outcome,
-  PROPOSED_CONTRACT_TERMS,
+  CONTRACT_TERMS,
   formatCoin,
 } from '@buddha/shared';
 import { copy } from '@/copy';
@@ -531,11 +531,12 @@ export function showsScheduledOpen(status: MarketStatus): boolean {
 /**
  * The fixed 무효 지급 line under 지연·취소·무효 처리 (#23 AC 6, #173 item 9): what one YES and one NO
  * contract each pay on VOID. One rule for every market, so no market enters it (ADR-0093 result 1);
- * the amounts are `PROPOSED_CONTRACT_TERMS`', the terms the market maker prices with, so the rule a
- * reader is shown and the bot's prices cannot disagree. It is a rule, never a refund (N03 §6).
+ * the amounts are the approved contract values' (`CONTRACT_TERMS`, ADR-0107 결정 1 #177 1항), the
+ * terms the market maker prices with, so the rule a reader is shown and the bot's prices cannot
+ * disagree. It is a rule, never a refund (N03 §6).
  */
 export function voidPayoutText(
-  terms: Pick<ContractTerms, 'voidPayoutYesCoin' | 'voidPayoutNoCoin'> = PROPOSED_CONTRACT_TERMS,
+  terms: Pick<ContractTerms, 'voidPayoutYesCoin' | 'voidPayoutNoCoin'> = CONTRACT_TERMS,
 ): string {
   return (
     `${copy.rulesVoidPayoutYes} ${formatCoin(terms.voidPayoutYesCoin)}, ` +

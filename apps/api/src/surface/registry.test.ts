@@ -357,6 +357,24 @@ describe('public and owner-only routes (static)', () => {
     ).toEqual([]);
   });
 
+  it('names no pair mint, redeem or burn in a public or owner-only route path (#177 6항)', () => {
+    // ADR-0107 결정 1 #177 6항: a person has no screen or API that makes or undoes a YES·NO pair —
+    // pairs come only from two opposite buys matching (#118's asset functions, #119's intake), and
+    // the only burn is the 운영 마켓메이커's own (#129 calls it in the worker). Admin routes are
+    // left out: #129's treasury mint is an admin act on Coin, not on pairs. The kept coupon path
+    // (D9, ADR-0049) redeems a coupon, not a pair, and is closed while paid Coin is.
+    const pairWords = /pair|mint|redeem|burn/i;
+    const coupon = 'POST /coupons/redeem';
+    expect(registered(byClass('owner').find((route) => route.key === coupon)!)).toMatchObject({
+      preservedPaid: true,
+    });
+    expect(
+      [...byClass('public'), ...byClass('owner')]
+        .filter((route) => pairWords.test(route.path) && route.key !== coupon)
+        .map((route) => route.key),
+    ).toEqual([]);
+  });
+
   it('holds an owner-only or admin path to transfers, rewards and cash-out only', () => {
     expect(excludedInAnyPath('/me/coins/send')).toEqual(['coin-transfer']);
     expect(excludedInAnyPath('/admin/rewards')).toEqual(['activity-reward']);
