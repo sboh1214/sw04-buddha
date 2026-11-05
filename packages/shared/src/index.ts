@@ -46,6 +46,7 @@ export * from './market-times.js';
 export * from './market-maker/ladder.js';
 export * from './market-maker/risk.js';
 export * from './market-maker/terms.js';
+export * from './matching.js';
 export * from './media.js';
 export * from './me.js';
 export * from './moderation.js';
