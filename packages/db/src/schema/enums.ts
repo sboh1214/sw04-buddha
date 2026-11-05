@@ -6,15 +6,16 @@
 import {
   ACCOUNT_TYPES,
   APPROVAL_STATUSES,
-  COUNTERPARTY_TYPES,
+  FILL_KINDS,
   LEDGER_ACCOUNT_KINDS,
   LEDGER_ENTRY_TYPES,
   MARKET_RESULTS,
   MARKET_STATUSES,
   MARKET_VISIBILITIES,
+  ORDER_CANCEL_REASONS,
+  ORDER_REJECT_REASONS,
   ORDER_SIDES,
   ORDER_STATUSES,
-  ORDER_TYPES,
   OUTCOMES,
   PAYMENT_STATUSES,
   PRICE_TICK_TRIGGERS,
@@ -42,10 +43,14 @@ export const outcomeEnum = pgEnum('outcome', OUTCOMES);
 /** A market's result type, apart from the contract side `outcome` (#174, migration 0048). */
 export const marketResultEnum = pgEnum('market_result', MARKET_RESULTS);
 export const orderSideEnum = pgEnum('order_side', ORDER_SIDES);
-export const orderTypeEnum = pgEnum('order_type', ORDER_TYPES);
+/** An order's six states (#119, ADR-0107 결정 1 #177 7항), rebuilt by migration 0062. */
 export const orderStatusEnum = pgEnum('order_status', ORDER_STATUSES);
+/** Why an order ended 거절, and why 취소 완료 (#119, ADR-0107 결정 1 #177 8항; migration 0062). */
+export const orderRejectReasonEnum = pgEnum('order_reject_reason', ORDER_REJECT_REASONS);
+export const orderCancelReasonEnum = pgEnum('order_cancel_reason', ORDER_CANCEL_REASONS);
 export const timeInForceEnum = pgEnum('time_in_force', TIME_IN_FORCES);
-export const counterpartyTypeEnum = pgEnum('counterparty_type', COUNTERPARTY_TYPES);
+/** A fill's kind, a trade or a pair mint (#119, ADR-0107 결정 1 #177 11항; migration 0062). */
+export const fillKindEnum = pgEnum('fill_kind', FILL_KINDS);
 export const priceTickTriggerEnum = pgEnum('price_tick_trigger', PRICE_TICK_TRIGGERS);
 export const releaseSettingStatusEnum = pgEnum('release_setting_status', RELEASE_SETTING_STATUSES);
 export const approvalStatusEnum = pgEnum('approval_status', APPROVAL_STATUSES);

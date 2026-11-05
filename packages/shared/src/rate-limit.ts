@@ -1,6 +1,7 @@
 /**
  * PLAN 7.5's table, in one place (M6). Its `/trades` row went with the direct AMM trade (#125);
- * the CLOB brings its own order limit (#119).
+ * the order limit is no bucket here but the release setting `order.rate_limit` (#119, ADR-0112:
+ * per account per minute over every market), read per request.
  *
  * A limit is part of the contract, so it lives in `shared` beside the error codes rather than
  * in the API's environment: PLAN 7.5 states the numbers and `docs/API.md` renders this table

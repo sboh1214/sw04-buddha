@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
-  isLiveOrderStatus,
   MARKET_STATUSES,
   orderIntakeLock,
   orderRemainingLock,
@@ -43,6 +42,7 @@ import {
 } from './schema/index.js';
 import { contractBook, positionOf } from './test/contracts.js';
 import { createMarket, createMarketPause, createPosition, createUser } from './test/factories.js';
+import { createFillRecord, createOrder } from './test/orders.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
 import {
   balanceOf,
@@ -53,6 +53,7 @@ import {
   spendCoin,
   withLedgerGuardsOff,
 } from './test/ledger.js';
+import { orderLockFactsOf } from './orders.js';
 import { lockMarket, lockMarkets } from './tx-helpers.js';
 import { waitForLockWaiter } from './test/wait.js';
 
@@ -106,10 +107,52 @@ describe.skipIf(!hasTestDb())('contracts (#118, docker test profile)', () => {
     t.db.transaction((tx) => lockForOrder(tx, { marketId, ownerId, lock: what }));
   const release = (marketId: string, ownerId: string, what: OrderLock) =>
     t.db.transaction((tx) => releaseForOrder(tx, { marketId, ownerId, lock: what }));
-  const mint = (input: Omit<PairMintFillInput, 'fillId'> & { fillId?: string }) =>
-    t.db.transaction((tx) => applyPairMintFill(tx, { fillId: randomUUID(), ...input }));
-  const fill = (input: Omit<TradeFillInput, 'fillId'> & { fillId?: string }) =>
-    t.db.transaction((tx) => applyTradeFill(tx, { fillId: randomUUID(), ...input }));
+  /**
+   * The fill record (#119, `createFillRecord`) a test's fill events refer to — migration 0062
+   * binds every TRADE_FILL and PAIR_MINT_COLLATERAL to its fill — as its id. A refusal no record
+   * can stand for (one owner on both sides, an unknown owner, a malformed price or quantity) gets
+   * an id that names none: contracts.ts refuses it before any event.
+   */
+  const recordId = async (record: () => Promise<{ fill: { id: number } }>) => {
+    try {
+      return String((await record()).fill.id);
+    } catch {
+      return randomUUID();
+    }
+  };
+  type MintTerms = Pick<PairMintFillInput, 'marketId' | 'qty' | 'yesPriceCoin' | 'yes' | 'no'>;
+  type TradeTerms = Pick<TradeFillInput, 'marketId' | 'outcome' | 'qty' | 'priceCoin' | 'buyer'> &
+    Pick<TradeFillInput, 'sellerId'>;
+  const mintRecordId = (input: MintTerms) =>
+    recordId(() =>
+      createFillRecord(t.db, {
+        marketId: input.marketId,
+        incomingOwnerId: input.yes.ownerId,
+        restingOwnerId: input.no.ownerId,
+        priceCoin: input.yesPriceCoin,
+        qty: input.qty,
+      }),
+    );
+  const tradeRecordId = (input: TradeTerms) =>
+    recordId(() =>
+      createFillRecord(t.db, {
+        marketId: input.marketId,
+        incomingOwnerId: input.buyer.ownerId,
+        restingOwnerId: input.sellerId,
+        outcome: input.outcome,
+        kind: 'trade',
+        priceCoin: input.priceCoin,
+        qty: input.qty,
+      }),
+    );
+  const mint = async (input: Omit<PairMintFillInput, 'fillId'> & { fillId?: string }) => {
+    const fillId = input.fillId ?? (await mintRecordId(input));
+    return t.db.transaction((tx) => applyPairMintFill(tx, { ...input, fillId }));
+  };
+  const fill = async (input: Omit<TradeFillInput, 'fillId'> & { fillId?: string }) => {
+    const fillId = input.fillId ?? (await tradeRecordId(input));
+    return t.db.transaction((tx) => applyTradeFill(tx, { ...input, fillId }));
+  };
   const burn = (marketId: string, qty: number, burnId: string = randomUUID()) =>
     t.db.transaction((tx) => burnMarketMakerPairs(tx, { marketId, burnId, qty }));
 
@@ -428,6 +471,23 @@ describe.skipIf(!hasTestDb())('contracts (#118, docker test profile)', () => {
         await lock(b, u, coin(40n));
         let go!: () => void;
         const opened = new Promise<void>((resolve) => (go = resolve));
+        // The fill records first: the two processings meet on the balance rows, not on them.
+        const recorded = new Map<string, string>();
+        for (const [marketId, incoming, waiting] of [
+          [a, u, v],
+          [b, v, u],
+        ] as const) {
+          recorded.set(
+            marketId,
+            await mintRecordId({
+              marketId,
+              qty: 1,
+              yesPriceCoin: 60,
+              yes: { ownerId: incoming, limitPriceCoin: 60 },
+              no: { ownerId: waiting, limitPriceCoin: 40 },
+            }),
+          );
+        }
         const processing = (
           marketId: string,
           incoming: string,
@@ -446,7 +506,7 @@ describe.skipIf(!hasTestDb())('contracts (#118, docker test profile)', () => {
             await (order === 'holders_first' ? intake() : holders());
             await applyPairMintFill(tx, {
               marketId,
-              fillId: randomUUID(),
+              fillId: recorded.get(marketId)!,
               qty: 1,
               yesPriceCoin: 60,
               yes: { ownerId: incoming, limitPriceCoin: 60 },
@@ -576,15 +636,15 @@ describe.skipIf(!hasTestDb())('contracts (#118, docker test profile)', () => {
       await lock(market.id, noBuyer, orderIntakeLock(buy('NO', 40)));
       await lock(market.id, yesBuyer, orderIntakeLock(buy('YES', 65)));
       const supply = await ledgerSupply(t.db);
-      const fillId = randomUUID();
-      const minted = await mint({
+      const terms = {
         marketId: market.id,
-        fillId,
         qty: 1,
         yesPriceCoin: 60,
         yes: { ownerId: yesBuyer, limitPriceCoin: 65 },
         no: { ownerId: noBuyer, limitPriceCoin: 40 },
-      });
+      };
+      const fillId = await mintRecordId(terms);
+      const minted = await mint({ ...terms, fillId });
       expect(minted.outcome).toBe('minted');
       if (minted.outcome !== 'minted') return;
       expect(minted.entries.YES).toMatchObject({
@@ -624,7 +684,8 @@ describe.skipIf(!hasTestDb())('contracts (#118, docker test profile)', () => {
       const kinds = await t.db.select({ kind: ledgerAccounts.kind }).from(ledgerAccounts);
       expect(new Set(kinds.map((row) => row.kind))).toEqual(new Set(['market_collateral', 'user']));
       expect(await ledgerSupply(t.db)).toEqual(supply);
-      expect(await t.db.select().from(fills)).toEqual([]);
+      // contracts.ts writes no fill: the one row is the test's record (#119 writes it).
+      expect((await t.db.select().from(fills)).map((row) => String(row.id))).toEqual([fillId]);
       expect(await t.db.select().from(priceTicks)).toEqual([]);
       expect(
         await t.db
@@ -664,11 +725,26 @@ describe.skipIf(!hasTestDb())('contracts (#118, docker test profile)', () => {
       await lock(marketId, seller, contracts('YES', 3));
       await lock(marketId, buyer, coin(1_234n));
       await lock(marketId, other, coin(90n));
+      const tradeId = await tradeRecordId({
+        marketId,
+        outcome: 'YES',
+        qty: 3,
+        priceCoin: 60,
+        buyer: { ownerId: buyer, limitPriceCoin: null },
+        sellerId: seller,
+      });
+      const mintId = await mintRecordId({
+        marketId,
+        qty: 2,
+        yesPriceCoin: 55,
+        yes: { ownerId: buyer, limitPriceCoin: null },
+        no: { ownerId: other, limitPriceCoin: 45 },
+      });
       await t.db.transaction(async (tx) => {
         await lockOrderHolders(tx, marketId, [buyer, seller, other]);
         await applyTradeFill(tx, {
           marketId,
-          fillId: randomUUID(),
+          fillId: tradeId,
           outcome: 'YES',
           qty: 3,
           priceCoin: 60,
@@ -677,7 +753,7 @@ describe.skipIf(!hasTestDb())('contracts (#118, docker test profile)', () => {
         });
         await applyPairMintFill(tx, {
           marketId,
-          fillId: randomUUID(),
+          fillId: mintId,
           qty: 2,
           yesPriceCoin: 55,
           yes: { ownerId: buyer, limitPriceCoin: null },
@@ -750,14 +826,14 @@ describe.skipIf(!hasTestDb())('contracts (#118, docker test profile)', () => {
       const b = await member(1_000n);
       await lock(market.id, a, coin(500n));
       await lock(market.id, b, coin(500n));
-      const input = {
+      const terms = {
         marketId: market.id,
-        fillId: randomUUID(),
         qty: 2,
         yesPriceCoin: 30,
         yes: { ownerId: a, limitPriceCoin: 30 },
         no: { ownerId: b, limitPriceCoin: 70 },
       };
+      const input = { ...terms, fillId: await mintRecordId(terms) };
       const [one, two] = await Promise.all([mint(input), mint(input)]);
       expect([one.outcome, two.outcome].sort()).toEqual(['duplicate', 'minted']);
       // Then the rest of both locks goes back (#119 releases an order's unspent lock in the same
@@ -804,16 +880,16 @@ describe.skipIf(!hasTestDb())('contracts (#118, docker test profile)', () => {
       });
       await lock(market.id, seller, contracts('YES', 3));
       await lock(market.id, buyer, coin(210n));
-      const fillId = randomUUID();
-      const filled = await fill({
+      const terms = {
         marketId: market.id,
-        fillId,
-        outcome: 'YES',
+        outcome: 'YES' as const,
         qty: 3,
         priceCoin: 60,
         buyer: { ownerId: buyer, limitPriceCoin: 70 },
         sellerId: seller,
-      });
+      };
+      const fillId = await tradeRecordId(terms);
+      const filled = await fill({ ...terms, fillId });
       expect(filled.outcome === 'filled' && filled.entry).toMatchObject({
         type: 'TRADE_FILL',
         amountCoin: 180n,
@@ -890,15 +966,15 @@ describe.skipIf(!hasTestDb())('contracts (#118, docker test profile)', () => {
       });
       await lock(market.id, seller, contracts('YES', 2));
       await lock(market.id, buyer, coin(120n));
-      const input = {
+      const terms = {
         marketId: market.id,
-        fillId: randomUUID(),
         outcome: 'YES' as const,
         qty: 2,
         priceCoin: 60,
         buyer: { ownerId: buyer, limitPriceCoin: 60 },
         sellerId: seller,
       };
+      const input = { ...terms, fillId: await tradeRecordId(terms) };
       const [one, two] = await Promise.all([fill(input), fill(input)]);
       expect([one.outcome, two.outcome].sort()).toEqual(['duplicate', 'filled']);
       expect(await positionOf(t.db, buyer, market.id, 'YES')).toMatchObject({ qty: 2 });
@@ -1051,6 +1127,7 @@ describe.skipIf(!hasTestDb())('contracts (#118, docker test profile)', () => {
       const { marketId, a, b } = await burnable();
       const supply = await ledgerSupply(t.db);
       const fundsBefore = (await ledgerAccountBalance(t.db, funds(marketId)))!.availableCoin;
+      const fillsBefore = await t.db.select().from(fills);
       const burnId = randomUUID();
       const burned = await burn(marketId, 2, burnId);
       expect(burned.outcome).toBe('burned');
@@ -1081,8 +1158,9 @@ describe.skipIf(!hasTestDb())('contracts (#118, docker test profile)', () => {
       // The people's holdings, a person's YES and NO among them, are not touched.
       expect(await positionOf(t.db, a, marketId, 'NO')).toMatchObject({ qty: 3 });
       expect(await positionOf(t.db, b, marketId, 'YES')).toMatchObject({ qty: 3 });
-      // Not a fill (N01 §6).
-      expect(await t.db.select().from(fills)).toEqual([]);
+      // Not a fill (N01 §6): the burn writes none (the two rows are the mints' records).
+      expect(await t.db.select().from(fills)).toEqual(fillsBefore);
+      expect(fillsBefore).toHaveLength(2);
       expect(await t.db.select().from(priceTicks)).toEqual([]);
       expect(
         await t.db
@@ -1280,52 +1358,31 @@ describe.skipIf(!hasTestDb())('contracts (#118, docker test profile)', () => {
   });
 
   it('leaves no lock on an ended order: locked = Σ live orders’ remaining locks (R12, AC 7)', async () => {
-    // Order rows as #119 will write them, their locks taken and given back through contracts.ts.
+    // Order rows as #119 writes them (`createOrder`), their locks taken and given back through
+    // contracts.ts.
     const market = await createMarket(t.db);
     const buyer = await member(1_000n);
     const seller = await member(1_000n);
     const x = await member(1_000n);
     await mintTestPairs(t.db, { marketId: market.id, yesHolderId: seller, noHolderId: x, qty: 3 });
-    const [buy, sell] = await t.db
-      .insert(orders)
-      .values([
-        {
-          userId: buyer,
-          marketId: market.id,
-          outcome: 'YES',
-          side: 'buy',
-          type: 'limit',
-          limitPrice: 60,
-          qty: 5,
-          status: 'open',
-          timeInForce: 'gtc',
-          idempotencyKey: randomUUID(),
-        },
-        {
-          userId: seller,
-          marketId: market.id,
-          outcome: 'YES',
-          side: 'sell',
-          type: 'limit',
-          limitPrice: 55,
-          qty: 3,
-          status: 'open',
-          timeInForce: 'gtc',
-          idempotencyKey: randomUUID(),
-        },
-      ])
-      .returning();
-    const factsOf = (row: typeof orders.$inferSelect): OrderLockFacts => ({
-      side: row.side,
-      outcome: row.outcome,
-      limitPriceCoin: row.limitPrice,
-      qty: row.qty,
-      filledQty: row.filledQty,
-      budgetCoin: null,
-      live: isLiveOrderStatus(row.status),
+    const buy = await createOrder(t.db, {
+      marketId: market.id,
+      userId: buyer,
+      side: 'buy',
+      limitPriceCoin: 60,
+      qty: 5,
     });
-    await lock(market.id, buyer, orderIntakeLock(factsOf(buy!)));
-    await lock(market.id, seller, orderIntakeLock(factsOf(sell!)));
+    const sell = await createOrder(t.db, {
+      marketId: market.id,
+      userId: seller,
+      side: 'sell',
+      limitPriceCoin: 55,
+      qty: 3,
+    });
+    // The exported rule the cancel (#178), the expiry (#120) and the reconciliation (#93) use.
+    const factsOf = orderLockFactsOf;
+    await lock(market.id, buyer, orderIntakeLock(factsOf(buy)));
+    await lock(market.id, seller, orderIntakeLock(factsOf(sell)));
     // 2 fill at the resting sell's 55: the buyer gets (60 − 55) × 2 back.
     await fill({
       marketId: market.id,
@@ -1335,10 +1392,10 @@ describe.skipIf(!hasTestDb())('contracts (#118, docker test profile)', () => {
       buyer: { ownerId: buyer, limitPriceCoin: 60 },
       sellerId: seller,
     });
-    for (const row of [buy!, sell!]) {
+    for (const row of [buy, sell]) {
       await t.db
         .update(orders)
-        .set({ filledQty: 2, status: 'partially_filled' })
+        .set({ filledQty: 2, filledAmountCoin: 110n, status: 'partially_filled' })
         .where(eq(orders.id, row.id));
     }
     const expectLocksFollowOrders = async () => {
@@ -1357,12 +1414,15 @@ describe.skipIf(!hasTestDb())('contracts (#118, docker test profile)', () => {
     expect(await expectLocksFollowOrders()).toEqual({ coinLocked: 180n, contractsLocked: 1 });
     // Cancel both: the remaining lock goes back, and the ended orders hold nothing.
     for (const [row, ownerId] of [
-      [buy!, buyer],
-      [sell!, seller],
+      [buy, buyer],
+      [sell, seller],
     ] as const) {
       const [current] = await t.db.select().from(orders).where(eq(orders.id, row.id));
       await release(market.id, ownerId, orderRemainingLock(factsOf(current!)));
-      await t.db.update(orders).set({ status: 'cancelled' }).where(eq(orders.id, row.id));
+      await t.db
+        .update(orders)
+        .set({ status: 'cancelled', cancelReason: 'by_owner', endedAt: new Date() })
+        .where(eq(orders.id, row.id));
     }
     expect(await expectLocksFollowOrders()).toEqual({ coinLocked: 0n, contractsLocked: 0 });
     expect(await balanceOf(t.db, buyer)).toMatchObject({ availableCoin: 890n, lockedCoin: 0n });

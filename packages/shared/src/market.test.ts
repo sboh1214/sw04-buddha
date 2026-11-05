@@ -28,7 +28,11 @@ import {
   marketSchema,
   marketSlugSchema,
   marketSummarySchema,
+  myFillSchema,
+  myFillsQuerySchema,
+  myOrdersQuerySchema,
   orderSchema,
+  placeOrderResultSchema,
   positionSchema,
   positionsQuerySchema,
   priceSeriesSchema,
@@ -114,18 +118,26 @@ const event = {
 };
 const order = {
   id: marketId,
+  requestId: 'req-0001',
   marketId,
   marketSlug: summary.slug,
   marketTitle: summary.title,
   outcome: 'YES',
   side: 'buy',
-  type: 'market',
+  timeInForce: 'ioc',
+  limitPriceCoin: 55,
+  protectedLimitPriceCoin: 55,
   qty: 10,
+  budgetCoin: null,
   filledQty: 10,
+  filledAmountCoin: '520',
+  cancelledQty: 0,
+  unspentCoin: null,
   status: 'filled',
-  amountCoin: '520',
-  priceAvgBp: 5200,
+  rejectReason: null,
+  cancelReason: null,
   createdAt: at,
+  endedAt: at,
 };
 const fill = {
   id: '7',
@@ -225,6 +237,7 @@ describe('read DTOs', () => {
       events: [event],
       missingOpenItems: [],
       leadCloseGapMinutes: 60,
+      priceProtectionTicks: 5,
       review: {
         pending: null,
         createdBy: { id: 'admin-1', nickname: '운영자1' },
@@ -396,6 +409,19 @@ describe('read DTOs', () => {
       ).toBe(false);
     }
     expect(marketSchema.parse(admin)).not.toHaveProperty('leadCloseGapMinutes');
+    // The 가격 보호 폭 (#119): 1..98 ticks, or null while the default is undecided; admin only.
+    for (const priceProtectionTicks of [1, 98, null]) {
+      expect(adminMarketSchema.parse({ ...admin, priceProtectionTicks }).priceProtectionTicks).toBe(
+        priceProtectionTicks,
+      );
+    }
+    for (const priceProtectionTicks of [0, 99, 1.5, '5', undefined]) {
+      expect(
+        adminMarketSchema.safeParse({ ...admin, priceProtectionTicks }).success,
+        String(priceProtectionTicks),
+      ).toBe(false);
+    }
+    expect(marketSchema.parse(admin)).not.toHaveProperty('priceProtectionTicks');
     expect(adminMarketSchema.safeParse(market).success).toBe(false);
     // No LMSR state on the admin shape either (#125).
     expect(
@@ -654,6 +680,7 @@ describe('read DTOs', () => {
       events: [],
       missingOpenItems: [],
       leadCloseGapMinutes: null,
+      priceProtectionTicks: null,
       review: {
         pending: null,
         createdBy: { id: 'admin-1', nickname: '운영자1' },
@@ -729,6 +756,93 @@ describe('read DTOs', () => {
 });
 
 // ---- list queries --------------------------------------------------------------------
+describe('own order and fill DTOs (#119)', () => {
+  it('parse an order with its terms, its fills and its state, and none of the server internals', () => {
+    expect(placeOrderResultSchema.parse({ order, replayed: false })).toEqual({
+      order,
+      replayed: false,
+    });
+    const rejected = {
+      ...order,
+      qty: null,
+      budgetCoin: '30',
+      filledQty: 0,
+      filledAmountCoin: '0',
+      unspentCoin: '30',
+      status: 'rejected',
+      rejectReason: 'budget_too_small',
+    };
+    expect(orderSchema.parse(rejected)).toEqual(rejected);
+    const live = { ...order, timeInForce: 'gtc', status: 'open', filledQty: 0, endedAt: null };
+    expect(orderSchema.parse(live).endedAt).toBeNull();
+    expect(orderSchema.safeParse({ ...order, status: 'expired' }).success).toBe(true);
+    expect(orderSchema.safeParse({ ...order, rejectReason: 'too_late' }).success).toBe(false);
+    expect(orderSchema.safeParse({ ...order, cancelReason: 'by_owner' }).success).toBe(true);
+    // A market sent back to a draft (#78 되돌리기): its order names none of it.
+    const hidden = { ...rejected, marketSlug: null, marketTitle: null };
+    expect(orderSchema.parse(hidden)).toEqual(hidden);
+    // No reference quote, width, counterparty or account type leaves the server (N04 §5·§7).
+    const parsed = orderSchema.parse({
+      ...order,
+      referencePriceCoin: 50,
+      protectionTicks: 5,
+      userId: 'a',
+      accountType: 'member',
+      type: 'market',
+    });
+    for (const internal of [
+      'referencePriceCoin',
+      'protectionTicks',
+      'userId',
+      'accountType',
+      'type',
+    ]) {
+      expect(parsed, internal).not.toHaveProperty(internal);
+    }
+  });
+
+  it('parse an own fill as its side holds it, the counterparty and the kind left out', () => {
+    const own = {
+      id: '7',
+      orderId: marketId,
+      marketId,
+      marketSlug: summary.slug,
+      marketTitle: summary.title,
+      outcome: 'NO',
+      side: 'buy',
+      qty: 10,
+      priceCoin: 40,
+      amountCoin: '400',
+      yesPriceCoin: 60,
+      feeCoin: '0',
+      createdAt: at,
+    };
+    expect(myFillSchema.parse(own)).toEqual(own);
+    const parsed = myFillSchema.parse({
+      ...own,
+      kind: 'pair_mint',
+      restingOrderId: marketId,
+      restingOwnerId: 'mm',
+      restingAccountType: 'market_maker',
+    });
+    for (const hidden of ['kind', 'restingOrderId', 'restingOwnerId', 'restingAccountType']) {
+      expect(parsed, hidden).not.toHaveProperty(hidden);
+    }
+  });
+
+  it('filter the own lists by market and, for orders, live or ended', () => {
+    expect(myOrdersQuerySchema.parse({})).toEqual({ limit: 20 });
+    expect(myOrdersQuerySchema.parse({ marketId, state: 'live', limit: '5' })).toEqual({
+      marketId,
+      state: 'live',
+      limit: 5,
+    });
+    expect(myOrdersQuerySchema.safeParse({ state: 'open' }).success).toBe(false);
+    expect(myOrdersQuerySchema.safeParse({ marketId: 'x' }).success).toBe(false);
+    expect(myFillsQuerySchema.parse({ marketId })).toEqual({ marketId, limit: 20 });
+  });
+});
+
 describe('marketListQuerySchema', () => {
   it('defaults to open markets by 추천 and coerces the page size', () => {
     expect(marketListQuerySchema.parse({})).toEqual({

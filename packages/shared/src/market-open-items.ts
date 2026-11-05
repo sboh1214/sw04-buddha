@@ -46,6 +46,11 @@ export type TimeRelationItem = (typeof TIME_RELATION_ITEMS)[number];
  *   (ADR-0093 decision 2 #172 item 1). `markets.category_id` is never null, so a market always has
  *   one; the check fails one whose category was hidden, or got sub-categories, after it was picked.
  * - `tags`: MARKET_TAGS_MIN..MARKET_TAGS_MAX of them (#172 item 2); entry already refuses more.
+ * - `priceProtection` 가격 보호 폭 (#119, ADR-0112; ADR-0107 결정 1 #177 2항): the market's width in
+ *   ticks — its own (`markets.price_protection_ticks`, copied at creation), else what the
+ *   submission would copy, the release setting `order.price_protection_ticks`. Missing while both
+ *   are null, so a market cannot be submitted for review while the default is undecided (as
+ *   `leadClose`, ADR-0098 7-5). Not a form field: it comes last.
  *
  * The order is the form's, which is the order a refusal names them in; each relation item comes
  * after the time items it relates.
@@ -57,6 +62,7 @@ export const OPEN_ITEMS = [
   ...TIME_RELATION_ITEMS,
   'category',
   'tags',
+  'priceProtection',
 ] as const;
 export type OpenItem = (typeof OPEN_ITEMS)[number];
 export const openItemSchema = z.enum(OPEN_ITEMS).meta({ id: 'OpenItem' });
@@ -75,6 +81,12 @@ export type OpenItemsInput = MarketRuleItems &
      * while the setting is undecided and the market has none (`AdminMarket.leadCloseGapMinutes`).
      */
     leadCloseGapMinutes: number | null;
+    /**
+     * The 가격 보호 폭 in ticks the market would trade with: its own, else the release setting's
+     * reading; null while the setting is undecided and the market has none
+     * (`AdminMarket.priceProtectionTicks`).
+     */
+    priceProtectionTicks: number | null;
   };
 
 /** The items `input` misses, in OPEN_ITEMS order; empty when the market may leave the draft. */
@@ -89,6 +101,7 @@ export function missingOpenItems(input: OpenItemsInput): OpenItem[] {
   }
   if (!input.categorySelectable) missing.push('category');
   if (input.tagCount < MARKET_TAGS_MIN || input.tagCount > MARKET_TAGS_MAX) missing.push('tags');
+  if (input.priceProtectionTicks === null) missing.push('priceProtection');
   return missing;
 }
 

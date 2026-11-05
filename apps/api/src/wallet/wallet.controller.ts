@@ -12,8 +12,6 @@ import {
 import { ApiCookieAuth, ApiHeader, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import {
   IDEMPOTENCY_KEY_HEADER,
-  IDEMPOTENCY_KEY_MAX_LENGTH,
-  IDEMPOTENCY_KEY_MIN_LENGTH,
   chargeBodySchema,
   chargePackageSchema,
   chargeResultSchema,
@@ -37,7 +35,10 @@ import { type SessionUser } from '../auth/auth.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import { assertExpectedAccount } from '../auth/expected-account.js';
 import { SessionGuard } from '../auth/session.guard.js';
-import { IdempotencyKey } from '../common/decorators/idempotency-key.decorator.js';
+import {
+  IDEMPOTENCY_KEY_SCHEMA,
+  IdempotencyKey,
+} from '../common/decorators/idempotency-key.decorator.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
 import { CURSOR_QUERY_PARAMS } from '../common/openapi/cursor-query.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
@@ -95,14 +96,6 @@ export class PaymentProviderController {
     return { provider: this.config.provider };
   }
 }
-
-/** The `Idempotency-Key` header of the charge (PLAN 5.4). */
-const IDEMPOTENCY_KEY_SCHEMA = {
-  type: 'string',
-  minLength: IDEMPOTENCY_KEY_MIN_LENGTH,
-  maxLength: IDEMPOTENCY_KEY_MAX_LENGTH,
-  pattern: '^[A-Za-z0-9_-]+$',
-} as const;
 
 /**
  * `POST /api/v1/payments/charge` (PLAN 7.2, M2). PaidCoinSalesGuard first: while paid Coin is

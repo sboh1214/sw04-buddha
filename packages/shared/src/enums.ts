@@ -382,37 +382,98 @@ export const MARKET_EVENT_TYPES = [
    * (no edit, no withdrawal).
    */
   'judgement_delay_recorded',
+  /**
+   * No status change (`from_status`/`to_status` null): an OPEN or PAUSED market's 가격 보호 폭
+   * changed after the open by one admin with a reason (#119, ADR-0112; ADR-0107 결정 1 #177 2항,
+   * ADR-0093 #172 14항). Payload `{before, after, reason}`, the widths in ticks (`before` null for
+   * a market opened with none). Applies to the orders taken after it; resting orders keep theirs.
+   */
+  'price_protection_changed',
 ] as const;
 export type MarketEventType = (typeof MARKET_EVENT_TYPES)[number];
 export const marketEventTypeSchema = z.enum(MARKET_EVENT_TYPES);
 
-// ---- orders / fills (PLAN 6.2, CLOB-ready) ------------------------------------------
+// ---- orders / fills (PLAN 6.2; #119, ADR-0112) ---------------------------------------
 export const ORDER_SIDES = ['buy', 'sell'] as const;
 export type OrderSide = (typeof ORDER_SIDES)[number];
 export const orderSideSchema = z.enum(ORDER_SIDES);
 
-export const ORDER_TYPES = ['market', 'limit'] as const;
-export type OrderType = (typeof ORDER_TYPES)[number];
-export const orderTypeSchema = z.enum(ORDER_TYPES);
-
+/**
+ * An order's six states (ADR-0107 결정 1 #177 7항): 대기 (`open`) and 부분 체결 (`partially_filled`)
+ * rest in the book and hold their lock (`LIVE_ORDER_STATUSES`, contract.ts); 전량 체결 (`filled`),
+ * 취소 완료 (`cancelled`), 만료 (`expired`, a GTC order at the close, #120) and 거절 (`rejected`, ended
+ * with no fill, its reason in `ORDER_REJECT_REASONS`) have ended. An IOC order that filled nothing
+ * is 거절; one that filled some is 취소 완료 with its remainder (`ioc_remainder`).
+ */
 export const ORDER_STATUSES = [
   'open',
   'partially_filled',
   'filled',
   'cancelled',
+  'expired',
   'rejected',
 ] as const;
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
 export const orderStatusSchema = z.enum(ORDER_STATUSES);
 
+/**
+ * Why the server ended an order with no fill, 거절 (ADR-0107 결정 1 #177 8항, ADR-0111 결정 6), in
+ * the ADR's order: 잔액 부족 (`insufficient_coin`, the lock it needs is above the available Coin),
+ * 보유량 부족 (`insufficient_contracts`, a sell above the unlocked holding), 개장 전
+ * (`not_open_yet`, SCHEDULED), 마감 (`closed`, CLOSED and every later status), 일시 중단
+ * (`paused`), 호가 부족 (`no_quote`, nothing opposite to meet, the bot not quoting included), 가격
+ * 한도 (`price_limit`, the best opposite entry is beyond the limit), 금액 부족 (`budget_too_small`,
+ * a budget order that cannot buy one contract) and 자기 체결 (`self_trade`, the first entry is the
+ * owner's own group's). Each is kept on the order's row with its request id (no retention).
+ * Refusals that write no row — a malformed request, the rate limit, onboarding, a restriction, an
+ * admin's order, closed intake — are errors, not reasons. #143 appends one (its own migration).
+ */
+export const ORDER_REJECT_REASONS = [
+  'insufficient_coin',
+  'insufficient_contracts',
+  'not_open_yet',
+  'closed',
+  'paused',
+  'no_quote',
+  'price_limit',
+  'budget_too_small',
+  'self_trade',
+] as const;
+export type OrderRejectReason = (typeof ORDER_REJECT_REASONS)[number];
+export const orderRejectReasonSchema = z.enum(ORDER_REJECT_REASONS);
+
+/**
+ * Why an order ended 취소 완료 (ADR-0107 결정 1 #177 8항), in the ADR's order: 본인 취소
+ * (`by_owner`, #178), 즉시 거래 잔량 (`ioc_remainder`, an IOC order's unfilled rest), 자기 체결
+ * (`self_trade`, the walk stopped at the owner's own group after a fill, a GTC order too), 일시
+ * 중단 (`paused`, #178 at a pause), 관리자 권한 (`admin_role`, #143), 계정 제한 (`restricted`,
+ * #178·#139) and 탈퇴 (`account_closed`, shown only on records and operations screens). The intake
+ * (#119) writes only `ioc_remainder` and `self_trade`.
+ */
+export const ORDER_CANCEL_REASONS = [
+  'by_owner',
+  'ioc_remainder',
+  'self_trade',
+  'paused',
+  'admin_role',
+  'restricted',
+  'account_closed',
+] as const;
+export type OrderCancelReason = (typeof ORDER_CANCEL_REASONS)[number];
+export const orderCancelReasonSchema = z.enum(ORDER_CANCEL_REASONS);
+
 export const TIME_IN_FORCES = ['ioc', 'gtc'] as const;
 export type TimeInForce = (typeof TIME_IN_FORCES)[number];
 export const timeInForceSchema = z.enum(TIME_IN_FORCES);
 
-/** fills.counterparty_type: the resting order a fill matched (#119 shapes the CLOB fills). */
-export const COUNTERPARTY_TYPES = ['order'] as const;
-export type CounterpartyType = (typeof COUNTERPARTY_TYPES)[number];
-export const counterpartyTypeSchema = z.enum(COUNTERPARTY_TYPES);
+/**
+ * What a fill is (`fills.kind`, ADR-0107 결정 1 #177 11항): `trade` moved existing contracts from a
+ * seller to a buyer of one outcome; `pair_mint` turned a buy of each outcome into a new pair — one
+ * fill with one YES price. The matcher's `MATCH_FILL_KINDS` (matching.ts) are the same two.
+ */
+export const FILL_KINDS = ['trade', 'pair_mint'] as const;
+export type FillKind = (typeof FILL_KINDS)[number];
+export const fillKindSchema = z.enum(FILL_KINDS);
 
 // ---- price ticks --------------------------------------------------------------------
 /**
@@ -846,6 +907,11 @@ export const ADMIN_ACTION_TYPES = [
    * `{before, after}`. Written only when the memo changed.
    */
   'proposal_memo',
+  /**
+   * An OPEN or PAUSED market's 가격 보호 폭 changed (#119, ADR-0112): target `market` / its id,
+   * payload `{before, after, reason}` — as its `price_protection_changed` event.
+   */
+  'market_price_protection_change',
 ] as const;
 export type AdminActionType = (typeof ADMIN_ACTION_TYPES)[number];
 export const adminActionTypeSchema = z.enum(ADMIN_ACTION_TYPES);

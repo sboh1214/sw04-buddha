@@ -1,0 +1,447 @@
+/**
+ * Order and fill test helpers (#119, ADR-0112). `createOrder` and `createFillRecord` write
+ * `orders` and `fills` rows as the intake leaves them — every CHECK and trigger of migration 0062
+ * holds — under the market lock, and move no asset: no balance, lock, position or ledger entry
+ * changes there. A test that needs the assets too records them against the fill (`mintTestPairs`,
+ * `spendCoin` in ledger.ts), or goes through the intake itself (`placeTestOrder`), and reads the
+ * books back with `checkOrderInvariants`.
+ */
+import { randomUUID } from 'node:crypto';
+import {
+  CONTRACT_TERMS,
+  ORDER_ACCEPTING_SETTING,
+  ORDER_QTY_MAX,
+  ORDER_RATE_LIMIT_SETTING,
+  PAYOUT_PER_CONTRACT_COIN,
+  PRICE_PROTECTION_TICKS_SETTING,
+  isLiveOrderStatus,
+  type FillKind,
+  type OrderCancelReason,
+  type OrderRejectReason,
+  type OrderSide,
+  type OrderStatus,
+  type Outcome,
+  type TimeInForce,
+} from '@buddha/shared';
+import { eq, sql } from 'drizzle-orm';
+import type { Db } from '../client.js';
+import {
+  placeOrder,
+  type FillRow,
+  type OrderRow,
+  type PlaceOrderInput,
+  type PlaceOrderResult,
+} from '../orders.js';
+import { fills, orders, user } from '../schema/index.js';
+import { lockMarket } from '../tx-helpers.js';
+import { contractBook } from './contracts.js';
+import { TEST_PRICE_PROTECTION_TICKS, createUser, setReleaseSetting } from './factories.js';
+import { ledgerSupply } from './ledger.js';
+
+export type { FillRow, OrderRow };
+
+/** The reasons a market's status rejects an order with, before any width is read. */
+const MARKET_REASONS: readonly OrderRejectReason[] = ['not_open_yet', 'paused', 'closed'];
+
+export interface CreateOrderInput {
+  marketId: string;
+  /** The owner. Default: a fresh member. */
+  userId?: string;
+  /** Default 'YES'. */
+  outcome?: Outcome;
+  /** Default 'buy'. */
+  side?: OrderSide;
+  /** Default 'gtc'. */
+  timeInForce?: TimeInForce;
+  /** The confirmed limit. Default 50. */
+  limitPriceCoin?: number;
+  /** Default the confirmed limit (an IOC order with no reference). */
+  protectedLimitPriceCoin?: number;
+  /** IOC only. Default null. */
+  referencePriceCoin?: number | null;
+  /**
+   * IOC only. Default TEST_PRICE_PROTECTION_TICKS, null for a market-status reject; always null
+   * for GTC.
+   */
+  protectionTicks?: number | null;
+  /** Default 1, or null with a budget. */
+  qty?: number | null;
+  /** An IOC buy's budget. Default null. */
+  budgetCoin?: bigint | null;
+  /** Default 0. */
+  filledQty?: number;
+  /** Default filledQty × the protected limit. */
+  filledAmountCoin?: bigint;
+  /** Default 'open' for GTC, 'rejected' for IOC. */
+  status?: OrderStatus;
+  /** Default: 'no_quote' for a rejected order, else null. */
+  rejectReason?: OrderRejectReason | null;
+  /** Default: for a cancelled order 'by_owner' (GTC) or 'ioc_remainder' (IOC), else null. */
+  cancelReason?: OrderCancelReason | null;
+  /** The request id. Default: a fresh uuid. */
+  requestId?: string;
+  /** Default: the database clock (and the end, for an ended order). */
+  createdAt?: Date;
+  /** Default: budget − filled Coin, null without a budget. A CHECK test's override only. */
+  unspentCoin?: bigint | null;
+  /** Default: null for a live order, else its creation. A CHECK test's override only. */
+  endedAt?: Date | null;
+}
+
+/**
+ * Inserts one order row in a given state, consistent with migration 0062's CHECKs — a GTC buy of
+ * one YES at 50 resting (`open`) by default — under the market lock, with its arrival key from the
+ * sequence. Holds no lock: a test of the lock rule takes it itself (`lockForOrder`), or goes
+ * through the intake. For reads, eligibility and closure tests that need an order and no intake.
+ */
+export async function createOrder(db: Db, input: CreateOrderInput): Promise<OrderRow> {
+  const userId = input.userId ?? (await createUser(db)).user.id;
+  const timeInForce = input.timeInForce ?? 'gtc';
+  const budgetCoin = input.budgetCoin ?? null;
+  const qty = input.qty !== undefined ? input.qty : budgetCoin === null ? 1 : null;
+  const status = input.status ?? (timeInForce === 'gtc' ? 'open' : 'rejected');
+  const limitPrice = input.limitPriceCoin ?? 50;
+  const protectedLimitPrice = input.protectedLimitPriceCoin ?? limitPrice;
+  const rejectReason =
+    input.rejectReason !== undefined
+      ? input.rejectReason
+      : status === 'rejected'
+        ? 'no_quote'
+        : null;
+  const cancelReason =
+    input.cancelReason !== undefined
+      ? input.cancelReason
+      : status === 'cancelled'
+        ? timeInForce === 'gtc'
+          ? 'by_owner'
+          : 'ioc_remainder'
+        : null;
+  const protectionTicks =
+    timeInForce === 'gtc'
+      ? null
+      : input.protectionTicks !== undefined
+        ? input.protectionTicks
+        : rejectReason !== null && MARKET_REASONS.includes(rejectReason)
+          ? null
+          : TEST_PRICE_PROTECTION_TICKS;
+  const filledQty = input.filledQty ?? 0;
+  const filledAmountCoin =
+    input.filledAmountCoin ?? BigInt(filledQty) * BigInt(protectedLimitPrice);
+  return db.transaction(async (tx) => {
+    await lockMarket(tx, input.marketId);
+    const at =
+      input.createdAt ??
+      (await tx.execute<{ now: Date }>(sql`SELECT clock_timestamp() AS now`)).rows[0]!.now;
+    const [row] = await tx
+      .insert(orders)
+      .values({
+        userId,
+        marketId: input.marketId,
+        outcome: input.outcome ?? 'YES',
+        side: input.side ?? 'buy',
+        timeInForce,
+        limitPrice,
+        protectedLimitPrice,
+        referencePrice: timeInForce === 'gtc' ? null : (input.referencePriceCoin ?? null),
+        protectionTicks,
+        qty,
+        budgetCoin,
+        filledQty,
+        filledAmountCoin,
+        unspentCoin:
+          input.unspentCoin !== undefined
+            ? input.unspentCoin
+            : budgetCoin === null
+              ? null
+              : budgetCoin - filledAmountCoin,
+        status,
+        rejectReason,
+        cancelReason,
+        idempotencyKey: input.requestId ?? randomUUID(),
+        createdAt: new Date(at),
+        endedAt:
+          input.endedAt !== undefined
+            ? input.endedAt
+            : isLiveOrderStatus(status)
+              ? null
+              : new Date(at),
+      })
+      .returning();
+    return row!;
+  });
+}
+
+export interface CreateFillRecordInput {
+  marketId: string;
+  /** The incoming order's owner. */
+  incomingOwnerId: string;
+  /** The resting order's owner; another account, and not two non-person accounts. */
+  restingOwnerId: string;
+  /** The incoming order's outcome and side. Default 'YES', 'buy'. */
+  outcome?: Outcome;
+  side?: OrderSide;
+  /**
+   * Default: a buy mints a pair (the resting order a buy of the other outcome), a sell trades (a
+   * resting buy of the same outcome). A trade buy meets a resting sell.
+   */
+  kind?: FillKind;
+  /** The incoming contract's price per contract, 1..99. Default 50. */
+  priceCoin?: number;
+  /** Default 1. */
+  qty?: number;
+  /** The orders' and the fill's instant. Default: the database clock. */
+  createdAt?: Date;
+}
+
+export interface FillRecord {
+  fill: FillRow;
+  incoming: OrderRow;
+  resting: OrderRow;
+}
+
+/**
+ * One match as the intake records it, in one transaction under the market lock: the resting GTC
+ * order (live, its price the fill's), the incoming IOC order in its end state (전량 체결, its
+ * reference the fill's price and the test width), the fill — both owners and their account types,
+ * the price, the YES price and the amount (price × qty) — and the resting order then filled. No
+ * asset moves. `String(fill.id)` is the key a test's ledger events of the fill use.
+ */
+export async function createFillRecord(db: Db, input: CreateFillRecordInput): Promise<FillRecord> {
+  const outcome = input.outcome ?? 'YES';
+  const side = input.side ?? 'buy';
+  const kind = input.kind ?? (side === 'buy' ? 'pair_mint' : 'trade');
+  const priceCoin = input.priceCoin ?? 50;
+  const qty = input.qty ?? 1;
+  if (kind === 'pair_mint' && side !== 'buy') throw new Error('createFillRecord: a mint is buys');
+  const payout = CONTRACT_TERMS.payoutCoin;
+  const resting =
+    kind === 'pair_mint'
+      ? { outcome: outcome === 'YES' ? ('NO' as const) : ('YES' as const), side: 'buy' as const }
+      : { outcome, side: side === 'buy' ? ('sell' as const) : ('buy' as const) };
+  const restingPrice = kind === 'pair_mint' ? payout - priceCoin : priceCoin;
+  return db.transaction(async (tx) => {
+    await lockMarket(tx, input.marketId);
+    const at =
+      input.createdAt ??
+      (await tx.execute<{ now: Date }>(sql`SELECT clock_timestamp() AS now`)).rows[0]!.now;
+    const [restingOrder] = await tx
+      .insert(orders)
+      .values({
+        userId: input.restingOwnerId,
+        marketId: input.marketId,
+        ...resting,
+        timeInForce: 'gtc',
+        limitPrice: restingPrice,
+        protectedLimitPrice: restingPrice,
+        qty,
+        status: 'open',
+        idempotencyKey: randomUUID(),
+        createdAt: new Date(at),
+      })
+      .returning();
+    const [incomingOrder] = await tx
+      .insert(orders)
+      .values({
+        userId: input.incomingOwnerId,
+        marketId: input.marketId,
+        outcome,
+        side,
+        timeInForce: 'ioc',
+        limitPrice: priceCoin,
+        protectedLimitPrice: priceCoin,
+        referencePrice: priceCoin,
+        protectionTicks: TEST_PRICE_PROTECTION_TICKS,
+        qty,
+        filledQty: qty,
+        filledAmountCoin: BigInt(priceCoin) * BigInt(qty),
+        status: 'filled',
+        idempotencyKey: randomUUID(),
+        createdAt: new Date(at),
+        endedAt: new Date(at),
+      })
+      .returning();
+    const typeOf = async (id: string) =>
+      (await tx.select({ type: user.accountType }).from(user).where(eq(user.id, id)))[0]!.type;
+    const [fill] = await tx
+      .insert(fills)
+      .values({
+        marketId: input.marketId,
+        kind,
+        incomingOrderId: incomingOrder!.id,
+        restingOrderId: restingOrder!.id,
+        incomingOwnerId: input.incomingOwnerId,
+        restingOwnerId: input.restingOwnerId,
+        incomingAccountType: await typeOf(input.incomingOwnerId),
+        restingAccountType: await typeOf(input.restingOwnerId),
+        outcome,
+        side,
+        qty,
+        priceCoin,
+        yesPriceCoin: outcome === 'YES' ? priceCoin : payout - priceCoin,
+        amountCoin: BigInt(priceCoin) * BigInt(qty),
+        createdAt: new Date(at),
+      })
+      .returning();
+    const [restingFilled] = await tx
+      .update(orders)
+      .set({
+        filledQty: qty,
+        filledAmountCoin: BigInt(restingPrice) * BigInt(qty),
+        status: 'filled',
+        endedAt: new Date(at),
+      })
+      .where(eq(orders.id, restingOrder!.id))
+      .returning();
+    return { fill: fill!, incoming: incomingOrder!, resting: restingFilled! };
+  });
+}
+
+/**
+ * A price and a quantity whose product is `amountCoin` (price 1..99, qty 1..ORDER_QTY_MAX): the
+ * highest such price. Throws when there is none (above 99 × ORDER_QTY_MAX, or no divisor fits).
+ */
+export function priceAndQtyOf(amountCoin: bigint): { priceCoin: number; qty: number } {
+  for (let price = CONTRACT_TERMS.priceMaxCoin; price >= CONTRACT_TERMS.priceMinCoin; price -= 1) {
+    if (amountCoin % BigInt(price) === 0n) {
+      const qty = amountCoin / BigInt(price);
+      if (qty >= 1n && qty <= BigInt(ORDER_QTY_MAX)) return { priceCoin: price, qty: Number(qty) };
+    }
+  }
+  throw new Error(`no contract price and quantity make ${amountCoin.toString()} Coin`);
+}
+
+export interface OpenOrderIntakeInput {
+  /** The admin the settings are recorded under. */
+  adminId: string;
+  /** `order.rate_limit` as a test value. Default: left as it is (undecided after a reset). */
+  rateLimit?: number;
+  /** `order.price_protection_ticks` as a test value. Default: left as it is. */
+  widthTicks?: number;
+}
+
+/**
+ * Opens order intake as the test environment does (ADR-0107 결정 3, the e2e global setup): the
+ * release setting `order.accepting` set to `true` with the status 시험값, and optionally the order
+ * rate limit and the width default. A reset empties `release_settings`, which closes it again.
+ */
+export async function openOrderIntake(db: Db, input: OpenOrderIntakeInput): Promise<void> {
+  const set = (key: string, value: unknown) =>
+    setReleaseSetting(db, { adminId: input.adminId, key, status: 'test', value });
+  await set(ORDER_ACCEPTING_SETTING.key, true);
+  if (input.rateLimit !== undefined) await set(ORDER_RATE_LIMIT_SETTING.key, input.rateLimit);
+  if (input.widthTicks !== undefined) {
+    await set(PRICE_PROTECTION_TICKS_SETTING.key, input.widthTicks);
+  }
+}
+
+export interface PlaceTestOrderInput extends Partial<
+  Omit<PlaceOrderInput, 'marketId' | 'ownerId'>
+> {
+  marketId: string;
+  ownerId: string;
+}
+
+/**
+ * Places an order through the real intake (`placeOrder`, its own transaction): a person's, or
+ * the 운영 마켓메이커's. Defaults: a fresh request id, a GTC buy of one YES at 50 — `qty` 1
+ * unless a `budgetCoin` is given (then an IOC buy). Intake must be open (`openOrderIntake`).
+ */
+export async function placeTestOrder(
+  db: Db,
+  input: PlaceTestOrderInput,
+): Promise<PlaceOrderResult> {
+  const budgetCoin = input.budgetCoin ?? null;
+  return db.transaction((tx) =>
+    placeOrder(tx, {
+      requestId: input.requestId ?? randomUUID(),
+      outcome: input.outcome ?? 'YES',
+      side: input.side ?? 'buy',
+      timeInForce: input.timeInForce ?? (budgetCoin === null ? 'gtc' : 'ioc'),
+      limitPriceCoin: input.limitPriceCoin ?? 50,
+      qty: input.qty !== undefined ? input.qty : budgetCoin === null ? 1 : null,
+      budgetCoin,
+      marketId: input.marketId,
+      ownerId: input.ownerId,
+    }),
+  );
+}
+
+/**
+ * Every live order's lock against what its holder holds locked (ADR-0110 결정 4, ADR-0112): one
+ * row per Coin account — a person's own, or a market's 마켓메이커 자금 — whose `locked_coin` is not
+ * the sum of its live quantity buys' protected limit × (qty − filled), and per position whose
+ * `locked_qty` is not the sum of its live sells' qty − filled. No row: every lock is an order's.
+ * Read-only; docs/OPERATIONS.md '주문 접수' carries it for operators.
+ */
+export const ORDER_LOCKS_CHECK_SQL = `SELECT 'coin' AS lock, a.kind::text AS holder, a.owner_id, a.market_id,
+       b.locked_coin::text AS locked,
+       coalesce(sum(o.protected_limit_price::bigint * (o.qty - o.filled_qty)), 0)::text AS live
+FROM ledger_accounts a
+JOIN balances b ON b.account_id = a.id
+LEFT JOIN orders o ON o.status IN ('open', 'partially_filled') AND o.side = 'buy'
+  AND o.user_id = a.owner_id AND (a.kind = 'user' OR o.market_id = a.market_id)
+WHERE a.kind IN ('user', 'market_maker_funds')
+GROUP BY a.id, a.kind, a.owner_id, a.market_id, b.locked_coin
+HAVING b.locked_coin <> coalesce(sum(o.protected_limit_price::bigint * (o.qty - o.filled_qty)), 0)
+UNION ALL
+SELECT 'contracts', p.outcome::text, p.user_id, p.market_id, p.locked_qty::text,
+       coalesce(sum(o.qty - o.filled_qty), 0)::text
+FROM positions p
+LEFT JOIN orders o ON o.status IN ('open', 'partially_filled') AND o.side = 'sell'
+  AND o.user_id = p.user_id AND o.market_id = p.market_id AND o.outcome = p.outcome
+GROUP BY p.user_id, p.market_id, p.outcome, p.locked_qty
+HAVING p.locked_qty <> coalesce(sum(o.qty - o.filled_qty), 0)
+ORDER BY 1, 3, 4, 2;
+`;
+
+/**
+ * The intake's invariants over the whole database, as a list of what breaks them (empty when all
+ * hold): every lock is a live order's (`ORDER_LOCKS_CHECK_SQL`); per market unsettled YES = NO
+ * and its collateral = pairs × payout; Coin carried = minted − burned and held = carried; and
+ * every order's filled amounts are the sums of its fills (an incoming order's at its incoming
+ * price, a resting one's at its own).
+ */
+export async function checkOrderInvariants(db: Db): Promise<string[]> {
+  const breaks: string[] = [];
+  const { rows: locks } = await db.$client.query(ORDER_LOCKS_CHECK_SQL);
+  for (const row of locks) breaks.push(`lock ${JSON.stringify(row)}`);
+  const marketIds = (
+    await db.execute<{ id: string }>(
+      sql`SELECT DISTINCT market_id AS id FROM positions
+          UNION SELECT market_id FROM ledger_accounts WHERE kind = 'market_collateral'`,
+    )
+  ).rows.map((row) => row.id);
+  for (const marketId of marketIds) {
+    const book = await contractBook(db, marketId);
+    if (
+      book.yes !== book.no ||
+      book.collateralCoin !== BigInt(book.yes) * PAYOUT_PER_CONTRACT_COIN
+    ) {
+      breaks.push(
+        `market ${marketId}: ${JSON.stringify({ ...book, collateralCoin: String(book.collateralCoin) })}`,
+      );
+    }
+  }
+  const supply = await ledgerSupply(db);
+  if (
+    supply.carriedCoin !== supply.mintedCoin - supply.burnedCoin ||
+    supply.heldCoin !== supply.carriedCoin
+  ) {
+    breaks.push(
+      `supply ${JSON.stringify(supply, (_, v: unknown) => (typeof v === 'bigint' ? String(v) : v))}`,
+    );
+  }
+  const { rows: amounts } = await db.$client.query(`
+    SELECT o.id, o.filled_qty, o.filled_amount_coin::text AS amount,
+           coalesce(sum(f.qty), 0)::int AS fill_qty,
+           coalesce(sum(CASE WHEN f.incoming_order_id = o.id THEN f.amount_coin
+                             ELSE o.protected_limit_price::bigint * f.qty END), 0)::text AS fill_amount
+    FROM orders o
+    LEFT JOIN fills f ON f.incoming_order_id = o.id OR f.resting_order_id = o.id
+    GROUP BY o.id
+    HAVING o.filled_qty <> coalesce(sum(f.qty), 0)
+        OR o.filled_amount_coin <> coalesce(sum(CASE WHEN f.incoming_order_id = o.id
+             THEN f.amount_coin ELSE o.protected_limit_price::bigint * f.qty END), 0)`);
+  for (const row of amounts) breaks.push(`order ${JSON.stringify(row)}`);
+  return breaks;
+}

@@ -23,6 +23,7 @@ import {
   MARKET_REVIEW_REQUEST_REASON,
   MARKET_TAGS_MIN,
   marketReviewExclusion,
+  PRICE_PROTECTION_TICKS_SETTING,
   marketSlugSchema,
   missingOpenItems,
   rulesEditedPayload,
@@ -40,6 +41,7 @@ import {
   type AdminSettlementStep,
   type ApproveMarketReviewBody,
   type CategoryUnselectableReason,
+  type ChangePriceProtectionBody,
   type CreateMarketBody,
   type CursorQuery,
   type MarketApprovedPayload,
@@ -277,7 +279,8 @@ function openItemsMissing(
  * The open-items check of `row` as it is stored (#17, #23, #22): the title and every rule item, the
  * scheduled open and judgement, the judgement time zone, the times in order, the lead close at
  * `gapMinutes`, a category a new market may be filed under (`category`, read FOR SHARE by the
- * caller) and 1..5 tags. OPEN_ITEMS_MISSING naming every missing item (`openItemsMissing`). The
+ * caller), 1..5 tags and a 가격 보호 폭 (`priceProtectionTicks`, #119: the market's or the one the
+ * submission copies). OPEN_ITEMS_MISSING naming every missing item (`openItemsMissing`). The
  * gate of the review submission and the approval (#78, ADR-0099); the open itself does not check it
  * again — the approval was the last gate (#21, ADR-0100; `openScheduledMarket`).
  */
@@ -287,6 +290,7 @@ function assertOpenItems(
   sources: MarketSources,
   category: CategorySelectability,
   gapMinutes: number | null,
+  priceProtectionTicks: number | null,
 ): void {
   const input = {
     title: row.title,
@@ -296,6 +300,7 @@ function assertOpenItems(
     categorySelectable: category.found && category.reason === null,
     tagCount: tags.length,
     leadCloseGapMinutes: gapMinutes,
+    priceProtectionTicks,
   };
   const missing = missingOpenItems(input);
   if (missing.length > 0) {
@@ -444,8 +449,8 @@ export function decisionInstant(request: ApprovalRequest): Date {
  * sources (`readMarketSources`; #23): the row holds neither, so the caller hands them in — a tag or
  * source edit is then a `market_update` with its before and after (ADR-0093 decision 2 #172 item
  * 14). The rule items (`ruleItemsOf`) and the times (`timesOf`, #22) are in it whole, with the
- * lead-close gap the market was last checked against, so an edit of any of them moves it. A
- * supplement's approval records the market before and after with it too (#80).
+ * lead-close gap the market was last checked against, so an edit of any of them moves it, and its
+ * 가격 보호 폭 (#119). A supplement's approval records the market before and after with it too (#80).
  */
 export function snapshot(
   row: MarketRow,
@@ -468,6 +473,7 @@ export function snapshot(
     ...timesOf(row),
     closeAt: row.closeAt.toISOString(),
     leadCloseGapMinutes: row.leadCloseGapMinutes,
+    priceProtectionTicks: row.priceProtectionTicks,
   };
 }
 
@@ -618,6 +624,9 @@ export class MarketAdminService {
     assertFutureCloseAt(closeAt, now);
     assertSelectableCategory(category);
     assertTimeOrder({ ...times, eventDeadline: items.eventDeadline }, sentTimeFields(body));
+    // The 가격 보호 폭 is copied from the release setting at creation (#119, ADR-0107 결정 1 #177
+    // 2항), null while it is undecided — the review submission fills it then, or refuses.
+    const priceProtectionTicks = await this.priceProtectionSetting(tx);
     let inserted: MarketRow | undefined;
     try {
       [inserted] = await tx
@@ -631,6 +640,7 @@ export class MarketAdminService {
           status: 'draft',
           openAt: null,
           ...timeColumns(times),
+          priceProtectionTicks,
           createdBy: adminId,
         })
         .returning();
@@ -942,14 +952,17 @@ export class MarketAdminService {
    * other status is refused naming `status`. The gate is the open-items check at the gap in force
    * (`assertOpenItems`, `leadCloseGap`; #17, #23: the title and every rule item, never without them
    * — PLAN 0.2; #22: the scheduled open and judgement, the judgement time zone, the times in order
-   * and the lead close; a category a new market may be filed under; 1..5 tags), OPEN_ITEMS_MISSING
-   * naming every missing item; then a close still ahead (`closeAt`, 'must be in the future'): what
+   * and the lead close; a category a new market may be filed under; 1..5 tags; #119: a 가격 보호 폭,
+   * the market's or the release setting's, `priceProtection`), OPEN_ITEMS_MISSING naming every
+   * missing item; then a close still ahead (`closeAt`, 'must be in the future'): what
    * the market lacks comes first. The scheduled open is not asked: a market approved after it opens
    * at the approval (#21, ADR-0100). Opens the `market_review` request (#171; payload `{title}`),
    * moves the market with a `submitted` event naming the request and the gap the check used — which
    * the market keeps (`lead_close_gap_minutes`), so the approval checks with the same one and the
-   * open keeps it — and writes `market_submit` with the market as submitted. From here the content
-   * is locked (`update`). A market in REVIEW is not public: nothing is published.
+   * open keeps it — stores the width it checked (`price_protection_ticks`, fixed from here on but
+   * for the after-open change, `changePriceProtection`; migration 0062) and writes `market_submit`
+   * with the market as submitted. From here the content is locked (`update`). A market in REVIEW is
+   * not public: nothing is published.
    */
   async submit(adminId: string, id: string): Promise<AdminMarket> {
     return this.db.transaction(async (tx) => {
@@ -960,7 +973,8 @@ export class MarketAdminService {
       const sources = await readMarketSources(tx, id);
       const category = await readCategorySelectability(tx, current.categoryId);
       const leadCloseGapMinutes = await this.leadCloseGap(tx, current);
-      assertOpenItems(current, tags, sources, category, leadCloseGapMinutes);
+      const priceProtectionTicks = await this.priceProtection(tx, current);
+      assertOpenItems(current, tags, sources, category, leadCloseGapMinutes, priceProtectionTicks);
       const request = await this.approvals.request(
         {
           kind: MARKET_REVIEW_APPROVAL_KIND,
@@ -982,7 +996,7 @@ export class MarketAdminService {
         actorId: adminId,
         payload: { approvalId: request.id, leadCloseGapMinutes } satisfies MarketSubmittedPayload,
         at: now,
-        set: { leadCloseGapMinutes },
+        set: { leadCloseGapMinutes, priceProtectionTicks },
       });
       await tx.insert(schema.adminActions).values({
         adminId,
@@ -1033,7 +1047,14 @@ export class MarketAdminService {
       const tags = await marketTagNames(tx, id);
       const sources = await readMarketSources(tx, id);
       const category = await readCategorySelectability(tx, current.categoryId);
-      assertOpenItems(current, tags, sources, category, current.leadCloseGapMinutes);
+      assertOpenItems(
+        current,
+        tags,
+        sources,
+        category,
+        current.leadCloseGapMinutes,
+        current.priceProtectionTicks,
+      );
       const decided = await this.approvals.approve(adminId, request.id, body.reason, tx);
       const now = decisionInstant(decided);
       assertFutureCloseAt(current.closeAt, now);
@@ -1295,6 +1316,70 @@ export class MarketAdminService {
     return market;
   }
 
+  /**
+   * 가격 보호 폭의 개장 뒤 변경 (#119, ADR-0112; ADR-0107 결정 1 #177 2항, the #172 item 14 precedent
+   * of `reschedule`): an OPEN or PAUSED market's width in ticks, by one admin with a reason. Any
+   * other status is refused naming `status` (a draft keeps the width it copied at its creation,
+   * one with none takes the setting's at the submission; from the review to the open it is fixed);
+   * the stored value again is VALIDATION_ERROR on `priceProtectionTicks`, 'unchanged'. A market
+   * with none (submitted before #119) takes one here, `before` null. A `price_protection_changed`
+   * event (no status change) and `market_price_protection_change`, each `{before, after, reason}`.
+   * Applies to the orders taken after it — the intake reads the width under the same market lock —
+   * never to resting ones, which keep the limit they were taken at. Nothing is published: no member
+   * sees the width.
+   */
+  async changePriceProtection(
+    adminId: string,
+    id: string,
+    body: WithoutExpectedAccount<ChangePriceProtectionBody>,
+  ): Promise<AdminMarket> {
+    return this.db.transaction(async (tx) => {
+      await lockMarket(tx, id);
+      const current = await lockedMarketRow(tx, id);
+      if (current.status !== 'open' && current.status !== 'paused') {
+        throw wrongStatus(current.status);
+      }
+      if (current.priceProtectionTicks === body.priceProtectionTicks) {
+        throw fieldError(
+          'priceProtectionTicks',
+          'The price protection width is unchanged',
+          'unchanged',
+        );
+      }
+      // After the market lock (clock.ts): the change sorts after whatever committed meanwhile.
+      const now = await clockTimestamp(tx);
+      const [changed] = await tx
+        .update(schema.markets)
+        .set({ priceProtectionTicks: body.priceProtectionTicks, updatedAt: now })
+        .where(eq(schema.markets.id, id))
+        .returning();
+      if (!changed) throw new AppError('INTERNAL', { message: 'Market update failed' });
+      const detail = {
+        before: current.priceProtectionTicks,
+        after: body.priceProtectionTicks,
+        reason: body.reason,
+      };
+      await tx.insert(schema.marketEvents).values({
+        marketId: id,
+        type: 'price_protection_changed',
+        actorId: adminId,
+        payload: detail,
+        createdAt: now,
+      });
+      await tx.insert(schema.adminActions).values({
+        adminId,
+        type: 'market_price_protection_change',
+        targetType: 'market',
+        targetId: id,
+        payload: detail,
+        createdAt: now,
+      });
+      const tags = await marketTagNames(tx, id);
+      const sources = await readMarketSources(tx, id);
+      return await this.toAdminMarket(tx, changed, tags, sources);
+    });
+  }
+
   /** `GET /admin/market-reviews` (검수 대기, #78): `listMarketReviews`, the oldest request first. */
   listReviews(query: CursorQuery): Promise<Page<AdminMarketReviewItem>> {
     return listMarketReviews(this.db, query);
@@ -1444,6 +1529,30 @@ export class MarketAdminService {
   }
 
   /**
+   * The release setting `order.price_protection_ticks` (#119, PRICE_PROTECTION_TICKS_SETTING;
+   * ADR-0107 결정 1 #177 2항): its value in any status, null while undecided. Read through
+   * `executor` once per write, as the lead-close gap's.
+   */
+  private async priceProtectionSetting(executor: Executor): Promise<number | null> {
+    const reading = await this.settings.get(PRICE_PROTECTION_TICKS_SETTING, executor);
+    return reading.status === 'undecided' ? null : reading.value;
+  }
+
+  /**
+   * The 가격 보호 폭 `row` trades with (#119; `AdminMarket.priceProtectionTicks`): its own
+   * (`price_protection_ticks` — copied at creation, filled at the review submission) once it has
+   * one, else for a draft the setting's current reading — what the submission would store. A
+   * market past the draft with none (one submitted before #119) stays null: the order intake
+   * refuses its immediate orders until an admin enters one (`changePriceProtection`).
+   */
+  private async priceProtection(executor: Executor, row: MarketRow): Promise<number | null> {
+    if (row.priceProtectionTicks !== null || row.status !== 'draft') {
+      return row.priceProtectionTicks;
+    }
+    return this.priceProtectionSetting(executor);
+  }
+
+  /**
    * The admin detail: the public shape plus exposure figures, settlement steps, the event log,
    * what the open-items check finds missing (#17, #23, #22, every status) at the lead-close gap
    * the market is held to (`leadCloseGap`, which it reports too), the review (#78,
@@ -1542,6 +1651,7 @@ export class MarketAdminService {
       .limit(ADMIN_EVENTS_LIMIT);
 
     const leadCloseGapMinutes = await this.leadCloseGap(executor, row);
+    const priceProtectionTicks = await this.priceProtection(executor, row);
     const ruleVersions = await readAdminRuleVersions(executor, row.id);
     const judgementDelays = await readJudgementDelays(executor, row.id);
     return {
@@ -1570,8 +1680,10 @@ export class MarketAdminService {
         categorySelectable: unselectable === null,
         tagCount: tags.length,
         leadCloseGapMinutes,
+        priceProtectionTicks,
       }),
       leadCloseGapMinutes,
+      priceProtectionTicks,
       review: await readMarketReview(executor, row),
       supplement: await readMarketSupplement(executor, row.id, ruleVersions),
       pause: await readMarketPause(executor, row.id),

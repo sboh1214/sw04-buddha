@@ -104,6 +104,7 @@ const draft: AdminMarket = {
   judgement: { current: null, history: [], pending: null, log: [], disputeWindowUndecided: false },
   missingOpenItems: [],
   leadCloseGapMinutes: null,
+  priceProtectionTicks: null,
   // Never submitted (#78): no request, no editor, no record.
   review: {
     pending: null,

@@ -49,7 +49,8 @@ import { E2E_CONSENT_VERSIONS } from './consent-versions';
  * judgement since #152: the first registers it and the second approves it, which publishes the
  * 잠정 결과 (`judgeMarket`); the worker confirms it once its dispute window — the release setting
  * the suite's global setup enters while it is 미정 (global-setup.ts) — has passed, no 판정 이의
- * holding it (#175: only a member with a fill submits one, and nobody can trade until #119). And
+ * holding it (#175: only a member with a fill submits one, and no spec trades on a market it
+ * judges — orders.spec.ts trades on its own open market alone, #119). And
  * in every 판정 정정 since #176: the first registers it and the second approves it — the next
  * judgement version, its result and a new deadline of the first one's length (`registerCorrection`
  * and `approveJudgementAsReviewer`) — or rejects it; while it waits, it holds the confirmation.
@@ -1398,9 +1399,9 @@ async function unwrap<T>(response: APIResponse): Promise<T> {
  * whatever the calendar says. Its scheduled open has passed (`timesFor`, #22), so the approval
  * opens it at once (#21, ADR-0100), and the open records its content as rule v1 (#80, ADR-0101):
  * its `ruleVersion` is 1, and its rule version items change by a supplement alone
- * (`requestSupplement`, `approveSupplementAsReviewer`). It has no fill — there is no way to trade
- * until the CLOB lands (#119) — so its price reads 체결 없음 and its chart is empty (N02 §5):
- * opening writes no price tick.
+ * (`requestSupplement`, `approveSupplementAsReviewer`). It has no fill — only orders.spec.ts
+ * trades, through the API on its own markets (#119; the order panel is #66) — so its price reads
+ * 체결 없음 and its chart is empty (N02 §5): opening writes no price tick.
  */
 export async function createOpenMarket(
   admin: APIRequestContext,
@@ -2231,6 +2232,61 @@ export async function startCoinText(context: APIRequestContext): Promise<string>
   return coinText(amount);
 }
 
+// ---- 주문 접수 (#119, 출시 설정) -----------------------------------------------------------
+
+/**
+ * The three release settings of the order intake (#119, ADR-0112; `ORDER_ACCEPTING_SETTING`,
+ * `ORDER_RATE_LIMIT_SETTING`, `PRICE_PROTECTION_TICKS_SETTING`, restated: these specs import only
+ * types from `@buddha/shared`), and what the suite enters while each is 미정 — the test values of
+ * ADR-0107 결정 3·결과 3: intake open, 20 orders a minute per account, a width of 5 ticks.
+ */
+export const ORDER_SETTINGS = {
+  accepting: { key: 'order.accepting', value: true },
+  rateLimit: { key: 'order.rate_limit', value: 20 },
+  priceProtectionTicks: { key: 'order.price_protection_ticks', value: 5 },
+} as const;
+
+/** Why the suite entered them, as the change record keeps it (1..500 characters). */
+const E2E_ORDER_SETTINGS_REASON = 'e2e: 시험 DB의 주문 접수 시험값';
+
+/** A release setting's value as `context`'s admin reads it, or null while it is 미정. */
+async function releaseSettingValue(
+  context: APIRequestContext,
+  key: string,
+): Promise<number | boolean | null> {
+  const items = await unwrap<ReleaseSetting[]>(await context.get('/api/v1/admin/release-settings'));
+  const item = items.find((entry) => entry.key === key);
+  if (item === undefined) throw new Error(`no release setting ${key} is registered`);
+  if (item.status === 'undecided') return null;
+  return typeof item.value === 'number' || typeof item.value === 'boolean' ? item.value : null;
+}
+
+/**
+ * Makes sure the order intake's settings have values, for the suite's global setup
+ * (global-setup.ts) — the width before any spec submits a market for review, whose submission
+ * needs one (OPEN_ITEMS_MISSING `priceProtection`) and copies it: while one is 미정, `context`'s
+ * admin enters ORDER_SETTINGS' value as a 시험값 with its reason; a value already there — a run
+ * before this one, or a developer's — is left as it is. Safe to run twice at once, as
+ * `ensureDisputeWindow` is.
+ */
+export async function ensureOrderSettings(context: APIRequestContext): Promise<void> {
+  for (const { key, value } of Object.values(ORDER_SETTINGS)) {
+    if ((await releaseSettingValue(context, key)) !== null) continue;
+    const entered = await context.patch(`/api/v1/admin/release-settings/${key}`, {
+      data: {
+        status: 'test',
+        value,
+        reason: E2E_ORDER_SETTINGS_REASON,
+        expectedAccountId: await accountIdOf(context),
+      },
+    });
+    if (entered.ok() || (await releaseSettingValue(context, key)) !== null) continue;
+    throw new Error(
+      `entering ${key} failed (${String(entered.status())}): ${await entered.text()}`,
+    );
+  }
+}
+
 // ---- 판정 (#152) ---------------------------------------------------------------------------
 
 /**
@@ -2428,7 +2484,7 @@ export async function leaveNoJudgement(
  * `result` on the 1차 출처 (무효 on none, with its reason) and the second seed admin approves it
  * (`approveJudgementAsReviewer`). The answer is the market PROVISIONAL — its 잠정 결과 public at once
  * — and the worker confirms it once its dispute deadline passes (`waitForResolved`): no spec
- * holds it with a 판정 이의 (#175, ADR-0104 — none can submit one without a fill, #119), and a 판정
+ * holds it with a 판정 이의 (#175, ADR-0104 — none can submit one without a fill on it), and a 판정
  * 정정 (#176, `registerCorrection`) holds it only until the spec approves or rejects it. The API,
  * not the UI: judgement.spec.ts walks the screens. A 무효 judged here goes on, once confirmed, to
  * stay 지급 중 with a failed step until #126 pays 무효 (ADR-0103) — on a database kept between runs,

@@ -48,6 +48,7 @@ import {
   marketResultSchema,
   coinAmountSchema,
   parseCoinAmount,
+  priceProtectionTicksSchema,
   ruleItemSchema,
   ruleVersionItemSchema,
   rulesEditedItemSchema,
@@ -145,7 +146,8 @@ export const MARKET_RESULT_LABEL: Record<MarketResult, string> = {
  * status each leads to; a `resolved` row written before #152 is the one-admin 판정, final at once.
  * 판정 정정 is #176's (ADR-0105): an approved correction, which changes no status. 판정 지연 기록 is
  * #142's (ADR-0106): one admin's record of a delay's reason and next review time, which changes no
- * status either.
+ * status either. 가격 보호 폭 변경 is #119's (ADR-0112): one admin's change of an open or paused
+ * market's width, with the reason, which changes no status.
  */
 export const MARKET_EVENT_LABEL: Record<MarketEventType, string> = {
   created: copy.eventCreated,
@@ -166,6 +168,7 @@ export const MARKET_EVENT_LABEL: Record<MarketEventType, string> = {
   resumed: copy.eventResumed,
   judgement_corrected: copy.eventJudgementCorrected,
   judgement_delay_recorded: copy.eventJudgementDelayRecorded,
+  price_protection_changed: copy.eventPriceProtectionChanged,
 };
 
 /**
@@ -725,6 +728,22 @@ const PAUSED_PAYLOAD = z.object({
 });
 /** 재개 (#114): the review result (null but for a 실질 기준 변경 pause); the ids as above. */
 const RESUMED_PAYLOAD = z.object({ reviewResult: marketPauseReviewResultSchema.nullable() });
+/**
+ * 가격 보호 폭 변경 (#119, ADR-0112): the width before (null for a market submitted before #119)
+ * and after, in ticks, and the reason.
+ */
+const PRICE_PROTECTION_CHANGED_PAYLOAD = z.object({
+  before: priceProtectionTicksSchema.nullable(),
+  after: priceProtectionTicksSchema,
+  reason: z.string(),
+});
+
+/** A market's 가격 보호 폭 as the admin reads it: '5틱', or 미정 while it has none (#119). */
+export function priceProtectionText(ticks: number | null): string {
+  return ticks === null
+    ? copy.adminMarketPriceProtectionUndecided
+    : `${String(ticks)}${copy.adminMarketPriceProtectionTicks}`;
+}
 
 /** The review result's row, none without one. */
 function reviewResultRows(reviewResult: MarketPauseReviewResult | null): EventRow[] {
@@ -845,7 +864,7 @@ function interimResolveRows(detail: {
  * with its version and result (#152) — a 결과 확정 before #152 with its note and evidence — a 판정
  * 정정 with the version and result before and after it, the new deadline and the disputes it
  * closed (#176) — a 판정 지연 기록 with its reason, next review time and the status it was made on
- * (#142) — the
+ * (#142) — a 가격 보호 폭 변경 with the width before and after and the reason (#119) — the
  * finalize summary, the 개설 검수's records
  * (#78, `reviewDetailRows`) — and no row at all for the start of the payout, whose only field is
  * the `source` the 시스템 actor beside it already says, nor for a resume without a review result.
@@ -992,6 +1011,15 @@ export function marketEventRows(type: MarketEventType, payload: unknown): EventR
     case 'resumed': {
       const parsed = RESUMED_PAYLOAD.safeParse(payload);
       return parsed.success ? reviewResultRows(parsed.data.reviewResult) : undefined;
+    }
+    case 'price_protection_changed': {
+      const parsed = PRICE_PROTECTION_CHANGED_PAYLOAD.safeParse(payload);
+      if (!parsed.success) return undefined;
+      return [
+        { label: copy.eventRulesBefore, value: priceProtectionText(parsed.data.before) },
+        { label: copy.eventRulesAfter, value: priceProtectionText(parsed.data.after) },
+        { label: copy.reviewLogReason, value: parsed.data.reason },
+      ];
     }
     case 'submitted':
     case 'approved':
@@ -1147,6 +1175,7 @@ export const OPEN_ITEM_LABEL: Record<OpenItem, string> = {
   leadClose: copy.openItemLeadClose,
   category: copy.openItemCategory,
   tags: copy.openItemTags,
+  priceProtection: copy.openItemPriceProtection,
 };
 
 /**
@@ -1344,7 +1373,8 @@ function timeRuleLine(violation: TimeRuleViolation, gapMinutes: number | null): 
  * 시각 순서 and 선행 마감 (#22, ADR-0098) name a relation, not a field, so each adds a line per rule
  * it breaks, one under another — '시각 순서: 거래 마감 시각이 예정 판정 시각보다 늦습니다', '선행
  * 마감: 간격(출시 설정)이 미정이라 …' — recomputed from the market's times with the gap the check
- * used (`timeRuleViolations` with `leadCloseGapMinutes`, the API's own rule).
+ * used (`timeRuleViolations` with `leadCloseGapMinutes`, the API's own rule). 가격 보호 폭 adds
+ * one line too: no field of the form fills it, the market takes the release setting's (#119).
  */
 export function openItemsNotice(
   market: TimeRuleInput & {
@@ -1361,6 +1391,10 @@ export function openItemsNotice(
       const relation = OPEN_ITEM_LABEL[RELATION_OF[violation.rule]];
       return `${relation}: ${timeRuleLine(violation, gap)}`;
     });
+  // No form field fills the width: the market takes the release setting's (#119, ADR-0112).
+  if (market.missingOpenItems.includes('priceProtection')) {
+    lines.push(`${OPEN_ITEM_LABEL.priceProtection}: ${copy.openItemRulePriceProtectionUndecided}`);
+  }
   const head = `${copy.adminMarketOpenItems}: ${openItemList(market.missingOpenItems)}`;
   return [head, ...lines].join('\n');
 }

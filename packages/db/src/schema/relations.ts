@@ -290,20 +290,21 @@ export const noticeImagesRelations = relations(noticeImages, ({ one }) => ({
 export const ordersRelations = relations(orders, ({ one, many }) => ({
   user: one(user, { fields: [orders.userId], references: [user.id] }),
   market: one(markets, { fields: [orders.marketId], references: [markets.id] }),
-  fills: many(fills, { relationName: 'orderFills' }),
+  incomingFills: many(fills, { relationName: 'incomingFills' }),
+  restingFills: many(fills, { relationName: 'restingFills' }),
 }));
 
 export const fillsRelations = relations(fills, ({ one }) => ({
   market: one(markets, { fields: [fills.marketId], references: [markets.id] }),
-  order: one(orders, {
-    fields: [fills.orderId],
+  incomingOrder: one(orders, {
+    fields: [fills.incomingOrderId],
     references: [orders.id],
-    relationName: 'orderFills',
+    relationName: 'incomingFills',
   }),
-  counterpartyOrder: one(orders, {
-    fields: [fills.counterpartyOrderId],
+  restingOrder: one(orders, {
+    fields: [fills.restingOrderId],
     references: [orders.id],
-    relationName: 'counterpartyFills',
+    relationName: 'restingFills',
   }),
 }));
 

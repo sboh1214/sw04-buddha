@@ -146,6 +146,8 @@ function openItemsOf(market: SeedMarket, now: Date, leadCloseGapMinutes: number 
     categorySelectable: true,
     tagCount: market.tags.length,
     leadCloseGapMinutes,
+    // The seed writes no width; the submission fills the default (#119), its test value here.
+    priceProtectionTicks: 5,
   };
 }
 

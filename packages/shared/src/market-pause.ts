@@ -18,7 +18,8 @@ import { storableInstantSchema } from './market-rules.js';
  *   happened; for `early_result` also the publication instant the operator confirmed, kept in UTC
  *   (decision 3). Refused once the close has come, by the clock too. One `market_pauses` row
  *   (@buddha/db) per pause; a market may pause again after a resume. The pending orders are
- *   cancelled at the pause (#173 item 3), which M9 adds in the same place (#119, #178).
+ *   cancelled at the pause (#173 item 3), which #178 adds in the same place; until then they rest
+ *   with their locks, and the intake (#119) refuses new orders 일시 중단 (ADR-0112 10-13).
  * - 재개 (PAUSED → OPEN) or 조기 마감 (PAUSED → CLOSED): one admin asks for the next path
  *   (`POST /admin/markets/:id/pause-decisions`, MARKET_PAUSE_PATHS), a `basis_change` pause with
  *   its review result (MARKET_PAUSE_REVIEW_RESULTS), which opens a `market_pause_decision` approval

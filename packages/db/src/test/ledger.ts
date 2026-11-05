@@ -25,6 +25,7 @@ import {
 import { balances, ledgerEntries } from '../schema/index.js';
 import { clockTimestamp } from '../tx-helpers.js';
 import { createMarket, createMarketMakerAccount } from './factories.js';
+import { createFillRecord, priceAndQtyOf } from './orders.js';
 import { testDbUrls } from './harness.js';
 
 /** One event as a person's ledger shows it: signed from its side, its total after. */
@@ -101,16 +102,20 @@ export async function ledgerSupply(
 }
 
 export interface SpendCoinOptions {
-  /** The market whose collateral takes it. Default: a new draft market. */
+  /** The market whose collateral takes it. Default: a new open market. */
   marketId?: string;
 }
 
 /**
- * Takes `amountCoin` out of a person's available Coin as one pair-mint leg with no pair: a
- * PAIR_MINT_COLLATERAL into a market's collateral under a fresh key, and no order, fill or
- * position — collateral without contracts, which only a test makes (no production path records
- * one leg alone: contract-writes.test.ts). For a test that needs a person to have spent Coin — a
- * refund's shortfall, a closure's balance — and nothing of the trade itself. Returns the event.
+ * Takes `amountCoin` out of a person's available Coin as one pair-mint leg with no pair: a fill
+ * record (`createFillRecord`: the person's YES buy at the price × qty `priceAndQtyOf` makes of
+ * the amount, against the 운영 마켓메이커's resting NO buy) and its YES PAIR_MINT_COLLATERAL into
+ * the market's collateral — the leg migration 0062 binds to that fill — and no NO leg, lock or
+ * position: collateral without contracts, which only a test makes (no production path records one
+ * leg alone: contract-writes.test.ts). For a test that needs a person to have spent Coin — a
+ * refund's shortfall, a closure's balance — and nothing of the trade itself; the person then has a
+ * fill on the market (`hasMarketFill`). Throws for an amount no price × qty makes. Returns the
+ * event.
  */
 export async function spendCoin(
   db: Db,
@@ -119,7 +124,13 @@ export async function spendCoin(
   options: SpendCoinOptions = {},
 ) {
   const marketId = options.marketId ?? (await createMarket(db)).id;
-  const fillId = randomUUID();
+  const { fill } = await createFillRecord(db, {
+    marketId,
+    incomingOwnerId: userId,
+    restingOwnerId: await createMarketMakerAccount(db),
+    ...priceAndQtyOf(amountCoin),
+  });
+  const fillId = String(fill.id);
   return db.transaction(async (tx) => {
     const done = await recordLedgerEntry(tx, {
       type: 'PAIR_MINT_COLLATERAL',
@@ -186,17 +197,27 @@ export interface MintTestPairsInput {
 }
 
 /**
- * Mints pairs the real way (#118, contracts.ts): both buyers' accounts locked first
- * (`lockOrderHolders`), each buyer's lock of its price × qty (`lockForOrder`, as #119's intake will
- * take it) and one `applyPairMintFill` at limits equal to the prices, in one transaction — each
- * buyer's collateral moved into the market's collateral account (PAIR_MINT_COLLATERAL, 100 per pair
- * between the two) and each one's position (qty and cost added). So the collateral holds exactly
- * unsettled pairs × 100, which a settlement test pays out of. No order or fill row is written. The
- * holders must hold the Coin, and be two owners. Returns the fill id the two events refer to.
+ * Mints pairs the real way (#118, contracts.ts): the fill record first (`createFillRecord`: the
+ * YES holder's IOC buy filled against the NO holder's resting GTC buy, one pair-mint fill — the
+ * row migration 0062 binds the two events to), then in one transaction both buyers' accounts
+ * locked (`lockOrderHolders`), each buyer's lock of its price × qty (`lockForOrder`, as the intake
+ * takes it) and one `applyPairMintFill` at limits equal to the prices — each buyer's collateral
+ * moved into the market's collateral account (PAIR_MINT_COLLATERAL, 100 per pair between the two)
+ * and each one's position (qty and cost added). So the collateral holds exactly unsettled pairs ×
+ * 100, which a settlement test pays out of, and both holders have a fill on the market
+ * (`hasMarketFill`). The holders must hold the Coin, be two owners, not both non-person accounts
+ * and neither an admin (`orders_refuse_admin_owner`). Returns the fill id the two events refer to.
  */
 export async function mintTestPairs(db: Db, input: MintTestPairsInput): Promise<string> {
   const prices = pairPrices(input.yesPriceCoin ?? 50);
-  const fillId = randomUUID();
+  const { fill } = await createFillRecord(db, {
+    marketId: input.marketId,
+    incomingOwnerId: input.yesHolderId,
+    restingOwnerId: input.noHolderId,
+    priceCoin: prices.YES,
+    qty: input.qty,
+  });
+  const fillId = String(fill.id);
   const legs: [Outcome, string][] = [
     ['YES', input.yesHolderId],
     ['NO', input.noHolderId],
@@ -241,7 +262,8 @@ export async function ledgerAccountBalance(db: Db, ref: LedgerAccountRef) {
 export interface LedgerGuardsOffOptions {
   /**
    * Also lets `ledger_entries` take a row that does not follow its accounts (no chain check, no
-   * COMMIT check) — for a test that forges an event. Default: only a balance may be changed alone.
+   * COMMIT check, no binding of a fill event to its fill — migration 0062) — for a test that
+   * forges an event. Default: only a balance may be changed alone.
    */
   entries?: boolean;
 }
@@ -250,11 +272,12 @@ export interface LedgerGuardsOffOptions {
  * Runs `tamper` on a migrate-role connection, in one transaction with migration 0060's guards of
  * the books switched off — the UPDATE check that a balance's total moves only with its ledger
  * total (`balances_keep_ledger_gap`) and the COMMIT check that the ledger total is its ledger's
- * (and, with `entries`, the INSERT and COMMIT checks of an event) — then switches them on again
- * and commits. The one way a test breaks the books on purpose (the ledger audit's mismatches, an
- * account whose total left its ledger): the app role holds no INSERT or DELETE of `balances`, a
- * total changed alone is refused at once, and a ledger total changed without an event never
- * commits. ALTER TABLE locks the tables until the commit, so nothing else writes Coin meanwhile.
+ * (and, with `entries`, the INSERT and COMMIT checks of an event, its fill binding too) — then
+ * switches them on again and commits. The one way a test breaks the books on purpose (the ledger
+ * audit's mismatches, an account whose total left its ledger): the app role holds no INSERT or
+ * DELETE of `balances`, a total changed alone is refused at once, and a ledger total changed
+ * without an event never commits. ALTER TABLE locks the tables until the commit, so nothing else
+ * writes Coin meanwhile.
  */
 export async function withLedgerGuardsOff<T>(
   tamper: (client: Client) => Promise<T>,
@@ -270,6 +293,7 @@ export async function withLedgerGuardsOff<T>(
   ];
   if (options.entries) {
     triggers.push(['ledger_entries', 'ledger_entries_check']);
+    triggers.push(['ledger_entries', 'ledger_entries_fill_binding']);
     triggers.push(['ledger_entries', 'ledger_entries_follow_balances']);
   }
   try {

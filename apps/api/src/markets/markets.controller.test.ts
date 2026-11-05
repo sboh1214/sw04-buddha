@@ -7,6 +7,7 @@ import { clockTimestamp, schema } from '@buddha/db';
 import {
   createCategory,
   createFill,
+  createFillRecord,
   createMarket,
   createOpenedMarket,
   createSupplementedMarket,
@@ -23,7 +24,6 @@ import {
   type Fill,
   type Market,
   type MarketSummary,
-  type Outcome,
   PUBLIC_MARKET_STATUSES,
   RULE_ITEMS,
   marketSummarySchema,
@@ -103,53 +103,6 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
   /** `walkPages`' ids alone. */
   async function walk(url: string): Promise<string[]> {
     return (await walkPages(url)).ids;
-  }
-
-  /**
-   * A filled order and its fill against `restingOrderId`, written directly: no route places
-   * orders until the CLOB (#119).
-   */
-  async function insertFill(input: {
-    marketId: string;
-    userId: string;
-    restingOrderId: string;
-    outcome: Outcome;
-    side: 'buy' | 'sell';
-    qty: number;
-    amountCoin: bigint;
-    createdAt: Date;
-  }) {
-    const [order] = await t.db
-      .insert(schema.orders)
-      .values({
-        userId: input.userId,
-        marketId: input.marketId,
-        outcome: input.outcome,
-        side: input.side,
-        type: 'market',
-        qty: input.qty,
-        filledQty: input.qty,
-        status: 'filled',
-        idempotencyKey: randomUUID(),
-        createdAt: input.createdAt,
-      })
-      .returning();
-    const [fill] = await t.db
-      .insert(schema.fills)
-      .values({
-        marketId: input.marketId,
-        orderId: order!.id,
-        counterpartyType: 'order',
-        counterpartyOrderId: input.restingOrderId,
-        outcome: input.outcome,
-        side: input.side,
-        qty: input.qty,
-        amountCoin: input.amountCoin,
-        priceAvgBp: Math.round((Number(input.amountCoin) * 100) / input.qty),
-        createdAt: input.createdAt,
-      })
-      .returning();
-    return fill!;
   }
 
   it('lists open markets by default, never a draft or a review, and filters by status', async () => {
@@ -1259,35 +1212,27 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     const trader = (await createUser(t.db)).user.id;
     const maker = (await createUser(t.db)).user.id;
     const base = Date.now() - 60 * 60 * 1000;
-    const [resting] = await t.db
-      .insert(schema.orders)
-      .values({
-        userId: maker,
-        marketId: open.id,
-        outcome: 'YES',
-        side: 'sell',
-        type: 'limit',
-        limitPrice: 50,
-        qty: 1_000,
-        status: 'open',
-        timeInForce: 'gtc',
-        idempotencyKey: randomUUID(),
-        createdAt: new Date(base - 1_000),
-      })
-      .returning();
-    const written: { id: number; qty: number }[] = [];
+    // Each a match as the intake records it (#119): the trader's order against the maker's
+    // resting one, at 30, 40, 50 or 60 Coin a contract — a NO fill off 50 has a YES price
+    // (100 − its price) that differs from its own.
+    const written: { id: number; qty: number; outcome: string; priceCoin: number }[] = [];
     for (let i = 0; i < FILLS_RECENT_LIMIT + 5; i += 1) {
-      const fill = await insertFill({
+      const { fill } = await createFillRecord(t.db, {
         marketId: open.id,
-        userId: trader,
-        restingOrderId: resting!.id,
+        incomingOwnerId: trader,
+        restingOwnerId: maker,
         outcome: i % 2 === 0 ? 'YES' : 'NO',
         side: i % 3 === 0 ? 'sell' : 'buy',
+        priceCoin: 30 + (i % 4) * 10,
         qty: i + 1,
-        amountCoin: BigInt((i + 1) * 50),
         createdAt: new Date(base + i * 1_000),
       });
-      written.push({ id: fill.id, qty: fill.qty });
+      written.push({
+        id: fill.id,
+        qty: fill.qty,
+        outcome: fill.outcome,
+        priceCoin: fill.priceCoin,
+      });
     }
 
     const res = await get(`/api/v1/markets/${open.id}/fills`);
@@ -1301,8 +1246,16 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
         .reverse()
         .map((fill) => fill.id.toString()),
     );
-    expect(fills[0]).toMatchObject({ qty: FILLS_RECENT_LIMIT + 5, priceAvgBp: 5000 });
-    expect(fills[0]!.amountCoin).toBe(String((FILLS_RECENT_LIMIT + 5) * 50));
+    // The incoming contract's price on either outcome (ADR-0112 결정 7: `price_coin` × 100), never
+    // the YES price a NO fill records beside it.
+    const shown = written.slice(-FILLS_RECENT_LIMIT).reverse();
+    expect(
+      fills.map(({ outcome, priceAvgBp, amountCoin }) => [outcome, priceAvgBp, amountCoin]),
+    ).toEqual(
+      shown.map((row) => [row.outcome, row.priceCoin * 100, String(row.qty * row.priceCoin)]),
+    );
+    expect(shown.some((row) => row.outcome === 'NO' && row.priceCoin !== 50)).toBe(true);
+    // Anonymous: no order, owner or account type of either side (ADR-0107 결정 5 '#179·#119').
     for (const fill of fills) {
       expect(Object.keys(fill).sort()).toEqual(
         ['amountCoin', 'createdAt', 'id', 'outcome', 'priceAvgBp', 'qty', 'side'].sort(),

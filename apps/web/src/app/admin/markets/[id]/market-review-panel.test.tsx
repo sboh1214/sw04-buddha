@@ -73,6 +73,7 @@ const base: AdminMarket = {
   judgement: { current: null, history: [], pending: null, log: [], disputeWindowUndecided: false },
   missingOpenItems: [],
   leadCloseGapMinutes: 60,
+  priceProtectionTicks: 5,
   review: { pending: null, createdBy: CREATOR, editors: [EDITOR], sameCondition: [], log: [] },
 };
 

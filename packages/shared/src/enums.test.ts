@@ -129,7 +129,7 @@ describe('enums', () => {
     // Postgres types were recreated without them on an emptied database (migration 0017).
     expect(enums.ledgerEntryTypeSchema.safeParse('MARKET_VOID_REFUND').success).toBe(false);
     expect(enums.priceTickTriggerSchema.safeParse('open').success).toBe(false);
-    expect(enums.counterpartyTypeSchema.safeParse('amm').success).toBe(false);
+    expect(enums).not.toHaveProperty('COUNTERPARTY_TYPES');
     expect(enums.adminActionTypeSchema.safeParse('market_void').success).toBe(false);
     expect(enums).not.toHaveProperty('MARKET_MECHANISMS');
   });
@@ -239,9 +239,9 @@ describe('enums', () => {
   });
 
   it('records a pause and its next path as two market events and five admin actions (#114)', () => {
-    // Appended: a pause (open → paused) and a resume (paused → open), #152's, #176's and #142's
-    // after them; an early close is `closed` with its own `source`, the worker's close too.
-    expect(enums.MARKET_EVENT_TYPES.slice(-5, -3)).toEqual(['paused', 'resumed']);
+    // Appended: a pause (open → paused) and a resume (paused → open), #152's, #176's, #142's and
+    // #119's after them; an early close is `closed` with its own `source`, the worker's close too.
+    expect(enums.MARKET_EVENT_TYPES.slice(-6, -4)).toEqual(['paused', 'resumed']);
     expect(enums.MARKET_EVENT_TYPES.filter((type) => type === 'closed')).toHaveLength(1);
     // The pause is one admin's; the next path's request, approval, 반려 and 철회 are each an admin
     // action, and only the approval writes a market event.
@@ -303,12 +303,13 @@ describe('enums', () => {
     expect(enums.ADMIN_ACTION_TYPES.indexOf('market_dispute_dismiss')).toBe(
       enums.ADMIN_ACTION_TYPES.indexOf('market_judgement_retract') + 1,
     );
-    // No market event of its own: #152's `provisional` is followed by #176's correction and
-    // #142's delay record alone.
-    expect(enums.MARKET_EVENT_TYPES.slice(-3)).toEqual([
+    // No market event of its own: #152's `provisional` is followed by #176's correction,
+    // #142's delay record and #119's width change alone.
+    expect(enums.MARKET_EVENT_TYPES.slice(-4)).toEqual([
       'provisional',
       'judgement_corrected',
       'judgement_delay_recorded',
+      'price_protection_changed',
     ]);
     expect(enums.MARKET_EVENT_TYPES.filter((type) => type.includes('dispute'))).toEqual([]);
     // The M5 review type stays gone; admin_actions.type is varchar(40).
@@ -321,7 +322,7 @@ describe('enums', () => {
     // (PROVISIONAL stays) and is the one market event a correction writes. Its name says nothing of
     // disputes, whose records are no market events (#175), though it closes the replaced
     // version's pending ones.
-    expect(enums.MARKET_EVENT_TYPES.at(-2)).toBe('judgement_corrected');
+    expect(enums.MARKET_EVENT_TYPES.at(-3)).toBe('judgement_corrected');
     expect(enums.MARKET_EVENT_TYPES.indexOf('judgement_corrected')).toBe(
       enums.MARKET_EVENT_TYPES.indexOf('provisional') + 1,
     );
@@ -336,9 +337,9 @@ describe('enums', () => {
   });
 
   it('records a delay record as one market event and one admin action (#142)', () => {
-    // Appended last, after #176's: a record changes no status (CLOSED or PROVISIONAL stays) and
-    // is one event and one admin action — one admin, no approval kind (#173 item 2).
-    expect(enums.MARKET_EVENT_TYPES.at(-1)).toBe('judgement_delay_recorded');
+    // Appended after #176's (#119's after it): a record changes no status (CLOSED or PROVISIONAL
+    // stays) and is one event and one admin action — one admin, no approval kind (#173 item 2).
+    expect(enums.MARKET_EVENT_TYPES.at(-2)).toBe('judgement_delay_recorded');
     expect(enums.MARKET_EVENT_TYPES.indexOf('judgement_delay_recorded')).toBe(
       enums.MARKET_EVENT_TYPES.indexOf('judgement_corrected') + 1,
     );
@@ -394,9 +395,7 @@ describe('enums', () => {
     expect(enums.marketVisibilitySchema.parse('public')).toBe('public');
     expect(enums.marketEventTypeSchema.parse('rules_edited')).toBe('rules_edited');
     expect(enums.orderSideSchema.parse('buy')).toBe('buy');
-    expect(enums.orderTypeSchema.parse('market')).toBe('market');
     expect(enums.timeInForceSchema.parse('ioc')).toBe('ioc');
-    expect(enums.counterpartyTypeSchema.parse('order')).toBe('order');
     expect(enums.priceTickTriggerSchema.parse('trade')).toBe('trade');
     expect(enums.adminActionTypeSchema.parse('coupon_create')).toBe('coupon_create');
     expect(enums.auditFailureKindSchema.parse('ledger_balance_mismatch')).toBe(
@@ -404,6 +403,49 @@ describe('enums', () => {
     );
     expect(enums.ledgerRefTypeSchema.parse('fill')).toBe('fill');
     expect(enums.categorySlugSchema.parse('weather')).toBe('weather');
+  });
+
+  it('names the six order states and the reasons of ADR-0107 #177 7·8항 in its order (#119)', () => {
+    // 대기·부분 체결·전량 체결·취소 완료·만료·거절.
+    expect(enums.ORDER_STATUSES).toEqual([
+      'open',
+      'partially_filled',
+      'filled',
+      'cancelled',
+      'expired',
+      'rejected',
+    ]);
+    // 잔액 부족·보유량 부족·개장 전·마감·일시 중단·호가 부족·가격 한도·금액 부족·자기 체결.
+    expect(enums.ORDER_REJECT_REASONS).toEqual([
+      'insufficient_coin',
+      'insufficient_contracts',
+      'not_open_yet',
+      'closed',
+      'paused',
+      'no_quote',
+      'price_limit',
+      'budget_too_small',
+      'self_trade',
+    ]);
+    expect(enums.orderRejectReasonSchema.options).toEqual([...enums.ORDER_REJECT_REASONS]);
+    // 본인 취소·즉시 거래 잔량·자기 체결·일시 중단·관리자 권한·계정 제한·탈퇴.
+    expect(enums.ORDER_CANCEL_REASONS).toEqual([
+      'by_owner',
+      'ioc_remainder',
+      'self_trade',
+      'paused',
+      'admin_role',
+      'restricted',
+      'account_closed',
+    ]);
+    expect(enums.orderCancelReasonSchema.options).toEqual([...enums.ORDER_CANCEL_REASONS]);
+    expect(enums.fillKindSchema.options).toEqual(['trade', 'pair_mint']);
+    // Every order carries a limit, so there is no market order type (#177 2항), and a fill names
+    // both orders itself (no counterparty type).
+    expect(enums).not.toHaveProperty('ORDER_TYPES');
+    expect(enums).not.toHaveProperty('orderTypeSchema');
+    expect(enums.MARKET_EVENT_TYPES).toContain('price_protection_changed');
+    expect(enums.ADMIN_ACTION_TYPES).toContain('market_price_protection_change');
   });
 
   it('gives the start grant a ledger type of its own, apart from the coupon BONUS (#70)', () => {

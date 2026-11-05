@@ -1,6 +1,11 @@
 import * as z from 'zod';
 import { type ValidationIssue } from './api/errors.js';
 import { cursorQuerySchema } from './api/pagination.js';
+import {
+  ORDER_RATE_LIMIT_MAX,
+  PRICE_PROTECTION_TICKS_MAX,
+  PRICE_PROTECTION_TICKS_MIN,
+} from './constants.js';
 import { releaseSettingStatusSchema, type ReleaseSettingStatus } from './enums.js';
 import { expectedAccountIdSchema } from './expected-account.js';
 import { disputeWindowMinutesSchema } from './market-judgement.js';
@@ -237,6 +242,70 @@ export const DISPUTE_WINDOW_SETTING = defineReleaseSetting({
 });
 
 /**
+ * 주문 접수 (#119, ADR-0112; ADR-0107 결정 3 '주문 접수', 결정 1 #177 7항): whether the server takes
+ * new orders at all. Only an explicit `true` opens it (`isOrderIntakeOpen`), whatever the status;
+ * undecided or `false` refuses every new order — the 운영 마켓메이커's too — with
+ * ORDER_INTAKE_CLOSED and no order row, while resting orders stay and their cancel (#178) and the
+ * quote and book reads (#179) go on. Read once per order inside its transaction, so a change
+ * applies to the orders taken after it. The owner opens it once the settlement's live-order check
+ * (#126) and the reconciliation (#93) are deployed; the test environment opens it with a test
+ * value (e2e global setup). The first boolean item.
+ */
+export const ORDER_ACCEPTING_SETTING = defineReleaseSetting({
+  key: 'order.accepting',
+  label: '주문 접수',
+  unit: null,
+  description:
+    '참이면 새 주문을 받는다(#119, ADR-0107 결정 3). 미정이거나 거짓이면 새 주문을 운영 마켓메이커의 것까지 주문 행 없이 거절하고, 이미 들어와 있는 주문과 그 취소·호가와 주문장 조회는 그대로다. 상태와 상관없이 값이 참일 때만 연다. 바꾼 값은 그 뒤에 들어오는 주문부터 적용한다. 정산의 대기 주문 확인(#126)과 장부 대사(#93)가 배포된 뒤 오너가 연다.',
+  schema: z.boolean(),
+});
+
+/**
+ * Whether the reading opens order intake: a value of `true`, whatever the status. Undecided and
+ * `false` keep it closed (`ORDER_ACCEPTING_SETTING`).
+ */
+export function isOrderIntakeOpen(reading: ReleaseSettingReading<boolean>): boolean {
+  return reading.status !== 'undecided' && reading.value;
+}
+
+/**
+ * 주문 속도 제한 (#119, ADR-0112; ADR-0107 결정 1 #177 9항): how many orders one account may submit
+ * per minute, across every market. Counts each submission that reaches the order route — not a
+ * cancel (#178) — and never the 운영 마켓메이커's, which takes no HTTP route. Whatever the status,
+ * a value is used; undecided, no account limit applies and only the address bucket (100 a minute,
+ * rate-limit.ts) does. Read per request, so a change applies to the next submission. The test value
+ * is 20. An integer, 1 to ORDER_RATE_LIMIT_MAX.
+ */
+export const ORDER_RATE_LIMIT_SETTING = defineReleaseSetting({
+  key: 'order.rate_limit',
+  label: '주문 속도 제한',
+  unit: '회/분',
+  description:
+    '한 계정이 1분에 낼 수 있는 주문 수(#119, ADR-0107 #177 9항, 시험값 20). 모든 시장을 합쳐 세고, 주문 제출만 세며 취소는 세지 않는다. 운영 마켓메이커는 세지 않는다. 값이 있으면 상태와 상관없이 쓰고, 미정이면 계정 제한 없이 접속 주소마다 1분 100회 제한만 둔다. 바꾼 값은 그 뒤의 제출부터 적용한다.',
+  schema: z.number().int().min(1).max(ORDER_RATE_LIMIT_MAX),
+});
+
+/**
+ * 가격 보호 폭 표준값 (#119, ADR-0112; ADR-0107 결정 1 #177 2항, ADR-0093 #172 6항): the default
+ * width in ticks of a market's 가격 보호 — an IOC order's limit is narrowed to the best opposite
+ * quote at intake ± the market's width. A market copies the value when it is created, and its
+ * review submission fills a market that has none (`markets.price_protection_ticks`); from the
+ * review on the market's value is fixed, and an open market's changes only through the after-open
+ * change with a reason. Whatever the status, a value is used; undecided, a market with no width of
+ * its own cannot be submitted for review (OPEN_ITEMS_MISSING `priceProtection`, as ADR-0098 7-5's
+ * lead close). A change applies to the markets created or submitted after it. The test value is 5.
+ * An integer, PRICE_PROTECTION_TICKS_MIN to PRICE_PROTECTION_TICKS_MAX.
+ */
+export const PRICE_PROTECTION_TICKS_SETTING = defineReleaseSetting({
+  key: 'order.price_protection_ticks',
+  label: '가격 보호 폭 표준값',
+  unit: '틱',
+  description:
+    '즉시 거래(IOC) 주문의 한도를 접수 때 반대편 최우선 호가에서 이 틱 수 안으로 좁히는 가격 보호 폭의 표준값(#119, ADR-0107 #177 2항, 시험값 5). 시장을 만들 때 이 값을 시장에 복사하고, 값이 없는 시장은 검수 제출 때 넣으며, 검수부터 그 시장의 값이 잠긴다. 거래 중인 시장의 값은 개장 뒤 변경 절차로만 바꾼다. 값이 있으면 상태와 상관없이 쓰고, 미정이면 값이 없는 시장을 검수 제출할 수 없다. 바꾼 값은 그 뒤에 만드는 시장과, 값 없이 만든 초안을 검수 제출할 때부터 적용한다(이미 값을 복사한 초안은 제 값을 지킨다).',
+  schema: z.number().int().min(PRICE_PROTECTION_TICKS_MIN).max(PRICE_PROTECTION_TICKS_MAX),
+});
+
+/**
  * A retention period (#184, retention.ts): whole days, 1 to RETENTION_PERIOD_MAX_DAYS. Days, the
  * unit every count of this project's periods uses (a day is 24 hours of the database clock), so
  * one value says exactly when a record is due; a year is entered as its days.
@@ -376,16 +445,19 @@ export const RETENTION_PERIOD_SETTINGS: Readonly<
 /**
  * The shipped registry, in the order the admin screen lists it: the operating values, then the
  * retention periods. #170 built the mechanism, and each value is registered by the issue that uses
- * it (#70 the start grant, #22 the lead-close gap, #152 the dispute window, #184 the retention
- * periods, #77 the market proposals' retention period;
- * #74, #119, … to come) — define it with `defineReleaseSetting` and list it here, then
- * update every test that pins the list (docs/SETTINGS.md, 항목 등록하기). Tests inject their own
- * registry (`createTestApp({ releaseSettings })` in apps/api).
+ * it (#70 the start grant, #22 the lead-close gap, #152 the dispute window, #119 the order intake,
+ * the order rate limit and the price-protection width, #184 the retention periods, #77 the market
+ * proposals' retention period; #74, … to come) — define it with `defineReleaseSetting` and list it
+ * here, then update every test that pins the list (docs/SETTINGS.md, 항목 등록하기). Tests inject their
+ * own registry (`createTestApp({ releaseSettings })` in apps/api).
  */
 export const RELEASE_SETTINGS: ReleaseSettingsRegistry = defineReleaseSettings([
   START_COIN_SETTING,
   LEAD_CLOSE_GAP_SETTING,
   DISPUTE_WINDOW_SETTING,
+  ORDER_ACCEPTING_SETTING,
+  ORDER_RATE_LIMIT_SETTING,
+  PRICE_PROTECTION_TICKS_SETTING,
   CONSENT_RECORDS_RETENTION_SETTING,
   PHONE_VERIFICATION_RECORDS_RETENTION_SETTING,
   DELETED_POSTS_RETENTION_SETTING,

@@ -136,10 +136,14 @@ describe('value input', () => {
     expect(releaseSettingValueText(24, INTEGER)).toBe('24');
     expect(releaseSettingValueText('"quoted"', STRING)).toBe('"quoted"');
     expect(releaseSettingValueText({ hours: 24 }, OBJECT)).toBe('{\n  "hours": 24\n}');
+    // The first boolean item (#119 `order.accepting`): `false` is a value, not a blank.
+    expect(releaseSettingValueText(false, { type: 'boolean' })).toBe('false');
     for (const [value, schema] of [
       [24, INTEGER],
       ['"quoted"', STRING],
       [{ hours: 24 }, OBJECT],
+      [true, { type: 'boolean' }],
+      [false, { type: 'boolean' }],
     ] as const) {
       expect(parseReleaseSettingValueText(releaseSettingValueText(value, schema), schema)).toEqual({
         ok: true,

@@ -24,6 +24,7 @@ import {
   markPriceCoin,
   priceIsStale,
   markToLiveMarket,
+  orderAveragePriceBp,
   ordersInfiniteQueryOptions,
   portfolioTotals,
   positionListStatusFor,
@@ -56,21 +57,30 @@ function position(overrides: Partial<Position> = {}): Position {
   };
 }
 
-function order(id: string): Order {
+function order(id: string, overrides: Partial<Order> = {}): Order {
   return {
     id,
+    requestId: `request-${id}`,
     marketId: '3f2504e0-4f89-11d3-9a0c-0305e82c3301',
     marketSlug: 'rate-cut-2026',
     marketTitle: '기준금리 인하?',
     outcome: 'YES',
     side: 'buy',
-    type: 'market',
+    timeInForce: 'ioc',
+    limitPriceCoin: 65,
+    protectedLimitPriceCoin: 65,
     qty: 10,
+    budgetCoin: null,
     filledQty: 10,
+    filledAmountCoin: '630',
+    cancelledQty: 0,
+    unspentCoin: null,
     status: 'filled',
-    amountCoin: '630',
-    priceAvgBp: 6300,
+    rejectReason: null,
+    cancelReason: null,
     createdAt: '2026-09-07T00:00:00.000Z',
+    endedAt: '2026-09-07T00:00:00.000Z',
+    ...overrides,
   };
 }
 
@@ -79,6 +89,25 @@ function priced(value: bigint | undefined): bigint {
   if (value === undefined) throw new Error('expected a priced figure');
   return value;
 }
+
+describe('orderAveragePriceBp', () => {
+  it("averages the order's fills at its own side's prices, half-up, and has none before a fill", () => {
+    // #119: `filledAmountCoin` is Σ price × qty over the order's fills, so 10 at 63 is 63.00 Coin.
+    expect(orderAveragePriceBp(order('o1'))).toBe(6300);
+    // 2 at 60 and 1 at 61: 181 / 3 = 60.333… → 60.33 Coin.
+    expect(orderAveragePriceBp({ filledQty: 3, filledAmountCoin: '181' })).toBe(6033);
+    // 1 at 60 and 2 at 61: 182 / 3 = 60.666… → 60.67 Coin, rounded up.
+    expect(orderAveragePriceBp({ filledQty: 3, filledAmountCoin: '182' })).toBe(6067);
+    // A refused, resting or unfilled order: a dash, not a division by zero.
+    const rejected = order('o2', {
+      status: 'rejected',
+      rejectReason: 'no_quote',
+      filledQty: 0,
+      filledAmountCoin: '0',
+    });
+    expect(orderAveragePriceBp(rejected)).toBeUndefined();
+  });
+});
 
 describe('markPriceCoin / positionValueCoin / unrealizedPnlCoin', () => {
   it('values a YES holding at the market price and a NO holding at its complement', () => {

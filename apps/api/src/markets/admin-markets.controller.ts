@@ -16,6 +16,7 @@ import {
   adminMarketSchema,
   adminRelatedMarketSchema,
   approveMarketReviewBodySchema,
+  changePriceProtectionBodySchema,
   createMarketBodySchema,
   expectedAccountBodySchema,
   expectedAccountQuerySchema,
@@ -30,6 +31,7 @@ import {
   type AdminMarketListQuery,
   type AdminRelatedMarket,
   type ApproveMarketReviewBody,
+  type ChangePriceProtectionBody,
   type CreateMarketBody,
   type ExpectedAccountBody,
   type ExpectedAccountQuery,
@@ -67,7 +69,8 @@ import { RelatedMarketsService } from './related-markets.service.js';
  *
  * 개설 검수 (#78, ADR-0099): submit (draft → review), approve (→ scheduled) and reject (→ draft) by
  * another admin, revert (review or scheduled → draft) by any admin with a reason, and a SCHEDULED
- * market's scheduled open moved with a reason (reschedule). The queue of pending reviews is
+ * market's scheduled open moved with a reason (reschedule). An OPEN or PAUSED market's 가격 보호 폭
+ * changes with a reason (price-protection, #119, ADR-0112). The queue of pending reviews is
  * AdminMarketReviewsController's. No route opens a market directly (#21, ADR-0100): the worker
  * opens a SCHEDULED one at its scheduled open, and an approval or a reschedule that finds that
  * instant come opens it at once — the interim draft → open route is gone. After the open the
@@ -403,5 +406,28 @@ export class AdminMarketsController {
     const { expectedAccountId, ...reschedule } = body;
     assertExpectedAccount(admin.id, expectedAccountId);
     return this.markets.reschedule(admin.id, id, reschedule);
+  }
+
+  @Post(':id/price-protection')
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'adminChangeMarketPriceProtection',
+    summary:
+      'Change an open or paused market’s price-protection width in ticks (1..98), with a ' +
+      'reason, by one admin; recorded with the value before and after, it applies to the ' +
+      'immediate orders taken after it and never to resting ones',
+  })
+  @ApiData(adminMarketSchema)
+  // VALIDATION_ERROR names `priceProtectionTicks` (not 1..98) or `reason` from the body, then
+  // `status` (not open or paused), then `priceProtectionTicks` 'unchanged' (the stored width).
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
+  adminChangeMarketPriceProtection(
+    @CurrentUser() admin: SessionUser,
+    @Param('id', { schema: uuidParamSchema }) id: string,
+    @Body({ schema: changePriceProtectionBodySchema }) body: ChangePriceProtectionBody,
+  ): Promise<AdminMarket> {
+    const { expectedAccountId, ...change } = body;
+    assertExpectedAccount(admin.id, expectedAccountId);
+    return this.markets.changePriceProtection(admin.id, id, change);
   }
 }

@@ -53,6 +53,7 @@ export * from './moderation.js';
 export * from './nickname.js';
 export * from './notice.js';
 export * from './onboarding.js';
+export * from './orders.js';
 export * from './payment-gateway.js';
 export * from './phone-verification.js';
 export * from './post.js';

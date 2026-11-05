@@ -29,9 +29,9 @@ import {
  * 결과가 공개되고, 이의 기한이 지나면 워커가 결과를 확정하고 정산한다 — 시장을 보던 탭이 소켓으로
  * 잠정 결과를, 그다음 지급 완료를 받는다(#174의 라벨).
  *
- * Nobody holds the market: there is no way to trade until the CLOB lands (#119; D13), so the
- * holder's half of AC 7 — 포트폴리오 정산 이력, 원장 정산 지급 — comes back with the order
- * panel and its screen tests (#189). What stays is the lifecycle every market goes through,
+ * Nobody holds the market: no spec trades on it (the API takes orders since #119, but the order
+ * panel is #66; D13), so the holder's half of AC 7 — 포트폴리오 정산 이력, 원장 정산 지급 — comes back with the
+ * order panel and its screen tests (#189). What stays is the lifecycle every market goes through,
  * holders or not.
  *
  * The dispute window is the release setting `market.dispute_window`, which the suite's global

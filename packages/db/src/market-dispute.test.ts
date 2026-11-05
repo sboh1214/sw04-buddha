@@ -32,7 +32,6 @@ import {
   marketDisputes,
   marketEvents,
   markets,
-  orders,
   profiles,
 } from './schema/index.js';
 import {
@@ -51,6 +50,7 @@ import {
   resolveMarketNow,
 } from './test/factories.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
+import { createOrder, type CreateOrderInput } from './test/orders.js';
 import { clockTimestamp, lockAdminRoles, lockMarket } from './tx-helpers.js';
 
 const MINUTE_MS = 60_000;
@@ -323,8 +323,10 @@ describe.skipIf(!hasTestDb())('market disputes (#175, #176, docker test profile)
       const before = new Date(deadline.getTime() - 1);
       // An admin with a fill (from before the grant, #143), refused as an admin past the deadline
       // only as late, and with a stale version only as stale.
-      const { user: adminUser } = await createUser(t.db, { role: 'admin' });
+      // The fill first: an admin takes no order (#119, `orders_refuse_admin_owner`).
+      const { user: adminUser } = await createUser(t.db);
       await createFill(t.db, { marketId: market.id, userId: adminUser.id, amountCoin: 50n });
+      await t.db.update(profiles).set({ role: 'admin' }).where(eq(profiles.userId, adminUser.id));
       expect(await submit(market.id, adminUser.id, { judgementVersion: 2 }, deadline)).toEqual({
         created: false,
         reason: 'stale_version',
@@ -391,21 +393,33 @@ describe.skipIf(!hasTestDb())('market disputes (#175, #176, docker test profile)
       // A cancelled remainder keeps its filled part; an order that never filled is none.
       const { user: partial } = await createUser(t.db);
       const { user: resting } = await createUser(t.db);
-      const order = (id: string, filledQty: number, status: 'cancelled' | 'open') => ({
-        userId: id,
-        marketId: market.id,
-        outcome: 'YES' as const,
-        side: 'buy' as const,
-        type: 'limit' as const,
-        limitPrice: 40,
+      // A budget order that filled counts (#177 3항); one rejected for '금액 부족' bought nothing.
+      const { user: budget } = await createUser(t.db);
+      const { user: tooSmall } = await createUser(t.db);
+      const order = (id: string, input: Omit<CreateOrderInput, 'marketId' | 'userId'>) =>
+        createOrder(t.db, { marketId: market.id, userId: id, limitPriceCoin: 40, ...input });
+      await order(partial.id, {
         qty: 3,
-        filledQty,
-        status,
-        idempotencyKey: randomUUID(),
+        filledQty: 1,
+        status: 'cancelled',
+        cancelReason: 'by_owner',
       });
-      await t.db
-        .insert(orders)
-        .values([order(partial.id, 1, 'cancelled'), order(resting.id, 0, 'open')]);
+      await order(resting.id, { qty: 3 });
+      await order(budget.id, {
+        timeInForce: 'ioc',
+        qty: null,
+        budgetCoin: 100n,
+        filledQty: 2,
+        status: 'filled',
+      });
+      await order(tooSmall.id, {
+        timeInForce: 'ioc',
+        qty: null,
+        budgetCoin: 30n,
+        rejectReason: 'budget_too_small',
+      });
+      expect(await hasMarketFill(t.db, budget.id, market.id)).toBe(true);
+      expect(await hasMarketFill(t.db, tooSmall.id, market.id)).toBe(false);
       expect(await hasMarketFill(t.db, partial.id, market.id)).toBe(true);
       expect(await hasMarketFill(t.db, resting.id, market.id)).toBe(false);
     });

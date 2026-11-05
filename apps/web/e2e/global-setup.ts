@@ -2,6 +2,7 @@ import { type FullConfig, request } from '@playwright/test';
 import {
   awaitOwnStartGrant,
   ensureDisputeWindow,
+  ensureOrderSettings,
   ensureStartCoin,
   signInFirstSeedAdmin,
 } from './helpers';
@@ -32,6 +33,11 @@ import {
  * still (market.spec.ts AC 1). A value already there is left as it is, and the specs read the one
  * in force (`startCoinValue`).
  *
+ * And the order intake's three settings (#119, ADR-0112; ADR-0107 결정 3: the test environment opens
+ * it with test values): `order.accepting` true, `order.rate_limit` 20 a minute and
+ * `order.price_protection_ticks` 5 — the width before any spec submits a market for review, which
+ * needs one and copies it (`ensureOrderSettings`). Values already there are left as they are.
+ *
  * Before any test, so no spec writes a setting while another reads it:
  * release-settings.spec.ts reads the whole list once and holds the screen to it. The values stay
  * in the database for the runs after this one (README '테스트').
@@ -42,6 +48,7 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
     await signInFirstSeedAdmin(context);
     await ensureDisputeWindow(context);
     await ensureStartCoin(context);
+    await ensureOrderSettings(context);
     await awaitOwnStartGrant(context);
   } finally {
     await context.dispose();

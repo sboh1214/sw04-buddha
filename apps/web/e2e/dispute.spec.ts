@@ -47,10 +47,11 @@ import {
  * operators' 이의 접수 (`/admin/disputes`, after 테마 in the menu) has 검토 대기 and 처리됨, and the
  * admin detail's 판정 panel a '판정 이의' block for the current judgement version.
  *
- * No spec can make a fill: there is no way to trade until the CLOB lands (#119; D13), and only a
- * member with a fill on the market may dispute it (#173 item 6) — on the deployed environment too,
- * where nobody is eligible until then. So a dispute is never submitted for real here: a 판정 이의
- * that holds a market, its 기각 and 수용, the hold past the deadline ('판정 지연'), '이의 검토 중' and
+ * No spec makes a fill on a market it judges (orders.spec.ts trades through the API on its own
+ * open markets, #119; the order panel is #66, D13), and only a member with a fill on the market
+ * may dispute it (#173 item 6) — on the deployed environment too, where nobody is eligible while
+ * the order intake stays closed (ADR-0107 결정 3). So a dispute is never submitted for real here: a
+ * 판정 이의 that holds a market, its 기각 and 수용, the hold past the deadline ('판정 지연'), '이의 검토 중' and
  * the confirmation right after the last 기각 are the database's, the API's and the worker's
  * integration tests (packages/db market-dispute.test.ts, market-disputes.controller.test.ts,
  * private-data.test.ts, worker market-resolve.test.ts), which make fills with `createFill` — and
@@ -203,8 +204,8 @@ test.describe('판정 이의', () => {
     const memberContext = await browser.newContext();
     const adminContext = await browser.newContext();
     try {
-      // --- before the judgement, everything that takes time: the member signed up (no fill —
-      // nobody can trade, #119), an operator's browser signed in, the market closed, and every
+      // --- before the judgement, everything that takes time: the member signed up (no fill on
+      // this market), an operator's browser signed in, the market closed, and every
       // screen the window needs opened once, on the CLOSED market.
       const memberPage = await memberContext.newPage();
       const email = freshEmail();
@@ -431,7 +432,7 @@ test.describe('판정 이의', () => {
     page,
   }) => {
     /*
-     * Client-only. No spec can make a fill (#119), so the API refuses this member `no_fill`, and
+     * Client-only. This member has no fill on the market, so the API refuses it `no_fill`, and
      * the member's own reads and writes of 판정 이의 are answered in the browser: the standing is
      * the API's real answer with `eligible` put in for `no_fill` — then, once one was 'sent', the
      * duplicate with it, as the API answers — and the submission, the 철회 and MY's list are
@@ -647,8 +648,8 @@ test.describe('판정 이의', () => {
     admin,
     page,
   }) => {
-    // No account can trade (#119), so no database these specs run on holds a dispute: both halves
-    // are empty, in the API and on screen.
+    // No spec trades on a market it judges, so no database these specs run on holds a dispute:
+    // both halves are empty, in the API and on screen.
     for (const status of ['pending', 'decided']) {
       const response = await admin.get(`/api/v1/admin/market-disputes?status=${status}`);
       const body = await response.text();

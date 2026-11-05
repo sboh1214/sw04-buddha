@@ -116,6 +116,19 @@ export {
   type OnboardingRead,
 } from './onboarding.js';
 export { isPhoneVerified } from './phone-verification.js';
+export {
+  findOrderByRequest,
+  orderLockFactsOf,
+  placeOrder,
+  readLiveBook,
+  type FillRow,
+  type LiveBookOrder,
+  type OrderRow,
+  type PlaceOrderInput,
+  type PlaceOrderOptions,
+  type PlaceOrderResult,
+  type PlaceOrderTouched,
+} from './orders.js';
 export { getReleaseSetting, storedReleaseSettingValue } from './release-settings.js';
 export * as schema from './schema/index.js';
 export {

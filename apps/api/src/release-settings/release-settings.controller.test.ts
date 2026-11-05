@@ -15,6 +15,9 @@ import {
   JSONB_LONE_SURROGATE_MESSAGE,
   JSONB_NUL_MESSAGE,
   LEAD_CLOSE_GAP_SETTING,
+  ORDER_ACCEPTING_SETTING,
+  ORDER_RATE_LIMIT_SETTING,
+  PRICE_PROTECTION_TICKS_SETTING,
   RELEASE_SETTINGS,
   RELEASE_SETTING_UNCHANGED_MESSAGE,
   RETENTION_PERIOD_MAX_DAYS,
@@ -626,12 +629,15 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
     await t.app.get(AdminGuard).invalidate(admin.id);
   });
 
-  it('lists the start grant amount (#70), the lead-close gap (#22), the dispute window (#152) and the retention periods (#184), undecided until an admin enters a value', async () => {
+  it('lists the start grant amount (#70), the lead-close gap (#22), the dispute window (#152), the order intake, rate limit and width (#119) and the retention periods (#184), undecided until an admin enters a value', async () => {
     const retention = Object.values(RETENTION_PERIOD_SETTINGS);
     expect([...RELEASE_SETTINGS.keys()]).toEqual([
       START_COIN_SETTING.key,
       LEAD_CLOSE_GAP_SETTING.key,
       DISPUTE_WINDOW_SETTING.key,
+      ORDER_ACCEPTING_SETTING.key,
+      ORDER_RATE_LIMIT_SETTING.key,
+      PRICE_PROTECTION_TICKS_SETTING.key,
       ...retention.map((definition) => definition.key),
     ]);
     const res = await t.app.inject({
@@ -682,6 +688,48 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
           type: 'integer',
           minimum: 1,
           maximum: 10_080,
+        }) as unknown,
+        status: 'undecided',
+        value: null,
+        updatedAt: null,
+        updatedBy: null,
+      },
+      {
+        // The first boolean item (#119): intake opens only on true.
+        key: 'order.accepting',
+        label: '주문 접수',
+        unit: null,
+        description: ORDER_ACCEPTING_SETTING.description,
+        valueSchema: expect.objectContaining({ type: 'boolean' }) as unknown,
+        status: 'undecided',
+        value: null,
+        updatedAt: null,
+        updatedBy: null,
+      },
+      {
+        key: 'order.rate_limit',
+        label: '주문 속도 제한',
+        unit: '회/분',
+        description: ORDER_RATE_LIMIT_SETTING.description,
+        valueSchema: expect.objectContaining({
+          type: 'integer',
+          minimum: 1,
+          maximum: 1_000,
+        }) as unknown,
+        status: 'undecided',
+        value: null,
+        updatedAt: null,
+        updatedBy: null,
+      },
+      {
+        key: 'order.price_protection_ticks',
+        label: '가격 보호 폭 표준값',
+        unit: '틱',
+        description: PRICE_PROTECTION_TICKS_SETTING.description,
+        valueSchema: expect.objectContaining({
+          type: 'integer',
+          minimum: 1,
+          maximum: 98,
         }) as unknown,
         status: 'undecided',
         value: null,
@@ -739,6 +787,31 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
       expect(refused.statusCode, String(value)).toBe(400);
     }
     expect((await settings.get(START_COIN_SETTING)).value).toBe(10_000);
+  });
+
+  it('takes the order intake as true or false, refusing anything else (#119, the first boolean)', async () => {
+    const settings = t.app.get(ReleaseSettingsService);
+    const key = ORDER_ACCEPTING_SETTING.key;
+    const patchAccepting = (value: unknown, status = 'test') =>
+      t.app.inject({
+        method: 'PATCH',
+        url: `${BASE}/${key}`,
+        headers: { ...jsonHeaders, cookie: admin.cookie },
+        payload: { status, value, reason: '시험 환경', expectedAccountId: admin.id },
+      });
+    // false is a value (closed, as undecided is), then true opens it.
+    expect((await patchAccepting(false)).statusCode).toBe(200);
+    expect(await settings.get(ORDER_ACCEPTING_SETTING)).toEqual({
+      key,
+      status: 'test',
+      value: false,
+    });
+    expect((await patchAccepting(true)).statusCode).toBe(200);
+    expect((await settings.get(ORDER_ACCEPTING_SETTING)).value).toBe(true);
+    for (const value of ['true', 1, 0, {}]) {
+      expect((await patchAccepting(value, 'approved')).statusCode, JSON.stringify(value)).toBe(400);
+    }
+    expect((await settings.get(ORDER_ACCEPTING_SETTING)).value).toBe(true);
   });
 
   it('takes a retention period in whole days and keeps its status as given (#184)', async () => {

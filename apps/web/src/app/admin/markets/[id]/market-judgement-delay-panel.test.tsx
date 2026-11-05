@@ -73,6 +73,7 @@ const closed: AdminMarket = {
   tags: ['날씨'],
   missingOpenItems: [],
   leadCloseGapMinutes: 60,
+  priceProtectionTicks: 5,
   review: {
     pending: null,
     createdBy: { id: 'creator', nickname: '만든이' },

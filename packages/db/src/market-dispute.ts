@@ -133,11 +133,12 @@ export function marketConfirmationHeld(): SQL {
  * Whether `userId` has a fill on `marketId` (#173 item 6 '자격': 그 시장에 체결 이력이 있는 사용자):
  * an order of theirs on it with anything filled — the taker's and the resting order's alike, so
  * either side of a fill counts — whatever became of the order (a cancelled remainder keeps its
- * filled part). The one place eligibility reads the orders: #119 reshapes them and adapts this.
+ * filled part, and a Coin-amount order counts its contracts like any other — #119, ADR-0112: a
+ * rejected order filled none). The one place eligibility reads the orders.
  * A 사용자 is a person's account (`isHumanAccountSql`, #115 — the participants' rule, #177 13항):
  * the 운영 마켓메이커's own fills give it nothing to dispute with, while a member whose fill's other
- * side was the 운영 마켓메이커 has one like any other. No fill exists before #119, so nobody is
- * eligible on the deployed environment until then.
+ * side was the 운영 마켓메이커 has one like any other. Fills exist from #119's intake on, which the
+ * deployed environment opens with `order.accepting` (ADR-0107 결정 3).
  */
 export async function hasMarketFill(
   executor: Reader,

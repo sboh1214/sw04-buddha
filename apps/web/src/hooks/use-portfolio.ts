@@ -238,6 +238,20 @@ export function averageCostCoin(
   return (parseCoinAmount(position.costBasisCoin) + held / 2n) / held;
 }
 
+/**
+ * 주문 이력's 평균가 in basis points of a Coin (6300 = 63.00 Coin, `formatPricePerContract`): what
+ * the order's fills cost per contract at its own side's prices (#119 `filledAmountCoin`), rounded
+ * half-up in bigint. `undefined` while nothing filled — a resting, refused or unfilled order shows
+ * a dash, not a division by zero.
+ */
+export function orderAveragePriceBp(
+  order: Pick<Order, 'filledQty' | 'filledAmountCoin'>,
+): number | undefined {
+  if (order.filledQty === 0) return undefined;
+  const filled = BigInt(order.filledQty);
+  return Number((parseCoinAmount(order.filledAmountCoin) * 100n + filled / 2n) / filled);
+}
+
 export interface PortfolioTotals {
   /** Σ `positionValueCoin` — copy.portfolioValue. */
   valueCoin: bigint;

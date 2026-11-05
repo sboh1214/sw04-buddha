@@ -32,6 +32,7 @@ import {
   createUser,
 } from './test/factories.js';
 import { connectTestDb, hasTestDb, testDbUrls, type TestDb } from './test/harness.js';
+import { createFillRecord, priceAndQtyOf } from './test/orders.js';
 import {
   fundMarketMakerFunds,
   ledgerAccountBalance,
@@ -88,19 +89,79 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
     await t.reset();
   });
 
-  /** One event in a transaction of its own, under a fresh key unless one is given. */
-  const record = (
-    input: Omit<LedgerEntryInput, 'idempotencyKey' | 'refType' | 'refId'> &
-      Partial<Pick<LedgerEntryInput, 'idempotencyKey' | 'refType' | 'refId'>>,
-  ) =>
-    t.db.transaction((tx) =>
+  type RecordInput = Omit<LedgerEntryInput, 'idempotencyKey' | 'refType' | 'refId'> &
+    Partial<Pick<LedgerEntryInput, 'idempotencyKey' | 'refType' | 'refId'>>;
+
+  /**
+   * The fill a TRADE_FILL or PAIR_MINT_COLLATERAL refers to, as migration 0062 binds them (#119):
+   * a fill record (`createFillRecord`) of the event's owners — a trade from its buyer to its
+   * seller, a pair mint's YES leg from its payer, the NO buyer a fresh member — at a price × qty of
+   * its amount, with its ref and key. Null for an event no fill can stand for (no market, one
+   * owner, an amount no price × qty makes): the write API or 0060's trigger refuses it first.
+   */
+  async function fillRefOf(
+    input: RecordInput,
+  ): Promise<Pick<LedgerEntryInput, 'refType' | 'refId' | 'idempotencyKey'> | null> {
+    if (input.type !== 'TRADE_FILL' && input.type !== 'PAIR_MINT_COLLATERAL') return null;
+    const ownerOf = async (ref: LedgerAccountRef | null) =>
+      ref?.kind === 'user'
+        ? ref.userId
+        : ref?.kind === 'market_maker_funds'
+          ? await createMarketMakerAccount(t.db)
+          : null;
+    let size: { priceCoin: number; qty: number };
+    try {
+      size = priceAndQtyOf(input.amountCoin);
+    } catch {
+      return null;
+    }
+    const payer = await ownerOf(input.from);
+    if (input.type === 'TRADE_FILL') {
+      const payee = await ownerOf(input.to);
+      if (!payer || !payee || payer === payee || !input.marketId) return null;
+      const { fill } = await createFillRecord(t.db, {
+        marketId: input.marketId,
+        incomingOwnerId: payer,
+        restingOwnerId: payee,
+        kind: 'trade',
+        ...size,
+      });
+      return {
+        refType: 'fill',
+        refId: String(fill.id),
+        idempotencyKey: ledgerKeys.fill(String(fill.id)),
+      };
+    }
+    if (!payer || input.to?.kind !== 'market_collateral') return null;
+    const { fill } = await createFillRecord(t.db, {
+      marketId: input.to.marketId,
+      incomingOwnerId: payer,
+      restingOwnerId: (await createUser(t.db)).user.id,
+      ...size,
+    });
+    const refId = String(fill.id);
+    return { refType: 'fill', refId, idempotencyKey: ledgerKeys.fillLeg(refId, 'YES') };
+  }
+
+  /**
+   * One event in a transaction of its own, under a fresh key unless one is given — a fill event
+   * against its own fill record (`fillRefOf`) unless its ref or key is given.
+   */
+  const record = async (input: RecordInput) => {
+    const bound =
+      input.refId === undefined && input.idempotencyKey === undefined
+        ? await fillRefOf(input)
+        : null;
+    return t.db.transaction((tx) =>
       recordLedgerEntry(tx, {
         refType: 'fill',
         refId: randomUUID(),
         idempotencyKey: randomUUID(),
+        ...bound,
         ...input,
       }),
     );
+  };
 
   /** A ledger account's balance row, made if new. */
   async function balanceOf(ref: LedgerAccountRef) {
@@ -467,7 +528,15 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
       const { user: c } = await createUser(t.db);
       await fund({ kind: 'market_collateral', marketId: market.id }, 1_000n);
       const requestId = randomUUID();
-      const fillId = randomUUID();
+      // The fill the TRADE_FILL records (#119: migration 0062 binds it): a buys 1 @ 60 of b.
+      const { fill: traded } = await createFillRecord(t.db, {
+        marketId: market.id,
+        incomingOwnerId: a.id,
+        restingOwnerId: b.id,
+        kind: 'trade',
+        priceCoin: 60,
+      });
+      const fillId = String(traded.id);
       const events: Parameters<typeof record>[0][] = [
         {
           type: 'TREASURY_MINT',
@@ -523,7 +592,18 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
           (e) => codeOf(e) === 'key_conflict',
         );
       }
-      // Unique per type: another type may use the same key (a fill and its legs differ anyway).
+      // Unique per type, and since #119 bound to its fill: a pair-mint leg never takes a trade
+      // fill's key (migration 0062's `ledger_entries_fill_binding`; a fill and its legs differ).
+      await expect(
+        record({
+          type: 'PAIR_MINT_COLLATERAL',
+          amountCoin: 40n,
+          from: { kind: 'user', userId: a.id },
+          to: { kind: 'market_collateral', marketId: market.id },
+          refId: fillId,
+          idempotencyKey: ledgerKeys.fill(fillId),
+        }),
+      ).rejects.toSatisfy((e) => sqlConstraint(e) === 'ledger_entries_fill_binding');
       expect(
         (
           await record({
@@ -531,7 +611,6 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
             amountCoin: 40n,
             from: { kind: 'user', userId: a.id },
             to: { kind: 'market_collateral', marketId: market.id },
-            idempotencyKey: ledgerKeys.fill(fillId),
           })
         ).outcome,
       ).toBe('recorded');
@@ -854,6 +933,14 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
       const { user: b } = await createUser(t.db);
       const market = await createMarket(t.db);
       const [ownB] = await t.db.select().from(balances).where(eq(balances.userId, b.id));
+      // A real fill of 10 Coin from a to b (#119: migration 0062 binds the event to it).
+      const { fill: record10 } = await createFillRecord(t.db, {
+        marketId: market.id,
+        incomingOwnerId: a.id,
+        restingOwnerId: b.id,
+        kind: 'trade',
+        priceCoin: 10,
+      });
       const fill = {
         type: 'TRADE_FILL' as const,
         amountCoin: 10n,
@@ -863,7 +950,8 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
         toBalanceAfterCoin: 10n,
         marketId: market.id,
         refType: 'fill',
-        refId: randomUUID(),
+        refId: String(record10.id),
+        idempotencyKey: String(record10.id),
       };
       for (const [moved, stayed, by] of [
         [ownB!.accountId, own!.accountId, 10],
@@ -871,7 +959,7 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
       ] as const) {
         await expect(
           t.db.transaction(async (tx) => {
-            await tx.insert(ledgerEntries).values({ ...fill, idempotencyKey: randomUUID() });
+            await tx.insert(ledgerEntries).values(fill);
             await tx
               .update(balances)
               .set({
