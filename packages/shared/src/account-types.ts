@@ -15,9 +15,10 @@ const HUMAN_ACCOUNT_TYPE = 'member' satisfies AccountType;
  * Whether an account of `type` is a person's (사람 계정). Every count and check of people asks
  * this and nothing else: participants and volume (#121, #177 13항), '사용자 체결 0건' (#20·#120),
  * the start grant, a public profile and public activity (#73 11항), the market maker's self-trade
- * group (#117), the order rate limit's exclusion (#119), a 판정 이의's eligibility (#175). The
- * admin role is not looked at (#177 13항: an admin is a person), and a closed account stays a
- * person; nothing else — role, nickname, email, onboarding, closure — decides it.
+ * group (#117, `sameSelfTradeGroup` in matching.ts), the order rate limit's exclusion (#119), a 판정
+ * 이의's eligibility (#175). The admin role is not looked at (#177 13항: an admin is a person), and a
+ * closed account stays a person; nothing else — role, nickname, email, onboarding, closure —
+ * decides it.
  */
 export function isHumanAccountType(type: AccountType): boolean {
   return type === HUMAN_ACCOUNT_TYPE;
