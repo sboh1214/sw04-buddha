@@ -91,6 +91,7 @@ import {
   type MarketRuleVersionRow,
 } from '../market-rules-content.js';
 import { transitionMarket } from '../market-transitions.js';
+import { lockMarketOrders } from '../order-cancel.js';
 import {
   account,
   adminActions,
@@ -2089,10 +2090,11 @@ export interface MarketPauseMade {
  * A pause (#114, ADR-0102) as `POST /admin/markets/:id/pause` leaves it, of a market already OPEN:
  * `pauseMarket` in one transaction under the market lock, with the row read FOR UPDATE and the
  * database clock after it — the `paused` event (actor `by`, payload `{pauseId, reason,
- * resultPublishedAt}`), the market `paused` and its lasting `market_pauses` row. No `market_pause`
- * record, as no factory writes a route's. The route's checks are `pauseMarket`'s: a market not
- * OPEN, a close that has come or a publication instant after the pause pauses nothing, and the
- * factory throws with the skip reason.
+ * resultPublishedAt}`), the market `paused` and its lasting `market_pauses` row, and its resting
+ * orders cancelled 일시 중단 as the route does (but for `ledger_failure`, #178: the orders locked after
+ * the row, before the clock). No `market_pause` record, as no factory writes a route's. The route's
+ * checks are `pauseMarket`'s: a market not OPEN, a close that has come or a publication instant
+ * after the pause pauses nothing, and the factory throws with the skip reason.
  */
 export async function createMarketPause(
   db: Db,
@@ -2108,6 +2110,7 @@ export async function createMarketPause(
       .where(eq(markets.id, input.marketId))
       .for('update');
     if (!current) throw new Error(`createMarketPause: market ${input.marketId} not found`);
+    const orders = await lockMarketOrders(tx, input.marketId);
     const now = await clockTimestamp(tx);
     const resultPublishedAt =
       input.resultPublishedAt !== undefined
@@ -2117,6 +2120,7 @@ export async function createMarketPause(
           : null;
     const result = await pauseMarket(tx, {
       market: current,
+      orders,
       now,
       actorId: by,
       reason,
@@ -2271,8 +2275,9 @@ export interface PauseDecided {
  * transaction), then in one transaction under the market lock with the row FOR UPDATE a
  * `market_pause_decision` request about its lasting pause, approved by another admin with a
  * reason, a millisecond and two after the later of the database clock and the market's last
- * write, and `endMarketPause` at the approval's instant — the event, the market `open` or `closed`
- * and the pause's end. No admin records and no job change (the API's). `endMarketPause`'s checks
+ * write, and `endMarketPause` at the approval's instant — the market's live orders cancelled 일시
+ * 중단 (a `ledger_failure` pause's recovery, #178), the event, the market `open` or `closed` and
+ * the pause's end. No admin records and no job change (the API's). `endMarketPause`'s checks
  * are made: a market neither OPEN nor PAUSED, a close that has come, or a review result the pause's
  * reason refuses throws.
  */
@@ -2302,6 +2307,7 @@ async function approvePauseDecision(
     if (!current || !pause) {
       throw new Error(`approvePauseDecision: market ${marketId} has no lasting pause`);
     }
+    const orders = await lockMarketOrders(tx, marketId);
     const base = Math.max((await clockTimestamp(tx)).getTime(), current.updatedAt.getTime());
     const reviewResult =
       input.reviewResult === undefined ? defaultReviewResult(pause.reason) : input.reviewResult;
@@ -2327,6 +2333,7 @@ async function approvePauseDecision(
       .returning();
     const result = await endMarketPause(tx, {
       market: current,
+      orders,
       pause,
       now: at,
       approverId: approvedBy,

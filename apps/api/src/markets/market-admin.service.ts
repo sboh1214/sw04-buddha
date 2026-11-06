@@ -551,10 +551,19 @@ function toSettlementSteps(rows: SettlementStepRow[]): AdminSettlementStep[] {
  * ApprovalService) that the submission opens and the approval, the 반려 or the 되돌리기 ends, in the
  * same transaction as the market's change. Lock order: the market lock, the market row (and the
  * category's rows, FOR SHARE, where the open-items check runs), then ApprovalService's shared
- * admin-roles lock and the request row. Nothing takes the admin-roles lock and then a market lock
- * (a role grant or revoke, and an account closure, lock no market), so the order cannot cycle; a
- * request row of this kind is written under its market's lock alone, so it never waits. The
- * instant such a write records is the one ApprovalService reads for its step, after every lock
+ * admin-roles lock and the request row. Some flows go the other way, the admin-roles lock shared
+ * and then market locks: a dispute's submission, and since #178 an account closure and an account
+ * restriction's `apply` approval (their cancels, `lockAccountOrders`). Both sides take it shared,
+ * so the two meet only behind a role grant or revoke waiting for it exclusively — a soft cycle
+ * PostgreSQL rearranges after deadlock_timeout (ADR-0113 결정 4). So nothing may hold the
+ * admin-roles lock exclusively while it waits for a market lock (a hard cycle with this order,
+ * 40P01), and taking the markets first does not help: that is a hard cycle with the flows above
+ * that take the admin-roles lock shared and then a market (ADR-0112 결과 5 #143). A role grant's
+ * cancel (#143) so has no deadlock-free place inside the grant's transaction under these orders;
+ * #143 resolves it — the cancel in its own transaction after the grant commits, a change of this
+ * order, or the owner asked again about ADR-0107 결정 5 '권한 부여 트랜잭션 안' (ADR-0113 결과 5
+ * #143). A request row of this kind is written under its market's lock alone, so it never waits.
+ * The instant such a write records is the one ApprovalService reads for its step, after every lock
  * the write queued on — the request's, the decision's or the retraction's — so the market's event,
  * its record and the request say the same time (as #139's decisions do, ADR-0085); a write with
  * no request step reads the clock after the market lock.

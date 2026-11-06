@@ -2,6 +2,7 @@ import { Body, Controller, Get, HttpCode, Param, Post, Query, UseGuards } from '
 import { ApiCookieAuth, ApiHeader, ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
   IDEMPOTENCY_KEY_HEADER,
+  expectedAccountBodySchema,
   idempotencyKeySchema,
   myFillSchema,
   myFillsQuerySchema,
@@ -10,6 +11,7 @@ import {
   placeOrderBodySchema,
   placeOrderResultSchema,
   uuidParamSchema,
+  type ExpectedAccountBody,
   type MyFill,
   type MyFillsQuery,
   type MyOrdersQuery,
@@ -102,10 +104,12 @@ export class MarketOrdersController {
 
 /**
  * `/api/v1/me/orders`, `/me/fills` (#119, ADR-0112): the caller's own orders — rejected ones
- * included — and fills. Owner-only: the session decides whose rows are read, and another
- * account's order is NOT_FOUND (N04 §7). A fill is shown as the caller's own order took it, the
- * counterparty anonymous: no other order, account or account type (ADR-0107 결정 5 '#179·#119').
- * Signed in is enough: an account sent back to agree to the terms again still reads its own.
+ * included — and fills, and the cancel of a waiting one (#178, ADR-0113). Owner-only: the session
+ * decides whose rows are read or cancelled, and another account's order is NOT_FOUND (N04 §7). A
+ * fill is shown as the caller's own order took it, the counterparty anonymous: no other order,
+ * account or account type (ADR-0107 결정 5 '#179·#119'). Signed in is enough: an account sent back
+ * to agree to the terms again still reads its own, and cancels its own as it retracts its own
+ * proposal (ADR-0089).
  */
 @ApiTags('orders')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -160,6 +164,43 @@ export class MeOrdersController {
     @Param('id', { schema: uuidParamSchema }) id: string,
   ): Promise<Order> {
     return this.orders.mine(user.id, id);
+  }
+
+  /**
+   * 주문 취소 (#178, ADR-0113; ADR-0107 결정 1 #177 7·9항): the whole remaining quantity of one of
+   * the account's waiting or partly filled orders, ended in this request — no 'cancel requested'
+   * state on the server — and answered in its final state, as `GET /me/orders/:id` would. Signed
+   * in is enough: not the order limit (`order.rate_limit` counts submissions only, #177 9항), nor
+   * the intake (`order.accepting`), nor the onboarding, nor an account restriction (N02 §9 stops
+   * new orders, not their cancel) — nor the admin role, for an order placed before the grant. The
+   * body names the account the screen shows (`expectedAccountId`, ADR-0092), refused before
+   * anything is read when it is not the cookie's.
+   */
+  @Post('orders/:id/cancel')
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'cancelMyOrder',
+    summary:
+      'Cancel one of the account’s waiting or partly filled orders: its whole remaining ' +
+      'quantity at once, inside this request (no "requested" state), its lock released and what ' +
+      'filled kept. Answers the order in its final state; one that had ended answers as it is. ' +
+      'Another account’s is NOT_FOUND; MARKET_NOT_OPEN while its market is held for a ledger ' +
+      'failure (the recovery approval ends it: cancelled, reason paused, at a resume or early ' +
+      'close; expired when the market closed before its recovery, #93). Not counted by the ' +
+      'order rate limit, and open while order intake is closed',
+  })
+  @ApiData(orderSchema)
+  // FORBIDDEN: a foreign Origin, or `expectedAccountId` not the cookie's. MARKET_NOT_OPEN: the
+  // order's market is paused for a ledger failure (or closed before its recovery), details
+  // `[{path: ['market'], message: 'paused'}]`; nothing is written.
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'MARKET_NOT_OPEN')
+  cancelMyOrder(
+    @CurrentUser() user: SessionUser,
+    @Param('id', { schema: uuidParamSchema }) id: string,
+    @Body({ schema: expectedAccountBodySchema }) body: ExpectedAccountBody,
+  ): Promise<Order> {
+    assertExpectedAccount(user.id, body.expectedAccountId);
+    return this.orders.cancel(user.id, id);
   }
 
   @Get('fills')

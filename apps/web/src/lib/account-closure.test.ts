@@ -36,6 +36,7 @@ function refused(status: number, code: ErrorCode, details?: unknown): ApiError {
 
 const check = (overrides: Partial<AccountClosureCheck> = {}): AccountClosureCheck => ({
   availableCoin: '12000',
+  lockedCoin: '0',
   refusals: [],
   restriction: null,
   startGrantReceived: false,
@@ -132,6 +133,11 @@ describe('the confirmation screen', () => {
     expect(closureCoinText(check({ availableCoin: '0' }))).toBe('0 Coin');
   });
 
+  it('counts the Coin its waiting orders lock, which the closure gives back first (#178)', () => {
+    expect(closureCoinText(check({ lockedCoin: '3500' }))).toBe('15,500 Coin');
+    expect(closureCoinText(check({ availableCoin: '0', lockedCoin: '700' }))).toBe('700 Coin');
+  });
+
   it('says the forfeiture and that it cannot be undone (decision 4 #140 «마지막 확인»)', () => {
     expect(copy.closureForfeit).toContain('남은 Coin');
     expect(copy.closureForfeit).toContain('사라');
@@ -151,6 +157,12 @@ describe('what refuses a closure', () => {
     // #57-17: an admin closes once the role is revoked; #57-16: not until all are settled.
     expect(CLOSURE_REFUSAL_TEXT.admin).toContain('회수');
     expect(CLOSURE_REFUSAL_TEXT.unsettled_contracts).toContain('정산');
+    // #178 (owner answer 2026-11-06): only an order waiting for a stopped market's recovery
+    // refuses — the closure cancels every other one — and the member is not told of the ledger
+    // failure, an operator's pause reason.
+    expect(CLOSURE_REFUSAL_TEXT.orders_awaiting_recovery).toContain('복구');
+    expect(CLOSURE_REFUSAL_TEXT.orders_awaiting_recovery).not.toMatch(/원장|장애|담보/);
+    expect(copy).not.toHaveProperty('closureRefusalPendingOrders');
   });
 
   it('lists nothing when nothing refuses it', () => {
@@ -161,14 +173,14 @@ describe('what refuses a closure', () => {
     expect(
       closureBlockers(
         check({
-          refusals: ['admin', 'pending_orders'],
+          refusals: ['admin', 'orders_awaiting_recovery'],
           restriction: { kind: 'account', endsAt: END },
         }),
         formatKst,
       ),
     ).toEqual([
       { message: CLOSURE_REFUSAL_TEXT.admin, restricted: false },
-      { message: CLOSURE_REFUSAL_TEXT.pending_orders, restricted: false },
+      { message: CLOSURE_REFUSAL_TEXT.orders_awaiting_recovery, restricted: false },
       {
         message: `계정 제한 중에는 탈퇴할 수 없습니다(${formatKst(END)}까지).`,
         restricted: true,

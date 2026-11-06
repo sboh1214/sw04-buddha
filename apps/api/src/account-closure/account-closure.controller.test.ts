@@ -10,17 +10,21 @@
  * 404 — N04 §7's third deletion check, #37-19), the nickname held unlinked for 30 days, a start
  * grant still waiting cancelled and its number freed, the account restriction requests about the
  * member closed as rejected '탈퇴'; the closed account signs in no more, and the same address and
- * number sign up again at once without a second start Coin. Refused while an admin, restricted,
- * holding an unsettled contract, paying or ordering — nothing changes then; another member's rows,
- * requests, contracts, payments and orders are neither touched nor counted. Asked twice at once,
+ * number sign up again at once without a second start Coin. The waiting orders are cancelled
+ * first as 취소 완료(탈퇴) at the closure's instant, their locks forfeited with the rest (#178,
+ * ADR-0113). Refused while an admin, restricted, holding an unsettled contract, paying or with an
+ * order waiting for a ledger failure's recovery — nothing changes then, no order cancelled;
+ * another member's rows, requests, contracts, payments and orders are neither touched nor
+ * counted. Asked twice at once,
  * it runs once. A request that passed SessionGuard before the closure committed writes nothing
  * (UNAUTHENTICATED), and operators can neither adjust nor grant the closed account; a former admin
  * who closed the account is named with no nickname in the operators' records. Skips when TEST_*
  * are unset.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
-import { schema } from '@buddha/db';
+import { lockMarket, schema } from '@buddha/db';
 import {
+  checkOrderInvariants,
   completeOnboarding,
   createApprovalRequest,
   createCategory,
@@ -29,6 +33,7 @@ import {
   createFill,
   createOrder,
   createMarket,
+  createMarketPause,
   createModerationAction,
   createPhoneVerification,
   createPosition,
@@ -44,6 +49,7 @@ import {
   ledgerOf as accountLedgerOf,
   openOrderIntake,
   placeTestOrder,
+  resumeMarket,
   withLedgerGuardsOff,
 } from '@buddha/db/test';
 import {
@@ -176,6 +182,16 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       .from(schema.balances)
       .where(eq(schema.balances.userId, userId));
     return balance!;
+  }
+  /** An order through the intake (#119, `placeTestOrder`): a GTC buy of 1 YES at 50 by default. */
+  async function place(input: Parameters<typeof placeTestOrder>[1]) {
+    const result = await placeTestOrder(t.db, input);
+    if (result.kind !== 'placed') throw new Error(`expected a placed order, got ${result.kind}`);
+    return result.order;
+  }
+  async function orderOf(id: string) {
+    const [row] = await t.db.select().from(schema.orders).where(eq(schema.orders.id, id));
+    return row!;
   }
   /** The account's ledger, each event from its side (`ledgerOf` of @buddha/db/test, #116). */
   const ledgerOf = (userId: string) => accountLedgerOf(t.db, userId);
@@ -340,6 +356,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       // 2026-10-23 (3차) 9) — and no market proposal waiting (#77).
       expect(await checkOf(member)).toEqual({
         availableCoin: '10000',
+        lockedCoin: '0',
         refusals: [],
         restriction: null,
         startGrantReceived: true,
@@ -967,6 +984,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       });
       expect(await checkOf(proposer)).toEqual({
         availableCoin: '0',
+        lockedCoin: '0',
         refusals: [],
         restriction: null,
         startGrantReceived: false,
@@ -1035,6 +1053,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       const fresh = await signUpTestUser(t);
       expect(await checkOf(fresh)).toEqual({
         availableCoin: '0',
+        lockedCoin: '0',
         refusals: [],
         restriction: null,
         startGrantReceived: false,
@@ -1085,8 +1104,9 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
         qty: 2,
         status: 'expired',
       });
-      // Another member's unsettled contract, payment and refund in progress and waiting orders
-      // refuse only that member's closure.
+      // Another member's unsettled contract, payment and refund in progress refuse only that
+      // member's closure; its waiting orders (rows with no lock: never met by a cancel) refuse
+      // nothing — a closure cancels its own — and the member's closure leaves them be.
       await createPosition(t.db, { userId: other.id, marketId: market.id, outcome: 'YES', qty: 4 });
       for (const status of ['pending', 'refunding'] as const) {
         await t.db.insert(schema.payments).values({
@@ -1115,8 +1135,135 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       await closed(member);
       expect((await profileOf(member.id)).closedAt).not.toBeNull();
       expect(await checkOf(other)).toMatchObject({
-        refusals: ['unsettled_contracts', 'payment_in_progress', 'pending_orders'],
+        refusals: ['unsettled_contracts', 'payment_in_progress'],
       });
+      const othersOrders = await t.db
+        .select({ status: schema.orders.status })
+        .from(schema.orders)
+        .where(eq(schema.orders.userId, other.id));
+      expect(othersOrders.map((row) => row.status).sort()).toEqual(['open', 'partially_filled']);
+    });
+
+    it('cancels the waiting orders first as 취소 완료(탈퇴) at the closure, in every market, and forfeits their Coin with the rest (#178, ADR-0107 결정 5)', async () => {
+      await openOrderIntake(t.db, { adminId: admin.id });
+      await createStartGrant(t.db, { userId: member.id, amountCoin: 1_000n });
+      await createStartGrant(t.db, { userId: other.id, amountCoin: 1_000n });
+      const another = await createMarket(t.db);
+      const mine = [
+        await place({ marketId: market.id, ownerId: member.id, limitPriceCoin: 40, qty: 2 }),
+        await place({
+          marketId: another.id,
+          ownerId: member.id,
+          outcome: 'NO',
+          limitPriceCoin: 30,
+        }),
+      ];
+      const theirs = await place({ marketId: market.id, ownerId: other.id, limitPriceCoin: 20 });
+      expect(await checkOf(member)).toMatchObject({
+        availableCoin: '890',
+        lockedCoin: '110',
+        refusals: [],
+      });
+      const result = await closed(member);
+      expect(result.forfeitedCoin).toBe('1000');
+      for (const order of mine) {
+        expect(await orderOf(order.id)).toMatchObject({
+          status: 'cancelled',
+          cancelReason: 'account_closed',
+          filledQty: 0,
+          endedAt: new Date(result.closedAt),
+        });
+      }
+      expect(await orderOf(theirs.id)).toMatchObject({ status: 'open' });
+      expect(await balanceOf(member.id)).toMatchObject({
+        availableCoin: 0n,
+        lockedCoin: 0n,
+        ledgerCoin: 0n,
+      });
+      const forfeits = (await ledgerOf(member.id)).filter(
+        (entry) => entry.type === 'CLOSURE_FORFEIT',
+      );
+      expect(forfeits).toHaveLength(1);
+      expect(forfeits[0]).toMatchObject({ amountCoin: -1_000n });
+      expect(await checkOrderInvariants(t.db)).toEqual([]);
+    });
+
+    it('meets a counterparty’s order on the market lock: a fill first refuses it as unsettled, a closure first leaves nothing to meet', async () => {
+      await openOrderIntake(t.db, { adminId: admin.id });
+      await createStartGrant(t.db, { userId: other.id, amountCoin: 1_000n });
+      for (const fillFirst of [true, false]) {
+        const who = await onboarded();
+        await createStartGrant(t.db, { userId: who.id, amountCoin: 1_000n });
+        const venue = await createMarket(t.db);
+        // A NO bid of one at 40: a YES ask of 60 the counterparty's IOC buy meets.
+        const bid = await place({
+          marketId: venue.id,
+          ownerId: who.id,
+          outcome: 'NO',
+          limitPriceCoin: 40,
+        });
+        const observer = await t.db.$client.connect();
+        let release = () => {};
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        let held = () => {};
+        const holding = new Promise<void>((resolve) => {
+          held = resolve;
+        });
+        const holder = t.db.transaction(async (tx) => {
+          await lockMarket(tx, venue.id);
+          held();
+          await gate;
+        });
+        const crossing = () =>
+          placeTestOrder(t.db, {
+            marketId: venue.id,
+            ownerId: other.id,
+            timeInForce: 'ioc',
+            limitPriceCoin: 99,
+          });
+        let closing: Promise<Res> | undefined;
+        let crossed: ReturnType<typeof crossing> | undefined;
+        try {
+          await holding;
+          if (fillFirst) {
+            crossed = crossing();
+            await waitForLockWaiter(observer, 'the crossing order behind the market lock');
+            closing = close(who);
+          } else {
+            closing = close(who);
+            await waitForLockWaiter(observer, 'the closure behind the market lock');
+            crossed = crossing();
+          }
+          await waitForLockWaiter(observer, 'both behind the market lock', 2);
+          release();
+          await holder;
+          const [res, cross] = await Promise.all([closing, crossed]);
+          if (fillFirst) {
+            expect(cross).toMatchObject({ kind: 'placed', order: { status: 'filled' } });
+            expect(errorOf(res, 409, 'CLOSURE_NOT_ALLOWED')).toEqual({
+              reason: 'unsettled_contracts',
+            });
+            expect(await orderOf(bid.id)).toMatchObject({ status: 'filled' });
+          } else {
+            expect(res.statusCode, res.body).toBe(200);
+            expect(cross).toMatchObject({
+              kind: 'placed',
+              order: { status: 'rejected', rejectReason: 'no_quote' },
+            });
+            expect(await orderOf(bid.id)).toMatchObject({
+              status: 'cancelled',
+              cancelReason: 'account_closed',
+            });
+          }
+        } finally {
+          release();
+          await Promise.allSettled([holder, closing, crossed]);
+          observer.release();
+        }
+        expect(await checkOrderInvariants(t.db)).toEqual([]);
+      }
     });
 
     it('accepts the confirmation with blanks around it and refuses any other word or account', async () => {
@@ -1270,6 +1417,46 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       await closed(admin);
     });
 
+    it('refuses an admin holding an order placed before the grant without waiting on its market: that admin’s decision there holds the market, then asks for the profile (ADR-0113 결정 8)', async () => {
+      await openOrderIntake(t.db, { adminId: admin.id });
+      await createStartGrant(t.db, { userId: member.id, amountCoin: 1_000n });
+      const before = await place({ marketId: market.id, ownerId: member.id, limitPriceCoin: 40 });
+      await t.db
+        .update(schema.profiles)
+        .set({ role: 'admin' })
+        .where(eq(schema.profiles.userId, member.id));
+      // Stands for the member's decision on the market (a supplement, a pause decision): the
+      // market lock held, the decider's profile not yet asked for.
+      let release = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let held = () => {};
+      const holding = new Promise<void>((resolve) => {
+        held = resolve;
+      });
+      const holder = t.db.transaction(async (tx) => {
+        await lockMarket(tx, market.id);
+        held();
+        await gate;
+      });
+      let closing: Promise<Res> | undefined;
+      try {
+        await holding;
+        closing = close(member);
+        const waited = new Promise<'waited'>((resolve) => setTimeout(resolve, 5_000, 'waited'));
+        const res = await Promise.race([closing, waited]);
+        if (res === 'waited') throw new Error('the closure waited on the market lock');
+        expect(errorOf(res, 409, 'CLOSURE_NOT_ALLOWED')).toEqual({ reason: 'admin' });
+      } finally {
+        release();
+        await Promise.allSettled([holder, closing]);
+      }
+      await expectOpen(member);
+      expect(await orderOf(before.id)).toMatchObject({ status: 'open', cancelReason: null });
+      expect(await balanceOf(member.id)).toMatchObject({ lockedCoin: 40n });
+    });
+
     it('refuses while a writing restriction stands, naming its end', async () => {
       const endsAt = new Date(Date.now() + 3 * DAY_MS);
       await createModerationAction(t.db, {
@@ -1309,7 +1496,13 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       await closed(member);
     });
 
-    it('refuses an unsettled contract, a payment in progress and an order waiting, in that order', async () => {
+    it('refuses an unsettled contract, a payment in progress and an order awaiting a ledger failure’s recovery, in that order, cancelling nothing (#178)', async () => {
+      await openOrderIntake(t.db, { adminId: admin.id });
+      await createStartGrant(t.db, { userId: member.id, amountCoin: 1_000n });
+      const held = await createMarket(t.db);
+      const waiting = await place({ marketId: held.id, ownerId: member.id, limitPriceCoin: 40 });
+      const resting = await place({ marketId: market.id, ownerId: member.id, limitPriceCoin: 30 });
+      await createMarketPause(t.db, { marketId: held.id, reason: 'ledger_failure', by: admin.id });
       await createPosition(t.db, { userId: member.id, marketId: market.id, outcome: 'NO', qty: 3 });
       await t.db.insert(schema.payments).values({
         userId: member.id,
@@ -1319,15 +1512,14 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
         status: 'pending',
         idempotencyKey: `closure-${randomUUID()}`,
       });
-      await createOrder(t.db, {
-        userId: member.id,
-        marketId: market.id,
-        limitPriceCoin: 40,
-        qty: 2,
-      });
       expect(await checkOf(member)).toMatchObject({
-        refusals: ['unsettled_contracts', 'payment_in_progress', 'pending_orders'],
+        availableCoin: '930',
+        lockedCoin: '70',
+        refusals: ['unsettled_contracts', 'payment_in_progress', 'orders_awaiting_recovery'],
       });
+      const orders = async () =>
+        t.db.select().from(schema.orders).where(eq(schema.orders.userId, member.id));
+      const before = await orders();
       expect(errorOf(await close(member), 409, 'CLOSURE_NOT_ALLOWED')).toEqual({
         reason: 'unsettled_contracts',
       });
@@ -1342,13 +1534,39 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
         .update(schema.payments)
         .set({ status: 'failed' })
         .where(eq(schema.payments.userId, member.id));
+      // The held order's lock cannot be kept by a closed account: refused, and the other market's
+      // order is not cancelled either (one transaction).
       expect(errorOf(await close(member), 409, 'CLOSURE_NOT_ALLOWED')).toEqual({
-        reason: 'pending_orders',
+        reason: 'orders_awaiting_recovery',
       });
+      expect(await orders()).toEqual(before);
+      expect(await balanceOf(member.id)).toMatchObject({ lockedCoin: 70n });
       await expectOpen(member);
+
+      // The 재개 approval — the recovery — cancels it 일시 중단; then the closure goes through.
+      await resumeMarket(t.db, held.id, { requestedBy: admin.id, approvedBy: second.id });
+      expect(await checkOf(member)).toMatchObject({ lockedCoin: '30', refusals: [] });
+      const result = await closed(member);
+      expect(result.forfeitedCoin).toBe('1000');
+      const after = new Map((await orders()).map((row) => [row.id, row]));
+      expect(after.get(waiting.id)).toMatchObject({ status: 'cancelled', cancelReason: 'paused' });
+      expect(after.get(resting.id)).toMatchObject({
+        status: 'cancelled',
+        cancelReason: 'account_closed',
+        endedAt: new Date(result.closedAt),
+      });
     });
 
-    it('refuses a refund in progress and a partly filled order, each on its own (decision 7, #178)', async () => {
+    it('refuses a refund in progress with an order waiting, cancelling nothing, and cancels it once the refund ended (decision 7, #178)', async () => {
+      await openOrderIntake(t.db, { adminId: admin.id });
+      await createStartGrant(t.db, { userId: member.id, amountCoin: 1_000n });
+      const order = await place({
+        marketId: market.id,
+        ownerId: member.id,
+        outcome: 'NO',
+        limitPriceCoin: 60,
+        qty: 3,
+      });
       await t.db.insert(schema.payments).values({
         userId: member.id,
         amountCoin: 10_000n,
@@ -1357,28 +1575,25 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
         status: 'refunding',
         idempotencyKey: `closure-${randomUUID()}`,
       });
-      expect(await checkOf(member)).toMatchObject({ refusals: ['payment_in_progress'] });
+      expect(await checkOf(member)).toMatchObject({
+        lockedCoin: '180',
+        refusals: ['payment_in_progress'],
+      });
       expect(errorOf(await close(member), 409, 'CLOSURE_NOT_ALLOWED')).toEqual({
         reason: 'payment_in_progress',
       });
+      expect(await orderOf(order.id)).toMatchObject({ status: 'open', endedAt: null });
+      expect(await balanceOf(member.id)).toMatchObject({ availableCoin: 820n, lockedCoin: 180n });
+      await expectOpen(member);
       await t.db
         .update(schema.payments)
         .set({ status: 'refunded' })
         .where(eq(schema.payments.userId, member.id));
-      await createOrder(t.db, {
-        userId: member.id,
-        marketId: market.id,
-        outcome: 'NO',
-        limitPriceCoin: 60,
-        qty: 3,
-        filledQty: 1,
-        status: 'partially_filled',
+      expect((await closed(member)).forfeitedCoin).toBe('1000');
+      expect(await orderOf(order.id)).toMatchObject({
+        status: 'cancelled',
+        cancelReason: 'account_closed',
       });
-      expect(await checkOf(member)).toMatchObject({ refusals: ['pending_orders'] });
-      expect(errorOf(await close(member), 409, 'CLOSURE_NOT_ALLOWED')).toEqual({
-        reason: 'pending_orders',
-      });
-      await expectOpen(member);
     });
 
     it('refuses contracts and a partly filled order made through the intake (ADR-0086 결과 5)', async () => {
@@ -1387,22 +1602,26 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       for (const who of [member, other]) {
         await createStartGrant(t.db, { userId: who.id, amountCoin: 1_000n });
       }
-      const place = async (input: Omit<Parameters<typeof placeTestOrder>[1], 'marketId'>) => {
-        const result = await placeTestOrder(t.db, { marketId: market.id, ...input });
-        if (result.kind !== 'placed')
-          throw new Error(`expected a placed order, got ${result.kind}`);
-        return result.order;
-      };
       // The member's NO bid of 2 at 30 rests; the other member's IOC YES buy mints one pair at 70.
-      await place({ ownerId: member.id, outcome: 'NO', limitPriceCoin: 30, qty: 2 });
-      await place({ ownerId: other.id, timeInForce: 'ioc', limitPriceCoin: 99 });
-      const [order] = await t.db
-        .select()
-        .from(schema.orders)
-        .where(eq(schema.orders.userId, member.id));
-      expect(order).toMatchObject({ status: 'partially_filled', filledQty: 1 });
+      const bid = await place({
+        marketId: market.id,
+        ownerId: member.id,
+        outcome: 'NO',
+        limitPriceCoin: 30,
+        qty: 2,
+      });
+      await place({
+        marketId: market.id,
+        ownerId: other.id,
+        timeInForce: 'ioc',
+        limitPriceCoin: 99,
+      });
+      expect(await orderOf(bid.id)).toMatchObject({ status: 'partially_filled', filledQty: 1 });
+      // The partly filled order refuses nothing itself (the closure would cancel its rest): its
+      // contract does.
       expect(await checkOf(member)).toMatchObject({
-        refusals: ['unsettled_contracts', 'pending_orders'],
+        lockedCoin: '30',
+        refusals: ['unsettled_contracts'],
       });
       expect(await checkOf(other)).toMatchObject({ refusals: ['unsettled_contracts'] });
       const before = await balanceOf(member.id);
@@ -1414,8 +1633,57 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
         reason: 'unsettled_contracts',
       });
       expect(await balanceOf(member.id)).toEqual(before);
+      expect(await orderOf(bid.id)).toMatchObject({ status: 'partially_filled' });
       await expectOpen(member);
       await expectOpen(other);
+    });
+
+    it('cancels a partly filled buy whose contracts were all sold as 탈퇴: no holding refuses it (#178)', async () => {
+      await openOrderIntake(t.db, { adminId: admin.id });
+      const third = await onboarded();
+      for (const who of [member, other, third]) {
+        await createStartGrant(t.db, { userId: who.id, amountCoin: 1_000n });
+      }
+      // The member's NO bid of 2 at 30 fills one in a pair mint; the member sells that NO into a
+      // better bid of 60 (not the member's own, so no self-trade stop), and holds none again.
+      const bid = await place({
+        marketId: market.id,
+        ownerId: member.id,
+        outcome: 'NO',
+        limitPriceCoin: 30,
+        qty: 2,
+      });
+      await place({
+        marketId: market.id,
+        ownerId: other.id,
+        timeInForce: 'ioc',
+        limitPriceCoin: 99,
+      });
+      await place({ marketId: market.id, ownerId: third.id, outcome: 'NO', limitPriceCoin: 60 });
+      await place({
+        marketId: market.id,
+        ownerId: member.id,
+        outcome: 'NO',
+        side: 'sell',
+        timeInForce: 'ioc',
+        limitPriceCoin: 60,
+      });
+      expect(await orderOf(bid.id)).toMatchObject({ status: 'partially_filled', filledQty: 1 });
+      expect(await checkOf(member)).toMatchObject({
+        availableCoin: '1000',
+        lockedCoin: '30',
+        refusals: [],
+      });
+      const result = await closed(member);
+      expect(result.forfeitedCoin).toBe('1030');
+      expect(await orderOf(bid.id)).toMatchObject({
+        status: 'cancelled',
+        cancelReason: 'account_closed',
+        filledQty: 1,
+        endedAt: new Date(result.closedAt),
+      });
+      expect(await balanceOf(member.id)).toMatchObject({ availableCoin: 0n, lockedCoin: 0n });
+      expect(await checkOrderInvariants(t.db)).toEqual([]);
     });
 
     it('refuses an account whose balance left its ledger until the gap is closed (ADR-0109 12-8)', async () => {

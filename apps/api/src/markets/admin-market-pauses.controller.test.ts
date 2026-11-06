@@ -12,10 +12,16 @@
  * its close by the worker, its close come and a pause since ended; rejected and retracted in any
  * status; two pauses in a row; two writes at once; the 일시 중단 결정 대기 queue; the admin on
  * screen; and the PATCH of a paused market (category and tags, never a version item). The removed
- * one-admin close is admin-markets.controller.test's. Skips when TEST_* are unset.
+ * one-admin close is admin-markets.controller.test's. And the resting orders (#178, ADR-0113): a
+ * pause cancels every one of the market's — people's and the 운영 마켓메이커's — as 일시 중단 at its
+ * instant, a refused one none; a `ledger_failure` pause none (an owner's cancel refused), until the
+ * approval of its 재개 or 조기 마감 cancels them before the status changes. Skips when TEST_* are
+ * unset.
  */
 import { clockTimestamp, endPauseAtClose, lockMarket, schema, transitionMarket } from '@buddha/db';
 import {
+  balanceOf,
+  checkOrderInvariants,
   completeOnboarding,
   createCategory,
   createMarket,
@@ -23,7 +29,11 @@ import {
   createOpenedMarket,
   createPauseDecision,
   createPausedMarket,
+  createStartGrant,
   createSupplementRequest,
+  fundMarketMakerFunds,
+  openOrderIntake,
+  placeTestOrder,
   resumeMarket,
 } from '@buddha/db/test';
 import {
@@ -1529,6 +1539,173 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
       slug: market.slug,
       closeAt: market.closeAt,
       status: 'paused',
+    });
+  });
+  // --- the resting orders (#178) ----------------------------------------------------------------
+  describe('resting orders (#178, ADR-0113)', () => {
+    /** An onboarded member with 1,000 Coin. */
+    async function member(): Promise<TestUser> {
+      const user = await signUpTestUser(t);
+      await completeOnboarding(t.db, { userId: user.id });
+      await createStartGrant(t.db, { userId: user.id, amountCoin: 1_000n });
+      return user;
+    }
+    /** A GTC order through the intake, resting. */
+    async function rest(
+      marketId: string,
+      ownerId: string,
+      input: Partial<Parameters<typeof placeTestOrder>[1]> = {},
+    ) {
+      const result = await placeTestOrder(t.db, { marketId, ownerId, ...input });
+      if (result.kind !== 'placed' || result.order.status !== 'open') {
+        throw new Error(`expected a resting order, got ${result.kind}`);
+      }
+      return result.order;
+    }
+    async function orderOf(id: string) {
+      const [row] = await t.db.select().from(schema.orders).where(eq(schema.orders.id, id));
+      return row!;
+    }
+    const expectSound = async () => expect(await checkOrderInvariants(t.db)).toEqual([]);
+    const cancelAsOwner = (who: TestUser, orderId: string) =>
+      post(`/api/v1/me/orders/${orderId}/cancel`, who);
+
+    beforeEach(async () => {
+      await openOrderIntake(t.db, { adminId: asker.id });
+    });
+
+    it('cancels every resting order of the market at the pause, people’s and the 운영 마켓메이커’s, their locks back; a refused pause none', async () => {
+      const market = await opened();
+      const elsewhere = await opened();
+      const [a, b] = [await member(), await member()];
+      const marketMaker = await fundMarketMakerFunds(t.db, market.id, 1_000n);
+      const orders = [
+        await rest(market.id, a.id, { limitPriceCoin: 40, qty: 2 }),
+        await rest(market.id, b.id, { outcome: 'NO', limitPriceCoin: 30 }),
+        await rest(market.id, marketMaker, { limitPriceCoin: 45, qty: 3 }),
+      ];
+      const kept = await rest(elsewhere.id, a.id);
+      // A refused pause (an early result published after it) cancels nothing.
+      const refused = await pause(market.id, asker, {
+        reason: 'early_result',
+        resultPublishedAt: iso(Date.now() + HOUR_MS),
+      });
+      expectRefused(refused, 'resultPublishedAt', 'after the pause');
+      for (const order of orders) expect((await orderOf(order.id)).status).toBe('open');
+
+      await listening(market.id, async (received) => {
+        const res = await pause(market.id);
+        expect(res.statusCode, res.body).toBe(200);
+        const [row] = await pausesOf(market.id);
+        for (const order of orders) {
+          expect(await orderOf(order.id)).toMatchObject({
+            status: 'cancelled',
+            cancelReason: 'paused',
+            filledQty: 0,
+            endedAt: row!.pausedAt,
+          });
+        }
+        // The status alone is published: a lock given back has no event.
+        await waitForMessages(received, 1, 'market:status of the pause');
+        await sleep(100);
+        expect(received.map((message) => (JSON.parse(message) as { type: string }).type)).toEqual([
+          'market:status',
+        ]);
+      });
+      expect(await balanceOf(t.db, a.id)).toMatchObject({ availableCoin: 950n, lockedCoin: 50n });
+      expect(await balanceOf(t.db, b.id)).toMatchObject({ availableCoin: 1_000n, lockedCoin: 0n });
+      expect(await orderOf(kept.id)).toMatchObject({ status: 'open' });
+      // The record is the pause's as before: its cancels are derived (paused, at its instant).
+      const [action] = await pauseActionsFor(market.id);
+      expect(Object.keys(action!.payload as object).sort()).toEqual(
+        ['after', 'before', 'note', 'pauseId', 'reason', 'resultPublishedAt'].sort(),
+      );
+      await expectSound();
+    });
+
+    it('keeps a ledger failure’s orders locked, refusing the owner’s cancel, until the approval of its 재개 or 조기 마감 cancels them first', async () => {
+      const a = await member();
+      for (const path of ['resume', 'early_close'] as const) {
+        const market = await opened();
+        const order = await rest(market.id, a.id, { limitPriceCoin: 40, qty: 2 });
+        const res = await pause(market.id, asker, { reason: 'ledger_failure' });
+        expect(res.statusCode, res.body).toBe(200);
+        const before = await orderOf(order.id);
+        expect(before.status).toBe('open');
+        const refusal = await cancelAsOwner(a, order.id);
+        expect(refusal.statusCode, refusal.body).toBe(409);
+        expect(errorOf(refusal)).toMatchObject({
+          code: 'MARKET_NOT_OPEN',
+          details: [{ path: ['market'], message: 'paused' }],
+        });
+        expect(await orderOf(order.id)).toEqual(before);
+        expect(await balanceOf(t.db, a.id)).toMatchObject({ lockedCoin: 80n });
+
+        expect((await requestDecision(market.id, { path })).statusCode).toBe(200);
+        const requestId = await pendingId(market.id);
+        // The requester's approval is refused: nothing cancelled.
+        expectNotAllowed(await approve(market.id, requestId, asker), 'requester');
+        expect(await orderOf(order.id)).toEqual(before);
+
+        const approved = await approve(market.id, requestId);
+        expect(approved.statusCode, approved.body).toBe(200);
+        const event = (await eventsFor(market.id)).at(-1)!;
+        expect(event.type).toBe(path === 'resume' ? 'resumed' : 'closed');
+        // At the decision's instant, which is the event's: cancelled before the status changed.
+        expect(await orderOf(order.id)).toMatchObject({
+          status: 'cancelled',
+          cancelReason: 'paused',
+          endedAt: event.createdAt,
+        });
+        expect(await balanceOf(t.db, a.id)).toMatchObject({
+          availableCoin: 1_000n,
+          lockedCoin: 0n,
+        });
+        await expectSound();
+      }
+    });
+
+    it('serialises a pause with the owner’s cancel on the market lock: one of the two ends the order', async () => {
+      const a = await member();
+      for (const pauseFirst of [true, false]) {
+        const market = await opened();
+        const order = await rest(market.id, a.id, { limitPriceCoin: 40 });
+        const observer = await t.db.$client.connect();
+        let release = () => {};
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        let held = () => {};
+        const holding = new Promise<void>((resolve) => {
+          held = resolve;
+        });
+        const holder = t.db.transaction(async (tx) => {
+          await lockMarket(tx, market.id);
+          held();
+          await gate;
+        });
+        try {
+          await holding;
+          const first = pauseFirst ? pause(market.id) : cancelAsOwner(a, order.id);
+          await waitForLockWaiter(observer, 'the first write behind the market lock');
+          const second = pauseFirst ? cancelAsOwner(a, order.id) : pause(market.id);
+          await waitForLockWaiter(observer, 'the second write behind the market lock', 2);
+          release();
+          await holder;
+          const answers = await Promise.all([first, second]);
+          for (const res of answers) expect(res.statusCode, res.body).toBe(200);
+        } finally {
+          release();
+          await holder.catch(() => undefined);
+          observer.release();
+        }
+        expect(await orderOf(order.id)).toMatchObject({
+          status: 'cancelled',
+          cancelReason: pauseFirst ? 'paused' : 'by_owner',
+        });
+        expect(await balanceOf(t.db, a.id)).toMatchObject({ lockedCoin: 0n });
+        await expectSound();
+      }
     });
   });
 });

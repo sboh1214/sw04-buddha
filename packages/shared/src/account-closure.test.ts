@@ -47,7 +47,7 @@ describe('탈퇴 (#140)', () => {
       'admin',
       'unsettled_contracts',
       'payment_in_progress',
-      'pending_orders',
+      'orders_awaiting_recovery',
     ]);
     expect(ERROR_CODES).toEqual(expect.arrayContaining(['CLOSURE_NOT_ALLOWED', 'ACCOUNT_CLOSED']));
     expect(accountClosureNotAllowedDetailsSchema.parse({ reason: 'admin' })).toEqual({
@@ -62,17 +62,34 @@ describe('탈퇴 (#140)', () => {
     expect(
       accountClosureCheckSchema.parse({
         availableCoin: '10000',
+        lockedCoin: '120',
         refusals: ['unsettled_contracts'],
         restriction: { kind: 'account', endsAt: null },
         startGrantReceived: true,
         pendingProposals: true,
       }),
-    ).toMatchObject({ availableCoin: '10000', startGrantReceived: true, pendingProposals: true });
+    ).toMatchObject({
+      availableCoin: '10000',
+      lockedCoin: '120',
+      startGrantReceived: true,
+      pendingProposals: true,
+    });
+    // The locked Coin is always said too (#178): the closure forfeits it with the available Coin.
+    expect(
+      accountClosureCheckSchema.safeParse({
+        availableCoin: '0',
+        refusals: [],
+        restriction: null,
+        startGrantReceived: false,
+        pendingProposals: false,
+      }).success,
+    ).toBe(false);
     // Whether the start Coin was paid is always said (owner decision 2026-10-23 (3차) 9), and so
     // is whether a proposal is being processed (#77, owner decision 2026-10-24, ADR-0089).
     expect(
       accountClosureCheckSchema.safeParse({
         availableCoin: '0',
+        lockedCoin: '0',
         refusals: [],
         restriction: null,
         pendingProposals: false,
@@ -81,6 +98,7 @@ describe('탈퇴 (#140)', () => {
     expect(
       accountClosureCheckSchema.safeParse({
         availableCoin: '0',
+        lockedCoin: '0',
         refusals: [],
         restriction: null,
         startGrantReceived: false,

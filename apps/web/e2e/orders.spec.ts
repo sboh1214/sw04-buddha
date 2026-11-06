@@ -7,6 +7,7 @@ import {
   expect,
   freshEmail,
   meOf,
+  pauseMarket,
   signIn,
   signUp,
   test,
@@ -26,6 +27,13 @@ import {
  * true, 20 orders a minute per account, 5 ticks): each member here sends well under 20. The width
  * the market copied is read, not assumed — a developer's database may hold another. Nothing is
  * left to settle: the market stays open, and A's resting buy ends filled by the last order.
+ *
+ * 주문 취소 (#178, ADR-0113), through the API too — the button and '취소 요청 중' are #123's: A's
+ * partly filled order is cancelled by A, the rest given back and what filled kept, in the request
+ * (the answer is the final state, the same again on a repeat); A's resting order with nothing
+ * filled ends whole with its whole lock back; B naming A's order with B's own account is
+ * NOT_FOUND, as an id naming none; and an admin's pause cancels A's resting order on another
+ * market as 일시 중단. Each member sends a handful of orders, well under the limit.
  */
 
 /** `{ data }` out of the success envelope, with the body in the message on a failure. */
@@ -283,6 +291,118 @@ test.describe('주문 접수 (#119)', () => {
     } finally {
       await otherContext.close();
       await adminContext.close();
+    }
+  });
+});
+
+test.describe('주문 취소 (#178)', () => {
+  test('본인 취소는 남은 수량 전부를 그 요청 안에서 끝내 잠금을 돌려주고, 다른 계정의 주문은 없는 주문처럼 404이며, 일시 중단은 대기 주문을 취소한다', async ({
+    admin,
+    browser,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const other = await createOpenMarket(admin);
+    const otherContext = await browser.newContext();
+    try {
+      const otherPage = await otherContext.newPage();
+      await signUp(otherPage, freshEmail());
+      await signUp(page, freshEmail());
+      const a = otherPage.request;
+      const b = page.request;
+      const cancel = async (context: APIRequestContext, orderId: string) =>
+        context.post(`/api/v1/me/orders/${orderId}/cancel`, {
+          data: { expectedAccountId: (await meOf(context)).id },
+        });
+
+      // --- A's GTC NO buy, 2 at 40, rests; B's IOC YES buy of one meets it at 40 (a pair mint).
+      const resting = (
+        await placeOrder(a, market.id, crypto.randomUUID(), {
+          outcome: 'NO',
+          side: 'buy',
+          timeInForce: 'gtc',
+          limitPriceCoin: 40,
+          qty: 2,
+        })
+      ).order;
+      await placeOrder(b, market.id, crypto.randomUUID(), {
+        outcome: 'YES',
+        side: 'buy',
+        timeInForce: 'ioc',
+        limitPriceCoin: 99,
+        qty: 1,
+      });
+      expect((await meOf(a)).balance.lockedCoin).toBe('40');
+
+      // --- B naming A's order with B's own account: NOT_FOUND, the same as an id naming none.
+      const foreign = await cancel(b, resting.id);
+      const none = await cancel(b, crypto.randomUUID());
+      expect(foreign.status()).toBe(404);
+      expect(await foreign.text()).toBe(await none.text());
+      expect(await dataOf<Order>(await a.get(`/api/v1/me/orders/${resting.id}`))).toMatchObject({
+        status: 'partially_filled',
+        filledQty: 1,
+      });
+
+      // --- A cancels: the rest ends in the request, what filled stays, the lock comes back.
+      const cancelled = await dataOf<Order>(await cancel(a, resting.id));
+      expect(cancelled).toMatchObject({
+        id: resting.id,
+        status: 'cancelled',
+        cancelReason: 'by_owner',
+        qty: 2,
+        filledQty: 1,
+        filledAmountCoin: '40',
+        cancelledQty: 1,
+      });
+      expect(cancelled.endedAt).not.toBeNull();
+      expect(await dataOf<Order>(await a.get(`/api/v1/me/orders/${resting.id}`))).toEqual(
+        cancelled,
+      );
+      expect((await meOf(a)).balance.lockedCoin).toBe('0');
+      // Asked again: the same final state, nothing more released.
+      expect(await dataOf<Order>(await cancel(a, resting.id))).toEqual(cancelled);
+
+      // --- A's own resting GTC with nothing filled: all of it cancelled, its whole lock back.
+      const unfilled = (
+        await placeOrder(a, market.id, crypto.randomUUID(), {
+          outcome: 'YES',
+          side: 'buy',
+          timeInForce: 'gtc',
+          limitPriceCoin: 20,
+          qty: 3,
+        })
+      ).order;
+      expect((await meOf(a)).balance.lockedCoin).toBe('60');
+      expect(await dataOf<Order>(await cancel(a, unfilled.id))).toMatchObject({
+        status: 'cancelled',
+        cancelReason: 'by_owner',
+        filledQty: 0,
+        filledAmountCoin: '0',
+        cancelledQty: 3,
+      });
+      expect((await meOf(a)).balance.lockedCoin).toBe('0');
+
+      // --- A's GTC buy on the other market rests; an admin's pause cancels it as 일시 중단.
+      const waiting = (
+        await placeOrder(a, other.id, crypto.randomUUID(), {
+          outcome: 'YES',
+          side: 'buy',
+          timeInForce: 'gtc',
+          limitPriceCoin: 30,
+          qty: 1,
+        })
+      ).order;
+      expect((await meOf(a)).balance.lockedCoin).toBe('30');
+      await pauseMarket(admin, other.id);
+      expect(await dataOf<Order>(await a.get(`/api/v1/me/orders/${waiting.id}`))).toMatchObject({
+        status: 'cancelled',
+        cancelReason: 'paused',
+        cancelledQty: 1,
+      });
+      expect((await meOf(a)).balance.lockedCoin).toBe('0');
+    } finally {
+      await otherContext.close();
     }
   });
 });

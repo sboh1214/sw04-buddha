@@ -2169,7 +2169,7 @@ export type paths = {
         /** What closing the account would do now: the Coin it forfeits, what refuses it, whether the start Coin was paid to it — its number gets none again — and whether a market proposal of it is still being processed (탈퇴, #140; #77) */
         get: operations["getMyClosureCheck"];
         put?: never;
-        /** Close the account (탈퇴, #140): type '탈퇴'; forfeits the Coin left, deletes the identifying data and ends every session */
+        /** Close the account (탈퇴, #140): type '탈퇴'; cancels the waiting orders (탈퇴, #178), forfeits the Coin left, deletes the identifying data and ends every session */
         post: operations["closeMyAccount"];
         delete?: never;
         options?: never;
@@ -2426,6 +2426,23 @@ export type paths = {
         get: operations["getMyOrder"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/orders/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel one of the account’s waiting or partly filled orders: its whole remaining quantity at once, inside this request (no "requested" state), its lock released and what filled kept. Answers the order in its final state; one that had ended answers as it is. Another account’s is NOT_FOUND; MARKET_NOT_OPEN while its market is held for a ledger failure (the recovery approval ends it: cancelled, reason paused, at a resume or early close; expired when the market closed before its recovery, #93). Not counted by the order rate limit, and open while order intake is closed */
+        post: operations["cancelMyOrder"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3145,13 +3162,14 @@ export type components = {
         };
         AccountClosureCheck: {
             availableCoin: components["schemas"]["CoinAmount"];
+            lockedCoin: components["schemas"]["CoinAmount"];
             pendingProposals: boolean;
             refusals: components["schemas"]["AccountClosureRefusal"][];
             restriction: components["schemas"]["RestrictedDetails"] | null;
             startGrantReceived: boolean;
         };
         /** @enum {string} */
-        AccountClosureRefusal: "admin" | "unsettled_contracts" | "payment_in_progress" | "pending_orders";
+        AccountClosureRefusal: "admin" | "unsettled_contracts" | "payment_in_progress" | "orders_awaiting_recovery";
         AccountClosureResult: {
             /** Format: date-time */
             closedAt: string;
@@ -17627,6 +17645,87 @@ export interface operations {
             };
             /** @description NOT_FOUND */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    cancelMyOrder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedAccountBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Order"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description MARKET_NOT_OPEN */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

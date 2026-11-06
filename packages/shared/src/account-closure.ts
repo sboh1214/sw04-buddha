@@ -14,9 +14,12 @@ import { restrictedDetailsSchema } from './moderation.js';
  * (#37-17) — while the ledger, the orders, fills and positions and every operator record stay.
  *
  * Refused while the account holds the admin role (#57-17: closed only after the role is revoked),
- * holds contracts not settled (#57-16), has a payment pending or refunding (decision 7), has orders
- * waiting (their cancellation is #178's), or a writing or an account restriction stands (decision 4
- * #140 «제재 중 탈퇴»: RESTRICTED, until it ends or is lifted).
+ * holds contracts not settled (#57-16), has a payment pending or refunding (decision 7), has an
+ * order waiting for the recovery of a market paused for a ledger failure (#178, owner answer
+ * 2026-11-06: a closed account cannot keep locked Coin), or a writing or an account restriction
+ * stands (decision 4 #140 «제재 중 탈퇴»: RESTRICTED, until it ends or is lifted). Its other waiting
+ * orders are cancelled in the closure's transaction as 취소 완료(탈퇴) (#178, ADR-0107 결정 5 '#178
+ * 탈퇴 때 대기 주문'), and the Coin they locked is forfeited with the rest.
  */
 
 /** What the member types to confirm, exactly (decision 4 #140 «'탈퇴'를 직접 입력해 한 번 확인한다»). */
@@ -65,16 +68,16 @@ export type AccountClosureBody = z.infer<typeof accountClosureBodySchema>;
  * - `unsettled_contracts`: a contract it holds is not settled yet (#57-16: not until all are);
  * - `payment_in_progress`: a payment of the kept paid-Coin code (D9) is pending or refunding
  *   (ADR-0069 decision 7: never today, sales being closed);
- * - `pending_orders`: an order of it still waits — their cancellation before a closure (N02 §9) is
- *   #178's, and until it is there the closure never forfeits a reserved Coin (none can exist
- *   today: there is no order intake).
+ * - `orders_awaiting_recovery`: an order of it waits in a market paused for a ledger failure,
+ *   whose orders keep their locks until its recovery (#178, owner answer 2026-11-06) — the closure
+ *   cancels every other waiting order (탈퇴), but cannot keep this one's locked Coin.
  * A writing or an account restriction refuses it as RESTRICTED, with its kind and end.
  */
 export const ACCOUNT_CLOSURE_REFUSALS = [
   'admin',
   'unsettled_contracts',
   'payment_in_progress',
-  'pending_orders',
+  'orders_awaiting_recovery',
 ] as const;
 export type AccountClosureRefusal = (typeof ACCOUNT_CLOSURE_REFUSALS)[number];
 export const accountClosureRefusalSchema = z
@@ -89,24 +92,29 @@ export type AccountClosureNotAllowedDetails = z.infer<typeof accountClosureNotAl
 
 /**
  * `GET /me/closure`: what the confirmation screen says before the member types anything — the Coin
- * the closure would forfeit now (the available balance; reserved Coin cannot exist without orders)
- * and whatever refuses it now: the reasons in the order the closure asks them, and the restriction
- * it would answer RESTRICTED with (the later of the two when both stand, as every refusal names
- * it), or none — and whether the account's start Coin was paid (`startGrantReceived`, owner
- * decision 2026-10-23 (3차) 9, ADR-0086): only then does the screen say that the same number gets
- * no start Coin again on a new sign-up (#57-1). A grant still waiting is cancelled by the closure
- * and its number may receive the start Coin with the next account (owner decision 2026-10-18 on
- * #70), and an account that never had one (none asked yet, or its number's went to another
- * account — `number_used`) is told nothing either. And whether the account has a market proposal
- * still being processed (`pendingProposals` — 접수 or 검토, PENDING_PROPOSAL_STATUSES; #77's owner
- * decision 2026-10-24, ADR-0089): only then does the screen say that the operators process what it
- * proposed as it is and that the member will not see it once closed (ADR-0069 decision 4 #140
- * «처리 중인 … 제안: 그대로 검토하고 결과를 기록한다. 탈퇴한 본인은 볼 수 없다»). Read as of now: the
- * closure asks everything again in its own transaction.
+ * the closure would forfeit now (`availableCoin + lockedCoin`: the closure cancels the waiting
+ * orders first, which gives their locks back) and whatever refuses it now: the reasons in the order
+ * the closure asks them, and the restriction it would answer RESTRICTED with (the later of the two
+ * when both stand, as every refusal names it), or none — and whether the account's start Coin was
+ * paid (`startGrantReceived`, owner decision 2026-10-23 (3차) 9, ADR-0086): only then does the
+ * screen say that the same number gets no start Coin again on a new sign-up (#57-1). A grant still
+ * waiting is cancelled by the closure and its number may receive the start Coin with the next
+ * account (owner decision 2026-10-18 on #70), and an account that never had one (none asked yet, or
+ * its number's went to another account — `number_used`) is told nothing either. And whether the
+ * account has a market proposal still being processed (`pendingProposals` — 접수 or 검토,
+ * PENDING_PROPOSAL_STATUSES; #77's owner decision 2026-10-24, ADR-0089): only then does the screen
+ * say that the operators process what it proposed as it is and that the member will not see it once
+ * closed (ADR-0069 decision 4 #140 «처리 중인 … 제안: 그대로 검토하고 결과를 기록한다. 탈퇴한 본인은 볼 수
+ * 없다»). Read as of now: the closure asks everything again in its own transaction.
  */
 export const accountClosureCheckSchema = z
   .object({
     availableCoin: coinAmountSchema,
+    /**
+     * The Coin the account's waiting orders lock (#178): the closure gives it back by cancelling
+     * them (탈퇴) and forfeits it with the available Coin.
+     */
+    lockedCoin: coinAmountSchema,
     refusals: z.array(accountClosureRefusalSchema),
     restriction: restrictedDetailsSchema.nullable(),
     /** The account's start grant was paid (`granted`): its number never gets one again. */
