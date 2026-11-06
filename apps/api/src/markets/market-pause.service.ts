@@ -3,6 +3,7 @@ import {
   currentMarketPause,
   endMarketPause,
   lockAdminRoles,
+  lockMarketOrders,
   pauseMarket,
   schema,
   type Db,
@@ -151,8 +152,17 @@ const END_SKIPS: Readonly<Record<EndPauseSkipReason, () => AppError>> = {
  * stays waiting for another admin's decision, and they cannot retract it. The request's
  * `no_decider` check counts every admin but the requester (`ApprovalService.hasDecider`).
  *
- * Orders: resting orders stay with their locks until #178 cancels them in `pauseMarket`; the
- * intake (#119) refuses new orders on a paused market as 일시 중단 (ADR-0112 10-13).
+ * Orders (#178, ADR-0113): the pause cancels the market's resting orders — people's and the 운영
+ * 마켓메이커's — as 취소 완료(일시 중단) at its instant, their locks given back, in its transaction
+ * (`pauseMarket`; ADR-0107 결정 5 '#119 일시 중단 때 대기 주문'). A `ledger_failure` pause cancels
+ * none: they keep their locks (an owner's cancel is refused, MARKET_NOT_OPEN) until the approval
+ * of its 재개 or 조기 마감 — the recovery — cancels them the same way at the decision's instant,
+ * before the status changes (`endMarketPause`, 결정 4 #178 rows). Both take the market's orders and
+ * their owners' Coin accounts (`lockMarketOrders`) before the clock, so balance rows come last: the
+ * pause right after the market row (it takes no admin-roles lock), the decision's approval after
+ * the row and `decidable`'s shared admin-roles lock. A refusal rolls every cancel back. Nothing
+ * more is published (a lock change alone has no event). The intake (#119) refuses new orders on a
+ * paused market as 일시 중단 (ADR-0112 10-13).
  */
 @Injectable()
 export class MarketPauseService {
@@ -170,8 +180,9 @@ export class MarketPauseService {
    * PAUSED market included), `closeAt` 'closed', `resultPublishedAt` 'after the pause' (the
    * database clock's instant, read after the market lock, is the pause's). `pauseMarket` writes the
    * `paused` event (the admin its actor, payload `{pauseId, reason, resultPublishedAt}`) and the
-   * pause row; `market_pause` records the pause, the note and the market before and after. After
-   * COMMIT `market:status` (paused, the event's key).
+   * pause row, then cancels the market's resting orders (the class's Orders); `market_pause`
+   * records the pause, the note and the market before and after. After COMMIT `market:status`
+   * (paused, the event's key).
    */
   async pause(
     adminId: string,
@@ -181,11 +192,15 @@ export class MarketPauseService {
     const market = await this.db.transaction(async (tx) => {
       await lockMarket(tx, id);
       const current = await lockedMarketRow(tx, id);
+      // Its resting orders and their owners' Coin accounts, before the clock (#178): the pause
+      // cancels them at its instant (but for `ledger_failure`, whose orders wait for the recovery).
+      const orders = await lockMarketOrders(tx, id);
       // After the market lock (clock.ts): the pause sorts after whatever committed on the market
       // while this transaction queued — the worker's close among them.
       const now = await clockTimestamp(tx);
       const result = await pauseMarket(tx, {
         market: current,
+        orders,
         now,
         actorId: adminId,
         reason: body.reason,
@@ -304,14 +319,15 @@ export class MarketPauseService {
    * a request waiting then is moot, ended by a 반려 or a 철회 alone), `closeAt` 'closed' (its close
    * has come, by the clock too) and `pause` 'stale' (the request's pause is not the current one).
    *
-   * Then `endMarketPause` at the decision's instant, the approver its actor: 재개 — the `resumed`
-   * event, payload `{pauseId, approvalId, requestedBy, reviewResult}`, the market OPEN again with
-   * its `open_at` kept; 조기 마감 — the `closed` event, payload `{closedAt, source: 'early_close',
-   * …}`, the market CLOSED with `close_at` kept as the scheduled close (#80's rule-version item);
-   * and the pause's end with the review result. `market_pause_decision_approve` records the
-   * request, the approver's reason and the market before and after. After COMMIT `market:status`
-   * (open or closed, the event's key) and, for an early close, the close job under `close_at`
-   * cancelled.
+   * Then `endMarketPause` at the decision's instant, the approver its actor: first the market's
+   * live orders cancelled 일시 중단 (the class's Orders; a `ledger_failure` pause's recovery), then
+   * 재개 — the `resumed` event, payload `{pauseId, approvalId, requestedBy, reviewResult}`, the
+   * market OPEN again with its `open_at` kept; 조기 마감 — the `closed` event, payload `{closedAt,
+   * source: 'early_close', …}`, the market CLOSED with `close_at` kept as the scheduled close
+   * (#80's rule-version item); and the pause's end with the review result.
+   * `market_pause_decision_approve` records the request, the approver's reason and the market
+   * before and after. After COMMIT `market:status` (open or closed, the event's key) and, for an
+   * early close, the close job under `close_at` cancelled.
    */
   async approve(
     adminId: string,
@@ -323,6 +339,9 @@ export class MarketPauseService {
       await lockMarket(tx, id);
       const current = await lockedMarketRow(tx, id);
       const request = await this.decidable(tx, adminId, id, requestId);
+      // The market's live orders and their owners' Coin accounts, last before the clock (#178):
+      // the end cancels them at the decision's instant, before the status changes.
+      const orders = await lockMarketOrders(tx, id);
       const now = await clockTimestamp(tx);
       const payload = pauseDecisionPayloadOf(request);
       if (current.status !== 'paused') throw refused('status', 'notPaused');
@@ -335,6 +354,7 @@ export class MarketPauseService {
       // reached before (`endMarketPause` judges it again), rolling the decision back.
       const result = await endMarketPause(tx, {
         market: current,
+        orders,
         pause: { id: payload.pauseId },
         now: at,
         approverId: adminId,

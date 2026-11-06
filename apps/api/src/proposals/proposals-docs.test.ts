@@ -294,7 +294,8 @@ describe('the closure check’s new field in ADR-0086’s status line (ADR-0089)
     const added = fields.filter((field) => clause!.includes(`\`${field}\``));
     expect(added).toEqual(['pendingProposals']);
     // The fields ADR-0086 knew; a decision of it that names them all lists the answer's fields.
-    const known = fields.filter((field) => !added.includes(field));
+    // `lockedCoin` came later still, with #178's cancel at the closure (ADR-0113).
+    const known = fields.filter((field) => !added.includes(field) && field !== 'lockedCoin');
     expect(known).toEqual(['availableCoin', 'refusals', 'restriction', 'startGrantReceived']);
 
     const decided = between(ADR_0086, '\n### 결정', '\n### 결과');

@@ -58,14 +58,15 @@ export class MeClosureController {
   @ApiOperation({
     operationId: 'closeMyAccount',
     summary:
-      "Close the account (탈퇴, #140): type '탈퇴'; forfeits the Coin left, deletes the identifying data and ends every session",
+      "Close the account (탈퇴, #140): type '탈퇴'; cancels the waiting orders (탈퇴, #178), forfeits the Coin left, deletes the identifying data and ends every session",
   })
   @ApiData(accountClosureResultSchema)
   // FORBIDDEN: a mutation whose Origin is not ours (SessionGuard's CSRF check), or a body whose
   // `expectedAccountId` is not the cookie's account (details name the field; nothing done).
   // VALIDATION_ERROR: the confirmation is not '탈퇴'. RESTRICTED: a writing or an account
   // restriction stands (decision 4 #140), with the one that ends later. CLOSURE_NOT_ALLOWED: the
-  // admin role, a contract not settled, a payment in progress or an order waiting.
+  // admin role, a contract not settled, a payment in progress or an order waiting for a
+  // ledger-failure market's recovery (#178; every other waiting order is cancelled 탈퇴).
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',

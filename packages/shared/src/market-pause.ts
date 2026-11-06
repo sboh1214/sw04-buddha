@@ -18,8 +18,11 @@ import { storableInstantSchema } from './market-rules.js';
  *   happened; for `early_result` also the publication instant the operator confirmed, kept in UTC
  *   (decision 3). Refused once the close has come, by the clock too. One `market_pauses` row
  *   (@buddha/db) per pause; a market may pause again after a resume. The pending orders are
- *   cancelled at the pause (#173 item 3), which #178 adds in the same place; until then they rest
- *   with their locks, and the intake (#119) refuses new orders 일시 중단 (ADR-0112 10-13).
+ *   cancelled at the pause (#173 item 3), in its transaction, as 취소 완료(일시 중단) (#178,
+ *   ADR-0113) — for `ledger_failure` at the approval of its 재개 or 조기 마감 (its recovery); a
+ *   `ledger_failure` market that closed meanwhile keeps them locked until #93's recovery approval
+ *   ends them as 만료 (ADR-0107 decision 4). The intake (#119) refuses new orders 일시 중단
+ *   (ADR-0112 10-13).
  * - 재개 (PAUSED → OPEN) or 조기 마감 (PAUSED → CLOSED): one admin asks for the next path
  *   (`POST /admin/markets/:id/pause-decisions`, MARKET_PAUSE_PATHS), a `basis_change` pause with
  *   its review result (MARKET_PAUSE_REVIEW_RESULTS), which opens a `market_pause_decision` approval
@@ -50,7 +53,8 @@ export const MARKET_PAUSE_DECISION_APPROVAL_KIND = 'market_pause_decision';
  * 일시 중단 사유 (ADR-0093 decision 1 #173 item 3: these three only), `market_pauses.reason`:
  * - `early_result`: 사건 선공개 — the result became known before the close (N03 §3, 조기 결과).
  *   The pause records when it was published (`resultPublishedAt`, decision 3);
- * - `ledger_failure`: 담보·원장 장애 (N03 §3); its orders are cancelled after the recovery (M9);
+ * - `ledger_failure`: 담보·원장 장애 (N03 §3); its orders keep their locks and are cancelled at
+ *   the recovery, the approval of its next path (#178);
  * - `basis_change`: 실질 기준 변경 (N03 §4) — what the market asks changed in substance, or the
  *   event's schedule moved earlier with the result still unknown (Q2). Its next path carries a
  *   review result (`pauseReasonNeedsReview`).

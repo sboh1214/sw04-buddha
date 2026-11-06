@@ -254,16 +254,18 @@ export const copy = {
   closureCheckFailed: '남은 Coin과 지금 탈퇴할 수 있는지를 불러오지 못했습니다.',
   // 지금 막는 것(GET /me/closure)과 탈퇴의 거절(CLOSURE_NOT_ALLOWED)의 까닭. 관리자 권한은 회수받은 뒤에
   // (#57-17), 미정산 계약은 모두 정산될 때까지(#57-16), 진행 중인 결제·환불은 끝날 때까지(ADR-0069 결정 7 —
-  // 유료 충전이 닫힌 동안은 생기지 않는다), 대기 주문은 있는 동안(임시 — N02 §9는 대기 주문을 취소하고 탈퇴하며,
-  // 그 취소를 #178이 만들면 이 거절과 문장은 빠진다. 주문 접수가 없는 지금은 생기지 않는다, ADR-0086 7-9·결과
-  // 5 — 오너 결정 2026-10-23 (3차) 10: #178이 취소를 만들 때까지 둔다). 작성 제한·계정 제한은 위의
+  // 유료 충전이 닫힌 동안은 생기지 않는다), 거래가 멈춘 시장에서 복구를 기다리는 대기 주문은 그 시장이 복구될
+  // 때까지(#178, 오너 답 2026-11-06 — 원장 장애로 멈춘 시장의 주문은 복구 승인까지 잠금을 둔 채 남고, 닫힌
+  // 계정은 잠긴 Coin을 둘 수 없다. 회원에게는 원장 장애를 말하지 않는다, ADR-0113). 다른 대기 주문은 탈퇴가
+  // 먼저 취소하므로(탈퇴) 거절하지 않는다. 작성 제한·계정 제한은 위의
   // errRestrictedClosure·errRestrictedAccountClosure다.
   closureBlocked: '지금은 탈퇴할 수 없습니다.',
   closureRefusalAdmin: '관리자 권한이 있는 계정은 권한을 회수받은 뒤에 탈퇴할 수 있습니다.',
   closureRefusalUnsettled:
     '정산되지 않은 계약이 있는 동안에는 탈퇴할 수 없습니다. 모두 정산된 뒤에 탈퇴할 수 있습니다.',
   closureRefusalPayment: '진행 중인 결제나 환불이 끝난 뒤에 탈퇴할 수 있습니다.',
-  closureRefusalPendingOrders: '대기 주문이 있는 동안에는 탈퇴할 수 없습니다.',
+  closureRefusalOrdersAwaitingRecovery:
+    '거래가 멈춘 시장에 복구를 기다리는 대기 주문이 있어 지금은 탈퇴할 수 없습니다. 그 시장이 복구되어 주문이 정리된 뒤에 탈퇴할 수 있습니다.',
   errClosureConfirmation: "'탈퇴'를 정확히 입력해 주세요.",
   // 탈퇴는 그 계정의 세션을 모두 끝내므로, 답을 받지 못한 탈퇴를 다시 보내면 이 거절(401)을 만난다. 앞은 앱의
   // 다른 로그아웃 문장(portfolioSignedOut·onboardingSignedOut)과 같은 말이다.
@@ -905,7 +907,7 @@ export const copy = {
   // 일시 중단 창.
   adminMarketPauseTitle: '거래를 일시 중단합니다',
   adminMarketPauseBody:
-    '일시 중단하면 바로 거래가 멈추고 공개 화면에 거래 일시 중단으로 보입니다. 거래 마감 시각은 그대로입니다. 재개나 조기 마감은 다른 관리자의 승인으로 합니다.',
+    '일시 중단하면 바로 거래가 멈추고 공개 화면에 거래 일시 중단으로 보입니다. 걸려 있던 대기 주문은 모두 취소됩니다(담보·원장 장애로 멈추면 재개·조기 마감을 승인할 때 취소됩니다). 거래 마감 시각은 그대로입니다. 재개나 조기 마감은 다른 관리자의 승인으로 합니다.',
   adminMarketPauseNoteHint:
     '무슨 일이 있었는지 적어 주세요. 일시 중단 기록에 관리자·시각과 함께 남고 관리자만 봅니다. 500자까지 쓸 수 있습니다.',
   adminMarketPauseResultPublishedAtHint:
@@ -972,10 +974,11 @@ export const copy = {
   adminMarketPauseReject: '반려',
   adminMarketPauseRetract: '철회',
   adminMarketPauseApproveTitle: '요청을 승인합니다',
-  adminMarketPauseApproveResumeBody: '승인하면 거래가 바로 다시 열리고 일시 중단이 끝납니다.',
+  adminMarketPauseApproveResumeBody:
+    '승인하면 거래가 바로 다시 열리고 일시 중단이 끝납니다. 남아 있던 대기 주문(담보·원장 장애로 멈춘 시장의 주문)은 그 전에 모두 취소됩니다.',
   // 조기 마감은 거래 마감 시각(예정된 시각, 규칙 버전의 항목)을 바꾸지 않고 실제로 마감한 시각을 남긴다.
   adminMarketPauseApproveEarlyCloseBody:
-    '승인하면 시장이 바로 마감되고 판정으로 넘어갑니다. 다시 열 수 없습니다. 거래 마감 시각은 예정된 시각으로 남고, 실제로 마감한 시각이 기록됩니다.',
+    '승인하면 시장이 바로 마감되고 판정으로 넘어갑니다. 다시 열 수 없습니다. 남아 있던 대기 주문(담보·원장 장애로 멈춘 시장의 주문)은 그 전에 모두 취소됩니다. 거래 마감 시각은 예정된 시각으로 남고, 실제로 마감한 시각이 기록됩니다.',
   adminMarketPauseApproveReason: '승인 사유',
   adminMarketPauseResumed: '재개를 승인했습니다. 거래가 다시 열렸습니다.',
   adminMarketPauseEarlyClosed: '조기 마감을 승인했습니다. 시장이 마감되었습니다.',
@@ -3035,7 +3038,7 @@ export const copy = {
   adminModerationAccountRestrict: '계정 제한 요청',
   adminModerationAccountRestrictTitle: '회원의 계정 제한을 요청합니다',
   adminModerationAccountRestrictBody:
-    '다른 운영자가 승인하면 그때부터 고른 기간 동안 거래(새 주문)와 시장 제안, 공개 프로필의 새 값, 탈퇴를 막습니다. 글·댓글 쓰기·좋아요·신고·관심 등록과 잔액·기록은 그대로입니다. 이미 계정 제한 중이면 더 늦게 끝나는 쪽이 적용됩니다. 대상을 고르면 승인될 때 그 대상에 처리를 기다리는 신고가 모두 조치함으로 닫힙니다.',
+    '다른 운영자가 승인하면 그때부터 고른 기간 동안 거래(새 주문)와 시장 제안, 공개 프로필의 새 값, 탈퇴를 막습니다. 승인하면 걸려 있던 대기 주문을 모두 취소하고(담보·원장 장애로 멈춘 시장의 주문은 복구 때) 제한이 끝나도 되살리지 않습니다. 글·댓글 쓰기·좋아요·신고·관심 등록과 잔액·보유·기록은 그대로입니다. 이미 계정 제한 중이면 더 늦게 끝나는 쪽이 적용됩니다. 대상을 고르면 승인될 때 그 대상에 처리를 기다리는 신고가 모두 조치함으로 닫힙니다.',
   adminModerationAccountNoteHint:
     '꼭 적어야 합니다. 500자까지 쓸 수 있고, 승인하는 운영자도 이 설명을 요청 사유로 읽습니다.',
   adminModerationAccountMemoLabel: '운영자 메모',
@@ -3134,7 +3137,7 @@ export const copy = {
   adminAccountRequestApproveBody:
     '승인하면 요청한 일이 곧바로 적용되고, 승인한 운영자·사유·시각이 기록에 남습니다.',
   adminAccountRequestApproveApplyBody:
-    '승인하면 그때부터 계정 제한이 적용되고 기간도 그때부터 셉니다. 대상을 정한 요청이면 그 대상에 처리를 기다리는 신고가 모두 조치함으로 닫힙니다. 승인한 운영자·사유·시각이 기록에 남습니다.',
+    '승인하면 그때부터 계정 제한이 적용되고 기간도 그때부터 셉니다. 걸려 있던 대기 주문은 모두 취소되고(담보·원장 장애로 멈춘 시장의 주문은 복구 때) 제한이 끝나도 되살리지 않습니다. 대상을 정한 요청이면 그 대상에 처리를 기다리는 신고가 모두 조치함으로 닫힙니다. 승인한 운영자·사유·시각이 기록에 남습니다.',
   adminAccountRequestRejectTitle: '요청을 거절합니다',
   adminAccountRequestRejectBody:
     '거절하면 아무것도 바뀌지 않고 요청은 거절됨으로 닫힙니다. 거절한 운영자·사유·시각이 기록에 남습니다.',

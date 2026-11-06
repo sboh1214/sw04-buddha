@@ -45,14 +45,15 @@ import { balances, fills, markets, orders, positions, user } from './schema/inde
 import { clockTimestamp, lockMarket } from './tx-helpers.js';
 
 /*
- * 주문 접수와 체결 (#119, ADR-0112; ADR-0107 결정 1 #177 2·3·7·8·9·11·12·15항, 결정 3 '주문 접수',
- * 결정 5 #119 rows; ADR-0110 결정 4·8, ADR-0111 결정 6): the one writer of `orders` and `fills`
- * — the cancel (#178) and the expiry (#120) join it here (order-writes.test.ts). One intake runs in
- * its caller's transaction — the API's for a member, after the checks that write no row (the
- * address and account rate limits, onboarding, `assertCanTrade`, the admin role, the shown
- * account), and the bot runtime's (M10 #129) for the 운영 마켓메이커 — and either writes nothing
- * (the request was answered before, intake is closed, no such public market) or writes the order
- * once in its final state of the intake, with every fill it made.
+ * 주문 접수와 체결 (#119, ADR-0112; ADR-0107 결정 1 #177 2·3·7·8·9·11·12·15항, 결정 3 '주문 접수', 결정 5 #119 rows;
+ * ADR-0110 결정 4·8, ADR-0111 결정 6): the one writer of `fills` and of `orders` beside the cancel
+ * (order-cancel.ts, #178), which ends live orders; the expiry (#120) joins them
+ * (order-writes.test.ts). One intake runs in its caller's transaction — the API's for a member,
+ * after the checks that write no row (the address and account rate limits, onboarding,
+ * `assertCanTrade`, the admin role, the shown account), and the bot runtime's (M10 #129) for the 운영
+ * 마켓메이커 — and either writes nothing (the request was answered before, intake is closed, no such
+ * public market) or writes the order once in its final state of the intake, with every fill it
+ * made.
  *
  * Every writer of `orders` or `fills` holds the market's `lockMarket` (the arrival key is drawn
  * under it, and `fills_check` reads both orders by key trusting it). The lock order of an intake

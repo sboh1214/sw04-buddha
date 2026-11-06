@@ -179,8 +179,10 @@ export const ERROR_CODES = [
   /**
    * A closure of the account by its member, 탈퇴 #140, that the rules refuse: the account holds
    * the admin role and closes once the role is revoked, it holds contracts not settled yet, a
-   * payment of it is pending or refunding, or it has orders waiting. Details carry the reason,
-   * accountClosureNotAllowedDetailsSchema. A restriction refuses it as RESTRICTED.
+   * payment of it is pending or refunding, or an order of it waits in a market held for a ledger
+   * failure's recovery (orders_awaiting_recovery, #178; every other waiting order is cancelled by
+   * the closure). Details carry the reason, accountClosureNotAllowedDetailsSchema. A restriction
+   * refuses it as RESTRICTED.
    */
   'CLOSURE_NOT_ALLOWED',
   /**

@@ -1,10 +1,13 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
+  cancelLockedOrders,
   cancelStartGrant,
   ledgerKeys,
+  lockAccountOrders,
   lockAdminRoles,
   lockLedgerAccounts,
   lockNicknames,
+  ordersAwaitingRecovery,
   recordLedgerEntry,
   schema,
   type Db,
@@ -13,7 +16,6 @@ import {
   ACCOUNT_CLOSURE_DECISION_REASON,
   ACCOUNT_RESTRICTION_APPROVAL_KINDS,
   AUTH_USER_NAME,
-  LIVE_ORDER_STATUSES,
   PENDING_PROPOSAL_STATUSES,
   closedAccountEmail,
   serializeCoinAmount,
@@ -41,7 +43,7 @@ export function closureNotAllowed(reason: AccountClosureRefusal): AppError {
     admin: 'An admin account closes only once its admin role is revoked',
     unsettled_contracts: 'The account holds contracts not settled yet',
     payment_in_progress: 'A payment of the account is pending or refunding',
-    pending_orders: 'The account has orders waiting',
+    orders_awaiting_recovery: 'An order of the account waits in a market held for its recovery',
   };
   return new AppError('CLOSURE_NOT_ALLOWED', { message: messages[reason], details: { reason } });
 }
@@ -76,20 +78,26 @@ interface Closed {
  * admin-roles lock shared (a role grant takes it exclusively, then the grantee's profile; the
  * closure closes the account's requests under it too), the profile row FOR UPDATE (an operator's
  * restriction and a request about the member, a public item's write and a nickname's change hold
- * it before they write — so no request it would close commits after it looked for them), then
- * #70's order: the 본인확인 record, the start grant, the balance (ADR-0071 7-18) — so whatever was
- * in flight commits first and is seen, and whatever comes later finds the account closed. The
- * writers that take none of these locks — a session or a sign-in method, a nickname hold, a
- * watch, a recorded search, a code send or a 본인확인 record, a password-reset token — meet the
- * same order in migration 0043's insert triggers, which read the profile FOR KEY SHARE and refuse
- * a closed account (the API answers that refusal as UNAUTHENTICATED, `closedAccountRefusal`):
+ * it before they write — so no request it would close commits after it looked for them; an order
+ * holds it FOR KEY SHARE, ADR-0112 10-16), then #70's order: the 본인확인 record, the start grant,
+ * the markets of the account's waiting orders and its Coin accounts in them (#178), the balance
+ * (ADR-0071 7-18) — so whatever was in flight commits first and is seen, and whatever comes later
+ * finds the account closed. The writers that take none of these locks — a session or a sign-in
+ * method, a nickname hold, a watch, a recorded search, a code send or a 본인확인 record, a
+ * password-reset token — meet the same order in migration 0043's insert triggers, which read the
+ * profile FOR KEY SHARE and refuse a closed account (the API answers that refusal as
+ * UNAUTHENTICATED, `closedAccountRefusal`):
  *
  * 1. Refused while the account holds the admin role (`admin`, #57-17), a writing or an account
  *    restriction stands (RESTRICTED, `assertNotRestricted` — decision 4 #140 «제재 중 탈퇴»; a
  *    request waiting for approval does not refuse it, owner decision 2026-10-23), a contract it
  *    holds is not settled (`unsettled_contracts`, #57-16), a payment is pending or refunding
- *    (`payment_in_progress`, decision 7) or an order waits (`pending_orders` — cancelling them
- *    first, N02 §9, is #178's; until then the closure never runs past an order's reserved Coin).
+ *    (`payment_in_progress`, decision 7) or an order waits in a market paused for a ledger failure
+ *    (`orders_awaiting_recovery`, #178, owner answer 2026-11-06: its lock stays until that
+ *    market's recovery, and a closed account cannot keep locked Coin). Every other waiting order
+ *    is cancelled first (N02 §9 «대기 주문을 취소하고 … 계정 폐쇄»; ADR-0107 결정 5 '#178 탈퇴 때 대기
+ *    주문'): 취소 완료(탈퇴) at the closure's instant, its lock given back (order-cancel.ts), in
+ *    the same transaction — a refusal rolls the cancels back with the rest.
  * 2. A start grant still waiting for its amount is cancelled (`cancelStartGrant`, owner decision
  *    2026-10-18 on #70: the number did not receive it, so the next account verifying it may), and
  *    the 본인확인 record — the verified number and real name — is deleted. The code-send records
@@ -97,7 +105,8 @@ interface Closed {
  *    Coin (#57-1: no second grant on re-signup) and the keyed hashes of likes and reports (decision
  *    7: the limits go on by number).
  * 3. The Coin left is forfeited ('탈퇴 소멸', `CLOSURE_FORFEIT`, #57-16): one ledger entry of the
- *    whole balance, never an overwrite (N01 §9), so the ledger still sums to the balance.
+ *    whole balance — the waiting orders' released locks included — never an overwrite (N01 §9),
+ *    so the ledger still sums to the balance.
  * 4. The public face goes (#37-16): the nickname — held from every account for NICKNAME_HOLD_DAYS
  *    with no link to this one (#57-6, #57-18), and every hold naming the account loses that link —
  *    the 소개, the image (row now with its object's key queued for removal — #46's
@@ -144,7 +153,11 @@ export class AccountClosureService {
    */
   async check(userId: string): Promise<AccountClosureCheck> {
     const [account] = await this.db
-      .select({ role: schema.profiles.role, availableCoin: schema.balances.availableCoin })
+      .select({
+        role: schema.profiles.role,
+        availableCoin: schema.balances.availableCoin,
+        lockedCoin: schema.balances.lockedCoin,
+      })
       .from(schema.profiles)
       .innerJoin(schema.balances, eq(schema.balances.userId, schema.profiles.userId))
       .where(eq(schema.profiles.userId, userId))
@@ -152,6 +165,7 @@ export class AccountClosureService {
     if (!account) throw new AppError('NOT_FOUND', { message: 'Profile not found' });
     return {
       availableCoin: serializeCoinAmount(account.availableCoin),
+      lockedCoin: serializeCoinAmount(account.lockedCoin),
       refusals: await this.refusalsOf(this.db, userId, account.role),
       restriction: await restrictionInForce(this.db, userId),
       startGrantReceived: await this.startGrantReceived(userId),
@@ -232,6 +246,12 @@ export class AccountClosureService {
         imageKey: null,
       };
     }
+    // The role is fixed now (the admin-roles lock shared, the profile FOR UPDATE), so an admin is
+    // refused before any market lock: an admin may still hold an order placed before the grant
+    // (#143 cancels it), and waiting on its market under this profile lock would cycle with that
+    // admin's own decision on the market — `lockMarket`, then the decider's profile FOR SHARE in
+    // `approval_requests_keep_record` (migration 0021) — a 40P01 (ADR-0113 결정 8).
+    if (profile.role === 'admin') throw closureNotAllowed('admin');
 
     // #70's lock order (ADR-0071 7-18) before anything is asked: the 본인확인 record, then the
     // start grant (`cancelStartGrant` takes both again), then the balance — a payment of the start
@@ -246,27 +266,36 @@ export class AccountClosureService {
       .from(schema.startGrants)
       .where(eq(schema.startGrants.userId, userId))
       .for('update');
-    // #178's hook: N02 §9 cancels the waiting orders first («대기 주문을 취소하고 … 계정 폐쇄»). Its
-    // cancellation goes HERE, before the balance row below (ADR-0110 결정 4, 결과 5 #178): the
-    // account's markets with `lockMarkets`, then each market's `lockOrderHolders` and
-    // `releaseForOrder` — from the second market on that call re-locks this person's row and adds
-    // only the market's collateral, held under `lockMarkets`, so it never waits (the exception in
-    // ADR-0110 결정 4: this one person, no new owner). Holding the row first, it would wait on a
-    // market whose processing holds `lockMarket` and waits on this row (40P01). The balance is
-    // then read after the cancels, and `pending_orders` leaves the refusals.
+    // N02 §9 «대기 주문을 취소하고 … 계정 폐쇄» (#178, ADR-0107 결정 5 '#178 탈퇴 때 대기 주문'): the
+    // markets of the account's live orders (`lockMarkets`), then its Coin account in each one not
+    // held for a ledger failure (`lockOrderHolders`) — before the balance row below is read, as
+    // every order flow takes them (ADR-0110 결정 4 and its 10-28 exception: one person, no new
+    // owner), the profile held FOR UPDATE above keeping a new order out meanwhile. The refusals are
+    // asked under these locks, so a fill on a resting order that got in first is seen.
+    const orders = await lockAccountOrders(tx, userId);
     // The account's user ledger account (`lockLedgerAccounts`, migration 0060).
-    const [held] = await lockLedgerAccounts(tx, [{ kind: 'user', userId }]);
-    const balance = held!.balance;
+    await lockLedgerAccounts(tx, [{ kind: 'user', userId }]);
 
-    if (profile.role === 'admin') throw closureNotAllowed('admin');
     await assertNotRestricted(tx, userId);
-    // Until #178's cancellation exists (above the balance row) a waiting order refuses the closure.
     const [refusal] = await this.refusalsOf(tx, userId, profile.role);
     if (refusal !== undefined) throw closureNotAllowed(refusal);
-    // Reserved Coin exists only for a waiting order (`LIVE_ORDER_STATUSES`, the one rule of which
-    // orders hold a lock — #118), refused above: nothing a closure may forfeit or leave behind
-    // (#178 cancels the orders and frees it first). A sell's locked contracts are a holding, so
-    // `unsettled_contracts` refused them already.
+
+    const closedAt = await clockTimestamp(tx);
+    // Every waiting order ends 취소 완료(탈퇴) at the closure's instant, its lock given back; none
+    // waits in a held market (`orders_awaiting_recovery` refused that above, under the locks).
+    const { held } = await cancelLockedOrders(tx, orders, {
+      reason: 'account_closed',
+      at: closedAt,
+    });
+    if (held.length !== 0) {
+      throw new AppError('INTERNAL', { message: 'An order awaits a recovery past the refusals' });
+    }
+    // The balance as the releases left it: what is forfeited.
+    const [after] = await lockLedgerAccounts(tx, [{ kind: 'user', userId }]);
+    const balance = after!.balance;
+    // No Coin stays reserved once every order of the account ended (`LIVE_ORDER_STATUSES`, the one
+    // rule of which orders hold a lock — #118): nothing a closure may forfeit or leave behind. A
+    // sell's locked contracts are a holding, so `unsettled_contracts` refused them already.
     if (balance.lockedCoin !== 0n) {
       throw new AppError('INTERNAL', { message: 'Reserved Coin with no order waiting' });
     }
@@ -276,8 +305,6 @@ export class AccountClosureService {
     if (balance.availableCoin !== balance.ledgerCoin) {
       throw new AppError('INTERNAL', { message: 'The balance differs from its ledger' });
     }
-
-    const closedAt = await clockTimestamp(tx);
     await cancelStartGrant(tx, userId);
     await tx.delete(phoneVerifications).where(eq(phoneVerifications.userId, userId));
     const forfeitedCoin = await this.forfeit(tx, userId, balance.availableCoin, closedAt);
@@ -292,16 +319,19 @@ export class AccountClosureService {
   /**
    * What refuses a closure now besides the admin role and a restriction, in the order it is asked
    * (ACCOUNT_CLOSURE_REFUSALS): the admin role, then a contract not settled — a position holding
-   * contracts in a market not settled yet (#57-16; none can exist before trading, M9) — a payment
-   * pending or refunding (decision 7; none while paid Coin is closed, D9) and an order waiting
-   * (#178's to cancel; none before the order intake, #119).
+   * contracts in a market not settled yet (#57-16) — a payment pending or refunding (decision 7;
+   * none while paid Coin is closed, D9) and an order waiting in a market held for a ledger failure
+   * (`orders_awaiting_recovery`, #178, owner answer 2026-11-06: its lock stays until the market's
+   * recovery, and a closed account cannot keep it). Every other waiting order is the closure's to
+   * cancel, so it refuses nothing. The same reads serve the closure, under its locks, and the
+   * check, with none.
    */
   private async refusalsOf(
     executor: Executor,
     userId: string,
     role: Role,
   ): Promise<AccountClosureRefusal[]> {
-    const { positions, payments, orders } = schema;
+    const { positions, payments } = schema;
     const exists = async (rows: Promise<unknown[]>) => (await rows).length > 0;
     const unsettled = await exists(
       executor
@@ -324,18 +354,12 @@ export class AccountClosureService {
         )
         .limit(1),
     );
-    const ordering = await exists(
-      executor
-        .select({ one: sql`1` })
-        .from(orders)
-        .where(and(eq(orders.userId, userId), inArray(orders.status, [...LIVE_ORDER_STATUSES])))
-        .limit(1),
-    );
+    const awaiting = (await ordersAwaitingRecovery(executor, userId)).length > 0;
     const refusals: AccountClosureRefusal[] = [];
     if (role === 'admin') refusals.push('admin');
     if (unsettled) refusals.push('unsettled_contracts');
     if (paying) refusals.push('payment_in_progress');
-    if (ordering) refusals.push('pending_orders');
+    if (awaiting) refusals.push('orders_awaiting_recovery');
     return refusals;
   }
 

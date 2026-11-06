@@ -8591,6 +8591,123 @@
         ]
       }
     },
+    "/api/v1/me/orders/{id}/cancel": {
+      "post": {
+        "operationId": "cancelMyOrder",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpectedAccountBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Order"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "MARKET_NOT_OPEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Cancel one of the account’s waiting or partly filled orders: its whole remaining quantity at once, inside this request (no \"requested\" state), its lock released and what filled kept. Answers the order in its final state; one that had ended answers as it is. Another account’s is NOT_FOUND; MARKET_NOT_OPEN while its market is held for a ledger failure (the recovery approval ends it: cancelled, reason paused, at a resume or early close; expired when the market closed before its recovery, #93). Not counted by the order rate limit, and open while order intake is closed",
+        "tags": [
+          "orders"
+        ]
+      }
+    },
     "/api/v1/me/fills": {
       "get": {
         "operationId": "getMyFills",
@@ -20269,7 +20386,7 @@
             "session": []
           }
         ],
-        "summary": "Close the account (탈퇴, #140): type '탈퇴'; forfeits the Coin left, deletes the identifying data and ends every session",
+        "summary": "Close the account (탈퇴, #140): type '탈퇴'; cancels the waiting orders (탈퇴, #178), forfeits the Coin left, deletes the identifying data and ends every session",
         "tags": [
           "me"
         ]
@@ -34016,6 +34133,9 @@
           "availableCoin": {
             "$ref": "#/components/schemas/CoinAmount"
           },
+          "lockedCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
           "refusals": {
             "type": "array",
             "items": {
@@ -34039,6 +34159,7 @@
         },
         "required": [
           "availableCoin",
+          "lockedCoin",
           "refusals",
           "restriction",
           "startGrantReceived",
@@ -34052,7 +34173,7 @@
           "admin",
           "unsettled_contracts",
           "payment_in_progress",
-          "pending_orders"
+          "orders_awaiting_recovery"
         ]
       },
       "AccountClosureBody": {

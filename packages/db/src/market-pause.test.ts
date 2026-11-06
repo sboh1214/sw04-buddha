@@ -16,7 +16,8 @@ import {
   type EndMarketPauseInput,
   type PauseMarketInput,
 } from './market-pause.js';
-import { approvalRequests, marketEvents, marketPauses, markets } from './schema/index.js';
+import { lockMarketOrders } from './order-cancel.js';
+import { approvalRequests, marketEvents, marketPauses, markets, orders } from './schema/index.js';
 import {
   closeMarketEarly,
   createApprovalRequest,
@@ -29,13 +30,16 @@ import {
   resumeMarket,
 } from './test/factories.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
+import { balanceOf, fundMarketMakerFunds, ledgerAccountBalance } from './test/ledger.js';
+import { checkOrderInvariants, openOrderIntake, placeTestOrder } from './test/orders.js';
+import { transitionMarket } from './market-transitions.js';
 import { clockTimestamp, lockMarket } from './tx-helpers.js';
 
 const HOUR_MS = 60 * 60 * 1000;
 const NOTE = '조기 결과가 공개되어 거래를 멈춘다.';
 
-type Pausing = Omit<PauseMarketInput, 'market' | 'now'>;
-type Ending = Omit<EndMarketPauseInput, 'market' | 'now'>;
+type Pausing = Omit<PauseMarketInput, 'market' | 'orders' | 'now'>;
+type Ending = Omit<EndMarketPauseInput, 'market' | 'orders' | 'now'>;
 
 describe.skipIf(!hasTestDb())('market pauses (#114, docker test profile)', () => {
   let t: TestDb;
@@ -68,8 +72,9 @@ describe.skipIf(!hasTestDb())('market pauses (#114, docker test profile)', () =>
   const admin = async () => (await createUser(t.db, { role: 'admin' })).user.id;
 
   /**
-   * As the API pauses: the market lock, the row FOR UPDATE after it, then `now` — the database
-   * clock after the lock, unless a boundary case gives the instant itself.
+   * As the API pauses: the market lock, the row FOR UPDATE after it, its orders locked
+   * (`lockMarketOrders`), then `now` — the database clock after the locks, unless a boundary case
+   * gives the instant itself.
    */
   function pause(marketId: string, input: Pausing, at?: Date) {
     return t.db.transaction(async (tx) => {
@@ -79,8 +84,9 @@ describe.skipIf(!hasTestDb())('market pauses (#114, docker test profile)', () =>
         .from(markets)
         .where(eq(markets.id, marketId))
         .for('update');
+      const orders = await lockMarketOrders(tx, marketId);
       const now = at ?? (await clockTimestamp(tx));
-      return { now, result: await pauseMarket(tx, { market: market!, now, ...input }) };
+      return { now, result: await pauseMarket(tx, { market: market!, orders, now, ...input }) };
     });
   }
 
@@ -93,8 +99,9 @@ describe.skipIf(!hasTestDb())('market pauses (#114, docker test profile)', () =>
         .from(markets)
         .where(eq(markets.id, marketId))
         .for('update');
+      const orders = await lockMarketOrders(tx, marketId);
       const now = at ?? (await clockTimestamp(tx));
-      return { now, result: await endMarketPause(tx, { market: market!, now, ...input }) };
+      return { now, result: await endMarketPause(tx, { market: market!, orders, now, ...input }) };
     });
   }
 
@@ -524,6 +531,213 @@ describe.skipIf(!hasTestDb())('market pauses (#114, docker test profile)', () =>
         ),
       ).toBeNull();
       expect(await pausesOf(paused.id)).toEqual([ended]);
+    });
+  });
+
+  describe('the resting orders (#178, ADR-0113)', () => {
+    let opener: string;
+    beforeEach(async () => {
+      opener = await admin();
+      await openOrderIntake(t.db, { adminId: opener });
+    });
+
+    const member = async () => (await createUser(t.db, { balanceCoin: 1_000n })).user.id;
+    /** A resting GTC buy of `marketId`, placed through the intake (it holds its lock). */
+    async function rest(ownerId: string, marketId: string, outcome: 'YES' | 'NO', price: number) {
+      const done = await placeTestOrder(t.db, {
+        ownerId,
+        marketId,
+        outcome,
+        limitPriceCoin: price,
+        qty: 2,
+      });
+      if (done.kind !== 'placed' || done.order.status !== 'open') throw new Error('not resting');
+      return done.order;
+    }
+    const orderRow = async (id: string) =>
+      (await t.db.select().from(orders).where(eq(orders.id, id)))[0]!;
+    const lockedOf = async (userId: string) => (await balanceOf(t.db, userId))!.lockedCoin;
+
+    it.each(['early_result', 'basis_change'] as const)(
+      'cancels people’s and the 운영 마켓메이커’s orders at a %s pause, at its instant',
+      async (reason) => {
+        const market = await createMarket(t.db);
+        const a = await member();
+        const mm = await fundMarketMakerFunds(t.db, market.id, 1_000n);
+        const rows = [await rest(a, market.id, 'YES', 40), await rest(mm, market.id, 'NO', 30)];
+        const { now, result } = await pause(market.id, {
+          actorId: await admin(),
+          reason,
+          note: NOTE,
+          resultPublishedAt: reason === 'early_result' ? new Date(Date.now() - HOUR_MS) : null,
+        });
+        expect(result.paused).toBe(true);
+        if (!result.paused) return;
+        expect(result.cancelled.held).toEqual([]);
+        expect(result.cancelled.cancelled).toEqual(
+          rows.map((row) => ({
+            ...row,
+            status: 'cancelled',
+            cancelReason: 'paused',
+            endedAt: now,
+            updatedAt: now,
+          })),
+        );
+        expect(await lockedOf(a)).toBe(0n);
+        expect(
+          await ledgerAccountBalance(t.db, { kind: 'market_maker_funds', marketId: market.id }),
+        ).toMatchObject({ lockedCoin: 0n });
+        expect(await checkOrderInvariants(t.db)).toEqual([]);
+      },
+    );
+
+    it('cancels nothing at a pause skipped as close_passed or published_after_pause: the judgments come first', async () => {
+      // An OPEN market held by nothing, so a cancel before the skip would show (R25).
+      const closeAt = new Date((await clockTimestamp(t.db)).getTime() + HOUR_MS);
+      const market = await createMarket(t.db, { closeAt });
+      const a = await member();
+      const mm = await fundMarketMakerFunds(t.db, market.id, 1_000n);
+      const rows = [await rest(a, market.id, 'YES', 40), await rest(mm, market.id, 'NO', 30)];
+      const funds = { kind: 'market_maker_funds', marketId: market.id } as const;
+      const mmBefore = await ledgerAccountBalance(t.db, funds);
+      const actorId = await admin();
+      expect(
+        (
+          await pause(
+            market.id,
+            { actorId, reason: 'basis_change', note: NOTE, resultPublishedAt: null },
+            closeAt,
+          )
+        ).result,
+      ).toEqual({ paused: false, reason: 'close_passed' });
+      const at = await clockTimestamp(t.db);
+      expect(
+        (
+          await pause(
+            market.id,
+            {
+              actorId,
+              reason: 'early_result',
+              note: NOTE,
+              resultPublishedAt: new Date(at.getTime() + 1),
+            },
+            at,
+          )
+        ).result,
+      ).toEqual({ paused: false, reason: 'published_after_pause' });
+      for (const row of rows) expect(await orderRow(row.id)).toEqual(row);
+      expect(await lockedOf(a)).toBe(80n);
+      expect(await ledgerAccountBalance(t.db, funds)).toEqual(mmBefore);
+      expect(mmBefore).toMatchObject({ lockedCoin: 60n });
+      expect(await eventsOf(market.id)).toEqual([]);
+      expect(await pausesOf(market.id)).toEqual([]);
+    });
+
+    it('keeps the orders and their locks at a ledger_failure pause, and at a skipped one (not_open)', async () => {
+      const market = await createMarket(t.db);
+      const a = await member();
+      const row = await rest(a, market.id, 'YES', 40);
+      const { result } = await pause(market.id, {
+        actorId: await admin(),
+        reason: 'ledger_failure',
+        note: NOTE,
+        resultPublishedAt: null,
+      });
+      expect(result).toMatchObject({
+        paused: true,
+        cancelled: { cancelled: [], held: [], touched: { positions: [] } },
+      });
+      // A second pause of the PAUSED market is skipped: nothing written.
+      expect(
+        (
+          await pause(market.id, {
+            actorId: await admin(),
+            reason: 'basis_change',
+            note: NOTE,
+            resultPublishedAt: null,
+          })
+        ).result,
+      ).toEqual({ paused: false, reason: 'not_open' });
+      expect(await orderRow(row.id)).toEqual(row);
+      expect(await lockedOf(a)).toBe(80n);
+    });
+
+    it.each(['resume', 'early_close'] as const)(
+      'ends a ledger_failure pause’s orders at its %s approval, before the status changes',
+      async (path) => {
+        const market = await createMarket(t.db);
+        const a = await member();
+        const row = await rest(a, market.id, 'YES', 40);
+        await createMarketPause(t.db, { marketId: market.id, reason: 'ledger_failure' });
+        expect(await orderRow(row.id)).toEqual(row);
+        const { ending } = await approvedDecision(market.id, path, null);
+        const { now, result } = await end(market.id, ending);
+        expect(result.ended).toBe(true);
+        if (!result.ended) return;
+        expect(result.cancelled.cancelled).toEqual([
+          { ...row, status: 'cancelled', cancelReason: 'paused', endedAt: now, updatedAt: now },
+        ]);
+        expect((await eventsOf(market.id)).at(-1)).toMatchObject({
+          id: result.eventId,
+          createdAt: now,
+        });
+        expect(await lockedOf(a)).toBe(0n);
+        expect(await checkOrderInvariants(t.db)).toEqual([]);
+      },
+    );
+
+    it('cancels nothing at a stale or close_passed decision, nor at the close', async () => {
+      const closeAt = new Date((await clockTimestamp(t.db)).getTime() + HOUR_MS);
+      const market = await createMarket(t.db, { closeAt });
+      const a = await member();
+      const row = await rest(a, market.id, 'YES', 40);
+      await createMarketPause(t.db, { marketId: market.id, reason: 'ledger_failure' });
+      const { ending: stale } = await approvedDecision(market.id, 'resume', null, randomUUID());
+      expect((await end(market.id, stale)).result).toEqual({ ended: false, reason: 'stale' });
+      const { ending } = await approvedDecision(market.id, 'resume', null);
+      expect((await end(market.id, ending, closeAt)).result).toEqual({
+        ended: false,
+        reason: 'close_passed',
+      });
+      expect(await orderRow(row.id)).toEqual(row);
+      // The close at `close_at`: the pause ends `closed_at_close`, the order stays locked (#93).
+      await t.db.transaction(async (tx) => {
+        await lockMarket(tx, market.id);
+        const now = await clockTimestamp(tx);
+        const eventId = await transitionMarket(tx, {
+          marketId: market.id,
+          from: 'paused',
+          to: 'closed',
+          type: 'closed',
+          actorId: null,
+          payload: { closedAt: now.toISOString(), source: 'job' },
+          at: now,
+        });
+        await endPauseAtClose(tx, { marketId: market.id, now, eventId });
+      });
+      expect(await orderRow(row.id)).toEqual(row);
+      expect(await lockedOf(a)).toBe(80n);
+    });
+
+    it('takes the orders lockMarketOrders locked of that market, and nothing else', async () => {
+      const market = await createMarket(t.db);
+      const other = await createMarket(t.db);
+      await expect(
+        t.db.transaction(async (tx) => {
+          await lockMarket(tx, market.id);
+          const [row] = await tx.select().from(markets).where(eq(markets.id, market.id));
+          const orders = await lockMarketOrders(tx, other.id);
+          return pauseMarket(tx, {
+            market: row!,
+            orders,
+            now: await clockTimestamp(tx),
+            actorId: await admin(),
+            reason: 'basis_change',
+            note: NOTE,
+            resultPublishedAt: null,
+          });
+        }),
+      ).rejects.toThrow('A pause takes the orders lockMarketOrders locked of market');
     });
   });
 

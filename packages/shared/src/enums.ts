@@ -448,7 +448,10 @@ export const orderRejectReasonSchema = z.enum(ORDER_REJECT_REASONS);
  * (`self_trade`, the walk stopped at the owner's own group after a fill, a GTC order too), 일시
  * 중단 (`paused`, #178 at a pause), 관리자 권한 (`admin_role`, #143), 계정 제한 (`restricted`,
  * #178·#139) and 탈퇴 (`account_closed`, shown only on records and operations screens). The intake
- * (#119) writes only `ioc_remainder` and `self_trade`.
+ * (#119) writes only `ioc_remainder` and `self_trade`; the cancel processing (#178, @buddha/db
+ * order-cancel.ts) writes `by_owner` (the member, the bot's refresh), `paused` (a pause, the end
+ * of a pause), `restricted` (an account restriction's approval) and `account_closed` (the
+ * closure), and `admin_role` when #143's grant calls it.
  */
 export const ORDER_CANCEL_REASONS = [
   'by_owner',
@@ -859,9 +862,11 @@ export const ADMIN_ACTION_TYPES = [
   /**
    * Another admin approved an account restriction request, and what it asked for was done in the
    * same transaction: target `approval_request` / the request's id, payload `{requestId, change,
-   * actionId, userId, reason, reportIds}` — `change` (`apply`, `shorten`, `lift`, `cancel`), the
-   * restriction given or changed, the approver's reason, and the pending reports an approved
-   * restriction resolved (none for a change).
+   * actionId, userId, reason, reportIds, cancelledOrderIds, heldOrderIds}` — `change` (`apply`,
+   * `shorten`, `lift`, `cancel`), the restriction given or changed, the approver's reason, the
+   * pending reports an approved restriction resolved (none for a change), and the member's resting
+   * orders an `apply` cancelled as 취소 완료(계정 제한) and those it left, still locked, for a
+   * ledger-failure market's recovery (#178, ADR-0113; both empty for a change).
    */
   'account_restriction_approve',
   /**

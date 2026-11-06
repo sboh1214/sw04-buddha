@@ -56,13 +56,15 @@ export function isClosureConfirmed(typed: string): boolean {
  * Each refusal's sentence (CLOSURE_NOT_ALLOWED and the check's `refusals`): what keeps the closure
  * from going ahead now and when it can — the admin role until it is revoked (#57-17), contracts
  * until all are settled (#57-16), a payment or a refund until it ends (ADR-0069 decision 7), and
- * waiting orders (their cancellation before a closure is #178's).
+ * an order waiting for the recovery of a market whose trading stopped, until that recovery ends it
+ * (#178, owner answer 2026-11-06 — the sentence does not name the ledger failure, an operator's
+ * pause reason). Other waiting orders refuse nothing: the closure cancels them first (탈퇴).
  */
 export const CLOSURE_REFUSAL_TEXT: Readonly<Record<AccountClosureRefusal, string>> = {
   admin: copy.closureRefusalAdmin,
   unsettled_contracts: copy.closureRefusalUnsettled,
   payment_in_progress: copy.closureRefusalPayment,
-  pending_orders: copy.closureRefusalPendingOrders,
+  orders_awaiting_recovery: copy.closureRefusalOrdersAwaitingRecovery,
 };
 
 /**
@@ -124,10 +126,13 @@ export function closureLines(
 
 /**
  * The Coin the closure forfeits, as the screen writes it ('12,000 Coin'): the available balance
- * now — reserved Coin cannot exist without a waiting order, which refuses the closure.
+ * now and the Coin its waiting orders lock — the closure cancels them first (탈퇴, #178), which
+ * gives their locks back, and forfeits the whole. No line of its own says so (ADR-0113).
  */
-export function closureCoinText(check: Pick<AccountClosureCheck, 'availableCoin'>): string {
-  return formatCoin(parseCoinAmount(check.availableCoin));
+export function closureCoinText(
+  check: Pick<AccountClosureCheck, 'availableCoin' | 'lockedCoin'>,
+): string {
+  return formatCoin(parseCoinAmount(check.availableCoin) + parseCoinAmount(check.lockedCoin));
 }
 
 /**

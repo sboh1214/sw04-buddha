@@ -1,9 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  cancelOrder,
   findOrderByRequest,
   lockMarket,
   placeOrder,
   schema,
+  type CancelTouched,
   type Db,
   type OrderRow,
   type PlaceOrderTouched,
@@ -134,6 +136,18 @@ const notFound = (what: 'Market' | 'Order') =>
  *   sell lock wrote; the 운영 마켓메이커 has no room. A buy that only rests publishes nothing (no
  *   ledger entry; the submitter reads its own answer); a sell that only rests publishes its
  *   position row's `user:position` (its lock is on that row).
+ * - 취소 (`cancel`, #178, ADR-0113): the whole remainder of one of the session's live orders, ended
+ *   in one transaction by `cancelOrder` (@buddha/db order-cancel.ts: the market's lock, the order
+ *   again under it, the owner's Coin account, then the release and the row as 취소 완료(본인 취소))
+ *   and answered in its final state — one that had ended (filled, cancelled, expired, rejected)
+ *   as it is, so a repeat answers the same and releases nothing. No restriction, role, onboarding,
+ *   intake or order-limit check: a cancel only gives back what the order locked. Another
+ *   account's order is NOT_FOUND, as in the reads; a live one in a market held for a ledger
+ *   failure is MARKET_NOT_OPEN 'paused' with nothing written (ADR-0107 결정 4 #178 rows: the
+ *   recovery approval ends it — 취소 완료(일시 중단) at a resume or early close, 만료 when the
+ *   market closed before its recovery, #93's kind). After COMMIT, best effort, a sell's
+ *   `user:position` (its lock was on that row); a buy's release writes no ledger entry and
+ *   publishes nothing, as its resting.
  * - The owner's reads (`listMine`, `mine`, `mineByRequest`, `listMyFills`): the session's own
  *   rows only — another account's order is NOT_FOUND, as if it did not exist (N04 §7) — and a
  *   fill as the caller's own order took it, the counterparty anonymous (결정 5 '#179·#119').
@@ -211,6 +225,30 @@ export class OrderService {
       }
     });
     if (touched) await this.publish(touched);
+    return answer;
+  }
+
+  /** `POST /me/orders/:id/cancel`: the class doc's 취소. */
+  async cancel(userId: string, orderId: string): Promise<Order> {
+    const { answer, touched } = await this.db.transaction(async (tx) => {
+      const result = await cancelOrder(tx, { ownerId: userId, orderId, reason: 'by_owner' });
+      switch (result.kind) {
+        case 'not_found':
+          throw notFound('Order');
+        case 'held':
+          throw new AppError('MARKET_NOT_OPEN', {
+            message: 'The market is paused',
+            details: [{ path: ['market'], message: 'paused' }],
+          });
+        case 'ended':
+        case 'cancelled': {
+          const market = await this.marketRef(tx, result.order.marketId);
+          const answer = toOrder(result.order, market);
+          return { answer, touched: result.kind === 'cancelled' ? result.touched : null };
+        }
+      }
+    });
+    if (touched) await this.publishCancel(touched);
     return answer;
   }
 
@@ -348,6 +386,11 @@ export class OrderService {
       .limit(1);
     if (!market) throw new AppError('INTERNAL', { message: `Market ${id} of an order is gone` });
     return market;
+  }
+
+  /** A cancel's realtime, after COMMIT and best effort: each person's position row a sell freed. */
+  private async publishCancel(touched: CancelTouched): Promise<void> {
+    await this.publish({ balances: [], positions: touched.positions });
   }
 
   /**

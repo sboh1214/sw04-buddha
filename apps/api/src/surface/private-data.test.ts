@@ -272,6 +272,11 @@ interface Fixture {
   /** A's filled order on `market` (#119): its id and its request id, what B's reads name. */
   filledOrderId: string;
   filledOrderKey: string;
+  /**
+   * A's resting order on `market` (#119): what B's cancel names (#178). A row with no lock
+   * (`createOrder`), so no step here may cancel it: B's cancels are refused before they reach it.
+   */
+  openOrderId: string;
   /** Page cursors made from A's rows: a page from there holds A's newest row and the older ones. */
   cursors: {
     ledger: string;
@@ -931,6 +936,13 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
       expectedSources: 'B의 출처',
       expectedAccountId: fixture.a.id,
     }),
+    status: 403,
+  },
+  // B's cookie naming A's account and A's resting order (#178): refused before anything is read,
+  // and A's order stays as it was (below).
+  'POST /me/orders/:id/cancel': {
+    params: { id: (fixture) => fixture.openOrderId },
+    body: (fixture) => ({ expectedAccountId: fixture.a.id }),
     status: 403,
   },
   // B's cookie naming A's account and A's proposal: refused, and A's proposal stays 접수 (below).
@@ -2072,6 +2084,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       paymentId: payment!.id,
       filledOrderId: filled.id,
       filledOrderKey: filledKey,
+      openOrderId: open.id,
       cursors: {
         ledger: cursorAfter(entry),
         // Past the later of A's two orders by arrival, so the page holds both.
@@ -2890,6 +2903,26 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       status: 200,
       leaks: [],
     });
+
+    // B cancelling A's resting order as B itself is NOT_FOUND, the same answer as an id naming no
+    // order — nothing says A's exists (N04 §7, #178) — and A's order is as it was, as after B's
+    // refused cancel naming A.
+    const aOrder = async () =>
+      (await t.db.select().from(schema.orders).where(eq(schema.orders.id, f.openOrderId)))[0];
+    const aOrderBefore = await aOrder();
+    expect(aOrderBefore).toMatchObject({ userId: f.a.id, status: 'open', cancelReason: null });
+    const cancelAsB = (id: string) =>
+      call(routeOf('POST /me/orders/:id/cancel'), {
+        params: { id },
+        body: { expectedAccountId: f.b.id },
+        cookie: f.b.cookie,
+      });
+    const foreignCancel = await cancelAsB(f.openOrderId);
+    const noneCancel = await cancelAsB(randomUUID());
+    expect(foreignCancel.statusCode).toBe(404);
+    expect(foreignCancel.body).toBe(noneCancel.body);
+    expect(leaked(foreignCancel.body)).toEqual([]);
+    expect(await aOrder()).toEqual(aOrderBefore);
 
     // B's refused proposal and retract left A's proposals as they were and wrote nothing for B
     // (#77). B retracting A's proposal as B itself is NOT_FOUND: it is looked up among B's own.

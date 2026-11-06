@@ -153,8 +153,10 @@ export async function assertNotRestricted(executor: Executor, userId: string): P
  *    readable and untouched (N02 §9).
  *
  * ADR-0107 결정 4 (#119 row) decided #57-13's order part: new orders, sells of a holding included,
- * are refused here; resting orders are cancelled by #178 at the restriction's approval; the
- * limited re-grant is #74 (M12). Nothing here cancels or changes an order.
+ * are refused here; resting orders are cancelled at the restriction's approval as 계정 제한
+ * (AccountRestrictionService, #178 — those in a market held for a ledger failure at its
+ * recovery); the limited re-grant is #74 (M12). Nothing here cancels or changes an order, and the
+ * owner's own cancel (`POST /me/orders/:id/cancel`) does not ask this: it only gives back a lock.
  */
 export async function assertCanTrade(tx: Tx, userId: string): Promise<void> {
   await tx

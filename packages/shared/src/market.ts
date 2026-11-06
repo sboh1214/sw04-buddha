@@ -346,7 +346,8 @@ export type MarketListQuery = z.infer<typeof marketListQuerySchema>;
 // ---- orders, fills, positions ------------------------------------------------------
 /**
  * The caller's own order (#119, ADR-0112; `GET /me/orders`, `GET /me/orders/:id`, the request-id
- * lookup and the order route's answer). Owner only (N04 §7): no other account reads it. Its terms
+ * lookup, the order route's answer, and the answer of `POST /me/orders/:id/cancel`, #178: the
+ * order in its final state). Owner only (N04 §7): no other account reads it. Its terms
  * as sent — `requestId` the `Idempotency-Key`, the confirmed `limitPriceCoin` — and as the server
  * took them: `protectedLimitPriceCoin`, the limit it matched, locked and rests at (an immediate
  * order's narrowed by the market's 가격 보호 폭, #177 2항; a GTC order's its own). `qty` for a

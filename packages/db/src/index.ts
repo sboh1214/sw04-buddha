@@ -117,6 +117,20 @@ export {
 } from './onboarding.js';
 export { isPhoneVerified } from './phone-verification.js';
 export {
+  cancelLockedOrders,
+  cancelOrder,
+  lockAccountOrders,
+  lockMarketOrders,
+  ordersAwaitingRecovery,
+  type CancelledOrders,
+  type CancelOrderInput,
+  type CancelOrderResult,
+  type CancelTouched,
+  type LockedMarketOrders,
+  type LockedOrders,
+  type OrderCancelProcessReason,
+} from './order-cancel.js';
+export {
   findOrderByRequest,
   orderLockFactsOf,
   placeOrder,
@@ -163,6 +177,7 @@ export {
   type LedgerEntryRow,
   type RecordLedgerEntryResult,
 } from './ledger.js';
+export { ledgerHeldMarketIds, ledgerHeldMarketSql } from './ledger-held-markets.js';
 export {
   applyPairMintFill,
   applyTradeFill,

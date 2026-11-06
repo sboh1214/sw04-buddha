@@ -42,10 +42,11 @@ import { LoadFailed, SessionEnded, useSessionEnded } from '../../portfolio';
  * 탈퇴 (#140, ADR-0086; ADR-0069 decision 1 #57-15…#57-18, decision 3 #37-15…#37-17, decision 4
  * #140 rows): the one confirmation screen (decision 4 #140 «남은 Coin의 소멸과 되돌릴 수 없음을 한
  * 화면에 보이고 '탈퇴'를 직접 입력해 한 번 확인한다»). It reads what a closure would do now
- * (`GET /me/closure`): the Coin left, which the closure forfeits ('탈퇴 소멸', #57-16), and what
- * refuses it now — the admin role (#57-17), contracts not settled (#57-16), a payment in progress
- * (decision 7), waiting orders (#178's to cancel), a writing or an account restriction with its end
- * and the way to 조치·신고 내역 (decision 4 #140 «제재 중 탈퇴») — what goes and what stays
+ * (`GET /me/closure`): the Coin left, which the closure forfeits ('탈퇴 소멸', #57-16) — the locks
+ * of the waiting orders it cancels first (탈퇴, #178) included — and what refuses it now — the
+ * admin role (#57-17), contracts not settled (#57-16), a payment in progress (decision 7), an
+ * order waiting for a stopped market's recovery (#178), a writing or an account restriction with
+ * its end and the way to 조치·신고 내역 (decision 4 #140 «제재 중 탈퇴») — what goes and what stays
  * (`closureLines`: the 본인확인 record kept for the retention period, and the start Coin not given
  * again to the same number only for an account that received it — owner decision 2026-10-23 (3차)
  * 7 and 9 — and, only for an account with a market proposal 접수 or 검토, that the operators process

@@ -11,12 +11,13 @@ import {
   type Outcome,
   type TimeInForce,
 } from '@buddha/shared';
-import { count, eq, sql } from 'drizzle-orm';
+import { and, count, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { applyPairMintFill, applyTradeFill } from './contracts.js';
 import { findLedgerAccount, LedgerEntryError } from './ledger.js';
 import { hasMarketFill } from './market-dispute.js';
 import { pauseMarket } from './market-pause.js';
+import { lockMarketOrders } from './order-cancel.js';
 import { transitionMarket } from './market-transitions.js';
 import {
   orderLockFactsOf,
@@ -27,7 +28,12 @@ import {
 } from './orders.js';
 import { balances, fills, ledgerEntries, markets, orders, positions } from './schema/index.js';
 import { contractBook, positionOf } from './test/contracts.js';
-import { createMarket, createUser, setReleaseSetting } from './test/factories.js';
+import {
+  createMarket,
+  createMarketPause,
+  createUser,
+  setReleaseSetting,
+} from './test/factories.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
 import {
   balanceOf,
@@ -36,6 +42,8 @@ import {
   mintTestPairs,
 } from './test/ledger.js';
 import {
+  cancelTestAccountOrders,
+  cancelTestOrder,
   checkOrderInvariants,
   openOrderIntake,
   ORDER_LOCKS_CHECK_SQL,
@@ -915,10 +923,12 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
         const changing = t.db.transaction(async (tx) => {
           await lockMarket(tx, m);
           const [row] = await tx.select().from(markets).where(eq(markets.id, m)).for('update');
+          const locked = await lockMarketOrders(tx, m);
           const now = await clockTimestamp(tx);
           if (edge === 'pause') {
             const done = await pauseMarket(tx, {
               market: row!,
+              orders: locked,
               now,
               actorId: adminId,
               reason: 'basis_change',
@@ -950,24 +960,34 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
         });
         expect(await coin(a)).toEqual({ available: 1_000n, locked: 0n });
       }
-      // An order that rested before the pause keeps resting with its lock (#178 cancels it).
+      // An order that rested before the pause is cancelled by it, its lock back (#178).
       const m = await market();
       const a = await member();
       const rested = await order(a, m, 'YES', 'buy', 'gtc', 40, 1);
-      await t.db.transaction(async (tx) => {
+      const pausedAt = await t.db.transaction(async (tx) => {
         await lockMarket(tx, m);
         const [row] = await tx.select().from(markets).where(eq(markets.id, m)).for('update');
+        const locked = await lockMarketOrders(tx, m);
+        const now = await clockTimestamp(tx);
         await pauseMarket(tx, {
           market: row!,
-          now: await clockTimestamp(tx),
+          orders: locked,
+          now,
           actorId: adminId,
           reason: 'basis_change',
           note: '시험',
           resultPublishedAt: null,
         });
+        return now;
       });
-      expect((await orderRow(rested.order.id)).status).toBe('open');
-      expect(await coin(a)).toEqual({ available: 960n, locked: 40n });
+      expect(await orderRow(rested.order.id)).toMatchObject({
+        status: 'cancelled',
+        cancelReason: 'paused',
+        filledQty: 0,
+        endedAt: pausedAt,
+        updatedAt: pausedAt,
+      });
+      expect(await coin(a)).toEqual({ available: 1_000n, locked: 0n });
     });
   });
 
@@ -1125,6 +1145,23 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
           seen.set(key, (seen.get(key) ?? 0) + 1);
           if (result.fills.length > 0)
             seen.set('fill', (seen.get('fill') ?? 0) + result.fills.length);
+          // Now and then its owner cancels a live order (#178): the whole rest, its lock back.
+          if (pick(8) === 0) {
+            const live = await t.db
+              .select()
+              .from(orders)
+              .where(sql`${orders.status} IN ('open', 'partially_filled')`)
+              .orderBy(orders.arrivalSeq);
+            const target = live[pick(Math.max(live.length, 1))];
+            if (target !== undefined) {
+              const done = await cancelTestOrder(t.db, {
+                ownerId: target.userId,
+                orderId: target.id,
+              });
+              expect(done.kind).toBe('cancelled');
+              seen.set('by_owner', (seen.get('by_owner') ?? 0) + 1);
+            }
+          }
         }
         expect(await checkOrderInvariants(t.db)).toEqual([]);
         // The operators' check (docs/OPERATIONS.md '주문 접수') as buddha_app: nothing to show.
@@ -1163,8 +1200,38 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
           ),
         ).toEqual(qtyLocks);
         expect(coinLocks.size + qtyLocks.size, 'some lock is held').toBeGreaterThan(0);
+        // An account's batch (계정 제한) over both markets, then a pause of the first market: its
+        // people's and the 운영 마켓메이커's orders ended, every lock still an order's.
+        const restricted = await cancelTestAccountOrders(t.db, people[2]!, 'restricted');
+        seen.set('restricted', (seen.get('restricted') ?? 0) + restricted.cancelled.length);
+        const paused = await createMarketPause(t.db, { marketId: marketIds[0]!, by: adminId });
+        expect(
+          await t.db
+            .select()
+            .from(orders)
+            .where(
+              and(
+                eq(orders.marketId, marketIds[0]!),
+                sql`${orders.status} IN ('open', 'partially_filled')`,
+              ),
+            ),
+        ).toEqual([]);
+        const pausedRows = await t.db
+          .select()
+          .from(orders)
+          .where(and(eq(orders.cancelReason, 'paused'), eq(orders.endedAt, paused.pause.pausedAt)));
+        seen.set('paused', (seen.get('paused') ?? 0) + pausedRows.length);
+        expect(await checkOrderInvariants(t.db)).toEqual([]);
       }
-      for (const kind of ['fill', 'open', 'filled', 'no_quote']) {
+      for (const kind of [
+        'fill',
+        'open',
+        'filled',
+        'no_quote',
+        'by_owner',
+        'restricted',
+        'paused',
+      ]) {
         expect(seen.get(kind) ?? 0, kind).toBeGreaterThan(0);
       }
     });

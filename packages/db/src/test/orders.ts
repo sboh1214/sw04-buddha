@@ -26,14 +26,22 @@ import {
 import { eq, sql } from 'drizzle-orm';
 import type { Db } from '../client.js';
 import {
+  cancelLockedOrders,
+  cancelOrder,
+  lockAccountOrders,
+  type CancelledOrders,
+  type CancelOrderResult,
+  type OrderCancelProcessReason,
+} from '../order-cancel.js';
+import {
   placeOrder,
   type FillRow,
   type OrderRow,
   type PlaceOrderInput,
   type PlaceOrderResult,
 } from '../orders.js';
-import { fills, orders, user } from '../schema/index.js';
-import { lockMarket } from '../tx-helpers.js';
+import { fills, orders, profiles, user } from '../schema/index.js';
+import { clockTimestamp, lockMarket } from '../tx-helpers.js';
 import { contractBook } from './contracts.js';
 import { TEST_PRICE_PROTECTION_TICKS, createUser, setReleaseSetting } from './factories.js';
 import { ledgerSupply } from './ledger.js';
@@ -93,6 +101,9 @@ export interface CreateOrderInput {
  * one YES at 50 resting (`open`) by default — under the market lock, with its arrival key from the
  * sequence. Holds no lock: a test of the lock rule takes it itself (`lockForOrder`), or goes
  * through the intake. For reads, eligibility and closure tests that need an order and no intake.
+ * A live row of it has no lock to give back, so never let a cancel meet it (#178: an owner's
+ * cancel, a pause but `ledger_failure`, a pause's end, a restriction's approval, a closure — the
+ * release throws): use `placeTestOrder` there.
  */
 export async function createOrder(db: Db, input: CreateOrderInput): Promise<OrderRow> {
   const userId = input.userId ?? (await createUser(db)).user.id;
@@ -364,6 +375,45 @@ export async function placeTestOrder(
       ownerId: input.ownerId,
     }),
   );
+}
+
+export interface CancelTestOrderInput {
+  ownerId: string;
+  orderId: string;
+  /** Default `by_owner` (the member's own cancel). */
+  reason?: OrderCancelProcessReason;
+}
+
+/** One order's cancel by its owner (`cancelOrder`, #178), in its own transaction. */
+export async function cancelTestOrder(
+  db: Db,
+  input: CancelTestOrderInput,
+): Promise<CancelOrderResult> {
+  return db.transaction((tx) =>
+    cancelOrder(tx, {
+      ownerId: input.ownerId,
+      orderId: input.orderId,
+      reason: input.reason ?? 'by_owner',
+    }),
+  );
+}
+
+/**
+ * An account's batch cancel (#178) as the restriction's approval and the closure run it, in its
+ * own transaction: the person's profile FOR UPDATE first (`lockAccountOrders`' precondition),
+ * the batch's locks, the clock, then `cancelLockedOrders` with `reason` at that instant.
+ */
+export async function cancelTestAccountOrders(
+  db: Db,
+  ownerId: string,
+  reason: OrderCancelProcessReason,
+): Promise<CancelledOrders & { at: Date }> {
+  return db.transaction(async (tx) => {
+    await tx.select().from(profiles).where(eq(profiles.userId, ownerId)).for('update');
+    const locked = await lockAccountOrders(tx, ownerId);
+    const at = await clockTimestamp(tx);
+    return { ...(await cancelLockedOrders(tx, locked, { reason, at })), at };
+  });
 }
 
 /**

@@ -4,14 +4,17 @@ import { describe, expect, it } from 'vitest';
 const ROOT = new URL('../../../', import.meta.url);
 
 /**
- * The one writer of orders and fills (#119, ADR-0112; ADR-0111 '주문을 쓰는 모든 곳이 lockMarket을
- * 잡는 것은 #119가 지킨다'): orders.ts takes every order and writes every fill under the market's
- * `lockMarket` — the arrival key is drawn under it, and `fills_check` (migration 0062) reads both
- * orders by key trusting it. Every other writer is listed with its reason; the cancel (#178) and
- * the expiry (#120) join here, holding the same lock.
+ * The writers of orders and fills (#119, ADR-0112; ADR-0111 '주문을 쓰는 모든 곳이 lockMarket을
+ * 잡는 것은 #119가 지킨다'; #178, ADR-0113): orders.ts takes every order and writes every fill, and
+ * order-cancel.ts ends live orders as 취소 완료, each under the market's `lockMarket` — the arrival
+ * key is drawn under it, `fills_check` (migration 0062) reads both orders by key trusting it, and
+ * a cancel re-reads the row under it. Every other writer is listed with its reason; the expiry
+ * (#120) joins here, holding the same lock.
  */
 const ORDER_WRITERS: Record<string, string> = {
   'packages/db/src/orders.ts': 'the intake: the order, its fills and the resting orders they fill',
+  'packages/db/src/order-cancel.ts':
+    'the cancel (#178): one order, a market, an account — under lockMarket',
   // `createOrder`, `createFillRecord`: rows as the intake leaves them, under `lockMarket`, for
   // reads and fixtures with no intake (their docs say so).
   'packages/db/src/test/orders.ts': 'test fixture',
@@ -67,7 +70,7 @@ const writesOrders = (text: string) => ORDER_WRITES.some((pattern) => pattern.te
 
 const read = (file: string) => readFileSync(new URL(file, ROOT), 'utf8');
 
-describe('one writer of orders and fills (#119, static)', () => {
+describe('the writers of orders and fills (#119, #178, static)', () => {
   it('reads the source tree (the scan is not empty)', () => {
     expect(sourceFiles()).toEqual(expect.arrayContaining(Object.keys(ORDER_WRITERS)));
   });

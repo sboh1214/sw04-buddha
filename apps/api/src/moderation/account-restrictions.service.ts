@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { lockAdminRoles, schema, type Db } from '@buddha/db';
+import { cancelLockedOrders, lockAccountOrders, lockAdminRoles, schema, type Db } from '@buddha/db';
 import {
   ACCOUNT_RESTRICTION_APPROVAL_KINDS,
   ACCOUNT_RESTRICTION_DAYS,
@@ -99,8 +99,12 @@ interface LockedAction {
  * account is #140's (owner decision 2026-10-23: closed then, rejected for '탈퇴' — ADR-0085 결과 5),
  * and no new `apply` about a closed account is taken or approved (`closed`, owner decision
  * 2026-10-23 (2차) 1, ADR-0086); a change of an earlier one (a cancellation, say) is asked as for
- * any member. Nothing here touches a balance, an order or a record of trades (N02 §9:
- * «잔액·기록·이의제기 경로는 유지»).
+ * any member. An `apply`'s approval cancels the member's resting orders in every market as
+ * 취소 완료(계정 제한), their locks given back (#178, ADR-0113; ADR-0107 결정 4 #119 '계정 제한 중
+ * 대기 주문', #57-13), but those in a market held for a ledger failure, which keep their locks until
+ * its recovery (the owner's answer 2026-11-06) — the restriction applies all the same. They are not
+ * restored when it ends, is brought forward, lifted or cancelled. Nothing else here touches a
+ * balance, a holding or a record of trades (N02 §9: «잔액·기록·이의제기 경로는 유지»).
  */
 @Injectable()
 export class AccountRestrictionService {
@@ -294,7 +298,9 @@ export class AccountRestrictionService {
    *   write hold or lock it until they commit — so the restriction holds from this commit with
    *   nothing slipping past; then its subject (re-checked: the member's) and the restriction,
    *   ending `days` after the approval (or 무기한), with the pending reports on the subject
-   *   resolved (조치함). A member restricted already keeps the one that ends later.
+   *   resolved (조치함). A member restricted already keeps the one that ends later. Then the
+   *   member's resting orders are cancelled 계정 제한 at the approval's instant (the class doc),
+   *   the audit naming them (`cancelledOrderIds`) and those left for a recovery (`heldOrderIds`).
    * - `shorten`, `lift`: the restriction's end brought forward to the end asked for, or to now —
    *   the change recorded as the asking operator's, with its approval.
    * - `cancel`: the restriction cancelled at once, as the asking operator's, with its approval.
@@ -309,7 +315,10 @@ export class AccountRestrictionService {
    * the grantee's profile row, so the profiles after it keep the one order (no deadlock). Then the
    * profiles, in account-id order (`lockProfiles`, 7-17): the deciding admin's, which the
    * decision's trigger locks again, and an `apply`'s member's — so two approvals whose deciders are
-   * each other's members do not deadlock — and then the rows they come before.
+   * each other's members do not deadlock — and then the rows they come before: an `apply`'s
+   * subject, then the markets of the member's live orders and the member's Coin accounts in them
+   * (`lockAccountOrders`, #178: every market before any balance row, as every order flow takes
+   * them; the member's profile FOR UPDATE keeps a new order from coming in meanwhile).
    *
    * Refused: no such request of #139 (NOT_FOUND), the member deciding about themselves (`own`), the
    * one who asked (APPROVAL_NOT_ALLOWED `requester`), one decided already (`decided`), an `apply`
@@ -331,11 +340,27 @@ export class AccountRestrictionService {
         change === 'apply'
           ? { change, apply: await this.lockApply(tx, request, memberId) }
           : { change, action: await this.lockAction(tx, request.targetId!) };
+      // An `apply` cancels the member's resting orders (#178): their markets, then the member's
+      // Coin accounts in them, last before the decision (the member's profile is held FOR UPDATE).
+      // Open (ADR-0113 결정 4): a member holding the admin role with an order placed before the
+      // grant, deciding a request on that market meanwhile (`lockMarket`, then their profile FOR
+      // SHARE in migration 0021's `approval_requests_keep_record`), meets this in a 40P01 — until
+      // #143's grant cancels those orders; a held market's stay to its recovery.
+      const orders = change === 'apply' ? await lockAccountOrders(tx, memberId) : null;
       const decided = await this.approvals.approve(deciderId, request.id, reason, tx);
       const at = decided.decidedAt!;
       let done: { actionId: string; reportIds: string[] };
+      let cancelled: { cancelledOrderIds: string[]; heldOrderIds: string[] } = {
+        cancelledOrderIds: [],
+        heldOrderIds: [],
+      };
       if (locked.change === 'apply') {
         done = await this.applyApproved(tx, request, memberId, locked.apply, at);
+        const ended = await cancelLockedOrders(tx, orders!, { reason: 'restricted', at });
+        cancelled = {
+          cancelledOrderIds: ended.cancelled.map((order) => order.id),
+          heldOrderIds: ended.held.map((order) => order.id),
+        };
       } else if (locked.change === 'cancel') {
         done = {
           actionId: await this.cancelApproved(tx, request, locked.action, at),
@@ -364,6 +389,7 @@ export class AccountRestrictionService {
           userId: memberId,
           reason: decided.decisionReason,
           reportIds: done.reportIds,
+          ...cancelled,
         },
       );
       return done.actionId;

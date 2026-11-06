@@ -13,17 +13,22 @@
  * reports, the 관심 등록, the balance and every record stay as they were; a term ends by itself;
  * restricted twice, the later end governs, and with a writing restriction the later of the two
  * (the account restriction on a tie). The member reads the restriction, its reason and end, never
- * who asked or approved, nor does an admin it is about. Nothing of it is public. Skips when TEST_*
- * are unset.
+ * who asked or approved, nor does an admin it is about. Nothing of it is public. Its approval
+ * cancels the member's resting orders in every market as 계정 제한 (#178, ADR-0113), but those in
+ * a market held for a ledger failure, which its recovery ends; none comes back when it ends. Skips
+ * when TEST_* are unset.
  */
 import { randomUUID } from 'node:crypto';
 import { lockAdminRoles, lockMarket, schema } from '@buddha/db';
 import {
+  balanceOf,
+  checkOrderInvariants,
   completeOnboarding,
   createApprovalRequest,
   createComment,
   createFill,
   createMarket,
+  createMarketPause,
   createModerationAction,
   createNotice,
   createPosition,
@@ -31,8 +36,11 @@ import {
   createProvisionalMarket,
   createReport,
   createStartGrant,
+  fundMarketMakerFunds,
   ledgerOf,
   openOrderIntake,
+  placeTestOrder,
+  resumeMarket,
 } from '@buddha/db/test';
 import {
   WRITE_LIMITS,
@@ -1001,6 +1009,14 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
       await expect(t.db.transaction((tx) => assertCanTrade(tx, member.id))).rejects.toMatchObject({
         code: 'RESTRICTED',
       });
+      // The order that got in first rested, and the approval cancelled it 계정 제한 (#178).
+      const [order] = await t.db
+        .select()
+        .from(schema.orders)
+        .where(eq(schema.orders.userId, member.id));
+      expect(order).toMatchObject({ status: 'cancelled', cancelReason: 'restricted' });
+      expect(order!.endedAt!.toISOString()).toBe(action.createdAt);
+      expect(await balanceOf(t.db, member.id)).toMatchObject({ lockedCoin: 0n });
     });
 
     it('names the later of a writing and an account restriction where both refuse, the account restriction on a tie (#77, #140 hooks)', async () => {
@@ -1713,6 +1729,219 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
         aboutViewer: false,
         closedByAccountClosure: false,
       });
+    });
+  });
+  describe('the resting orders (#178, ADR-0113)', () => {
+    /** A GTC order through the intake (`placeTestOrder`), as it stands after it. */
+    async function place(input: Parameters<typeof placeTestOrder>[1]) {
+      const result = await placeTestOrder(t.db, input);
+      if (result.kind !== 'placed') throw new Error(`expected a placed order, got ${result.kind}`);
+      return result.order;
+    }
+    async function orderOf(id: string) {
+      const [row] = await t.db.select().from(schema.orders).where(eq(schema.orders.id, id));
+      return row!;
+    }
+    const expectSound = async () => expect(await checkOrderInvariants(t.db)).toEqual([]);
+
+    beforeEach(async () => {
+      await openOrderIntake(t.db, { adminId: admin.id });
+      for (const who of [member, other]) {
+        await createStartGrant(t.db, { userId: who.id, amountCoin: 1_000n });
+      }
+    });
+
+    it('cancels the member’s resting orders in every market at the approval, the filled part kept, and nobody else’s; a refusal none', async () => {
+      const another = await createMarket(t.db);
+      const marketMaker = await fundMarketMakerFunds(t.db, market.id, 1_000n);
+      // The member's NO bid of 2 at 40 meets the other member's IOC YES buy of one: partly filled.
+      const partly = await place({
+        marketId: market.id,
+        ownerId: member.id,
+        outcome: 'NO',
+        limitPriceCoin: 40,
+        qty: 2,
+      });
+      await place({
+        marketId: market.id,
+        ownerId: other.id,
+        timeInForce: 'ioc',
+        limitPriceCoin: 99,
+      });
+      const resting = await place({ marketId: another.id, ownerId: member.id, limitPriceCoin: 30 });
+      const others = [
+        await place({ marketId: market.id, ownerId: other.id, limitPriceCoin: 20 }),
+        await place({ marketId: market.id, ownerId: marketMaker, limitPriceCoin: 25 }),
+      ];
+      expect(await orderOf(partly.id)).toMatchObject({
+        status: 'partially_filled',
+        filledQty: 1,
+      });
+      const request = requestOf(await ask(7));
+      // The one who asked is refused: nothing is cancelled.
+      expect(approvalRefusalOf(await approve(request.id, admin))).toBe('requester');
+      expect((await orderOf(resting.id)).status).toBe('open');
+
+      const action = decisionOf(await approve(request.id)).action!;
+      for (const id of [partly.id, resting.id]) {
+        const row = await orderOf(id);
+        expect(row).toMatchObject({ status: 'cancelled', cancelReason: 'restricted' });
+        expect(row.endedAt!.toISOString()).toBe(action.createdAt);
+      }
+      expect(await orderOf(partly.id)).toMatchObject({ filledQty: 1, qty: 2 });
+      for (const order of others) expect((await orderOf(order.id)).status).toBe('open');
+      expect(await balanceOf(t.db, member.id)).toMatchObject({
+        availableCoin: 960n,
+        lockedCoin: 0n,
+      });
+      const [audit] = await audits('account_restriction_approve');
+      expect(audit!.payload).toMatchObject({ change: 'apply', heldOrderIds: [] });
+      expect(
+        [...(audit!.payload as { cancelledOrderIds: string[] }).cancelledOrderIds].sort(),
+      ).toEqual([partly.id, resting.id].sort());
+      await expectSound();
+
+      // None comes back when the restriction is brought forward, lifted or cancelled.
+      const before = await t.db.select().from(schema.orders);
+      await change(action.id, 'shorten', { endsAt: new Date(Date.now() + DAY_MS).toISOString() });
+      await change(action.id, 'lift');
+      await change(action.id, 'cancel');
+      expect(await t.db.select().from(schema.orders)).toEqual(before);
+    });
+
+    it('cancels nothing at a 감경, lift or cancellation approval, even with an order of the member resting then (결정 7)', async () => {
+      // A cancellation of a restriction that ended by itself, after which the member ordered
+      // again: the order the approval meets is live and locked.
+      const ended = await createModerationAction(t.db, {
+        userId: member.id,
+        createdBy: admin.id,
+        approvedBy: second.id,
+        type: 'account_restriction',
+        createdAt: new Date(Date.now() - 2 * DAY_MS),
+        endsAt: new Date(Date.now() - 60_000),
+      });
+      const resting = await place({ marketId: market.id, ownerId: member.id, limitPriceCoin: 30 });
+      // A standing one the factory wrote without the apply approval, so an order of the member
+      // rests under it while it is brought forward and lifted.
+      const standing = await createModerationAction(t.db, {
+        userId: member.id,
+        createdBy: admin.id,
+        approvedBy: second.id,
+        type: 'account_restriction',
+        endsAt: new Date(Date.now() + 7 * DAY_MS),
+      });
+      const before = await orderOf(resting.id);
+      const balance = await balanceOf(t.db, member.id);
+      expect(balance).toMatchObject({ lockedCoin: 30n });
+
+      await change(standing.id, 'shorten', { endsAt: new Date(Date.now() + DAY_MS).toISOString() });
+      await change(standing.id, 'lift');
+      await change(standing.id, 'cancel');
+      await change(ended.id, 'cancel');
+      expect(await orderOf(resting.id)).toEqual(before);
+      expect(await balanceOf(t.db, member.id)).toEqual(balance);
+      const approvals = await audits('account_restriction_approve');
+      expect(approvals.map((row) => (row.payload as { change: string }).change).sort()).toEqual([
+        'cancel',
+        'cancel',
+        'lift',
+        'shorten',
+      ]);
+      for (const row of approvals) {
+        expect(row.payload).toMatchObject({ cancelledOrderIds: [], heldOrderIds: [] });
+      }
+      await expectSound();
+    });
+
+    it('skips an order in a market held for a ledger failure — the restriction applies all the same — and the recovery cancels it', async () => {
+      const held = await createMarket(t.db);
+      const waiting = await place({ marketId: held.id, ownerId: member.id, limitPriceCoin: 40 });
+      const resting = await place({ marketId: market.id, ownerId: member.id, limitPriceCoin: 30 });
+      await createMarketPause(t.db, { marketId: held.id, reason: 'ledger_failure', by: admin.id });
+      const before = await orderOf(waiting.id);
+      const action = await restrict(null);
+      expect(await mine()).toMatchObject({ accountRestriction: { kind: 'account', endsAt: null } });
+      expect(await orderOf(waiting.id)).toEqual(before);
+      expect(await orderOf(resting.id)).toMatchObject({
+        status: 'cancelled',
+        cancelReason: 'restricted',
+      });
+      expect(await balanceOf(t.db, member.id)).toMatchObject({ lockedCoin: 40n });
+      const [audit] = await audits('account_restriction_approve');
+      expect(audit!.payload).toMatchObject({
+        actionId: action.id,
+        cancelledOrderIds: [resting.id],
+        heldOrderIds: [waiting.id],
+      });
+      await expectSound();
+      // The 재개 approval — its recovery — ends it 일시 중단, as every order there.
+      await resumeMarket(t.db, held.id, { requestedBy: admin.id, approvedBy: second.id });
+      expect(await orderOf(waiting.id)).toMatchObject({
+        status: 'cancelled',
+        cancelReason: 'paused',
+      });
+      expect(await balanceOf(t.db, member.id)).toMatchObject({
+        availableCoin: 1_000n,
+        lockedCoin: 0n,
+      });
+      await expectSound();
+    });
+
+    it('commits with an admin’s market action and a role grant at once: the queue is reordered, no deadlock (ADR-0113)', async () => {
+      await place({ marketId: market.id, ownerId: member.id, limitPriceCoin: 40 });
+      const request = requestOf(await ask(7));
+      const grantee = await onboarded();
+      const observer = await t.db.$client.connect();
+      let proceed = () => {};
+      const asking = new Promise<void>((resolve) => {
+        proceed = resolve;
+      });
+      let held = () => {};
+      const holding = new Promise<void>((resolve) => {
+        held = resolve;
+      });
+      // An admin's market action as MarketAdminService takes its locks: the market's, then the
+      // admin roles' (shared).
+      const action = t.db.transaction(async (tx) => {
+        await lockMarket(tx, market.id);
+        held();
+        await asking;
+        await lockAdminRoles(tx, 'shared');
+      });
+      let approving: Promise<Res> | undefined;
+      let granting: Promise<void> | undefined;
+      try {
+        await Promise.race([holding, action]);
+        // The approval holds the roles' lock (shared) and the member's profile, then waits on
+        // the market of the member's order.
+        approving = approve(request.id);
+        await waitForLockWaiter(observer, 'the approval behind the market action');
+        // A grant queues for the roles' lock (exclusive) behind the approval.
+        granting = t.db.transaction(async (tx) => {
+          await lockAdminRoles(tx, 'exclusive');
+          await tx
+            .update(schema.profiles)
+            .set({ role: 'admin' })
+            .where(eq(schema.profiles.userId, grantee.id));
+        });
+        await waitForLockWaiter(observer, 'the grant behind the approval', 2);
+        // The action now asks for the roles' lock behind the waiting grant: PostgreSQL moves it
+        // ahead (a soft cycle) after deadlock_timeout, and all three commit.
+        proceed();
+        await action;
+        expect(decisionOf(await approving).action).not.toBeNull();
+        await granting;
+      } finally {
+        proceed();
+        await Promise.allSettled([action, approving, granting]);
+        observer.release();
+      }
+      const [order] = await t.db
+        .select()
+        .from(schema.orders)
+        .where(eq(schema.orders.userId, member.id));
+      expect(order).toMatchObject({ status: 'cancelled', cancelReason: 'restricted' });
+      await expectSound();
     });
   });
 });

@@ -29,7 +29,7 @@ import {
   type LedgerEntryInput,
   type LedgerEntryRow,
 } from './ledger.js';
-import { currentMarketPause } from './market-pause.js';
+import { ledgerHeldMarketIds } from './ledger-held-markets.js';
 import { fills, markets, positions } from './schema/index.js';
 import { clockTimestamp, lockMarket } from './tx-helpers.js';
 
@@ -719,7 +719,8 @@ export async function applyTradeFill(tx: Tx, input: TradeFillInput): Promise<Tra
  * - `not_trading`: the market is not OPEN or PAUSED (#73 12항: never after close);
  * - `ledger_failure`: its lasting pause is for 담보·원장 장애 — the collateral the reconciliation
  *   doubts is not paid out while it lasts (ADR-0110 10-9, reversible). A failure #93 records on a
- *   market already paused for another reason (#73 10항) is not read yet: #93 adds it here;
+ *   market already paused for another reason (#73 10항) is not read yet: #93 adds it to the
+ *   held-market rule (ledger-held-markets.ts, #178), which this asks;
  * - `insufficient_pairs`: qty is above the pairs the 운영 마켓메이커 holds unlocked —
  *   min(YES − locked YES, NO − locked NO);
  * - `close_passed`: OPEN or PAUSED, but its close has come by the database clock (#120's 서버 시각),
@@ -796,7 +797,9 @@ export async function burnMarketMakerPairs(tx: Tx, input: PairBurnInput): Promis
   if (market.status !== 'open' && market.status !== 'paused') {
     return { outcome: 'refused', reason: 'not_trading' };
   }
-  if ((await currentMarketPause(tx, marketId))?.reason === 'ledger_failure') {
+  // Held for a ledger failure (ledger-held-markets.ts): while PAUSED, its lasting pause is for
+  // `ledger_failure`; a held market that closed was refused `not_trading` above.
+  if ((await ledgerHeldMarketIds(tx, [marketId])).has(marketId)) {
     return { outcome: 'refused', reason: 'ledger_failure' };
   }
   const unlocked = (row: PositionRow | null) =>
