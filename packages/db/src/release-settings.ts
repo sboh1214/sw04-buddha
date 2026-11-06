@@ -27,9 +27,12 @@ export const storedReleaseSettingValue = sql<unknown>`${releaseSettings.value}::
  * `readReleaseSetting` (@buddha/shared) — so only the very definition object `registry` holds is
  * read, `undecided` comes back with no value and any other status with the value its schema types.
  * apps/api reads through `ReleaseSettingsService.get` (its injected registry), the worker calls
- * this with RELEASE_SETTINGS. A value applies to work started after it changed (owner decision
- * 2026-10-13): read it once when the work begins, inside that work's transaction when it has one.
- * Throws a plain Error for an unregistered definition or a stored value that no longer fits.
+ * this with RELEASE_SETTINGS, and a write here that reads one inside its own transaction takes the
+ * registry from its caller (`placeOrder`'s `order.accepting`: the API passes its injected one,
+ * the worker none, so RELEASE_SETTINGS; docs/SETTINGS.md '값 읽기'). A value applies to work started
+ * after it changed (owner decision 2026-10-13): read it once when the work begins, inside that
+ * work's transaction when it has one. Throws a plain Error for an unregistered definition or a
+ * stored value that no longer fits.
  */
 export async function getReleaseSetting<T extends ReleaseSettingValue>(
   executor: Db | Tx,

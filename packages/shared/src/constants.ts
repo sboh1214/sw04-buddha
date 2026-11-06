@@ -68,6 +68,29 @@ export const POSITION_QTY_MAX = INT4_MAX;
 /** Bound on request-side Coin fields (`COIN_AMOUNT_INPUT_MAX_LENGTH` is its length): 10^15. */
 export const MAX_COIN_AMOUNT = 10n ** 15n;
 
+// ---- orders (#119, ADR-0112; ADR-0107 결정 1 #177 2·3·9항) --------------------------------
+/**
+ * The input cap of one order's quantity, 1 to this many contracts (#177 9항: no economic order or
+ * holding cap, only this input cap — the old `ORDER_QTY_MAX`).
+ */
+export const ORDER_QTY_MAX = 1_000_000;
+
+/**
+ * The cap of a Coin-amount (budget) order's budget, 1 to this many Coin: `ORDER_QTY_MAX` × the
+ * lowest price, so a budget order never fills more contracts than a quantity order may ask.
+ */
+export const ORDER_BUDGET_MAX_COIN = BigInt(ORDER_QTY_MAX) * BigInt(PRICE_MIN);
+
+/**
+ * The range of a 가격 보호 폭 in ticks (#177 2항): the release setting's default and a market's own
+ * (`markets.price_protection_ticks`). 98 ticks reach from any price to either end of 1..99.
+ */
+export const PRICE_PROTECTION_TICKS_MIN = 1;
+export const PRICE_PROTECTION_TICKS_MAX = PRICE_MAX - PRICE_MIN;
+
+/** The highest value of the release setting `order.rate_limit` (submissions per minute). */
+export const ORDER_RATE_LIMIT_MAX = 1_000;
+
 export const MARKET_TITLE_MAX = 120;
 /**
  * Each rule text (#23, ADR-0093 decision 3 '#23 문장 길이와 표시'): 배경 (`description`), the YES and

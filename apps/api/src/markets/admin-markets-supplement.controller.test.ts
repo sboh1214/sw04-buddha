@@ -22,6 +22,9 @@ import {
   createOpenedMarket,
   createRuleSupplement,
   createSupplementRequest,
+  createUser,
+  openOrderIntake,
+  placeTestOrder,
 } from '@buddha/db/test';
 import {
   MARKET_SUPPLEMENT_APPROVAL_KIND,
@@ -33,7 +36,7 @@ import {
   type Market,
 } from '@buddha/shared';
 import { Queue } from 'bullmq';
-import { and, asc, eq, ne } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne } from 'drizzle-orm';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
@@ -947,6 +950,49 @@ describe.skipIf(!hasTestInfra)('admin market supplements (integration)', () => {
       [1, []],
     ]);
     expect(await jobQueue.getJob(marketCloseJobId(market.id, new Date(c + DAY_MS)))).toBeDefined();
+  });
+
+  it('leaves the resting orders and their locks as they were after an approval (ADR-0107 결정 5)', async () => {
+    // '#119 규칙 보충 때 대기 주문': a supplement keeps the meaning, so the orders resting on the
+    // market stay — none cancelled, none repriced, no lock moved.
+    const market = await opened();
+    await openOrderIntake(t.db, { adminId: asker.id });
+    const yes = (await createUser(t.db, { balanceCoin: 1_000n })).user.id;
+    const no = (await createUser(t.db, { balanceCoin: 1_000n })).user.id;
+    for (const [ownerId, outcome, limitPriceCoin] of [
+      [yes, 'YES', 40],
+      [no, 'NO', 50],
+    ] as const) {
+      const placed = await placeTestOrder(t.db, {
+        ownerId,
+        marketId: market.id,
+        outcome,
+        limitPriceCoin,
+        qty: 3,
+      });
+      expect(placed.kind === 'placed' && placed.order.status).toBe('open');
+    }
+    const state = async () => ({
+      orders: await t.db
+        .select()
+        .from(schema.orders)
+        .where(eq(schema.orders.marketId, market.id))
+        .orderBy(asc(schema.orders.arrivalSeq)),
+      balances: await t.db
+        .select()
+        .from(schema.balances)
+        .where(inArray(schema.balances.userId, [yes, no]))
+        .orderBy(asc(schema.balances.userId)),
+    });
+    const before = await state();
+    expect(before.balances.map((row) => row.lockedCoin)).toEqual(
+      [yes, no].sort().map((id) => (id === yes ? 120n : 150n)),
+    );
+    expect(
+      (await requestSupplement(market.id, { description: '배경을 고쳐 쓴다' })).statusCode,
+    ).toBe(200);
+    expect((await approve(market.id, await pendingId(market.id))).statusCode).toBe(200);
+    expect(await state()).toEqual(before);
   });
 
   it('approves 사건 기한, the delay items, the zone and an announcement cleared', async () => {

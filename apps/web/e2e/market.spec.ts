@@ -22,7 +22,8 @@ import {
  * accessibility readings AC 6 can actually be held to in a browser (the Lighthouse number
  * itself is a manual run recorded in ADR-0032).
  *
- * There is no way to trade until the CLOB lands (#119, #66; D13): a market here has no fill, so
+ * There is no way to trade on screen until the order panel lands (#66; D13 — the API takes
+ * orders since #119, orders.spec.ts, on its own markets): a market here has no fill, so
  * its price reads 체결 없음, its chart is empty (N02 §5) and its order area says 거래 준비 중 — the
  * desktop column, and below md the sheet its YES 매수 · NO 매수 bar opens for a member, a sign-in
  * prompt in that sheet for a signed-out visitor (#122, ADR-0067).
@@ -535,9 +536,10 @@ test.describe('시장 카드', () => {
     // What the card no longer draws: no 거래량 and no price trend line (ADR-0061 decision 1,
     // item 4) — both were on every card, priced or not, so these two fail on the old one.
     // The payout multiple ('1.59x', O-21) is checked here too, but that line proves nothing yet:
-    // a card with no fill never showed one (ADR-0048) and an e2e market cannot get a fill until
-    // the order path exists (#119, #189). What pins its removal today is the source scan in
-    // lib/market-card.test.ts; this line starts to count once a spec can trade.
+    // a card with no fill never showed one (ADR-0048) and this market has none (orders.spec.ts
+    // trades on its own markets only, #119; the screen tests are #189). What pins its removal
+    // today is the source scan in lib/market-card.test.ts; this line starts to count once a
+    // spec trades on the market it reads.
     await expect(card).not.toContainText(/\d\.\d{2}x/);
     await expect(card).not.toContainText(copy.marketVolume);
     await expect(card.getByTestId('market-card-volume')).toHaveCount(0);

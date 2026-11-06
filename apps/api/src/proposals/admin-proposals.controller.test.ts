@@ -20,8 +20,11 @@ import {
   createCategory,
   createMarket,
   createProposal,
+  setReleaseSetting,
+  TEST_PRICE_PROTECTION_TICKS,
 } from '@buddha/db/test';
 import {
+  PRICE_PROTECTION_TICKS_SETTING,
   MARKET_REVIEW_CHECKLIST,
   adminProposalSchema,
   proposalDraftCloseAt,
@@ -30,7 +33,7 @@ import {
   type AdminProposal,
 } from '@buddha/shared';
 import { randomUUID } from 'node:crypto';
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, ne } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
@@ -74,6 +77,14 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
       .set({ nickname: 'proposer_one' })
       .where(eq(schema.profiles.userId, proposer.id));
     category = await createCategory(t.db, { slug: 'economy', nameKo: '경제' });
+    // The 가격 보호 폭 default the test environment enters (#119, ADR-0107 결과 3): a market copies
+    // it at creation and its review submission needs one (OPEN_ITEMS_MISSING priceProtection).
+    await setReleaseSetting(t.db, {
+      adminId: admin.id,
+      key: PRICE_PROTECTION_TICKS_SETTING.key,
+      status: 'test',
+      value: TEST_PRICE_PROTECTION_TICKS,
+    });
   });
 
   /** An admin that finished the onboarding, as /admin requires (ADR-0072). */
@@ -157,6 +168,8 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
         payload: schema.adminActions.payload,
       })
       .from(schema.adminActions)
+      // Not the width default `beforeEach` enters (#119): a setting's record, not a proposal's.
+      .where(ne(schema.adminActions.type, 'release_setting_change'))
       .orderBy(asc(schema.adminActions.createdAt));
   /**
    * Makes a market public as the market's own routes do (#78, #21): `admin` submits the draft for

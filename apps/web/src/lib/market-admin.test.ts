@@ -58,6 +58,7 @@ import {
   marketEventRows,
   marketFormError,
   openItemsNotice,
+  priceProtectionText,
   ruleVersionItemList,
   ruleVersionItemText,
   MAX_TIMEOUT_MS,
@@ -694,6 +695,39 @@ describe('marketEventRows', () => {
     }
   });
 
+  it('reads a 가격 보호 폭 변경 as the width before and after and the reason (#119)', () => {
+    // ADR-0112: one admin's change of an OPEN or PAUSED market's width; no status change. `before`
+    // is null only for a market submitted before #119, which had none.
+    const payload = { before: 5, after: 3, reason: '호가가 촘촘해져 폭을 좁힙니다.' };
+    expect(marketEventRows('price_protection_changed', payload)).toEqual([
+      { label: copy.eventRulesBefore, value: '5틱' },
+      { label: copy.eventRulesAfter, value: '3틱' },
+      { label: copy.reviewLogReason, value: payload.reason },
+    ]);
+    expect(
+      marketEventRows('price_protection_changed', { ...payload, before: null }),
+    ).toContainEqual({
+      label: copy.eventRulesBefore,
+      value: copy.adminMarketPriceProtectionUndecided,
+    });
+    expect(MARKET_EVENT_LABEL.price_protection_changed).toBe('가격 보호 폭 변경');
+    expect(marketEventLabel('price_protection_changed', payload)).toBe('가격 보호 폭 변경');
+    for (const bad of [
+      { ...payload, after: 0 },
+      { ...payload, after: 99 },
+      { ...payload, before: 2.5 },
+      { ...payload, reason: undefined },
+      null,
+    ]) {
+      expect(marketEventRows('price_protection_changed', bad)).toBeUndefined();
+    }
+    expect([priceProtectionText(1), priceProtectionText(98), priceProtectionText(null)]).toEqual([
+      '1틱',
+      '98틱',
+      '미정',
+    ]);
+  });
+
   it('reads a 판정 지연 기록 as its reason, next review time and the status it was made on (#142)', () => {
     // The record's `judgement_delay_recorded` event (ADR-0106): no status change; the record's id
     // is an id, which no row prints, and the actor beside it is the admin who recorded it.
@@ -992,6 +1026,7 @@ describe('openItemsNotice', () => {
       '선행 마감',
       '카테고리',
       '태그 1~5개',
+      '가격 보호 폭',
     ]);
     // '정산' is Coin's payout (ADR-0052): no item is named with it any more.
     for (const item of OPEN_ITEMS) expect(OPEN_ITEM_LABEL[item], item).not.toContain('정산');
@@ -1008,7 +1043,14 @@ describe('openItemsNotice', () => {
     expect(draft([...OPEN_ITEMS])).toBe(
       '검수 제출 전에 채우거나 고칠 항목: 질문 · 배경 · YES 조건 · NO 조건 · 사건 기한 · 1차 출처 · ' +
         '대체 출처 · 전환 조건 · 장기 지연 기한 · 지연·취소·무효 처리 · 예정 개장 시각 · ' +
-        '거래 마감 시각 · 예정 판정 시각 · 판정 기준 시간대 · 시각 순서 · 선행 마감 · 카테고리 · 태그 1~5개',
+        '거래 마감 시각 · 예정 판정 시각 · 판정 기준 시간대 · 시각 순서 · 선행 마감 · 카테고리 · 태그 1~5개 · ' +
+        '가격 보호 폭\n' +
+        '가격 보호 폭: 표준값(출시 설정)이 미정이라 검수 제출할 수 없습니다',
+    );
+    // The width is no field of the form: the line says it waits for the release setting (#119).
+    expect(draft(['priceProtection'])).toBe(
+      `${copy.adminMarketOpenItems}: ${copy.openItemPriceProtection}\n` +
+        `${copy.openItemPriceProtection}: ${copy.openItemRulePriceProtectionUndecided}`,
     );
     expect(draft(['tags'])).toBe('검수 제출 전에 채우거나 고칠 항목: 태그 1~5개');
     expect(draft(['tags', 'primarySource', 'yesCondition'])).toBe(

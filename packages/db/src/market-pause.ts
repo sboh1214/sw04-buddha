@@ -33,9 +33,11 @@ type Reader = Pick<NodePgDatabase<typeof schema>, 'select'>;
  * 조기 결과의 공개 시각'): the one place each edge into and out of PAUSED is taken, as the open is
  * `openScheduledMarket`'s (ADR-0100 결정 2), so the rule lives once — `pauseMarket` (OPEN →
  * PAUSED, one admin), `endMarketPause` (PAUSED → OPEN or CLOSED, by another admin's approval) and
- * `endPauseAtClose` (the worker's close at `close_at` of a PAUSED market). M9 cancels the pending
- * orders at the pause here (#173 item 3; for `ledger_failure` after the recovery — #119, #178),
- * and #93 may call `pauseMarket` with `ledger_failure`. Each is called under `lockMarket`, with the
+ * `endPauseAtClose` (the worker's close at `close_at` of a PAUSED market). #178 cancels the
+ * resting orders at the pause here, in the same transaction (#173 item 3, ADR-0107 결정 5 '#119 일시
+ * 중단 때 대기 주문'; for `ledger_failure` after the recovery, 결정 4); until then they rest and
+ * keep their locks, and the intake (#119) refuses new orders '일시 중단'. #93 may call
+ * `pauseMarket` with `ledger_failure`. Each is called under `lockMarket`, with the
  * market read `FOR UPDATE` after the lock and `now` the DB clock read after the last lock, in the
  * caller's transaction; each writes no admin action (the API's) and publishes nothing (the caller
  * publishes `market:status` after COMMIT).
@@ -93,8 +95,8 @@ export type PauseMarketResult =
  * `early_result`), at `now`, the market's `status_event_id` — then its `market_pauses` row with
  * that id (generated first, so the event names it), the reason, the note, the instant, `now`, the
  * admin and the event, lasting. Nothing else of the market changes: `close_at` stays, and the
- * close still comes at it, on schedule (#173 item 3). Orders: none yet (M9 cancels the pending
- * ones here).
+ * close still comes at it, on schedule (#173 item 3). Orders: the resting ones stay until #178
+ * cancels them here; new ones are rejected '일시 중단' (#119).
  */
 export async function pauseMarket(
   tx: Executor,

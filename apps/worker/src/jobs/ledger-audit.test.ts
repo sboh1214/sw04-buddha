@@ -18,6 +18,7 @@ import {
 import {
   closeAccount,
   connectTestDb,
+  createFillRecord,
   createMarket,
   createMarketMakerAccount,
   createStartGrant,
@@ -467,6 +468,14 @@ describe.skipIf(!hasTestDb())('ledger.audit (integration)', () => {
     // giving 5 back (TRADE_FILL); the 운영 마켓메이커 burns its one pair back into its 마켓메이커
     // 자금 (PAIR_BURN_RETURN); and alice keeps a buy lock of 300 and a sell lock of one YES — no
     // event, so the audit counts both buckets and finds nothing.
+    // The fill's record first (#119: migration 0062 binds its TRADE_FILL to it).
+    const { fill } = await createFillRecord(t.db, {
+      marketId: market.id,
+      incomingOwnerId: bob,
+      restingOwnerId: alice,
+      kind: 'trade',
+      priceCoin: 60,
+    });
     await t.db.transaction(async (tx) => {
       // Every account the processing touches first, ascending (ADR-0110 결정 4).
       await lockOrderHolders(tx, market.id, [alice, bob, maker]);
@@ -475,7 +484,7 @@ describe.skipIf(!hasTestDb())('ledger.audit (integration)', () => {
       await lockForOrder(tx, { ...lock, ownerId: bob, lock: { kind: 'coin', amountCoin: 65n } });
       await applyTradeFill(tx, {
         marketId: market.id,
-        fillId: 'audit-fill',
+        fillId: String(fill.id),
         outcome: 'YES',
         qty: 1,
         priceCoin: 60,

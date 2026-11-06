@@ -72,8 +72,9 @@ import { type CachedSeries, appendTick } from '@/lib/ticks';
  * answers are joined through as well (query-client.ts): one ordering rule for both deliveries,
  * so whichever arrives second is a no-op instead of a rollback. Nothing here restates a reducer.
  *
- * `market:tick` and `market:trade` have no publisher until the CLOB fills (#119); their handlers
- * stay so a fill arrives already wired.
+ * `market:tick` and `market:trade` have no publisher until the market figures (#121): the CLOB
+ * fills since #119 but publishes only `user:` events (ADR-0112); their handlers stay so a fill
+ * arrives already wired.
  */
 
 /**
@@ -693,7 +694,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           }
         }
         // 주문 이력 has no reducer and no event of its own: an `Order` carries its id, status,
-        // filledQty, amountCoin, priceAvgBp and the market's slug and title, none of which any
+        // filledQty, filledAmountCoin and the market's slug and title, none of which any
         // `user:` event does, so a row cannot be built and has to be asked for — the same answer
         // `market:trade` gives 체결 내역. Without it MY moved its balance and its holding
         // on this event and left the order list a row short until a focus or a reconnect.

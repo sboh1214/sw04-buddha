@@ -119,8 +119,9 @@ export type OrderLock =
   { kind: 'coin'; amountCoin: bigint } | { kind: 'contracts'; outcome: Outcome; qty: number };
 
 /**
- * The facts of an order the lock rule reads. Today's `orders` row maps onto it; #119 adds the
- * budget when it reshapes the table, and its own rule for `live`.
+ * The facts of an order the lock rule reads. An `orders` row maps onto it (`orderLockFactsOf` in
+ * @buddha/db, #119): its protected limit — a budget order's left out, as it locks its budget —
+ * and `live` from its status.
  */
 export interface OrderLockFacts {
   side: OrderSide;
@@ -132,7 +133,7 @@ export interface OrderLockFacts {
   filledQty: number;
   /** The whole budget of an IOC Coin-amount buy (#177 3항); null for any other order. */
   budgetCoin: bigint | null;
-  /** Whether the order still rests and holds its lock (`isLiveOrderStatus`, or #119's rule). */
+  /** Whether the order still rests and holds its lock (`isLiveOrderStatus` of its status). */
   live: boolean;
 }
 

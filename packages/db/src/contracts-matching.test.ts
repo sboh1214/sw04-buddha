@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import {
   type BookOrder,
   type FillBuyLeg,
@@ -23,7 +22,9 @@ import {
 } from './contracts.js';
 import { ledgerAccounts } from './schema/index.js';
 import { contractBook, positionOf } from './test/contracts.js';
+import type { Db } from './client.js';
 import { createMarket, createUser } from './test/factories.js';
+import { createFillRecord } from './test/orders.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
 import {
   balanceOf,
@@ -61,7 +62,8 @@ it('pins the plan’s argument to #118’s input keys (a drift fails `tsc`)', ()
  * processes the way #119 will call them (ADR-0110 결정 4·5, 결과 5): the holders locked first with
  * the plan's counterparties, the incoming order's intake lock, one process per planned fill with
  * `fillProcessInput`'s argument, then the remainder or the unspent budget released. Resting orders
- * exist only as their locks (no order or fill row before #119).
+ * exist only as their locks; each fill gets a stand-in record (`createFillRecord`), which the
+ * intake (#119) replaces with its own order and fill rows.
  */
 describe.skipIf(!hasTestDb())('matching × contracts (#117, docker test profile)', () => {
   let t: TestDb;
@@ -129,7 +131,19 @@ describe.skipIf(!hasTestDb())('matching × contracts (#117, docker test profile)
       expect(locked.locked).toBe(true);
       for (const fill of result.fills) {
         const call = fillProcessInput(incoming, fill);
-        const fillId = randomUUID();
+        // The fill's record first, as the intake writes it (migration 0062 binds the events to
+        // it): a stand-in pair of orders per fill, in this processing.
+        const { fill: recorded } = await createFillRecord(tx as unknown as Db, {
+          marketId,
+          incomingOwnerId: ownerId,
+          restingOwnerId: fill.restingOwnerId,
+          outcome: incoming.outcome,
+          side: incoming.side,
+          kind: fill.kind,
+          priceCoin: fill.priceCoin,
+          qty: fill.qty,
+        });
+        const fillId = String(recorded.id);
         if (call.process === 'trade') {
           // A missing, renamed or retyped field fails `tsc` here; an extra one, INPUT_KEYS_PINNED.
           const input = call.input satisfies Omit<TradeFillInput, 'marketId' | 'fillId' | 'at'>;

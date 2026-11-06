@@ -14,7 +14,10 @@ const ROOT = new URL('../../../', import.meta.url);
 /**
  * The files that may name an account type itself (#115, ADR-0108): where the types are listed
  * and stored, the one rule, the one maker of the 운영 마켓메이커 account, and the private-data list
- * that names the field to keep it out of public answers. #119's fill column adds its writer here.
+ * that names the field to keep it out of public answers. #119 (ADR-0112) records both owners'
+ * types on each fill, copied at the write and never compared there: the fill table, the intake
+ * that writes the fills (orders.ts, which asks the rule for the self-trade group), and the test
+ * helper that writes fill records as the intake does (`createFillRecord`).
  */
 const MAY_NAME_THE_TYPE = [
   'packages/shared/src/enums.ts',
@@ -22,7 +25,10 @@ const MAY_NAME_THE_TYPE = [
   'packages/shared/src/guards/private-data.ts',
   'packages/db/src/schema/enums.ts',
   'packages/db/src/schema/auth.ts',
+  'packages/db/src/schema/fills.ts',
   'packages/db/src/account-types.ts',
+  'packages/db/src/orders.ts',
+  'packages/db/src/test/orders.ts',
 ];
 
 /** The trees the static guard scans, each `<group>/<name>/src`. */

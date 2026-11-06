@@ -106,6 +106,7 @@ import { timeZoneLabel } from '@/lib/time-zone';
 import { MarketFormFields } from '../market-form-fields';
 import { MarketJudgementPanel } from './market-judgement-panel';
 import { MarketPausePanel } from './market-pause-panel';
+import { PriceProtectionItem } from './market-price-protection';
 import { MarketReviewPanel, SubmitReviewButton } from './market-review-panel';
 import { MarketSupplementPanel } from './market-supplement-panel';
 
@@ -251,6 +252,9 @@ export function AdminMarketDetail({ id }: { id: string }) {
             <Item label={copy.marketOpenAt} testId="market-detail-open-at">
               {data.openAt ? formatKst(data.openAt) : '—'}
             </Item>
+            {/* 가격 보호 폭 (#119, ADR-0112), changed by one admin while OPEN or PAUSED: keyed by the
+                market, as the panels are, so its dialog never names the next one. */}
+            <PriceProtectionItem key={`price-protection-${data.id}`} market={data} />
             {/* YES·NO·무효, or '—' before a judgement and on a cancelled market (ADR-0093 decision 1,
                 item 10: a cancelled market has no result, never VOID) — from the 잠정 결과 on (#152:
                 the approved judgement's, ADR-0095 8-2). */}

@@ -15,12 +15,16 @@ import { schema } from '@buddha/db';
 import {
   completeOnboarding,
   createCategory,
+  createFillRecord,
   createMarket,
   createOpenedMarket,
   createPosition,
   createUser,
+  setReleaseSetting,
+  TEST_PRICE_PROTECTION_TICKS,
 } from '@buddha/db/test';
 import {
+  PRICE_PROTECTION_TICKS_SETTING,
   DEFAULT_JUDGEMENT_TIME_ZONE,
   INT4_MAX,
   MARKET_TEXT_MAX,
@@ -35,7 +39,7 @@ import {
   type MarketSummary,
 } from '@buddha/shared';
 import { randomUUID } from 'node:crypto';
-import { asc, eq, inArray } from 'drizzle-orm';
+import { asc, eq, inArray, ne } from 'drizzle-orm';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
@@ -84,6 +88,14 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     // The guard caches roles for 60 s (PLAN 10.5); the promotion above happened behind it.
     await t.app.get(AdminGuard).invalidate(admin.id);
     category = await createCategory(t.db, { slug: 'economy', nameKo: '경제' });
+    // The 가격 보호 폭 default the test environment enters (#119, ADR-0107 결과 3): a market copies
+    // it at creation and its review submission needs one (OPEN_ITEMS_MISSING priceProtection).
+    await setReleaseSetting(t.db, {
+      adminId: admin.id,
+      key: PRICE_PROTECTION_TICKS_SETTING.key,
+      status: 'test',
+      value: TEST_PRICE_PROTECTION_TICKS,
+    });
   });
 
   const future = () => new Date(Date.now() + 7 * DAY_MS).toISOString();
@@ -176,6 +188,14 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
   const detail = (res: { json: <U>() => U }) => data<AdminMarket>(res);
   const errorOf = (res: { json: <U>() => U }) => res.json<ErrorBody>().error;
   const detailPath = (res: { json: <U>() => U }) => errorOf(res).details?.[0]?.path;
+
+  /** Every record but the width default's `beforeEach` entered (#119): what a route wrote. */
+  async function routeActions() {
+    return t.db
+      .select()
+      .from(schema.adminActions)
+      .where(ne(schema.adminActions.type, 'release_setting_change'));
+  }
 
   async function actionsFor(targetId: string) {
     return t.db
@@ -301,7 +321,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect(errorOf(taken).code).toBe('VALIDATION_ERROR');
     expect(detailPath(taken)).toEqual(['slug']);
     // Nothing of the refused create is left behind.
-    expect(await t.db.select().from(schema.adminActions)).toHaveLength(0);
+    expect(await routeActions()).toHaveLength(0);
 
     for (const slug of [randomUUID(), 'ab', 'Upper-Case', 'has space', 'a'.repeat(81)]) {
       const res = await create({ slug });
@@ -1262,6 +1282,58 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
   });
 
   // --- the open-items check at the submission (#17, #78) -------------------------------------
+  it('copies the 가격 보호 폭 into a market at creation, fills it at the submission and needs one there (#119)', async () => {
+    const width = (value: number | null) =>
+      setReleaseSetting(t.db, {
+        adminId: admin.id,
+        key: PRICE_PROTECTION_TICKS_SETTING.key,
+        status: value === null ? 'undecided' : 'test',
+        value,
+      });
+    // Created while the default is entered: the market keeps its own copy.
+    const copied = detail(await create({ slug: 'width-copied' }));
+    expect(copied.priceProtectionTicks).toBe(TEST_PRICE_PROTECTION_TICKS);
+    expect((await marketRow(copied.id)).priceProtectionTicks).toBe(TEST_PRICE_PROTECTION_TICKS);
+
+    // Created while it is undecided: none, and the submission is refused naming it, writing nothing
+    // (ADR-0098 7-5's lead close the precedent).
+    await width(null);
+    const bare = detail(await create({ slug: 'width-bare' }));
+    expect(bare).toMatchObject({
+      priceProtectionTicks: null,
+      missingOpenItems: ['priceProtection'],
+    });
+    const refused = await submit(bare.id);
+    expect(refused.statusCode).toBe(422);
+    expect(errorOf(refused)).toMatchObject({
+      code: 'OPEN_ITEMS_MISSING',
+      details: [{ path: ['priceProtection'], message: 'required' }],
+    });
+    expect((await marketRow(bare.id)).status).toBe('draft');
+    // Once entered, a draft with none shows the default and the submission stores it; a draft
+    // with its own copy keeps it (shown and submitted); from the review on the market keeps it
+    // whatever the setting becomes.
+    await width(7);
+    expect(detail(await get(`/api/v1/admin/markets/${bare.id}`))).toMatchObject({
+      priceProtectionTicks: 7,
+      missingOpenItems: [],
+    });
+    expect(detail(await get(`/api/v1/admin/markets/${copied.id}`)).priceProtectionTicks).toBe(
+      TEST_PRICE_PROTECTION_TICKS,
+    );
+    expect((await submit(bare.id)).statusCode).toBe(200);
+    expect((await marketRow(bare.id)).priceProtectionTicks).toBe(7);
+    // The copied draft submitted under the new default stores its own copy, not the 7.
+    expect((await submit(copied.id)).statusCode).toBe(200);
+    expect(await marketRow(copied.id)).toMatchObject({
+      status: 'review',
+      priceProtectionTicks: TEST_PRICE_PROTECTION_TICKS,
+    });
+    await width(3);
+    expect(detail(await get(`/api/v1/admin/markets/${bare.id}`)).priceProtectionTicks).toBe(7);
+    expect((await marketRow(copied.id)).priceProtectionTicks).toBe(TEST_PRICE_PROTECTION_TICKS);
+  });
+
   it('refuses to submit a draft the open-items check finds wanting (OPEN_ITEMS_MISSING), naming every item in order', async () => {
     // #17, #23, #22: the title, every rule item, the required times, a category a new market may be
     // filed under, 1..5 tags — all named at once, in OPEN_ITEMS order. Here: no rule item but a
@@ -1623,52 +1695,25 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       costBasisCoin: 300n,
       settled: true,
     });
-    // Two fills of the trader's order against one resting order of another account
-    // (`fills_counterparty_check` wants it named).
-    const order = async (userId: string, type: 'market' | 'limit') => {
-      const [inserted] = await t.db
-        .insert(schema.orders)
-        .values({
-          userId,
-          marketId: row.id,
-          outcome: 'YES',
-          side: 'buy',
-          type,
-          limitPrice: type === 'limit' ? 50 : null,
-          qty: 12,
-          filledQty: type === 'market' ? 12 : 0,
-          status: type === 'market' ? 'filled' : 'open',
-          idempotencyKey: randomUUID(),
-        })
-        .returning();
-      return inserted!;
-    };
-    const resting = await order((await createUser(t.db)).user.id, 'limit');
-    const taker = await order(trader, 'market');
-    await t.db.insert(schema.fills).values([
-      {
-        marketId: row.id,
-        orderId: taker.id,
-        counterpartyType: 'order',
-        counterpartyOrderId: resting.id,
-        outcome: 'YES',
-        side: 'buy',
-        qty: 12,
-        amountCoin: 600n,
-        priceAvgBp: 5_000,
-      },
-      {
-        marketId: row.id,
-        orderId: taker.id,
-        counterpartyType: 'order',
-        counterpartyOrderId: resting.id,
-        outcome: 'YES',
-        side: 'sell',
-        qty: 2,
-        amountCoin: 110n,
-        priceAvgBp: 5_500,
-      },
-    ]);
+    // Two fills of the trader's orders against resting orders of another account: a buy of 12
+    // at 50 (600) and a sell of 2 at 55 (110), each recorded as the intake records it.
+    const counterparty = (await createUser(t.db)).user.id;
+    await createFillRecord(t.db, {
+      marketId: row.id,
+      incomingOwnerId: trader,
+      restingOwnerId: counterparty,
+      side: 'buy',
+      priceCoin: 50,
+      qty: 12,
+    });
+    await createFillRecord(t.db, {
+      marketId: row.id,
+      incomingOwnerId: trader,
+      restingOwnerId: counterparty,
+      side: 'sell',
+      priceCoin: 55,
+      qty: 2,
+    });
     await t.db.insert(schema.marketEvents).values([
       {
         marketId: row.id,
@@ -1752,7 +1797,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect(await marketRow(draft.id)).toMatchObject({ status: 'draft', title: draft.title });
     expect((await marketRow(open.id)).status).toBe('open');
     expect(await t.db.select().from(schema.marketEvents)).toEqual([]);
-    expect(await t.db.select().from(schema.adminActions)).toEqual([]);
+    expect(await routeActions()).toEqual([]);
   });
 
   it('asks every write for the admin on screen, and takes the cookie’s own', async () => {
@@ -1780,7 +1825,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect(errorOf(bodyless).code).toBe('VALIDATION_ERROR');
     expect(detailPath(bodyless)).toEqual([]);
     expect((await marketRow(draft.id)).status).toBe('draft');
-    expect(await t.db.select().from(schema.adminActions)).toEqual([]);
+    expect(await routeActions()).toEqual([]);
     // The account checked is never stored: the `created` event keeps the fields as sent.
     const created = detail(await create({ slug: 'named-admin' }));
     expect(created.events[0]!.payload).not.toHaveProperty('expectedAccountId');
@@ -1828,7 +1873,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     }
     expect((await marketRow(row.id)).status).toBe('draft');
     expect(await t.db.select().from(schema.markets)).toHaveLength(1);
-    expect(await t.db.select().from(schema.adminActions)).toHaveLength(0);
+    expect(await routeActions()).toHaveLength(0);
   });
 
   it('refuses a cookie-authenticated mutation whose Origin is not ours (CSRF)', async () => {
@@ -1851,7 +1896,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     }
     expect(await t.db.select().from(schema.markets)).toHaveLength(1);
     expect((await marketRow(row.id)).status).toBe('draft');
-    expect(await t.db.select().from(schema.adminActions)).toHaveLength(0);
+    expect(await routeActions()).toHaveLength(0);
 
     // No Origin at all (curl, a server) is not a browser and passes; reads are never checked.
     const curl = await t.app.inject({

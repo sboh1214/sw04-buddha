@@ -10,7 +10,7 @@ import {
 import { type MarketRuleItems, RULE_ITEMS } from './market-rules.js';
 import { type MarketTimes, REQUIRED_TIME_ITEMS, timeRuleViolations } from './market-times.js';
 
-describe('missingOpenItems (#17, #23, #22)', () => {
+describe('missingOpenItems (#17, #23, #22, #119)', () => {
   const ruleItems: MarketRuleItems = {
     description: '코스피가 연말에 3000을 넘는지 묻는다.',
     yesCondition: '12월 30일 종가가 3000 이상이면 YES.',
@@ -36,6 +36,7 @@ describe('missingOpenItems (#17, #23, #22)', () => {
     categorySelectable: true,
     tagCount: 1,
     leadCloseGapMinutes: null,
+    priceProtectionTicks: 5,
   };
   const blank = {
     title: '  ',
@@ -57,6 +58,7 @@ describe('missingOpenItems (#17, #23, #22)', () => {
     categorySelectable: false,
     tagCount: 0,
     leadCloseGapMinutes: null,
+    priceProtectionTicks: null,
   };
 
   it('finds nothing missing with every item, a selectable category and 1..5 tags', () => {
@@ -85,6 +87,9 @@ describe('missingOpenItems (#17, #23, #22)', () => {
     expect(missingOpenItems({ ...ready, tagCount: 6 })).toEqual(['tags']);
     expect(missingOpenItems({ ...ready, categorySelectable: false })).toEqual(['category']);
     expect(missingOpenItems({ ...ready, title: '' })).toEqual(['title']);
+    // The 가격 보호 폭 (#119): missing only with neither the market's own nor the default.
+    expect(missingOpenItems({ ...ready, priceProtectionTicks: null })).toEqual(['priceProtection']);
+    expect(missingOpenItems({ ...ready, priceProtectionTicks: 1 })).toEqual([]);
     expect(missingOpenItems({ ...ready, yesCondition: ' ', tagCount: 0 })).toEqual([
       'yesCondition',
       'tags',
@@ -145,7 +150,7 @@ describe('missingOpenItems (#17, #23, #22)', () => {
     );
   });
 
-  it('keeps the item list a closed enum: title, the rule items, the times, category, tags', () => {
+  it('keeps the item list a closed enum: title, the rule items, the times, category, tags, width', () => {
     expect(openItemSchema.options).toEqual([
       'title',
       'description',
@@ -165,6 +170,7 @@ describe('missingOpenItems (#17, #23, #22)', () => {
       'leadClose',
       'category',
       'tags',
+      'priceProtection',
     ]);
     expect(OPEN_ITEMS).toEqual([
       'title',
@@ -173,6 +179,7 @@ describe('missingOpenItems (#17, #23, #22)', () => {
       ...TIME_RELATION_ITEMS,
       'category',
       'tags',
+      'priceProtection',
     ]);
     // The announcement is optional ('없음', #172 item 13): no open item.
     expect(openItemSchema.safeParse('scheduledAnnouncementAt').success).toBe(false);

@@ -77,6 +77,7 @@ import {
   createCorrectedMarket,
   createCorrectionRequest,
   createDispute,
+  createFillRecord,
   createJudgementDelay,
   createMarket,
   createMarketLink,
@@ -87,6 +88,7 @@ import {
   createMedia,
   createModerationAction,
   createNotice,
+  createOrder,
   createPauseDecision,
   createPhoneVerification,
   createPost,
@@ -118,6 +120,7 @@ import {
   REALTIME_EXCEPTION_EVENT,
   REALTIME_NAMESPACE,
   encodeKeyset,
+  encodeTupleCursor,
   findExcludedIdentifier,
   findPrivateField,
   marketChannel,
@@ -266,10 +269,16 @@ interface Fixture {
   /** An active category: what B's refused interest categories name (#58). */
   categoryId: number;
   paymentId: string;
+  /** A's filled order on `market` (#119): its id and its request id, what B's reads name. */
+  filledOrderId: string;
+  filledOrderKey: string;
   /** Page cursors made from A's rows: a page from there holds A's newest row and the older ones. */
   cursors: {
     ledger: string;
+    /** Past A's later order by arrival (#119). */
     orders: string;
+    /** Past A's fill (#119). */
+    fills: string;
     payments: string;
     watchlist: string;
     posts: string;
@@ -537,6 +546,8 @@ interface OwnerCase {
   body?: (fixture: Fixture) => unknown;
   /** The type of a body sent as bytes (`body` a Buffer). */
   contentType?: string;
+  /** Request headers B sends besides the cookie and the body's: A's request id (#119). */
+  headers?: (fixture: Fixture) => Record<string, string>;
   /** B's answer. */
   status: number;
   /**
@@ -662,10 +673,54 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
     status: 200,
     own: ['position qty', 'cost basis', 'realized pnl'],
   },
+  // B's orders, paged from A's and filtered to A's market: B ordered nothing, so nothing of A's
+  // may come back (#119, N04 §7). The ended ones: A's are its filled order.
   'GET /me/orders': {
-    query: { cursor: (fixture) => fixture.cursors.orders, limit: LIMIT },
+    query: {
+      cursor: (fixture) => fixture.cursors.orders,
+      limit: LIMIT,
+      marketId: (fixture) => fixture.market.id,
+      state: () => 'ended',
+    },
     status: 200,
-    own: ['filled order id', 'open order id'],
+    own: ['filled order id', 'filled order key'],
+  },
+  // A's order by its id and by its request id: another account's is 404, as if none (#119).
+  'GET /me/orders/:id': {
+    params: { id: (fixture) => fixture.filledOrderId },
+    status: 404,
+    own: ['filled order id', 'filled order key'],
+  },
+  'GET /me/orders/request/:requestId': {
+    params: { requestId: (fixture) => fixture.filledOrderKey },
+    status: 404,
+    own: ['filled order id', 'filled order key'],
+  },
+  // B's fills, paged from A's on A's market: none. A's own name A's order and side alone — the
+  // counterparty, its order and its account type never (ADR-0107 결정 5 '#179·#119').
+  'GET /me/fills': {
+    query: {
+      cursor: (fixture) => fixture.cursors.fills,
+      limit: LIMIT,
+      marketId: (fixture) => fixture.market.id,
+    },
+    status: 200,
+    own: ['filled order id'],
+  },
+  // B's cookie naming A's account, with A's request id: refused before anything is read or
+  // written — no order of anybody's, and A's request id still names A's order alone (below).
+  'POST /markets/:id/orders': {
+    params: { id: (fixture) => fixture.market.id },
+    headers: (fixture) => ({ 'idempotency-key': fixture.filledOrderKey }),
+    body: (fixture) => ({
+      outcome: 'YES',
+      side: 'buy',
+      timeInForce: 'gtc',
+      limitPriceCoin: 40,
+      qty: 1,
+      expectedAccountId: fixture.a.id,
+    }),
+    status: 403,
   },
   // B's list, paged from A's watch in the order that cursor was made for (최근 관심 등록 순) and
   // filtered to the watched market's status and category: B watches nothing, so nothing of A's
@@ -1263,7 +1318,20 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     // ledger shows its own +amount and nothing of A's — no account id, no counterparty), and an
     // order's lock, available → locked within the total and no event (ADR-0107 결정 2 #73 1항).
     const paidToB = 1_234n;
-    const fillId = randomUUID();
+    // The fill the payment records (#119: a TRADE_FILL names its fill row, migration 0062): A's
+    // buy of 617 YES at 2 from B's resting sell, on a closed market of its own — so the public
+    // fills of `market` stay the one below.
+    const tradedMarket = await createMarket(t.db, { status: 'closed', createdBy: admin.id });
+    const { fill: trade } = await createFillRecord(t.db, {
+      marketId: tradedMarket.id,
+      incomingOwnerId: a.id,
+      restingOwnerId: b.id,
+      side: 'buy',
+      kind: 'trade',
+      priceCoin: 2,
+      qty: 617,
+    });
+    const fillId = String(trade.id);
     const entry = await t.db.transaction(async (tx) => {
       const paymentRef = randomUUID();
       await recordLedgerEntry(tx, {
@@ -1281,7 +1349,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         amountCoin: paidToB,
         from: { kind: 'user', userId: a.id },
         to: { kind: 'user', userId: b.id },
-        marketId: market.id,
+        marketId: tradedMarket.id,
         refType: 'fill',
         refId: fillId,
         idempotencyKey: ledgerKeys.fill(fillId),
@@ -1370,65 +1438,41 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       reviewResult: 'judgeable',
       reason: pauseText.secondResumeReason,
     });
-    // The other side of A's fill: a resting order of a third account (the counterparty).
+    // A third account with a resting order of its own on A's market: neither it nor its order is
+    // in any answer B reads, and nobody's but its own.
     const maker = await createUser(t.db);
-    // The 운영 마켓메이커 account the seed makes (#115): it has no public face, so its id is in no
-    // answer anyone but an operator reads.
-    const marketMaker = await createMarketMakerAccount(t.db);
-    const order = (values: {
-      userId: string;
-      side: 'buy' | 'sell';
-      type: 'limit' | 'market';
-      qty: number;
-      filledQty?: number;
-      key: string;
-    }) =>
-      t.db
-        .insert(schema.orders)
-        .values({
-          userId: values.userId,
-          marketId: market.id,
-          outcome: 'YES',
-          side: values.side,
-          type: values.type,
-          limitPrice: values.type === 'limit' ? (values.side === 'sell' ? 61 : 40) : null,
-          qty: values.qty,
-          filledQty: values.filledQty ?? 0,
-          status: values.filledQty === values.qty ? 'filled' : 'open',
-          timeInForce: values.type === 'limit' ? 'gtc' : 'ioc',
-          idempotencyKey: values.key,
-        })
-        .returning()
-        .then((rows) => rows[0]!);
     const makerKey = `leak-maker-${tag}`;
-    const filledKey = `leak-filled-${tag}`;
-    const openKey = `leak-open-${tag}`;
-    const resting = await order({
+    const resting = await createOrder(t.db, {
       userId: maker.user.id,
-      side: 'sell',
-      type: 'limit',
-      qty: 1_000,
-      key: makerKey,
-    });
-    const filled = await order({
-      userId: a.id,
-      side: 'buy',
-      type: 'market',
-      qty: PUBLIC_FILL.qty,
-      filledQty: PUBLIC_FILL.qty,
-      key: filledKey,
-    });
-    const open = await order({ userId: a.id, side: 'buy', type: 'limit', qty: 21, key: openKey });
-    await t.db.insert(schema.fills).values({
       marketId: market.id,
-      orderId: filled.id,
-      counterpartyType: 'order',
-      counterpartyOrderId: resting.id,
-      outcome: 'YES',
+      side: 'sell',
+      limitPriceCoin: 62,
+      qty: 1_000,
+      requestId: makerKey,
+    });
+    // The 운영 마켓메이커 account the seed makes (#115): it has no public face, so its id is in no
+    // answer anyone but an operator reads. It is the other side of A's fill (#119): its resting NO
+    // bid met A's YES buy in one pair mint, so A's own fills and orders, which name A's side only,
+    // must not name it, its order or its account type (ADR-0107 결정 5 '#179·#119').
+    const marketMaker = await createMarketMakerAccount(t.db);
+    const record = await createFillRecord(t.db, {
+      marketId: market.id,
+      incomingOwnerId: a.id,
+      restingOwnerId: marketMaker,
       side: 'buy',
+      priceCoin: PUBLIC_FILL.priceAvgBp / 100,
       qty: PUBLIC_FILL.qty,
-      amountCoin: PUBLIC_FILL.amountCoin,
-      priceAvgBp: PUBLIC_FILL.priceAvgBp,
+    });
+    const filled = record.incoming;
+    const filledKey = filled.idempotencyKey;
+    const counterpartyOrder = record.resting;
+    const openKey = `leak-open-${tag}`;
+    const open = await createOrder(t.db, {
+      userId: a.id,
+      marketId: market.id,
+      limitPriceCoin: 40,
+      qty: 21,
+      requestId: openKey,
     });
     await t.db.insert(schema.positions).values({
       userId: a.id,
@@ -2026,10 +2070,14 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       phone,
       categoryId,
       paymentId: payment!.id,
+      filledOrderId: filled.id,
+      filledOrderKey: filledKey,
       cursors: {
         ledger: cursorAfter(entry),
-        // The later of A's two orders, so the page holds both.
-        orders: cursorAfter(open.createdAt >= filled.createdAt ? open : filled),
+        // Past the later of A's two orders by arrival, so the page holds both.
+        orders: encodeTupleCursor([], String(Math.max(open.arrivalSeq, filled.arrivalSeq) + 1)),
+        // Past A's fill, so the page holds it.
+        fills: encodeTupleCursor([], String(record.fill.id + 1)),
         payments: cursorAfter(payment!),
         watchlist: cursorAfter({ createdAt: watch.watch.watchedAt, id: watched.id }),
         posts: cursorAfter(hiddenPost),
@@ -2134,11 +2182,15 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('open order id', open.id),
         text('filled order key', filledKey),
         text('open order key', openKey),
-        text('counterparty user id', maker.user.id),
-        text('counterparty email', maker.user.email),
-        text('counterparty order id', resting.id),
-        text('counterparty order key', makerKey),
+        text('other member user id', maker.user.id),
+        text('other member email', maker.user.email),
+        text('other member order id', resting.id),
+        text('other member order key', makerKey),
+        text('counterparty order id', counterpartyOrder.id),
+        text('counterparty order key', counterpartyOrder.idempotencyKey),
         text('market maker account id', marketMaker),
+        // An account's type is recorded on a fill and never answered (결정 5 '#179·#119').
+        text('market maker account type', 'market_maker'),
         text('payment id', payment!.id),
         text('payment key', paymentKey),
         text('watched market id', watched.id),
@@ -2171,6 +2223,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       body?: unknown;
       /** The type of a body that is bytes (a Buffer); JSON otherwise. */
       contentType?: string;
+      headers?: Record<string, string>;
       cookie?: string;
     },
   ) {
@@ -2199,6 +2252,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
                 ? (input.contentType ?? 'application/octet-stream')
                 : 'application/json',
             }),
+        ...input.headers,
         ...(input.cookie ? { cookie: input.cookie } : {}),
       },
       ...(safe ? {} : { payload: bytes ?? JSON.stringify(input.body) }),
@@ -2660,6 +2714,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         query,
         body: ownerCase.body?.(f),
         contentType: ownerCase.contentType,
+        headers: ownerCase.headers?.(f),
         cookie: f.b.cookie,
       });
       answers.push({ route: key, status: res.statusCode, leaks: leaked(res.body) });

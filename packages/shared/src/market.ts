@@ -19,6 +19,7 @@ import { adminMarketDisputesSchema } from './market-dispute.js';
 import { adminMarketJudgementStateSchema, judgementVersionSchema } from './market-judgement.js';
 import { adminJudgementDelaySchema, marketJudgementDelaySchema } from './market-judgement-delay.js';
 import { openItemSchema } from './market-open-items.js';
+import { priceProtectionTicksSchema } from './orders.js';
 import { adminMarketPauseStateSchema } from './market-pause.js';
 import { adminMarketReviewSchema } from './market-review.js';
 import { marketRuleItemsSchema } from './market-rules.js';
@@ -36,12 +37,14 @@ import {
   marketResultSchema,
   marketStatusSchema,
   orderSideSchema,
+  orderCancelReasonSchema,
+  orderRejectReasonSchema,
   orderStatusSchema,
-  orderTypeSchema,
   outcomeSchema,
   priceTickTriggerSchema,
   settlementStepSchema,
   settlementStepStatusSchema,
+  timeInForceSchema,
 } from './enums.js';
 
 /**
@@ -341,26 +344,111 @@ export const marketListQuerySchema = cursorQuerySchema.extend({
 export type MarketListQuery = z.infer<typeof marketListQuerySchema>;
 
 // ---- orders, fills, positions ------------------------------------------------------
-/** The caller's own order (`GET /me/orders`). */
+/**
+ * The caller's own order (#119, ADR-0112; `GET /me/orders`, `GET /me/orders/:id`, the request-id
+ * lookup and the order route's answer). Owner only (N04 §7): no other account reads it. Its terms
+ * as sent — `requestId` the `Idempotency-Key`, the confirmed `limitPriceCoin` — and as the server
+ * took them: `protectedLimitPriceCoin`, the limit it matched, locked and rests at (an immediate
+ * order's narrowed by the market's 가격 보호 폭, #177 2항; a GTC order's its own). `qty` for a
+ * quantity order, `budgetCoin` for a budget one. What filled: `filledQty` contracts for
+ * `filledAmountCoin` Coin (the average is the one over the other); `cancelledQty` what a 취소 완료
+ * or 만료 quantity order left unfilled (0 otherwise; a budget order's rest is `unspentCoin`).
+ * The state and its reason (#177 7·8항). Never the reference quote, the width, the counterparties
+ * or any account's type (ADR-0107 결정 5 '#179·#119').
+ *
+ * `marketSlug` and `marketTitle` are null together while the market is not public
+ * (`isPublicMarketStatus`): a SCHEDULED market's rejected order (개장 전) stays when #78's 되돌리기
+ * sends the market back to a draft, and the draft being fixed — its title and slug among it — is
+ * the admin's alone until it is public again (ADR-0099, owner answer 2026-11-01; as
+ * `postMarketSchema`). `marketId` stays, so the row still groups by its market.
+ */
 export const orderSchema = z
   .object({
     id: z.uuid(),
+    requestId: z.string(),
+    marketId: z.uuid(),
+    marketSlug: z.string().nullable(),
+    marketTitle: z.string().nullable(),
+    outcome: outcomeSchema,
+    side: orderSideSchema,
+    timeInForce: timeInForceSchema,
+    limitPriceCoin: priceSchema,
+    protectedLimitPriceCoin: priceSchema,
+    qty: countSchema.nullable(),
+    budgetCoin: coinAmountSchema.nullable(),
+    filledQty: countSchema,
+    filledAmountCoin: coinAmountSchema,
+    cancelledQty: countSchema,
+    /** A budget order's budget minus what it spent, given back; null for a quantity order. */
+    unspentCoin: coinAmountSchema.nullable(),
+    status: orderStatusSchema,
+    /** Set exactly when `status` is `rejected` (거절). */
+    rejectReason: orderRejectReasonSchema.nullable(),
+    /** Set exactly when `status` is `cancelled` (취소 완료). */
+    cancelReason: orderCancelReasonSchema.nullable(),
+    createdAt: z.iso.datetime(),
+    /** When it left the live states (대기·부분 체결); null while it rests. */
+    endedAt: z.iso.datetime().nullable(),
+  })
+  .meta({ id: 'Order' });
+export type Order = z.infer<typeof orderSchema>;
+
+/**
+ * `POST /markets/:id/orders`'s answer: the order — taken, or rejected with its reason (a rejected
+ * order is an order row, not an error) — and whether the request id had already named it
+ * (`replayed`: the order as it stands now, nothing written).
+ */
+export const placeOrderResultSchema = z
+  .object({ order: orderSchema, replayed: z.boolean() })
+  .meta({ id: 'PlaceOrderResult' });
+export type PlaceOrderResult = z.infer<typeof placeOrderResultSchema>;
+
+/**
+ * One of the caller's own fills (#119, `GET /me/fills`), as its own order's side holds it: its
+ * order, the market, its order's outcome and side, the quantity, its price per contract
+ * (`ownFillPrice`: the YES price, or the payout minus it for NO), the Coin (price × qty) and the
+ * recorded YES price (#177 15항), the fee (0, #73 15항). Owner only. The counterparty stays
+ * anonymous — no other order, account or account type (ADR-0107 결정 5 '#179·#119') — and so does
+ * whether it was a pair mint or a trade (#177 4항).
+ */
+export const myFillSchema = z
+  .object({
+    id: z.string(),
+    orderId: z.uuid(),
     marketId: z.uuid(),
     marketSlug: z.string(),
     marketTitle: z.string(),
     outcome: outcomeSchema,
     side: orderSideSchema,
-    type: orderTypeSchema,
     qty: countSchema,
-    filledQty: countSchema,
-    status: orderStatusSchema,
-    /** From the fill; null while nothing filled. */
-    amountCoin: coinAmountSchema.nullable(),
-    priceAvgBp: bpSchema.nullable(),
+    priceCoin: priceSchema,
+    amountCoin: coinAmountSchema,
+    yesPriceCoin: priceSchema,
+    feeCoin: coinAmountSchema,
     createdAt: z.iso.datetime(),
   })
-  .meta({ id: 'Order' });
-export type Order = z.infer<typeof orderSchema>;
+  .meta({ id: 'MyFill' });
+export type MyFill = z.infer<typeof myFillSchema>;
+
+/** `GET /me/orders`'s filter: the live ones (대기·부분 체결) or the ended ones; omitted = all. */
+export const MY_ORDER_STATES = ['live', 'ended'] as const;
+export type MyOrderState = (typeof MY_ORDER_STATES)[number];
+
+/**
+ * `GET /me/orders` (no `.meta`: query DTO): newest first by arrival, rejected orders included;
+ * one market's, and the live or the ended ones.
+ */
+export const myOrdersQuerySchema = cursorQuerySchema.extend({
+  marketId: uuidParamSchema.optional(),
+  state: z.enum(MY_ORDER_STATES).optional(),
+});
+export type MyOrdersQuery = z.infer<typeof myOrdersQuerySchema>;
+
+/** `GET /me/fills` (no `.meta`: query DTO): newest first, one market's when named. */
+export const myFillsQuerySchema = cursorQuerySchema.extend({
+  marketId: uuidParamSchema.optional(),
+});
+export type MyFillsQuery = z.infer<typeof myFillsQuerySchema>;
 
 /** Public and anonymous (PLAN 7.1): no user id. `id` is a bigserial as a decimal string. */
 export const fillSchema = z
@@ -533,7 +621,7 @@ export const marketEventSchema = z
      * The status change the event made (#174): both set on a transition, only `toStatus` on
      * `created`, both null on an event that changes no status (`rules_edited`,
      * `open_rescheduled`, `rules_supplemented`, `judgement_corrected`,
-     * `judgement_delay_recorded`).
+     * `judgement_delay_recorded`, `price_protection_changed`).
      */
     fromStatus: marketStatusSchema.nullable(),
     toStatus: marketStatusSchema.nullable(),
@@ -595,6 +683,14 @@ export const adminMarketSchema = marketSchema
      * none. The admin screen recomputes which time rule is broken from it (`timeRuleViolations`).
      */
     leadCloseGapMinutes: z.number().int().min(0).nullable(),
+    /**
+     * The 가격 보호 폭 in ticks (#119, ADR-0112; ADR-0107 결정 1 #177 2항): the market's own
+     * (`markets.price_protection_ticks` — copied from the release setting
+     * `order.price_protection_ticks` at creation, filled at the review submission if it had none,
+     * fixed from the review on but for the after-open change) once there is one, else for a draft
+     * the setting's current reading; null while that is undecided and the market has none.
+     */
+    priceProtectionTicks: priceProtectionTicksSchema.nullable(),
     /**
      * 개설 검수 (#78, ADR-0099), in every status: the pending request, the creator and the editors
      * the exclusions name, the same-condition markets and the 검수 기록.

@@ -113,8 +113,9 @@ export function isPendingOrder(status: OrderStatus): boolean {
 }
 
 /**
- * Whether one side of the split order list offers 더 보기. `GET /me/orders` has no state filter,
- * so a page can hold fewer of a side's rows than it wants: the full tab keeps the button while
+ * Whether one side of the split order list offers 더 보기. The screens read `GET /me/orders`
+ * without its state filter (#119; the split moves to the server with #123, #124), so a page
+ * can hold fewer of a side's rows than it wants: the full tab keeps the button while
  * there is a next page, and a /my preview (`limit`, MY_PREVIEW_ROWS) keeps it until it has that
  * many rows — not only while it has none, which left a preview short of its rows with no way to
  * load the rest.

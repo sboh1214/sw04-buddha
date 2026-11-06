@@ -4,4 +4,5 @@ export * from './factories.js';
 export * from './harness.js';
 export * from './ledger.js';
 export * from './operator.js';
+export * from './orders.js';
 export * from './wait.js';

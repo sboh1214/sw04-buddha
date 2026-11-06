@@ -4616,6 +4616,123 @@
         ]
       }
     },
+    "/api/v1/admin/markets/{id}/price-protection": {
+      "post": {
+        "operationId": "adminChangeMarketPriceProtection",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePriceProtectionBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AdminMarket"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Change an open or paused market’s price-protection width in ticks (1..98), with a reason, by one admin; recorded with the value before and after, it applies to the immediate orders taken after it and never to resting ones",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/v1/admin/market-reviews": {
       "get": {
         "operationId": "adminListMarketReviews",
@@ -8053,30 +8170,180 @@
         ]
       }
     },
+    "/api/v1/markets/{id}/orders": {
+      "post": {
+        "operationId": "placeOrder",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "The request id: client-generated, unique per account. Re-sending it with the same market and terms answers the order it named (replayed: true) and writes nothing; with other terms DUPLICATE_REQUEST (409, the id is spent). A refusal with an error writes no order, so its id may be sent again. GET /me/orders/request/{requestId} reads the order.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaceOrderBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/PlaceOrderResult"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN | RESTRICTED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | ORDER_INTAKE_CLOSED | DUPLICATE_REQUEST",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Place an order: buy or sell YES or NO, immediate (ioc: fills what it can now, the rest is cancelled) or limit (gtc: the rest waits), always with a limit price 1–99 — an immediate order’s narrowed to the best opposite quote ± the market’s price-protection width — and a quantity of 1–1,000,000 contracts or, for an immediate buy only, a Coin budget. Answers the order: taken, or rejected with its reason (not an error). The same Idempotency-Key with the same terms answers that order as it stands now (replayed)",
+        "tags": [
+          "orders"
+        ]
+      }
+    },
     "/api/v1/me/orders": {
       "get": {
         "operationId": "getMyOrders",
         "parameters": [
           {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
-          },
-          {
             "name": "cursor",
             "required": false,
             "in": "query",
-            "description": "Opaque; `meta.nextCursor` of the previous page.",
             "schema": {
               "type": "string",
               "minLength": 1,
               "maxLength": 200
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 20,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "marketId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "state",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "live",
+                "ended"
+              ]
             }
           }
         ],
@@ -8143,9 +8410,289 @@
             "session": []
           }
         ],
-        "summary": "Orders of the account with their fill, newest first",
+        "summary": "The account's orders, newest first, rejected ones included, each with what filled and its state and reason; marketId narrows to one market, state=live to the waiting and partly filled ones, state=ended to the rest",
         "tags": [
-          "trades"
+          "orders"
+        ]
+      }
+    },
+    "/api/v1/me/orders/request/{requestId}": {
+      "get": {
+        "operationId": "getMyOrderByRequest",
+        "parameters": [
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Order"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "The account’s order its request id (the Idempotency-Key it was sent with) named — what became of a request whose answer was lost. NOT_FOUND when it named none",
+        "tags": [
+          "orders"
+        ]
+      }
+    },
+    "/api/v1/me/orders/{id}": {
+      "get": {
+        "operationId": "getMyOrder",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Order"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "One of the account’s orders; another account’s is NOT_FOUND",
+        "tags": [
+          "orders"
+        ]
+      }
+    },
+    "/api/v1/me/fills": {
+      "get": {
+        "operationId": "getMyFills",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 20,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "marketId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/MyFill"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/PageMeta"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "The account's fills, newest first, each as its own order took it: the order, outcome, side, quantity, price per contract and Coin, the recorded YES price and the fee (0). The counterparty is never named; marketId narrows to one market",
+        "tags": [
+          "orders"
         ]
       }
     },
@@ -21778,6 +22325,7 @@
           "PROPOSAL_LIMITED",
           "OPEN_ITEMS_MISSING",
           "DISPUTE_NOT_ALLOWED",
+          "ORDER_INTAKE_CLOSED",
           "INTERNAL"
         ]
       },
@@ -24328,6 +24876,12 @@
             "minimum": 0,
             "maximum": 9007199254740991
           },
+          "priceProtectionTicks": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 98
+          },
           "review": {
             "$ref": "#/components/schemas/AdminMarketReview"
           },
@@ -24398,6 +24952,7 @@
           "events",
           "missingOpenItems",
           "leadCloseGapMinutes",
+          "priceProtectionTicks",
           "review",
           "supplement",
           "pause",
@@ -24553,7 +25108,8 @@
               "resumed",
               "provisional",
               "judgement_corrected",
-              "judgement_delay_recorded"
+              "judgement_delay_recorded",
+              "price_protection_changed"
             ]
           },
           "actorId": {
@@ -24634,7 +25190,8 @@
           "timeOrder",
           "leadClose",
           "category",
-          "tags"
+          "tags",
+          "priceProtection"
         ]
       },
       "AdminMarketReview": {
@@ -26335,6 +26892,31 @@
           "expectedAccountId"
         ]
       },
+      "ChangePriceProtectionBody": {
+        "type": "object",
+        "properties": {
+          "priceProtectionTicks": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 98
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "priceProtectionTicks",
+          "reason",
+          "expectedAccountId"
+        ]
+      },
       "AdminMarketReviewItem": {
         "type": "object",
         "properties": {
@@ -27532,10 +28114,252 @@
         ],
         "additionalProperties": false
       },
+      "PlaceOrderBody": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "YES",
+              "NO"
+            ]
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "buy",
+              "sell"
+            ]
+          },
+          "timeInForce": {
+            "type": "string",
+            "enum": [
+              "ioc",
+              "gtc"
+            ]
+          },
+          "limitPriceCoin": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 99
+          },
+          "qty": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000
+          },
+          "budgetCoin": {
+            "maxLength": 17,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CoinAmount"
+              }
+            ]
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "outcome",
+          "side",
+          "timeInForce",
+          "limitPriceCoin",
+          "expectedAccountId"
+        ],
+        "additionalProperties": false
+      },
+      "PlaceOrderResult": {
+        "type": "object",
+        "properties": {
+          "order": {
+            "$ref": "#/components/schemas/Order"
+          },
+          "replayed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "order",
+          "replayed"
+        ],
+        "additionalProperties": false
+      },
       "Order": {
         "type": "object",
         "properties": {
           "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "marketId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "marketSlug": {
+            "nullable": true,
+            "type": "string"
+          },
+          "marketTitle": {
+            "nullable": true,
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "YES",
+              "NO"
+            ]
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "buy",
+              "sell"
+            ]
+          },
+          "timeInForce": {
+            "type": "string",
+            "enum": [
+              "ioc",
+              "gtc"
+            ]
+          },
+          "limitPriceCoin": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 99
+          },
+          "protectedLimitPriceCoin": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 99
+          },
+          "qty": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "budgetCoin": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CoinAmount"
+              }
+            ]
+          },
+          "filledQty": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "filledAmountCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
+          "cancelledQty": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "unspentCoin": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CoinAmount"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "partially_filled",
+              "filled",
+              "cancelled",
+              "expired",
+              "rejected"
+            ]
+          },
+          "rejectReason": {
+            "nullable": true,
+            "type": "string",
+            "enum": [
+              "insufficient_coin",
+              "insufficient_contracts",
+              "not_open_yet",
+              "closed",
+              "paused",
+              "no_quote",
+              "price_limit",
+              "budget_too_small",
+              "self_trade"
+            ]
+          },
+          "cancelReason": {
+            "nullable": true,
+            "type": "string",
+            "enum": [
+              "by_owner",
+              "ioc_remainder",
+              "self_trade",
+              "paused",
+              "admin_role",
+              "restricted",
+              "account_closed"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "endedAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "id",
+          "requestId",
+          "marketId",
+          "marketSlug",
+          "marketTitle",
+          "outcome",
+          "side",
+          "timeInForce",
+          "limitPriceCoin",
+          "protectedLimitPriceCoin",
+          "qty",
+          "budgetCoin",
+          "filledQty",
+          "filledAmountCoin",
+          "cancelledQty",
+          "unspentCoin",
+          "status",
+          "rejectReason",
+          "cancelReason",
+          "createdAt",
+          "endedAt"
+        ],
+        "additionalProperties": false
+      },
+      "MyFill": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "orderId": {
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
@@ -27565,46 +28389,26 @@
               "sell"
             ]
           },
-          "type": {
-            "type": "string",
-            "enum": [
-              "market",
-              "limit"
-            ]
-          },
           "qty": {
             "type": "integer",
             "minimum": 0,
             "maximum": 9007199254740991
           },
-          "filledQty": {
+          "priceCoin": {
             "type": "integer",
-            "minimum": 0,
-            "maximum": 9007199254740991
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "open",
-              "partially_filled",
-              "filled",
-              "cancelled",
-              "rejected"
-            ]
+            "minimum": 1,
+            "maximum": 99
           },
           "amountCoin": {
-            "nullable": true,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/CoinAmount"
-              }
-            ]
+            "$ref": "#/components/schemas/CoinAmount"
           },
-          "priceAvgBp": {
-            "nullable": true,
+          "yesPriceCoin": {
             "type": "integer",
-            "minimum": 0,
-            "maximum": 10000
+            "minimum": 1,
+            "maximum": 99
+          },
+          "feeCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
           },
           "createdAt": {
             "type": "string",
@@ -27614,17 +28418,17 @@
         },
         "required": [
           "id",
+          "orderId",
           "marketId",
           "marketSlug",
           "marketTitle",
           "outcome",
           "side",
-          "type",
           "qty",
-          "filledQty",
-          "status",
+          "priceCoin",
           "amountCoin",
-          "priceAvgBp",
+          "yesPriceCoin",
+          "feeCoin",
           "createdAt"
         ],
         "additionalProperties": false

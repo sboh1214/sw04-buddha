@@ -11,7 +11,9 @@ import { profileView } from '@/lib/query-client';
 import { StartGrantPendingNotice } from './start-grant-notice';
 
 /**
- * Balance summary (PLAN 11.3). `locked_coin` is always 0 in the MVP but shown for honesty.
+ * Balance summary (PLAN 11.3). `locked_coin` is the Coin the account's live buy orders hold
+ * (#118 lock, #119 intake): 0 until it has one. A lock alone publishes no `user:balance`
+ * (ADR-0112), so the figure follows the next read or the next ledger event.
  *
  * Under the balance, while the account's start Coin waits for its amount, the owner's notice that
  * it will be paid (`StartGrantPendingNotice`, ADR-0069 decision 4 #70) — the same one MY 요약's

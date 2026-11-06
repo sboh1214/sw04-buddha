@@ -99,7 +99,6 @@ import {
   categories,
   commentLikes,
   consentRecords,
-  fills,
   linkFlags,
   linkUses,
   marketDisputes,
@@ -121,7 +120,6 @@ import {
   nicknameHolds,
   noticeImages,
   notices,
-  orders,
   phoneVerifications,
   positions,
   postComments,
@@ -147,6 +145,14 @@ import { ledgerKeys, lockLedgerAccounts, recordLedgerEntry } from '../ledger.js'
 import { storedReleaseSettingValue } from '../release-settings.js';
 import { payStartGrant, recordStartGrant } from '../start-grants.js';
 import { clockTimestamp, lockMarket } from '../tx-helpers.js';
+import { createFillRecord, priceAndQtyOf, type FillRow } from './orders.js';
+
+/**
+ * The 가격 보호 폭 the test environment uses (#119, ADR-0107 결과 3: the release setting
+ * `order.price_protection_ticks`'s test value): a non-draft market's default here and what
+ * `createMarketInReview`'s submission fills.
+ */
+export const TEST_PRICE_PROTECTION_TICKS = 5;
 
 /** Short unique tag for generated emails/slugs/nicknames. */
 const tag = () => randomUUID().replaceAll('-', '').slice(0, 8);
@@ -335,6 +341,14 @@ export interface CreateMarketInput {
    */
   leadCloseGapMinutes?: number | null;
   /**
+   * The market's 가격 보호 폭 in ticks (`price_protection_ticks`, #119). Default: null for a draft
+   * (created while the default is undecided, filled at the submission — `createMarketInReview`
+   * fills TEST_PRICE_PROTECTION_TICKS), TEST_PRICE_PROTECTION_TICKS (5, the test value) for every
+   * other status, so an order reaches an open market with no setup. A test of a market with none
+   * passes null.
+   */
+  priceProtectionTicks?: number | null;
+  /**
    * Resolution columns, stored as given and null by default: a test that needs a market
    * mid-settlement sets `status: 'settling'` with a result. The factory writes no market event,
    * so `statusEventId` stays null unless given — the rank fallback of `statusSupersedes` is what
@@ -497,6 +511,12 @@ export async function createMarket(db: Db, input: CreateMarketInput = {}) {
       scheduledJudgementAt: times.scheduledJudgementAt,
       judgementTimeZone: times.judgementTimeZone,
       leadCloseGapMinutes: input.leadCloseGapMinutes ?? null,
+      priceProtectionTicks:
+        input.priceProtectionTicks !== undefined
+          ? input.priceProtectionTicks
+          : status === 'draft'
+            ? null
+            : TEST_PRICE_PROTECTION_TICKS,
       resolvedResult:
         input.resolvedResult !== undefined
           ? input.resolvedResult
@@ -647,81 +667,52 @@ export interface CreateFillInput {
   amountCoin: bigint;
   /** Default: the database clock. A volume-window test sets it. */
   createdAt?: Date;
-  /** The taker. A fresh user is created when omitted. */
+  /** The incoming order's owner. A fresh user is created when omitted. */
   userId?: string;
-  /** The resting order's account. A fresh user is created when omitted. */
+  /** The resting order's owner. A fresh user is created when omitted. */
   makerId?: string;
   /** Default 'YES'. */
   outcome?: Outcome;
   /** Default 'buy'. */
   side?: 'buy' | 'sell';
-  /** Default 1. */
+  /**
+   * Default: the quantity `priceAndQtyOf` finds for the amount (the highest price that divides
+   * it). Given, the amount over it must be a contract price.
+   */
   qty?: number;
 }
 
 /**
- * One execution as the CLOB will leave it (#119): a filled market order matched against a
- * resting limit order of another account, and the `fills` row between them — nothing routes an
- * order yet. No balance, position, ledger entry, tick or market statistic moves: a test that
- * needs those sets them itself (`createMarket`'s statistics). The two orders share the fill's
- * instant.
+ * One execution as the intake records it (#119, `createFillRecord`): an IOC order of `userId`
+ * filled against a resting GTC order of `makerId` — a buy minting a pair with a buy of the other
+ * outcome, a sell trading with a buy of its outcome — and the `fills` row between them, its
+ * amount `amountCoin` (price × qty). No balance, position, ledger entry, tick or market statistic
+ * moves: a test that needs those sets them itself (`createMarket`'s statistics). The two orders
+ * share the fill's instant, and both owners have a fill on the market (`hasMarketFill`).
  */
 export async function createFill(db: Db, input: CreateFillInput) {
   const taker = input.userId ?? (await createUser(db)).user.id;
   const maker = input.makerId ?? (await createUser(db)).user.id;
-  const outcome = input.outcome ?? 'YES';
-  const side = input.side ?? 'buy';
-  const qty = input.qty ?? 1;
-  const at = input.createdAt === undefined ? {} : { createdAt: input.createdAt };
-  return db.transaction(async (tx) => {
-    const [resting] = await tx
-      .insert(orders)
-      .values({
-        userId: maker,
-        marketId: input.marketId,
-        outcome: outcome === 'YES' ? 'NO' : 'YES',
-        side: 'buy',
-        type: 'limit',
-        limitPrice: 50,
-        qty,
-        filledQty: qty,
-        status: 'filled',
-        idempotencyKey: randomUUID(),
-        ...at,
-      })
-      .returning();
-    const [order] = await tx
-      .insert(orders)
-      .values({
-        userId: taker,
-        marketId: input.marketId,
-        outcome,
-        side,
-        type: 'market',
-        qty,
-        filledQty: qty,
-        status: 'filled',
-        idempotencyKey: randomUUID(),
-        ...at,
-      })
-      .returning();
-    const [fill] = await tx
-      .insert(fills)
-      .values({
-        marketId: input.marketId,
-        orderId: order!.id,
-        counterpartyType: 'order',
-        counterpartyOrderId: resting!.id,
-        outcome,
-        side,
-        qty,
-        amountCoin: input.amountCoin,
-        priceAvgBp: Math.min(10_000, Math.round((Number(input.amountCoin) * 100) / qty)),
-        ...at,
-      })
-      .returning();
-    return fill!;
+  let size = priceAndQtyOf(input.amountCoin);
+  if (input.qty !== undefined) {
+    const price = Number(input.amountCoin) / input.qty;
+    if (!Number.isInteger(price) || price < PRICE_MIN || price > PRICE_MAX) {
+      throw new RangeError(
+        `createFill: ${input.amountCoin.toString()} Coin is no price × ${input.qty}`,
+      );
+    }
+    size = { priceCoin: price, qty: input.qty };
+  }
+  const { fill } = await createFillRecord(db, {
+    marketId: input.marketId,
+    incomingOwnerId: taker,
+    restingOwnerId: maker,
+    outcome: input.outcome ?? 'YES',
+    side: input.side ?? 'buy',
+    ...size,
+    ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
   });
+  return fill;
 }
 
 export interface CreateWatchInput {
@@ -1579,6 +1570,12 @@ export interface CreateMarketInReviewInput extends ReviewedMarketFields {
    * nothing reads back). Default none.
    */
   editedBy?: string[];
+  /**
+   * A submission from before #119 (migration 0062): the market reaches REVIEW with no 가격 보호 폭,
+   * which the approval refuses (ADR-0112 결정 5). Default false: the draft's own width, else
+   * TEST_PRICE_PROTECTION_TICKS, as the submission fills it in.
+   */
+  withoutPriceProtection?: boolean;
 }
 
 /** A market under review, scheduled or opened from it, with its `market_review` request (#78). */
@@ -1594,14 +1591,15 @@ export interface ReviewedMarket {
  * MARKET_REVIEW_REQUEST_REASON), and the `submitted` transition — the `market_events` row (payload
  * `{approvalId, leadCloseGapMinutes}`) and the market in `review` with its `status_event_id` —
  * made by `transitionMarket`, at one instant, in one transaction. The submission stores the gap it
- * checked: `leadCloseGapMinutes` as given (default null). Writes no `market_submit` record, as no
+ * checked: `leadCloseGapMinutes` as given (default null), and the 가격 보호 폭 (the draft's own, else
+ * TEST_PRICE_PROTECTION_TICKS, #119). Writes no `market_submit` record, as no
  * factory writes the admin records of a route (but the editors', which are the point here).
  */
 export async function createMarketInReview(
   db: Db,
   input: CreateMarketInReviewInput = {},
 ): Promise<ReviewedMarket> {
-  const { submittedBy, submittedAt, editedBy, ...fields } = input;
+  const { submittedBy, submittedAt, editedBy, withoutPriceProtection, ...fields } = input;
   const createdBy = fields.createdBy ?? (await createUser(db, { role: 'admin' })).user.id;
   const draft = await createMarket(db, {
     ...fields,
@@ -1639,6 +1637,11 @@ export async function createMarketInReview(
       requestedAt: at,
     });
     const leadCloseGapMinutes = draft.leadCloseGapMinutes;
+    // The submission fills a draft with no width of its own with the default (#119).
+    const priceProtectionTicks =
+      withoutPriceProtection === true
+        ? null
+        : (draft.priceProtectionTicks ?? TEST_PRICE_PROTECTION_TICKS);
     await transitionMarket(tx, {
       marketId: draft.id,
       from: 'draft',
@@ -1647,7 +1650,7 @@ export async function createMarketInReview(
       actorId: requester,
       payload: { approvalId: request.id, leadCloseGapMinutes },
       at,
-      set: { leadCloseGapMinutes },
+      set: { leadCloseGapMinutes, priceProtectionTicks },
     });
     const [market] = await tx.select().from(markets).where(eq(markets.id, draft.id));
     return { market: market!, request };
@@ -2969,7 +2972,7 @@ export interface DisputeMade {
   /** The market read back after the write, its `dispute_hold_count` kept. */
   market: typeof markets.$inferSelect;
   /** The fill written for the submitter; null with `fill: false`. */
-  fill: typeof fills.$inferSelect | null;
+  fill: FillRow | null;
 }
 
 /**

@@ -83,6 +83,10 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   // past the deadline, no fill, a dispute decided or retracted, the version's registrant or the
   // dispute's submitter deciding — a conflict with that state, `details.reason` naming which.
   DISPUTE_NOT_ALLOWED: HttpStatus.CONFLICT,
+  // The server takes no new order (#119, ADR-0112): intake closed by the release setting
+  // `order.accepting`, or an immediate order on a market with no price-protection width — a
+  // conflict with that state, no order row written; the same request passes once it opens.
+  ORDER_INTAKE_CLOSED: HttpStatus.CONFLICT,
   INTERNAL: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 

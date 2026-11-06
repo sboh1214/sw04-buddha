@@ -2,6 +2,7 @@ import {
   applyBuy,
   applyPairBurn,
   applySell,
+  CONTRACT_TERMS,
   isContractPrice,
   pairPrices,
   PAYOUT_PER_CONTRACT_COIN,
@@ -29,7 +30,7 @@ import {
   type LedgerEntryRow,
 } from './ledger.js';
 import { currentMarketPause } from './market-pause.js';
-import { markets, positions } from './schema/index.js';
+import { fills, markets, positions } from './schema/index.js';
 import { clockTimestamp, lockMarket } from './tx-helpers.js';
 
 /*
@@ -68,7 +69,9 @@ import { clockTimestamp, lockMarket } from './tx-helpers.js';
  * its ledger key before any bound is judged and answers `duplicate` with nothing moved, or
  * `key_conflict` when its Coin event differs (accounts, amount, market). That pins a mint's price
  * and qty (its two legs) and a burn's qty, but not a trade fill's outcome or (price, qty) of the
- * same product: the fill row (#119) is what holds them, and #119 checks a replay against it.
+ * same product: the fill row (#119) holds them, and a fill's replay is checked against it
+ * (`key_conflict` too). The fill row comes first and names the events: migration 0062 binds each
+ * TRADE_FILL and PAIR_MINT_COLLATERAL to its row's accounts and amounts (ADR-0112).
  */
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -221,6 +224,49 @@ function assertBuyerCovers(balance: BalanceRow, paidCoin: bigint, releasedCoin: 
     throw new ContractError(
       'insufficient_coin',
       `ledger account ${balance.accountId} holds ${balance.lockedCoin} locked Coin (ledger ${balance.ledgerCoin}), short of ${paidCoin} paid and ${releasedCoin} released`,
+    );
+  }
+}
+
+/**
+ * A replayed fill's terms against its fill row (#119, ADR-0112): the Coin events pin only price ×
+ * qty (and a mint's two legs), so the row's outcome, qty and price must be the call's too — or
+ * `key_conflict`, nothing moved. No row is `key_conflict` too: migration 0062 binds every fill
+ * event to its row, so a recorded event without one is a books' breach.
+ */
+async function assertReplayOfFill(
+  tx: Tx,
+  fillId: string,
+  expected: {
+    kind: 'trade' | 'pair_mint';
+    outcome: Outcome | null;
+    qty: number;
+    yesPriceCoin: number;
+  },
+): Promise<void> {
+  const id = /^[0-9]+$/.test(fillId) ? Number(fillId) : null;
+  const [row] =
+    id === null || !Number.isSafeInteger(id)
+      ? []
+      : await tx
+          .select({
+            kind: fills.kind,
+            outcome: fills.outcome,
+            qty: fills.qty,
+            yesPriceCoin: fills.yesPriceCoin,
+          })
+          .from(fills)
+          .where(eq(fills.id, id));
+  if (
+    !row ||
+    row.kind !== expected.kind ||
+    (expected.outcome !== null && row.outcome !== expected.outcome) ||
+    row.qty !== expected.qty ||
+    row.yesPriceCoin !== expected.yesPriceCoin
+  ) {
+    throw new LedgerEntryError(
+      'key_conflict',
+      `fill ${fillId} was recorded with other terms than this replay's`,
     );
   }
 }
@@ -515,6 +561,12 @@ export async function applyPairMintFill(
 
   if (await findLedgerEntry(tx, 'PAIR_MINT_COLLATERAL', ledgerKeys.fillLeg(input.fillId, 'YES'))) {
     await rerecord(tx, [entryOf('YES'), entryOf('NO')]);
+    await assertReplayOfFill(tx, input.fillId, {
+      kind: 'pair_mint',
+      outcome: null,
+      qty,
+      yesPriceCoin: prices.YES,
+    });
     return { outcome: 'duplicate' };
   }
 
@@ -612,6 +664,13 @@ export async function applyTradeFill(tx: Tx, input: TradeFillInput): Promise<Tra
 
   if (await findLedgerEntry(tx, 'TRADE_FILL', ledgerKeys.fill(input.fillId))) {
     await rerecord(tx, [entryInput()]);
+    await assertReplayOfFill(tx, input.fillId, {
+      kind: 'trade',
+      outcome,
+      qty,
+      yesPriceCoin:
+        outcome === 'YES' ? input.priceCoin : CONTRACT_TERMS.payoutCoin - input.priceCoin,
+    });
     return { outcome: 'duplicate' };
   }
 

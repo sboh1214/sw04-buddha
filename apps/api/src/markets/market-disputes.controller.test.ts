@@ -143,6 +143,19 @@ describe.skipIf(!hasTestInfra)('market disputes (integration)', () => {
       ...(maker ? { makerId: maker.id } : {}),
       amountCoin: 50n,
     });
+  /**
+   * An admin's fill on `marketId`, as one can come about: made while the account was a member,
+   * the role granted after (#143) — an admin owns no order (migration 0062,
+   * `orders_refuse_admin_owner`).
+   */
+  const fillBeforeGrant = async (marketId: string, admin: TestUser) => {
+    const role = (value: 'user' | 'admin') =>
+      t.db.update(schema.profiles).set({ role: value }).where(eq(schema.profiles.userId, admin.id));
+    await role('user');
+    await fillOn(marketId, admin);
+    await role('admin');
+    await t.app.get(AdminGuard).invalidate(admin.id);
+  };
 
   // Every write names the account on screen (ADR-0092): `who`'s own unless the payload names
   // another.
@@ -391,14 +404,14 @@ describe.skipIf(!hasTestInfra)('market disputes (integration)', () => {
     // A deadline passed: the stale version first, then the deadline — before the role.
     const late = await provisional(new Date(Date.now() - MINUTE_MS));
     const admin = await makeAdmin();
-    await fillOn(late.id, admin);
+    await fillBeforeGrant(late.id, admin);
     expectNotAllowed(await submit(late.id, admin, { judgementVersion: 2 }), 'stale_version');
     expectNotAllowed(await submit(late.id, admin), 'deadline_passed');
     // Ahead: an admin is refused with a fill (from before a grant, #143) or without one, before
     // the fill is asked (#173 item 15).
     const market = await provisional();
     expectNotAllowed(await submit(market.id, admin), 'admin');
-    await fillOn(market.id, admin);
+    await fillBeforeGrant(market.id, admin);
     expectNotAllowed(await submit(market.id, admin), 'admin');
     // A member with no fill on this market — a fill on another counts for nothing.
     await fillOn(open.id, member);

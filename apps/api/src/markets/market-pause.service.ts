@@ -151,7 +151,8 @@ const END_SKIPS: Readonly<Record<EndPauseSkipReason, () => AppError>> = {
  * stays waiting for another admin's decision, and they cannot retract it. The request's
  * `no_decider` check counts every admin but the requester (`ApprovalService.hasDecider`).
  *
- * Orders: none yet (D13). M9 cancels the pending ones at the pause in `pauseMarket` (#119, #178).
+ * Orders: resting orders stay with their locks until #178 cancels them in `pauseMarket`; the
+ * intake (#119) refuses new orders on a paused market as 일시 중단 (ADR-0112 10-13).
  */
 @Injectable()
 export class MarketPauseService {

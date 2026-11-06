@@ -59,6 +59,9 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'POST /admin/markets/:id/reject': 'market_reject',
   'POST /admin/markets/:id/revert': 'market_revert',
   'POST /admin/markets/:id/reschedule': 'market_reschedule',
+  // #119: one admin changes an open or paused market's 가격 보호 폭, with the market's own event
+  // (`price_protection_changed`).
+  'POST /admin/markets/:id/price-protection': 'market_price_protection_change',
   // #80: a rule supplement is a request, then another admin's decision or its requester's
   // retraction; only the approval also writes the market's event.
   'POST /admin/markets/:id/supplements': 'market_supplement_request',

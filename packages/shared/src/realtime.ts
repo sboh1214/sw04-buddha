@@ -109,8 +109,9 @@ export function statusSupersedes(incoming: StatusKeyed, held: StatusKeyed): bool
 }
 
 /**
- * Room `market:<id>`: price and stats after a fill. Nothing publishes it until the CLOB fills
- * orders (#119): the direct AMM trade that did is gone (#125).
+ * Room `market:<id>`: price and stats after a fill. Nothing publishes it yet: the order intake
+ * fills orders (#119) and the market's statistics and this event are #121's (ADR-0107 결정 4·6);
+ * the direct AMM trade that did is gone (#125).
  */
 export const marketTickEventSchema = z
   .object({
@@ -132,8 +133,8 @@ export const marketTickEventSchema = z
 export type MarketTickEvent = z.infer<typeof marketTickEventSchema>;
 
 /**
- * Room `market:<id>`: one anonymous fill (no publisher until #119). `fillId` is `Fill.id`
- * (strict per market).
+ * Room `market:<id>`: one anonymous fill (no publisher yet: #121 publishes the fills the order
+ * intake records, #119). `fillId` is `Fill.id` (strict per market).
  */
 export const marketTradeEventSchema = z
   .object({

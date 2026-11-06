@@ -4,9 +4,10 @@ import { copy } from '../src/copy';
 import { accountIdOf, adminAccount, expect, freshEmail, signIn, signUp, test } from './helpers';
 
 /**
- * 출시 설정 (#170, ADR-0055) as the shipped build has it: nine registered items — 시작 지급액
+ * 출시 설정 (#170, ADR-0055) as the shipped build has it: twelve registered items — 시작 지급액
  * (`grant.start_coin`, #70, ADR-0071), 선행 마감 최소 간격 (`market.lead_close_gap`, #22,
- * ADR-0098), 이의 기간 (`market.dispute_window`, #152, ADR-0103) and the six retention periods
+ * ADR-0098), 이의 기간 (`market.dispute_window`, #152, ADR-0103), 주문 접수, 주문 속도 제한 and 가격
+ * 보호 폭 표준값 (`order.*`, #119, ADR-0112 — the first a flag) and the six retention periods
  * (`retention.*` — #184's five, ADR-0087, and #77's market proposals, ADR-0089) — which the screen
  * and the API list alike, in the registry's order. Changing and recording an item are fixed by
  * the API suite with injected test items (`createTestApp({ releaseSettings })`), paying the start
@@ -21,11 +22,12 @@ import { accountIdOf, adminAccount, expect, freshEmail, signIn, signUp, test } f
  * worker's next daily run; for the lead-close gap, decide which markets with an announcement time
  * may open — and stay for the runs after it, so the spec reads the status the database holds —
  * 미정 on a fresh one, as no migration or seed writes a value (docs/SETTINGS.md) — and checks the
- * screen against it. The two values the suite writes are the dispute window's and the start
- * Coin's, by its global setup before any test (global-setup.ts: 1분 and 1,000,000 Coin as 시험값
- * while each is 미정; the start Coin since #116, the e2e accounts' only Coin), so neither is 미정
- * here and neither changes while this spec reads the list. The change dialogs are opened and
- * cancelled only.
+ * screen against it. The suite writes five values, by its global setup before any test
+ * (global-setup.ts, 시험값 while each is 미정): the dispute window's 1분, the start Coin's 1,000,000
+ * (since #116, the e2e accounts' only Coin) and the three order items — intake open, 20 orders a
+ * minute and a width of 5 ticks (#119, `ensureOrderSettings`). So none of the five is 미정 here,
+ * none changes while this spec reads the list, and the 미정 count comes from the other items
+ * alone. The change dialogs are opened and cancelled only.
  */
 
 const LIST = '/api/v1/admin/release-settings';
@@ -45,6 +47,17 @@ const LEAD_CLOSE_GAP_KEY = 'market.lead_close_gap';
  * published disputes are taken before the worker confirms it, in whole minutes.
  */
 const DISPUTE_WINDOW_KEY = 'market.dispute_window';
+
+/**
+ * The order items (#119): 주문 접수 (`ORDER_ACCEPTING_SETTING`, true or false), 주문 속도 제한
+ * (`ORDER_RATE_LIMIT_SETTING`, submissions a minute) and 가격 보호 폭 표준값
+ * (`PRICE_PROTECTION_TICKS_SETTING`, ticks), with their names and units.
+ */
+const ORDER_ITEMS = [
+  ['order.accepting', '주문 접수', null, 'boolean'],
+  ['order.rate_limit', '주문 속도 제한', '회/분', 'integer'],
+  ['order.price_protection_ticks', '가격 보호 폭 표준값', '틱', 'integer'],
+] as const;
 
 /**
  * The retention periods (`RETENTION_PERIOD_SETTINGS`, #184 and #77) with their names, restated:
@@ -69,6 +82,7 @@ const SHIPPED_KEYS = [
   START_COIN_KEY,
   LEAD_CLOSE_GAP_KEY,
   DISPUTE_WINDOW_KEY,
+  ...ORDER_ITEMS.map(([key]) => key),
   ...RETENTION_ITEMS.map(([key]) => key),
 ];
 
@@ -98,12 +112,12 @@ async function expectForbidden(response: APIResponse): Promise<void> {
 }
 
 test.describe('출시 설정 (#170)', () => {
-  test('관리자 메뉴에서 열면 시작 지급액·선행 마감 최소 간격·이의 기간과 여섯 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
+  test('관리자 메뉴에서 열면 시작 지급액·선행 마감 최소 간격·이의 기간, 주문의 세 항목과 여섯 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
     page,
     admin,
   }) => {
-    // The API: the nine items, as #70, #22, #152, #184 and #77 registered them — whole numbers of
-    // Coin, of minutes and of days.
+    // The API: the twelve items, as #70, #22, #152, #119, #184 and #77 registered them — whole
+    // numbers of Coin, of minutes, of submissions, of ticks and of days, and one flag.
     const items = await dataOf<ReleaseSetting[]>(await admin.get(LIST));
     expect(items.map((item) => item.key)).toEqual(SHIPPED_KEYS);
     const startCoin = items.find((item) => item.key === START_COIN_KEY);
@@ -121,6 +135,13 @@ test.describe('출시 설정 (#170)', () => {
     expect(disputeWindow).toMatchObject({ label: '이의 기간', unit: '분' });
     expect(disputeWindow?.valueSchema.type).toBe('integer');
     expect(disputeWindow?.status).not.toBe('undecided');
+    for (const [key, label, unit, type] of ORDER_ITEMS) {
+      const item = items.find((entry) => entry.key === key);
+      expect(item, key).toMatchObject({ key, label, unit });
+      expect(item?.valueSchema.type, key).toBe(type);
+      // Entered by the global setup while 미정, like the two above (`ensureOrderSettings`).
+      expect(item?.status, key).not.toBe('undecided');
+    }
     for (const [key, label] of RETENTION_ITEMS) {
       const item = items.find((entry) => entry.key === key);
       expect(item, key).toMatchObject({ key, label, unit: '일' });
@@ -208,6 +229,19 @@ test.describe('출시 설정 (#170)', () => {
       await dialog.getByTestId('release-setting-cancel').click();
       await expect(dialog).toHaveCount(0);
     }
+    // The first flag (#119 주문 접수): one line of JSON too ('true' or 'false'), and no unit.
+    await page.getByTestId(`release-setting-edit-${ORDER_ITEMS[0][0]}`).click();
+    const flagDialog = page.getByTestId('release-setting-dialog');
+    await expect(flagDialog).toContainText(ORDER_ITEMS[0][1]);
+    await flagDialog.getByTestId('release-setting-status-test').click();
+    const flagInput = flagDialog.getByTestId('release-setting-value-input');
+    await expect(flagInput).toBeVisible();
+    expect(await flagInput.evaluate((element) => element.tagName)).toBe('INPUT');
+    await expect(
+      flagDialog.getByText(copy.adminReleaseSettingValue, { exact: true }),
+    ).toBeVisible();
+    await flagDialog.getByTestId('release-setting-cancel').click();
+    await expect(flagDialog).toHaveCount(0);
     expect(await dataOf<ReleaseSetting[]>(await admin.get(LIST))).toEqual(items);
 
     // 미정만 보기 keeps the items that are 미정 and hides the rest, or says none is 미정.

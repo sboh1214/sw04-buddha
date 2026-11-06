@@ -104,13 +104,22 @@ export class RateLimitGuard extends ThrottlerGuard {
     // buckets are the strict ones. The `X-RateLimit-*` family keeps the library's suffix: those
     // are for an operator reading a response, and there the distinction is the useful part.
     const { res } = this.getRequestResponse(context);
-    (res as { header: (name: string, value: number) => void }).header(
-      'Retry-After',
-      detail.timeToBlockExpire,
-    );
-    throw new AppError('RATE_LIMITED', {
-      message: 'Too many requests',
-      details: { retryAfterSeconds: detail.timeToBlockExpire },
-    });
+    throw rateLimited(res, detail.timeToBlockExpire);
   }
+}
+
+/**
+ * The refusal of a limit counted inside Nest — a named bucket here, the order limit
+ * (OrderRateLimitGuard, #119): `Retry-After` in seconds on `res` and the PLAN 7.4 envelope,
+ * `RATE_LIMITED` with `details.retryAfterSeconds` the same number. Answers the error to throw.
+ */
+export function rateLimited(res: unknown, retryAfterSeconds: number): AppError {
+  (res as { header: (name: string, value: number) => void }).header(
+    'Retry-After',
+    retryAfterSeconds,
+  );
+  return new AppError('RATE_LIMITED', {
+    message: 'Too many requests',
+    details: { retryAfterSeconds },
+  });
 }

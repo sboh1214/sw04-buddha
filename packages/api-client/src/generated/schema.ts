@@ -622,6 +622,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/markets/{id}/price-protection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Change an open or paused market’s price-protection width in ticks (1..98), with a reason, by one admin; recorded with the value before and after, it applies to the immediate orders taken after it and never to resting ones */
+        post: operations["adminChangeMarketPriceProtection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/markets/{id}/reject": {
         parameters: {
             query?: never;
@@ -2005,6 +2022,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/markets/{id}/orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Place an order: buy or sell YES or NO, immediate (ioc: fills what it can now, the rest is cancelled) or limit (gtc: the rest waits), always with a limit price 1–99 — an immediate order’s narrowed to the best opposite quote ± the market’s price-protection width — and a quantity of 1–1,000,000 contracts or, for an immediate buy only, a Coin budget. Answers the order: taken, or rejected with its reason (not an error). The same Idempotency-Key with the same terms answers that order as it stands now (replayed) */
+        post: operations["placeOrder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/markets/{id}/posts": {
         parameters: {
             query?: never;
@@ -2228,6 +2262,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/fills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The account's fills, newest first, each as its own order took it: the order, outcome, side, quantity, price per contract and Coin, the recorded YES price and the fee (0). The counterparty is never named; marketId narrows to one market */
+        get: operations["getMyFills"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/interest-categories": {
         parameters: {
             query?: never;
@@ -2354,8 +2405,42 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Orders of the account with their fill, newest first */
+        /** The account's orders, newest first, rejected ones included, each with what filled and its state and reason; marketId narrows to one market, state=live to the waiting and partly filled ones, state=ended to the rest */
         get: operations["getMyOrders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/orders/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One of the account’s orders; another account’s is NOT_FOUND */
+        get: operations["getMyOrder"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/orders/request/{requestId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The account’s order its request id (the Idempotency-Key it was sent with) named — what became of a request whose answer was lost. NOT_FOUND when it named none */
+        get: operations["getMyOrderByRequest"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3357,6 +3442,7 @@ export type components = {
                 yes: number;
             };
             pause: components["schemas"]["AdminMarketPauseState"];
+            priceProtectionTicks: number | null;
             primarySource: components["schemas"]["MarketSource"] | null;
             /** Format: date-time */
             resolvedAt: string | null;
@@ -4063,6 +4149,11 @@ export type components = {
             slug: string;
             sortOrder: number;
         };
+        ChangePriceProtectionBody: {
+            expectedAccountId: string;
+            priceProtectionTicks: number;
+            reason: string;
+        };
         ChargeBody: {
             expectedAccountId: string;
             expectedAmountCoin: components["schemas"]["CoinAmount"];
@@ -4307,7 +4398,7 @@ export type components = {
             title: string;
         };
         /** @enum {string} */
-        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "REPORT_NOT_ALLOWED" | "REPORT_LIMITED" | "MODERATION_NOT_ALLOWED" | "RESTRICTED" | "WRITE_LIMITED" | "CLOSURE_NOT_ALLOWED" | "ACCOUNT_CLOSED" | "PROPOSAL_LIMITED" | "OPEN_ITEMS_MISSING" | "DISPUTE_NOT_ALLOWED" | "INTERNAL";
+        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "REPORT_NOT_ALLOWED" | "REPORT_LIMITED" | "MODERATION_NOT_ALLOWED" | "RESTRICTED" | "WRITE_LIMITED" | "CLOSURE_NOT_ALLOWED" | "ACCOUNT_CLOSED" | "PROPOSAL_LIMITED" | "OPEN_ITEMS_MISSING" | "DISPUTE_NOT_ALLOWED" | "ORDER_INTAKE_CLOSED" | "INTERNAL";
         ErrorEnvelope: {
             error: {
                 code: components["schemas"]["ErrorCode"];
@@ -4474,7 +4565,7 @@ export type components = {
             /** @enum {string|null} */
             toStatus: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled" | null;
             /** @enum {string} */
-            type: "created" | "submitted" | "approved" | "rejected" | "reverted" | "open_rescheduled" | "opened" | "closed" | "finalized" | "rules_edited" | "resolved" | "settling" | "rules_supplemented" | "paused" | "resumed" | "provisional" | "judgement_corrected" | "judgement_delay_recorded";
+            type: "created" | "submitted" | "approved" | "rejected" | "reverted" | "open_rescheduled" | "opened" | "closed" | "finalized" | "rules_edited" | "resolved" | "settling" | "rules_supplemented" | "paused" | "resumed" | "provisional" | "judgement_corrected" | "judgement_delay_recorded" | "price_protection_changed";
         };
         MarketJudgementCorrection: {
             baseVersion: number;
@@ -4854,6 +4945,26 @@ export type components = {
             /** Format: date-time */
             submittedAt: string;
         };
+        MyFill: {
+            amountCoin: components["schemas"]["CoinAmount"];
+            /** Format: date-time */
+            createdAt: string;
+            feeCoin: components["schemas"]["CoinAmount"];
+            id: string;
+            /** Format: uuid */
+            marketId: string;
+            marketSlug: string;
+            marketTitle: string;
+            /** Format: uuid */
+            orderId: string;
+            /** @enum {string} */
+            outcome: "YES" | "NO";
+            priceCoin: number;
+            qty: number;
+            /** @enum {string} */
+            side: "buy" | "sell";
+            yesPriceCoin: number;
+        };
         MyMarketDispute: {
             dispute: components["schemas"]["MyDispute"] | null;
             eligibility: components["schemas"]["DisputeEligibility"];
@@ -4953,28 +5064,39 @@ export type components = {
         /** @enum {string} */
         OnboardingStep: "consent" | "verification" | "nickname";
         /** @enum {string} */
-        OpenItem: "title" | "description" | "yesCondition" | "noCondition" | "eventDeadline" | "primarySource" | "fallbackSources" | "fallbackCondition" | "longDelayDays" | "delayHandling" | "scheduledOpenAt" | "closeAt" | "scheduledJudgementAt" | "judgementTimeZone" | "timeOrder" | "leadClose" | "category" | "tags";
+        OpenItem: "title" | "description" | "yesCondition" | "noCondition" | "eventDeadline" | "primarySource" | "fallbackSources" | "fallbackCondition" | "longDelayDays" | "delayHandling" | "scheduledOpenAt" | "closeAt" | "scheduledJudgementAt" | "judgementTimeZone" | "timeOrder" | "leadClose" | "category" | "tags" | "priceProtection";
         Order: {
-            amountCoin: components["schemas"]["CoinAmount"] | null;
+            budgetCoin: components["schemas"]["CoinAmount"] | null;
+            cancelledQty: number;
+            /** @enum {string|null} */
+            cancelReason: "by_owner" | "ioc_remainder" | "self_trade" | "paused" | "admin_role" | "restricted" | "account_closed" | null;
             /** Format: date-time */
             createdAt: string;
+            /** Format: date-time */
+            endedAt: string | null;
+            filledAmountCoin: components["schemas"]["CoinAmount"];
             filledQty: number;
             /** Format: uuid */
             id: string;
+            limitPriceCoin: number;
             /** Format: uuid */
             marketId: string;
-            marketSlug: string;
-            marketTitle: string;
+            marketSlug: string | null;
+            marketTitle: string | null;
             /** @enum {string} */
             outcome: "YES" | "NO";
-            priceAvgBp: number | null;
-            qty: number;
+            protectedLimitPriceCoin: number;
+            qty: number | null;
+            /** @enum {string|null} */
+            rejectReason: "insufficient_coin" | "insufficient_contracts" | "not_open_yet" | "closed" | "paused" | "no_quote" | "price_limit" | "budget_too_small" | "self_trade" | null;
+            requestId: string;
             /** @enum {string} */
             side: "buy" | "sell";
             /** @enum {string} */
-            status: "open" | "partially_filled" | "filled" | "cancelled" | "rejected";
+            status: "open" | "partially_filled" | "filled" | "cancelled" | "expired" | "rejected";
             /** @enum {string} */
-            type: "market" | "limit";
+            timeInForce: "ioc" | "gtc";
+            unspentCoin: components["schemas"]["CoinAmount"] | null;
         };
         PageMeta: {
             nextCursor: string | null;
@@ -5021,6 +5143,22 @@ export type components = {
         PhoneVerificationCodeSent: {
             expiresInSeconds: number;
             resendAfterSeconds: number;
+        };
+        PlaceOrderBody: {
+            budgetCoin?: components["schemas"]["CoinAmount"];
+            expectedAccountId: string;
+            limitPriceCoin: number;
+            /** @enum {string} */
+            outcome: "YES" | "NO";
+            qty?: number;
+            /** @enum {string} */
+            side: "buy" | "sell";
+            /** @enum {string} */
+            timeInForce: "ioc" | "gtc";
+        };
+        PlaceOrderResult: {
+            order: components["schemas"]["Order"];
+            replayed: boolean;
         };
         Position: {
             costBasisCoin: components["schemas"]["CoinAmount"];
@@ -9132,6 +9270,87 @@ export interface operations {
                 };
             };
             /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminChangeMarketPriceProtection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePriceProtectionBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -15830,6 +16049,90 @@ export interface operations {
             };
         };
     };
+    placeOrder: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The request id: client-generated, unique per account. Re-sending it with the same market and terms answers the order it named (replayed: true) and writes nothing; with other terms DUPLICATE_REQUEST (409, the id is spent). A refusal with an error writes no order, so its id may be sent again. GET /me/orders/request/{requestId} reads the order. */
+                "Idempotency-Key": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlaceOrderBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["PlaceOrderResult"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN | RESTRICTED */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | ORDER_INTAKE_CLOSED | DUPLICATE_REQUEST */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     listMarketPosts: {
         parameters: {
             query?: {
@@ -16744,6 +17047,59 @@ export interface operations {
             };
         };
     };
+    getMyFills: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                marketId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["MyFill"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     setMyInterestCategories: {
         parameters: {
             query?: never;
@@ -17179,9 +17535,10 @@ export interface operations {
     getMyOrders: {
         parameters: {
             query?: {
-                /** @description Opaque; `meta.nextCursor` of the previous page. */
                 cursor?: string;
                 limit?: number;
+                marketId?: string;
+                state?: "live" | "ended";
             };
             header?: never;
             path?: never;
@@ -17211,6 +17568,124 @@ export interface operations {
             };
             /** @description UNAUTHENTICATED */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getMyOrder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Order"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getMyOrderByRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Order"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

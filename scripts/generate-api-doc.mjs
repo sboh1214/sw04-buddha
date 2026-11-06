@@ -242,7 +242,11 @@ Nest 라우팅·전역 prefix·버저닝·본문 파싱보다 **먼저** 실행�
   \`EMAIL_MISMATCH\`)은 받지 않는다.`;
 
 /** 레이트 리밋 산문. Read from apps/api/src/rate-limit/* and packages/shared/src/rate-limit.ts. */
-const RATE_LIMIT_NOTES = `- **버킷을 지목한 라우트는 두 번 세어진다.** \`@RateLimit('<bucket>')\` 이 붙어도 기본 100/분 의
+const RATE_LIMIT_NOTES = `- **주문(\`POST /api/v1/markets/{id}/orders\`, #119)의 한도는 버킷이 아니라 출시 설정이다.**
+  \`order.rate_limit\` 이 계정마다 1분에 받는 주문 제출의 수(모든 시장을 더해)를 정하고, 요청마다 그
+  값을 읽는다. 검증에 실패한 제출과 같은 요청 ID 의 다시 보내기도 센다. 미정이면 계정의 한도 없이
+  주소 버킷만 걸린다. 거절은 다른 버킷과 같은 \`RATE_LIMITED\`·\`Retry-After\` 다. 취소는 세지 않는다.
+- **버킷을 지목한 라우트는 두 번 세어진다.** \`@RateLimit('<bucket>')\` 이 붙어도 기본 100/분 의
   주소 상한은 그대로 걸리고, 그 위에 그 버킷의 한도가 더해진다. 먼저 닿는 쪽이 거절한다. 지목한
   버킷이 기본값보다 언제나 엄격하므로, 한 호출자가 한 계정으로 부르는 동안은 대개 그쪽이 먼저 닿는다.
 - **헤더** — 계수된 응답에는 주소 버킷의 \`X-RateLimit-Limit\`, \`X-RateLimit-Remaining\`,
@@ -354,12 +358,12 @@ const ERROR_NOTES = {
   NOT_FOUND: '대상이 없다. 공개에 보이지 않는 초안(draft)·검수 중(review) 시장도 여기로 답한다.',
   VALIDATION_ERROR: '요청이 스키마에 맞지 않는다. `details` 에 `{ path, message }` 배열이 붙는다.',
   MARKET_NOT_OPEN:
-    '시장이 거래 중(`open`)이 아니라 그 동작을 할 수 없다(거래 일시 중단 `paused` 도 여기로 답한다). 지금은 이 코드로 답하는 라우트가 없다 — 관리자 한 명의 마감(`POST /api/v1/admin/markets/{id}/close`)은 없어졌고(#114), 거래(M9)가 이 코드를 쓴다. 관리자 상태 전이의 거절은 `VALIDATION_ERROR` 가 `status` 를 지목한다.',
+    '시장이 거래 중(`open`)이 아니라 그 동작을 할 수 없다(거래 일시 중단 `paused` 도 여기로 답한다). 지금은 이 코드로 답하는 라우트가 없다 — 관리자 한 명의 마감(`POST /api/v1/admin/markets/{id}/close`)은 없어졌고(#114), 주문(#119)도 이 코드로 답하지 않는다 — 거래 중이 아닌 시장의 주문은 거절된 주문(개장 전·일시 중단·마감)으로 답한다. 관리자 상태 전이의 거절은 `VALIDATION_ERROR` 가 `status` 를 지목한다.',
   INSUFFICIENT_BALANCE: '잔고가 모자란다.',
   PRICE_MOVED:
     '화면이 보여 준 충전 상품의 조건(`expectedAmountCoin`·`expectedPriceKrw`)이 지금 판매하는 조건과 다르다.',
   DUPLICATE_REQUEST:
-    '이미 쓴 멱등 키를 다른 조건으로 다시 썼거나(키는 소모된다), 한 번만 할 수 있는 일을 두 번 했다(쿠폰 재사용). 환불 재시도는 앞선 시도가 아직 PG 의 답을 기다리는 동안 이것으로 답한다(`details[0].message` 가 `in progress`).',
+    '이미 쓴 멱등 키를 다른 조건으로 다시 썼거나(키는 소모된다 — 주문(#119)의 요청 ID 도 계정마다 한 주문을 가리키고, 같은 조건이면 그 주문의 지금 상태로 답한다), 한 번만 할 수 있는 일을 두 번 했다(쿠폰 재사용). 환불 재시도는 앞선 시도가 아직 PG 의 답을 기다리는 동안 이것으로 답한다(`details[0].message` 가 `in progress`).',
   RATE_LIMITED: '레이트 리밋 초과. `details.retryAfterSeconds` 와 `Retry-After` 헤더에 대기 초.',
   RULES_REQUIRED:
     '거래 중(`open`)·일시 중단(`paused`)인 시장의 규칙 보충(#80)이, 채워 두었던 규칙 항목(#23)이나 판정 기준 시간대(#22, 판정 항목)를 빠진 것으로 만들 수 없다 — 보충 요청과 그 승인이 저마다 따진다. `details` 가 그렇게 빠질 항목마다 하나씩 규칙 항목의 순서로, 시간대는 맨 뒤에 온다 — `path` 가 그 항목 하나(`yesCondition`·`judgementTimeZone` 처럼), `message` 가 `required while open`. 빠졌다고 보는 기준은 `OPEN_ITEMS_MISSING` 과 같고, 이미 빠져 있던 항목(#23 전에 연 시장의 규칙 항목, #22 전에 연 시장의 시간대)은 다른 보충을 막지 않으며 다시 비워 보내도 바뀐 것이 아니다. 개장 뒤의 수정(PATCH)은 규칙 버전의 항목을 받지 않고(`supplement only while open`), 초안을 여는 때의 검사는 `OPEN_ITEMS_MISSING` 이다.',
@@ -420,9 +424,11 @@ const ERROR_NOTES = {
   PROPOSAL_LIMITED:
     '시장 제안을 받지 않았다(#77). 한도는 계정이 아니라 본인확인한 번호(키 있는 해시)로 센다. 운영자 계정에는 한도가 없다. `details.reason` 이 걸린 한도를, `details.limit` 이 그 수를 말한다 — `pending`(처리 대기(접수·검토) 제안이 5건이다. 하나가 채택·반려·철회되면 다시 낼 수 있어 `details.retryAfterSeconds` 는 `null`), `daily`(직전 24시간에 3건을 냈다. 그 뒤 철회·반려된 것도 센다. `details.retryAfterSeconds` 가 가장 오래된 것이 24시간을 벗어나기까지의 초를 분 단위로 올린 값).',
   OPEN_ITEMS_MISSING:
-    "시장이 개설 항목 검사를 통과하지 못해 초안을 벗어날 수 없다(#17, #23, #22 — 검수 제출과 승인(#78)). `details` 가 빠진 항목마다 하나씩 검사의 순서로 온다 — `path` 가 `['title']`(질문이 비었다), 규칙 항목인 `['description']`(배경이 비었다)·`['yesCondition']`·`['noCondition']`·`['eventDeadline']`(사건 기한이 없다)·`['primarySource']`(1차 출처가 없거나 이름·주소 가운데 하나가 비었다)·`['fallbackSources']`(적은 대체 출처의 이름·주소 가운데 하나가 비었다 — 대체 출처가 없는 것은 빠진 것이 아니다)·`['fallbackCondition']`(대체 출처가 있는데 전환 조건이 비었다)·`['longDelayDays']`(장기 지연 기한이 없다)·`['delayHandling']`(지연·취소·무효 처리가 비었다), 시각인 `['scheduledOpenAt']`(예정 개장 시각이 없다)·`['closeAt']`(거래 마감 시각 — 저장된 시장에는 늘 있어 빠지지 않는다)·`['scheduledJudgementAt']`(예정 판정 시각이 없다)·`['judgementTimeZone']`(판정 기준 시간대가 없다), `['timeOrder']`(시각 순서 — 예정 개장 < 거래 마감 ≤ 예정 판정, 사건 기한 ≤ 예정 판정을 분 단위로 본다. `message` 가 어긴 규칙을 `, ` 로 잇는다. DB 의 CHECK 가 같은 순서를 지키므로 저장된 시장에서는 나오지 않는다), `['leadClose']`(선행 마감 — 발표 예정 시각이 있으면 거래 마감이 그보다 출시 설정 `market.lead_close_gap` 의 분 이상 앞서야 한다. 그 설정이 미정이면 `message` 가 `gap undecided` 이고, 발표 예정 시각이 없음인 시장은 상관없다), `['category']`(새 시장을 둘 수 없는 카테고리다 — 숨겼거나, 부모를 숨겼거나, 하위 분류가 있는 상위다. `message` 가 그 까닭이다), `['tags']`(태그가 1개 이상 5개 이하가 아니다). 승인은 제출 때 저장한 선행 마감 간격으로 다시 본다. 개장(#21 — 워커가 예정 개장 시각에, 또는 그 시각이 지난 뒤의 승인·예정 개장 시각 변경이 그 자리에서)은 이 검사를 다시 하지 않는다.",
+    "시장이 개설 항목 검사를 통과하지 못해 초안을 벗어날 수 없다(#17, #23, #22 — 검수 제출과 승인(#78)). `details` 가 빠진 항목마다 하나씩 검사의 순서로 온다 — `path` 가 `['title']`(질문이 비었다), 규칙 항목인 `['description']`(배경이 비었다)·`['yesCondition']`·`['noCondition']`·`['eventDeadline']`(사건 기한이 없다)·`['primarySource']`(1차 출처가 없거나 이름·주소 가운데 하나가 비었다)·`['fallbackSources']`(적은 대체 출처의 이름·주소 가운데 하나가 비었다 — 대체 출처가 없는 것은 빠진 것이 아니다)·`['fallbackCondition']`(대체 출처가 있는데 전환 조건이 비었다)·`['longDelayDays']`(장기 지연 기한이 없다)·`['delayHandling']`(지연·취소·무효 처리가 비었다), 시각인 `['scheduledOpenAt']`(예정 개장 시각이 없다)·`['closeAt']`(거래 마감 시각 — 저장된 시장에는 늘 있어 빠지지 않는다)·`['scheduledJudgementAt']`(예정 판정 시각이 없다)·`['judgementTimeZone']`(판정 기준 시간대가 없다), `['timeOrder']`(시각 순서 — 예정 개장 < 거래 마감 ≤ 예정 판정, 사건 기한 ≤ 예정 판정을 분 단위로 본다. `message` 가 어긴 규칙을 `, ` 로 잇는다. DB 의 CHECK 가 같은 순서를 지키므로 저장된 시장에서는 나오지 않는다), `['leadClose']`(선행 마감 — 발표 예정 시각이 있으면 거래 마감이 그보다 출시 설정 `market.lead_close_gap` 의 분 이상 앞서야 한다. 그 설정이 미정이면 `message` 가 `gap undecided` 이고, 발표 예정 시각이 없음인 시장은 상관없다), `['category']`(새 시장을 둘 수 없는 카테고리다 — 숨겼거나, 부모를 숨겼거나, 하위 분류가 있는 상위다. `message` 가 그 까닭이다), `['tags']`(태그가 1개 이상 5개 이하가 아니다), `['priceProtection']`(가격 보호 폭이 없다 — 시장의 폭도, 검수 제출이 넣을 출시 설정 `order.price_protection_ticks` 도 미정이다, #119). 승인은 제출 때 저장한 선행 마감 간격으로 다시 본다. 개장(#21 — 워커가 예정 개장 시각에, 또는 그 시각이 지난 뒤의 승인·예정 개장 시각 변경이 그 자리에서)은 이 검사를 다시 하지 않는다.",
   DISPUTE_NOT_ALLOWED:
-    '판정 이의(#175)를 받지 않는다 — 제재 이의(이메일)와 다르다. `details.reason` 이 까닭을 말한다. 제출(`POST /markets/{id}/disputes`)은 이 순서로 묻는다 — `not_provisional`(시장이 잠정 결과가 아니다: 아직 판정 전이거나 이미 확정했다), `stale_version`(본문의 `judgementVersion` 이 시장의 지금 판정 버전이 아니다 — 화면이 본 결과를 판정 정정(#176)이 바꿨다. 새 버전에는 다시 낼 수 있다), `deadline_passed`(이의 기한이 지났다 — 서버 DB 시계로 기한과 같은 밀리초부터), `admin`(관리자 계정이다 — 관리자는 거래하지 않고 이의를 처리한다), `no_fill`(그 시장에 체결 이력이 없다 — 체결의 어느 쪽이든 된다. 주문 경로(#119) 전에는 아무도 체결 이력이 없다), `duplicate`(그 판정 버전에 이미 낸 이의가 있다 — 철회한 것도 센다). 계정 제한·작성 제한은 거절하지 않는다. 철회(`POST /me/disputes/{disputeId}/retract`)는 `retracted`(이미 철회했다)·`decided`(기각·수용됐거나 정정으로 종결됐다 — 정정이 반려·철회되어 수용에서 검토 중으로 돌아온 이의는 기한 안에 다시 철회할 수 있다, #176), 그다음 `deadline_passed`. 기각·수용(`POST /admin/markets/{id}/disputes/{disputeId}/dismiss`·`accept`)은 `retracted`·`decided`, 그다음 `registrant`(그 판정 버전을 등록한 관리자다 — 승인한 관리자는 처리할 수 있다)·`own`(그 이의를 낸 계정이다 — 이의를 낸 뒤 관리자 역할을 받았다). 다른 계정의 이의, 그 시장에 없는 이의, 공개되지 않은 시장은 `NOT_FOUND` 다.',
+    '판정 이의(#175)를 받지 않는다 — 제재 이의(이메일)와 다르다. `details.reason` 이 까닭을 말한다. 제출(`POST /markets/{id}/disputes`)은 이 순서로 묻는다 — `not_provisional`(시장이 잠정 결과가 아니다: 아직 판정 전이거나 이미 확정했다), `stale_version`(본문의 `judgementVersion` 이 시장의 지금 판정 버전이 아니다 — 화면이 본 결과를 판정 정정(#176)이 바꿨다. 새 버전에는 다시 낼 수 있다), `deadline_passed`(이의 기한이 지났다 — 서버 DB 시계로 기한과 같은 밀리초부터), `admin`(관리자 계정이다 — 관리자는 거래하지 않고 이의를 처리한다), `no_fill`(그 시장에 체결 이력이 없다 — 체결의 어느 쪽이든 된다), `duplicate`(그 판정 버전에 이미 낸 이의가 있다 — 철회한 것도 센다). 계정 제한·작성 제한은 거절하지 않는다. 철회(`POST /me/disputes/{disputeId}/retract`)는 `retracted`(이미 철회했다)·`decided`(기각·수용됐거나 정정으로 종결됐다 — 정정이 반려·철회되어 수용에서 검토 중으로 돌아온 이의는 기한 안에 다시 철회할 수 있다, #176), 그다음 `deadline_passed`. 기각·수용(`POST /admin/markets/{id}/disputes/{disputeId}/dismiss`·`accept`)은 `retracted`·`decided`, 그다음 `registrant`(그 판정 버전을 등록한 관리자다 — 승인한 관리자는 처리할 수 있다)·`own`(그 이의를 낸 계정이다 — 이의를 낸 뒤 관리자 역할을 받았다). 다른 계정의 이의, 그 시장에 없는 이의, 공개되지 않은 시장은 `NOT_FOUND` 다.',
+  ORDER_INTAKE_CLOSED:
+    "새 주문을 받지 않는다(#119, 409) — 주문 행을 쓰지 않으므로 요청 ID 는 그대로 쓸 수 있다. 출시 설정 `order.accepting` 이 참이 아니면(미정·거짓) 누구의 주문도(운영 마켓메이커 포함) 받지 않는다. 가격 보호 폭이 없는 시장(#119 배포 전에 검수에 낸 것)의 즉시 거래 주문도 이것이고 `details[0].path` 가 `['priceProtection']` 다(지정가 주문은 받는다). 대기 주문·취소·호가와 주문 기록 조회는 막지 않는다. 시장·자산·호가 때문에 거절된 주문은 오류가 아니라 거절 사유를 단 주문으로 답한다.",
   INTERNAL: '그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다.',
 };
 

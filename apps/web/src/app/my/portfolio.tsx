@@ -36,6 +36,7 @@ import {
   listState,
   markPriceCoin,
   markToLiveMarket,
+  orderAveragePriceBp,
   priceIsStale,
   portfolioTotals,
   positionValueCoin,
@@ -77,12 +78,16 @@ import { MY_ORDERS_PATH, isPendingOrder, orderHistoryEmpty, showMoreOrders } fro
 /** The repo's placeholder for a figure that does not exist (admin-market-detail.tsx). */
 const EMPTY = '—';
 
-/** PLAN Appendix A: every order state gets plain Korean, and the badge always carries the word. */
+/**
+ * PLAN Appendix A: every order state gets plain Korean, and the badge always carries the word. 만료
+ * is #119's sixth state (ADR-0107 결정 1 #177 7항); the reasons and the other names are #123's.
+ */
 const ORDER_STATUS_LABEL: Record<OrderStatus, string> = {
   open: copy.orderStatusOpen,
   partially_filled: copy.orderStatusPartiallyFilled,
   filled: copy.orderStatusFilled,
   cancelled: copy.orderStatusCancelled,
+  expired: copy.orderStatusExpired,
   rejected: copy.orderStatusRejected,
 };
 
@@ -92,6 +97,7 @@ const ORDER_STATUS_PALETTE: Record<OrderStatus, 'brand' | 'gray' | 'orange' | 'n
   partially_filled: 'orange',
   filled: 'brand',
   cancelled: 'gray',
+  expired: 'gray',
   rejected: 'no',
 };
 
@@ -427,13 +433,13 @@ export function SettledBody({ settled, limit }: { settled: SettledList; limit?: 
  * One side of the old 주문 이력: `pending` is 대기 주문 (`isPendingOrder`), `history` every
  * other state.
  *
- * Both read the ONE `GET /me/orders` list and split it here, because the route has no state
- * filter: a page can hold none of one side's rows while older pages still do. So an empty side
- * says it is empty only once the list has no further page, and offers 더 보기 until then (a /my
- * preview until it has its rows, `showMoreOrders`) — which
- * is also the only moment 거래·정산 이력 can tell an account that never ordered from one whose
- * every order is still 대기 (`orderHistoryEmpty`). The split itself moves to the server with the
- * tabs' own issues (#123, #124).
+ * Both read the ONE `GET /me/orders` list and split it here — the route's `state` filter (#119)
+ * waits for the tabs' own issues: a page can hold none of one side's rows while older pages still
+ * do. So an empty side says it is empty only once the list has no further page, and offers 더 보기
+ * until then (a /my preview until it has its rows, `showMoreOrders`) — which is also the only
+ * moment 거래·정산 이력 can tell an account that never ordered from one whose every order is still 대기
+ * (`orderHistoryEmpty`). The split itself moves to the server with the tabs' own issues (#123,
+ * #124).
  *
  * The list has no reducer and no event of its own — `restartQueries(queryClient, ORDERS_KEY)`
  * (realtime-provider.tsx) is the ONLY path a new order arrives by, so a failed refresh is a list
@@ -643,11 +649,15 @@ function SettledPositionRow({ position }: { position: Position }) {
 }
 
 /**
- * 주문 이력 한 줄. `filledQty`/`priceAvgBp`/`amountCoin` are what the order actually did, and all
- * three are null-or-zero on a refusal, so the state badge is what explains the row.
+ * 주문 이력 한 줄. `filledQty` and `filledAmountCoin` are what the order actually did (#119: Coin at
+ * its own side's prices) and the 평균가 is the one over the other (`orderAveragePriceBp`); a refused
+ * or unfilled order has none of them, so the state badge is what explains the row. A market sent
+ * back to a draft (#78 되돌리기, ADR-0099) reaches the row with no slug or title, and its line says
+ * only '공개되지 않은 시장' — no title or link — until the market is public again.
  */
-function OrderRow({ order }: { order: Order }) {
+export function OrderRow({ order }: { order: Order }) {
   const yes = order.outcome === 'YES';
+  const average = orderAveragePriceBp(order);
   const formatDateTime = useFormatDateTime();
   return (
     <Stack
@@ -658,7 +668,13 @@ function OrderRow({ order }: { order: Order }) {
       data-testid={`portfolio-order-${order.id}`}
     >
       <HStack gap="2" flexWrap="wrap">
-        <MarketLink slug={order.marketSlug} title={order.marketTitle} />
+        {order.marketSlug === null || order.marketTitle === null ? (
+          <Text fontWeight="semibold" color="fg.muted" data-testid="portfolio-order-market-hidden">
+            {copy.postMarketNotPublic}
+          </Text>
+        ) : (
+          <MarketLink slug={order.marketSlug} title={order.marketTitle} />
+        )}
         <Badge colorPalette={yes ? 'yes' : 'no'} variant="subtle">
           {yes ? copy.yes : copy.no}
         </Badge>
@@ -672,13 +688,13 @@ function OrderRow({ order }: { order: Order }) {
         </Item>
         <Item label={copy.fillQty}>{formatContracts(order.filledQty)}</Item>
         <Item label={copy.fillAvgPrice}>
-          {order.priceAvgBp === null ? EMPTY : formatPricePerContract(order.priceAvgBp)}
+          {average === undefined ? EMPTY : formatPricePerContract(average)}
         </Item>
         <Item label={copy.orderAmount}>
-          {order.amountCoin === null ? (
+          {average === undefined ? (
             EMPTY
           ) : (
-            <CoinText amount={parseCoinAmount(order.amountCoin)} />
+            <CoinText amount={parseCoinAmount(order.filledAmountCoin)} />
           )}
         </Item>
         <Item label={copy.orderCreatedAt}>{formatDateTime(order.createdAt)}</Item>

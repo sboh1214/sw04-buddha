@@ -1,7 +1,23 @@
 import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
-import { IDEMPOTENCY_KEY_HEADER, idempotencyKeySchema } from '@buddha/shared';
+import {
+  IDEMPOTENCY_KEY_HEADER,
+  IDEMPOTENCY_KEY_MAX_LENGTH,
+  IDEMPOTENCY_KEY_MIN_LENGTH,
+  idempotencyKeySchema,
+} from '@buddha/shared';
 import { type FastifyRequest } from 'fastify';
 import { AppError } from '../errors/app-error.js';
+
+/**
+ * The `Idempotency-Key` header's JSON Schema for `@ApiHeader` (PLAN 5.4: the charge, and an
+ * order's request id, #119), as `idempotencyKeySchema` takes it.
+ */
+export const IDEMPOTENCY_KEY_SCHEMA = {
+  type: 'string',
+  minLength: IDEMPOTENCY_KEY_MIN_LENGTH,
+  maxLength: IDEMPOTENCY_KEY_MAX_LENGTH,
+  pattern: '^[A-Za-z0-9_-]+$',
+} as const;
 
 /**
  * The request's `Idempotency-Key` header (PLAN 5.4), validated, for a route that moves money.

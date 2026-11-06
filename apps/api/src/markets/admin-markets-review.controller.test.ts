@@ -20,8 +20,11 @@ import {
   createMarket,
   createMarketInReview,
   createScheduledMarket,
+  setReleaseSetting,
+  TEST_PRICE_PROTECTION_TICKS,
 } from '@buddha/db/test';
 import {
+  PRICE_PROTECTION_TICKS_SETTING,
   JOB_NAMES,
   MARKET_REVIEW_APPROVAL_KIND,
   MARKET_REVIEW_CHECKLIST,
@@ -116,6 +119,14 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
     second = await makeAdmin();
     third = await makeAdmin();
     category = await createCategory(t.db, { slug: 'economy', nameKo: '경제' });
+    // The 가격 보호 폭 default the test environment enters (#119, ADR-0107 결과 3): a market copies
+    // it at creation and its review submission needs one (OPEN_ITEMS_MISSING priceProtection).
+    await setReleaseSetting(t.db, {
+      adminId: creator.id,
+      key: PRICE_PROTECTION_TICKS_SETTING.key,
+      status: 'test',
+      value: TEST_PRICE_PROTECTION_TICKS,
+    });
   });
 
   // Every write names the admin on screen (ADR-0092): `who`'s own account unless the payload
@@ -690,6 +701,41 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
     expect((await marketRow(late.id)).status).toBe('review');
     expect(await reviewActionsFor(late.id)).toEqual([]);
     expect((await revert(late.id, second)).statusCode).toBe(200);
+  });
+
+  it('refuses the approval of a market submitted with no 가격 보호 폭, the default entered (ADR-0112 결정 5)', async () => {
+    // Submitted before #119: the approval reads the stored width, never the default in its place.
+    const { market: legacy } = await createMarketInReview(t.db, {
+      createdBy: creator.id,
+      categoryId: category.id,
+      withoutPriceProtection: true,
+    });
+    expect(legacy.priceProtectionTicks).toBeNull();
+    // Its admin detail shows none and names it missing — the default stands in for a draft only.
+    expect(detail(await get(`/api/v1/admin/markets/${legacy.id}`, third))).toMatchObject({
+      status: 'review',
+      priceProtectionTicks: null,
+      missingOpenItems: ['priceProtection'],
+    });
+    const refused = await approve(legacy.id, third);
+    expect(refused.statusCode).toBe(422);
+    expect(errorOf(refused)).toMatchObject({
+      code: 'OPEN_ITEMS_MISSING',
+      details: [{ path: ['priceProtection'] }],
+    });
+    expect((await requestsFor(legacy.id)).map((row) => [row.status, row.decidedBy])).toEqual([
+      ['pending', null],
+    ]);
+    const row = await marketRow(legacy.id);
+    expect(row).toMatchObject({ status: 'review', priceProtectionTicks: null });
+    expect(await reviewActionsFor(legacy.id)).toEqual([]);
+    // The owner's procedure (docs/OPERATIONS.md '주문 접수'): sent back, and submitted again.
+    expect((await revert(legacy.id, second)).statusCode).toBe(200);
+    expect((await submit(legacy.id, creator)).statusCode).toBe(200);
+    expect(await marketRow(legacy.id)).toMatchObject({
+      status: 'review',
+      priceProtectionTicks: TEST_PRICE_PROTECTION_TICKS,
+    });
   });
 
   // --- 반려 -----------------------------------------------------------------------------------

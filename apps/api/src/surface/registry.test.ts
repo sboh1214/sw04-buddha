@@ -615,6 +615,9 @@ describe('the public API document (static)', () => {
       // 시장 제안 (#77, ADR-0069 decision 4 #77 자격 «계정 제한과 작성 제한 중에는 낼 수 없다»): a new
       // proposal, until either restriction ends or is lifted.
       'POST /me/proposals',
+      // 주문 (#119, ADR-0112; N02 §9 «계정 제한 시 신규 주문은 막되»): an account restriction only
+      // (`assertCanTrade`) — a writing restriction trades on (#57-12).
+      'POST /markets/:id/orders',
     ];
     // What a writing restriction leaves open (#45-12: deleting one's own, likes, reports and
     // reading; decision 7 and #37-9: clearing a public item and the private settings) and what is

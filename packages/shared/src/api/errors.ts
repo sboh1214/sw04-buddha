@@ -221,6 +221,15 @@ export const ERROR_CODES = [
    * the reason, disputeNotAllowedDetailsSchema. No restriction refuses it.
    */
   'DISPUTE_NOT_ALLOWED',
+  /**
+   * No order was taken and no order row written, 409 (#119): the release setting order.accepting
+   * is not true, so the server takes no new order from anyone, the market maker included; or the
+   * order is an immediate one on a market that has no price-protection width yet, and then the
+   * first detail names the path priceProtection. Resting orders, their cancel and the quote and
+   * book reads are not refused. A rejected order, a market or asset or quote reason, is no error:
+   * it is answered with its order row.
+   */
+  'ORDER_INTAKE_CLOSED',
   'INTERNAL',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

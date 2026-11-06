@@ -476,6 +476,25 @@ export const copy = {
   adminMarketLeadCloseGap: '선행 마감 간격',
   adminMarketLeadCloseGapMinutes: '분',
   adminMarketLeadCloseGapUndecided: '미정',
+  // 가격 보호 폭(#119, ADR-0112; ADR-0107 결정 1 #177 2항): 숫자 뒤에 '틱'이 붙는다. 관리자가 시장을
+  // 만들 때 출시 설정 값을 복사하므로 그 초안은 제 값을 보이고, 값 없이 만든 초안 — 설정이 미정일 때 만든
+  // 것과 시드 초안(시드는 폭을 쓰지 않는다, ADR-0112 10-14) — 만 지금의 출시 설정 값(미정이면 '미정')을
+  // 보인다. 검수 제출부터는 시장에 저장한 값이다. 거래 중·일시 중단 시장은 관리자 한 명이 사유와 함께
+  // 바꾸고(#172 14항의 예), 바꾼 값은 그 뒤 들어오는 즉시 거래 주문에만 적용된다.
+  adminMarketPriceProtection: '가격 보호 폭',
+  adminMarketPriceProtectionTicks: '틱',
+  adminMarketPriceProtectionUndecided: '미정',
+  adminMarketPriceProtectionChange: '가격 보호 폭 변경',
+  adminMarketPriceProtectionChangeTitle: '가격 보호 폭을 바꿉니다',
+  adminMarketPriceProtectionChangeBody:
+    '바꾼 폭은 바꾼 뒤 들어오는 즉시 거래 주문에만 적용되고, 대기 중인 주문은 그대로입니다. 사유와 이전·이후 값이 이벤트 로그와 감사 기록에 남습니다.',
+  adminMarketPriceProtectionCurrent: '지금의 가격 보호 폭',
+  adminMarketPriceProtectionNew: '새 가격 보호 폭 (틱)',
+  adminMarketPriceProtectionNewHint:
+    '1~98틱. 즉시 거래 주문의 한도를 그때의 최우선 반대 호가에서 이 틱 수 안으로 좁힙니다.',
+  adminMarketPriceProtectionChanged: '가격 보호 폭을 바꿨습니다.',
+  errPriceProtectionTicks: '1~98 사이의 정수를 입력해 주세요.',
+  errPriceProtectionUnchanged: '지금의 가격 보호 폭과 같습니다.',
   // 관리자 상세의 판정 지연 줄(#173 11항): 사용자 화면이 '판정 지연'으로 보이는 시장이다. 상태 배지는
   // 관리자의 상태 라벨 그대로다.
   adminMarketJudgementDelayed: '판정 지연',
@@ -523,6 +542,9 @@ export const copy = {
   openItemLeadClose: '선행 마감',
   openItemCategory: '카테고리',
   openItemTags: '태그 1~5개',
+  // 가격 보호 폭(#119, ADR-0112): 즉시 거래 주문의 한도를 좁히는 틱 수. 시장을 만들 때 출시 설정의 표준값을
+  // 옮겨 담고 검수 제출이 저장하므로, 폼에서 채우는 항목이 아니라 출시 설정이 정해져야 채워진다.
+  openItemPriceProtection: '가격 보호 폭',
   // 초안 상세의 안내는 시각 순서·선행 마감마다 어긋난 것을 한 줄씩 덧붙인다('시각 순서: …', 분 단위).
   // 선행 마감은 앞뒤 조각 사이에 간격의 분 수가 들어간다.
   openItemRuleOpenBeforeClose: '예정 개장 시각이 거래 마감 시각과 같거나 늦습니다',
@@ -532,6 +554,8 @@ export const copy = {
   openItemRuleLeadCloseTail: '분 이상 앞서지 않습니다',
   openItemRuleLeadCloseUndecided:
     '간격(출시 설정)이 미정이라 발표 예정 시각이 있는 시장은 검수 제출할 수 없습니다',
+  // 가격 보호 폭이 빠진 초안의 안내 한 줄('가격 보호 폭: …').
+  openItemRulePriceProtectionUndecided: '표준값(출시 설정)이 미정이라 검수 제출할 수 없습니다',
   // 시각 순서·선행 마감은 채우는 것이 아니라 고치는 것이라 '채우거나 고칠'이다(#22). 검수 제출(#78)이 이
   // 검사를 받고, 승인이 다시 본다. 개장(#21)은 다시 보지 않는다(ADR-0093 결정 2 #172 1항).
   adminMarketOpenItems: '검수 제출 전에 채우거나 고칠 항목',
@@ -1382,6 +1406,8 @@ export const copy = {
   eventRejected: '반려',
   eventReverted: '초안으로 되돌림',
   eventOpenRescheduled: '예정 개장 시각 변경',
+  // 가격 보호 폭 변경(#119): 상태는 그대로이고, 이전·이후 폭과 사유를 보인다(행위자는 바꾼 관리자).
+  eventPriceProtectionChanged: '가격 보호 폭 변경',
   // 거래 일시 중단(#114): 일시 중단(거래 중 → 거래 일시 중단, 행위자는 멈춘 관리자; 사유와 조기 결과의 공개
   // 시각), 재개(→ 거래 중, 행위자는 승인한 관리자; 검토 결과), 그리고 승인한 조기 마감은 마감 기록(closed)에
   // source 'early_close'로 남아 '조기 마감'으로 보인다. 요청한 관리자는 일시 중단 기록이 보인다.
@@ -2226,6 +2252,8 @@ export const copy = {
   orderStatusFilled: '체결 완료',
   orderStatusCancelled: '취소됨',
   orderStatusRejected: '거절됨',
+  // 만료(#119가 상태를 두고 #120이 마감 때 남은 지정가 주문을 만료한다). 위 넷의 이름 정리는 #123의 것이다.
+  orderStatusExpired: '만료',
 
   // 옛 포트폴리오(PLAN 11.3)의 잔고 요약·목록. #16이 MY 요약과 보유 계약·대기 주문·거래·정산 이력
   // 탭으로 옮겼다. 합계는 행 라벨과 헷갈리지 않도록 '총'을 붙인다.
@@ -2310,7 +2338,8 @@ export const copy = {
   postMarketHeading: '이 글의 시장',
   postMarketPosts: '이 시장의 글 더 보기',
   // 개장 예정이던 시장이 초안으로 되돌려진 글·댓글의 시장 칸(#78, ADR-0099, 오너 답 2026-11-01): 다시
-  // 공개될 때까지 제목·상태·링크 없이 이 말만 보인다. 고치는 중인 초안의 내용은 운영자의 것이다.
+  // 공개될 때까지 제목·상태·링크 없이 이 말만 보인다. 고치는 중인 초안의 내용은 운영자의 것이다. 그
+  // 시장에서 거절된 주문(개장 전, #119)의 주문 이력 줄도 같다.
   postMarketNotPublic: '공개되지 않은 시장',
   postBackToCommunity: '커뮤니티로',
   postEdit: '수정',

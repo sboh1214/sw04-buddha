@@ -94,6 +94,8 @@ describe('LIVE_ORDER_STATUSES', () => {
     expect(LIVE_ORDER_STATUSES).toEqual(['open', 'partially_filled']);
     for (const status of LIVE_ORDER_STATUSES) expect(ORDER_STATUSES).toContain(status);
     expect(ORDER_STATUSES.filter(isLiveOrderStatus)).toEqual([...LIVE_ORDER_STATUSES]);
+    // 만료 (#119's sixth state, a GTC order at the close) has ended, as 거절 has.
+    expect(isLiveOrderStatus('expired')).toBe(false);
   });
 });
 

@@ -4,7 +4,10 @@ import {
   ACCOUNT_TYPES,
   APPROVAL_STATUSES,
   CONSENT_ITEMS,
-  COUNTERPARTY_TYPES,
+  FILL_KINDS,
+  ORDER_CANCEL_REASONS,
+  ORDER_REJECT_REASONS,
+  ORDER_STATUSES,
   NICKNAME_HOLD_DAYS,
   NOTICE_PIN_LIMIT,
   LEDGER_ENTRY_TYPES,
@@ -122,6 +125,7 @@ import { dueProvisionalMarkets, setCorrectionPending } from './market-judgement.
 import { openScheduledMarket } from './market-open.js';
 import { allowRuleSupplement } from './market-rules-content.js';
 import { storedReleaseSettingValue } from './release-settings.js';
+import { createOrder } from './test/orders.js';
 import {
   closeAccount,
   completeOnboarding,
@@ -1270,6 +1274,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         categorySelectable: true,
         tagCount: 1,
         leadCloseGapMinutes,
+        priceProtectionTicks: row!.priceProtectionTicks ?? 5,
       });
     }
 
@@ -1755,6 +1760,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           categorySelectable: true,
           tagCount: tagged.length,
           leadCloseGapMinutes: null,
+          priceProtectionTicks: market.priceProtectionTicks ?? 5,
         }),
       ).toEqual([]);
 
@@ -4624,7 +4630,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       };
       const before = await countPeople();
       const { user: member } = await createUser(t.db);
-      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      await createUser(t.db, { role: 'admin' });
       // An admin is a person (#177 13항); the 운영 마켓메이커 adds nobody.
       expect(await countPeople()).toBe(before + 2);
       const marketMaker = await createMarketMakerAccount(t.db);
@@ -4639,11 +4645,14 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         userId: member.id,
         makerId: marketMaker,
       });
+      // An admin takes no order while it holds the role (ADR-0107 결정 5 '#119·#143'): another
+      // member is the bot's counterparty here.
+      const { user: other } = await createUser(t.db);
       await createFill(t.db, {
         marketId: market.id,
         amountCoin: 50n,
         userId: marketMaker,
-        makerId: admin.id,
+        makerId: other.id,
       });
       await createPosition(t.db, {
         userId: marketMaker,
@@ -4657,25 +4666,42 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         .from(orders)
         .where(eq(orders.marketId, market.id));
       expect(new Set(orderOwners.map((row) => `${row.userId}:${String(row.human)}`))).toEqual(
-        new Set([`${member.id}:true`, `${admin.id}:true`, `${marketMaker}:false`]),
+        new Set([`${member.id}:true`, `${other.id}:true`, `${marketMaker}:false`]),
       );
-      // A fill's two sides: the taker's order and the resting one.
+      // A fill's two sides: the incoming order and the resting one, through each order's account
+      // and as the fill records them (#119, migration 0062: copied at the write).
       const resting = alias(orders, 'resting');
       const sides = await t.db
         .select({
           taker: orders.userId,
           takerHuman: isHumanAccountSql(orders.userId),
+          takerType: fills.incomingAccountType,
           maker: resting.userId,
           makerHuman: isHumanAccountSql(resting.userId),
+          makerType: fills.restingAccountType,
         })
         .from(fills)
-        .innerJoin(orders, eq(orders.id, fills.orderId))
-        .innerJoin(resting, eq(resting.id, fills.counterpartyOrderId))
+        .innerJoin(orders, eq(orders.id, fills.incomingOrderId))
+        .innerJoin(resting, eq(resting.id, fills.restingOrderId))
         .where(eq(fills.marketId, market.id));
       expect(sides).toEqual(
         expect.arrayContaining([
-          { taker: member.id, takerHuman: true, maker: marketMaker, makerHuman: false },
-          { taker: marketMaker, takerHuman: false, maker: admin.id, makerHuman: true },
+          {
+            taker: member.id,
+            takerHuman: true,
+            takerType: 'member',
+            maker: marketMaker,
+            makerHuman: false,
+            makerType: 'market_maker',
+          },
+          {
+            taker: marketMaker,
+            takerHuman: false,
+            takerType: 'market_maker',
+            maker: other.id,
+            makerHuman: true,
+            makerType: 'member',
+          },
         ]),
       );
       const holders = await t.db
@@ -4688,7 +4714,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           { userId: member.id, human: true },
         ]),
       );
-      // The people who traded the market: the member and the admin, not the 운영 마켓메이커.
+      // The people who traded the market: the two members, not the 운영 마켓메이커.
       const [traders] = await t.db
         .select({ people: sql<number>`count(DISTINCT ${orders.userId})::int` })
         .from(orders)
@@ -8143,10 +8169,14 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         WHERE table_schema = 'public'
           AND (table_name, column_name) IN (('markets', 'liquidity_b'), ('markets', 'q_yes'),
             ('markets', 'q_no'), ('markets', 'initial_prob_bp'), ('markets', 'reserve_p'),
-            ('markets', 'mechanism'), ('orders', 'max_cost_p'), ('orders', 'min_proceeds_p'))`);
+            ('markets', 'mechanism'), ('orders', 'max_cost_p'), ('orders', 'min_proceeds_p'),
+            ('orders', 'type'), ('fills', 'price_avg_bp'), ('fills', 'counterparty_type'),
+            ('fills', 'order_id'), ('fills', 'counterparty_order_id'))`);
       expect(rows).toEqual([]);
+      // The market order type and the counterparty type went with #119's reshape (0062).
       const types = await t.db.execute<{ n: number }>(
-        sql`SELECT count(*)::int AS n FROM pg_type WHERE typname = 'market_mechanism'`,
+        sql`SELECT count(*)::int AS n FROM pg_type
+            WHERE typname IN ('market_mechanism', 'order_type', 'counterparty_type')`,
       );
       expect(types.rows[0]?.n).toBe(0);
     });
@@ -8160,42 +8190,21 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       }
       expect(await labels('ledger_entry_type')).toEqual([...LEDGER_ENTRY_TYPES]);
       expect(await labels('price_tick_trigger')).toEqual([...PRICE_TICK_TRIGGERS]);
-      expect(await labels('counterparty_type')).toEqual([...COUNTERPARTY_TYPES]);
+      // #119 (migration 0062): the six states rebuilt in order, the reasons and the fill kinds.
+      expect(await labels('order_status')).toEqual([...ORDER_STATUSES]);
+      expect(await labels('order_reject_reason')).toEqual([...ORDER_REJECT_REASONS]);
+      expect(await labels('order_cancel_reason')).toEqual([...ORDER_CANCEL_REASONS]);
+      expect(await labels('fill_kind')).toEqual([...FILL_KINDS]);
     });
 
-    it('requires a fill to name the order it matched', async () => {
-      const { user: u } = await createUser(t.db);
+    it('requires a fill to name the two orders it matched (#119: orders-schema.test.ts)', async () => {
       const market = await createMarket(t.db);
-      const [taker, maker] = await t.db
-        .insert(orders)
-        .values(
-          ['taker-key', 'maker-key'].map((idempotencyKey) => ({
-            userId: u.id,
-            marketId: market.id,
-            outcome: 'YES' as const,
-            side: 'buy' as const,
-            type: 'market' as const,
-            qty: 1,
-            status: 'open' as const,
-            idempotencyKey,
-          })),
-        )
-        .returning();
-      const fill = {
-        marketId: market.id,
-        orderId: taker!.id,
-        counterpartyType: 'order' as const,
-        outcome: 'YES' as const,
-        side: 'buy' as const,
-        qty: 1,
-        amountCoin: 52n,
-        priceAvgBp: 5200,
-      };
-      await expect(t.db.insert(fills).values(fill)).rejects.toSatisfy(
-        (e) => sqlState(e) === '23514',
-      );
-      await t.db.insert(fills).values({ ...fill, counterpartyOrderId: maker!.id });
-      expect(await t.db.select().from(fills)).toHaveLength(1);
+      const fill = await createFill(t.db, { marketId: market.id, amountCoin: 52n });
+      expect(fill).toMatchObject({ qty: 1, priceCoin: 52, yesPriceCoin: 52, amountCoin: 52n });
+      const { incomingOrderId: _incoming, ...noOrder } = fill;
+      await expect(
+        t.db.insert(fills).values({ ...noOrder, id: undefined, incomingOrderId: randomUUID() }),
+      ).rejects.toSatisfy((e) => sqlConstraint(e) === 'fills_check');
     });
   });
 
@@ -8238,6 +8247,11 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           'fills.fee_coin',
           'fills_amount_coin_check',
           'fills_fee_coin_check',
+          // #119 (migration 0062): a fill's price in the incoming contract and its YES price.
+          'fills.price_coin',
+          'fills.yes_price_coin',
+          'fills_price_coin_check',
+          'fills_yes_price_coin_check',
           // #116 (migration 0060): one positive amount per event, and each side's total after it.
           'ledger_entries.amount_coin',
           'ledger_entries.from_balance_after_coin',
@@ -8247,6 +8261,11 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           // `markets_status_volume_coin_id_idx` went with the volume order (migration 0024,
           // ADR-0065); #132 brings both back.
           'markets_volume_coin_check',
+          // #119 (migration 0062): a budget order's budget, what it filled and what it gave back.
+          'orders.budget_coin',
+          'orders.filled_amount_coin',
+          'orders.unspent_coin',
+          'orders_budget_coin_check',
           'payments.amount_coin',
           'payments_amount_coin_check',
           'positions.cost_basis_coin',
@@ -8507,22 +8526,19 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     const { user: a } = await createUser(t.db);
     const { user: b } = await createUser(t.db);
     const market = await createMarket(t.db);
-    const order = (userId: string, idempotencyKey: string) => ({
-      userId,
-      marketId: market.id,
-      outcome: 'YES' as const,
-      side: 'buy' as const,
-      type: 'market' as const,
-      qty: 1,
-      filledQty: 1,
-      status: 'filled' as const,
-      idempotencyKey,
-    });
-    await t.db.insert(orders).values(order(a.id, 'client-key'));
+    // The request id of an order (#119): a rejected order keeps it as a filled one does.
+    await createOrder(t.db, { marketId: market.id, userId: a.id, requestId: 'client-key' });
     // Client-minted keys collide across accounts; that must not block the second user.
-    await t.db.insert(orders).values(order(b.id, 'client-key'));
+    await createOrder(t.db, {
+      marketId: market.id,
+      userId: b.id,
+      requestId: 'client-key',
+      timeInForce: 'ioc',
+    });
     expect(await t.db.select().from(orders)).toHaveLength(2);
-    await expect(t.db.insert(orders).values(order(a.id, 'client-key'))).rejects.toSatisfy(
+    await expect(
+      createOrder(t.db, { marketId: market.id, userId: a.id, requestId: 'client-key' }),
+    ).rejects.toSatisfy(
       (e) =>
         sqlState(e) === '23505' && sqlConstraint(e) === 'orders_user_id_idempotency_key_unique',
     );
@@ -10796,7 +10812,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
             'profile_interest_categories', 'post_likes', 'comment_likes',
             'write_limit_events', 'link_uses', 'link_flags', 'retention_purges',
             'themes', 'theme_markets', 'theme_notices', 'tags', 'market_tags', 'categories',
-            'market_sources', 'market_rule_versions', 'market_judgement_delays')
+            'market_sources', 'market_rule_versions', 'market_judgement_delays', 'orders',
+            'fills')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
@@ -10809,6 +10826,10 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       // opened by its trigger and never removed; its amounts are updated by column only.
       expect(privs('ledger_accounts')).toEqual(['INSERT', 'SELECT']);
       expect(privs('balances')).toEqual(['SELECT']);
+      // Migration 0062 (#119): an order is updated in place while it rests and never removed; a
+      // fill is a permanent fact.
+      expect(privs('orders')).toEqual(['INSERT', 'SELECT', 'UPDATE']);
+      expect(privs('fills')).toEqual(['INSERT', 'SELECT']);
       expect(privs('payments')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       // Migration 0028 (#183): the real name changes in place and the row goes with the account;
       // a code's wrong entries, its use and what the provider said (0030) are written in place,

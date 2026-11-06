@@ -17,7 +17,7 @@
  * are unset.
  */
 import { randomUUID } from 'node:crypto';
-import { clockTimestamp, lockAdminRoles, schema } from '@buddha/db';
+import { lockAdminRoles, lockMarket, schema } from '@buddha/db';
 import {
   completeOnboarding,
   createApprovalRequest,
@@ -30,7 +30,9 @@ import {
   createPost,
   createProvisionalMarket,
   createReport,
+  createStartGrant,
   ledgerOf,
+  openOrderIntake,
 } from '@buddha/db/test';
 import {
   WRITE_LIMITS,
@@ -930,34 +932,57 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
       const request = requestOf(
         await ask(7, member, { subject: { type: 'post', postId: post.id } }),
       );
+      await openOrderIntake(t.db, { adminId: admin.id });
+      await createStartGrant(t.db, { userId: member.id, amountCoin: 1_000n });
       const observer = await t.db.$client.connect();
       let release = () => {};
-      const gate = new Promise<void>((resolve) => {
+      const opened = new Promise<void>((resolve) => {
         release = resolve;
       });
-      let checked = () => {};
-      const inFlight = new Promise<void>((resolve) => {
-        checked = resolve;
+      let held = () => {};
+      const holding = new Promise<void>((resolve) => {
+        held = resolve;
       });
-      // An order in flight as #119 will make it: the trading check first, the rest of its work
-      // after, its time read just before it commits.
-      const order = t.db.transaction(async (tx) => {
-        await assertCanTrade(tx, member.id);
-        checked();
-        await gate;
-        return clockTimestamp(tx);
+      // An order in flight through #119's intake (ADR-0112): the market's lock, held here, parks
+      // it after its trading check has taken the member's profile; its time is read after.
+      const gate = t.db.transaction(async (tx) => {
+        await lockMarket(tx, market.id);
+        held();
+        await opened;
       });
       let orderedAt: Date;
       let action: AdminModerationAction;
       try {
-        await inFlight;
+        await Promise.race([holding, gate]);
+        const ordering = t.app.inject({
+          method: 'POST',
+          url: `/api/v1/markets/${market.id}/orders`,
+          headers: {
+            origin: TRUSTED_ORIGIN,
+            'content-type': 'application/json',
+            'idempotency-key': randomUUID(),
+            cookie: member.cookie,
+          },
+          payload: JSON.stringify({
+            outcome: 'YES',
+            side: 'buy',
+            timeInForce: 'gtc',
+            limitPriceCoin: 40,
+            qty: 1,
+            expectedAccountId: member.id,
+          }),
+        });
+        await waitForLockWaiter(observer, 'the order behind the market lock');
         const pending = approve(request.id);
-        await waitForLockWaiter(observer, 'the approval behind the order’s trading check');
+        await waitForLockWaiter(observer, 'the approval behind the order’s trading check', 2);
         // A report on the restriction's subject, filed and committed while the approval waits.
         const filed = await send(`/posts/${post.id}/reports`, { reason: 'spam' }, other);
         expect(filed.statusCode, filed.body).toBe(201);
         release();
-        orderedAt = await order;
+        await gate;
+        const placed = dataOf<{ order: { status: string; createdAt: string } }>(await ordering);
+        expect(placed.order.status).toBe('open');
+        orderedAt = new Date(placed.order.createdAt);
         action = decisionOf(await pending).action!;
       } finally {
         release();

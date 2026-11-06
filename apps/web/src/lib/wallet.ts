@@ -16,7 +16,7 @@ import { type Me } from './api';
  * The start Coin (#70) is `START_GRANT`, '시작 지급' — its own type and its own word (ADR-0069
  * decision 4 #70), never the coupon's `BONUS` '보너스', so the wallet tells the two sources apart
  * (N04 §5). The 담보, 체결 and 대사 정정 words are provisional until the wallet screens (#69) name
- * them; nothing writes them before #119 and #93.
+ * them; fills write 담보 and 체결 since #119, and 대사 정정 waits for #93.
  */
 export const LEDGER_TYPE_LABEL: Readonly<Record<MemberLedgerEntryType, string>> = {
   START_GRANT: copy.ledgerTypeStartGrant,

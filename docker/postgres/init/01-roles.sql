@@ -10,11 +10,11 @@
 --   buddha_app      DML only. No CREATE anywhere. Per-table restrictions
 --                   (ledger_entries, market_events, admin_actions, payment_events,
 --                   market_watch_events, retention_purges, tags, market_rule_versions,
---                   market_judgements, market_judgement_delays, ledger_accounts:
+--                   market_judgements, market_judgement_delays, ledger_accounts, fills:
 --                   INSERT/SELECT only; balances: SELECT and UPDATE of available_coin,
 --                   locked_coin, ledger_coin and updated_at only, its rows opened by a trigger;
 --                   release_settings, approval_requests, start_grants, start_grant_numbers,
---                   themes, theme_notices, market_pauses, market_disputes: no DELETE —
+--                   themes, theme_notices, market_pauses, market_disputes, orders: no DELETE —
 --                   approval_requests' retention goes through a SECURITY DEFINER function, 0044,
 --                   market_disputes' empties a row in place; market_searches,
 --                   phone_verification_refused_sends, consent_records, post_revisions,
@@ -25,7 +25,7 @@
 --                   applied later by migrations with REVOKE
 --                   (0001, 0015, 0020, 0021, 0023, 0026, 0030, 0031, 0032, 0033, 0034, 0035,
 --                   0036, 0039, 0040, 0041, 0044, 0045, 0049, 0053, 0054, 0055, 0056, 0058,
---                   0060),
+--                   0060, 0062),
 --                   see bottom.
 
 CREATE ROLE buddha_migrate LOGIN PASSWORD 'buddha';
@@ -84,5 +84,8 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO buddha_app;
 -- (available_coin, locked_coin, ledger_coin, updated_at), its rows opened at 0 by a SECURITY
 -- DEFINER trigger on ledger_accounts, its total moved only with its ledger total (ledger_coin) at
 -- every UPDATE and that held to the ledger at COMMIT; ledger_entries keeps 0001's REVOKE and gains
--- a trigger that refuses UPDATE and DELETE to every role).
+-- a trigger that refuses UPDATE and DELETE to every role) and 0062 (#119: orders: DELETE — an order
+-- is a permanent record, a trigger refuses DELETE to every role and lets an UPDATE only move a
+-- resting order forward, its terms frozen; fills: UPDATE, DELETE — a fill is a permanent fact, a
+-- trigger refuses both to every role).
 -- Default privileges are applied at CREATE time, so a REVOKE afterwards sticks.

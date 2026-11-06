@@ -146,13 +146,15 @@ export async function assertNotRestricted(executor: Executor, userId: string): P
  *    `assertWriter` takes for a post: an approved account restriction locks that row FOR UPDATE
  *    before it is written (AccountRestrictionService), so an order in flight commits before the
  *    restriction and one that comes after reads it. Taken first, so every lock order is the
- *    profile's and then the order's.
+ *    profile's and then the order's. (The intake reads the same row FOR SHARE with its role
+ *    later, under the market's lock — a role grant's update waits for that: ADR-0112 10-16.)
  * 2. The account restriction: the writing restriction does not stop trading (#57-12: 작성 제한은
  *    커뮤니티 작성만), nor does anything else here — the balance, the holdings and every record stay
  *    readable and untouched (N02 §9).
  *
- * What #57-13 left unasked stays with M9: pending orders when a restriction comes into force,
- * selling a holding and the limited re-grant (#74). Nothing here cancels or changes an order.
+ * ADR-0107 결정 4 (#119 row) decided #57-13's order part: new orders, sells of a holding included,
+ * are refused here; resting orders are cancelled by #178 at the restriction's approval; the
+ * limited re-grant is #74 (M12). Nothing here cancels or changes an order.
  */
 export async function assertCanTrade(tx: Tx, userId: string): Promise<void> {
   await tx

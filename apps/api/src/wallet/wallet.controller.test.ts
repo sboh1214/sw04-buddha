@@ -4,8 +4,13 @@
  * production while paid Coin is off (ADR-0049; paid-coin-sales.test.ts), so this app opens them.
  * Skips when TEST_* are unset (fails under CI=true, see the harness).
  */
-import { recordLedgerEntry, schema } from '@buddha/db';
-import { createMarket, ledgerOf as accountLedgerOf, withLedgerGuardsOff } from '@buddha/db/test';
+import { ledgerKeys, recordLedgerEntry, schema } from '@buddha/db';
+import {
+  createFillRecord,
+  createMarket,
+  ledgerOf as accountLedgerOf,
+  withLedgerGuardsOff,
+} from '@buddha/db/test';
 import {
   userChannel,
   type ChargePackage,
@@ -579,6 +584,17 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     await charge(pack);
     const other = await signUpTestUser(t);
     const market = await createMarket(t.db);
+    // The fill it pays for (#119: a TRADE_FILL names its fill row, migration 0062): the caller's
+    // buy of 617 YES at 2 from the other's resting sell.
+    const { fill: trade } = await createFillRecord(t.db, {
+      marketId: market.id,
+      incomingOwnerId: user.id,
+      restingOwnerId: other.id,
+      side: 'buy',
+      kind: 'trade',
+      priceCoin: 2,
+      qty: 617,
+    });
     const fill = await t.db.transaction((tx) =>
       recordLedgerEntry(tx, {
         type: 'TRADE_FILL',
@@ -587,8 +603,8 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
         to: { kind: 'user', userId: other.id },
         marketId: market.id,
         refType: 'fill',
-        refId: randomUUID(),
-        idempotencyKey: randomUUID(),
+        refId: String(trade.id),
+        idempotencyKey: ledgerKeys.fill(String(trade.id)),
       }),
     );
     const ledgerFor = async (as: TestUser) => {

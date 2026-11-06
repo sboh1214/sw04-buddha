@@ -12,8 +12,19 @@
  * alone. Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
-import { completeOnboarding, createCategory, createMarket } from '@buddha/db/test';
-import { STORABLE_INSTANT_TOO_EARLY, floorToMinute, type AdminMarket } from '@buddha/shared';
+import {
+  completeOnboarding,
+  createCategory,
+  createMarket,
+  setReleaseSetting,
+  TEST_PRICE_PROTECTION_TICKS,
+} from '@buddha/db/test';
+import {
+  PRICE_PROTECTION_TICKS_SETTING,
+  STORABLE_INSTANT_TOO_EARLY,
+  floorToMinute,
+  type AdminMarket,
+} from '@buddha/shared';
 import { asc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
@@ -58,6 +69,14 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
     await completeOnboarding(t.db, { userId: admin.id });
     await t.app.get(AdminGuard).invalidate(admin.id);
     category = await createCategory(t.db, { slug: 'economy', nameKo: '경제' });
+    // The 가격 보호 폭 default the test environment enters (#119, ADR-0107 결과 3): a market copies
+    // it at creation and its review submission needs one (OPEN_ITEMS_MISSING priceProtection).
+    await setReleaseSetting(t.db, {
+      adminId: admin.id,
+      key: PRICE_PROTECTION_TICKS_SETTING.key,
+      status: 'test',
+      value: TEST_PRICE_PROTECTION_TICKS,
+    });
   });
 
   const post = (url: string, payload: Record<string, unknown> = {}) =>

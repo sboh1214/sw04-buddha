@@ -239,7 +239,11 @@ export async function marketTagNames(executor: Db | Tx, marketId: string): Promi
   return rows.map((row) => row.name);
 }
 
-/** Anonymous (PLAN 7.1): the order and its owner never leave the server. */
+/**
+ * Anonymous (PLAN 7.1): the orders, their owners and their account types never leave the server.
+ * The incoming order's outcome and side, and its contract price as basis points (`price_coin` ×
+ * 100: one fill is one price since #119) — #121 reshapes this answer with `market:trade`.
+ */
 export function toFill(row: FillRow): Fill {
   return {
     id: row.id.toString(),
@@ -247,7 +251,7 @@ export function toFill(row: FillRow): Fill {
     side: row.side,
     qty: row.qty,
     amountCoin: serializeCoinAmount(row.amountCoin),
-    priceAvgBp: row.priceAvgBp,
+    priceAvgBp: row.priceCoin * 100,
     createdAt: row.createdAt.toISOString(),
   };
 }

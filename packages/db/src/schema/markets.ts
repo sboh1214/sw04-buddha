@@ -160,6 +160,19 @@ export const markets = pgTable(
      */
     leadCloseGapMinutes: integer(),
     /**
+     * 가격 보호 폭 in ticks (#119, ADR-0112; ADR-0107 결정 1 #177 2항, ADR-0093 #172 6항): how far
+     * from the best opposite quote an immediate order's limit may reach (`protectedLimit`). Copied
+     * from the release setting `order.price_protection_ticks` when the market is created (null
+     * while it is undecided), filled by the review submission when still null — the open-items
+     * check refuses the submission while both are null (`priceProtection`) — and fixed from then on
+     * (`markets_price_protection_fixed`, migration 0062), but for the after-open change of an OPEN
+     * or PAUSED market with a reason (`price_protection_changed`). A 반려 or a 되돌리기 keeps it: it
+     * is a market term, not a reading. A non-draft market with none — one submitted before #119 —
+     * takes GTC orders and refuses IOC ones (ORDER_INTAKE_CLOSED) until the after-open change
+     * gives it one. 1..98, or null.
+     */
+    priceProtectionTicks: smallint(),
+    /**
      * The current rule version (#80, ADR-0101; ADR-0093 decision 2 #172 items 6·7): the market's
      * newest `market_rule_versions.version` — 1 from the open, which records v1 in its own
      * transaction (`openScheduledMarket`), then one more per approved supplement. Null before the
@@ -326,6 +339,7 @@ export const markets = pgTable(
       sql`${utcMinute(t.eventDeadline)} <= ${utcMinute(t.scheduledJudgementAt)}`,
     ),
     check('markets_lead_close_gap_minutes_check', sql`${t.leadCloseGapMinutes} >= 0`),
+    check('markets_price_protection_ticks_check', sql`${t.priceProtectionTicks} BETWEEN 1 AND 98`),
     check('markets_rule_version_check', sql`${t.ruleVersion} >= 1`),
     check('markets_judgement_version_check', sql`${t.judgementVersion} >= 1`),
     /**

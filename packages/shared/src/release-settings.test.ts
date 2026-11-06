@@ -12,12 +12,16 @@ import {
   JSONB_NUL_MESSAGE,
   LEAD_CLOSE_GAP_SETTING,
   MARKET_PROPOSALS_RETENTION_SETTING,
+  ORDER_ACCEPTING_SETTING,
+  ORDER_RATE_LIMIT_SETTING,
+  PRICE_PROTECTION_TICKS_SETTING,
   RELEASE_SETTINGS,
   RELEASE_SETTING_STATUS_LABELS,
   RETENTION_PERIOD_SETTINGS,
   START_COIN_SETTING,
   defineReleaseSetting,
   defineReleaseSettings,
+  isOrderIntakeOpen,
   isReleaseSettingUnchanged,
   jsonbValueIssues,
   parseReleaseSettingChange,
@@ -52,13 +56,17 @@ const window = defineReleaseSetting({
 });
 
 describe('release settings registry', () => {
-  it('ships the items the issues that use them registered: the start grant (#70), the lead-close gap (#22), the dispute window (#152) and the retention periods (#184, #77)', () => {
+  it('ships the items the issues that use them registered: the start grant (#70), the lead-close gap (#22), the dispute window (#152), the order intake, rate limit and price-protection width (#119) and the retention periods (#184, #77)', () => {
     expect([...RELEASE_SETTINGS.keys()]).toEqual([
       'grant.start_coin',
       // 선행 마감 최소 간격 (#22, ADR-0093 #172 item 13): the operating values come first.
       'market.lead_close_gap',
       // 이의 기간 (#152, ADR-0093 #173 item 5): one value for every market.
       'market.dispute_window',
+      // 주문 접수·주문 속도 제한·가격 보호 폭 표준값 (#119, ADR-0107 결정 1 #177 2·9항, 결정 3).
+      'order.accepting',
+      'order.rate_limit',
+      'order.price_protection_ticks',
       'retention.consent_records',
       'retention.phone_verification_records',
       'retention.deleted_posts',
@@ -70,6 +78,11 @@ describe('release settings registry', () => {
     expect(RELEASE_SETTINGS.get('grant.start_coin')).toBe(START_COIN_SETTING);
     expect(RELEASE_SETTINGS.get('market.lead_close_gap')).toBe(LEAD_CLOSE_GAP_SETTING);
     expect(RELEASE_SETTINGS.get('market.dispute_window')).toBe(DISPUTE_WINDOW_SETTING);
+    expect(RELEASE_SETTINGS.get('order.accepting')).toBe(ORDER_ACCEPTING_SETTING);
+    expect(RELEASE_SETTINGS.get('order.rate_limit')).toBe(ORDER_RATE_LIMIT_SETTING);
+    expect(RELEASE_SETTINGS.get('order.price_protection_ticks')).toBe(
+      PRICE_PROTECTION_TICKS_SETTING,
+    );
     // The worker reads each period through the very object the registry holds.
     for (const definition of Object.values(RETENTION_PERIOD_SETTINGS)) {
       expect(RELEASE_SETTINGS.get(definition.key)).toBe(definition);
@@ -287,6 +300,73 @@ describe('release settings registry', () => {
     // The deadline the reading fixes: the publication plus the window, to the millisecond.
     const publishedAt = new Date('2026-11-02T03:04:05.678Z');
     expect(disputeDeadlineOf(publishedAt, 1_440).toISOString()).toBe('2026-11-03T03:04:05.678Z');
+  });
+
+  it('opens order intake only on a value of true, whatever the status (#119, the first boolean item)', () => {
+    const accepts = (value: unknown) => ORDER_ACCEPTING_SETTING.schema.safeParse(value).success;
+    expect(ORDER_ACCEPTING_SETTING).toMatchObject({ label: '주문 접수', unit: null });
+    expect([true, false].map(accepts)).toEqual([true, true]);
+    for (const value of ['true', 1, 0, null, {}])
+      expect(accepts(value), JSON.stringify(value)).toBe(false);
+    const read = (stored: Parameters<typeof readReleaseSetting>[2]) =>
+      readReleaseSetting(RELEASE_SETTINGS, ORDER_ACCEPTING_SETTING, stored);
+    // Undecided (no row, or a row with no value) and false keep it closed; true opens it, a test
+    // value as an approved one.
+    expect(isOrderIntakeOpen(read(undefined))).toBe(false);
+    expect(isOrderIntakeOpen(read({ status: 'undecided', value: null }))).toBe(false);
+    expect(isOrderIntakeOpen(read({ status: 'approved', value: false }))).toBe(false);
+    expect(isOrderIntakeOpen(read({ status: 'test', value: true }))).toBe(true);
+    expect(isOrderIntakeOpen(read({ status: 'approved', value: true }))).toBe(true);
+    expect(read({ status: 'approved', value: true })).toEqual({
+      key: 'order.accepting',
+      status: 'approved',
+      value: true,
+    });
+    // A change to false is a change from undecided; a stored false is read back as false.
+    expect(
+      parseReleaseSettingChange(ORDER_ACCEPTING_SETTING, { status: 'approved', value: false }),
+    ).toEqual({ success: true, state: { status: 'approved', value: false } });
+    expect(isReleaseSettingUnchanged(undefined, { status: 'approved', value: false })).toBe(false);
+    expect(releaseSettingValueJsonSchema(ORDER_ACCEPTING_SETTING)).toMatchObject({
+      type: 'boolean',
+    });
+    const { description } = ORDER_ACCEPTING_SETTING;
+    expect(description).toContain('미정이거나 거짓이면 새 주문을 운영 마켓메이커의 것까지');
+    expect(description).toContain('주문 행 없이 거절');
+    expect(description).toContain('정산의 대기 주문 확인(#126)과 장부 대사(#93)');
+  });
+
+  it('takes the order rate limit per account per minute, 1 to 1,000 (#119, #177 9항)', () => {
+    const accepts = (value: unknown) => ORDER_RATE_LIMIT_SETTING.schema.safeParse(value).success;
+    expect(ORDER_RATE_LIMIT_SETTING).toMatchObject({ label: '주문 속도 제한', unit: '회/분' });
+    for (const value of [1, 20, 1_000]) expect(accepts(value), String(value)).toBe(true);
+    for (const value of [0, -1, 1.5, '20', 1_001, null]) {
+      expect(accepts(value), String(value)).toBe(false);
+    }
+    const { description } = ORDER_RATE_LIMIT_SETTING;
+    expect(description).toContain('시험값 20');
+    expect(description).toContain('취소는 세지 않는다');
+    expect(description).toContain('운영 마켓메이커는 세지 않는다');
+    expect(description).toContain('미정이면 계정 제한 없이 접속 주소마다 1분 100회 제한만');
+  });
+
+  it('takes the price-protection width default in ticks, 1 to 98 (#119, #177 2항)', () => {
+    const accepts = (value: unknown) =>
+      PRICE_PROTECTION_TICKS_SETTING.schema.safeParse(value).success;
+    expect(PRICE_PROTECTION_TICKS_SETTING).toMatchObject({
+      key: 'order.price_protection_ticks',
+      label: '가격 보호 폭 표준값',
+      unit: '틱',
+    });
+    for (const value of [1, 5, 98]) expect(accepts(value), String(value)).toBe(true);
+    for (const value of [0, -1, 1.5, '5', 99, null]) {
+      expect(accepts(value), String(value)).toBe(false);
+    }
+    const { description } = PRICE_PROTECTION_TICKS_SETTING;
+    expect(description).toContain('시험값 5');
+    expect(description).toContain('시장을 만들 때 이 값을 시장에 복사하고');
+    expect(description).toContain('검수부터 그 시장의 값이 잠긴다');
+    expect(description).toContain('미정이면 값이 없는 시장을 검수 제출할 수 없다');
   });
 
   it('labels every status, and only proposal and test are distinct from approved', () => {

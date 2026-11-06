@@ -5,6 +5,7 @@ import { type ApprovalRefusal, approvalReasonSchema } from './approvals.js';
 import { type MarketEventType, type MarketStatus, marketStatusSchema } from './enums.js';
 import { expectedAccountIdSchema } from './expected-account.js';
 import { storableInstantSchema } from './market-rules.js';
+import { priceProtectionTicksSchema } from './orders.js';
 
 /**
  * 개설 검수 (#78, ADR-0099; ADR-0093 decision 1 #173 items 1·12, decision 2 #172 items 4·5·6·12·13,
@@ -218,6 +219,21 @@ export const rescheduleMarketOpenBodySchema = z
   })
   .meta({ id: 'RescheduleMarketOpenBody' });
 export type RescheduleMarketOpenBody = z.infer<typeof rescheduleMarketOpenBodySchema>;
+
+/**
+ * `POST /admin/markets/:id/price-protection` (#119, ADR-0112; OPEN or PAUSED only): the market's
+ * new 가격 보호 폭 in ticks — one admin, with the reason (ADR-0107 결정 1 #177 2항 '개장 뒤 변경',
+ * the #172 14항 precedent) — and the admin on screen. Recorded with the value before and after;
+ * applies to the orders taken after it, never to resting ones.
+ */
+export const changePriceProtectionBodySchema = z
+  .object({
+    priceProtectionTicks: priceProtectionTicksSchema,
+    reason: approvalReasonSchema,
+    expectedAccountId: expectedAccountIdSchema,
+  })
+  .meta({ id: 'ChangePriceProtectionBody' });
+export type ChangePriceProtectionBody = z.infer<typeof changePriceProtectionBodySchema>;
 
 // ---- records --------------------------------------------------------------------------
 /** The market event types the review writes (enums.ts documents each), the 검수 기록's entries. */

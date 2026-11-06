@@ -27,6 +27,7 @@ import {
   createComment,
   createConsents,
   createFill,
+  createOrder,
   createMarket,
   createModerationAction,
   createPhoneVerification,
@@ -41,6 +42,8 @@ import {
   createStartGrant,
   createWatch,
   ledgerOf as accountLedgerOf,
+  openOrderIntake,
+  placeTestOrder,
   withLedgerGuardsOff,
 } from '@buddha/db/test';
 import {
@@ -1066,16 +1069,21 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
         status: 'refunded',
         idempotencyKey: `closure-${randomUUID()}`,
       });
-      await t.db.insert(schema.orders).values({
+      // Ended orders refuse nothing: filled, rejected (a row with its reason, #177 7항), expired.
+      await createOrder(t.db, {
         userId: member.id,
         marketId: market.id,
-        outcome: 'YES',
-        side: 'buy',
-        type: 'market',
+        timeInForce: 'ioc',
         qty: 1,
         filledQty: 1,
         status: 'filled',
-        idempotencyKey: `closure-${randomUUID()}`,
+      });
+      await createOrder(t.db, { userId: member.id, marketId: market.id, timeInForce: 'ioc' });
+      await createOrder(t.db, {
+        userId: member.id,
+        marketId: market.id,
+        qty: 2,
+        status: 'expired',
       });
       // Another member's unsettled contract, payment and refund in progress and waiting orders
       // refuse only that member's closure.
@@ -1094,18 +1102,13 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
         ['open', 0],
         ['partially_filled', 1],
       ] as const) {
-        await t.db.insert(schema.orders).values({
+        await createOrder(t.db, {
           userId: other.id,
           marketId: market.id,
-          outcome: 'YES',
-          side: 'buy',
-          type: 'limit',
-          limitPrice: 40,
+          limitPriceCoin: 40,
           qty: 2,
           filledQty,
           status,
-          timeInForce: 'gtc',
-          idempotencyKey: `closure-${randomUUID()}`,
         });
       }
       expect(await checkOf(member)).toMatchObject({ refusals: [], restriction: null });
@@ -1316,17 +1319,11 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
         status: 'pending',
         idempotencyKey: `closure-${randomUUID()}`,
       });
-      await t.db.insert(schema.orders).values({
+      await createOrder(t.db, {
         userId: member.id,
         marketId: market.id,
-        outcome: 'YES',
-        side: 'buy',
-        type: 'limit',
-        limitPrice: 40,
+        limitPriceCoin: 40,
         qty: 2,
-        status: 'open',
-        timeInForce: 'gtc',
-        idempotencyKey: `closure-${randomUUID()}`,
       });
       expect(await checkOf(member)).toMatchObject({
         refusals: ['unsettled_contracts', 'payment_in_progress', 'pending_orders'],
@@ -1368,24 +1365,57 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
         .update(schema.payments)
         .set({ status: 'refunded' })
         .where(eq(schema.payments.userId, member.id));
-      await t.db.insert(schema.orders).values({
+      await createOrder(t.db, {
         userId: member.id,
         marketId: market.id,
         outcome: 'NO',
-        side: 'buy',
-        type: 'limit',
-        limitPrice: 60,
+        limitPriceCoin: 60,
         qty: 3,
         filledQty: 1,
         status: 'partially_filled',
-        timeInForce: 'gtc',
-        idempotencyKey: `closure-${randomUUID()}`,
       });
       expect(await checkOf(member)).toMatchObject({ refusals: ['pending_orders'] });
       expect(errorOf(await close(member), 409, 'CLOSURE_NOT_ALLOWED')).toEqual({
         reason: 'pending_orders',
       });
       await expectOpen(member);
+    });
+
+    it('refuses contracts and a partly filled order made through the intake (ADR-0086 결과 5)', async () => {
+      // Real orders (#119): Coin locked by a resting order, contracts with their collateral.
+      await openOrderIntake(t.db, { adminId: admin.id });
+      for (const who of [member, other]) {
+        await createStartGrant(t.db, { userId: who.id, amountCoin: 1_000n });
+      }
+      const place = async (input: Omit<Parameters<typeof placeTestOrder>[1], 'marketId'>) => {
+        const result = await placeTestOrder(t.db, { marketId: market.id, ...input });
+        if (result.kind !== 'placed')
+          throw new Error(`expected a placed order, got ${result.kind}`);
+        return result.order;
+      };
+      // The member's NO bid of 2 at 30 rests; the other member's IOC YES buy mints one pair at 70.
+      await place({ ownerId: member.id, outcome: 'NO', limitPriceCoin: 30, qty: 2 });
+      await place({ ownerId: other.id, timeInForce: 'ioc', limitPriceCoin: 99 });
+      const [order] = await t.db
+        .select()
+        .from(schema.orders)
+        .where(eq(schema.orders.userId, member.id));
+      expect(order).toMatchObject({ status: 'partially_filled', filledQty: 1 });
+      expect(await checkOf(member)).toMatchObject({
+        refusals: ['unsettled_contracts', 'pending_orders'],
+      });
+      expect(await checkOf(other)).toMatchObject({ refusals: ['unsettled_contracts'] });
+      const before = await balanceOf(member.id);
+      expect(before.lockedCoin).toBe(30n);
+      expect(errorOf(await close(member), 409, 'CLOSURE_NOT_ALLOWED')).toEqual({
+        reason: 'unsettled_contracts',
+      });
+      expect(errorOf(await close(other), 409, 'CLOSURE_NOT_ALLOWED')).toEqual({
+        reason: 'unsettled_contracts',
+      });
+      expect(await balanceOf(member.id)).toEqual(before);
+      await expectOpen(member);
+      await expectOpen(other);
     });
 
     it('refuses an account whose balance left its ledger until the gap is closed (ADR-0109 12-8)', async () => {

@@ -98,7 +98,8 @@ export type MarketPages = InfiniteData<MarketPage, string | undefined>;
 
 /**
  * The four fields a `market:tick` moves, under the market's id. Nothing publishes the event
- * until the CLOB fills (#119); the reducers keep reading it so a fill arrives already wired.
+ * until the market figures (#121; the CLOB fills since #119); the reducers keep reading it so a
+ * fill arrives already wired.
  */
 export type MarketTickPatch = Pick<
   MarketTickEvent,
@@ -441,9 +442,13 @@ export function applyPositionEvent(
  * Whether this event announces an order row that 주문 이력 does not hold yet.
  *
  * A fill writes one (the order and its fill commit together), and no `user:` event carries an
- * `Order`'s id, status, filledQty, amountCoin or priceAvgBp — so the list cannot be built from the
- * event and has to be asked for. A settlement writes NO order row at all (it moves positions and
- * balances only), so a refetch there could answer nothing the list does not already hold.
+ * `Order`'s id, status, filledQty or filledAmountCoin — so the list cannot be built from the event
+ * and has to be asked for. A sell that only rests writes one too, and its lock is on the position
+ * row, so that row is published (ADR-0112 결정 8: each position row the intake touched) and the list
+ * is asked for then as well. A buy that only rests publishes nothing (ADR-0112: a lock alone moves
+ * no ledger row), so it reaches the list on its next read. A settlement writes NO order row at all
+ * (it moves positions and balances only), so a refetch there could answer nothing the list does not
+ * already hold.
  *
  * The same rule `liveMarketStatus` (use-portfolio.ts) states from the other side: a terminal
  * transition is the REST answer's business. Exported apart from the socket handler because a

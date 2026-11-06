@@ -706,6 +706,8 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
           scheduledJudgementAt: markets.scheduledJudgementAt,
           judgementTimeZone: markets.judgementTimeZone,
           leadCloseGapMinutes: markets.leadCloseGapMinutes,
+          // The 가격 보호 폭 (#119): none of the seed's own.
+          priceProtectionTicks: markets.priceProtectionTicks,
           createdAt: markets.createdAt,
           createdBy: markets.createdBy,
         })
@@ -908,6 +910,8 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
         // the 선행 마감 at the proposed gap of 60 minutes (#22): the draft can be submitted and
         // approved (#78) — a stale one aside, whose close has passed — once the owner enters the
         // gap.
+        // The seed writes no 가격 보호 폭 (#119): a draft takes the default at its submission.
+        expect(row.priceProtectionTicks, row.slug).toBeNull();
         const iso = (instant: Date | null) => instant?.toISOString() ?? null;
         expect(
           missingOpenItems({
@@ -930,6 +934,9 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
             categorySelectable: true,
             tagCount: linked.filter((link) => link.slug === row.slug).length,
             leadCloseGapMinutes: 60,
+            // No width of its own (the seed writes none): the submission fills the default
+            // (#119), here its test value.
+            priceProtectionTicks: row.priceProtectionTicks ?? 5,
           }),
           row.slug,
         ).toEqual([]);
