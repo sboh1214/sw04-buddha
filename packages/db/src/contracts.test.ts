@@ -1099,6 +1099,66 @@ describe.skipIf(!hasTestDb())('contracts (#118, docker test profile)', () => {
     });
   });
 
+  describe('마감 뒤 막음 (#120)', () => {
+    /** A trade and a mint ready in `marketId`: c's locked YES, a's and b's Coin locks. */
+    async function ready(marketId: string) {
+      const a = await member(1_000n);
+      const b = await member(1_000n);
+      const c = await member(1_000n);
+      await mintTestPairs(t.db, { marketId, yesHolderId: c, noHolderId: b, qty: 1 });
+      await lock(marketId, c, contracts('YES', 1));
+      await lock(marketId, a, coin(200n));
+      await lock(marketId, b, coin(200n));
+      const sale = {
+        marketId,
+        outcome: 'YES' as const,
+        qty: 1,
+        priceCoin: 50,
+        buyer: { ownerId: a, limitPriceCoin: 50 },
+        sellerId: c,
+      };
+      const pair = {
+        marketId,
+        qty: 1,
+        yesPriceCoin: 60,
+        yes: { ownerId: a, limitPriceCoin: 60 },
+        no: { ownerId: b, limitPriceCoin: 40 },
+      };
+      return { sale, pair };
+    }
+
+    it('refuses both fill processings on a market not OPEN, nothing written', async () => {
+      for (const status of ['paused', 'closed', 'provisional', 'settling', 'cancelled'] as const) {
+        const market = await createMarket(t.db, { status });
+        const { sale, pair } = await ready(market.id);
+        const before = await snapshot();
+        await expect(fill(sale), status).rejects.toSatisfy((e) => contractCode(e) === 'refused');
+        await expect(mint(pair), status).rejects.toSatisfy((e) => contractCode(e) === 'refused');
+        expect(await snapshot()).toEqual(before);
+        await expectFullCollateral(market.id, status);
+      }
+      // The same terms fill while OPEN.
+      const open = await createMarket(t.db);
+      const { sale, pair } = await ready(open.id);
+      expect(await fill(sale)).toMatchObject({ outcome: 'filled' });
+      expect(await mint(pair)).toMatchObject({ outcome: 'minted' });
+    });
+
+    it('answers a fill recorded while OPEN `duplicate` after the close: the key comes first', async () => {
+      const market = await createMarket(t.db);
+      const { sale, pair } = await ready(market.id);
+      const saleInput = { ...sale, fillId: await tradeRecordId(sale) };
+      const pairInput = { ...pair, fillId: await mintRecordId(pair) };
+      expect(await fill(saleInput)).toMatchObject({ outcome: 'filled' });
+      expect(await mint(pairInput)).toMatchObject({ outcome: 'minted' });
+      await t.db.update(markets).set({ status: 'closed' }).where(eq(markets.id, market.id));
+      const before = await snapshot();
+      expect(await fill(saleInput)).toEqual({ outcome: 'duplicate' });
+      expect(await mint(pairInput)).toEqual({ outcome: 'duplicate' });
+      expect(await snapshot()).toEqual(before);
+    });
+  });
+
   describe('the 운영 마켓메이커’s pair burn', () => {
     /** The 운영 마켓메이커 holds 3 YES (cost 180) and 3 NO (cost 90); a 3 NO, b 3 YES. */
     async function burnable(status: MarketStatus = 'open') {

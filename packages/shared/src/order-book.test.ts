@@ -73,7 +73,12 @@ const resting = (
   arrival: number,
 ): BookOrder => ({ id, owner, outcome, side, priceCoin, remainingQty, arrival });
 
-const OPEN: MarketTradingFacts = { status: 'open', widthTicks: 10 };
+// The read's DB clock and a 거래 마감 시각 a day ahead: a market trading by the clock (#120).
+const CLOCK = {
+  closeAt: new Date('2026-11-08T00:00:00.000Z'),
+  now: new Date('2026-11-07T00:00:00.000Z'),
+} as const;
+const OPEN: MarketTradingFacts = { ...CLOCK, status: 'open', widthTicks: 10 };
 
 const terms = (overrides: Partial<QuoteTerms> = {}): QuoteTerms => ({
   outcome: 'YES',
@@ -257,7 +262,7 @@ describe('quoteOrder (#177 2·3·10·12항, ADR-0111 결정 8)', () => {
       cancelReason: 'ioc_remainder',
     });
     expect(
-      quoted(book, { side: 'sell', qty: 1 }, { status: 'open', widthTicks: 98 }),
+      quoted(book, { side: 'sell', qty: 1 }, { ...CLOCK, status: 'open', widthTicks: 98 }),
     ).toMatchObject({ protectedLimitPriceCoin: 1, filledQty: 1 });
   });
 
@@ -330,7 +335,7 @@ describe('quoteOrder (#177 2·3·10·12항, ADR-0111 결정 8)', () => {
       quoted(
         book,
         { timeInForce: 'gtc', limitPriceCoin: 99, qty: 1 },
-        { status: 'open', widthTicks: null },
+        { ...CLOCK, status: 'open', widthTicks: null },
       ),
     ).toMatchObject({ protectedLimitPriceCoin: 99, filledQty: 1 });
     expect(() => quoteOrder(book, OPEN, terms({ timeInForce: 'gtc' }), null)).toThrow(RangeError);
@@ -339,7 +344,7 @@ describe('quoteOrder (#177 2·3·10·12항, ADR-0111 결정 8)', () => {
   it('answers a market not OPEN as the intake’s rejected row: its reason, nothing walked', () => {
     for (const status of MARKET_STATUSES) {
       if (status === 'draft' || status === 'review') {
-        expect(() => quoteOrder(book, { status, widthTicks: 10 }, terms(), null)).toThrow(
+        expect(() => quoteOrder(book, { ...CLOCK, status, widthTicks: 10 }, terms(), null)).toThrow(
           RangeError,
         );
         continue;
@@ -347,7 +352,12 @@ describe('quoteOrder (#177 2·3·10·12항, ADR-0111 결정 8)', () => {
       if (status === 'open') continue;
       for (const widthTicks of [10, null]) {
         expect(
-          quoteOrder(book, { status, widthTicks }, terms({ qty: 4, limitPriceCoin: 62 }), null),
+          quoteOrder(
+            book,
+            { ...CLOCK, status, widthTicks },
+            terms({ qty: 4, limitPriceCoin: 62 }),
+            null,
+          ),
         ).toEqual({
           kind: 'quoted',
           figures: {
@@ -365,7 +375,7 @@ describe('quoteOrder (#177 2·3·10·12항, ADR-0111 결정 8)', () => {
         });
       }
       expect(
-        quoted(book, { qty: null, budgetCoin: 80n }, { status, widthTicks: 10 }),
+        quoted(book, { qty: null, budgetCoin: 80n }, { ...CLOCK, status, widthTicks: 10 }),
       ).toMatchObject({
         protectedLimitPriceCoin: 99,
         remainingQty: null,
@@ -375,7 +385,7 @@ describe('quoteOrder (#177 2·3·10·12항, ADR-0111 결정 8)', () => {
   });
 
   it('answers an immediate order on a market with no width `closed`, as the intake does', () => {
-    const noWidth = { status: 'open', widthTicks: null } as const;
+    const noWidth = { ...CLOCK, status: 'open', widthTicks: null } as const;
     expect(quoteOrder(book, noWidth, terms(), null)).toEqual({
       kind: 'closed',
       why: 'price_protection',
@@ -438,11 +448,46 @@ describe('quoteOrder (#177 2·3·10·12항, ADR-0111 결정 8)', () => {
   });
 });
 
+describe('marketTradingRejectReason (#179, #120)', () => {
+  const closeAt = CLOCK.closeAt;
+  const facts = (status: MarketStatus, ms: number): MarketTradingFacts => ({
+    status,
+    widthTicks: 5,
+    closeAt,
+    now: new Date(closeAt.getTime() + ms),
+  });
+
+  it('refuses an OPEN market from its close_at on by the read’s clock, before the transition', () => {
+    expect(marketTradingRejectReason(facts('open', -1))).toBeNull();
+    expect(marketTradingRejectReason(facts('open', -86_400_000))).toBeNull();
+    expect(marketTradingRejectReason(facts('open', 0))).toBe('closed');
+    expect(marketTradingRejectReason(facts('open', 1))).toBe('closed');
+  });
+
+  it('keeps the status’s own reason first, past the close too', () => {
+    for (const status of MARKET_STATUSES) {
+      if (status === 'draft' || status === 'review') {
+        expect(() => marketTradingRejectReason(facts(status, 1))).toThrow(RangeError);
+        continue;
+      }
+      for (const ms of [-1, 0, 1]) {
+        const expected =
+          status === 'open' ? (ms < 0 ? null : 'closed') : marketRejectReason(status);
+        expect(marketTradingRejectReason(facts(status, ms)), `${status} ${ms}`).toBe(expected);
+      }
+    }
+    expect(marketTradingRejectReason(facts('paused', 1))).toBe('paused');
+    expect(marketTradingRejectReason(facts('scheduled', 1))).toBe('not_open_yet');
+  });
+});
+
 describe('intakeMarketGate (ADR-0112 결정 4 steps 4–5)', () => {
   it('rejects a market not OPEN first, then closes an immediate order on one with no width', () => {
     for (const status of MARKET_STATUSES) {
       if (status === 'draft' || status === 'review') {
-        expect(() => intakeMarketGate({ status, widthTicks: 5 }, 'gtc')).toThrow(RangeError);
+        expect(() => intakeMarketGate({ ...CLOCK, status, widthTicks: 5 }, 'gtc')).toThrow(
+          RangeError,
+        );
         continue;
       }
       const reason = marketRejectReason(status);
@@ -454,8 +499,20 @@ describe('intakeMarketGate (ADR-0112 결정 4 steps 4–5)', () => {
               : timeInForce === 'ioc' && widthTicks === null
                 ? { kind: 'closed', why: 'price_protection' }
                 : null;
-          expect(intakeMarketGate({ status, widthTicks }, timeInForce)).toEqual(expected);
+          expect(intakeMarketGate({ ...CLOCK, status, widthTicks }, timeInForce)).toEqual(expected);
         }
+      }
+    }
+  });
+
+  it('rejects an OPEN market past its close_at before an immediate order meets no width', () => {
+    const past = { status: 'open', closeAt: CLOCK.closeAt, now: CLOCK.closeAt } as const;
+    for (const widthTicks of [5, null]) {
+      for (const timeInForce of TIME_IN_FORCES) {
+        expect(intakeMarketGate({ ...past, widthTicks }, timeInForce)).toEqual({
+          kind: 'reject',
+          reason: 'closed',
+        });
       }
     }
   });
@@ -518,7 +575,7 @@ describe('sellableOf (#177 15항 매도 가능액)', () => {
       stop: 'price_limit',
       cancelReason: 'ioc_remainder',
     });
-    const wide = { status: 'open', widthTicks: 20 } as const;
+    const wide = { ...CLOCK, status: 'open', widthTicks: 20 } as const;
     const outOfBids = sellableOf(bids, wide, { outcome: 'YES', qty: 20, lockedQty: 0 }, A).quote!;
     expect(outOfBids).toMatchObject({ filledQty: 14, remainingQty: 6, stop: 'no_quote' });
   });
@@ -540,7 +597,7 @@ describe('sellableOf (#177 15항 매도 가능액)', () => {
     expect(
       sellableOf(
         bids,
-        { status: 'open', widthTicks: null },
+        { ...CLOCK, status: 'open', widthTicks: null },
         { outcome: 'YES', qty: 4, lockedQty: 0 },
         A,
       ).quote,
@@ -548,7 +605,7 @@ describe('sellableOf (#177 15항 매도 가능액)', () => {
     expect(
       sellableOf(
         bids,
-        { status: 'paused', widthTicks: 10 },
+        { ...CLOCK, status: 'paused', widthTicks: 10 },
         { outcome: 'YES', qty: 4, lockedQty: 0 },
         A,
       ).quote,
@@ -601,9 +658,10 @@ describe('the public DTOs (#113)', () => {
 
   it('empties the book where the intake gate and the quote reject (ADR-0114 결정 2·3)', () => {
     // One check, `marketTradingRejectReason`, for the book, the gate and the quote, all four taking
-    // one `MarketTradingFacts` — so each case below is one value handed to all four, and a field
-    // #120 adds (`close_at`, the snapshot clock) is one fixture they all see. This catches a split
-    // only for a case it holds: #120 adds an OPEN market past its `close_at` here (ADR-0114 결과 5).
+    // one `MarketTradingFacts` — so each case below is one value handed to all four, and its
+    // `close_at` and read clock (#120) are one fixture they all see. The OPEN markets at and past
+    // their `close_at`, before the worker's transition, are ADR-0114 결과 5 '#120''s case: 'closed'
+    // in the book, the gate and the quote alike; 1 ms before it the market still trades.
     const terms: QuoteTerms = {
       outcome: 'YES',
       side: 'buy',
@@ -612,9 +670,18 @@ describe('the public DTOs (#113)', () => {
       qty: 3,
       budgetCoin: null,
     };
-    const cases: MarketTradingFacts[] = MARKET_STATUSES.flatMap((status) =>
-      [5, null].map((widthTicks) => ({ status, widthTicks })),
-    );
+    const closeAt = CLOCK.closeAt;
+    const at = (ms: number) => ({ closeAt, now: new Date(closeAt.getTime() + ms) });
+    const cases: MarketTradingFacts[] = [
+      ...MARKET_STATUSES.flatMap((status) =>
+        [5, null].map((widthTicks) => ({ ...CLOCK, status, widthTicks })),
+      ),
+      ...[0, 1, 60_000, -1].flatMap((ms) =>
+        [5, null].map((widthTicks) => ({ ...at(ms), status: 'open' as const, widthTicks })),
+      ),
+      { ...at(60_000), status: 'paused', widthTicks: 5 },
+      { ...at(60_000), status: 'scheduled', widthTicks: 5 },
+    ];
     for (const facts of cases) {
       if (facts.status === 'draft' || facts.status === 'review') {
         expect(() => marketTradingRejectReason(facts)).toThrow(RangeError);
@@ -632,7 +699,23 @@ describe('the public DTOs (#113)', () => {
       expect(shown.contracts).toEqual(bookDepth(reason === null ? book : []));
       const quote = quoteOrder(book, facts, terms, null);
       expect(quote.kind === 'quoted' && quote.figures.rejectReason).toBe(reason);
+      // An immediate order too: a market past its close rejects it before the width's `closed`.
+      const ioc = quoteOrder(book, facts, { ...terms, timeInForce: 'ioc' }, null);
+      if (reason !== null) {
+        expect(intakeMarketGate(facts, 'ioc')).toEqual({ kind: 'reject', reason });
+        expect(ioc.kind === 'quoted' && ioc.figures.rejectReason).toBe(reason);
+      }
+      const sellable = sellableOf(book, facts, { outcome: 'YES', qty: 3, lockedQty: 0 }, A);
+      if (reason !== null) expect(sellable.quote?.rejectReason).toBe(reason);
     }
+    // The OPEN cases at and past the close answer 'closed'; the one before it trades.
+    expect(cases.slice(-10).map(marketTradingRejectReason)).toEqual([
+      ...Array<string>(6).fill('closed'),
+      null,
+      null,
+      'paused',
+      'not_open_yet',
+    ]);
   });
 
   it('sends a quote with Coin as strings and the fee 0', () => {
@@ -845,7 +928,7 @@ describe('properties', () => {
   it('D3 a quote is the plan’s totals, inside the protected limit and the budget', () => {
     fc.assert(
       fc.property(bookArb, termsArb, widthArb, (book, t, widthTicks) => {
-        const market = { status: 'open', widthTicks } as const;
+        const market = { ...CLOCK, status: 'open', widthTicks } as const;
         const answer = quoteOrder(book, market, t, null);
         if (answer.kind !== 'quoted') throw new Error('an OPEN market with a width quotes');
         const figures = answer.figures;
@@ -932,7 +1015,7 @@ describe('properties', () => {
         fc.constantFrom(...OWNERS),
         (book, outcome, a, b, widthTicks, owner) => {
           const [lockedQty, qty] = a <= b ? [a, b] : [b, a];
-          const market = { status: 'open', widthTicks } as const;
+          const market = { ...CLOCK, status: 'open', widthTicks } as const;
           const figures = sellableOf(book, market, { outcome, qty, lockedQty }, owner);
           expect(figures.unlockedQty + figures.restingSellQty).toBe(qty);
           if (figures.unlockedQty === 0) {

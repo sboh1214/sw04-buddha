@@ -28,10 +28,11 @@ const LIVE = sql.raw(`('open', 'partially_filled')`);
 /**
  * Orders (#119, ADR-0112; ADR-0107 결정 1 #177 2·3·7·8·9항, ADR-0111 결정 6·8): every order the intake
  * took — a person's or the 운영 마켓메이커's, resting, filled, ended or rejected — written only by
- * @buddha/db orders.ts and the cancel (order-cancel.ts, #178) under the market lock (`lockMarket`),
- * the expiry (#120) to come with them (order-writes.test.ts). A rejected order (a market, asset or
- * quote reason) is a row with its request id and reason; a refusal that writes no row is an error.
- * Inserted in its final state of the intake, then updated in place while it rests:
+ * @buddha/db orders.ts and order-cancel.ts (the cancel #178, and the expiry #120 that the close and
+ * a non-held early close call as `expireLockedOrders`) under the market lock (`lockMarket`,
+ * order-writes.test.ts). A rejected order (a market, asset or quote reason) is a row with its
+ * request id and reason; a refusal that writes no row is an error. Inserted in its final state of
+ * the intake, then updated in place while it rests:
  * `orders_keep_record` (migration 0062) freezes its terms, moves its status forward only, grows its
  * filled amounts only and refuses DELETE — the history is the row and its fills. The lock an order
  * holds is `orderRemainingLock` (@buddha/shared contract.ts) over these columns

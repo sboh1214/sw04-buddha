@@ -11,9 +11,10 @@
  * publishes none.
  */
 import { randomUUID } from 'node:crypto';
-import { clockTimestamp, endPauseAtClose, lockMarket, schema, transitionMarket } from '@buddha/db';
+import { schema } from '@buddha/db';
 import {
   checkOrderInvariants,
+  closeTestMarket,
   completeOnboarding,
   createMarket,
   createMarketPause,
@@ -22,6 +23,7 @@ import {
   fundMarketMakerFunds,
   mintTestPairs,
   openOrderIntake,
+  passMarketClose,
   placeTestOrder,
   setReleaseSetting,
 } from '@buddha/db/test';
@@ -261,27 +263,16 @@ describe.skipIf(!hasTestInfra)('the public book and quotes (integration)', () =>
     return answer;
   }
 
-  /** The worker's close at `close_at` (it cancels nothing): OPEN or PAUSED → CLOSED. */
-  const workerClose = (marketId: string) =>
-    t.db.transaction(async (tx) => {
-      await lockMarket(tx, marketId);
-      const [current] = await tx
-        .select()
-        .from(schema.markets)
-        .where(eq(schema.markets.id, marketId))
-        .for('update');
-      const now = await clockTimestamp(tx);
-      const eventId = await transitionMarket(tx, {
-        marketId,
-        from: current!.status,
-        to: 'closed',
-        type: 'closed',
-        actorId: null,
-        payload: { closedAt: now.toISOString(), source: 'job' },
-        at: now,
-      });
-      if (current!.status === 'paused') await endPauseAtClose(tx, { marketId, now, eventId });
-    });
+  /**
+   * The worker's close at `close_at` (`closeMarketAtClose`, #120): the close moved a minute back,
+   * then OPEN or PAUSED → CLOSED with every live order ended 만료 (a ledger-held market's kept).
+   */
+  async function workerClose(marketId: string) {
+    await passMarketClose(t.db, marketId);
+    const done = await closeTestMarket(t.db, marketId);
+    if (!done.closed) throw new Error(`the close skipped: ${done.reason}`);
+    return done;
+  }
 
   // --- the book ---------------------------------------------------------------------------------
   it('answers the public book to anyone alike: every level, converted supply merged, each order once, no source or account', async () => {
@@ -391,19 +382,82 @@ describe.skipIf(!hasTestInfra)('the public book and quotes (integration)', () =>
     expect(heldOrders.filter((row) => row.status === 'open')).toHaveLength(6);
     expect(heldOrders.filter((row) => row.status === 'cancelled')).toEqual([]);
     await expectClosedBook(held.id, 'paused');
-    // Closed by the worker with its orders still live (#120 expires them), and closed while held.
+    // Closed by the worker, its six resting orders expired (#120), and closed while held — its
+    // six kept live and locked for #93's recovery, none offered.
     const closed = await stocked();
-    await workerClose(closed.id);
+    expect((await workerClose(closed.id)).expired.expired).toHaveLength(6);
     await expectClosedBook(closed.id, 'closed');
-    await workerClose(held.id);
+    expect((await workerClose(held.id)).expired.held).toHaveLength(6);
     await expectClosedBook(held.id, 'closed');
-    // The holder's sellable figure there is the rejected quote too.
+    // The holder's sellable figure there is the rejected quote too; the expiry gave B's 2 back.
     expect((await sellableOf(closed.id, b)).contracts[0]).toMatchObject({
+      qty: 12,
+      restingSellQty: 0,
+      unlockedQty: 12,
+      quote: { status: 'rejected', rejectReason: 'closed', filledQty: 0, stop: null },
+    });
+  });
+
+  it('refuses an OPEN market past its close_at before the worker closes it: book, quote, sellable and the order agree (#120)', async () => {
+    // ADR-0114 결과 5 '#120' (b): one gate (`marketTradingRejectReason` on `close_at` and the
+    // read's DB clock) for all four, the market still OPEN and its orders still live.
+    const market = await stocked();
+    await passMarketClose(t.db, market.id);
+    const publisher = t.app.get(MarketPublisher);
+    const toMarket = vi.spyOn(publisher, 'publishMarket');
+    const before = await ledgerState();
+    expect(await bookOf(market.id)).toEqual({
+      marketId: market.id,
+      marketRejectReason: 'closed',
+      contracts: EMPTY_BOOK,
+    });
+    for (const terms of [
+      { outcome: 'YES', side: 'buy', timeInForce: 'ioc', qty: 3 },
+      { outcome: 'NO', side: 'buy', timeInForce: 'gtc', limitPriceCoin: 45, qty: 2 },
+      { outcome: 'YES', side: 'buy', timeInForce: 'ioc', budgetCoin: '100' },
+    ]) {
+      expect(await quoted(market.id, terms)).toMatchObject({
+        filledQty: 0,
+        filledAmountCoin: '0',
+        maxSpendCoin: null,
+        stop: null,
+        status: 'rejected',
+        rejectReason: 'closed',
+        cancelReason: null,
+      });
+    }
+    expect((await sellableOf(market.id, b)).contracts[0]).toMatchObject({
       qty: 12,
       restingSellQty: 2,
       unlockedQty: 10,
       quote: { status: 'rejected', rejectReason: 'closed', filledQty: 0, stop: null },
     });
+    expect(await ledgerState()).toEqual(before);
+    // The order in the same window is a rejected row 마감 — not ORDER_INTAKE_CLOSED — with its
+    // limit as sent, nothing filled or locked, and no market:book (no live order changed).
+    const { order: rejected } = placeOrderResultSchema.parse(
+      dataOf<PlaceOrderResult>(
+        await order(c, market.id, {
+          outcome: 'YES',
+          side: 'buy',
+          timeInForce: 'ioc',
+          limitPriceCoin: 65,
+          qty: 3,
+        }),
+      ),
+    );
+    expect(rejected).toMatchObject({
+      status: 'rejected',
+      rejectReason: 'closed',
+      filledQty: 0,
+      protectedLimitPriceCoin: 65,
+    });
+    expect(await ledgerState()).toEqual({ ...before, orders: before.orders + 1 });
+    expect(toMarket).not.toHaveBeenCalled();
+    expect(
+      (await t.db.select().from(schema.markets).where(eq(schema.markets.id, market.id)))[0],
+    ).toMatchObject({ status: 'open' });
+    expect(await checkOrderInvariants(t.db)).toEqual([]);
   });
 
   // --- the quote --------------------------------------------------------------------------------

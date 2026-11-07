@@ -81,7 +81,9 @@ import { type CachedSeries, appendTick } from '@/lib/ticks';
  *
  * `market:book` (#179, ADR-0114) is a signal with no state: the public book changed, so its
  * `['market-book', id]` is asked again (`refreshBook`). Nothing reads that key until the 호가창
- * (#122), so the handler costs nothing before then.
+ * (#122), so the handler costs nothing before then. The close sends one after `market:status`
+ * when it expired the market's remaining orders (#120, ADR-0115); nothing comes at `close_at`
+ * itself, so re-reading the book at the close time is #122's.
  */
 
 /**
@@ -107,8 +109,8 @@ const FILLS_INVALIDATE_MS = 1_000;
 
 /**
  * At most one book refetch per market per second, leading and trailing like the fills: every
- * order that rests, fills or is cancelled publishes `market:book`, and a bot market (#129) moves
- * its book many times a second.
+ * order that rests, fills or is cancelled publishes `market:book` (the close's expiry one per
+ * market), and a bot market (#129) moves its book many times a second.
  */
 const BOOK_INVALIDATE_MS = 1_000;
 

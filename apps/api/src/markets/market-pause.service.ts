@@ -163,10 +163,12 @@ const END_SKIPS: Readonly<Record<EndPauseSkipReason, () => AppError>> = {
  * their owners' Coin accounts (`lockMarketOrders`) before the clock, so balance rows come last: the
  * pause right after the market row (it takes no admin-roles lock), the decision's approval after
  * the row and `decidable`'s shared admin-roles lock. A refusal rolls every cancel back. After
- * COMMIT, when it cancelled any, `market:book` beside `market:status` (#179, ADR-0114: the public
- * book changed); a `ledger_failure` pause cancels none and publishes the status alone (a lock
- * change alone has no event). The intake (#119) refuses new orders on a paused market as 일시 중단
- * (ADR-0112 10-13).
+ * COMMIT, when it cancelled or expired any (a non-held 조기 마감's expiry, #120), `market:book`
+ * beside `market:status` (#179, ADR-0114: the public book changed); a `ledger_failure` pause
+ * cancels none and publishes the status alone (a lock change alone has no event). The intake (#119)
+ * refuses new orders on a paused market as 일시 중단 (ADR-0112 10-13). The 조기 마감 of a market not held
+ * gets the close's processing (#120, ADR-0115): an order still live then — none since #178's pause,
+ * a leftover from before it — ends 만료 after the transition, as at `close_at`.
  */
 @Injectable()
 export class MarketPauseService {
@@ -330,16 +332,20 @@ export class MarketPauseService {
    * a request waiting then is moot, ended by a 반려 or a 철회 alone), `closeAt` 'closed' (its close
    * has come, by the clock too) and `pause` 'stale' (the request's pause is not the current one).
    *
-   * Then `endMarketPause` at the decision's instant, the approver its actor: first the market's
-   * live orders cancelled 일시 중단 (the class's Orders; a `ledger_failure` pause's recovery), then
-   * 재개 — the `resumed` event, payload `{pauseId, approvalId, requestedBy, reviewResult}`, the
-   * market OPEN again with its `open_at` kept; 조기 마감 — the `closed` event, payload `{closedAt,
-   * source: 'early_close', …}`, the market CLOSED with `close_at` kept as the scheduled close
-   * (#80's rule-version item); and the pause's end with the review result.
-   * `market_pause_decision_approve` records the request, the approver's reason and the market
-   * before and after. After COMMIT `market:status` (open or closed, the event's key), `market:book`
-   * when the end cancelled any order (#179) and, for an early close, the close job under
-   * `close_at` cancelled.
+   * Then `endMarketPause` at the decision's instant, the approver its actor: for a 재개, and for
+   * the 조기 마감 of a market held for a ledger failure (its approval is the recovery, ADR-0107 결정
+   * 4 #178), first the market's live orders cancelled 일시 중단 (the class's Orders), then 재개 —
+   * the `resumed` event, payload `{pauseId, approvalId, requestedBy, reviewResult}`, the market
+   * OPEN again with its `open_at` kept; 조기 마감 — the `closed` event, payload `{closedAt, source:
+   * 'early_close', …}`, the market CLOSED with `close_at` kept as the scheduled close (#80's
+   * rule-version item), and the close's own processing after it: a live order left on a market not
+   * held ends 만료 at that instant (#120, ADR-0107 결정 5 '#120 조기 마감과 CLOSED 뒤 재개' — the
+   * pause cancelled every order, so only a row from before #178 reaches it); and the pause's end
+   * with the review result. `market_pause_decision_approve` records the request, the approver's
+   * reason and the market before and after. After COMMIT `market:status` (open or closed, the
+   * event's key), `market:book` when the end cancelled or expired any order (#179) and, for an
+   * early close, the close job under `close_at` cancelled. No `user:` event: the end only moves
+   * locks (ADR-0113 12-11).
    */
   async approve(
     adminId: string,
@@ -396,7 +402,14 @@ export class MarketPauseService {
       });
       return {
         market: await this.markets.toAdminMarket(tx, result.market, tags, sources),
-        book: { marketIds: cancelledMarketIds(result.cancelled), at },
+        // The early close's expiry is this market's alone; `publishBook` names it once.
+        book: {
+          marketIds: [
+            ...cancelledMarketIds(result.cancelled),
+            ...(result.expired.expired.length > 0 ? [id] : []),
+          ],
+          at,
+        },
         // The delayed close job is keyed by market AND instant (marketCloseJobId); the early close
         // keeps `close_at`, so the job under it is the one to cancel.
         cancelCloseAt: payload.path === 'early_close' ? current.closeAt : null,

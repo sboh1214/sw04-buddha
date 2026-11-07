@@ -12,18 +12,11 @@
  * `market:book` signal (#179, ADR-0114) both publish after COMMIT when the live book changed.
  */
 import { randomUUID } from 'node:crypto';
-import {
-  clockTimestamp,
-  endPauseAtClose,
-  lockAdminRoles,
-  lockLedgerAccounts,
-  lockMarket,
-  schema,
-  transitionMarket,
-} from '@buddha/db';
+import { lockAdminRoles, lockLedgerAccounts, lockMarket, schema } from '@buddha/db';
 import {
   balanceOf,
   checkOrderInvariants,
+  closeTestMarket,
   completeOnboarding,
   createMarket,
   createMarketPause,
@@ -32,6 +25,7 @@ import {
   createUser,
   fundMarketMakerFunds,
   openOrderIntake,
+  passMarketClose,
   placeTestOrder,
   resumeMarket,
   setReleaseSetting,
@@ -852,6 +846,46 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
     );
   });
 
+  it('answers an order on an OPEN market past its close_at as a 마감 row before the worker closes it (#120)', async () => {
+    // The intake's gate judges `close_at` by the DB clock (ADR-0114 결과 5 '#120'): a rejected row
+    // with its request id — not ORDER_INTAKE_CLOSED, not MARKET_NOT_OPEN — nothing locked, no
+    // market:book; the market stays OPEN and a resting order stays live until the close runs.
+    await open();
+    const resting = placed(await send(b, { outcome: 'NO', qty: 2 })).order;
+    await passMarketClose(t.db, market.id);
+    const before = await balanceOf(t.db, a.id);
+    const toMarket = vi.spyOn(t.app.get(MarketPublisher), 'publishMarket');
+    for (const body of [
+      {},
+      { timeInForce: 'ioc', limitPriceCoin: 65, qty: 2 },
+      { timeInForce: 'ioc', limitPriceCoin: 65, qty: undefined, budgetCoin: '200' },
+      { side: 'sell' },
+    ]) {
+      const requestId = randomUUID();
+      const answer = placed(await send(a, body, { requestId }));
+      expect(answer.replayed).toBe(false);
+      expect(answer.order).toMatchObject({
+        requestId,
+        status: 'rejected',
+        rejectReason: 'closed',
+        cancelReason: null,
+        filledQty: 0,
+        filledAmountCoin: '0',
+      });
+      expect(answer.order.createdAt).toBe(answer.order.endedAt);
+      // The same request id answers the same row.
+      expect(placed(await send(a, body, { requestId }))).toEqual({ ...answer, replayed: true });
+    }
+    expect(await balanceOf(t.db, a.id)).toEqual(before);
+    expect(toMarket).not.toHaveBeenCalled();
+    const [row] = await t.db.select().from(schema.markets).where(eq(schema.markets.id, market.id));
+    expect(row).toMatchObject({ status: 'open' });
+    expect(
+      (await t.db.select().from(schema.orders).where(eq(schema.orders.id, resting.id)))[0],
+    ).toMatchObject({ status: 'open' });
+    expect(await checkOrderInvariants(t.db)).toEqual([]);
+  });
+
   it('answers a budget order’s Coin: what it spent, and the rest given back (#177 3항)', async () => {
     await open();
     // B bids NO at 40 for one and at 38 for two: YES asks of 60, then 62 (within 60 + 5).
@@ -1291,27 +1325,16 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
     const orderRow = async (id: string) =>
       (await t.db.select().from(schema.orders).where(eq(schema.orders.id, id)))[0]!;
     const expectSound = async () => expect(await checkOrderInvariants(t.db)).toEqual([]);
-    /** The worker's close at `close_at` (it cancels nothing): OPEN or PAUSED → CLOSED. */
-    const workerClose = (marketId: string) =>
-      t.db.transaction(async (tx) => {
-        await lockMarket(tx, marketId);
-        const [current] = await tx
-          .select()
-          .from(schema.markets)
-          .where(eq(schema.markets.id, marketId))
-          .for('update');
-        const now = await clockTimestamp(tx);
-        const eventId = await transitionMarket(tx, {
-          marketId,
-          from: current!.status,
-          to: 'closed',
-          type: 'closed',
-          actorId: null,
-          payload: { closedAt: now.toISOString(), source: 'job' },
-          at: now,
-        });
-        if (current!.status === 'paused') await endPauseAtClose(tx, { marketId, now, eventId });
-      });
+    /**
+     * The worker's close at `close_at` (`closeMarketAtClose`, #120): the close moved a minute
+     * back, then OPEN or PAUSED → CLOSED with every live order ended 만료 (a held market's kept).
+     */
+    async function workerClose(marketId: string) {
+      await passMarketClose(t.db, marketId);
+      const done = await closeTestMarket(t.db, marketId);
+      if (!done.closed) throw new Error(`the close skipped: ${done.reason}`);
+      return done;
+    }
 
     it('ends a resting order in the request as 취소 완료(본인 취소), its lock back, and answers what GET reads', async () => {
       await open();
@@ -1473,7 +1496,7 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
       await expectSound();
     });
 
-    it('refuses a live order of a market held for a ledger failure, closed before its recovery too, and cancels a closed market’s', async () => {
+    it('refuses a live order of a market held for a ledger failure, closed before its recovery too, and answers an expired one as it is', async () => {
       await open();
       const held = placed(await send(a, { qty: 2 })).order;
       const ended = placed(await send(a, { timeInForce: 'ioc', limitPriceCoin: 99 })).order;
@@ -1494,11 +1517,41 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
       await workerClose(market.id);
       await refuse();
 
-      // A CLOSED market not held (until #120 expires its orders at the close): cancelled.
+      // A CLOSED market not held: the close ended the order 만료 at its instant (#120), and the
+      // owner's cancel answers it in that final state — 200, nothing released, nothing published.
       const other = await createMarket(t.db);
-      const resting = placed(await send(a, {}, { marketId: other.id })).order;
-      await workerClose(other.id);
-      expect((await cancelled(a, resting.id)).cancelReason).toBe('by_owner');
+      const resting = placed(await send(a, { qty: 3 }, { marketId: other.id })).order;
+      const done = await workerClose(other.id);
+      const expired = await orderRow(resting.id);
+      expect(expired).toMatchObject({ status: 'expired', cancelReason: null });
+      const coin = await balanceOf(t.db, a.id);
+      const publisher = t.app.get(MarketPublisher);
+      const toMarket = vi.spyOn(publisher, 'publishMarket');
+      const toUser = vi.spyOn(publisher, 'publishUser');
+      const answer = await cancelled(a, resting.id);
+      expect(answer).toMatchObject({
+        id: resting.id,
+        status: 'expired',
+        filledQty: 0,
+        cancelledQty: 3,
+        cancelReason: null,
+        rejectReason: null,
+        endedAt: done.closedAt.toISOString(),
+      });
+      expect(await cancelled(a, resting.id)).toEqual(answer);
+      expect(await orderRow(resting.id)).toEqual(expired);
+      expect(await balanceOf(t.db, a.id)).toEqual(coin);
+      expect(toMarket).not.toHaveBeenCalled();
+      expect(toUser).not.toHaveBeenCalled();
+      // The ended list has it; the live one does not.
+      const endedIds = dataOf<Order[]>(await read('/me/orders?state=ended&limit=100', a)).map(
+        (row) => row.id,
+      );
+      expect(endedIds).toContain(resting.id);
+      const liveIds = dataOf<Order[]>(await read('/me/orders?state=live&limit=100', a)).map(
+        (row) => row.id,
+      );
+      expect(liveIds).not.toContain(resting.id);
 
       // A paused market held until its 재개 is approved: the recovery cancels it 일시 중단.
       const third = await createMarket(t.db);

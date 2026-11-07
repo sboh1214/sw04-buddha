@@ -1,6 +1,7 @@
 import {
   idempotencyKeySchema,
   intakeMarketGate,
+  marketTradingRejectReason,
   intakeRemainderRelease,
   isContractPrice,
   isLiveOrderStatus,
@@ -16,6 +17,7 @@ import {
   restingStateAfterFill,
   type AccountType,
   type BookOrder,
+  type MarketTradingFacts,
   type OrderLock,
   type OrderLockFacts,
   type OrderRejectReason,
@@ -43,13 +45,12 @@ import { clockTimestamp, lockMarket } from './tx-helpers.js';
 /*
  * 주문 접수와 체결 (#119, ADR-0112; ADR-0107 결정 1 #177 2·3·7·8·9·11·12·15항, 결정 3 '주문 접수', 결정 5 #119 rows;
  * ADR-0110 결정 4·8, ADR-0111 결정 6): the one writer of `fills` and of `orders` beside the cancel
- * (order-cancel.ts, #178), which ends live orders; the expiry (#120) joins them
- * (order-writes.test.ts). One intake runs in its caller's transaction — the API's for a member,
- * after the checks that write no row (the address and account rate limits, onboarding,
- * `assertCanTrade`, the admin role, the shown account), and the bot runtime's (M10 #129) for the 운영
- * 마켓메이커 — and either writes nothing (the request was answered before, intake is closed, no such
- * public market) or writes the order once in its final state of the intake, with every fill it
- * made.
+ * (order-cancel.ts, #178 and the expiry #120), which ends live orders (order-writes.test.ts). One
+ * intake runs in its caller's transaction — the API's for a member, after the checks that write no
+ * row (the address and account rate limits, onboarding, `assertCanTrade`, the admin role, the shown
+ * account), and the bot runtime's (M10 #129) for the 운영 마켓메이커 — and either writes nothing (the
+ * request was answered before, intake is closed, no such public market) or writes the order once in
+ * its final state of the intake, with every fill it made.
  *
  * Every writer of `orders` or `fills` holds the market's `lockMarket` (the arrival key is drawn
  * under it, and `fills_check` reads both orders by key trusting it). The lock order of an intake
@@ -280,17 +281,20 @@ const zeroLock = (lock: OrderLock): boolean =>
  *    order it named before is answered as it stands now (`replayed`), or `conflict` when the terms
  *    differ — before any other answer, so a lost answer can be read back while intake is closed;
  * 2. `order.accepting` not `true` → `closed` (ADR-0107 결정 3: the 운영 마켓메이커 too);
- * 3. the market: none, DRAFT or REVIEW → `not_found`; any status but OPEN → a rejected order
- *    '개장 전', '일시 중단' or '마감' with nothing locked (`marketRejectReason`);
+ * 3. the market: none, DRAFT or REVIEW → `not_found`; any status but OPEN, or an OPEN market
+ *    whose `close_at` has come by the DB clock read after the locks so far (#120) → a rejected
+ *    order '개장 전', '일시 중단' or '마감' with nothing locked (`marketTradingRejectReason`);
  * 4. an immediate order on a market with no width → `closed` (a GTC order never uses it) — 3
  *    and 4 are `intakeMarketGate`;
  * 5. the live book; an immediate order's limit narrowed to the best opposite entry ± the market's
  *    width (`protectedLimit`, #177 2항 — the own resting order counts as the reference too), the
  *    match (#117 `matchOrder`, two arguments) and its end state — `planIntakeMatch`. The quote
  *    (#179, order-book.ts) runs the same gate and plan on a snapshot, with no owner;
- * 6. every owner the match meets locked at once (`lockOrderHolders`), then the order's intake
- *    lock (`orderIntakeLock` at the protected limit, a budget whole): a shortfall → a rejected
- *    order '잔액 부족' or '보유량 부족', nothing filled;
+ * 6. every owner the match meets locked at once (`lockOrderHolders`), the market's close again
+ *    at the fill instant read after it (a rejected order '마감', nothing locked — no fill carries
+ *    an instant at or past `close_at`, #120), then the order's intake lock (`orderIntakeLock` at
+ *    the protected limit, a budget whole): a shortfall → a rejected order '잔액 부족' or '보유량
+ *    부족', nothing filled;
  * 7. the order in its end state (`orderEndState`: ADR-0111 결정 6), then each fill in walk order —
  *    its row first (its id keys the ledger events, migration 0062 binds them), #118's process, the
  *    resting order's fill — and the lock left over released (`intakeRemainderRelease`: an IOC
@@ -338,14 +342,20 @@ export async function placeOrder(
   );
   if (!isOrderIntakeOpen(accepting)) return { kind: 'closed', why: 'intake' };
 
-  // Every writer of a market's status holds its `lockMarket`, so the row read now stays as it is.
-  const [market] = await tx
-    .select({ status: markets.status, widthTicks: markets.priceProtectionTicks })
+  // Every writer of a market's status or `close_at` holds its `lockMarket`, so the row read now
+  // stays as it is; the DB clock is read after it, after every lock taken so far.
+  const [row] = await tx
+    .select({
+      status: markets.status,
+      widthTicks: markets.priceProtectionTicks,
+      closeAt: markets.closeAt,
+    })
     .from(markets)
     .where(eq(markets.id, marketId));
-  if (!market || market.status === 'draft' || market.status === 'review') {
+  if (!row || row.status === 'draft' || row.status === 'review') {
     return { kind: 'not_found' };
   }
+  const market: MarketTradingFacts = { ...row, now: await clockTimestamp(tx) };
 
   /** The order's row values all its paths share. */
   const terms = {
@@ -393,19 +403,21 @@ export async function placeOrder(
     return { kind: 'placed', order, fills: [], touched: { balances: [], positions: [] } };
   };
 
-  // The market gate the quote (#179) runs too: #120 adds the `close_at` check of an OPEN market
-  // to its `marketTradingRejectReason`, which the public book shares. Per-account refusals (#143's
-  // role-revoke reason, #93's account hold) need the owner, which the public quote has not, so they
-  // go below beside the asset lock, not into the gate.
+  // A refusal of the market alone records the limit as sent, no reference and no width: the
+  // gate's row and the fill instant's '마감' row have one shape.
+  const gateProtection = {
+    protectedLimitPrice: input.limitPriceCoin,
+    referencePrice: null,
+    ticks: null,
+  };
+  // The market gate the quote (#179) runs too: its `marketTradingRejectReason` (the status, and
+  // the `close_at` of an OPEN market by the clock, #120) is the check the public book shares; the
+  // row records the instant judged. Per-account refusals (#143's role-revoke reason, #93's account
+  // hold) need the owner, which the public quote has not, so they go below beside the asset lock,
+  // not into the gate.
   const refusal = intakeMarketGate(market, input.timeInForce);
   if (refusal?.kind === 'closed') return refusal;
-  if (refusal?.kind === 'reject') {
-    return rejected(refusal.reason, await clockTimestamp(tx), {
-      protectedLimitPrice: input.limitPriceCoin,
-      referencePrice: null,
-      ticks: null,
-    });
-  }
+  if (refusal?.kind === 'reject') return rejected(refusal.reason, market.now, gateProtection);
 
   const owner = await ownerOf(tx, ownerId);
   if (owner === null) throw new RangeError(`account ${ownerId} does not exist`);
@@ -427,6 +439,12 @@ export async function placeOrder(
   // last lock that can wait, so the clock is read after it.
   await lockOrderHolders(tx, marketId, [ownerId, ...result.counterpartyOwnerIds]);
   const at = await clockTimestamp(tx);
+  // The close again at the fill instant (#120, ADR-0115): the gate's clock came before
+  // `lockOrderHolders`, which can wait on another market's intake, and no order or fill may carry
+  // an instant at or past `close_at`. Only 'closed' can answer here (the status cannot change under
+  // the market lock), and nothing is locked yet.
+  const late = marketTradingRejectReason({ ...market, now: at });
+  if (late !== null) return rejected(late, at, gateProtection);
   const facts: OrderLockFacts = {
     side: input.side,
     outcome: input.outcome,

@@ -131,15 +131,18 @@ const notFound = (what: 'Market' | 'Order') =>
  *   included). Then the intake:
  *   a request id that named an order before answers that order as it stands now (`replayed`) or
  *   DUPLICATE_REQUEST with other terms; ORDER_INTAKE_CLOSED while `order.accepting` is not true
- *   (결정 3) or an immediate order meets a market with no 가격 보호 폭 (details `priceProtection`);
+ *   (결정 3) or an immediate order meets a market with no 가격 보호 폭 (details `priceProtection`) —
+ *   a market not OPEN, or past its `close_at` by the DB clock, answers its rejected row first;
  *   NOT_FOUND for a market that is not public. Every other answer is an order row — taken, or
- *   rejected with its reason (#177 7항) — in 200. After COMMIT, best effort, `user:balance` for
- *   each person whose ledger the fills moved and `user:position` for each position row they or a
- *   sell lock wrote; the 운영 마켓메이커 has no room. A buy that only rests publishes no `user:`
- *   event (no ledger entry; the submitter reads its own answer); a sell that only rests publishes
- *   its position row's `user:position` (its lock is on that row). An order that rested or filled
- *   publishes `market:book` in its market's room (#179, ADR-0114: the public book changed); one
- *   rejected, or an immediate one that filled nothing, changed no live order and publishes none.
+ *   rejected with its reason (#177 7항) — in 200; a market past its `close_at` by the DB clock is
+ *   a 마감 (`closed`) row even while OPEN, before the worker's close (#120, ADR-0115). After COMMIT,
+ *   best effort, `user:balance` for each person whose ledger the fills moved and `user:position`
+ *   for each position row they or a sell lock wrote; the 운영 마켓메이커 has no room. A buy that only
+ *   rests publishes no `user:` event (no ledger entry; the submitter reads its own answer); a sell
+ *   that only rests publishes its position row's `user:position` (its lock is on that row). An
+ *   order that rested or filled publishes `market:book` in its market's room (#179, ADR-0114: the
+ *   public book changed); one rejected, or an immediate one that filled nothing, changed no live
+ *   order and publishes none.
  * - 취소 (`cancel`, #178, ADR-0113): the whole remainder of one of the session's live orders, ended
  *   in one transaction by `cancelOrder` (@buddha/db order-cancel.ts: the market's lock, the order
  *   again under it, the owner's Coin account, then the release and the row as 취소 완료(본인 취소))

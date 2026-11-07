@@ -1,11 +1,13 @@
 import type { APIRequestContext, APIResponse } from '@playwright/test';
 import type {
   AdminMarket,
+  Market,
   MyFill,
   Order,
   OrderBook,
   OrderQuote,
   PlaceOrderResult,
+  Position,
   Sellable,
 } from '@buddha/shared';
 import { copy } from '../src/copy';
@@ -19,6 +21,7 @@ import {
   signIn,
   signUp,
   test,
+  workerProbeDisabled,
 } from './helpers';
 
 /**
@@ -51,6 +54,13 @@ import {
  * same orders with the quoted limit then fill; B's 매도 가능액 is its unlocked YES quoted with the
  * resting sell apart, and what B's own sell then fills; A's stops at A's own bid where the public
  * quote fills it (ADR-0111 P9). Quotes and reads are no orders: A and B send three orders, C two.
+ *
+ * 시장 마감과 주문 만료 (#120, ADR-0115), through the API too — the MY lists are #123's and #124's,
+ * the notice #134's: on a market whose close is 70 s away (a worker to wait on, as pause.spec.ts's
+ * close), A's NO bid rests and fills one, B's YES sell of that one rests; an order sent past the
+ * close is a 마감 row; the worker closes the market and ends both orders as 만료 — A's fill kept,
+ * every lock back, both holdings as they were — and the book is empty with the reason 마감. A
+ * sends one order, B three.
  */
 
 /** `{ data }` out of the success envelope, with the body in the message on a failure. */
@@ -772,6 +782,168 @@ test.describe('공개 호가와 견적 (#179)', () => {
       await visitorContext.close();
       await aContext.close();
       await cContext.close();
+    }
+  });
+});
+
+/**
+ * How far ahead the market the worker closes has its close: room for its making and opening and
+ * four orders to land before it, on a slow box too (both members sign up before it is set) —
+ * pause.spec.ts's budget.
+ */
+const CLOSE_IN_MS = 70_000;
+
+/**
+ * How long the test waits for the close: the close, and then a whole minute more for the
+ * per-minute scan should the delayed job be lost (pause.spec.ts's).
+ */
+const CLOSE_WAIT_MS = 150_000;
+
+test.describe('시장 마감과 주문 만료 (#120)', () => {
+  test('거래 마감 시각이 지난 시장의 새 주문은 마감으로 거절되고, 워커가 마감하며 남은 대기 주문을 만료로 끝내 체결 수량을 두고 잠금을 돌려주며, 보유는 그대로다', async ({
+    admin,
+    browser,
+    page,
+  }) => {
+    test.skip(
+      workerProbeDisabled(),
+      'WORKER_HEALTH_PORT=0: no worker probe; the suite cannot wait for a worker',
+    );
+    test.slow(); // the close is more than a real minute away
+    // Both members sign up before the clock starts: CLOSE_IN_MS budgets the market's making and
+    // the orders, not two sign-ups as well.
+    const bContext = await browser.newContext();
+    try {
+      const bPage = await bContext.newPage();
+      await signUp(page, freshEmail());
+      await signUp(bPage, freshEmail());
+      const a = page.request;
+      const b = bPage.request;
+      const closeAt = new Date(Date.now() + CLOSE_IN_MS).toISOString();
+      const market = await createOpenMarket(admin, { closeAt });
+
+      // --- A's GTC NO buy, 3 at 40, rests; B's IOC YES buy of one meets it at 40 (a pair mint);
+      // B's GTC YES sell of that one at 90 rests with nothing to meet (A's NO bid is a YES ask).
+      const resting = (
+        await placeOrder(a, market.id, crypto.randomUUID(), {
+          outcome: 'NO',
+          side: 'buy',
+          timeInForce: 'gtc',
+          limitPriceCoin: 40,
+          qty: 3,
+        })
+      ).order;
+      await placeOrder(b, market.id, crypto.randomUUID(), {
+        outcome: 'YES',
+        side: 'buy',
+        timeInForce: 'ioc',
+        limitPriceCoin: 99,
+        qty: 1,
+      });
+      const sell = (
+        await placeOrder(b, market.id, crypto.randomUUID(), {
+          outcome: 'YES',
+          side: 'sell',
+          timeInForce: 'gtc',
+          limitPriceCoin: 90,
+          qty: 1,
+        })
+      ).order;
+      expect(sell).toMatchObject({ status: 'open', filledQty: 0 });
+      const aFilled = (await meOf(a)).balance;
+      expect(aFilled.lockedCoin).toBe('80');
+      expect(
+        (await dataOf<Sellable>(await b.get(`/api/v1/me/markets/${market.id}/sellable`)))
+          .contracts[0],
+      ).toMatchObject({ outcome: 'YES', qty: 1, restingSellQty: 1, unlockedQty: 0 });
+
+      // --- From close_at a new order is a 마감 row, whoever answers it: the intake's own clock
+      // while the market is still OPEN, or the status once the worker has closed it (which one
+      // is not deterministic here; the db, API and shared tests hold the OPEN window).
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.max(0, Date.parse(closeAt) + 1_000 - Date.now())),
+      );
+      const late = (
+        await placeOrder(b, market.id, crypto.randomUUID(), {
+          outcome: 'YES',
+          side: 'buy',
+          timeInForce: 'gtc',
+          limitPriceCoin: 50,
+          qty: 1,
+        })
+      ).order;
+      expect(late).toMatchObject({
+        status: 'rejected',
+        rejectReason: 'closed',
+        filledQty: 0,
+        limitPriceCoin: 50,
+      });
+
+      // --- The worker closes it at its close — the delayed job the approval registered at the
+      // open, or the per-minute scan behind it — and ends the orders left in the same transaction.
+      await expect
+        .poll(
+          async () =>
+            (await dataOf<Market>(await bPage.request.get(`/api/v1/markets/${market.id}`))).status,
+          { timeout: CLOSE_WAIT_MS, intervals: [2_000] },
+        )
+        .toBe('closed');
+
+      // A's order: 만료 (no cancel reason — 만료 is a state), the fill kept, the rest ended.
+      const expired = await dataOf<Order>(await a.get(`/api/v1/me/orders/${resting.id}`));
+      expect(expired).toMatchObject({
+        status: 'expired',
+        cancelReason: null,
+        rejectReason: null,
+        qty: 3,
+        filledQty: 1,
+        filledAmountCoin: '40',
+        cancelledQty: 2,
+      });
+      expect(Date.parse(expired.endedAt ?? '')).toBeGreaterThanOrEqual(Date.parse(closeAt));
+      // Its lock back, the 80 the two left held: nothing else moved A's Coin.
+      expect((await meOf(a)).balance).toEqual({
+        availableCoin: String(BigInt(aFilled.availableCoin) + 80n),
+        lockedCoin: '0',
+      });
+      // B's sell: 만료 too, its contract unlocked and still B's — the close moves no holding.
+      expect(await dataOf<Order>(await b.get(`/api/v1/me/orders/${sell.id}`))).toMatchObject({
+        status: 'expired',
+        cancelReason: null,
+        filledQty: 0,
+        cancelledQty: 1,
+      });
+      expect(
+        (await dataOf<Sellable>(await b.get(`/api/v1/me/markets/${market.id}/sellable`)))
+          .contracts[0],
+      ).toMatchObject({ outcome: 'YES', qty: 1, restingSellQty: 0, unlockedQty: 1 });
+      const held = async (context: APIRequestContext) =>
+        (await dataOf<Position[]>(await context.get('/api/v1/me/positions?status=open')))
+          .filter((position) => position.marketId === market.id)
+          .map(({ outcome, qty }) => ({ outcome, qty }));
+      expect(await held(a)).toEqual([{ outcome: 'NO', qty: 1 }]);
+      expect(await held(b)).toEqual([{ outcome: 'YES', qty: 1 }]);
+      expect(await dataOf<Order[]>(await a.get('/api/v1/me/orders?state=live'))).toEqual([]);
+
+      // --- The public book: nothing left, every side '호가 없음', the market's reason 마감.
+      const book = await readBook(bContext.request, market.id);
+      expect(book.marketRejectReason).toBe('closed');
+      for (const contract of book.contracts) {
+        expect(contract).toMatchObject({
+          asks: [],
+          bids: [],
+          bestAskCoin: null,
+          bestBidCoin: null,
+        });
+      }
+
+      // --- MY: A's 거래·정산 이력 holds the order as 만료.
+      await page.goto('/my/history');
+      await expect(
+        page.getByTestId('my-order-history').getByTestId(`portfolio-order-${resting.id}`),
+      ).toContainText(copy.orderStatusExpired);
+    } finally {
+      await bContext.close();
     }
   });
 });

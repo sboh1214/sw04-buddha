@@ -68,6 +68,12 @@ export {
   type SetCorrectionPendingInput,
 } from './market-judgement.js';
 export {
+  CLOSABLE_STATUSES,
+  closeMarketAtClose,
+  type CloseMarketAtCloseResult,
+  type CloseSkipReason,
+} from './market-close.js';
+export {
   openScheduledMarket,
   type OpenScheduledMarketInput,
   type OpenScheduledMarketResult,
@@ -120,6 +126,7 @@ export {
   cancelLockedOrders,
   cancelledMarketIds,
   cancelOrder,
+  expireLockedOrders,
   lockAccountOrders,
   lockMarketOrders,
   ordersAwaitingRecovery,
@@ -127,6 +134,7 @@ export {
   type CancelOrderInput,
   type CancelOrderResult,
   type CancelTouched,
+  type ExpiredOrders,
   type LockedMarketOrders,
   type LockedOrders,
   type OrderCancelProcessReason,
