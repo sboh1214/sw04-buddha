@@ -31,6 +31,12 @@ export const MARKETS_KEY = ['markets'] as const;
 export const MARKET_KEY = ['market'] as const;
 export const TICKS_KEY = ['ticks'] as const;
 export const MARKET_FILLS_KEY = ['market-fills'] as const;
+/**
+ * 공개 호가 (#179, ADR-0114): `GET /markets/:id/book`, the same for every reader (no cookie), so
+ * public and dehydratable. Nothing reads it yet — #122's 호가창 query will — but the realtime
+ * provider already restarts it on `market:book` and `market:status` and on a resnapshot.
+ */
+export const MARKET_BOOK_KEY = ['market-book'] as const;
 /** `_QUERY_KEY` rather than `_KEY` because the admin screens already import it under that name. */
 export const CATEGORIES_QUERY_KEY = ['categories'] as const;
 /**
@@ -282,6 +288,14 @@ export const ticksKey = (marketId: string, range: TickRange) =>
   [...TICKS_KEY, marketId, range] as const;
 
 export const marketFillsKey = (marketId: string) => [...MARKET_FILLS_KEY, marketId] as const;
+
+/**
+ * One market's public book, on the canonical lower-cased uuid like `marketKey`: the
+ * `market:book` signal names the row's own id, and a key on the id as typed would never be
+ * restarted by it.
+ */
+export const marketBookKey = (marketId: string) =>
+  [...MARKET_BOOK_KEY, marketId.toLowerCase()] as const;
 
 /**
  * Key roots that need the session cookie. They are never fetched on the server (`api.server.ts`

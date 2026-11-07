@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
+  marketBookEvent,
   marketChannel,
   userChannel,
   type MarketRealtimeEvent,
@@ -36,6 +37,18 @@ export class MarketPublisher {
   /** Room `market:<id>` (public). */
   async publishMarket(marketId: string, event: MarketRealtimeEvent): Promise<void> {
     await this.publish(marketChannel(marketId), event);
+  }
+
+  /**
+   * `market:book` (#179, ADR-0114) in each market's room, once per market however often it is
+   * named: the signal that its public book changed, for a writer whose committed transaction
+   * changed live orders there. Issued together, awaited together; a signal carries no state, so
+   * their order does not matter (the receiver re-reads `GET /markets/:id/book`).
+   */
+  async publishBook(marketIds: Iterable<string>, at: Date): Promise<void> {
+    await Promise.all(
+      [...new Set(marketIds)].map((id) => this.publishMarket(id, marketBookEvent(id, at))),
+    );
   }
 
   /** Room `user:<id>` (the account's own balance and positions). */

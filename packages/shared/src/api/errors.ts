@@ -226,10 +226,13 @@ export const ERROR_CODES = [
   /**
    * No order was taken and no order row written, 409 (#119): the release setting order.accepting
    * is not true, so the server takes no new order from anyone, the market maker included; or the
-   * order is an immediate one on a market that has no price-protection width yet, and then the
-   * first detail names the path priceProtection. Resting orders, their cancel and the quote and
-   * book reads are not refused. A rejected order, a market or asset or quote reason, is no error:
-   * it is answered with its order row.
+   * order is an immediate one on an OPEN market that has no price-protection width yet, and then
+   * the first detail names the path priceProtection — an immediate order's quote there
+   * (`POST /markets/:id/quote`, #179, ADR-0114) is answered the same. A market not OPEN answers
+   * its status rejection first, width or none: the order (a resting one too) as a rejected row,
+   * the quote as a rejected quote. order.accepting never closes the quote or the book reads;
+   * resting orders, their cancel and the order history are not refused. A rejected order, a
+   * market or asset or quote reason, is no error: it is answered with its order row.
    */
   'ORDER_INTAKE_CLOSED',
   'INTERNAL',

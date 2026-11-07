@@ -122,6 +122,14 @@ export interface CancelledOrders {
 
 const LIVE = inArray(orders.status, [...LIVE_ORDER_STATUSES]);
 
+/**
+ * The markets a batch ended an order in, each once in the batch's order: whose public book
+ * changed, for the caller's `market:book` after COMMIT (#179). Skipped held orders changed nothing.
+ */
+export function cancelledMarketIds(batch: Pick<CancelledOrders, 'cancelled'>): string[] {
+  return [...new Set(batch.cancelled.map((row) => row.marketId))];
+}
+
 function assertProcessReason(reason: OrderCancelReason): void {
   if (reason === 'ioc_remainder' || reason === 'self_trade') {
     throw new RangeError(`the intake writes '${reason}' itself; a cancel never does`);

@@ -1605,11 +1605,13 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
             endedAt: row!.pausedAt,
           });
         }
-        // The status alone is published: a lock given back has no event.
-        await waitForMessages(received, 1, 'market:status of the pause');
+        // The status, then the book's signal (#179: the cancels changed the public book); a lock
+        // given back has no event of its own.
+        await waitForMessages(received, 2, 'market:status and market:book of the pause');
         await sleep(100);
-        expect(received.map((message) => (JSON.parse(message) as { type: string }).type)).toEqual([
-          'market:status',
+        expect(received.map((message) => JSON.parse(message) as unknown)).toEqual([
+          expect.objectContaining({ type: 'market:status', status: 'paused' }),
+          { type: 'market:book', marketId: market.id, ts: row!.pausedAt.toISOString() },
         ]);
       });
       expect(await balanceOf(t.db, a.id)).toMatchObject({ availableCoin: 950n, lockedCoin: 50n });
@@ -1647,10 +1649,23 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
         expectNotAllowed(await approve(market.id, requestId, asker), 'requester');
         expect(await orderOf(order.id)).toEqual(before);
 
-        const approved = await approve(market.id, requestId);
-        expect(approved.statusCode, approved.body).toBe(200);
+        let received: string[] = [];
+        await listening(market.id, async (messages) => {
+          const approved = await approve(market.id, requestId);
+          expect(approved.statusCode, approved.body).toBe(200);
+          await waitForMessages(messages, 2, 'market:status and market:book of the recovery');
+          received = messages;
+        });
         const event = (await eventsFor(market.id)).at(-1)!;
         expect(event.type).toBe(path === 'resume' ? 'resumed' : 'closed');
+        // The recovery's cancels changed the public book (#179): its signal after the status.
+        expect(received.map((message) => JSON.parse(message) as unknown)).toEqual([
+          expect.objectContaining({
+            type: 'market:status',
+            status: path === 'resume' ? 'open' : 'closed',
+          }),
+          { type: 'market:book', marketId: market.id, ts: event.createdAt.toISOString() },
+        ]);
         // At the decision's instant, which is the event's: cancelled before the status changed.
         expect(await orderOf(order.id)).toMatchObject({
           status: 'cancelled',

@@ -1,6 +1,6 @@
 import * as z from 'zod';
 import { cursorQuerySchema } from './api/pagination.js';
-import { coinAmountSchema } from './api/coin-amount.js';
+import { coinAmountSchema, serializeCoinAmount } from './api/coin-amount.js';
 import { uuidParamSchema } from './api/path-param.js';
 import {
   BP_MAX,
@@ -19,7 +19,19 @@ import { adminMarketDisputesSchema } from './market-dispute.js';
 import { adminMarketJudgementStateSchema, judgementVersionSchema } from './market-judgement.js';
 import { adminJudgementDelaySchema, marketJudgementDelaySchema } from './market-judgement-delay.js';
 import { openItemSchema } from './market-open-items.js';
-import { priceProtectionTicksSchema } from './orders.js';
+import { MATCH_STOPS, type BookOrder } from './matching.js';
+import {
+  bookDepth,
+  type ContractDepth,
+  type MarketTradingFacts,
+  type OrderQuoteFigures,
+  type SellableFigures,
+} from './order-book.js';
+import {
+  MARKET_STATUS_REJECT_REASONS,
+  marketTradingRejectReason,
+  priceProtectionTicksSchema,
+} from './orders.js';
 import { adminMarketPauseStateSchema } from './market-pause.js';
 import { adminMarketReviewSchema } from './market-review.js';
 import { marketRuleItemsSchema } from './market-rules.js';
@@ -495,6 +507,160 @@ export const positionStatusSchema = z.enum(POSITION_STATUSES);
 /** `GET /me/positions` (no `.meta`: query DTO). Omitted status = every row. */
 export const positionsQuerySchema = z.object({ status: positionStatusSchema.optional() });
 export type PositionsQuery = z.infer<typeof positionsQuerySchema>;
+
+// ---- the public book, quotes and the sellable figures (#179) -------------------------
+/** One price level: its price in the contract and the quantity resting there, summed. */
+export const orderBookLevelSchema = z
+  .object({ priceCoin: priceSchema, qty: z.number().int().min(1) })
+  .meta({ id: 'OrderBookLevel' });
+export type OrderBookLevel = z.infer<typeof orderBookLevelSchema>;
+
+/**
+ * One contract's book (#177 4항, N02 §2·§5): `asks` what a buyer meets — the direct sells and the
+ * converted buys of the other outcome merged into one quantity per price, cheapest first — and
+ * `bids` what a seller meets, the direct buys only, highest first. Every level (at most 99 per
+ * side; the screen's depth is #122's). `bestAskCoin`/`bestBidCoin` null is '호가 없음'.
+ */
+export const orderBookContractSchema = z
+  .object({
+    outcome: outcomeSchema,
+    asks: z.array(orderBookLevelSchema).max(PRICE_MAX),
+    bids: z.array(orderBookLevelSchema).max(PRICE_MAX),
+    bestAskCoin: priceSchema.nullable(),
+    bestBidCoin: priceSchema.nullable(),
+  })
+  .meta({ id: 'OrderBookContract' });
+export type OrderBookContract = z.infer<typeof orderBookContractSchema>;
+
+/**
+ * `GET /markets/:id/book` (#179, public: the same for every caller): both contracts, YES then NO,
+ * price and summed quantity only — no order, account, account type, bot split or order count
+ * (ADR-0107 결정 5 '#179·#119'). A market that takes no order now (`marketTradingRejectReason`:
+ * 개장 전, 일시 중단, 마감) shows empty sides with the reason: its resting orders, a ledger hold's locked
+ * ones among them, cannot trade (ADR-0114).
+ */
+export const orderBookSchema = z
+  .object({
+    marketId: z.uuid(),
+    marketRejectReason: z.enum(MARKET_STATUS_REJECT_REASONS).nullable(),
+    contracts: z.array(orderBookContractSchema).length(2),
+  })
+  .meta({ id: 'OrderBook' });
+export type OrderBook = z.infer<typeof orderBookSchema>;
+
+/**
+ * The public book of a market from its trading facts and its live book (#179): every level when
+ * it takes orders now, empty sides with the reason otherwise (ADR-0114 결정 2) — by the intake's
+ * own check (`marketTradingRejectReason`), so #120's `close_at` refusal empties the book as it
+ * refuses the quote and the order. RangeError for a DRAFT or REVIEW market (the caller answers
+ * NOT_FOUND) or a malformed book.
+ */
+export function orderBookOf(
+  marketId: string,
+  market: MarketTradingFacts,
+  book: readonly BookOrder[],
+): OrderBook {
+  const reason = marketTradingRejectReason(market);
+  const depth: ContractDepth[] = bookDepth(reason === null ? book : []);
+  return {
+    marketId,
+    marketRejectReason: reason,
+    contracts: depth.map((contract) => ({
+      outcome: contract.outcome,
+      asks: contract.asks.map((level) => ({ priceCoin: level.priceCoin, qty: level.qty })),
+      bids: contract.bids.map((level) => ({ priceCoin: level.priceCoin, qty: level.qty })),
+      bestAskCoin: contract.bestAskCoin,
+      bestBidCoin: contract.bestBidCoin,
+    })),
+  };
+}
+
+/**
+ * A quote (#179; `POST /markets/:id/quote`, public, and each holding's `Sellable.quote`): the
+ * intake's walk on the book as it stands, in the `Order`'s names where it has the field —
+ * `protectedLimitPriceCoin` the 최대 매수 단가 or 최소 매도 단가 (#177 2항: send it as the order's
+ * limit), `filledQty` contracts filling at once for `filledAmountCoin` (paid by a buy, received
+ * by a sell; the average is the one over the other, #177 12항, with none at 0 — its rounding and
+ * place are #60·#66's), what is left (`remainingQty`, the matcher's qty − filledQty: a GTC's
+ * resting part, an IOC's cancelled rest, all of a refused one — not `Order.cancelledQty`, which
+ * stays 0 while a GTC rests and for a rejection; or a budget's `unspentCoin`), a buy's
+ * `maxSpendCoin` (the intake's whole lock: limit × qty, or the budget), the fee (always 0, #73
+ * 15항), why the walk stopped (null when the market's status refused the order) and the state the
+ * order would end its intake in with its reason (IOC: the rest cancelled; GTC: it rests at its
+ * limit). Never a fill row, a resting order, the reference or the width (ADR-0111 결과 '#179').
+ * No payout: VOID and each result's are `CONTRACT_TERMS` (#66).
+ */
+export const orderQuoteSchema = z
+  .object({
+    protectedLimitPriceCoin: priceSchema,
+    filledQty: countSchema,
+    filledAmountCoin: coinAmountSchema,
+    remainingQty: countSchema.nullable(),
+    unspentCoin: coinAmountSchema.nullable(),
+    maxSpendCoin: coinAmountSchema.nullable(),
+    feeCoin: z.literal('0'),
+    stop: z.enum(MATCH_STOPS).nullable(),
+    status: orderStatusSchema,
+    rejectReason: orderRejectReasonSchema.nullable(),
+    cancelReason: orderCancelReasonSchema.nullable(),
+  })
+  .meta({ id: 'OrderQuote' });
+export type OrderQuote = z.infer<typeof orderQuoteSchema>;
+
+/** A quote's figures on the wire (`OrderQuote`): Coin as strings and the fee 0. */
+export function orderQuoteOf(figures: OrderQuoteFigures): OrderQuote {
+  const coin = (value: bigint | null) => (value === null ? null : serializeCoinAmount(value));
+  return {
+    protectedLimitPriceCoin: figures.protectedLimitPriceCoin,
+    filledQty: figures.filledQty,
+    filledAmountCoin: serializeCoinAmount(figures.filledAmountCoin),
+    remainingQty: figures.remainingQty,
+    unspentCoin: coin(figures.unspentCoin),
+    maxSpendCoin: coin(figures.maxSpendCoin),
+    feeCoin: '0',
+    stop: figures.stop,
+    status: figures.status,
+    rejectReason: figures.rejectReason,
+    cancelReason: figures.cancelReason,
+  };
+}
+
+/**
+ * One contract of the caller's holding with its 매도 가능액 (#177 15항): what is held, the part in
+ * resting sells (shown apart), the rest, and that rest quoted as an immediate sell with 가격 보호
+ * (`quote`: null when nothing is unlocked or the market has no width; 'only part possible' is
+ * `quote.filledQty < unlockedQty`).
+ */
+export const sellableContractSchema = z
+  .object({
+    outcome: outcomeSchema,
+    qty: countSchema,
+    restingSellQty: countSchema,
+    unlockedQty: countSchema,
+    quote: orderQuoteSchema.nullable(),
+  })
+  .meta({ id: 'SellableContract' });
+export type SellableContract = z.infer<typeof sellableContractSchema>;
+
+/**
+ * `GET /me/markets/:id/sellable` (#179, owner only): both contracts, YES then NO, zeros when
+ * nothing is held, so every caller's answer has one shape. The screen is #67's.
+ */
+export const sellableSchema = z
+  .object({ marketId: z.uuid(), contracts: z.array(sellableContractSchema).length(2) })
+  .meta({ id: 'Sellable' });
+export type Sellable = z.infer<typeof sellableSchema>;
+
+/** One holding's sellable figures on the wire (`SellableContract`). */
+export function sellableContractOf(figures: SellableFigures): SellableContract {
+  return {
+    outcome: figures.outcome,
+    qty: figures.qty,
+    restingSellQty: figures.restingSellQty,
+    unlockedQty: figures.unlockedQty,
+    quote: figures.quote === null ? null : orderQuoteOf(figures.quote),
+  };
+}
 
 // ---- ticks --------------------------------------------------------------------------
 /**

@@ -22,6 +22,7 @@ import {
   ownFillPrice,
   placeOrderBodySchema,
   protectedLimit,
+  quoteOrderBodySchema,
   requestTermsEqual,
   restingStateAfterFill,
   type OrderRequestTerms,
@@ -158,6 +159,66 @@ describe('placeOrderBodySchema (#177 1·2·3·9항)', () => {
     }
     const { expectedAccountId: _account, ...anonymous } = body;
     expect(accepts(anonymous)).toBe(false);
+  });
+});
+
+describe('quoteOrderBodySchema (#179; #177 2·3·9항)', () => {
+  const body = { outcome: 'YES', side: 'sell', timeInForce: 'ioc', qty: 10 };
+  const accepts = (value: Record<string, unknown>) => quoteOrderBodySchema.safeParse(value).success;
+  const issuePaths = (value: Record<string, unknown>) =>
+    quoteOrderBodySchema.safeParse(value).error?.issues.map((issue) => issue.path) ?? [];
+
+  it('takes the intake’s terms, an immediate order’s limit optional (즉시 매도는 수량만)', () => {
+    expect(quoteOrderBodySchema.parse(body)).toEqual(body);
+    for (const outcome of ['YES', 'NO']) {
+      for (const side of ['buy', 'sell']) {
+        expect(accepts({ ...body, outcome, side })).toBe(true);
+        expect(accepts({ ...body, outcome, side, limitPriceCoin: 40 })).toBe(true);
+        expect(accepts({ ...body, outcome, side, timeInForce: 'gtc', limitPriceCoin: 40 })).toBe(
+          true,
+        );
+      }
+    }
+    for (const limitPriceCoin of [0, 100, 50.5, '60', null]) {
+      expect(accepts({ ...body, limitPriceCoin }), String(limitPriceCoin)).toBe(false);
+    }
+    for (const qty of [0, ORDER_QTY_MAX + 1, 1.5, '10']) {
+      expect(accepts({ ...body, qty }), String(qty)).toBe(false);
+    }
+  });
+
+  it('requires a GTC order’s limit: it rests there', () => {
+    expect(issuePaths({ ...body, timeInForce: 'gtc' })).toEqual([['limitPriceCoin']]);
+  });
+
+  it('takes a budget for an IOC buy only, and exactly one of a quantity and a budget', () => {
+    const { qty: _qty, ...noQty } = body;
+    expect(quoteOrderBodySchema.parse({ ...noQty, side: 'buy', budgetCoin: '100' })).toEqual({
+      ...noQty,
+      side: 'buy',
+      budgetCoin: 100n,
+    });
+    expect(issuePaths({ ...noQty, budgetCoin: '100' })).toEqual([['budgetCoin']]);
+    expect(
+      issuePaths({
+        ...noQty,
+        side: 'buy',
+        timeInForce: 'gtc',
+        limitPriceCoin: 50,
+        budgetCoin: '9',
+      }),
+    ).toEqual([['budgetCoin']]);
+    expect(issuePaths(noQty)).toEqual([['qty']]);
+    expect(issuePaths({ ...body, side: 'buy', budgetCoin: '100' })).toEqual([['budgetCoin']]);
+    for (const budgetCoin of ['0', '1000001', '1.5', 100]) {
+      expect(accepts({ ...noQty, side: 'buy', budgetCoin }), String(budgetCoin)).toBe(false);
+    }
+  });
+
+  it('refuses unknown fields: no account, no request id, no market', () => {
+    for (const extra of ['expectedAccountId', 'requestId', 'marketId', 'orderId', 'type']) {
+      expect(accepts({ ...body, [extra]: 'x' }), extra).toBe(false);
+    }
   });
 });
 

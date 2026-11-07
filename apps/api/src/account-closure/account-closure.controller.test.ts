@@ -85,6 +85,7 @@ import { AdminGuard } from '../auth/admin.guard.js';
 import { AppError } from '../common/errors/app-error.js';
 import { PhoneHasher } from '../identity/phone-hash.js';
 import { PhoneVerificationService } from '../phone-verification/phone-verification.service.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import { ReleaseSettingsService } from '../release-settings/release-settings.service.js';
 import { SearchHistoryService } from '../search-history/search-history.service.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
@@ -116,6 +117,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
     await t?.close(); // undefined when beforeAll timed out waiting for the file lock
   });
   beforeEach(async () => {
+    vi.restoreAllMocks();
     await t.reset();
     member = await onboarded();
     other = await onboarded();
@@ -1164,8 +1166,15 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
         lockedCoin: '110',
         refusals: [],
       });
+      const publish = vi.spyOn(t.app.get(MarketPublisher), 'publishMarket');
       const result = await closed(member);
       expect(result.forfeitedCoin).toBe('1000');
+      // After COMMIT, one `market:book` per market an order was cancelled in (#179).
+      expect(publish.mock.calls.map(([id, event]) => [id, event]).sort()).toEqual(
+        [market.id, another.id]
+          .map((id) => [id, { type: 'market:book', marketId: id, ts: result.closedAt }])
+          .sort(),
+      );
       for (const order of mine) {
         expect(await orderOf(order.id)).toMatchObject({
           status: 'cancelled',
@@ -1520,6 +1529,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       const orders = async () =>
         t.db.select().from(schema.orders).where(eq(schema.orders.userId, member.id));
       const before = await orders();
+      const publish = vi.spyOn(t.app.get(MarketPublisher), 'publishMarket');
       expect(errorOf(await close(member), 409, 'CLOSURE_NOT_ALLOWED')).toEqual({
         reason: 'unsettled_contracts',
       });
@@ -1542,6 +1552,8 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       expect(await orders()).toEqual(before);
       expect(await balanceOf(member.id)).toMatchObject({ lockedCoin: 70n });
       await expectOpen(member);
+      // A refused closure rolled its cancels back: nothing published (#179).
+      expect(publish).not.toHaveBeenCalled();
 
       // The 재개 approval — the recovery — cancels it 일시 중단; then the closure goes through.
       await resumeMarket(t.db, held.id, { requestedBy: admin.id, approvedBy: second.id });

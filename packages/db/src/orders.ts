@@ -1,25 +1,21 @@
 import {
   idempotencyKeySchema,
+  intakeMarketGate,
   intakeRemainderRelease,
   isContractPrice,
   isLiveOrderStatus,
   isOrderIntakeOpen,
-  marketRejectReason,
-  matchLine,
-  matchOrder,
   fillProcessInput,
-  orderEndState,
   orderIntakeLock,
   ORDER_ACCEPTING_SETTING,
   ORDER_BUDGET_MAX_COIN,
   ORDER_QTY_MAX,
-  protectedLimit,
+  planIntakeMatch,
   RELEASE_SETTINGS,
   requestTermsEqual,
   restingStateAfterFill,
   type AccountType,
   type BookOrder,
-  type IncomingOrder,
   type OrderLock,
   type OrderLockFacts,
   type OrderRejectReason,
@@ -206,7 +202,8 @@ export async function findOrderByRequest(
  * `arrival_seq` as its arrival, and whether its owner is a person (the one rule,
  * `is_human_account_type`). The whole book, never filtered by a limit: the intake reads it under
  * `lockMarket` (so it is the book the fills meet); a quote (#179) or a bot check (#128) may read
- * it without and get a snapshot.
+ * it without and get a snapshot — the public reads (#179, order-book.ts `readPublicBook`) read it
+ * in a REPEATABLE READ READ ONLY snapshot without `lockMarket`.
  */
 export async function readLiveBook(executor: Reader, marketId: string): Promise<LiveBookOrder[]> {
   const rows = await executor
@@ -239,12 +236,16 @@ export async function readLiveBook(executor: Reader, marketId: string): Promise<
   }));
 }
 
-/** The incoming order's owner: its id, the rule's answer and its type, or null when unknown. */
-async function ownerOf(
-  tx: Tx,
+/**
+ * An order's owner as the matcher reads it — its id and the rule's answer (`OrderOwner`) — and its
+ * type, or null when unknown: the intake's incoming owner, and the holder whose sellable figures
+ * (#179) walk like their own immediate sell.
+ */
+export async function ownerOf(
+  executor: Reader,
   ownerId: string,
 ): Promise<{ id: string; human: boolean; accountType: AccountType } | null> {
-  const [row] = await tx
+  const [row] = await executor
     .select({
       id: user.id,
       human: isHumanAccountTypeSql(user.accountType),
@@ -281,12 +282,15 @@ const zeroLock = (lock: OrderLock): boolean =>
  * 2. `order.accepting` not `true` → `closed` (ADR-0107 결정 3: the 운영 마켓메이커 too);
  * 3. the market: none, DRAFT or REVIEW → `not_found`; any status but OPEN → a rejected order
  *    '개장 전', '일시 중단' or '마감' with nothing locked (`marketRejectReason`);
- * 4. an immediate order on a market with no width → `closed` (a GTC order never uses it);
+ * 4. an immediate order on a market with no width → `closed` (a GTC order never uses it) — 3
+ *    and 4 are `intakeMarketGate`;
  * 5. the live book; an immediate order's limit narrowed to the best opposite entry ± the market's
- *    width (`protectedLimit`, #177 2항 — the own resting order counts as the reference too);
- * 6. the match (#117 `matchOrder`, two arguments), every owner it meets locked at once
- *    (`lockOrderHolders`), then the order's intake lock (`orderIntakeLock` at the protected limit,
- *    a budget whole): a shortfall → a rejected order '잔액 부족' or '보유량 부족', nothing filled;
+ *    width (`protectedLimit`, #177 2항 — the own resting order counts as the reference too), the
+ *    match (#117 `matchOrder`, two arguments) and its end state — `planIntakeMatch`. The quote
+ *    (#179, order-book.ts) runs the same gate and plan on a snapshot, with no owner;
+ * 6. every owner the match meets locked at once (`lockOrderHolders`), then the order's intake
+ *    lock (`orderIntakeLock` at the protected limit, a budget whole): a shortfall → a rejected
+ *    order '잔액 부족' or '보유량 부족', nothing filled;
  * 7. the order in its end state (`orderEndState`: ADR-0111 결정 6), then each fill in walk order —
  *    its row first (its id keys the ledger events, migration 0062 binds them), #118's process, the
  *    resting order's fill — and the lock left over released (`intakeRemainderRelease`: an IOC
@@ -389,57 +393,35 @@ export async function placeOrder(
     return { kind: 'placed', order, fills: [], touched: { balances: [], positions: [] } };
   };
 
-  // #120 adds the `close_at` check of an OPEN market beside this, #143 the role-revoke reason, #93
-  // a hold on a mismatch.
-  const marketReason = marketRejectReason(market.status);
-  if (marketReason !== null) {
-    return rejected(marketReason, await clockTimestamp(tx), {
+  // The market gate the quote (#179) runs too: #120 adds the `close_at` check of an OPEN market
+  // to its `marketTradingRejectReason`, which the public book shares. Per-account refusals (#143's
+  // role-revoke reason, #93's account hold) need the owner, which the public quote has not, so they
+  // go below beside the asset lock, not into the gate.
+  const refusal = intakeMarketGate(market, input.timeInForce);
+  if (refusal?.kind === 'closed') return refusal;
+  if (refusal?.kind === 'reject') {
+    return rejected(refusal.reason, await clockTimestamp(tx), {
       protectedLimitPrice: input.limitPriceCoin,
       referencePrice: null,
       ticks: null,
     });
   }
-  const isIoc = input.timeInForce === 'ioc';
-  if (isIoc && market.widthTicks === null) return { kind: 'closed', why: 'price_protection' };
 
   const owner = await ownerOf(tx, ownerId);
   if (owner === null) throw new RangeError(`account ${ownerId} does not exist`);
-  // #128 trims the 운영 마켓메이커's quantities on this book before matching.
+  // #128 trims the 운영 마켓메이커's quantities on this book before matching, and the quote's
+  // book (apps/api OrderBookService) the same way: a trim here alone parts the quote from the fill.
   const book = await readLiveBook(tx, marketId);
-  const referencePrice = isIoc
-    ? (matchLine(book, input.outcome, input.side)[0]?.priceCoin ?? null)
-    : null;
-  const widthTicks = isIoc ? market.widthTicks : null;
-  const protectedLimitPrice = protectedLimit({
-    side: input.side,
-    timeInForce: input.timeInForce,
-    limitPriceCoin: input.limitPriceCoin,
-    referencePriceCoin: referencePrice,
-    widthTicks,
+  // The reference, the protected limit, the match and the end state: the quote's plan too.
+  const plan = planIntakeMatch(book, input, market.widthTicks, {
+    id: owner.id,
+    human: owner.human,
   });
+  const { incoming, result, end } = plan;
+  const protectedLimitPrice = plan.protectedLimitPriceCoin;
+  const referencePrice = plan.referencePriceCoin;
+  const widthTicks = plan.widthTicks;
   const protection = { protectedLimitPrice, referencePrice, ticks: widthTicks };
-  const incomingOwner = { id: owner.id, human: owner.human };
-  const incoming: IncomingOrder =
-    input.budgetCoin === null
-      ? {
-          owner: incomingOwner,
-          outcome: input.outcome,
-          side: input.side,
-          timeInForce: input.timeInForce,
-          limitPriceCoin: protectedLimitPrice,
-          qty: input.qty!,
-          budgetCoin: null,
-        }
-      : {
-          owner: incomingOwner,
-          outcome: input.outcome,
-          side: 'buy',
-          timeInForce: 'ioc',
-          limitPriceCoin: protectedLimitPrice,
-          qty: null,
-          budgetCoin: input.budgetCoin,
-        };
-  const result = matchOrder(book, incoming);
 
   // Every owner's Coin account before the first lock, release or fill (ADR-0110 결정 4): the
   // last lock that can wait, so the clock is read after it.
@@ -461,7 +443,6 @@ export async function placeOrder(
     touchedPositions.set(`${userId}:${outcome}`, userId);
   if (locked.position !== null) touchPosition(ownerId, input.outcome);
 
-  const end = orderEndState(incoming, result);
   const order = await insertOrder({
     protectedLimitPrice,
     referencePrice,
@@ -548,6 +529,18 @@ export async function placeOrder(
     fills: made,
     touched: await touchedOf(tx, marketId, lastEntry, touchedPositions),
   };
+}
+
+/**
+ * Whether an intake changed the market's live book, so its public book changed (#179: the caller
+ * publishes `market:book` after COMMIT): a new order that rests, or any fill (a resting order
+ * filled or partly filled). A rejected order, an immediate one that filled nothing, and the
+ * answers that write nothing (`replayed`, `conflict`, `closed`, `not_found`) change nothing.
+ */
+export function placeOrderChangedBook(result: PlaceOrderResult): boolean {
+  return (
+    result.kind === 'placed' && (result.fills.length > 0 || isLiveOrderStatus(result.order.status))
+  );
 }
 
 /** The persons' balances and positions an intake changed, read at its end. */

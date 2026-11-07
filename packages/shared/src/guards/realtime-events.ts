@@ -30,6 +30,11 @@ export const REALTIME_EVENT_REGISTRY = {
     channel: 'market',
     reason: '시장 상태 전환과 판정 결과(N03): 시장 상세에 공개된 상태',
   },
+  'market:book': {
+    channel: 'market',
+    reason:
+      "공개 호가가 바뀌었다는 신호뿐(N02 §5): 시장 id·시각만 — 호가·주문·계정·계정 유형·봇 구분 없음(ADR-0107 결정 5 '#179·#119')",
+  },
   'user:balance': {
     channel: 'user',
     reason: '본인 잔액(N04 §2 본인 전용)',
