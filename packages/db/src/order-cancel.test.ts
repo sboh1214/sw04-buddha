@@ -9,6 +9,7 @@ import { transitionMarket } from './market-transitions.js';
 import {
   cancelLockedOrders,
   cancelOrder,
+  expireLockedOrders,
   lockAccountOrders,
   lockMarketOrders,
   ordersAwaitingRecovery,
@@ -46,8 +47,10 @@ import {
   cancelTestAccountOrders,
   cancelTestOrder,
   checkOrderInvariants,
+  closeTestMarket,
   createOrder,
   openOrderIntake,
+  passMarketClose,
   placeTestOrder,
   type PlaceTestOrderInput,
 } from './test/orders.js';
@@ -169,8 +172,13 @@ describe.skipIf(!hasTestDb())('order cancel (#178, docker test profile)', () => 
     balances: await t.db.select().from(balances).orderBy(balances.accountId),
   });
   const expectSound = async () => expect(await checkOrderInvariants(t.db)).toEqual([]);
-  /** The worker's close at `close_at` (no cancel): OPEN or PAUSED → CLOSED, the pause ended. */
-  const workerClose = (marketId: string) =>
+  /**
+   * A CLOSED market as the worker left it before #120 (no expiry): OPEN or PAUSED → CLOSED, the
+   * pause ended, the live orders left live and locked — a pre-#120 leftover, which the operators'
+   * check (a) shows and an owner can still cancel. A close whose expiry fails rolls back whole and
+   * leaves the market OPEN, so (a) never shows it.
+   */
+  const closeWithoutExpiry = (marketId: string) =>
     t.db.transaction(async (tx) => {
       await lockMarket(tx, marketId);
       const [current] = await tx
@@ -190,6 +198,11 @@ describe.skipIf(!hasTestDb())('order cancel (#178, docker test profile)', () => 
       });
       if (current!.status === 'paused') await endPauseAtClose(tx, { marketId, now, eventId });
     });
+  /** The close at `close_at` as the worker runs it (#120): due now, then `closeMarketAtClose`. */
+  const closeNow = async (marketId: string) => {
+    await passMarketClose(t.db, marketId);
+    return closeTestMarket(t.db, marketId);
+  };
   const ledgerPause = (marketId: string) =>
     createMarketPause(t.db, { marketId, reason: 'ledger_failure', by: adminId });
   /** Holds `marketId`'s lock on a connection of its own until `release` is called. */
@@ -414,8 +427,12 @@ describe.skipIf(!hasTestDb())('order cancel (#178, docker test profile)', () => 
         order: { status: 'cancelled', cancelReason: 'by_owner' },
       });
       expect(await written()).toEqual(before);
-      // The close comes on schedule before the recovery: still held (#93 expires it).
-      await workerClose(m);
+      // The close comes on schedule before the recovery: still held (#93 expires it), the
+      // close's expiry skipping it (#120).
+      expect(await closeNow(m)).toMatchObject({
+        closed: true,
+        expired: { expired: [], held: [live] },
+      });
       expect(await cancelTestOrder(t.db, { ownerId: a, orderId: live.id })).toMatchObject({
         kind: 'held',
       });
@@ -424,12 +441,23 @@ describe.skipIf(!hasTestDb())('order cancel (#178, docker test profile)', () => 
       await expectSound();
     });
 
-    it('cancels in a CLOSED market not held (before #120 expires it)', async () => {
+    it('answers an order the close expired as it is, and cancels a pre-#120 leftover', async () => {
+      // The close (#120) expired it: the owner's cancel answers its final state, nothing written.
       const m = await market();
       const a = await member();
       const row = await resting(a, m, 'YES', 'buy', 40, 1);
-      await workerClose(m);
+      await closeNow(m);
+      const before = await written();
       expect(await cancelTestOrder(t.db, { ownerId: a, orderId: row.id })).toMatchObject({
+        kind: 'ended',
+        order: { status: 'expired', cancelReason: null },
+      });
+      expect(await written()).toEqual(before);
+      // A CLOSED market's live order from before #120 (ADR-0113 12-9) can still be cancelled.
+      const old = await market();
+      const left = await resting(a, old, 'YES', 'buy', 40, 1);
+      await closeWithoutExpiry(old);
+      expect(await cancelTestOrder(t.db, { ownerId: a, orderId: left.id })).toMatchObject({
         kind: 'cancelled',
         order: { status: 'cancelled', cancelReason: 'by_owner' },
       });
@@ -767,6 +795,138 @@ describe.skipIf(!hasTestDb())('order cancel (#178, docker test profile)', () => 
     });
   });
 
+  describe('the expiry (#120)', () => {
+    /** Moves `marketId` out of trading with a raw write, its orders left live and locked. */
+    const leaveTrading = (marketId: string, status: 'closed' | 'cancelled' = 'closed') =>
+      t.db.update(markets).set({ status }).where(eq(markets.id, marketId));
+    /** A market's batch as the close takes it: locks, its instant, then the expiry. */
+    const expireNow = (marketId: string, options: { endsHold?: boolean } = {}) =>
+      t.db.transaction(async (tx) => {
+        const locked = await lockMarketOrders(tx, marketId);
+        const at = await clockTimestamp(tx);
+        return { ...(await expireLockedOrders(tx, locked, { at, ...options })), at };
+      });
+
+    it('ends every live order of every account type as 만료, each lock back once, nothing else', async () => {
+      const m = await market();
+      const other = await market();
+      const a = await member();
+      const b = await member();
+      const c = await yesHolder(m, 3);
+      const mm = await fundMarketMakerFunds(t.db, m, 1_000n);
+      // A's NO buy 3 @ 40, one filled by B's YES buy (a pair mint): 부분 체결.
+      const partial = await resting(a, m, 'NO', 'buy', 40, 3);
+      await order(b, m, 'YES', 'buy', 'ioc', 65, 1);
+      const sell = await resting(c, m, 'YES', 'sell', 70, 2);
+      const bot = await resting(mm, m, 'YES', 'buy', 30, 2);
+      const elsewhere = await resting(a, other, 'YES', 'buy', 20, 1);
+      const filled = await orderRow(partial.id);
+      expect(filled).toMatchObject({ status: 'partially_filled', filledQty: 1 });
+      await leaveTrading(m);
+      const booksBefore = await books([m, other]);
+      const bPosition = await positionOf(t.db, b, m, 'YES');
+
+      const done = await expireNow(m);
+      expect(done.expired.map((row) => row.id)).toEqual([partial.id, sell.id, bot.id]);
+      expect(done.held).toEqual([]);
+      for (const row of done.expired) {
+        expect(row).toMatchObject({
+          status: 'expired',
+          cancelReason: null,
+          rejectReason: null,
+          endedAt: done.at,
+          updatedAt: done.at,
+        });
+      }
+      // The filled part kept: 1 of 3 at 40, the rest (2) no longer locked.
+      expect(await orderRow(partial.id)).toEqual({
+        ...filled,
+        status: 'expired',
+        endedAt: done.at,
+        updatedAt: done.at,
+      });
+      // A's lock is its order in the other market alone; C's contracts back; the funds unlocked.
+      expect(await coin(a)).toEqual({ available: 1_000n - 40n - 20n, locked: 20n });
+      expect(await positionOf(t.db, c, m, 'YES')).toMatchObject({ qty: 3, lockedQty: 0 });
+      expect(
+        await ledgerAccountBalance(t.db, { kind: 'market_maker_funds', marketId: m }),
+      ).toMatchObject({ lockedCoin: 0n, availableCoin: 1_000n });
+      expect(await positionOf(t.db, b, m, 'YES')).toEqual(bPosition);
+      expect(await orderRow(elsewhere.id)).toEqual(elsewhere);
+      // People's rows only: C's sell; the 운영 마켓메이커's buy wrote no position.
+      expect(done.touched.positions.map((row) => [row.userId, row.outcome])).toEqual([[c, 'YES']]);
+      // No ledger entry, fill or contract move.
+      expect(await books([m, other])).toEqual(booksBefore);
+      await expectSound();
+      // Again with a fresh batch: nothing live, nothing written.
+      const again = await written();
+      expect((await expireNow(m)).expired).toEqual([]);
+      expect(await written()).toEqual(again);
+    });
+
+    it('keeps a held market’s orders live and locked, unless the batch ends its hold (#93)', async () => {
+      const m = await market();
+      const a = await member();
+      const live = await resting(a, m, 'YES', 'buy', 40, 2);
+      await ledgerPause(m);
+      // Closed on schedule before its recovery: still held.
+      expect(await closeNow(m)).toMatchObject({ closed: true, expired: { held: [live] } });
+      const before = await written();
+      expect(await expireNow(m)).toMatchObject({ expired: [], held: [live] });
+      expect(await written()).toEqual(before);
+      expect(await coin(a)).toEqual({ available: 920n, locked: 80n });
+      // #93's recovery of the closed market passes `endsHold`: 만료, not 취소 완료.
+      const recovered = await expireNow(m, { endsHold: true });
+      expect(recovered.expired).toMatchObject([
+        { id: live.id, status: 'expired', cancelReason: null },
+      ]);
+      expect(await coin(a)).toEqual({ available: 1_000n, locked: 0n });
+      await expectSound();
+    });
+
+    it('refuses an account’s batch and a market still trading, writing nothing', async () => {
+      const m = await market();
+      const a = await member();
+      await resting(a, m, 'YES', 'buy', 40, 1);
+      const before = await written();
+      // OPEN, then PAUSED (a ledger pause keeps the order): 만료 only after it leaves trading.
+      await expect(expireNow(m)).rejects.toThrow('만료 only after it leaves trading');
+      await ledgerPause(m);
+      await expect(expireNow(m)).rejects.toThrow('만료 only after it leaves trading');
+      await expect(
+        t.db.transaction(async (tx) => {
+          await tx.select().from(profiles).where(eq(profiles.userId, a)).for('update');
+          const locked = await lockAccountOrders(tx, a);
+          await expireLockedOrders(tx, locked, { at: await clockTimestamp(tx) });
+        }),
+      ).rejects.toThrow("만료 is a market's end");
+      expect((await written()).orders).toEqual(before.orders);
+      expect(await coin(a)).toEqual({ available: 960n, locked: 40n });
+    });
+
+    it('writes the 만료 only where the row is as read, on a CANCELLED market too', async () => {
+      const m = await market();
+      const a = await member();
+      const row = await resting(a, m, 'YES', 'buy', 40, 1);
+      await leaveTrading(m, 'cancelled');
+      await expect(
+        t.db.transaction(async (tx) => {
+          const locked = await lockMarketOrders(tx, m);
+          await tx
+            .update(orders)
+            .set({ status: 'cancelled', cancelReason: 'by_owner', endedAt: sql`now()` })
+            .where(eq(orders.id, row.id));
+          await expireLockedOrders(tx, locked, { at: await clockTimestamp(tx) });
+        }),
+      ).rejects.toThrow(`order ${row.id} changed outside its market's lock`);
+      expect(await orderRow(row.id)).toEqual(row);
+      // #20's CANCELLED expires the same way.
+      expect((await expireNow(m)).expired).toMatchObject([{ id: row.id, status: 'expired' }]);
+      expect(await coin(a)).toEqual({ available: 1_000n, locked: 0n });
+      await expectSound();
+    });
+  });
+
   describe('ledgerHeldMarketIds', () => {
     it('holds a lasting ledger_failure pause and one ended at the close, nothing else', async () => {
       const plain = await market();
@@ -774,7 +934,7 @@ describe.skipIf(!hasTestDb())('order cancel (#178, docker test profile)', () => 
       await ledgerPause(lasting);
       const closedBefore = await market();
       await ledgerPause(closedBefore);
-      await workerClose(closedBefore);
+      await closeNow(closedBefore);
       const resumed = await market();
       await ledgerPause(resumed);
       await resumeMarket(t.db, resumed);
@@ -788,7 +948,7 @@ describe.skipIf(!hasTestDb())('order cancel (#178, docker test profile)', () => 
       const other = await market();
       await createMarketPause(t.db, { marketId: other, by: adminId });
       const closed = await market();
-      await workerClose(closed);
+      await closeNow(closed);
       const all = [plain, lasting, closedBefore, resumed, closedEarly, pausedAgain, other, closed];
       expect(await ledgerHeldMarketIds(t.db, all)).toEqual(new Set([lasting, closedBefore]));
       expect(await ledgerHeldMarketIds(t.db, [])).toEqual(new Set());
@@ -817,12 +977,14 @@ describe.skipIf(!hasTestDb())('order cancel (#178, docker test profile)', () => 
       const waiting = await resting(a, heldMarket, 'YES', 'buy', 20, 2);
       const closedWaiting = await resting(a, closedHeld, 'NO', 'buy', 25, 1);
       await resting(a, paused, 'YES', 'buy', 10, 1);
-      await workerClose(closed);
+      // A close that left its order live (a pre-#120 leftover): (a) shows it.
+      await closeWithoutExpiry(closed);
       await ledgerPause(heldMarket);
-      // Closed on schedule before its recovery (end_kind closed_at_close): still held, so (d)
-      // shows it and (a) leaves it out (ADR-0113 결과 4 — it waits for #93's recovery).
+      // Closed on schedule before its recovery (end_kind closed_at_close): still held, so the
+      // close's expiry skips it, (d) shows it and (a) leaves it out (ADR-0113 결과 4 — it waits
+      // for #93's recovery).
       await ledgerPause(closedHeld);
-      await workerClose(closedHeld);
+      await closeNow(closedHeld);
       await createMarketPause(t.db, { marketId: paused, by: adminId });
       // What (a) is for: a live order in a PAUSED market not held (one from before #178, or a
       // pause whose cancel broke), which no flow leaves — a lock-less row only read here.
@@ -882,7 +1044,7 @@ describe.skipIf(!hasTestDb())('order cancel (#178, docker test profile)', () => 
       await resting(open, plain, 'NO', 'buy', 20, 1);
       await ledgerPause(heldMarket);
       await ledgerPause(closedHeld);
-      await workerClose(closedHeld);
+      await closeNow(closedHeld);
       const approver = (await createUser(t.db, { role: 'admin' })).user.id;
       const restrict = (userId: string, ago?: number) =>
         createModerationAction(t.db, {

@@ -6,15 +6,16 @@ const ROOT = new URL('../../../', import.meta.url);
 /**
  * The writers of orders and fills (#119, ADR-0112; ADR-0111 '주문을 쓰는 모든 곳이 lockMarket을
  * 잡는 것은 #119가 지킨다'; #178, ADR-0113): orders.ts takes every order and writes every fill, and
- * order-cancel.ts ends live orders as 취소 완료, each under the market's `lockMarket` — the arrival
- * key is drawn under it, `fills_check` (migration 0062) reads both orders by key trusting it, and
- * a cancel re-reads the row under it. Every other writer is listed with its reason; the expiry
- * (#120) joins here, holding the same lock.
+ * order-cancel.ts ends live orders as 취소 완료 or 만료 (the close's expiry, #120, ADR-0115 —
+ * market-close.ts and market-pause.ts call it and write no order themselves), each under the
+ * market's `lockMarket` — the arrival key is drawn under it, `fills_check` (migration 0062) reads
+ * both orders by key trusting it, and a cancel or an expiry re-reads the row under it. Every other
+ * writer is listed with its reason.
  */
 const ORDER_WRITERS: Record<string, string> = {
   'packages/db/src/orders.ts': 'the intake: the order, its fills and the resting orders they fill',
   'packages/db/src/order-cancel.ts':
-    'the cancel (#178): one order, a market, an account — under lockMarket',
+    'the cancel and the expiry (#178, #120): one order, a market, an account — under lockMarket',
   // `createOrder`, `createFillRecord`: rows as the intake leaves them, under `lockMarket`, for
   // reads and fixtures with no intake (their docs say so).
   'packages/db/src/test/orders.ts': 'test fixture',

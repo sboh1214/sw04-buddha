@@ -1,6 +1,7 @@
 import {
   LIVE_ORDER_STATUSES,
   isLiveOrderStatus,
+  isPreCloseMarketStatus,
   orderRemainingLock,
   type OrderCancelReason,
 } from '@buddha/shared';
@@ -10,7 +11,7 @@ import type { Db } from './client.js';
 import { lockOrderHolders, releaseForOrder, type PositionRow } from './contracts.js';
 import { ledgerHeldMarketIds, ledgerHeldMarketSql } from './ledger-held-markets.js';
 import { orderLockFactsOf, type OrderRow } from './orders.js';
-import { orders, user } from './schema/index.js';
+import { markets, orders, user } from './schema/index.js';
 import { clockTimestamp, lockMarket, lockMarkets } from './tx-helpers.js';
 
 /*
@@ -32,6 +33,12 @@ import { clockTimestamp, lockMarket, lockMarkets } from './tx-helpers.js';
  * is, and a repeat releases nothing. The reasons: 본인 취소 (`by_owner`: the member, #129's
  * refresh), 일시 중단 (`paused`: a pause, the end of a pause), 계정 제한 (`restricted`), 탈퇴
  * (`account_closed`) and 관리자 권한 (`admin_role`, #143); the intake writes the other two.
+ *
+ * The same core ends a live order as 만료 (#120, ADR-0115; ADR-0107 결정 1 #177 7항): a state, not a
+ * cancel reason (8항) — the market's close at `close_at` (market-close.ts), a non-held early close
+ * (market-pause.ts), #20's CANCELLED and #93's recovery of a closed held market end every live
+ * order of every account type so (`expireLockedOrders`), with the same single release, the filled
+ * quantity and amount kept, and no cancel reason (migration 0062's `orders_status_check`).
  *
  * A market held for a ledger failure (ledger-held-markets.ts) takes no order lock or ledger
  * write until its recovery (결정 4 #178 rows): one order there is answered `held` with nothing
@@ -111,7 +118,7 @@ export interface LockedOrders {
   readonly markets: readonly LockedMarketOrders[];
 }
 
-/** What a batch did. */
+/** What a cancel batch did. */
 export interface CancelledOrders {
   /** Every order it ended, as written, market by market. */
   cancelled: OrderRow[];
@@ -119,6 +126,19 @@ export interface CancelledOrders {
   held: OrderRow[];
   touched: CancelTouched;
 }
+
+/** What an expiry batch did (`expireLockedOrders`). */
+export interface ExpiredOrders {
+  /** Every order it ended as 만료, as written. */
+  expired: OrderRow[];
+  /** Live orders it skipped in a held market: still live and locked (#93's recovery ends them). */
+  held: OrderRow[];
+  /** People's position rows only (`touchedOf`), for #134's notice. */
+  touched: CancelTouched;
+}
+
+/** How the core ends a live order: 취소 완료 with its reason, or 만료 (a state, never a reason). */
+type OrderEnd = { status: 'cancelled'; reason: OrderCancelProcessReason } | { status: 'expired' };
 
 const LIVE = inArray(orders.status, [...LIVE_ORDER_STATUSES]);
 
@@ -138,26 +158,31 @@ function assertProcessReason(reason: OrderCancelReason): void {
 
 /**
  * Ends `rows` — live orders of `marketId`, read under its `lockMarket` with their owners' Coin
- * accounts locked (`lockOrderHolders`) — as 취소 완료 with `reason` at `at`, each lock given back.
- * The UPDATE matches the row as it was read (status and filled qty): no row means a writer worked
- * without the market lock, a bug that throws, and the caller's transaction rolls back. A lock
- * above what is held (`ContractError` 'refused') throws the same way. #120 widens this to 만료.
+ * accounts locked (`lockOrderHolders`) — as `end` at `at`: 취소 완료 with its reason, or 만료 with
+ * none (#120), each lock given back once. The UPDATE matches the row as it was read (status and
+ * filled qty): no row means a writer worked without the market lock, a bug that throws, and the
+ * caller's transaction rolls back. A lock above what is held (`ContractError` 'refused') throws
+ * the same way.
  */
 async function endOrders(
   tx: Tx,
   marketId: string,
   rows: readonly OrderRow[],
-  reason: OrderCancelProcessReason,
+  end: OrderEnd,
   at: Date,
 ): Promise<{ ended: OrderRow[]; positions: PositionRow[] }> {
   const ended: OrderRow[] = [];
   const positions: PositionRow[] = [];
+  const set =
+    end.status === 'cancelled'
+      ? { status: end.status, cancelReason: end.reason, endedAt: at, updatedAt: at }
+      : { status: end.status, endedAt: at, updatedAt: at };
   for (const row of rows) {
     if (row.marketId !== marketId) throw new Error(`order ${row.id} is not of ${marketId}`);
     const lock = orderRemainingLock(orderLockFactsOf(row));
     const [written] = await tx
       .update(orders)
-      .set({ status: 'cancelled', cancelReason: reason, endedAt: at, updatedAt: at })
+      .set(set)
       .where(
         and(
           eq(orders.id, row.id),
@@ -200,7 +225,9 @@ async function touchedOf(tx: Tx, positions: readonly PositionRow[]): Promise<Can
  * it is (`ended`), a live one in a held market answered `held` (the ended check first, so an
  * ended order there answers its final state), the owner's Coin account (`lockOrderHolders`, the
  * transaction's first balance row), the clock, then the release and the row (`cancelled`). Any
- * market status: a CLOSED market's order before #120 expires it, a SETTLING market's resting sell.
+ * market status: a held CLOSED market's order answers `held`; elsewhere the close has expired
+ * them (#120), so an own cancel there answers `ended` — and a live row left from before #120 in a
+ * closed market, or a SETTLING market's resting sell, can still be cancelled.
  */
 export async function cancelOrder(tx: Tx, input: CancelOrderInput): Promise<CancelOrderResult> {
   assertProcessReason(input.reason);
@@ -220,12 +247,18 @@ export async function cancelOrder(tx: Tx, input: CancelOrderInput): Promise<Canc
   }
   await lockOrderHolders(tx, row.marketId, [ownerId]);
   const at = await clockTimestamp(tx);
-  const done = await endOrders(tx, row.marketId, [row], input.reason, at);
+  const done = await endOrders(
+    tx,
+    row.marketId,
+    [row],
+    { status: 'cancelled', reason: input.reason },
+    at,
+  );
   return { kind: 'cancelled', order: done.ended[0]!, touched: await touchedOf(tx, done.positions) };
 }
 
 /**
- * Phase 1 of a market's batch (a pause, the end of a pause; #120's expiry, #20, #93 later):
+ * Phase 1 of a market's batch (a pause, the end of a pause, the close's expiry; #20, #93 later):
  * `lockMarket`, the market's live orders in arrival order, whether it is held, then every owner's
  * Coin account at once — the people's and the 운영 마켓메이커's 마켓메이커 자금 in one
  * `lockOrderHolders` (ADR-0110 결정 4) — even when nothing will be cancelled (a `ledger_failure`
@@ -304,14 +337,43 @@ export async function lockAccountOrders(tx: Tx, ownerId: string): Promise<Locked
 }
 
 /**
+ * Phase 2 of a batch, either end: every order `locked` holds ended as `end` at `at`, market by
+ * market; a held market's skipped and returned in `held` unless `endsHold`.
+ */
+async function endLockedOrders(
+  tx: Tx,
+  locked: LockedOrders,
+  end: OrderEnd,
+  options: { at: Date; endsHold?: boolean },
+): Promise<{ ended: OrderRow[]; held: OrderRow[]; touched: CancelTouched }> {
+  const endsHold = options.endsHold ?? false;
+  if (endsHold && locked.scope.kind !== 'market') {
+    throw new Error("only a market's batch ends its hold");
+  }
+  const ended: OrderRow[] = [];
+  const held: OrderRow[] = [];
+  const positions: PositionRow[] = [];
+  for (const entry of locked.markets) {
+    if (entry.held && !endsHold) {
+      held.push(...entry.orders);
+      continue;
+    }
+    const done = await endOrders(tx, entry.marketId, entry.orders, end, options.at);
+    ended.push(...done.ended);
+    positions.push(...done.positions);
+  }
+  return { ended, held, touched: await touchedOf(tx, positions) };
+}
+
+/**
  * Phase 2 of a batch: ends every order `locked` holds as 취소 완료 with `reason` at `at` — the
  * instant the caller read after phase 1 — each lock given back, market by market. A held market's
  * orders are skipped and returned in `held`, still live and locked (the owner's answer), unless
  * `endsHold`: the transaction that ends the market's hold (the pause end's approval,
  * `endMarketPause`) ends them too. #93's recovery of a market that closed meanwhile ends them as
- * 만료, not 취소 완료 (ADR-0107 decision 4): it takes `endsHold` only through the expiry #120 adds
- * to `endOrders`, never a cancel reason. Only a market's batch ends a hold: an account's took no
- * balance row in a held market.
+ * 만료, not 취소 완료 (ADR-0107 decision 4): it takes `endsHold` only through
+ * `expireLockedOrders`, never a cancel reason. Only a market's batch ends a hold: an account's
+ * took no balance row in a held market.
  */
 export async function cancelLockedOrders(
   tx: Tx,
@@ -319,23 +381,46 @@ export async function cancelLockedOrders(
   options: { reason: OrderCancelProcessReason; at: Date; endsHold?: boolean },
 ): Promise<CancelledOrders> {
   assertProcessReason(options.reason);
-  const endsHold = options.endsHold ?? false;
-  if (endsHold && locked.scope.kind !== 'market') {
-    throw new Error("only a market's batch ends its hold");
+  const done = await endLockedOrders(
+    tx,
+    locked,
+    { status: 'cancelled', reason: options.reason },
+    options,
+  );
+  return { cancelled: done.ended, held: done.held, touched: done.touched };
+}
+
+/**
+ * Phase 2 of a market's batch as 만료 (#120, ADR-0115; ADR-0107 결정 1 #177 7항 '마감·취소 때의
+ * 잔량', 결정 5 '#20·#120·#177 7항'): every live order of every account type `locked` holds — a
+ * person's, the 운영 마켓메이커's — ended 만료 at `at`, the instant the caller read after phase 1,
+ * its remaining lock given back once (`releaseForOrder`, as a cancel): no cancel reason, the
+ * filled quantity and amount kept, no ledger entry, fill or tick. The close at `close_at`, a
+ * non-held early close, #20's CANCELLED and #93's recovery of a closed held market call it, each
+ * after its transition in the same transaction: it throws unless `locked` is one market's batch
+ * and that market has left trading (DRAFT…PAUSED refused — 만료 is a market's end, never an
+ * account's). A market held for a ledger failure keeps its orders live and locked, returned in
+ * `held` (ADR-0107 결정 4 #178 '복구 전에 마감이 오면'), unless `endsHold`: #93's recovery passes it.
+ */
+export async function expireLockedOrders(
+  tx: Tx,
+  locked: LockedOrders,
+  options: { at: Date; endsHold?: boolean },
+): Promise<ExpiredOrders> {
+  if (locked.scope.kind !== 'market') {
+    throw new Error("만료 is a market's end: an account's batch never expires an order");
   }
-  const result: CancelledOrders = { cancelled: [], held: [], touched: { positions: [] } };
-  const positions: PositionRow[] = [];
-  for (const entry of locked.markets) {
-    if (entry.held && !endsHold) {
-      result.held.push(...entry.orders);
-      continue;
-    }
-    const done = await endOrders(tx, entry.marketId, entry.orders, options.reason, options.at);
-    result.cancelled.push(...done.ended);
-    positions.push(...done.positions);
+  const { marketId } = locked.scope;
+  const [market] = await tx
+    .select({ status: markets.status })
+    .from(markets)
+    .where(eq(markets.id, marketId));
+  if (!market) throw new Error(`market ${marketId} does not exist`);
+  if (isPreCloseMarketStatus(market.status)) {
+    throw new Error(`market ${marketId} is ${market.status}: 만료 only after it leaves trading`);
   }
-  result.touched = await touchedOf(tx, positions);
-  return result;
+  const done = await endLockedOrders(tx, locked, { status: 'expired' }, options);
+  return { expired: done.ended, held: done.held, touched: done.touched };
 }
 
 /**

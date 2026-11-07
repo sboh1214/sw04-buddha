@@ -35,6 +35,9 @@ import {
   hasTestDb,
   ledgerAccountBalance,
   mintTestPairs,
+  openOrderIntake,
+  passMarketClose,
+  placeTestOrder,
   testDbUrls,
   withLedgerGuardsOff,
   type AccountLedgerRow,
@@ -42,6 +45,7 @@ import {
 } from '@buddha/db/test';
 import {
   MARKET_STATUSES,
+  SETTLEMENT_STEPS,
   SETTLEMENT_STEP_ERROR_MAX,
   marketChannel,
   userChannel,
@@ -54,6 +58,7 @@ import { pino, type Logger } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createPublisher, createPublisherRedis, type Publish } from '../realtime.js';
 import { runLedgerAudit } from './ledger-audit.js';
+import { closeMarket } from './market-close.js';
 import { finalizeDueMarkets, finalizeMarket, type FinalizeResult } from './market-finalize.js';
 
 // hasTestDb() loads the root .env first, so TEST_REDIS_URL is visible after it.
@@ -1429,7 +1434,9 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     expect(await positionsOf(market.id)).toEqual(before.positions);
     expect(await marketRow(market.id)).toMatchObject({ status: 'settling', settledAt: null });
 
-    // Once the lock is released (#120's expiry, #178's cancel), a rerun settles and pays.
+    // Once the lock is released (#93's recovery of a held market, or #178's cancel — before the
+    // close, or of a leftover in a market closed before #120, ADR-0115 10-14), a rerun settles
+    // and pays. The close expires every other market's resting sell (#120): the next case.
     await t.db.transaction((tx) =>
       releaseForOrder(tx, { marketId: market.id, ownerId: alice, lock: sell }),
     );
@@ -1446,6 +1453,58 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     expect(await stepsOf(market.id)).toEqual([
       expect.objectContaining({ step: 'coin', status: 'done', attempts: 2 }),
     ]);
+    expect((await runLedgerAudit(t.db)).recorded).toBe(0);
+    expect(logs).toEqual([]);
+  });
+
+  it('settles a market whose resting sell the close expired: no lock is left at settlement (#120)', async () => {
+    // ADR-0112 결과 5 '#120' '대기 매도가 잡은 SETTLING': the close at close_at ends the resting sell
+    // 만료 and gives its `locked_qty` back, so the step's qty-0 UPDATE meets no lock.
+    const admin = (await createUser(t.db, { role: 'admin' })).user.id;
+    await openOrderIntake(t.db, { adminId: admin });
+    const market = await createMarket(t.db, { createdBy: admin });
+    const alice = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
+    const bob = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
+    await mintTestPairs(t.db, { marketId: market.id, yesHolderId: alice, noHolderId: bob, qty: 5 });
+    const sell = await placeTestOrder(t.db, {
+      ownerId: alice,
+      marketId: market.id,
+      side: 'sell',
+      limitPriceCoin: 70,
+      qty: 2,
+    });
+    expect(sell).toMatchObject({ kind: 'placed', order: { status: 'open' } });
+    expect(await positionOf(alice, market.id, 'YES')).toMatchObject({ qty: 5, lockedQty: 2 });
+    await passMarketClose(t.db, market.id);
+    expect(await closeMarket(t.db, market.id, publish)).toMatchObject({
+      outcome: 'closed',
+      expiredOrders: 1,
+    });
+    expect(await positionOf(alice, market.id, 'YES')).toMatchObject({ qty: 5, lockedQty: 0 });
+
+    // The judgement and its confirmation are #152's suites': written raw here, as the
+    // confirmation leaves the market (`resolved`, a pending row per step — `resolved()`'s shape).
+    await t.db
+      .update(schema.markets)
+      .set({
+        status: 'resolved',
+        resolvedResult: 'YES',
+        resolvedAt: new Date(),
+        judgementVersion: 1,
+      })
+      .where(eq(schema.markets.id, market.id));
+    for (const step of SETTLEMENT_STEPS) {
+      await createSettlementStep(t.db, { marketId: market.id, step });
+    }
+    const before = (await balanceOf(alice)).availableCoin;
+    await finalizeMarket(t.db, market.id, publish, logger);
+    expect(await marketRow(market.id)).toMatchObject({ status: 'settled' });
+    expect(await positionOf(alice, market.id, 'YES')).toMatchObject({
+      qty: 0,
+      lockedQty: 0,
+      settled: true,
+    });
+    expect((await balanceOf(alice)).availableCoin).toBe(before + 500n);
     expect((await runLedgerAudit(t.db)).recorded).toBe(0);
     expect(logs).toEqual([]);
   });

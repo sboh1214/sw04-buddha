@@ -190,10 +190,12 @@ export type MarketStatusEvent = z.infer<typeof marketStatusEventSchema>;
  * Room `market:<id>`: the market's public book changed (#179, ADR-0114) — published after COMMIT,
  * best effort, by every writer whose transaction changed its live orders: an intake that rested
  * an order or filled one (#119), an own cancel (#178), a pause, a pause's end or a ledger
- * recovery's approval that cancelled any, an account restriction's or a closure's batch; #120's
- * expiry, #20, #143's role-grant cancel and #129's bot join them (`marketBookEvent`: the API's
- * writers through `MarketPublisher.publishBook`, the worker's through its own `Publish` on
- * `marketChannel`, once per market — the worker cannot import the API's publisher). Only the market
+ * recovery's approval that cancelled any, an account restriction's or a closure's batch, the
+ * close's expiry (#120: the worker's close at `close_at`, once per market that expired an order,
+ * and a non-held early close's); #20, #143's role-grant cancel and #129's bot join them
+ * (`marketBookEvent`: the API's writers through `MarketPublisher.publishBook`, the worker's
+ * through its own `Publish` on `marketChannel`, once per market — the worker cannot import the
+ * API's publisher). Only the market
  * and the time: no level, order, account, account type or bot split (ADR-0107 결정 5 '#179·#119').
  * The receiver re-reads `GET /markets/:id/book`; no key orders it (see the module doc).
  */

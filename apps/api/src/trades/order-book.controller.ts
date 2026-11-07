@@ -32,8 +32,8 @@ export class MarketBookController {
       'quantity — asks (what a buyer meets: the direct sells and the other outcome’s buys at ' +
       '100 − their price, merged per price, cheapest first) and bids (the direct buys only, ' +
       'highest first) — and the best of each, null when the side is empty. No order, account ' +
-      'or order count. A market not open shows empty sides with marketRejectReason ' +
-      '(not_open_yet, paused, closed)',
+      'or order count. A market not open, or past its trading close, shows empty sides with ' +
+      'marketRejectReason (not_open_yet, paused, closed)',
   })
   @ApiData(orderBookSchema)
   @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')
@@ -51,7 +51,8 @@ export class MarketBookController {
       'opposite quote ± the market’s price-protection width; with none sent, 99 for a buy and 1 ' +
       'for a sell — send it as the order’s limit), the contracts filling at once and their Coin, ' +
       'what is left, a buy’s whole lock, the fee (0), why the walk stopped and the state the ' +
-      'order would end in. A market not open answers a rejected quote with its reason. Public: ' +
+      'order would end in. A market not open, or past its trading close, answers a rejected ' +
+      'quote with its reason. Public: ' +
       'no session, and open while order intake is closed',
   })
   @ApiData(orderQuoteSchema)
@@ -59,7 +60,8 @@ export class MarketBookController {
   // gtc — exactly one of qty 1–1,000,000 and budgetCoin 1–1,000,000, a budget for an ioc buy only,
   // and no other field). NOT_FOUND: no public market of that id. ORDER_INTAKE_CLOSED: an immediate
   // order on an OPEN market with no width (path priceProtection), as the intake answers; a market
-  // not OPEN answers its rejected quote first.
+  // not OPEN, or an OPEN one past its close_at by the DB clock (#120), answers its rejected quote
+  // first.
   @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR', 'ORDER_INTAKE_CLOSED')
   quoteOrder(
     @Param('id', { schema: uuidParamSchema }) id: string,

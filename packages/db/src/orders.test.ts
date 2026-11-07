@@ -15,6 +15,7 @@ import { and, count, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { applyPairMintFill, applyTradeFill } from './contracts.js';
 import { findLedgerAccount, LedgerEntryError } from './ledger.js';
+import { closeMarketAtClose } from './market-close.js';
 import { hasMarketFill } from './market-dispute.js';
 import { pauseMarket } from './market-pause.js';
 import { lockMarketOrders } from './order-cancel.js';
@@ -45,8 +46,10 @@ import {
   cancelTestAccountOrders,
   cancelTestOrder,
   checkOrderInvariants,
+  closeTestMarket,
   openOrderIntake,
   ORDER_LOCKS_CHECK_SQL,
+  passMarketClose,
   placeTestOrder,
   type PlaceTestOrderInput,
 } from './test/orders.js';
@@ -272,6 +275,42 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
       }
       expect(await coin(a)).toEqual({ available: 1_000n, locked: 0n });
       expect((await written()).entries).toBe(entries);
+    });
+
+    it('rejects 마감 on an OPEN market past its close_at before the worker’s transition (#120)', async () => {
+      const m = await market();
+      const a = await member();
+      // A resting ask the orders below would meet while the market traded.
+      await order(await yesHolder(m, 3), m, 'YES', 'sell', 'gtc', 40, 3);
+      await passMarketClose(t.db, m);
+      const before = await written();
+      for (const input of [
+        { timeInForce: 'gtc' as const, qty: 2, limitPriceCoin: 60 },
+        { timeInForce: 'ioc' as const, qty: 2, limitPriceCoin: 60 },
+        { timeInForce: 'ioc' as const, qty: null, budgetCoin: 300n, limitPriceCoin: 60 },
+      ]) {
+        const requestId = randomUUID();
+        const done = await placed({ ownerId: a, marketId: m, requestId, ...input });
+        expect(done.order, input.timeInForce).toMatchObject({
+          status: 'rejected',
+          rejectReason: 'closed',
+          idempotencyKey: requestId,
+          protectedLimitPrice: 60,
+          referencePrice: null,
+          protectionTicks: null,
+          filledQty: 0,
+          unspentCoin: input.budgetCoin ?? null,
+        });
+        expect(done.order.endedAt).toEqual(done.order.createdAt);
+        expect(done.fills).toEqual([]);
+        // The request id answers the row as it stands.
+        const replay = await placeTestOrder(t.db, { ownerId: a, marketId: m, requestId, ...input });
+        expect(replay).toEqual({ kind: 'replayed', order: done.order });
+      }
+      // Nothing locked, filled or moved: the rows are the three rejections alone.
+      expect(await written()).toEqual({ ...before, orders: before.orders + 3 });
+      const [market0] = await t.db.select().from(markets).where(eq(markets.id, m));
+      expect(market0!.status).toBe('open');
     });
   });
 
@@ -989,6 +1028,136 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
       });
       expect(await coin(a)).toEqual({ available: 1_000n, locked: 0n });
     });
+
+    it('rejects 마감 at the fill instant when the close came while the intake waited (#120)', async () => {
+      // The gate's clock passes before the close; `lockOrderHolders` then waits on another
+      // market's intake holding the same person past `close_at`. No fill may carry that instant.
+      const m = await market();
+      const other = await market();
+      const a = await member();
+      const b = await member();
+      const resting = await order(b, m, 'NO', 'buy', 'gtc', 40, 2);
+      const closeAt = new Date((await clockTimestamp(t.db)).getTime() + 1_500);
+      await passMarketClose(t.db, m, closeAt);
+      const bBefore = await coin(b);
+      let go!: () => void;
+      const held = new Promise<void>((resolve) => (go = resolve));
+      let entered!: () => void;
+      const inside = new Promise<void>((resolve) => (entered = resolve));
+      // A's intake in another market holds A's balance row.
+      const holding = t.db.transaction(async (tx) => {
+        const done = await placeOrder(tx, {
+          ownerId: a,
+          marketId: other,
+          requestId: randomUUID(),
+          outcome: 'YES',
+          side: 'buy',
+          timeInForce: 'gtc',
+          limitPriceCoin: 10,
+          qty: 1,
+          budgetCoin: null,
+        });
+        entered();
+        await held;
+        return done;
+      });
+      await inside;
+      const incoming = order(a, m, 'YES', 'buy', 'ioc', 65, 2);
+      await waitForLockWaiter(t.db.$client, 'the intake waits on A’s balance row');
+      // Past the close by the DB clock, then let the intake go on.
+      while ((await clockTimestamp(t.db)).getTime() < closeAt.getTime() + 50) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      }
+      go();
+      expect((await holding).kind).toBe('placed');
+      const late = (await incoming).order;
+      expect(late).toMatchObject({
+        status: 'rejected',
+        rejectReason: 'closed',
+        filledQty: 0,
+        referencePrice: null,
+        protectionTicks: null,
+        protectedLimitPrice: 65,
+      });
+      expect(late.createdAt.getTime()).toBeGreaterThanOrEqual(closeAt.getTime());
+      expect((await incoming).fills).toEqual([]);
+      // The resting NO buy and its owner are as they were; A's lock is its other order's only.
+      expect(await orderRow(resting.order.id)).toEqual(resting.order);
+      expect(await coin(b)).toEqual(bBefore);
+      expect(await coin(a)).toEqual({ available: 990n, locked: 10n });
+      expect(await t.db.select().from(fills).where(eq(fills.marketId, m))).toEqual([]);
+      expect(await checkOrderInvariants(t.db)).toEqual([]);
+    });
+
+    it('meets the real close on the market lock: rests before and expires, or 마감 after (#120)', async () => {
+      // The intake first: it rests before close_at under the lock; the close then expires it.
+      const m = await market();
+      const a = await member();
+      const closeAt = new Date((await clockTimestamp(t.db)).getTime() + 1_000);
+      await passMarketClose(t.db, m, closeAt);
+      let go!: () => void;
+      const held = new Promise<void>((resolve) => (go = resolve));
+      let entered!: () => void;
+      const inside = new Promise<void>((resolve) => (entered = resolve));
+      const intake = t.db.transaction(async (tx) => {
+        const done = await placeOrder(tx, {
+          ownerId: a,
+          marketId: m,
+          requestId: randomUUID(),
+          outcome: 'YES',
+          side: 'buy',
+          timeInForce: 'gtc',
+          limitPriceCoin: 40,
+          qty: 3,
+          budgetCoin: null,
+        });
+        entered();
+        await held;
+        return done;
+      });
+      await inside;
+      while ((await clockTimestamp(t.db)).getTime() < closeAt.getTime() + 50) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      }
+      const closing = closeTestMarket(t.db, m);
+      await waitForLockWaiter(t.db.$client, 'the close waits on the intake');
+      go();
+      const rested = await intake;
+      if (rested.kind !== 'placed') throw new Error('placed');
+      expect(rested.order.status).toBe('open');
+      expect(rested.order.createdAt.getTime()).toBeLessThan(closeAt.getTime());
+      const closed = await closing;
+      if (!closed.closed) throw new Error('closed');
+      expect(closed.expired.expired.map((row) => row.id)).toEqual([rested.order.id]);
+      expect(await orderRow(rested.order.id)).toMatchObject({
+        status: 'expired',
+        cancelReason: null,
+        endedAt: closed.closedAt,
+      });
+      expect(await coin(a)).toEqual({ available: 1_000n, locked: 0n });
+
+      // The close first: the intake waits on it and finds the market CLOSED.
+      const m2 = await market();
+      await passMarketClose(t.db, m2);
+      let go2!: () => void;
+      const held2 = new Promise<void>((resolve) => (go2 = resolve));
+      let entered2!: () => void;
+      const inside2 = new Promise<void>((resolve) => (entered2 = resolve));
+      const closing2 = t.db.transaction(async (tx) => {
+        const done = await closeMarketAtClose(tx, m2);
+        entered2();
+        await held2;
+        return done;
+      });
+      await inside2;
+      const ordering = order(a, m2, 'YES', 'buy', 'gtc', 40, 1);
+      await waitForLockWaiter(t.db.$client, 'the intake waits on the close');
+      go2();
+      expect((await closing2).closed).toBe(true);
+      expect((await ordering).order).toMatchObject({ status: 'rejected', rejectReason: 'closed' });
+      expect(await coin(a)).toEqual({ available: 1_000n, locked: 0n });
+      expect(await checkOrderInvariants(t.db)).toEqual([]);
+    });
   });
 
   describe('the 운영 마켓메이커 as an owner', () => {
@@ -1222,6 +1391,32 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
           .where(and(eq(orders.cancelReason, 'paused'), eq(orders.endedAt, paused.pause.pausedAt)));
         seen.set('paused', (seen.get('paused') ?? 0) + pausedRows.length);
         expect(await checkOrderInvariants(t.db)).toEqual([]);
+        // The second market's close (#120): every live order left, the 운영 마켓메이커's too,
+        // ends 만료 with its lock back; no contract moves and every lock is still an order's.
+        const book = await contractBook(t.db, marketIds[1]!);
+        const entriesBefore = (await written()).entries;
+        await passMarketClose(t.db, marketIds[1]!);
+        const closed = await closeTestMarket(t.db, marketIds[1]!);
+        if (!closed.closed) throw new Error('closed');
+        seen.set('expired', (seen.get('expired') ?? 0) + closed.expired.expired.length);
+        expect(
+          await t.db
+            .select()
+            .from(orders)
+            .where(
+              and(
+                eq(orders.marketId, marketIds[1]!),
+                sql`${orders.status} IN ('open', 'partially_filled')`,
+              ),
+            ),
+        ).toEqual([]);
+        expect(await contractBook(t.db, marketIds[1]!)).toEqual({
+          ...book,
+          lockedYes: 0,
+          lockedNo: 0,
+        });
+        expect((await written()).entries).toBe(entriesBefore);
+        expect(await checkOrderInvariants(t.db)).toEqual([]);
       }
       for (const kind of [
         'fill',
@@ -1231,6 +1426,7 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
         'by_owner',
         'restricted',
         'paused',
+        'expired',
       ]) {
         expect(seen.get(kind) ?? 0, kind).toBeGreaterThan(0);
       }

@@ -8,15 +8,17 @@ import { and, eq } from 'drizzle-orm';
 import type { Db } from './client.js';
 import { readLiveBook } from './orders.js';
 import { markets, positions } from './schema/index.js';
+import { clockTimestamp } from './tx-helpers.js';
 
 /*
- * 공개 호가와 견적의 읽기 (#179, ADR-0114): what the public book, the quote and a holder's sellable
- * figures read — the market's status and width, its live book without the owners' account types,
- * and one holder's two position rows. Readers only: no lock (never `lockMarket`, so a read never
- * waits on an intake or delays one) and no write. The API runs them in one REPEATABLE READ READ
- * ONLY transaction, so the status, the width, the book and the rows are one snapshot: every writer
- * of a market's status or orders holds its `lockMarket` and commits whole, so the snapshot sees
- * each intake, cancel or transition whole or not at all, and Postgres refuses any write in it.
+ * 공개 호가와 견적의 읽기 (#179, ADR-0114): what the public book, the quote and a holder's sellable figures
+ * read — the market's status, width and close (with the DB clock, #120), its live book without the
+ * owners' account types, and one holder's two position rows. Readers only: no lock (never
+ * `lockMarket`, so a read never waits on an intake or delays one) and no write. The API runs them
+ * in one REPEATABLE READ READ ONLY transaction, so the status, the width, the book and the rows are
+ * one snapshot: every writer of a market's status or orders holds its `lockMarket` and commits
+ * whole, so the snapshot sees each intake, cancel or transition whole or not at all, and Postgres
+ * refuses any write in it.
  */
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -25,20 +27,29 @@ type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 type Reader = Db | Tx;
 
 /**
- * A public market's trading facts (@buddha/shared `quoteOrder`, `orderBookOf`): its status and its
- * 가격 보호 폭; null for no such market and for one not public yet (DRAFT, REVIEW → NOT_FOUND).
- * #120 adds `close_at` and the snapshot's DB clock here for `marketTradingRejectReason`.
+ * A public market's trading facts (@buddha/shared `quoteOrder`, `orderBookOf`): its status, its
+ * 가격 보호 폭, its 거래 마감 시각 and the DB clock read right after them, for
+ * `marketTradingRejectReason`'s `close_at` refusal (#120); null for no such market and for one not
+ * public yet (DRAFT, REVIEW → NOT_FOUND). In the API's snapshot transaction the SELECT is its first
+ * statement and fixes the snapshot, and the clock read after it can only be later: a close the
+ * snapshot sees committed (at or after `close_at`) always reads 'closed', and a read a moment
+ * early errs toward 'closed'. Not `now()`, which is the transaction's start and can precede it.
  */
 export async function readMarketTradingFacts(
   executor: Reader,
   marketId: string,
 ): Promise<MarketTradingFacts | null> {
   const [row] = await executor
-    .select({ status: markets.status, widthTicks: markets.priceProtectionTicks })
+    .select({
+      status: markets.status,
+      widthTicks: markets.priceProtectionTicks,
+      closeAt: markets.closeAt,
+    })
     .from(markets)
     .where(eq(markets.id, marketId));
   if (!row || row.status === 'draft' || row.status === 'review') return null;
-  return { status: row.status, widthTicks: row.widthTicks };
+  const now = await clockTimestamp(executor);
+  return { status: row.status, widthTicks: row.widthTicks, closeAt: row.closeAt, now };
 }
 
 /**

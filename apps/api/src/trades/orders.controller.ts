@@ -77,7 +77,8 @@ export class MarketOrdersController {
   // an ioc buy only — and no other field). FORBIDDEN: a foreign Origin, `expectedAccountId` not the
   // cookie's, or an admin (who never trades). RESTRICTED: an account restriction stands (#139).
   // NOT_FOUND: no public market of that id. ORDER_INTAKE_CLOSED: intake is closed
-  // (`order.accepting`), or an immediate order on a market with no width (path priceProtection).
+  // (`order.accepting`), or an immediate order on a market with no width (path priceProtection) —
+  // a market not OPEN, or past its close_at by the DB clock (#120), answers a rejected order first.
   // DUPLICATE_REQUEST: the request id named another order. RATE_LIMITED: `order.rate_limit`.
   @ApiErrors(
     'UNAUTHENTICATED',

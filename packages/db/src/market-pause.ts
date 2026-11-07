@@ -15,7 +15,13 @@ import { and, desc, eq, isNull } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { Db } from './client.js';
 import { transitionMarket } from './market-transitions.js';
-import { cancelLockedOrders, type CancelledOrders, type LockedOrders } from './order-cancel.js';
+import {
+  cancelLockedOrders,
+  expireLockedOrders,
+  type CancelledOrders,
+  type ExpiredOrders,
+  type LockedOrders,
+} from './order-cancel.js';
 import type * as schema from './schema/index.js';
 import { marketPauses, markets } from './schema/index.js';
 
@@ -43,13 +49,15 @@ type Reader = Pick<NodePgDatabase<typeof schema>, 'select'>;
  * transaction, through order-cancel.ts (#178, ADR-0113; #173 item 3, ADR-0107 결정 5 '#119 일시
  * 중단 때 대기 주문'): at the pause, but for `ledger_failure`, whose orders keep their locks until
  * the recovery (결정 4 #178 rows) — the approval of its 재개 or 조기 마감, which cancels them before
- * the status changes. The intake (#119) refuses new orders '일시 중단' meanwhile. #93 may call
- * `pauseMarket` with `ledger_failure`. Each is called under `lockMarket`, with the market read
- * `FOR UPDATE` after the lock, its orders locked after that (`lockMarketOrders`, required by
- * `pauseMarket` and `endMarketPause`) and `now` the DB clock read after the last lock, in the
- * caller's transaction; each writes no admin action (the API's) and publishes nothing (the caller
- * publishes `market:status` after COMMIT, and `market:book` when it cancelled any order, #179; a
- * lock change alone has no event).
+ * the status changes. A non-held market's 조기 마감 expires what is left after the status changes,
+ * as the close at `close_at` does (#120, ADR-0107 결정 5 '#120 조기 마감'). The intake (#119)
+ * refuses new orders '일시 중단' meanwhile. #93 may call `pauseMarket` with `ledger_failure`. Each is
+ * called under `lockMarket`, with the market read `FOR UPDATE` after the lock, its orders locked
+ * after that (`lockMarketOrders`, required by `pauseMarket` and `endMarketPause`) and `now` the DB
+ * clock read after the last lock, in the caller's transaction; each writes no admin action (the
+ * API's) and publishes nothing (the caller publishes `market:status` after COMMIT, and
+ * `market:book` when it cancelled or expired any order — `cancelled` or `expired.expired`
+ * non-empty, #179 and a non-held 조기 마감's expiry, #120; a lock change alone has no event).
  */
 
 /**
@@ -222,8 +230,10 @@ export type EndMarketPauseResult =
       pause: MarketPauseRow;
       /** The `resumed` or `closed` event's id, the market's `status_event_id`. */
       eventId: number;
-      /** The orders it cancelled at `now`, before the status changed. */
+      /** The orders it cancelled at `now`, before the status changed (재개, a held 조기 마감). */
       cancelled: CancelledOrders;
+      /** The orders a non-held 조기 마감 expired at `now`, after the status changed (#120). */
+      expired: ExpiredOrders;
     }
   | { ended: false; reason: EndPauseSkipReason };
 
@@ -245,11 +255,14 @@ export type EndMarketPauseResult =
  *   actual close, and `close_at` stays the scheduled one — a rule-version item (#80, migration
  *   0053's guard). No VOID here: the judgement chooses it after the close (#173 item 4, #152).
  *
- * Before the event, every live order of the market is cancelled 일시 중단 at `now`, its lock given
- * back (`cancelLockedOrders` with `endsHold`, #178): for a `ledger_failure` pause this is its
- * recovery (ADR-0107 결정 4 #178 rows, '조기 마감은 복구를 겸함'), for 재개 and 조기 마감 alike, and
- * comes before any CLOSED; after another reason's pause it finds nothing (the pause cancelled
- * them), but rows from before #178. The reconciliation's pass on the recovery is #93's.
+ * For 재개, and for the 조기 마감 of a market held for a ledger failure, every live order of the
+ * market is cancelled 일시 중단 at `now` before the event, its lock given back
+ * (`cancelLockedOrders` with `endsHold`, #178): for a `ledger_failure` pause this is its recovery
+ * (ADR-0107 결정 4 #178 rows, '조기 마감은 복구를 겸함'), and comes before any CLOSED. The 조기 마감 of
+ * a market not held gets the close's own processing instead (ADR-0107 결정 4 '#120·#20', 결정 5
+ * '#120 조기 마감'): after the event, every live order ends 만료 at `now` (`expireLockedOrders`,
+ * #120). After another reason's pause both find nothing (the pause cancelled them), but rows from
+ * before #178. The reconciliation's pass on the recovery is #93's.
  *
  * Then the pause's end: `resumed` or `early_closed`, `now`, the approver, the event, the request
  * and the review result (a `basis_change` pause's alone). The caller cancels the close job after
@@ -274,11 +287,13 @@ export async function endMarketPause(
     throw new Error(`A ${current.reason} pause's ${path} is refused: ${refusal.message}`);
   }
 
-  const cancelled = await cancelLockedOrders(tx, orders, {
-    reason: 'paused',
-    at: now,
-    endsHold: true,
-  });
+  const held = orders.markets[0]?.held ?? false;
+  // 재개, and the 조기 마감 of a held market (its approval is the recovery, ADR-0107 결정 4 #178):
+  // 취소 완료(일시 중단) before the status changes.
+  const cancelled =
+    path === 'resume' || held
+      ? await cancelLockedOrders(tx, orders, { reason: 'paused', at: now, endsHold: true })
+      : { cancelled: [], held: [], touched: { positions: [] } };
   const decided = { pauseId: current.id, approvalId, requestedBy, reviewResult };
   const resumed: MarketResumedPayload = decided;
   const earlyClosed: MarketEarlyClosedPayload = {
@@ -286,6 +301,9 @@ export async function endMarketPause(
     source: 'early_close',
     ...decided,
   };
+  // #20: for an early close no person filled, this transition goes to 'cancelled' instead, and
+  // #20 picks its event type, payload and the pause's end kind below with it; the 만료 after the
+  // pause's end (`path === 'early_close' && !held`) is the same.
   const eventId = await transitionMarket(tx, {
     marketId: market.id,
     from: 'paused',
@@ -308,9 +326,14 @@ export async function endMarketPause(
     .where(and(eq(marketPauses.id, current.id), isNull(marketPauses.endedAt)))
     .returning();
   if (!pause) throw new Error(`Pause ${current.id} ended while its market was locked`);
+  // 조기 마감 of a market not held: the close's own processing, 만료 at the close's instant (#120).
+  const expired: ExpiredOrders =
+    path === 'early_close' && !held
+      ? await expireLockedOrders(tx, orders, { at: now })
+      : { expired: [], held: [], touched: { positions: [] } };
   const [row] = await tx.select().from(markets).where(eq(markets.id, market.id));
   if (!row) throw new Error(`Market ${market.id} left its pause but could not be read back`);
-  return { ended: true, market: row, pause, eventId, cancelled };
+  return { ended: true, market: row, pause, eventId, cancelled, expired };
 }
 
 export interface EndPauseAtCloseInput {
@@ -325,12 +348,12 @@ export interface EndPauseAtCloseInput {
  * The end of a PAUSED market's lasting pause at its close (#114; ADR-0093 decision 1 #173 items
  * 1·3: the close at `close_at` takes PAUSED to CLOSED on schedule, with no review and no
  * approval): `closed_at_close`, `now` and the worker's `closed` event, no approver, no request, no
- * review result. Called by the worker's `market.close` in the transaction of that transition, under
- * the market lock. Returns the ended pause, or null when the market had none lasting (a row written
- * outside `pauseMarket`, a test's); a next-path request still waiting is moot from then on — its
- * approval is refused, its 반려 and 철회 still end it. It cancels no order: a `ledger_failure`
- * market's stay locked (held, ledger-held-markets.ts) until #93's recovery of the closed market
- * expires them, and #120 expires the rest at the close.
+ * review result. Called by `closeMarketAtClose` (the worker's `market.close`) in the transaction of
+ * that transition, under the market lock. Returns the ended pause, or null when the market had none
+ * lasting (a row written outside `pauseMarket`, a test's); a next-path request still waiting is
+ * moot from then on — its approval is refused, its 반려 and 철회 still end it. It cancels no order: a
+ * `ledger_failure` market's stay locked (held, ledger-held-markets.ts) until #93's recovery of the
+ * closed market expires them, and the close (`closeMarketAtClose`, #120) expires the rest after it.
  */
 export async function endPauseAtClose(
   tx: Executor,

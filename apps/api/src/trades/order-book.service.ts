@@ -29,9 +29,10 @@ const marketNotFound = () => new AppError('NOT_FOUND', { message: 'Market not fo
  * `order-book.ts` on #117's line and walk.
  *
  * - 공개 호가 (`book`): both contracts' every level, price and summed quantity only. A market that
- *   takes no order now (SCHEDULED, PAUSED, CLOSED and after; #120's past `close_at` — the intake
- *   gate's own `marketTradingRejectReason`) shows empty sides with the reason, and its orders are
- *   not read: a ledger hold's locked ones cannot trade (`orderBookOf`).
+ *   takes no order now (SCHEDULED, PAUSED, CLOSED and after, and an OPEN one past its `close_at`
+ *   by the read's DB clock before the worker closes it, #120 — the intake gate's own
+ *   `marketTradingRejectReason`) shows empty sides with the reason, and its orders are not read:
+ *   a ledger hold's locked ones cannot trade (`orderBookOf`).
  * - 견적 (`quote`): the intake's own market gate and plan with no owner (`quoteOrder`) on the
  *   public book — no session, no personal data, no request id, no `order.accepting` (a closed
  *   intake still quotes, 결정 3) and no asset check. An immediate order on a market with no width
@@ -96,8 +97,8 @@ export class OrderBookService {
 
   /**
    * The live book of a market that takes orders now; none for any other, whose orders cannot
-   * trade. The check is the intake gate's own (`marketTradingRejectReason`), so #120's `close_at`
-   * refusal leaves the book unread as it refuses the quote and the order. #128's trim
+   * trade. The check is the intake gate's own (`marketTradingRejectReason`), so the `close_at`
+   * refusal (#120) leaves the book unread as it refuses the quote and the order. #128's trim
    * of the 운영 마켓메이커's quantities is not inherited from the intake's: it goes here too, as
    * after `placeOrder`'s `readLiveBook`, or the quote parts from the fill (ADR-0114 결과 5 #128;
    * whether the public depth shows the trimmed quantities is #128's call).

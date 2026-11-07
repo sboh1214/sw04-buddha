@@ -103,8 +103,11 @@ interface CoinStep {
  * production (#119 registers `order.accepting` closed, and the owner opens it once #126 and #93 are
  * deployed, ADR-0107 결정 3). A row a live sell order still locks (`locked_qty`, #118) is not closed
  * out: the qty-0 UPDATE fails `positions_locked_qty_check`, the step fails whole, and the market
- * stays SETTLING until #120 or #178 releases the lock (ADR-0107 결정 4 #178 row). #126 replaces this
- * with its own check.
+ * stays SETTLING until the lock is released (ADR-0107 결정 4 #178 row). The close expires every
+ * live order and releases its lock (#120, ADR-0115), so a market reaches settlement with a resting
+ * sell only when held for a ledger failure, until #93's recovery ends it, or closed before #120
+ * with a leftover sell (ADR-0115 10-14, none in production), until its owner's cancel (ADR-0113
+ * 12-9) releases it; the next attempt then finishes. #126 replaces this with its own check.
  *
  *  - positions FOR UPDATE in (user_id, outcome) order, then every ledger account the step pays
  *    from or into locked at once, ascending (`lockLedgerAccounts`, the write API's lock order),

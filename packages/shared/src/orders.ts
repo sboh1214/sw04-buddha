@@ -213,7 +213,7 @@ export type MarketStatusRejectReason = (typeof MARKET_STATUS_REJECT_REASONS)[num
  * later status 마감 (a CANCELLED market too); OPEN null — it takes orders, with or without a
  * quoting bot. A DRAFT or REVIEW market is not public: the caller answers NOT_FOUND before it asks
  * (RangeError here). It reads the status alone: whether a market takes orders now is
- * `marketTradingRejectReason`, where #120 adds the `close_at` check of an OPEN market.
+ * `marketTradingRejectReason`, which adds the `close_at` check of an OPEN market (#120).
  */
 export function marketRejectReason(status: MarketStatus): MarketStatusRejectReason | null {
   switch (status) {
@@ -240,18 +240,23 @@ export function marketRejectReason(status: MarketStatus): MarketStatusRejectReas
  * Why a public market takes no order now, or null when it does (#179, ADR-0114 결정 2·3): the one
  * check the intake's gate (`intakeMarketGate`, so the quote too) and the public book
  * (`orderBookOf`, and the API's read of the live book) share, so the book shows no level where
- * the intake and the quote refuse. Today it is the status alone (`marketRejectReason`). #120 adds
- * the `close_at` refusal of an OPEN market here — 'closed' from `close_at` on by the snapshot's
- * DB clock, before the worker's transition — carrying `close_at` and that clock in
- * `MarketTradingFacts` (`readMarketTradingFacts`), so the book, the quote and the intake agree in
- * that window. It and its three callers (`intakeMarketGate`, `orderBookOf`, `quoteOrder`) take
- * the one `MarketTradingFacts`, so a widened type reaches all four and `placeOrder`'s own read.
- * RangeError for a DRAFT or REVIEW market: the caller answered NOT_FOUND first.
+ * the intake and the quote refuse. The status first (`marketRejectReason`: a SCHEDULED or PAUSED
+ * market keeps its own reason past its close), then the `close_at` refusal of an OPEN market
+ * (#120, ADR-0115): 'closed' from `close_at` on by the read's DB clock (`now >= closeAt`, the
+ * worker's, the burn's and the pause's boundary), before the worker's transition — so the book,
+ * the quote and the intake agree in that window (ADR-0107 결정 5 '#120 개장 뒤 거래 마감 시각 변경':
+ * the close_at as stored then and the server's clock only). It and its three callers
+ * (`intakeMarketGate`, `orderBookOf`, `quoteOrder`) take the one `MarketTradingFacts`
+ * (`readMarketTradingFacts`, `placeOrder`'s own read). RangeError for a DRAFT or REVIEW market:
+ * the caller answered NOT_FOUND first.
  */
 export function marketTradingRejectReason(
   market: MarketTradingFacts,
 ): MarketStatusRejectReason | null {
-  return marketRejectReason(market.status);
+  const reason = marketRejectReason(market.status);
+  if (reason !== null) return reason;
+  // An OPEN market from its close_at on, by the DB clock, before the worker's transition (#120).
+  return market.closeAt.getTime() <= market.now.getTime() ? 'closed' : null;
 }
 
 /** What the intake's market gate answers: a rejected order with its reason, or nothing taken. */
@@ -263,7 +268,7 @@ export type IntakeMarketRefusal =
  * takes no order now rejects the order with its reason (`marketTradingRejectReason`, the check the
  * public book shares), and an immediate order meets a market with no 가격 보호 폭 as `closed`
  * (nothing written; a GTC order never uses the width). It holds only refusals of the market
- * alone, so the public quote (#179, no account) follows them: #120's `close_at` refusal goes into
+ * alone, so the public quote (#179, no account) follows them: the `close_at` refusal (#120) is in
  * `marketTradingRejectReason`, so the book follows too. Per-account refusals (#143's role-revoke
  * reason, #93's account hold) stay in `placeOrder` beside the asset lock, where a quote can differ
  * from the fill. RangeError for a DRAFT or REVIEW market: the caller answered NOT_FOUND first.

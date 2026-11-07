@@ -401,9 +401,10 @@ export const orderSideSchema = z.enum(ORDER_SIDES);
 /**
  * An order's six states (ADR-0107 결정 1 #177 7항): 대기 (`open`) and 부분 체결 (`partially_filled`)
  * rest in the book and hold their lock (`LIVE_ORDER_STATUSES`, contract.ts); 전량 체결 (`filled`),
- * 취소 완료 (`cancelled`), 만료 (`expired`, a GTC order at the close, #120) and 거절 (`rejected`, ended
- * with no fill, its reason in `ORDER_REJECT_REASONS`) have ended. An IOC order that filled nothing
- * is 거절; one that filled some is 취소 완료 with its remainder (`ioc_remainder`).
+ * 취소 완료 (`cancelled`), 만료 (`expired`, a GTC order of any account type at the close, #120; a
+ * ledger-held market's wait for #93's recovery) and 거절 (`rejected`, ended with no fill, its reason
+ * in `ORDER_REJECT_REASONS`) have ended. An IOC order that filled nothing is 거절; one that filled
+ * some is 취소 완료 with its remainder (`ioc_remainder`).
  */
 export const ORDER_STATUSES = [
   'open',
@@ -420,7 +421,9 @@ export const orderStatusSchema = z.enum(ORDER_STATUSES);
  * Why the server ended an order with no fill, 거절 (ADR-0107 결정 1 #177 8항, ADR-0111 결정 6), in
  * the ADR's order: 잔액 부족 (`insufficient_coin`, the lock it needs is above the available Coin),
  * 보유량 부족 (`insufficient_contracts`, a sell above the unlocked holding), 개장 전
- * (`not_open_yet`, SCHEDULED), 마감 (`closed`, CLOSED and every later status), 일시 중단
+ * (`not_open_yet`, SCHEDULED), 마감 (`closed`, CLOSED and every later status, and an OPEN market
+ * from its 거래 마감 시각 on by the DB clock before the worker's close — the intake's gate or its
+ * check at the fill instant, #120, ADR-0115), 일시 중단
  * (`paused`), 호가 부족 (`no_quote`, nothing opposite to meet, the bot not quoting included), 가격
  * 한도 (`price_limit`, the best opposite entry is beyond the limit), 금액 부족 (`budget_too_small`,
  * a budget order that cannot buy one contract) and 자기 체결 (`self_trade`, the first entry is the
