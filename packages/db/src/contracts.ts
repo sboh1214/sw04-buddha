@@ -63,6 +63,10 @@ import { clockTimestamp, lockMarket } from './tx-helpers.js';
  * adds is that market's collateral, written only under the market's `lockMarket`, which
  * `lockMarkets` holds. A later call that adds a new owner's row (or a 마켓메이커 자금, one row per
  * market) is the deadlock again (contracts.test.ts shows both).
+ * Locks and releases work in any market status (a cancel or an expiry ends an order in a closed
+ * market); the two fill processings take a market only while it trades (OPEN — 마감 뒤 막음, #120,
+ * ADR-0115), so no contract changes owner or is made after the close, and after CLOSED only
+ * settlement removes them (보유 확정).
  * Every check runs before the first write, so a throw leaves nothing to undo — but it is a caller's
  * bug, and the caller's transaction rolls back on it. Every Coin move between two accounts is one
  * `recordLedgerEntry`; locks and releases are no event (#73 1항). A fill or a burn run again finds
@@ -504,6 +508,25 @@ const releaseOf = (leg: BuyLeg, priceCoin: number, qty: number): bigint =>
   leg.limitPriceCoin === null ? 0n : priceImprovementCoin(leg.limitPriceCoin, priceCoin, qty);
 
 /**
+ * 마감 뒤 막음 (#120, ADR-0110 결과 5, ADR-0115): a fill only while the market trades (OPEN), under
+ * its `lockMarket`, which every status writer holds — a PAUSED or closed market's fill is a
+ * caller's bug, `refused`. The status alone: `close_at` is the intake's (its gate and its check at
+ * the fill instant). After a replay's key check, so a fill recorded while OPEN answers `duplicate`.
+ */
+async function assertTrading(tx: Tx, marketId: string): Promise<void> {
+  const [market] = await tx
+    .select({ status: markets.status })
+    .from(markets)
+    .where(eq(markets.id, marketId));
+  if (market?.status !== 'open') {
+    throw new ContractError(
+      'refused',
+      `market ${marketId} is ${market?.status ?? 'missing'}: a fill only while it trades`,
+    );
+  }
+}
+
+/**
  * 쌍 발행 (D17; N01 §4; ADR-0107 결정 2 #73 1항): one fill of a YES buy against a NO buy, which #117
  * matches and #119 records. Each buyer pays its price × qty out of its lock into the market's
  * collateral (PAIR_MINT_COLLATERAL, `fillLeg(fillId, outcome)`, ref `fill`) — together exactly qty
@@ -512,8 +535,9 @@ const releaseOf = (leg: BuyLeg, priceCoin: number, qty: number): bigint =>
  * what it paid (`applyBuy`). No treasury or operating account is touched unless the 운영
  * 마켓메이커 is a buyer, from its own 마켓메이커 자금. No fill row, tick or market statistic: #119
  * writes the one fill at the YES price. `refused` for the same owner on both legs (self-trade, and
- * no same-owner mint, #177 5·6항), an unknown owner, prices off the grid or a limit below its price;
- * `insufficient_coin` when a lock does not hold what this fill takes from it.
+ * no same-owner mint, #177 5·6항), an unknown owner, prices off the grid, a limit below its price
+ * or a market not OPEN (마감 뒤 막음, #120); `insufficient_coin` when a lock does not hold what this
+ * fill takes from it.
  */
 export async function applyPairMintFill(
   tx: Tx,
@@ -569,6 +593,7 @@ export async function applyPairMintFill(
     });
     return { outcome: 'duplicate' };
   }
+  await assertTrading(tx, marketId);
 
   const plan = outcomes.map((outcome) => {
     const paid = BigInt(prices[outcome]) * BigInt(qty);
@@ -626,8 +651,9 @@ export type TradeFillResult =
  * difference, and qty contracts leave the seller's lock for the buyer's holding — the seller's row
  * by `applySell` (its cost released, its PnL realized), the buyer's by `applyBuy`. The collateral
  * does not move. `refused` for the same owner on both sides (self-trade, and the 운영 마켓메이커's
- * one bundle, #73 11항), an unknown owner, a price off the grid or a limit below it;
- * `insufficient_contracts` when the seller's lock is short (no contract moves unlocked);
+ * one bundle, #73 11항), an unknown owner, a price off the grid, a limit below it or a market not
+ * OPEN (마감 뒤 막음, #120); `insufficient_contracts` when the seller's lock is short (no contract
+ * moves unlocked);
  * `insufficient_coin` when the buyer's is.
  */
 export async function applyTradeFill(tx: Tx, input: TradeFillInput): Promise<TradeFillResult> {
@@ -673,6 +699,7 @@ export async function applyTradeFill(tx: Tx, input: TradeFillInput): Promise<Tra
     });
     return { outcome: 'duplicate' };
   }
+  await assertTrading(tx, marketId);
 
   if (sellerRow === null || sellerRow.settled || sellerRow.lockedQty < qty) {
     throw new ContractError(
@@ -723,8 +750,9 @@ export async function applyTradeFill(tx: Tx, input: TradeFillInput): Promise<Tra
  *   held-market rule (ledger-held-markets.ts, #178), which this asks;
  * - `insufficient_pairs`: qty is above the pairs the 운영 마켓메이커 holds unlocked —
  *   min(YES − locked YES, NO − locked NO);
- * - `close_passed`: OPEN or PAUSED, but its close has come by the database clock (#120's 서버 시각),
- *   which a market reaches before the worker closes it.
+ * - `close_passed`: OPEN or PAUSED, but its close has come by the database clock (서버 시각, the
+ *   intake's and the public book's `close_at` refusal too, #120), which a market reaches before
+ *   the worker closes it.
  */
 export type PairBurnRefusal =
   'no_market_maker' | 'not_trading' | 'ledger_failure' | 'insufficient_pairs' | 'close_passed';

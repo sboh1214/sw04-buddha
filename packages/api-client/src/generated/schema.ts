@@ -1995,7 +1995,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** The public order book, YES then NO: every price level of each side with its summed quantity — asks (what a buyer meets: the direct sells and the other outcome’s buys at 100 − their price, merged per price, cheapest first) and bids (the direct buys only, highest first) — and the best of each, null when the side is empty. No order, account or order count. A market not open shows empty sides with marketRejectReason (not_open_yet, paused, closed) */
+        /** The public order book, YES then NO: every price level of each side with its summed quantity — asks (what a buyer meets: the direct sells and the other outcome’s buys at 100 − their price, merged per price, cheapest first) and bids (the direct buys only, highest first) — and the best of each, null when the side is empty. No order, account or order count. A market not open, or past its trading close, shows empty sides with marketRejectReason (not_open_yet, paused, closed) */
         get: operations["getOrderBook"];
         put?: never;
         post?: never;
@@ -2082,7 +2082,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Quote an order on the book as it stands, as the order intake would match it, writing nothing: the limit it would match with (an immediate order’s narrowed to the best opposite quote ± the market’s price-protection width; with none sent, 99 for a buy and 1 for a sell — send it as the order’s limit), the contracts filling at once and their Coin, what is left, a buy’s whole lock, the fee (0), why the walk stopped and the state the order would end in. A market not open answers a rejected quote with its reason. Public: no session, and open while order intake is closed */
+        /** Quote an order on the book as it stands, as the order intake would match it, writing nothing: the limit it would match with (an immediate order’s narrowed to the best opposite quote ± the market’s price-protection width; with none sent, 99 for a buy and 1 for a sell — send it as the order’s limit), the contracts filling at once and their Coin, what is left, a buy’s whole lock, the fee (0), why the walk stopped and the state the order would end in. A market not open, or past its trading close, answers a rejected quote with its reason. Public: no session, and open while order intake is closed */
         post: operations["quoteOrder"];
         delete?: never;
         options?: never;
@@ -2371,7 +2371,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** The account's holding of a market, YES then NO, with what it may sell now: the contracts held, the part in its resting sells (shown apart, never quoted) and the rest quoted as an immediate sell with price protection (null when nothing is free or the market has no width; fewer filled than free means only part can sell now). Zeros when nothing is held; a market not open answers a rejected quote with its reason */
+        /** The account's holding of a market, YES then NO, with what it may sell now: the contracts held, the part in its resting sells (shown apart, never quoted) and the rest quoted as an immediate sell with price protection (null when nothing is free or the market has no width; fewer filled than free means only part can sell now). Zeros when nothing is held; a market not open, or past its trading close, answers a rejected quote with its reason */
         get: operations["getMySellable"];
         put?: never;
         post?: never;

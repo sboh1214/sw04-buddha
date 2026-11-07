@@ -18,10 +18,11 @@
  * approval of its 재개 or 조기 마감 cancels them before the status changes. Skips when TEST_* are
  * unset.
  */
-import { clockTimestamp, endPauseAtClose, lockMarket, schema, transitionMarket } from '@buddha/db';
+import { lockMarket, schema } from '@buddha/db';
 import {
   balanceOf,
   checkOrderInvariants,
+  closeTestMarket,
   completeOnboarding,
   createCategory,
   createMarket,
@@ -216,31 +217,14 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
   }
 
   /**
-   * The worker's close at `close_at` (apps/worker market-close.ts), as one transaction under the
-   * market lock: OPEN or PAUSED → CLOSED with `{closedAt, source: 'job'}` and no actor, ending a
-   * paused market's pause (`endPauseAtClose`).
+   * The worker's close at `close_at` (apps/worker market-close.ts → `closeMarketAtClose`, #120),
+   * once the clock has passed it: OPEN or PAUSED → CLOSED with `{closedAt, source: 'job'}` and no
+   * actor, ending a paused market's pause (`endPauseAtClose`) and expiring the live orders of a
+   * market not held. A close still ahead skips, and fails the test.
    */
   async function workerClose(marketId: string) {
-    await t.db.transaction(async (tx) => {
-      await lockMarket(tx, marketId);
-      const [current] = await tx
-        .select()
-        .from(schema.markets)
-        .where(eq(schema.markets.id, marketId))
-        .for('update');
-      const now = await clockTimestamp(tx);
-      expect(current!.closeAt.getTime()).toBeLessThanOrEqual(now.getTime());
-      const eventId = await transitionMarket(tx, {
-        marketId,
-        from: current!.status,
-        to: 'closed',
-        type: 'closed',
-        actorId: null,
-        payload: { closedAt: now.toISOString(), source: 'job' },
-        at: now,
-      });
-      if (current!.status === 'paused') await endPauseAtClose(tx, { marketId, now, eventId });
-    });
+    const done = await closeTestMarket(t.db, marketId);
+    expect(done).toMatchObject({ closed: true });
   }
 
   const data = <T>(res: Res) => res.json<{ data: T }>().data;
@@ -1678,6 +1662,51 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
         });
         await expectSound();
       }
+    });
+
+    it('expires an order still live at the early close of a market not held, as the close at close_at does (#120)', async () => {
+      // ADR-0107 결정 5 '#120 조기 마감과 CLOSED 뒤 재개': the early close gets the close's
+      // processing. A pause cancels every order (#178), so the leftover is built by hand: an
+      // order rested while the market is set back to OPEN under the lasting pause.
+      const a = await member();
+      const market = await opened();
+      expect((await pause(market.id)).statusCode).toBe(200);
+      const setStatus = (status: 'open' | 'paused') =>
+        t.db.update(schema.markets).set({ status }).where(eq(schema.markets.id, market.id));
+      await setStatus('open');
+      const order = await rest(market.id, a.id, { limitPriceCoin: 40, qty: 2 });
+      await setStatus('paused');
+      expect(
+        (await requestDecision(market.id, { path: 'early_close', reviewResult: 'judgeable' }))
+          .statusCode,
+      ).toBe(200);
+      const requestId = await pendingId(market.id);
+      let received: string[] = [];
+      await listening(market.id, async (messages) => {
+        const approved = await approve(market.id, requestId);
+        expect(approved.statusCode, approved.body).toBe(200);
+        await waitForMessages(messages, 2, 'market:status and market:book of the early close');
+        await sleep(100);
+        received = messages;
+      });
+      const event = (await eventsFor(market.id)).at(-1)!;
+      expect(event).toMatchObject({ type: 'closed', toStatus: 'closed' });
+      // 만료 at the decision's instant, after the status changed — not 취소 완료(일시 중단).
+      expect(await orderOf(order.id)).toMatchObject({
+        status: 'expired',
+        cancelReason: null,
+        filledQty: 0,
+        endedAt: event.createdAt,
+      });
+      expect(await balanceOf(t.db, a.id)).toMatchObject({
+        availableCoin: 1_000n,
+        lockedCoin: 0n,
+      });
+      expect(received.map((message) => JSON.parse(message) as unknown)).toEqual([
+        expect.objectContaining({ type: 'market:status', status: 'closed' }),
+        { type: 'market:book', marketId: market.id, ts: event.createdAt.toISOString() },
+      ]);
+      await expectSound();
     });
 
     it('serialises a pause with the owner’s cancel on the market lock: one of the two ends the order', async () => {

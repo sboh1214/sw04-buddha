@@ -551,9 +551,9 @@ export type OrderBook = z.infer<typeof orderBookSchema>;
 /**
  * The public book of a market from its trading facts and its live book (#179): every level when
  * it takes orders now, empty sides with the reason otherwise (ADR-0114 결정 2) — by the intake's
- * own check (`marketTradingRejectReason`), so #120's `close_at` refusal empties the book as it
- * refuses the quote and the order. RangeError for a DRAFT or REVIEW market (the caller answers
- * NOT_FOUND) or a malformed book.
+ * own check (`marketTradingRejectReason`), so an OPEN market past its `close_at` (#120) shows an
+ * empty book as the quote and the order are refused. RangeError for a DRAFT or REVIEW market (the
+ * caller answers NOT_FOUND) or a malformed book.
  */
 export function orderBookOf(
   marketId: string,

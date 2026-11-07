@@ -31,8 +31,13 @@ import {
 } from './test/factories.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
 import { balanceOf, fundMarketMakerFunds, ledgerAccountBalance } from './test/ledger.js';
-import { checkOrderInvariants, openOrderIntake, placeTestOrder } from './test/orders.js';
-import { transitionMarket } from './market-transitions.js';
+import {
+  checkOrderInvariants,
+  closeTestMarket,
+  openOrderIntake,
+  passMarketClose,
+  placeTestOrder,
+} from './test/orders.js';
 import { clockTimestamp, lockMarket } from './tx-helpers.js';
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -677,6 +682,8 @@ describe.skipIf(!hasTestDb())('market pauses (#114, docker test profile)', () =>
         expect(result.cancelled.cancelled).toEqual([
           { ...row, status: 'cancelled', cancelReason: 'paused', endedAt: now, updatedAt: now },
         ]);
+        // The held market's 조기 마감 is its recovery: 취소 완료(일시 중단) first, no 만료 (#120).
+        expect(result.expired).toEqual({ expired: [], held: [], touched: { positions: [] } });
         expect((await eventsOf(market.id)).at(-1)).toMatchObject({
           id: result.eventId,
           createdAt: now,
@@ -700,23 +707,57 @@ describe.skipIf(!hasTestDb())('market pauses (#114, docker test profile)', () =>
         reason: 'close_passed',
       });
       expect(await orderRow(row.id)).toEqual(row);
-      // The close at `close_at`: the pause ends `closed_at_close`, the order stays locked (#93).
-      await t.db.transaction(async (tx) => {
-        await lockMarket(tx, market.id);
-        const now = await clockTimestamp(tx);
-        const eventId = await transitionMarket(tx, {
-          marketId: market.id,
-          from: 'paused',
-          to: 'closed',
-          type: 'closed',
-          actorId: null,
-          payload: { closedAt: now.toISOString(), source: 'job' },
-          at: now,
-        });
-        await endPauseAtClose(tx, { marketId: market.id, now, eventId });
+      // The close at `close_at` (#120): the pause ends `closed_at_close`, the order stays locked
+      // (#93's recovery expires it).
+      await passMarketClose(t.db, market.id);
+      expect(await closeTestMarket(t.db, market.id)).toMatchObject({
+        closed: true,
+        pause: { endKind: 'closed_at_close' },
+        expired: { expired: [], held: [row] },
       });
       expect(await orderRow(row.id)).toEqual(row);
       expect(await lockedOf(a)).toBe(80n);
+    });
+
+    it('expires what a non-held market’s 조기 마감 finds after the status changes (#120)', async () => {
+      // A live order in a PAUSED market not held, which only a row from before #178 leaves: the
+      // pause (basis_change) on an empty market, then an order rested while the status is raw OPEN.
+      const market = await createMarket(t.db);
+      await createMarketPause(t.db, { marketId: market.id, reason: 'basis_change' });
+      const setStatus = (status: 'open' | 'paused') =>
+        t.db.update(markets).set({ status }).where(eq(markets.id, market.id));
+      await setStatus('open');
+      const a = await member();
+      const row = await rest(a, market.id, 'NO', 30);
+      await setStatus('paused');
+      const { ending } = await approvedDecision(market.id, 'early_close', 'not_judgeable');
+      const { now, result } = await end(market.id, ending);
+      if (!result.ended) throw new Error('ended');
+      // The close's own processing: no 취소 완료(일시 중단), 만료 at the decision's instant.
+      expect(result.cancelled).toEqual({ cancelled: [], held: [], touched: { positions: [] } });
+      expect(result.expired.expired).toEqual([
+        { ...row, status: 'expired', endedAt: now, updatedAt: now },
+      ]);
+      expect(result.market.status).toBe('closed');
+      expect(await lockedOf(a)).toBe(0n);
+      expect(await checkOrderInvariants(t.db)).toEqual([]);
+    });
+
+    it('cancels a resumed market’s leftover 일시 중단 before the status changes, as before', async () => {
+      const market = await createMarket(t.db);
+      await createMarketPause(t.db, { marketId: market.id, reason: 'basis_change' });
+      await t.db.update(markets).set({ status: 'open' }).where(eq(markets.id, market.id));
+      const a = await member();
+      const row = await rest(a, market.id, 'NO', 30);
+      await t.db.update(markets).set({ status: 'paused' }).where(eq(markets.id, market.id));
+      const { ending } = await approvedDecision(market.id, 'resume', 'judgeable');
+      const { now, result } = await end(market.id, ending);
+      if (!result.ended) throw new Error('ended');
+      expect(result.cancelled.cancelled).toEqual([
+        { ...row, status: 'cancelled', cancelReason: 'paused', endedAt: now, updatedAt: now },
+      ]);
+      expect(result.expired.expired).toEqual([]);
+      expect(await lockedOf(a)).toBe(0n);
     });
 
     it('takes the orders lockMarketOrders locked of that market, and nothing else', async () => {

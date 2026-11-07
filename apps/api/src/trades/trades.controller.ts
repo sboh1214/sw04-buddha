@@ -62,7 +62,8 @@ export class MeTradesController {
       'contracts held, the part in its resting sells (shown apart, never quoted) and the rest ' +
       'quoted as an immediate sell with price protection (null when nothing is free or the ' +
       'market has no width; fewer filled than free means only part can sell now). Zeros when ' +
-      'nothing is held; a market not open answers a rejected quote with its reason',
+      'nothing is held; a market not open, or past its trading close, answers a rejected quote ' +
+      'with its reason',
   })
   @ApiData(sellableSchema)
   @ApiErrors('UNAUTHENTICATED', 'NOT_FOUND', 'VALIDATION_ERROR')

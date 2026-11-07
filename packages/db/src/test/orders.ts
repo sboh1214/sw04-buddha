@@ -25,6 +25,7 @@ import {
 } from '@buddha/shared';
 import { eq, sql } from 'drizzle-orm';
 import type { Db } from '../client.js';
+import { closeMarketAtClose, type CloseMarketAtCloseResult } from '../market-close.js';
 import {
   cancelLockedOrders,
   cancelOrder,
@@ -40,7 +41,7 @@ import {
   type PlaceOrderInput,
   type PlaceOrderResult,
 } from '../orders.js';
-import { fills, orders, profiles, user } from '../schema/index.js';
+import { fills, markets, orders, profiles, user } from '../schema/index.js';
 import { clockTimestamp, lockMarket } from '../tx-helpers.js';
 import { contractBook } from './contracts.js';
 import { TEST_PRICE_PROTECTION_TICKS, createUser, setReleaseSetting } from './factories.js';
@@ -101,9 +102,9 @@ export interface CreateOrderInput {
  * one YES at 50 resting (`open`) by default — under the market lock, with its arrival key from the
  * sequence. Holds no lock: a test of the lock rule takes it itself (`lockForOrder`), or goes
  * through the intake. For reads, eligibility and closure tests that need an order and no intake.
- * A live row of it has no lock to give back, so never let a cancel meet it (#178: an owner's
- * cancel, a pause but `ledger_failure`, a pause's end, a restriction's approval, a closure — the
- * release throws): use `placeTestOrder` there.
+ * A live row of it has no lock to give back, so never let a cancel or an expiry meet it (#178: an
+ * owner's cancel, a pause but `ledger_failure`, a pause's end, a restriction's approval, a closure;
+ * #120: the close, `closeTestMarket` — the release throws): use `placeTestOrder` there.
  */
 export async function createOrder(db: Db, input: CreateOrderInput): Promise<OrderRow> {
   const userId = input.userId ?? (await createUser(db)).user.id;
@@ -375,6 +376,37 @@ export async function placeTestOrder(
       ownerId: input.ownerId,
     }),
   );
+}
+
+/**
+ * Moves `marketId`'s 거래 마감 시각 to `at` (default a minute ago) with a raw write, as the clock
+ * passing it would: the market keeps its status, so an OPEN one is past its close before the
+ * worker's transition (#120). The scheduled open is cleared (the minute-grain CHECK
+ * `utcMinute(scheduled_open_at) < utcMinute(close_at)`); `at` must stay at or before the scheduled
+ * judgement (the other CHECK — every factory market's is days ahead). A market with a rule version
+ * takes it as a supplement does (`buddha.rule_supplement`, migration 0053's guard).
+ */
+export async function passMarketClose(
+  db: Db,
+  marketId: string,
+  at: Date = new Date(Date.now() - 60_000),
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT set_config('buddha.rule_supplement', ${marketId}, true)`);
+    await tx
+      .update(markets)
+      .set({ closeAt: at, scheduledOpenAt: null })
+      .where(eq(markets.id, marketId));
+  });
+}
+
+/**
+ * The close at `close_at` as the worker runs it (`closeMarketAtClose`, #120), in its own
+ * transaction: OPEN or PAUSED → CLOSED with every live order ended 만료 (a held market's kept), or
+ * a skip. The market must be due (`passMarketClose`, or a close already past). Publishes nothing.
+ */
+export async function closeTestMarket(db: Db, marketId: string): Promise<CloseMarketAtCloseResult> {
+  return db.transaction((tx) => closeMarketAtClose(tx, marketId));
 }
 
 export interface CancelTestOrderInput {

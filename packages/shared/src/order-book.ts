@@ -90,12 +90,18 @@ export function bookDepth(book: readonly BookOrder[]): ContractDepth[] {
 }
 
 /**
- * What the quote and the public book read of the market: its status and its 가격 보호 폭 (null:
- * none entered). #120 adds `close_at` and the DB clock for `marketTradingRejectReason`.
+ * What the intake, the quote and the public book read of the market: its status, its 가격 보호 폭
+ * (null: none entered), its 거래 마감 시각 and the DB clock of the read, so
+ * `marketTradingRejectReason` refuses an OPEN market from its `close_at` on before the worker's
+ * transition (#120, ADR-0114 10-16: every builder carries both).
  */
 export interface MarketTradingFacts {
   readonly status: MarketStatus;
   readonly widthTicks: number | null;
+  /** The market's 거래 마감 시각 as stored now (a supplement only extends it, ADR-0093 #172 14항). */
+  readonly closeAt: Date;
+  /** The DB clock of the read: the snapshot's (book, quote), or the intake's under its locks. */
+  readonly now: Date;
 }
 
 /** An order's terms as a quote takes them: the intake's, an immediate order's limit optional. */
@@ -175,8 +181,8 @@ export type QuoteAnswer =
  * quotes, ADR-0107 결정 3) and the assets (the public quote holds no personal data, 결정 4) —
  * so it differs from the fill only there, when `owner`'s own group stops the walk, when the
  * book changed, or when the market's own facts changed on an unchanged book (an admin's width
- * change, which publishes nothing; a pause; the close at `close_at` — #120 puts that refusal in
- * `marketTradingRejectReason`, which the gate and the public book share). `owner` null for
+ * change, which publishes nothing; a pause; `close_at` passing — that refusal is in
+ * `marketTradingRejectReason`, which the gate and the public book share, #120). `owner` null for
  * the public quote; a member's own (`sellableOf`) to show their self-trade stop. RangeError for a
  * DRAFT or REVIEW market (the caller answers NOT_FOUND), a GTC order with no limit, or malformed
  * terms or book.

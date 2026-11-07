@@ -2275,11 +2275,15 @@ export interface PauseDecided {
  * transaction), then in one transaction under the market lock with the row FOR UPDATE a
  * `market_pause_decision` request about its lasting pause, approved by another admin with a
  * reason, a millisecond and two after the later of the database clock and the market's last
- * write, and `endMarketPause` at the approval's instant — the market's live orders cancelled 일시
- * 중단 (a `ledger_failure` pause's recovery, #178), the event, the market `open` or `closed` and
- * the pause's end. No admin records and no job change (the API's). `endMarketPause`'s checks
- * are made: a market neither OPEN nor PAUSED, a close that has come, or a review result the pause's
- * reason refuses throws.
+ * write, and `endMarketPause` at the approval's instant. For 재개, and for the 조기 마감 of a market
+ * held for a ledger failure, the market's live orders are cancelled 일시 중단 first (a
+ * `ledger_failure` pause's recovery, #178), then the event, the market `open` or `closed` and the
+ * pause's end. For the 조기 마감 of a market not held: the event, the market `closed`, the pause's
+ * end, then every live order ends 만료 at that instant (`expireLockedOrders`, #120). A pause this
+ * factory made has already cancelled them (but a `ledger_failure` one), so the 만료 meets only
+ * live orders a test built by hand on the PAUSED market. No admin records and no job change (the
+ * API's). `endMarketPause`'s checks are made: a market neither OPEN nor PAUSED, a close that has
+ * come, or a review result the pause's reason refuses throws.
  */
 async function approvePauseDecision(
   db: Db,

@@ -22,8 +22,8 @@ import {
   recordLedgerEntry,
   type LedgerAccountRef,
 } from '../ledger.js';
-import { balances, ledgerEntries } from '../schema/index.js';
-import { clockTimestamp } from '../tx-helpers.js';
+import { balances, ledgerEntries, markets } from '../schema/index.js';
+import { clockTimestamp, lockMarket } from '../tx-helpers.js';
 import { createMarket, createMarketMakerAccount } from './factories.js';
 import { createFillRecord, priceAndQtyOf } from './orders.js';
 import { testDbUrls } from './harness.js';
@@ -207,6 +207,12 @@ export interface MintTestPairsInput {
  * 100, which a settlement test pays out of, and both holders have a fill on the market
  * (`hasMarketFill`). The holders must hold the Coin, be two owners, not both non-person accounts
  * and neither an admin (`orders_refuse_admin_owner`). Returns the fill id the two events refer to.
+ *
+ * Pairs as minted while the market traded: the fill processings refuse a market not OPEN (마감 뒤
+ * 막음, #120), so on a market in any other status (a settlement test's RESOLVED or SETTLING, a
+ * PROVISIONAL one) it sets the status to OPEN for the mint and back before COMMIT, under the
+ * market's lock — a raw write no trigger or CHECK on the status alone refuses (a PROVISIONAL
+ * market with a dispute hold or a pending correction would, loudly).
  */
 export async function mintTestPairs(db: Db, input: MintTestPairsInput): Promise<string> {
   const prices = pairPrices(input.yesPriceCoin ?? 50);
@@ -223,6 +229,17 @@ export async function mintTestPairs(db: Db, input: MintTestPairsInput): Promise<
     ['NO', input.noHolderId],
   ];
   await db.transaction(async (tx) => {
+    // The market before any balance row, as every processing takes it.
+    await lockMarket(tx, input.marketId);
+    const [market] = await tx
+      .select({ status: markets.status })
+      .from(markets)
+      .where(eq(markets.id, input.marketId))
+      .for('update');
+    if (!market) throw new Error(`mintTestPairs: market ${input.marketId} does not exist`);
+    const setStatus = (status: typeof market.status) =>
+      tx.update(markets).set({ status }).where(eq(markets.id, input.marketId));
+    if (market.status !== 'open') await setStatus('open');
     // Both owners' accounts first, ascending, as a processing must (`lockOrderHolders`).
     await lockOrderHolders(tx, input.marketId, [input.yesHolderId, input.noHolderId]);
     for (const [outcome, ownerId] of legs) {
@@ -241,6 +258,7 @@ export async function mintTestPairs(db: Db, input: MintTestPairsInput): Promise<
       yes: { ownerId: input.yesHolderId, limitPriceCoin: prices.YES },
       no: { ownerId: input.noHolderId, limitPriceCoin: prices.NO },
     });
+    if (market.status !== 'open') await setStatus(market.status);
   });
   return fillId;
 }

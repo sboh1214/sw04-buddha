@@ -28,12 +28,13 @@ import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
 import { fundMarketMakerFunds, mintTestPairs } from './test/ledger.js';
 import {
   checkOrderInvariants,
+  closeTestMarket,
   openOrderIntake,
+  passMarketClose,
   placeTestOrder,
   type PlaceTestOrderInput,
 } from './test/orders.js';
-import { clockTimestamp, lockMarket } from './tx-helpers.js';
-import { transitionMarket } from './market-transitions.js';
+import { clockTimestamp } from './tx-helpers.js';
 
 /**
  * 공개 호가와 견적의 읽기 (#179, ADR-0114): the readers against the test database in one REPEATABLE
@@ -255,36 +256,33 @@ describe.skipIf(!hasTestDb())('the public book and quotes (#179, docker test pro
       expect(bookDepth(book)).toEqual((await bookNow(m)).contracts);
     });
 
-    it('offers nothing where no order is taken: SCHEDULED, PAUSED, CLOSED, a ledger hold', async () => {
+    it('offers nothing where no order is taken: SCHEDULED, PAUSED, CLOSED, past close, a hold', async () => {
       // A ledger_failure pause keeps its live orders locked until the recovery (#178).
       const held = await market();
       const a = await member();
       await rest(a, held, 'YES', 'buy', 40, 2);
       await createMarketPause(t.db, { marketId: held, reason: 'ledger_failure', by: adminId });
-      // A worker close before #120: the GTC stays live in a CLOSED market.
+      // The worker's close (#120): the GTC ends 만료 in the CLOSED market.
       const closed = await market();
       await rest(a, closed, 'NO', 'buy', 30, 1);
-      await t.db.transaction(async (tx) => {
-        await lockMarket(tx, closed);
-        const at = await clockTimestamp(tx);
-        await transitionMarket(tx, {
-          marketId: closed,
-          from: 'open',
-          to: 'closed',
-          type: 'closed',
-          actorId: null,
-          at,
-        });
-      });
+      await passMarketClose(t.db, closed);
+      expect(await closeTestMarket(t.db, closed)).toMatchObject({ closed: true });
+      // OPEN past its close_at, before the worker's transition (ADR-0114 결과 5 '#120'): its
+      // resting GTC is still live and locked, and the book, the quote and the intake refuse it.
+      const pastClose = await market();
+      await rest(a, pastClose, 'YES', 'buy', 35, 4);
+      await rest(await holder(pastClose, 'YES', 2), pastClose, 'YES', 'sell', 70, 2);
+      await passMarketClose(t.db, pastClose);
       const scheduled = (await createMarket(t.db, { createdBy: adminId, status: 'scheduled' })).id;
       const live = await t.db
         .select({ n: count() })
         .from(orders)
         .where(sql`${orders.status} IN ('open', 'partially_filled')`);
-      expect(live[0]!.n).toBe(2);
+      expect(live[0]!.n).toBe(3);
       for (const [m, reason] of [
         [held, 'paused'],
         [closed, 'closed'],
+        [pastClose, 'closed'],
         [scheduled, 'not_open_yet'],
       ] as const) {
         expect(await bookNow(m)).toEqual({
@@ -299,6 +297,15 @@ describe.skipIf(!hasTestDb())('the public book and quotes (#179, docker test pro
           rejectReason: reason,
         });
       }
+      // The market past its close is still OPEN by status: only the clock refuses it.
+      const [open] = await t.db
+        .select({ status: markets.status })
+        .from(markets)
+        .where(eq(markets.id, pastClose));
+      expect(open!.status).toBe('open');
+      expect(await figuresOf(pastClose, terms({ timeInForce: 'gtc', limitPriceCoin: 70 }))).toEqual(
+        expect.objectContaining({ status: 'rejected', rejectReason: 'closed', maxSpendCoin: null }),
+      );
       // A held market is never OPEN, so the OPEN-only book never shows its locked orders.
       const heldIds = await ledgerHeldMarketIds(t.db, [held, closed, scheduled]);
       expect(heldIds).toEqual(new Set([held]));
@@ -590,10 +597,22 @@ describe.skipIf(!hasTestDb())('the public book and quotes (#179, docker test pro
       }
       const noWidth = (await createMarket(t.db, { createdBy: adminId, priceProtectionTicks: null }))
         .id;
-      expect(await readMarketTradingFacts(t.db, noWidth)).toEqual({
+      const [stored] = await t.db
+        .select({ closeAt: markets.closeAt })
+        .from(markets)
+        .where(eq(markets.id, noWidth));
+      const before = await clockTimestamp(t.db);
+      const facts = await readMarketTradingFacts(t.db, noWidth);
+      const after = await clockTimestamp(t.db);
+      expect(facts).toEqual({
         status: 'open',
         widthTicks: null,
+        closeAt: stored!.closeAt,
+        now: expect.any(Date) as unknown,
       });
+      // The DB clock read with the facts (#120), not the transaction's start or the app's.
+      expect(facts!.now.getTime()).toBeGreaterThanOrEqual(before.getTime());
+      expect(facts!.now.getTime()).toBeLessThanOrEqual(after.getTime());
       expect(await quoteNow(noWidth, terms({}))).toEqual({
         kind: 'closed',
         why: 'price_protection',

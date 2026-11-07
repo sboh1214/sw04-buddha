@@ -2255,7 +2255,8 @@ export const copy = {
   orderStatusFilled: '체결 완료',
   orderStatusCancelled: '취소됨',
   orderStatusRejected: '거절됨',
-  // 만료(#119가 상태를 두고 #120이 마감 때 남은 지정가 주문을 만료한다). 위 넷의 이름 정리는 #123의 것이다.
+  // 만료: 시장이 마감(조기 마감 포함)할 때 남은 지정가 주문이 끝나는 상태(#120, ADR-0115). 위 넷의
+  // 이름 정리는 #123의 것이다.
   orderStatusExpired: '만료',
 
   // 옛 포트폴리오(PLAN 11.3)의 잔고 요약·목록. #16이 MY 요약과 보유 계약·대기 주문·거래·정산 이력
