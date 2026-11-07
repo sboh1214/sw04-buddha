@@ -8,6 +8,7 @@ import {
   schema,
   type CancelTouched,
   type Db,
+  type FillRow,
   type OrderRow,
   type PlaceOrderTouched,
   type PositionRow,
@@ -17,8 +18,11 @@ import {
   encodeTupleCursor,
   isPublicMarketStatus,
   LIVE_ORDER_STATUSES,
+  marketTickEvent,
+  marketTradeEvent,
   ownFillPrice,
   serializeCoinAmount,
+  type MarketFillStats,
   type MyFill,
   type MyFillsQuery,
   type MyOrdersQuery,
@@ -104,6 +108,13 @@ export function positionEvent(row: PositionRow): UserPositionEvent {
   };
 }
 
+/** What an intake that filled publishes in its market's room (#121): its fills and statistics. */
+interface IntakeTrades {
+  marketId: string;
+  fills: readonly FillRow[];
+  stats: MarketFillStats;
+}
+
 const notFound = (what: 'Market' | 'Order') =>
   new AppError('NOT_FOUND', { message: `${what} not found` });
 
@@ -142,7 +153,12 @@ const notFound = (what: 'Market' | 'Order') =>
  *   that only rests publishes its position row's `user:position` (its lock is on that row). An
  *   order that rested or filled publishes `market:book` in its market's room (#179, ADR-0114: the
  *   public book changed); one rejected, or an immediate one that filled nothing, changed no live
- *   order and publishes none.
+ *   order and publishes none. An order that filled publishes one `market:tick` with the market's
+ *   statistics as the intake left them (`marketTickEvent`), first (`publish`: in any order the
+ *   gateway delivers it alike), and after the signal one `market:trade` per fill in fill order —
+ *   the anonymous public row (`marketTradeEvent`: no owner, order, taker direction or account
+ *   type; #121, ADR-0116). Nothing for a replay, a refusal, a rejected order, one that only
+ *   rests, or a rollback.
  * - 취소 (`cancel`, #178, ADR-0113): the whole remainder of one of the session's live orders, ended
  *   in one transaction by `cancelOrder` (@buddha/db order-cancel.ts: the market's lock, the order
  *   again under it, the owner's Coin account, then the release and the row as 취소 완료(본인 취소))
@@ -175,7 +191,7 @@ export class OrderService {
     requestId: string,
     body: WithoutExpectedAccount<PlaceOrderBody>,
   ): Promise<PlaceOrderResult> {
-    const { answer, touched, book } = await this.db.transaction(async (tx) => {
+    const { answer, touched, book, trades } = await this.db.transaction(async (tx) => {
       await assertCanTrade(tx, userId);
       await lockMarket(tx, marketId);
       const [profile] = await tx
@@ -231,11 +247,16 @@ export class OrderService {
               placed && placeOrderChangedBook(placed)
                 ? { marketId: placed.order.marketId, at: placed.order.createdAt }
                 : null,
+            // `stats` is set exactly when the intake recorded a fill (`recordFillStats`).
+            trades:
+              placed?.stats != null
+                ? { marketId: placed.order.marketId, fills: placed.fills, stats: placed.stats }
+                : null,
           };
         }
       }
     });
-    if (touched) await this.publish(touched, book);
+    if (touched) await this.publish(touched, book, trades);
     return answer;
   }
 
@@ -409,20 +430,35 @@ export class OrderService {
 
   /**
    * The intake's realtime, after COMMIT and best effort (`MarketPublisher` logs a failed send):
-   * each person's balance with the last ledger entry of the intake as its key, then each position
-   * row, then — when the live book changed — the market's `market:book`. Issued together, awaited
-   * together (realtime.ts).
+   * when it filled, the market's `market:tick` first (#121); then each person's balance with the
+   * last ledger entry of the intake as its key, then each position row, then — when the live book
+   * changed — the market's `market:book`, then each fill's `market:trade` by fill id. Issued
+   * together, awaited together (realtime.ts), so the wire keeps this order.
+   *
+   * The gateway sends the tick reliably like the rest (market.gateway.ts, ADR-0116 10-6), so its
+   * delivery does not rest on this order. Each event is keyed apart (`tradeCount`, `fillId`), so
+   * a client patches the statistics and lists the rows in whichever order they come.
    */
   private async publish(
     touched: PlaceOrderTouched,
     book: { marketId: string; at: Date } | null,
+    trades: IntakeTrades | null = null,
   ): Promise<void> {
+    const filled = trades ? [...trades.fills].sort((a, b) => a.id - b.id) : [];
     await Promise.all([
+      trades &&
+        this.publisher.publishMarket(
+          trades.marketId,
+          marketTickEvent(trades.marketId, trades.stats),
+        ),
       ...touched.balances.map(({ userId, balance, entry }) =>
         this.publisher.publishUser(userId, balanceEvent(balance, entry)),
       ),
       ...touched.positions.map((row) => this.publisher.publishUser(row.userId, positionEvent(row))),
       book && this.publisher.publishBook([book.marketId], book.at),
+      ...filled.map((fill) =>
+        this.publisher.publishMarket(fill.marketId, marketTradeEvent(fill.marketId, fill)),
+      ),
     ]);
   }
 }

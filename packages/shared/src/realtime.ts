@@ -1,15 +1,15 @@
 import * as z from 'zod';
-import { coinAmountSchema } from './api/coin-amount.js';
+import { coinAmountSchema, serializeCoinAmount } from './api/coin-amount.js';
 import { uuidSchema } from './api/uuid.js';
-import { BP_MAX, PRICE_MAX, PRICE_MIN } from './constants.js';
+import { PRICE_MAX, PRICE_MIN } from './constants.js';
 import {
   MARKET_STATUSES,
   marketResultSchema,
   marketStatusSchema,
-  orderSideSchema,
   outcomeSchema,
   type MarketStatus,
 } from './enums.js';
+import { publicFill, type PublicFillFacts } from './market.js';
 
 /**
  * Socket.IO event payloads (PLAN 8). The API publishes them to Redis after a fill or a
@@ -23,7 +23,9 @@ import {
  * drawn under the account's balance lock, so strictly increasing per account in commit
  * order; `/me/ledger` shows the current one), `user:position.version` (the row's version,
  * bumped on every write under the market lock), `market:tick.tradeCount` and
- * `market:trade.fillId` (both per market, under the market lock). `ts` is for display, and
+ * `market:trade.fillId` (both per market, under the market lock: the intake that fills publishes
+ * one `market:tick` — the gateway sends it reliably, not volatile (ADR-0116 10-6) — and one
+ * `market:trade` per fill, #121). `ts` is for display, and
  * keys are compared within one event type, never across them (they come from different
  * sequences). `market:book` is the one event with no key: it is a signal that carries no state
  * — the receiver re-reads `GET /markets/:id/book` — so a late or duplicate one costs one read and
@@ -61,7 +63,6 @@ export const REALTIME_EVENT_TYPES = [
 ] as const;
 export type RealtimeEventType = (typeof REALTIME_EVENT_TYPES)[number];
 
-const bpSchema = z.number().int().min(0).max(BP_MAX);
 const tsSchema = z.iso.datetime();
 /** A bigserial as a decimal string (ledger entries, fills): the ordering key of an event. */
 const serialIdSchema = z.string().regex(/^[1-9]\d*$/, 'must be a positive integer string');
@@ -113,32 +114,44 @@ export function statusSupersedes(incoming: StatusKeyed, held: StatusKeyed): bool
 }
 
 /**
- * Room `market:<id>`: price and stats after a fill. Nothing publishes it yet: the order intake
- * fills orders (#119) and the market's statistics and this event are #121's (ADR-0107 결정 4·6);
- * the direct AMM trade that did is gone (#125).
+ * Room `market:<id>`: the market's statistics after an intake that filled (#121, ADR-0116) —
+ * published once per such intake after COMMIT (the API's intake; the bot runtime's, #129, through
+ * the same builder `marketTickEvent`), with the values as they stand at the intake's end, so
+ * `tradeCount` may move by more than 1. Absolute values, so a late or repeated one changes
+ * nothing. The gateway sends it reliably like every other event: a volatile tick was dropped
+ * whenever the transport was not writable — on long polling once any earlier packet had answered
+ * the waiting GET, on websocket behind an earlier event of the same read, so the ticks of a burst
+ * were lost on both — and it is the one event that refreshes the statistics (ADR-0116 10-6).
  */
 export const marketTickEventSchema = z
   .object({
     type: z.literal('market:tick'),
     marketId: z.uuid(),
-    /** `MarketSummary.lastPrice`: null until the market's first fill. */
+    /**
+     * `MarketSummary.lastPrice`: the last fill's YES value. Every tick follows a fill, so it is
+     * set; nullable in the schema all the same, as the summary's is.
+     */
     lastPrice: z.number().int().min(PRICE_MIN).max(PRICE_MAX).nullable(),
     volumeCoin: coinAmountSchema,
+    /** The ordering key: the market's fills so far, strict per market under the market lock. */
     tradeCount: z.number().int().min(0),
     /**
-     * Raised by a fill from an account new to this market. It moves with the same fill, so it
-     * rides in the same patch: a client that patched every other fill-derived field kept the old
-     * participant count for as long as the market stayed busy.
+     * Raised by a fill from a person new to this market (#177 13항: person accounts only). It
+     * moves with the same fill, so it rides in the same patch: a client that patched every other
+     * fill-derived field kept the old participant count for as long as the market stayed busy.
      */
     traderCount: z.number().int().min(0),
+    /** The last fill's server time: `MarketSummary.lastFillAt`, the 시장가격's 갱신시각. */
     ts: tsSchema,
   })
   .meta({ id: 'MarketTickEvent' });
 export type MarketTickEvent = z.infer<typeof marketTickEventSchema>;
 
 /**
- * Room `market:<id>`: one anonymous fill (no publisher yet: #121 publishes the fills the order
- * intake records, #119). `fillId` is `Fill.id` (strict per market).
+ * Room `market:<id>`: one anonymous fill (#121, ADR-0116) — the public `Fill` (`publicFill`)
+ * under its key `fillId` (`Fill.id`, strict per market) with `ts` its `createdAt`, published once
+ * per fill, in fill order, after the intake's COMMIT. No account, order, taker direction, account
+ * type or kind (ADR-0107 결정 6 '남은 것'의 #60 3·6·17·20항).
  */
 export const marketTradeEventSchema = z
   .object({
@@ -146,13 +159,45 @@ export const marketTradeEventSchema = z
     marketId: z.uuid(),
     fillId: serialIdSchema,
     outcome: outcomeSchema,
-    side: orderSideSchema,
+    priceCoin: z.number().int().min(PRICE_MIN).max(PRICE_MAX),
+    yesPriceCoin: z.number().int().min(PRICE_MIN).max(PRICE_MAX),
     qty: z.number().int().min(1),
-    priceAvgBp: bpSchema,
+    amountCoin: coinAmountSchema,
     ts: tsSchema,
   })
   .meta({ id: 'MarketTradeEvent' });
 export type MarketTradeEvent = z.infer<typeof marketTradeEventSchema>;
+
+/**
+ * The market's statistics after an intake that filled, as @buddha/db `recordFillStats` returns
+ * them from the `markets` row: what a `market:tick` carries.
+ */
+export interface MarketFillStats {
+  readonly lastPrice: number;
+  readonly lastFillAt: Date;
+  readonly volumeCoin: bigint;
+  readonly tradeCount: number;
+  readonly traderCount: number;
+}
+
+/** The `market:tick` of `marketId` after an intake that filled: one builder for API and worker. */
+export function marketTickEvent(marketId: string, stats: MarketFillStats): MarketTickEvent {
+  return {
+    type: 'market:tick',
+    marketId,
+    lastPrice: stats.lastPrice,
+    volumeCoin: serializeCoinAmount(stats.volumeCoin),
+    tradeCount: stats.tradeCount,
+    traderCount: stats.traderCount,
+    ts: stats.lastFillAt.toISOString(),
+  };
+}
+
+/** The `market:trade` of one fill, through `publicFill`, so the event and REST cannot differ. */
+export function marketTradeEvent(marketId: string, fill: PublicFillFacts): MarketTradeEvent {
+  const { id, createdAt, ...rest } = publicFill(fill);
+  return { type: 'market:trade', marketId, fillId: id, ...rest, ts: createdAt };
+}
 
 /**
  * Room `market:<id>`: a status transition (every one `MARKET_LIFECYCLE_TRANSITIONS` allows,

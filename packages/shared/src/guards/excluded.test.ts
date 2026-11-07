@@ -482,7 +482,15 @@ describe('identifiers', () => {
     ]) {
       expect(namesPersonalProbability(name), name).toBe(true);
     }
-    for (const name of ['pYesBp', 'priceAvgBp', 'limitPrice', 'probe', 'cost_basis_coin']) {
+    for (const name of [
+      'pYesBp',
+      'priceAvgBp',
+      'limitPrice',
+      'probe',
+      'cost_basis_coin',
+      'lastPrice24hAgo',
+      'yesPriceCoin',
+    ]) {
       expect(namesPersonalProbability(name), name).toBe(false);
     }
   });

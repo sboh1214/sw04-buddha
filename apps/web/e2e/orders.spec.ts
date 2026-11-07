@@ -1,6 +1,7 @@
 import type { APIRequestContext, APIResponse } from '@playwright/test';
 import type {
   AdminMarket,
+  Fill,
   Market,
   MyFill,
   Order,
@@ -8,6 +9,7 @@ import type {
   OrderQuote,
   PlaceOrderResult,
   Position,
+  PriceSeries,
   Sellable,
 } from '@buddha/shared';
 import { copy } from '../src/copy';
@@ -61,6 +63,16 @@ import {
  * close is a 마감 row; the worker closes the market and ends both orders as 만료 — A's fill kept,
  * every lock back, both holdings as they were — and the book is empty with the reason 마감. A
  * sends one order, B three.
+ *
+ * 시장 통계 (#121, ADR-0116; ADR-0107 결정 1 #177 11·12·13항, 결정 4 #121 행), through the API
+ * too — the cards, chart and recent-fill area that draw them are #61's, #64's and #122's: a
+ * visitor reads a fresh market as '체결 없음' (no price, no fill time, no 24-hour-ago price, zero
+ * volume, trades and participants, no public fill, no chart point); after A's NO bid and B's
+ * immediate YES buy meet as one pair mint at 60, the market price is that fill's YES value at its
+ * server time, the volume is counted once (60, not 60 + 40), the participants are two, and the
+ * public fill is one anonymous row; B's second buy adds a trade and volume but no participant; a
+ * NO trade at 45 makes the price its YES value 55. The bot's exclusion from the participants is
+ * the db and api suites' (no spec runs the bot). A sends two orders, B three.
  */
 
 /** `{ data }` out of the success envelope, with the body in the message on a failure. */
@@ -944,6 +956,165 @@ test.describe('시장 마감과 주문 만료 (#120)', () => {
       ).toContainText(copy.orderStatusExpired);
     } finally {
       await bContext.close();
+    }
+  });
+});
+
+/** What a public fill carries (#121, ADR-0116): no account, order id, taker side or kind. */
+const PUBLIC_FILL_KEYS = [
+  'amountCoin',
+  'createdAt',
+  'id',
+  'outcome',
+  'priceCoin',
+  'qty',
+  'yesPriceCoin',
+];
+
+test.describe('시장 통계 (#121)', () => {
+  test('시장가격은 마지막 체결의 YES 기준 값과 그 서버 시각이고, 거래량은 체결마다 한 번, 참여자는 사람 계정 수이며, 체결 전에는 체결 없음이다', async ({
+    admin,
+    browser,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const visitorContext = await browser.newContext();
+    const aContext = await browser.newContext();
+    try {
+      const visitor = visitorContext.request;
+      const aPage = await aContext.newPage();
+      await signUp(aPage, freshEmail());
+      await signUp(page, freshEmail());
+      const a = aPage.request;
+      const b = page.request;
+      const readMarket = async () =>
+        dataOf<Market>(await visitor.get(`/api/v1/markets/${market.id}`));
+      const readFills = async () =>
+        dataOf<Fill[]>(await visitor.get(`/api/v1/markets/${market.id}/fills`));
+      const readRawTicks = async () =>
+        dataOf<PriceSeries>(await visitor.get(`/api/v1/markets/${market.id}/ticks?resolution=raw`));
+      /** B's newest own fill: the server time the market price must carry. */
+      const newestFillOfB = async () => {
+        const [fill] = await dataOf<MyFill[]>(await b.get('/api/v1/me/fills'));
+        if (fill === undefined) throw new Error('B has no fill');
+        return fill;
+      };
+
+      // --- Before any fill: '체결 없음' — nulls and zeros, no public fill, no chart point. The
+      // open writes no price (its 50% is no baseline, ADR-0107 결정 4 #121 행).
+      expect(await readMarket()).toMatchObject({
+        lastPrice: null,
+        lastFillAt: null,
+        lastPrice24hAgo: null,
+        volumeCoin: '0',
+        tradeCount: 0,
+        traderCount: 0,
+      });
+      expect(await readFills()).toEqual([]);
+      expect((await readRawTicks()).points).toEqual([]);
+
+      // --- A's GTC NO buy, 2 at 40, rests: an order is no fill, so nothing moves.
+      await placeOrder(a, market.id, crypto.randomUUID(), {
+        outcome: 'NO',
+        side: 'buy',
+        timeInForce: 'gtc',
+        limitPriceCoin: 40,
+        qty: 2,
+      });
+      expect(await readMarket()).toMatchObject({ lastPrice: null, tradeCount: 0, traderCount: 0 });
+
+      // --- B's IOC YES buy of 1 meets it as ONE pair mint at 60 (100 − 40): the price is the
+      // fill's YES value at its server time, the volume the incoming contract's price × qty once
+      // (60, not 60 + 40), one trade, and both members are participants.
+      const yesBuy: OrderTerms = {
+        outcome: 'YES',
+        side: 'buy',
+        timeInForce: 'ioc',
+        limitPriceCoin: 99,
+        qty: 1,
+      };
+      expect((await placeOrder(b, market.id, crypto.randomUUID(), yesBuy)).order.filledQty).toBe(1);
+      const first = await newestFillOfB();
+      expect(await readMarket()).toMatchObject({
+        lastPrice: 60,
+        lastFillAt: first.createdAt,
+        // Nothing traded 24 hours ago: no baseline, so no change badge (#60 5항 is M11's).
+        lastPrice24hAgo: null,
+        volumeCoin: '60',
+        tradeCount: 1,
+        traderCount: 2,
+      });
+      // The public row: one per match, anonymous — no side, order, account or kind.
+      const fills = await readFills();
+      expect(fills).toHaveLength(1);
+      expect(Object.keys(fills[0] ?? {}).sort()).toEqual(PUBLIC_FILL_KEYS);
+      expect(fills[0]).toEqual({
+        id: first.id,
+        outcome: 'YES',
+        priceCoin: 60,
+        yesPriceCoin: 60,
+        qty: 1,
+        amountCoin: '60',
+        createdAt: first.createdAt,
+      });
+      // The chart reads the fills as they are: one point, the fill's YES value at its time.
+      expect((await readRawTicks()).points).toEqual([
+        { ts: first.createdAt, pYesBp: 6000, trigger: 'trade' },
+      ]);
+
+      // --- B buys again: another trade and its volume, but B is no new participant.
+      await placeOrder(b, market.id, crypto.randomUUID(), yesBuy);
+      expect(await readMarket()).toMatchObject({
+        lastPrice: 60,
+        lastFillAt: (await newestFillOfB()).createdAt,
+        volumeCoin: '120',
+        tradeCount: 2,
+        traderCount: 2,
+      });
+
+      // --- A sells one of its NO at 45 and B's IOC NO buy takes it: a direct NO trade, so the
+      // market price is its YES value 55 and the row says both prices.
+      await placeOrder(a, market.id, crypto.randomUUID(), {
+        outcome: 'NO',
+        side: 'sell',
+        timeInForce: 'gtc',
+        limitPriceCoin: 45,
+        qty: 1,
+      });
+      await placeOrder(b, market.id, crypto.randomUUID(), {
+        outcome: 'NO',
+        side: 'buy',
+        timeInForce: 'ioc',
+        limitPriceCoin: 99,
+        qty: 1,
+      });
+      const last = await newestFillOfB();
+      expect(last).toMatchObject({ outcome: 'NO', priceCoin: 45, yesPriceCoin: 55 });
+      const after = await readMarket();
+      expect(after).toMatchObject({
+        lastPrice: 55,
+        lastFillAt: last.createdAt,
+        lastPrice24hAgo: null,
+        volumeCoin: '165',
+        tradeCount: 3,
+        traderCount: 2,
+      });
+      const publicFills = await readFills();
+      expect(publicFills[0]).toMatchObject({
+        id: last.id,
+        outcome: 'NO',
+        priceCoin: 45,
+        yesPriceCoin: 55,
+        amountCoin: '45',
+      });
+      // Volume = Σ of the public rows' amounts (#177 12항).
+      expect(publicFills.reduce((sum, fill) => sum + Number(fill.amountCoin), 0)).toBe(165);
+      const series = await readRawTicks();
+      expect(series.points.map((point) => point.pYesBp)).toEqual([6000, 6000, 5500]);
+      expect(series.tradeCount).toBe(3);
+    } finally {
+      await aContext.close();
+      await visitorContext.close();
     }
   });
 });

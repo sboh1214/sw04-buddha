@@ -9,10 +9,12 @@
 import { randomUUID } from 'node:crypto';
 import { schema } from '@buddha/db';
 import {
+  NO_MARKET_STATS,
   connectTestDb,
   createMarket,
   createScheduledMarket,
   hasTestDb,
+  marketStatsOf,
   type TestDb,
 } from '@buddha/db/test';
 import { MARKET_STATUSES, marketChannel } from '@buddha/shared';
@@ -139,6 +141,8 @@ describe.skipIf(!hasTestInfra)('market.open (integration)', () => {
       // market at version 1, its row made by the worker (null) at the open's instant, holding the
       // content the review locked — and no event of its own (the list above).
       expect(row.ruleVersion).toBe(1);
+      // The open is no fill: no 시장가격, no point, nothing counted (#121; the 50% is no price).
+      expect(await marketStatsOf(t.db, market.id)).toEqual(NO_MARKET_STATS);
       const versions = await versionsOf(market.id);
       expect(versions).toEqual([
         expect.objectContaining({

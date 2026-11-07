@@ -58,7 +58,8 @@ function parseMarketJob(job: Job): MarketJobData {
 
 /**
  * Job handlers by name (PLAN 9). An unknown job must not be retried, so the dispatcher rejects
- * it with UnrecoverableError. `market.trader_count` (stats) is not scheduled by anything yet.
+ * it with UnrecoverableError. `market.trader_count` (stats) is reserved and scheduled by nothing:
+ * `markets.trader_count` is kept with each fill in the order intake's transaction (#121, ADR-0116).
  */
 const HANDLERS: Partial<Record<string, Handler>> = {
   // #21 (ADR-0100): the delayed job the API registers at a market's scheduled open, or the scan.

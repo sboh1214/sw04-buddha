@@ -79,16 +79,37 @@ export const markets = pgTable(
     status: marketStatusEnum().notNull().default('draft'),
     visibility: marketVisibilityEnum().notNull().default('public'),
     groupId: uuid(),
-    // statistics
+    // statistics (#121, ADR-0116; ADR-0107 결정 1 #177 11–14항, 결정 4 #121 rows). Written only by
+    // @buddha/db market-stats.ts, which the intake (`placeOrder`) calls once per intake that
+    // filled, in its transaction under the market's lock (market-stats-writes.test.ts). Each can
+    // be recounted from `fills`, which never change (`MARKET_STATS_CHECK_SQL`).
     /**
-     * YES price 1..99 of the last fill (PLAN 5.3). NULL until the first fill — '체결 없음'
-     * (N02 §5) — and the CHECK below passes a NULL, as every SQL CHECK does.
+     * 시장가격: the YES value 1..99 (`fills.yes_price_coin`) of the last fill by (`created_at`,
+     * `id`) (#177 11항, ADR-0107 결정 4 '대표 시장가격'). NULL until the first fill — '체결 없음'
+     * (N02 §5); the open's 50% is never written here. The CHECK below passes a NULL, as every
+     * SQL CHECK does.
      */
     lastPrice: smallint(),
+    /**
+     * The last fill's server time, the 시장가격's 갱신시각 (ADR-0107 결정 4 #121 '대표 시장가격'):
+     * its `fills.created_at`, the intake's instant. NULL exactly when `last_price` is (the CHECK
+     * below). Not indexed, so the statistics' UPDATE stays a HOT update (ADR-0065).
+     */
+    lastFillAt: timestampTz(),
+    /**
+     * 누적 거래량 since the open (#177 12항): Σ `fills.amount_coin` — each match once, at the
+     * incoming contract's price × qty, a pair mint once.
+     */
     volumeCoin: bigint({ mode: 'bigint' })
       .notNull()
       .default(sql`0`),
+    /** The count of the market's fills (a pair mint is one): the `market:tick` ordering key. */
     tradeCount: integer().notNull().default(0),
+    /**
+     * 사용자 참여자 (#177 13항): the distinct person accounts (the account-type rule, #115) with a
+     * fill in the market on either side — the `hasMarketFill` basis (#173 6항). Never decreases:
+     * a full sell or a closure keeps the fills.
+     */
     traderCount: integer().notNull().default(0),
     // schedule / resolution
     /**
@@ -284,7 +305,7 @@ export const markets = pgTable(
      * migration 0024): nothing reads it until #132 brings the order back, and while it stood
      * every fill's `volume_coin` update had to write it (no HOT update on an indexed column).
      * 추천 orders by a 24-hour SUM no index can hold; its lateral reads
-     * `fills_market_id_created_at_idx`.
+     * `fills_market_id_created_at_id_idx`.
      */
     index('markets_status_open_at_id_idx').on(
       t.status,
@@ -314,6 +335,8 @@ export const markets = pgTable(
       .on(t.disputeDeadline, t.id)
       .where(sql`${t.status} = 'provisional'`),
     check('markets_last_price_check', sql`${t.lastPrice} >= 1 AND ${t.lastPrice} <= 99`),
+    // The 시장가격 and its 갱신시각 come from one fill and are set together (#121).
+    check('markets_last_fill_at_check', sql`(${t.lastPrice} IS NULL) = (${t.lastFillAt} IS NULL)`),
     check('markets_volume_coin_check', sql`${t.volumeCoin} >= 0`),
     check('markets_trade_count_check', sql`${t.tradeCount} >= 0`),
     check('markets_trader_count_check', sql`${t.traderCount} >= 0`),

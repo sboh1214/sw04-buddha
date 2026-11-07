@@ -139,6 +139,15 @@ export {
   type LockedOrders,
   type OrderCancelProcessReason,
 } from './order-cancel.js';
+export {
+  DAY_AGO,
+  marketPriceAt,
+  newHumanParticipants,
+  recordFillStats,
+  type MarketRowWrite,
+  type MarketStatsColumn,
+  type RecordFillStatsInput,
+} from './market-stats.js';
 export { readHoldings, readMarketTradingFacts, readPublicBook } from './order-book.js';
 export {
   findOrderByRequest,

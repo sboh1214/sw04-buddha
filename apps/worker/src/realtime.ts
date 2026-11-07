@@ -64,8 +64,9 @@ export function createPublisherRedis(
     commandTimeout: options.commandTimeoutMs ?? REDIS_PUBLISH_COMMAND_TIMEOUT_MS,
     socketTimeout: options.socketTimeoutMs ?? REDIS_PUBLISH_SOCKET_TIMEOUT_MS,
     // The default re-sends the outstanding queue on reconnect, which would republish events
-    // that already timed out; `user:balance` and `user:position` carry ordering keys but
-    // `market:trade` has none a client could dedup on (A-M3-28). With it false ioredis DROPS
+    // that already timed out; the keyed events (`user:balance`, `user:position`, `market:trade`'s
+    // `fillId`, #121) could be dropped by a client, but `market:book` carries no key and a
+    // republished row is still a repeat on the wire (A-M3-28). With it false ioredis DROPS
     // those entries when the socket goes, which is what `socketTimeout` is for, so
     // `commandTimeout` must stay set or a caller could still wait forever.
     autoResendUnfulfilledCommands: false,

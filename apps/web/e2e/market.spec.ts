@@ -321,14 +321,16 @@ test.describe('시장 상세', () => {
     page,
   }) => {
     /*
-     * No spec can make a fill before the order path exists (#189), so the browser's own reads of
-     * this market are answered with the API's real answers and a price put in: the row is at 63%
-     * after two trades, and its 1D series has the last move, 61 → 63. The server's HTML stays the
-     * real, unpriced one. The price arrives the way an admin's edit reaches an open detail: the
-     * edit — a tag added, which an open market takes directly (#80: its rule version items change
-     * by a supplement alone) — publishes `market:status`, and the reader refetches the row and
-     * every range of its series (realtime-provider.tsx) — the two requests these routes answer.
-     * `joinMarket` and `joinSeries` take both, since two trades supersede none.
+     * Real fills exist since the order intake (orders.spec.ts makes them for #121's figures), but
+     * this test is about the header's layout, so the reading is pinned rather than traded: the
+     * browser's own reads of this market are answered with the API's real answers and a price put
+     * in — the row is at 63% after two trades, and its 1D series has the last move, 61 → 63. The
+     * server's HTML stays the real, unpriced one. The price arrives the way an admin's edit reaches
+     * an open detail: the edit — a tag added, which an open market takes directly (#80: its rule
+     * version items change by a supplement alone) — publishes `market:status`, and the reader
+     * refetches the row and every range of its series (realtime-provider.tsx) — the two requests
+     * these routes answer. `joinMarket` and `joinSeries` take both, since two trades supersede
+     * none.
      */
     const market = await createOpenMarket(admin);
     const rowPath = `/api/v1/markets/${market.id}`;
@@ -339,7 +341,16 @@ test.describe('시장 상세', () => {
         const body = (await response.json()) as { data: object };
         await route.fulfill({
           response,
-          json: { ...body, data: { ...body.data, lastPrice: 63, tradeCount: 2 } },
+          json: {
+            ...body,
+            // The pair the server keeps (#121, ADR-0116): a price comes with its fill's time.
+            data: {
+              ...body.data,
+              lastPrice: 63,
+              lastFillAt: new Date().toISOString(),
+              tradeCount: 2,
+            },
+          },
         });
       },
     );

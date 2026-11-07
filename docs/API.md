@@ -304,10 +304,10 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | 메서드 | 경로 | 설명 | 인증 | 오류 |
 | --- | --- | --- | --- | --- |
 | GET | `/api/v1/markets` | Markets by status (default open; all is every public status), never draft or in review, optionally by category and a search (q: a title partial match, case-insensitive, or a tag of exactly that name, case and spaces aside); sorted recommended (24-hour volume, then the latest opening; the default), newest (latest opening) or closing (soonest close; with all or an ended status, the markets not closed yet (scheduled, open, paused) first and then the ended ones, latest close first) | — | `VALIDATION_ERROR`, `RATE_LIMITED` |
-| GET | `/api/v1/markets/{idOrSlug}` | One market by id or slug, with its tags in order and its rule versions, the current first (each one’s full text, changed items, reason and time, and nobody’s name); a draft or in-review one is NOT_FOUND to the public | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
-| GET | `/api/v1/markets/{id}/fills` | Newest 20 fills, anonymous | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
+| GET | `/api/v1/markets/{idOrSlug}` | One market by id or slug, with its tags in order and its rule versions, the current first (each one’s full text, changed items, reason and time, and nobody’s name), and its market price as of 24 hours ago (the last fill by then, null with none); a draft or in-review one is NOT_FOUND to the public | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
+| GET | `/api/v1/markets/{id}/fills` | Newest 20 fills, anonymous: each one’s contract, price, YES value, quantity, amount and server time — no account, order, taker side or account type | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
 | GET | `/api/v1/markets/{id}/related` | Markets linked to this one (links are two-way): every public status but cancelled, never one whose result is VOID, sorted recommended (24-hour volume, then the latest opening); a draft, in-review or unknown market is NOT_FOUND | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
-| GET | `/api/v1/markets/{id}/ticks` | Price series, ascending, at most 500 points. `raw` returns stored ticks, downsampled from the newest 10000 of the range (`truncated` says when older ones were left out). `1m`/`1h` sample the probability in force on an absolute grid, coarsening the stride until the window fits; `bucketSeconds` reports the stride served, and the point at `from` carries the last value at or before it, so the left edge is never empty. | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
+| GET | `/api/v1/markets/{id}/ticks` | Price series, ascending, at most 500 points. Every point is a fill: its YES value in basis points at its server time (the open and a judgement are no point). `raw` returns the fills, downsampled from the newest 10000 of the range (`truncated` says when older ones were left out). `1m`/`1h` sample the price in force on an absolute grid, coarsening the stride until the window fits; `bucketSeconds` reports the stride served, and the point at `from` carries the last fill at or before it, if any — before the first fill the series starts empty. | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
 | GET | `/api/v1/categories` | Active categories in display order: top-level rows (parentId null) first, then their sub-categories | — | `RATE_LIMITED` |
 
 ### `disputes` — 판정 이의
@@ -629,8 +629,8 @@ PLAN 7.5 의 표는 `packages/shared/src/rate-limit.ts` 한 곳에 있고, 아�
 
 | 이벤트 | 룸 | 뜻 | 순서 키 |
 | --- | --- | --- | --- |
-| `market:tick` | `market:<id>` | 체결 후의 가격·통계. 지금은 체결 경로가 없어 발행되지 않는다 | `tradeCount` |
-| `market:trade` | `market:<id>` | 익명 체결 1건. 지금은 체결 경로가 없어 발행되지 않는다 | `fillId` |
+| `market:tick` | `market:<id>` | 체결이 있었던 주문 접수 하나마다 커밋 뒤 한 번(#121) — 그 접수가 끝난 뒤의 시장가격(마지막 체결의 YES 기준 값)·마지막 체결의 서버 시각(`ts`)·누적 거래량·체결 수·사용자 참여자 수(사람 계정만). 한 접수의 체결이 여럿이면 `tradeCount` 가 1보다 크게 오른다. 다른 이벤트처럼 반드시 도착하도록 보낸다(휘발이 아니다). 값이 절대값이라 늦거나 겹친 틱은 아무것도 바꾸지 않는다. `market:trade`·`market:book` 과의 도착 순서에 기대지 말고 `tradeCount` 로 고른다 | `tradeCount` |
+| `market:trade` | `market:<id>` | 익명 체결 1건(#121) — 주문 접수가 커밋한 뒤 체결마다 체결 순서로: 계약·체결가·YES 기준 값·수량·금액·서버 시각. `GET /markets/{id}/fills` 의 행과 같은 값이다. 계정·주문 id·테이커 방향·계정 유형·봇 구분은 싣지 않는다 | `fillId` |
 | `market:status` | `market:<id>` | 상태 전이(검수 승인으로 개장 예정·개장·거래 일시 중단·재개·마감·잠정 결과·결과 확정·지급 시작·지급 완료). 개장은 워커가 예정 개장 시각에, 또는 그 시각이 지난 뒤의 승인·예정 개장 시각 변경이 그 자리에서 하고 `open` 을 `opened` 사건의 키로 한 번 발행한다 — 승인이 바로 연 시장은 개장 예정을 먼저 보내지 않는다(#21). 거래 일시 중단은 관리자 한 명이 하고 `paused` 를, 다른 관리자가 승인한 재개는 `open` 을, 조기 마감은 `closed` 를 저마다 그 사건의 새 키로 발행한다 — 재개는 순위로는 뒤로 가므로 순서는 키로만 정한다. 거래 마감 시각의 마감은 거래 중·일시 중단 시장 모두 워커가 하고 `closed` 를 발행한다(#114). 잠정 결과는 한 관리자가 등록한 판정을 다른 관리자가 승인할 때 `provisional` 을 그 결과(`resolvedResult`, 무효 `VOID` 포함)와 `provisional` 사건의 키로 발행하고 — 첫 판정의 등록·반려·철회는 아무것도 발행하지 않는다 — 잠정 결과 시장의 판정 정정(#176)은 다른 관리자가 승인할 때 같은 `provisional` 을 새 결과와 `judgement_corrected` 사건의 새 키로 발행한다(상태는 그대로이고, 새 판정 버전과 새 이의 기한은 다시 읽은 상세가 준다). 결과 확정은 이의 기한이 지나면 워커가 `resolved` 를 발행한다 — 검토 중이거나 수용한 판정 이의, 또는 승인을 기다리는 판정 정정이 있으면 확정하지 않고 잠정 결과에 머물며, 기한이 지난 뒤 마지막 이의가 기각되거나 정정이 반려·철회되어 잡아 두는 것이 없으면 워커가 몇 초 안에 확정한다(#175, #176). 그 뒤 지급 시작(`settling`)·지급 완료(`settled`)도 워커가 발행한다(#152). 거래 중·일시 중단 시장의 카테고리·태그·이미지를 바꾼 편집, 개장 예정 시장의 예정 개장 시각 변경, 거래 중·일시 중단 시장의 규칙 보충 승인(새 규칙 버전, #80), 잠정 결과 시장의 판정 이의 제출·철회·기각·수용(#175)과 판정 정정의 등록·반려·철회(#176 — 반려·철회는 그 정정이 답한 수용 이의를 검토 중으로 되돌린다), 판정 지연인 시장의 판정 지연 기록(#142 — 관리자 한 명이 지연 사유와 다음 검토 시각을 남기고, 상태·결과는 그대로다)도 같은 상태·같은 키로 다시 발행된다 — 받은 화면은 상세를 다시 읽어 새 글과 버전 이력, 이의 검토 중·판정 지연 표시(`disputeUnderReview`·`judgementDelayed`), 지금 지연 사유와 다음 검토 시각(`judgementDelay`)을 얻는다. 이의 수·제출자·본문과 정정 사유, 지연을 기록한 관리자는 싣지 않는다. 개장 예정에서 초안으로 되돌리면 `draft` 를 새 키로 발행한다 — 회원 화면은 공개되지 않는 상태를 적용하지 않고, 다시 읽으면 NOT_FOUND 다(#78) | `statusEventId` |
 | `market:book` | `market:<id>` | 공개 호가가 바뀌었다는 신호(#179) — 시장 id 와 시각만 싣고 호가·주문·계정·계정 유형·봇 구분은 싣지 않는다. 바뀐 대기 주문이 있는 쓰기가 커밋한 뒤에 보낸다: 대기하거나 체결된 주문 접수(거절되었거나 아무것도 체결되지 않은 즉시 거래는 보내지 않는다), 본인 취소, 일시 중단·재개나 조기 마감 승인(원장 장애 복구 포함)·계정 제한 승인·탈퇴가 대기 주문을 취소한 시장마다 하나, 거래 마감 시각의 마감(워커)이나 조기 마감 승인이 남은 대기 주문을 만료한 시장마다 하나(#120). 거래 마감 시각 그 자체에는 보내지 않는다. 받은 화면은 `GET /markets/{id}/book` 을 다시 읽는다 | 없음(상태를 싣지 않는 신호) |
 | `user:balance` | `user:<id>` | 충전·환불·정산 지급·시작 지급(#70)·주문 체결(#119) 후의 잔고 | `ledgerEntryId` |
@@ -650,8 +650,10 @@ PLAN 7.5 의 표는 `packages/shared/src/rate-limit.ts` 한 곳에 있고, 아�
   사라졌으므로 클라이언트는 REST 스냅샷을 다시 받아야 한다.
 - `exception` — 위의 거절 봉투.
 
-`market:tick` 만 volatile 로 보낸다: 다음 틱이 곧바로 덮어쓰는 스냅샷이라, 전송이 밀린 클라이언트는
-하나쯤 잃어도 된다. 나머지는 사실(fact)이라 반드시 도착해야 한다.
+모든 이벤트를 반드시 도착하도록 보낸다(volatile 없음). `market:tick` 도 그렇다(#121): 휘발 패킷은 전송
+계층이 쓸 수 없을 때 버려진다 — 롱 폴링에서는 앞 패킷이 기다리던 GET에 답한 뒤 다음 GET까지, 웹소켓에서는
+앞 패킷을 쓰는 동안이다. 그래서 한꺼번에 온 이벤트 사이의 틱은 두 전송 모두에서 버려졌고, 시장 통계를 고치는
+이벤트는 틱 하나뿐이다.
 
 **한도**
 

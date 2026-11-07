@@ -60,8 +60,9 @@
  *   the approval of a judgement A registered, which publishes its provisional result (#152), the
  *   dismissal of A's pending 판정 이의, which republishes the market's unchanged status (#175), the
  *   approval of a 판정 정정 of that judgement A registered, which publishes the new version's
- *   result under a new key (#176), and a 판정 지연 기록 of the delayed market, which republishes
- *   its unchanged status (#142).
+ *   result under a new key (#176), a 판정 지연 기록 of the delayed market, which republishes
+ *   its unchanged status (#142), a member's resting order (`market:book`, #179) and another
+ *   member's order that fills against it (`market:trade` and `market:tick`, #121).
  *
  * The routes come from the registry, which registry.test.ts holds to the module graph; this file
  * only knows how to call them. A route whose parameters, query keys or body it does not know
@@ -327,8 +328,11 @@ const AMOUNTS = {
   startGrant: 5_317_029n,
 } as const;
 
-/** The fill everyone may see: anonymous, so its numbers are public (N01 §5). */
-const PUBLIC_FILL = { qty: 13, amountCoin: 793n, priceAvgBp: 6_100 } as const;
+/**
+ * The fill everyone may see: anonymous, so its numbers are public (N01 §5; #121: a YES buy, so its
+ * YES value is its price).
+ */
+const PUBLIC_FILL = { qty: 13, amountCoin: 793n, priceCoin: 61 } as const;
 
 const routes = discoverRoutes();
 
@@ -1484,7 +1488,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       incomingOwnerId: a.id,
       restingOwnerId: marketMaker,
       side: 'buy',
-      priceCoin: PUBLIC_FILL.priceAvgBp / 100,
+      priceCoin: PUBLIC_FILL.priceCoin,
       qty: PUBLIC_FILL.qty,
     });
     const filled = record.incoming;
@@ -2631,13 +2635,20 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     ]) {
       expect(bodies.get(key), key).not.toContain(f.admin.id);
     }
+    // The public row (#121, ADR-0107 결정 6 '남은 것'의 #60 3·6·17·20항): the contract, its
+    // price, the YES value, qty, amount and time — exactly those names, no side, order, owner or
+    // account type.
     const fills = parse(bodies.get('GET /markets/:id/fills')!) as { data: object[] };
     expect(fills.data).toEqual([
-      expect.objectContaining({
+      {
+        id: expect.any(String) as string,
+        outcome: 'YES',
+        priceCoin: PUBLIC_FILL.priceCoin,
+        yesPriceCoin: PUBLIC_FILL.priceCoin,
         qty: PUBLIC_FILL.qty,
         amountCoin: String(PUBLIC_FILL.amountCoin),
-        priceAvgBp: PUBLIC_FILL.priceAvgBp,
-      }),
+        createdAt: expect.any(String) as string,
+      },
     ]);
   });
 
@@ -3137,7 +3148,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     // admin role of A's), for the approval that publishes its provisional result below.
     const closed = await createMarket(t.db, { createdBy: f.admin.id, status: 'closed' });
     const registration = await createJudgementRequest(t.db, { marketId: closed.id, by: f.a.id });
-    // An open market a member orders in through the intake, for its `market:book` (#179).
+    // An open market a member orders in through the intake, for its `market:book` (#179), and
+    // another fills against, for its `market:trade` and `market:tick` (#121).
     const booked = await createMarket(t.db, { createdBy: f.admin.id });
     const watchers = { anonymous: await openSocket(), B: await openSocket(f.b.cookie) };
     const received: { watcher: string; event: string; payload: unknown }[] = [];
@@ -3329,9 +3341,40 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     });
     expect(ordered.statusCode, ordered.body).toBe(200);
     const restingId = ordered.json<{ data: { order: { id: string } } }>().data.order.id;
+    // And a fill (#121): a second member's IOC NO buy meets that YES bid at 41 as NO at 59 — one
+    // pair mint, published as one anonymous `market:trade` and one `market:tick` beside the book's
+    // signal. Neither member's id, either order, a taker direction or an account type in them.
+    const taker = await signUpTestUser(t);
+    await completeOnboarding(t.db, { userId: taker.id });
+    await createStartGrant(t.db, { userId: taker.id, amountCoin: 1_000n });
+    const taken = await t.app.inject({
+      method: 'POST',
+      url: `/api/v1/markets/${booked.id}/orders`,
+      headers: {
+        origin: ORIGIN,
+        'content-type': 'application/json',
+        'idempotency-key': randomUUID(),
+        cookie: taker.cookie,
+      },
+      payload: {
+        outcome: 'NO',
+        side: 'buy',
+        timeInForce: 'ioc',
+        limitPriceCoin: 99,
+        qty: 1,
+        expectedAccountId: taker.id,
+      },
+    });
+    expect(taken.statusCode, taken.body).toBe(200);
+    const takenId = taken.json<{ data: { order: { id: string } } }>().data.order.id;
     const started = Date.now();
     const count = (event: string) => received.filter((entry) => entry.event === event).length;
-    while (count('market:status') < 10 || count('market:book') < 2) {
+    while (
+      count('market:status') < 10 ||
+      count('market:book') < 4 ||
+      count('market:trade') < 2 ||
+      count('market:tick') < 2
+    ) {
       if (Date.now() - started > 5_000) throw new Error('the events did not reach both');
       await sleep(20);
     }
@@ -3340,18 +3383,60 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     // have caused has arrived by now.
     expect(received.map(({ watcher, event }) => `${watcher} ${event}`).sort()).toEqual([
       'B market:book',
+      'B market:book',
       ...Array.from({ length: 5 }, () => 'B market:status'),
+      'B market:tick',
+      'B market:trade',
+      'anonymous market:book',
       'anonymous market:book',
       ...Array.from({ length: 5 }, () => 'anonymous market:status'),
+      'anonymous market:tick',
+      'anonymous market:trade',
     ]);
+    const fillEvents = new Set(['market:book', 'market:trade', 'market:tick']);
+    for (const { event, payload } of received.filter((entry) => fillEvents.has(entry.event))) {
+      for (const value of [restingId, takenId, trader.id, taker.id, 'market_maker', 'human']) {
+        expect({ event, leaked: JSON.stringify(payload).includes(value) }).toEqual({
+          event,
+          leaked: false,
+        });
+      }
+    }
     for (const { event, payload } of received.filter((entry) => entry.event === 'market:book')) {
       expect({ event, payload }).toEqual({
         event,
         payload: { type: 'market:book', marketId: booked.id, ts: expect.any(String) as string },
       });
-      for (const value of [restingId, trader.id, 'market_maker', 'human']) {
-        expect(JSON.stringify(payload)).not.toContain(value);
-      }
+    }
+    for (const { event, payload } of received.filter((entry) => entry.event === 'market:trade')) {
+      expect({ event, payload }).toEqual({
+        event,
+        payload: {
+          type: 'market:trade',
+          marketId: booked.id,
+          fillId: expect.any(String) as string,
+          outcome: 'NO',
+          priceCoin: 59,
+          yesPriceCoin: 41,
+          qty: 1,
+          amountCoin: '59',
+          ts: expect.any(String) as string,
+        },
+      });
+    }
+    for (const { event, payload } of received.filter((entry) => entry.event === 'market:tick')) {
+      expect({ event, payload }).toEqual({
+        event,
+        payload: {
+          type: 'market:tick',
+          marketId: booked.id,
+          lastPrice: 41,
+          volumeCoin: '59',
+          tradeCount: 1,
+          traderCount: 2,
+          ts: expect.any(String) as string,
+        },
+      });
     }
     const payloadsOf = (marketId: string) =>
       received

@@ -138,7 +138,10 @@ export function marketConfirmationHeld(): SQL {
  * A 사용자 is a person's account (`isHumanAccountSql`, #115 — the participants' rule, #177 13항):
  * the 운영 마켓메이커's own fills give it nothing to dispute with, while a member whose fill's other
  * side was the 운영 마켓메이커 has one like any other. Fills exist from #119's intake on, which the
- * deployed environment opens with `order.accepting` (ADR-0107 결정 3).
+ * deployed environment opens with `order.accepting` (ADR-0107 결정 3). The same basis as
+ * `markets.trader_count` (#121, market-stats.ts): it counts the accounts this answers true for, so
+ * `trader_count = 0` is #20's '사용자 체결 0건', until #132 leaves abnormal fills out (#177 13항);
+ * #20 decides from the fills on this basis, abnormal or not (#177 14항, ADR-0107 결정 5).
  */
 export async function hasMarketFill(
   executor: Reader,

@@ -63,6 +63,7 @@ const summary: MarketSummary = {
   judgementDelayed: false,
   disputeUnderReview: false,
   lastPrice: 50,
+  lastFillAt: '2026-09-07T00:00:00.000Z',
   volumeCoin: '120000',
   tradeCount: 10,
   traderCount: 4,
@@ -82,6 +83,7 @@ const otherCard: MarketSummary = { ...card, id: OTHER_ID, slug: 'other' };
 
 const detail: Market = {
   ...summary,
+  lastPrice24hAgo: null,
   description: null,
   yesCondition: '한국은행 발표 기준.',
   noCondition: '',

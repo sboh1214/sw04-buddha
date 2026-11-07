@@ -695,8 +695,10 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
           category: categories.slug,
           status: markets.status,
           lastPrice: markets.lastPrice,
+          lastFillAt: markets.lastFillAt,
           volumeCoin: markets.volumeCoin,
           tradeCount: markets.tradeCount,
+          traderCount: markets.traderCount,
           statusEventId: markets.statusEventId,
           openAt: markets.openAt,
           closeAt: markets.closeAt,
@@ -895,9 +897,12 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
         expect(row).toMatchObject({
           status: 'draft',
           openAt: null,
+          // No fill, so the statistics are their defaults (#121): 0063's guard needs no more.
           lastPrice: null,
+          lastFillAt: null,
           volumeCoin: 0n,
           tradeCount: 0,
+          traderCount: 0,
           createdBy: adminId,
         });
         // Every rule item as written (#23), and the sources in priority order; the times (#22).

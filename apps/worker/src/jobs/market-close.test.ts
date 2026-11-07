@@ -23,6 +23,7 @@ import {
   hasTestDb,
   ledgerAccountBalance,
   ledgerSupply,
+  marketStatsOf,
   mintTestPairs,
   openOrderIntake,
   passMarketClose,
@@ -508,6 +509,9 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
       const { marketId } = due;
       const before = await books(marketId);
       const bPosition = await positionOf(t.db, due.b, marketId, 'YES');
+      // The fills the intake made before the close, as statistics (#121): the close keeps them.
+      const stats = await marketStatsOf(t.db, marketId);
+      expect(stats.tradeCount).toBeGreaterThan(0);
       const market = await subscribeTo(marketId);
       const users = await subscribeToUsers();
       try {
@@ -568,6 +572,8 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
         // No ledger entry, fill or contract move; every remaining lock is an order's.
         expect(await books(marketId)).toEqual(before);
         expect(await checkOrderInvariants(t.db)).toEqual([]);
+        // No fill, so no statistic moved and no market:trade or market:tick (the list below).
+        expect(await marketStatsOf(t.db, marketId)).toEqual(stats);
 
         await waitForMessages(market.received, 2, 'market:status and market:book of the close');
         await sleep(100);

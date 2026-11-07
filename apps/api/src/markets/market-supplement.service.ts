@@ -6,6 +6,7 @@ import {
   ruleContentOf,
   schema,
   type Db,
+  type MarketRowWrite,
 } from '@buddha/db';
 import {
   MARKET_SUPPLEMENT_APPROVAL_KIND,
@@ -543,11 +544,11 @@ export class MarketSupplementService {
   }
 
   /** The `markets` columns of the items a supplement changes (sources are rows of their own). */
-  private changedColumns(checked: CheckedSupplement): Partial<typeof schema.markets.$inferInsert> {
+  private changedColumns(checked: CheckedSupplement): MarketRowWrite {
     const { changes, after } = checked;
     const rules = ruleItemColumns(ruleItemsOfContent(after));
     const times = timeColumns(timesOfContent(after));
-    const set: Partial<typeof schema.markets.$inferInsert> = {};
+    const set: MarketRowWrite = {};
     if (changes.title !== undefined) set.title = after.title;
     if (changes.description !== undefined) set.description = rules.description;
     if (changes.yesCondition !== undefined) set.yesCondition = rules.yesCondition;

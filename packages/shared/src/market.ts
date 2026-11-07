@@ -45,6 +45,7 @@ import { marketTimesSchema } from './market-times.js';
 import { marketTagsSchema } from './tags.js';
 import {
   type MarketStatus,
+  type Outcome,
   marketEventTypeSchema,
   marketResultSchema,
   marketStatusSchema,
@@ -123,17 +124,34 @@ const marketSummaryFields = {
    */
   disputeUnderReview: z.boolean(),
   /**
-   * YES price 1..99 of the last fill (PLAN 5.3); null until the market's first fill, which a
-   * client shows as '체결 없음' (N02 §5). #121 and #64 define the market's price fields.
+   * 시장가격 (ADR-0107 결정 4 #121 '대표 시장가격', #177 11항): the YES value 1..99 of the
+   * market's last fill (`fills.yes_price_coin`; a NO fill at 37 reads 63, a pair mint is one fill
+   * at 100 − its NO price). Null until the first fill, which a client shows as '체결 없음' (N02
+   * §5); the open's 50% is never a price. NO's value is 100 − it (#177 15항).
    */
   lastPrice: priceSchema.nullable(),
+  /**
+   * 시장가격의 갱신시각 (ADR-0107 결정 4 #121 '대표 시장가격'): the last fill's server time. Null
+   * exactly when `lastPrice` is ('체결 없음'). Cards and the detail show '최근 체결 <절대 시각>'
+   * (M11 #61/#60).
+   */
+  lastFillAt: z.iso.datetime().nullable(),
+  /**
+   * 누적 거래량 since the open (#177 12항 '기간'): each fill once, at the incoming contract's price
+   * × qty — a direct YES sell at 60 and a pair mint against a NO bid at 40 are both 60 — so it is
+   * the sum of the public recent fills' `amountCoin`. The 24-hour figure is 추천's alone.
+   */
   volumeCoin: coinAmountSchema,
+  /** How many fills the market has had (a pair mint is one): the raw price history's points. */
   tradeCount: countSchema,
   /**
    * The 사용자 참여자 the card and the detail header show, 0 included (ADR-0061 decision 1, item
-   * 4). Who counts is #177's to decide (13항: 사람 계정, admins included); #121 counts them with the
-   * account-type rule (`isHumanAccountType`, `is_human_account` in SQL, #115), which leaves the
-   * 운영 마켓메이커 out.
+   * 4; #177 13항): the person accounts (the account-type rule, #115 — the 운영 마켓메이커 is out,
+   * admins are in) with at least one fill in the market on either side, counted from the first
+   * one and never fewer — a full sell or a closure leaves it. The basis of 판정 이의's 자격
+   * (`hasMarketFill`, #173 6항): 0 is '사용자 체결 0건' only until #132 leaves abnormal fills out
+   * of it (#177 13항) — #20's CANCELLED counts every person's fill from the fills, abnormal or not
+   * (#177 14항, ADR-0107 결정 5), never this count.
    */
   traderCount: countSchema,
   closeAt: z.iso.datetime(),
@@ -244,6 +262,14 @@ export const marketSchema = z
      * with none. Nobody's name, no record time and no earlier record (#24); cards carry none.
      */
     judgementDelay: marketJudgementDelaySchema.nullable(),
+    /**
+     * The 시장가격 as of `RECOMMENDED_VOLUME_HOURS` hours before the answer (ADR-0107 결정 4 #121
+     * '변화량'): the YES value of the last fill at or before that instant, on the DB clock. Null
+     * when there was none — the open's 50% is never a baseline (N02 §5), so a market with no fill
+     * by then shows no change. Carried whatever the status; the change badge (`lastPrice` − this,
+     * trading markets and the detail only) is the screen's (M11 #60 5항). The same 24 hours as 추천.
+     */
+    lastPrice24hAgo: priceSchema.nullable(),
   })
   .meta({ id: 'Market' });
 export type Market = z.infer<typeof marketSchema>;
@@ -311,7 +337,11 @@ export const DEFAULT_MARKET_SORT = 'recommended' satisfies MarketSort;
 
 /**
  * The window of 추천 (ADR-0061 decision 1, item 9): the fills of the last 24 hours, counted up to
- * the instant the first page was read (ADR-0065).
+ * the instant the first page was read (ADR-0065) — Σ `fills.amount_coin` in `(asOf − 24h, asOf]`,
+ * which is #177 12항's volume (each match once, at the incoming contract's price × qty; every fill
+ * has a person on a side, so the 운영 마켓메이커's fills with members count). The same window is
+ * `Market.lastPrice24hAgo`'s (ADR-0107 결정 4 #121 '변화량'): a fill exactly 24 hours old is that
+ * baseline and not in the volume.
  */
 export const RECOMMENDED_VOLUME_HOURS = 24;
 
@@ -463,19 +493,53 @@ export const myFillsQuerySchema = cursorQuerySchema.extend({
 });
 export type MyFillsQuery = z.infer<typeof myFillsQuerySchema>;
 
-/** Public and anonymous (PLAN 7.1): no user id. `id` is a bigserial as a decimal string. */
+/**
+ * 최근 체결 한 건, public and anonymous (ADR-0107 결정 6 '남은 것'의 #60 3·6·17·20항, ADR-0116):
+ * the contract, the fill's price in it, its YES value (#177 11·15항), the quantity, the amount (#177
+ * 12항: the market's `volumeCoin` is the sum of these) and the server time. No account, order id,
+ * taker direction, account type or kind (ADR-0107 결정 5 '#179·#119'). `id` is a bigserial as a
+ * decimal string, the `market:trade` key. Built by `publicFill` only.
+ */
 export const fillSchema = z
   .object({
     id: z.string(),
     outcome: outcomeSchema,
-    side: orderSideSchema,
+    priceCoin: priceSchema,
+    yesPriceCoin: priceSchema,
     qty: countSchema,
     amountCoin: coinAmountSchema,
-    priceAvgBp: bpSchema,
     createdAt: z.iso.datetime(),
   })
   .meta({ id: 'Fill' });
 export type Fill = z.infer<typeof fillSchema>;
+
+/** What a public fill is made of: a `fills` row (@buddha/db `FillRow`) satisfies it. */
+export interface PublicFillFacts {
+  readonly id: number | bigint | string;
+  readonly outcome: Outcome;
+  readonly priceCoin: number;
+  readonly yesPriceCoin: number;
+  readonly qty: number;
+  readonly amountCoin: bigint;
+  readonly createdAt: Date;
+}
+
+/**
+ * The one public shape of a fill, for `GET /markets/:id/fills` and `market:trade`
+ * (`marketTradeEvent`): it picks its fields one by one, so an owner, an order or an account type
+ * on the input never leaves.
+ */
+export function publicFill(fill: PublicFillFacts): Fill {
+  return {
+    id: String(fill.id),
+    outcome: fill.outcome,
+    priceCoin: fill.priceCoin,
+    yesPriceCoin: fill.yesPriceCoin,
+    qty: fill.qty,
+    amountCoin: serializeCoinAmount(fill.amountCoin),
+    createdAt: fill.createdAt.toISOString(),
+  };
+}
 
 export const positionSchema = z
   .object({
@@ -664,9 +728,11 @@ export function sellableContractOf(figures: SellableFigures): SellableContract {
 
 // ---- ticks --------------------------------------------------------------------------
 /**
- * One point of a price series. At `resolution=raw` it is a stored tick and `ts` is the tick's
- * own instant. At a bucketed resolution it is a SAMPLE: `ts` is a boundary on the absolute
- * grid and `pYesBp`/`trigger` come from the last tick at or before it — the probability in
+ * One point of a price series. At `resolution=raw` it is a fill (#121, ADR-0116: the price history
+ * is the `fills` rows): its YES value in basis points (`yes_price_coin × 100`, lossless) at its
+ * server time, `trigger` always `'trade'` — the open's setting and a judgement are no point
+ * (ADR-0107 결정 1 #177 11항). At a bucketed resolution it is a SAMPLE: `ts` is a boundary on the
+ * absolute grid and `pYesBp`/`trigger` come from the last fill at or before it — the price in
  * force then, exact because the series is a step function (the price holds between fills).
  * Render it with a step curve, never straight interpolation.
  */
@@ -742,8 +808,8 @@ export const priceSeriesSchema = z
     /** Points older than the served ones exist inside the window but were left out. */
     truncated: z.boolean(),
     /**
-     * The market's trade count when this answer was read — the only field here that says what
-     * the answer CONTAINS rather than when it was written.
+     * The market's trade count when this answer was read (its fills: the raw points there are) —
+     * the only field here that says what the answer CONTAINS rather than when it was written.
      *
      * A watermark for a LIVE window only, which is the window a client merging `market:tick`
      * events has. Ask for an explicit `to` and this is still the counter at answer time, not
@@ -819,8 +885,6 @@ export const adminMarketSchema = marketSchema
   .extend({
     createdBy: z.string(),
     updatedAt: z.iso.datetime(),
-    /** Σ buy amounts − Σ sell amounts over the market's fills. */
-    netCollectedCoin: coinAmountSchema,
     /** Σ positions.qty per outcome where settled = false. */
     openInterest: z.object({ yes: countSchema, no: countSchema }),
     /**

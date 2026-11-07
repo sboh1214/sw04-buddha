@@ -17,12 +17,15 @@ import {
   restingStateAfterFill,
   type AccountType,
   type BookOrder,
+  type MarketFillStats,
   type MarketTradingFacts,
   type OrderLock,
   type OrderLockFacts,
   type OrderRejectReason,
   type OrderSide,
   type Outcome,
+  type MatchFill,
+  type OrderOwner,
   type ReleaseSettingsRegistry,
   type TimeInForce,
 } from '@buddha/shared';
@@ -38,6 +41,7 @@ import {
   type PositionRow,
 } from './contracts.js';
 import type { BalanceRow, LedgerEntryRow } from './ledger.js';
+import { newHumanParticipants, recordFillStats } from './market-stats.js';
 import { getReleaseSetting } from './release-settings.js';
 import { balances, fills, markets, orders, positions, user } from './schema/index.js';
 import { clockTimestamp, lockMarket } from './tx-helpers.js';
@@ -50,7 +54,8 @@ import { clockTimestamp, lockMarket } from './tx-helpers.js';
  * row (the address and account rate limits, onboarding, `assertCanTrade`, the admin role, the shown
  * account), and the bot runtime's (M10 #129) for the 운영 마켓메이커 — and either writes nothing (the
  * request was answered before, intake is closed, no such public market) or writes the order once in
- * its final state of the intake, with every fill it made.
+ * its final state of the intake, with every fill it made and, when it filled, the market's
+ * statistics (#121, market-stats.ts: their one writer).
  *
  * Every writer of `orders` or `fills` holds the market's `lockMarket` (the arrival key is drawn
  * under it, and `fills_check` reads both orders by key trusting it). The lock order of an intake
@@ -114,8 +119,17 @@ export interface PlaceOrderTouched {
 }
 
 export type PlaceOrderResult =
-  /** A new order: taken (resting, filled, cancelled) or rejected with its reason. */
-  | { kind: 'placed'; order: OrderRow; fills: FillRow[]; touched: PlaceOrderTouched }
+  /**
+   * A new order: taken (resting, filled, cancelled) or rejected with its reason. `stats` is the
+   * market's statistics after its fills (`market:tick`, #121), null when it filled nothing.
+   */
+  | {
+      kind: 'placed';
+      order: OrderRow;
+      fills: FillRow[];
+      stats: MarketFillStats | null;
+      touched: PlaceOrderTouched;
+    }
   /** The request id named an order before, with the same terms: that order as it stands now. */
   | { kind: 'replayed'; order: OrderRow }
   /** The request id named an order before with other terms (DUPLICATE_REQUEST). */
@@ -273,6 +287,21 @@ async function lockRequest(tx: Tx, ownerId: string, requestId: string): Promise<
 const zeroLock = (lock: OrderLock): boolean =>
   lock.kind === 'coin' ? lock.amountCoin === 0n : lock.qty === 0;
 
+/** The people among an intake's owners: the incoming one and each resting one its fills meet. */
+function humanOwnersOf(
+  owner: OrderOwner,
+  planned: readonly MatchFill[],
+  restingById: ReadonlyMap<string, LiveBookOrder>,
+): string[] {
+  const ids = new Set<string>();
+  if (owner.human) ids.add(owner.id);
+  for (const fill of planned) {
+    const resting = restingById.get(fill.restingOrderId)!.owner;
+    if (resting.human) ids.add(resting.id);
+  }
+  return [...ids];
+}
+
 /**
  * 주문 접수 (#119): takes one order in `input.marketId` for `input.ownerId`, in the caller's
  * transaction (ADR-0112). In order:
@@ -298,7 +327,9 @@ const zeroLock = (lock: OrderLock): boolean =>
  * 7. the order in its end state (`orderEndState`: ADR-0111 결정 6), then each fill in walk order —
  *    its row first (its id keys the ledger events, migration 0062 binds them), #118's process, the
  *    resting order's fill — and the lock left over released (`intakeRemainderRelease`: an IOC
- *    remainder, a budget's unspent Coin, a self-trade stop; a resting GTC order keeps it).
+ *    remainder, a budget's unspent Coin, a self-trade stop; a resting GTC order keeps it);
+ * 8. when it filled, the market's statistics once for the intake (#121, `recordFillStats`), with
+ *    the people new to the market read before step 7's first write (`newHumanParticipants`).
  *
  * A rejected order is a row with its request id and reason (#177 7항); `replayed`, `conflict`,
  * `closed` and `not_found` write nothing, so the request id stays free. A contract process that
@@ -400,7 +431,13 @@ export async function placeOrder(
       updatedAt: at,
       endedAt: at,
     });
-    return { kind: 'placed', order, fills: [], touched: { balances: [], positions: [] } };
+    return {
+      kind: 'placed',
+      order,
+      fills: [],
+      stats: null,
+      touched: { balances: [], positions: [] },
+    };
   };
 
   // A refusal of the market alone records the limit as sent, no reference and no width: the
@@ -461,6 +498,18 @@ export async function placeOrder(
     touchedPositions.set(`${userId}:${outcome}`, userId);
   if (locked.position !== null) touchPosition(ownerId, input.outcome);
 
+  const restingById = new Map(book.map((resting) => [resting.id, resting]));
+  // #121: who among this intake's people fills in this market for the first time, read before the
+  // order and the resting orders record their fills (the `hasMarketFill` basis, market-stats.ts).
+  const newParticipants =
+    result.fills.length === 0
+      ? 0
+      : await newHumanParticipants(
+          tx,
+          marketId,
+          humanOwnersOf({ id: owner.id, human: owner.human }, result.fills, restingById),
+        );
+
   const order = await insertOrder({
     protectedLimitPrice,
     referencePrice,
@@ -476,7 +525,6 @@ export async function placeOrder(
     endedAt: isLiveOrderStatus(end.status) ? null : at,
   });
 
-  const restingById = new Map(book.map((resting) => [resting.id, resting]));
   const lastEntry = new Map<string, LedgerEntryRow>();
   const noteEntry = (userId: string, entry: LedgerEntryRow) => {
     const before = lastEntry.get(userId);
@@ -541,10 +589,16 @@ export async function placeOrder(
     await releaseForOrder(tx, { marketId, ownerId, lock: release, at });
   }
 
+  const stats =
+    made.length === 0
+      ? null
+      : await recordFillStats(tx, { marketId, fills: made, newParticipants });
+
   return {
     kind: 'placed',
     order,
     fills: made,
+    stats,
     touched: await touchedOf(tx, marketId, lastEntry, touchedPositions),
   };
 }
@@ -554,6 +608,7 @@ export async function placeOrder(
  * publishes `market:book` after COMMIT): a new order that rests, or any fill (a resting order
  * filled or partly filled). A rejected order, an immediate one that filled nothing, and the
  * answers that write nothing (`replayed`, `conflict`, `closed`, `not_found`) change nothing.
+ * `market:trade` and `market:tick` follow the result's `fills` and `stats` (#121).
  */
 export function placeOrderChangedBook(result: PlaceOrderResult): boolean {
   return (

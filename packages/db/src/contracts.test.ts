@@ -38,11 +38,10 @@ import {
   markets,
   orders,
   positions,
-  priceTicks,
 } from './schema/index.js';
 import { contractBook, positionOf } from './test/contracts.js';
 import { createMarket, createMarketPause, createPosition, createUser } from './test/factories.js';
-import { createFillRecord, createOrder } from './test/orders.js';
+import { NO_MARKET_STATS, createFillRecord, createOrder, marketStatsOf } from './test/orders.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
 import {
   balanceOf,
@@ -686,13 +685,8 @@ describe.skipIf(!hasTestDb())('contracts (#118, docker test profile)', () => {
       expect(await ledgerSupply(t.db)).toEqual(supply);
       // contracts.ts writes no fill: the one row is the test's record (#119 writes it).
       expect((await t.db.select().from(fills)).map((row) => String(row.id))).toEqual([fillId]);
-      expect(await t.db.select().from(priceTicks)).toEqual([]);
-      expect(
-        await t.db
-          .select({ last: markets.lastPrice, volume: markets.volumeCoin, n: markets.tradeCount })
-          .from(markets)
-          .where(eq(markets.id, market.id)),
-      ).toEqual([{ last: null, volume: 0n, n: 0 }]);
+      // No fill, no statistic: the intake writes both (#121, market-stats.ts).
+      expect(await marketStatsOf(t.db, market.id)).toEqual(NO_MARKET_STATS);
       await expectFullCollateral(market.id);
     });
 
@@ -1221,13 +1215,7 @@ describe.skipIf(!hasTestDb())('contracts (#118, docker test profile)', () => {
       // Not a fill (N01 §6): the burn writes none (the two rows are the mints' records).
       expect(await t.db.select().from(fills)).toEqual(fillsBefore);
       expect(fillsBefore).toHaveLength(2);
-      expect(await t.db.select().from(priceTicks)).toEqual([]);
-      expect(
-        await t.db
-          .select({ last: markets.lastPrice, volume: markets.volumeCoin, n: markets.tradeCount })
-          .from(markets)
-          .where(eq(markets.id, marketId)),
-      ).toEqual([{ last: null, volume: 0n, n: 0 }]);
+      expect(await marketStatsOf(t.db, marketId)).toEqual(NO_MARKET_STATS);
       // The same burn again is the burn it repeats, whatever the market is now.
       const after = await snapshot();
       expect(await burn(marketId, 2, burnId)).toEqual({ outcome: 'duplicate' });

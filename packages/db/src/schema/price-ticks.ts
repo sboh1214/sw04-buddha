@@ -5,7 +5,11 @@ import { priceTickTriggerEnum } from './enums.js';
 import { markets } from './markets.js';
 
 /**
- * Price history for charts (PLAN 7.1 /markets/:id/ticks).
+ * Price history for charts (PLAN 7.1 /markets/:id/ticks) — RETIRED by #121 (ADR-0116): the price
+ * history is read from `fills` (each fill's YES value at its server time), so nothing reads or
+ * writes this table any more. The AMM-era rows are not carried over (owner D4·D13). Dropping it
+ * and `price_tick_trigger` is a later owner choice; `PRICE_TICK_TRIGGERS` stays for the public
+ * `PriceTick.trigger`, always 'trade'.
  *
  * ONE TABLE, not partitioned. PLAN 6.2 left "월 단위 파티셔닝은 M6에서 검토" against this line;
  * M6 reviewed it and decided against, with the reasons and the re-open triggers in ADR-0039.

@@ -311,7 +311,8 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
     // handshake and then went silent every later publish added one more (each holding its
     // event). `socketTimeout` closes such a connection, and `autoResendUnfulfilledCommands:
     // false` is the other half of that decision — the default replays the timed-out
-    // PUBLISHes on the new socket, and `market:trade` has no key a client could dedupe with.
+    // PUBLISHes on the new socket, and a client listing `market:trade` rows would have to drop
+    // each repeat by its `fillId` (`market:book` carries no key at all).
     const server = await listenStalledRedis();
     const stalled = createRedisClient(`redis://127.0.0.1:${String(server.port)}`, {
       commandTimeoutMs: 200,
@@ -336,10 +337,11 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
           type: 'market:trade',
           marketId: MARKET_ID,
           fillId: '7',
-          outcome: 'YES',
-          side: 'buy',
+          outcome: 'NO',
+          priceCoin: 48,
+          yesPriceCoin: 52,
           qty: 100,
-          priceAvgBp: 5125,
+          amountCoin: '4800',
           ts,
         }),
       ]);

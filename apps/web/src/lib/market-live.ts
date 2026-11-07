@@ -41,6 +41,12 @@ export interface LiveMarket {
   status: MarketStatus;
   /** The last fill's price, 1..99, or `null` before the first fill (N02 §5's 체결 없음). */
   lastPrice: number | null;
+  /**
+   * That fill's server time (#121, ADR-0116: the 시장가격's 갱신시각, the cards' and the detail's
+   * '최근 체결 <시각>' once #61/#60 draw it), `null` exactly when `lastPrice` is. It moves with the
+   * price under `tradeCount`.
+   */
+  lastFillAt: string | null;
   volumeCoin: string;
   tradeCount: number;
   traderCount: number;
@@ -97,13 +103,13 @@ export interface MarketPage {
 export type MarketPages = InfiniteData<MarketPage, string | undefined>;
 
 /**
- * The four fields a `market:tick` moves, under the market's id. Nothing publishes the event
- * until the market figures (#121; the CLOB fills since #119); the reducers keep reading it so a
- * fill arrives already wired.
+ * The fields a `market:tick` moves, under the market's id. The order intake publishes one after
+ * the COMMIT of every intake that filled anything (#121, ADR-0116), with the values the intake
+ * wrote; its `ts` is the last fill's server time, which becomes the row's `lastFillAt`.
  */
 export type MarketTickPatch = Pick<
   MarketTickEvent,
-  'marketId' | 'lastPrice' | 'volumeCoin' | 'tradeCount' | 'traderCount'
+  'marketId' | 'lastPrice' | 'volumeCoin' | 'tradeCount' | 'traderCount' | 'ts'
 >;
 
 /**
@@ -131,7 +137,7 @@ export { statusRank } from '@buddha/shared';
  * market as `marketId` where the DTO has `id`, and carries no slug, title, category or closeAt,
  * so a synthesised row would be a lie the screen could not tell from a load. `traderCount` does
  * ride with the price: the tick carries it under the same `tradeCount`, and the card and the
- * detail header show it.
+ * detail header show it. So does `lastFillAt`, from the tick's `ts` (#121).
  */
 export function applyTick<T extends LiveMarket>(
   held: T | undefined,
@@ -142,6 +148,7 @@ export function applyTick<T extends LiveMarket>(
   return {
     ...held,
     lastPrice: event.lastPrice,
+    lastFillAt: event.ts,
     volumeCoin: event.volumeCoin,
     tradeCount: event.tradeCount,
     traderCount: event.traderCount,
@@ -280,6 +287,7 @@ export function joinMarket<T extends LiveMarket>(held: T | undefined, incoming: 
     next = {
       ...next,
       lastPrice: held.lastPrice,
+      lastFillAt: held.lastFillAt,
       volumeCoin: held.volumeCoin,
       tradeCount: held.tradeCount,
       // In the ORDERED group, not the descriptive one: it moves with the same trade, so a

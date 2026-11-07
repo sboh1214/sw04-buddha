@@ -63,6 +63,8 @@ const closed: AdminMarket = {
   judgementDelayed: false,
   disputeUnderReview: false,
   lastPrice: 63,
+  lastFillAt: '2026-09-07T00:00:00.000Z',
+  lastPrice24hAgo: null,
   volumeCoin: '123456',
   tradeCount: 789,
   traderCount: 321,
@@ -73,7 +75,6 @@ const closed: AdminMarket = {
   createdAt: '2026-10-01T00:00:00.000Z',
   updatedAt: '2026-11-29T15:00:00.000Z',
   createdBy: 'creator',
-  netCollectedCoin: '98765',
   openInterest: { yes: 4321, no: 8765 },
   settlementSteps: [],
   statusEventId: '3',
@@ -305,7 +306,6 @@ const isOff = (html: string, testId: string) => {
 const expectNoMarketSignal = (html: string) => {
   for (const text of [
     copy.tradeStatsLastPrice,
-    copy.tradeStatsNetCollected,
     copy.tradeStatsOpenInterestYes,
     copy.tradeStatsOpenInterestNo,
     copy.marketVolume,
@@ -315,7 +315,6 @@ const expectNoMarketSignal = (html: string) => {
     '63%',
     '123456',
     '123,456',
-    '98,765',
     '4321',
     '8765',
     '789',

@@ -19,7 +19,10 @@ export const TICK_COIN = 1;
  */
 export const PAYOUT_PER_CONTRACT_COIN = 100n;
 
-/** Basis points: probability 0..1 is stored as 0..10000 (price_ticks.p_yes_bp). */
+/**
+ * Basis points: probability 0..1 as 0..10000 — a chart point's `PriceTick.pYesBp`, a fill's
+ * `yes_price_coin × 100` since #121 (ADR-0116; the retired `price_ticks.p_yes_bp` has the range).
+ */
 export const BP_MAX = 10_000;
 
 /**

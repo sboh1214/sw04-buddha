@@ -34,6 +34,7 @@ import {
   fundMarketMakerFunds,
   hasTestDb,
   ledgerAccountBalance,
+  marketStatsOf,
   mintTestPairs,
   openOrderIntake,
   passMarketClose,
@@ -1462,7 +1463,15 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     // 만료 and gives its `locked_qty` back, so the step's qty-0 UPDATE meets no lock.
     const admin = (await createUser(t.db, { role: 'admin' })).user.id;
     await openOrderIntake(t.db, { adminId: admin });
-    const market = await createMarket(t.db, { createdBy: admin });
+    // With statistics as a row holds them (#121): neither the close nor the settlement moves one.
+    const market = await createMarket(t.db, {
+      createdBy: admin,
+      lastPrice: 64,
+      volumeCoin: 640n,
+      tradeCount: 3,
+      traderCount: 2,
+    });
+    const stats = await marketStatsOf(t.db, market.id);
     const alice = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
     const bob = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
     await mintTestPairs(t.db, { marketId: market.id, yesHolderId: alice, noHolderId: bob, qty: 5 });
@@ -1507,6 +1516,7 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     expect((await balanceOf(alice)).availableCoin).toBe(before + 500n);
     expect((await runLedgerAudit(t.db)).recorded).toBe(0);
     expect(logs).toEqual([]);
+    expect(await marketStatsOf(t.db, market.id)).toEqual(stats);
   });
 
   it('records nothing when another run settled the market between the rollback and the record', async () => {

@@ -1158,9 +1158,11 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
     expect(data<Market>(pub)).toMatchObject({ status: 'open', lastPrice: null, tradeCount: 0 });
     const chart = await t.app.inject({ method: 'GET', url: `/api/v1/markets/${review.id}/ticks` });
     expect(data<PriceSeries>(chart).points).toEqual([]);
+    // The chart is the fills (#121): the open wrote none, and no statistic.
     expect(
-      await t.db.select().from(schema.priceTicks).where(eq(schema.priceTicks.marketId, review.id)),
+      await t.db.select().from(schema.fills).where(eq(schema.fills.marketId, review.id)),
     ).toEqual([]);
+    expect(data<Market>(pub)).toMatchObject({ lastFillAt: null, volumeCoin: '0', traderCount: 0 });
     // Open: nothing approves, reschedules or sends it back any more.
     expectWrongStatus(await approve(review.id, second), 'open');
     expectWrongStatus(

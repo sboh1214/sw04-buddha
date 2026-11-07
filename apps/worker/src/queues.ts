@@ -48,6 +48,7 @@ export const QUEUE_JOBS: Record<QueueName, readonly JobName[]> = {
     JOB_NAMES.marketFinalize,
   ],
   audit: [JOB_NAMES.ledgerAudit],
+  // Reserved: nothing schedules it — the intake keeps `markets.trader_count` (#121, ADR-0116).
   stats: [JOB_NAMES.marketTraderCount],
   wallet: [JOB_NAMES.startGrantPay],
   media: [JOB_NAMES.mediaOrphanCleanup],

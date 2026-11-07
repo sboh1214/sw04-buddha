@@ -14,7 +14,9 @@ import {
   marketChannel,
   marketRealtimeEventSchema,
   marketStatusEventSchema,
+  marketTickEvent,
   marketTickEventSchema,
+  marketTradeEvent,
   marketTradeEventSchema,
   realtimeEventSchema,
   statusRank,
@@ -44,9 +46,10 @@ const trade = {
   marketId,
   fillId: '7',
   outcome: 'YES',
-  side: 'buy',
+  priceCoin: 52,
+  yesPriceCoin: 52,
   qty: 10,
-  priceAvgBp: 5200,
+  amountCoin: '520',
   ts,
 };
 const status = {
@@ -124,7 +127,9 @@ describe('realtime events (PLAN 8)', () => {
     expect(realtimeEventSchema.safeParse(tickWithoutPrice).success).toBe(false);
     expect(marketTickEventSchema.parse({ ...tick, pYesBp: 5250 })).not.toHaveProperty('pYesBp');
     expect(realtimeEventSchema.safeParse({ ...trade, qty: 0 }).success).toBe(false);
-    expect(realtimeEventSchema.safeParse({ ...trade, side: 'short' }).success).toBe(false);
+    expect(realtimeEventSchema.safeParse({ ...trade, priceCoin: 100 }).success).toBe(false);
+    expect(realtimeEventSchema.safeParse({ ...trade, yesPriceCoin: 0 }).success).toBe(false);
+    expect(realtimeEventSchema.safeParse({ ...trade, amountCoin: 520 }).success).toBe(false);
     expect(realtimeEventSchema.safeParse({ ...position, qty: -1 }).success).toBe(false);
     expect(realtimeEventSchema.parse({ ...position, qty: 0 }).type).toBe('user:position');
   });
@@ -193,6 +198,59 @@ describe('ordering keys', () => {
     );
     expect(marketBookEventSchema.safeParse({ ...book, marketId: 'm' }).success).toBe(false);
     expect(marketBookEventSchema.safeParse({ ...book, ts: undefined }).success).toBe(false);
+  });
+
+  it('builds the tick and the trade of an intake that filled (#121)', () => {
+    const stats = {
+      lastPrice: 52,
+      lastFillAt: new Date(ts),
+      volumeCoin: 520n,
+      tradeCount: 1,
+      traderCount: 1,
+    };
+    expect(marketTickEvent(marketId, stats)).toEqual(tick);
+    expect(marketTickEventSchema.parse(marketTickEvent(marketId, stats))).toEqual(tick);
+    // A NO fill at 37 carries its YES value 63; the row's owners, order and type never leave,
+    // and neither does the taker direction (ADR-0107 결정 6 '남은 것'의 #60 3·6·17·20항).
+    const event = marketTradeEvent(marketId, {
+      id: 8,
+      outcome: 'NO',
+      priceCoin: 37,
+      yesPriceCoin: 63,
+      qty: 3,
+      amountCoin: 111n,
+      createdAt: new Date(ts),
+      side: 'buy',
+      incomingOwnerId: 'member-a',
+      restingOwnerId: 'mm',
+      restingAccountType: 'market_maker',
+      incomingOrderId: marketId,
+    } as Parameters<typeof marketTradeEvent>[1]);
+    expect(event).toEqual({
+      type: 'market:trade',
+      marketId,
+      fillId: '8',
+      outcome: 'NO',
+      priceCoin: 37,
+      yesPriceCoin: 63,
+      qty: 3,
+      amountCoin: '111',
+      ts,
+    });
+    expect(marketTradeEventSchema.parse(event)).toEqual(event);
+    expect(Object.keys(marketTradeEventSchema.shape).sort()).toEqual(
+      [
+        'amountCoin',
+        'fillId',
+        'marketId',
+        'outcome',
+        'priceCoin',
+        'qty',
+        'ts',
+        'type',
+        'yesPriceCoin',
+      ].sort(),
+    );
   });
 
   it('supersedes compares keys as integers, not as strings', () => {

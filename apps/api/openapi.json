@@ -2838,7 +2838,7 @@
             }
           }
         },
-        "summary": "One market by id or slug, with its tags in order and its rule versions, the current first (each one’s full text, changed items, reason and time, and nobody’s name); a draft or in-review one is NOT_FOUND to the public",
+        "summary": "One market by id or slug, with its tags in order and its rule versions, the current first (each one’s full text, changed items, reason and time, and nobody’s name), and its market price as of 24 hours ago (the last fill by then, null with none); a draft or in-review one is NOT_FOUND to the public",
         "tags": [
           "markets"
         ]
@@ -2913,7 +2913,7 @@
             }
           }
         },
-        "summary": "Newest 20 fills, anonymous",
+        "summary": "Newest 20 fills, anonymous: each one’s contract, price, YES value, quantity, amount and server time — no account, order, taker side or account type",
         "tags": [
           "markets"
         ]
@@ -3131,7 +3131,7 @@
             }
           }
         },
-        "summary": "Price series, ascending, at most 500 points. `raw` returns stored ticks, downsampled from the newest 10000 of the range (`truncated` says when older ones were left out). `1m`/`1h` sample the probability in force on an absolute grid, coarsening the stride until the window fits; `bucketSeconds` reports the stride served, and the point at `from` carries the last value at or before it, so the left edge is never empty.",
+        "summary": "Price series, ascending, at most 500 points. Every point is a fill: its YES value in basis points at its server time (the open and a judgement are no point). `raw` returns the fills, downsampled from the newest 10000 of the range (`truncated` says when older ones were left out). `1m`/`1h` sample the price in force on an absolute grid, coarsening the stride until the window fits; `bucketSeconds` reports the stride served, and the point at `from` carries the last fill at or before it, if any — before the first fill the series starts empty.",
         "tags": [
           "markets"
         ]
@@ -24064,6 +24064,12 @@
             "minimum": 1,
             "maximum": 99
           },
+          "lastFillAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
           "volumeCoin": {
             "$ref": "#/components/schemas/CoinAmount"
           },
@@ -24131,6 +24137,7 @@
           "judgementDelayed",
           "disputeUnderReview",
           "lastPrice",
+          "lastFillAt",
           "volumeCoin",
           "tradeCount",
           "traderCount",
@@ -24214,6 +24221,12 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 99
+          },
+          "lastFillAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
           },
           "volumeCoin": {
             "$ref": "#/components/schemas/CoinAmount"
@@ -24374,6 +24387,12 @@
                 "$ref": "#/components/schemas/MarketJudgementDelay"
               }
             ]
+          },
+          "lastPrice24hAgo": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 99
           }
         },
         "required": [
@@ -24386,6 +24405,7 @@
           "judgementDelayed",
           "disputeUnderReview",
           "lastPrice",
+          "lastFillAt",
           "volumeCoin",
           "tradeCount",
           "traderCount",
@@ -24415,7 +24435,8 @@
           "settledAt",
           "ruleVersion",
           "ruleVersions",
-          "judgementDelay"
+          "judgementDelay",
+          "lastPrice24hAgo"
         ],
         "additionalProperties": false
       },
@@ -24625,12 +24646,15 @@
               "NO"
             ]
           },
-          "side": {
-            "type": "string",
-            "enum": [
-              "buy",
-              "sell"
-            ]
+          "priceCoin": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 99
+          },
+          "yesPriceCoin": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 99
           },
           "qty": {
             "type": "integer",
@@ -24639,11 +24663,6 @@
           },
           "amountCoin": {
             "$ref": "#/components/schemas/CoinAmount"
-          },
-          "priceAvgBp": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 10000
           },
           "createdAt": {
             "type": "string",
@@ -24654,10 +24673,10 @@
         "required": [
           "id",
           "outcome",
-          "side",
+          "priceCoin",
+          "yesPriceCoin",
           "qty",
           "amountCoin",
-          "priceAvgBp",
           "createdAt"
         ],
         "additionalProperties": false
@@ -24840,6 +24859,12 @@
             "minimum": 1,
             "maximum": 99
           },
+          "lastFillAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
           "volumeCoin": {
             "$ref": "#/components/schemas/CoinAmount"
           },
@@ -24915,6 +24940,7 @@
           "judgementDelayed",
           "disputeUnderReview",
           "lastPrice",
+          "lastFillAt",
           "volumeCoin",
           "tradeCount",
           "traderCount",
@@ -25028,6 +25054,12 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 99
+          },
+          "lastFillAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
           },
           "volumeCoin": {
             "$ref": "#/components/schemas/CoinAmount"
@@ -25189,6 +25221,12 @@
               }
             ]
           },
+          "lastPrice24hAgo": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 99
+          },
           "createdBy": {
             "type": "string"
           },
@@ -25196,9 +25234,6 @@
             "type": "string",
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          },
-          "netCollectedCoin": {
-            "$ref": "#/components/schemas/CoinAmount"
           },
           "openInterest": {
             "type": "object",
@@ -25282,6 +25317,7 @@
           "judgementDelayed",
           "disputeUnderReview",
           "lastPrice",
+          "lastFillAt",
           "volumeCoin",
           "tradeCount",
           "traderCount",
@@ -25312,9 +25348,9 @@
           "ruleVersion",
           "ruleVersions",
           "judgementDelay",
+          "lastPrice24hAgo",
           "createdBy",
           "updatedAt",
-          "netCollectedCoin",
           "openInterest",
           "settlementSteps",
           "events",
@@ -29724,6 +29760,12 @@
             "minimum": 1,
             "maximum": 99
           },
+          "lastFillAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
           "volumeCoin": {
             "$ref": "#/components/schemas/CoinAmount"
           },
@@ -29799,6 +29841,7 @@
           "judgementDelayed",
           "disputeUnderReview",
           "lastPrice",
+          "lastFillAt",
           "volumeCoin",
           "tradeCount",
           "traderCount",

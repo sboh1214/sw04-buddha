@@ -26,9 +26,10 @@ import { formatContracts, formatPricePerContract } from '@/lib/market-admin';
  * with the admin detail's own fills list (`marketFillsKey`), which is why it goes through
  * `usePublicMarketFills` rather than declaring a second query for the same rows.
  *
- * Every row states its side and its outcome in words beside the colour (PLAN 11.2), and both
- * numbers come from the shared formatters: a contract count is never a bare integer and a price
- * is Coin per contract, not basis points.
+ * Every row states its contract in words beside the colour (PLAN 11.2), and both numbers come
+ * from the shared formatters: a contract count is never a bare integer and a price is Coin per
+ * contract. A public row carries no direction (#121, ADR-0116: no taker side, no account, no
+ * order id — a pair mint is one row), so it reads the contract's 체결가, not an order's 평균가.
  */
 
 export interface RecentFillsProps {
@@ -63,9 +64,10 @@ export function RecentFills({
       </Card.Header>
       <Card.Body>
         {/* A refetch that FAILED keeps the rows it last answered, and on this list that silence
-            costs a row: `market:trade` carries no `amountCoin`, so it is deliberately never merged
-            into the cache and the refetch is the only path a new fill arrives by. The rows stay
-            — the same reading `market-list.tsx` takes — with the same notice and a way back. */}
+            costs a row: `market:trade` now carries the public row (#121), but merging it into the
+            cache is the recent-fill area's (#122), so the refetch is still the only path a new
+            fill arrives by. The rows stay — the same reading `market-list.tsx` takes — with the
+            same notice and a way back. */}
         {view === 'stale' && (
           <Alert.Root status="warning" role="status" data-testid="market-fills-stale" mb="3">
             <Alert.Indicator />
@@ -109,10 +111,9 @@ export function RecentFills({
                 <Badge colorPalette={fill.outcome === 'YES' ? 'yes' : 'no'} variant="subtle">
                   {fill.outcome === 'YES' ? copy.yes : copy.no}
                 </Badge>
-                <Text>{fill.side === 'buy' ? copy.buy : copy.sell}</Text>
                 <Text>{formatContracts(fill.qty)}</Text>
                 <Text color="fg.muted">
-                  {copy.fillAvgPrice} {formatPricePerContract(fill.priceAvgBp)}
+                  {copy.fillPrice} {formatPricePerContract(fill.priceCoin * 100)}
                 </Text>
               </HStack>
             ))}

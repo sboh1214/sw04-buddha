@@ -47,7 +47,8 @@ export const REDIS_COMMAND_TIMEOUT_MS = 2_000;
  *
  * `autoResendUnfulfilledCommands: false` is part of the same decision, not a separate knob.
  * The default re-sends the queue on reconnect, which would republish events that already
- * timed out (`market:trade` has no ordering key a client could use to drop a duplicate).
+ * timed out (`market:book` carries no key at all, and a client listing `market:trade` rows
+ * would have to drop each repeat by its `fillId`, #121).
  * With it false, ioredis DROPS those entries rather than rejecting them — despite what the
  * option's own docstring says, `socketTimeout` settles nothing — so `commandTimeout` must
  * stay set on every client this factory builds, or a caller could wait forever.

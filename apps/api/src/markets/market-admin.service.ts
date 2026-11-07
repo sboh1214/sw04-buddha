@@ -1,13 +1,16 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import {
+  DAY_AGO,
   MarketTransitionError,
+  marketPriceAt,
   openScheduledMarket,
   readJudgementDelays,
   ruleContentOf,
   schema,
   transitionMarket,
   type Db,
+  type MarketRowWrite,
   type MarketTransition,
   type OpenSource,
 } from '@buddha/db';
@@ -839,7 +842,8 @@ export class MarketAdminService {
       // another PATCH, or a category write) may have committed meanwhile, and this edit's rows
       // must sort after it (clock.ts).
       const now = await clockTimestamp(tx);
-      const set: Partial<typeof schema.markets.$inferInsert> = { updatedAt: now };
+      // Never a statistic (`MarketRowWrite`, #121): an edit does not move them.
+      const set: MarketRowWrite = { updatedAt: now };
       if (body.imageUrl !== undefined) set.imageUrl = body.imageUrl ?? null;
       if (body.slug !== undefined) set.slug = body.slug;
       if (categoryChange) {
@@ -1619,14 +1623,6 @@ export class MarketAdminService {
       activeChildCount: category.activeChildCount,
     });
 
-    // Σ buy amounts − Σ sell amounts over the market's fills.
-    const [collected] = await executor
-      .select({
-        net: sql<string>`coalesce(sum(case when ${schema.fills.side} = 'buy' then ${schema.fills.amountCoin} else -${schema.fills.amountCoin} end), 0)`,
-      })
-      .from(schema.fills)
-      .where(eq(schema.fills.marketId, row.id));
-
     const interest = await executor
       .select({
         outcome: schema.positions.outcome,
@@ -1664,6 +1660,8 @@ export class MarketAdminService {
     const priceProtectionTicks = await this.priceProtection(executor, row);
     const ruleVersions = await readAdminRuleVersions(executor, row.id);
     const judgementDelays = await readJudgementDelays(executor, row.id);
+    // The public detail's baseline, read the same way (#121): the panel shows what visitors see.
+    const lastPrice24hAgo = await marketPriceAt(executor, row.id, DAY_AGO);
     return {
       ...toMarket(
         row,
@@ -1672,13 +1670,12 @@ export class MarketAdminService {
         sources,
         [],
         judgementDelays,
+        lastPrice24hAgo,
       ),
       // The admin's form of the history, in the public list's place (`AdminMarket.ruleVersions`).
       ruleVersions,
       createdBy: row.createdBy,
       updatedAt: row.updatedAt.toISOString(),
-      // sum() over bigint is numeric, which pg hands over as a string of digits.
-      netCollectedCoin: serializeCoinAmount(BigInt(collected?.net ?? '0')),
       openInterest,
       settlementSteps: toSettlementSteps(stepRows),
       events: events.map(toMarketEvent),

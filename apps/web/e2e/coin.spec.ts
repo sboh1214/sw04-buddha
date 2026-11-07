@@ -18,12 +18,12 @@ import { createOpenMarket, expect, freshEmail, signUp, startCoinText, test } fro
  *
  * The 거래량 is the detail header's. #13 named the card's, but the card shows none since ADR-0062
  * (ADR-0061 decision 1, item 4: volume on the detail only), so the measurement moved to the one
- * screen a visitor still reads it on. It cannot be raised the way the balance is: a new market
- * has no fill, a fill would not move it either (the market figures are #121; #119 records fills
- * only), and the detail renders on the server,
- * so `page.route` cannot rewrite the figure either. It is measured as it renders ('0 Coin') and
- * then with a nine-digit figure written into the same element, which keeps the header's own
- * styles.
+ * screen a visitor still reads it on. A new market has no fill, so it renders '0 Coin'. Fills do
+ * raise it (#121, ADR-0116: each filling intake adds its amount to `markets.volume_coin`, which
+ * orders.spec.ts '시장 통계 (#121)' shows), but a nine-digit volume through real fills is not a
+ * practical fixture, and the detail renders on the server, so `page.route` cannot rewrite the
+ * figure either. It is measured as it renders ('0 Coin') and then with a nine-digit figure
+ * written into the same element, which keeps the header's own styles.
  */
 
 /**

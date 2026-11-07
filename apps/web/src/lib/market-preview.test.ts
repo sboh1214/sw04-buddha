@@ -26,6 +26,7 @@ const traded: MarketSummary = {
   judgementDelayed: false,
   disputeUnderReview: false,
   lastPrice: 70,
+  lastFillAt: '2026-09-07T00:00:00.000Z',
   volumeCoin: '1250000',
   tradeCount: 42,
   traderCount: 11,

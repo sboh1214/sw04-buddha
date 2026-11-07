@@ -533,11 +533,11 @@ async function assertTrading(tx: Tx, marketId: string): Promise<void> {
  * × payout — gets back its excess limit (N01 §4: a YES buy at 65 against a NO buy waiting at 40
  * pays 60, and 5 goes back to its available), and holds qty more of its outcome, the cost being
  * what it paid (`applyBuy`). No treasury or operating account is touched unless the 운영
- * 마켓메이커 is a buyer, from its own 마켓메이커 자금. No fill row, tick or market statistic: #119
- * writes the one fill at the YES price. `refused` for the same owner on both legs (self-trade, and
- * no same-owner mint, #177 5·6항), an unknown owner, prices off the grid, a limit below its price
- * or a market not OPEN (마감 뒤 막음, #120); `insufficient_coin` when a lock does not hold what this
- * fill takes from it.
+ * 마켓메이커 is a buyer, from its own 마켓메이커 자금. No fill row or market statistic: #119
+ * writes the one fill at the YES price, and the intake the statistics (#121, market-stats.ts).
+ * `refused` for the same owner on both legs (self-trade, and no same-owner mint, #177 5·6항), an
+ * unknown owner, prices off the grid, a limit below its price or a market not OPEN (마감 뒤 막음,
+ * #120); `insufficient_coin` when a lock does not hold what this fill takes from it.
  */
 export async function applyPairMintFill(
   tx: Tx,
@@ -782,7 +782,7 @@ export interface PairBurnInput {
  * 자금 (PAIR_BURN_RETURN, ref `market`). No owner parameter: only the 운영 마켓메이커 burns, and the
  * return never reaches a person's account (#73 3항). Only while the market trades (OPEN or PAUSED,
  * before its close by the clock), decided under `lockMarket`, which the close also takes, so no
- * burn commits after a close did. Not a fill: no fill row, tick or market statistic (N01 §6). The
+ * burn commits after a close did. Not a fill: no fill row or market statistic (N01 §6, #121). The
  * same burn id again answers `duplicate` whatever the market is now (`key_conflict` with another
  * qty). #129 calls it; nothing in #118 does. `refused` (thrown) for a bad qty or burn id, or a
  * market that does not exist.

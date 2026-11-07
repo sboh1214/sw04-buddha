@@ -2,11 +2,11 @@ import { type MarketEventType, type MarketStatus, canTransitionMarket } from '@b
 import { and, eq } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type * as schema from './schema/index.js';
+import type { MarketRowWrite } from './market-stats.js';
 import { marketEvents, markets } from './schema/index.js';
 
-type MarketRowSet = Partial<
-  Omit<typeof markets.$inferInsert, 'id' | 'status' | 'statusEventId' | 'updatedAt'>
->;
+/** Never a statistic (`MarketRowWrite`, #121): a transition does not move them. */
+type MarketRowSet = Omit<MarketRowWrite, 'id' | 'status' | 'statusEventId' | 'updatedAt'>;
 
 /** A transaction handle of either app: never the pooled `Db`, which would split the two writes. */
 type Executor = Pick<NodePgDatabase<typeof schema>, 'insert' | 'update'>;
