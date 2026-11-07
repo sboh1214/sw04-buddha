@@ -1335,7 +1335,8 @@ export class MarketAdminService {
    * event (no status change) and `market_price_protection_change`, each `{before, after, reason}`.
    * Applies to the orders taken after it — the intake reads the width under the same market lock —
    * never to resting ones, which keep the limit they were taken at. Nothing is published: no member
-   * sees the width.
+   * sees the width, and the book is unchanged — a quote taken before it (#179) differs from the
+   * fill, as ADR-0114 결정 3 lists.
    */
   async changePriceProtection(
     adminId: string,

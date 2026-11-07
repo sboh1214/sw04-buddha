@@ -118,6 +118,7 @@ export {
 export { isPhoneVerified } from './phone-verification.js';
 export {
   cancelLockedOrders,
+  cancelledMarketIds,
   cancelOrder,
   lockAccountOrders,
   lockMarketOrders,
@@ -130,10 +131,13 @@ export {
   type LockedOrders,
   type OrderCancelProcessReason,
 } from './order-cancel.js';
+export { readHoldings, readMarketTradingFacts, readPublicBook } from './order-book.js';
 export {
   findOrderByRequest,
   orderLockFactsOf,
+  ownerOf,
   placeOrder,
+  placeOrderChangedBook,
   readLiveBook,
   type FillRow,
   type LiveBookOrder,

@@ -8170,6 +8170,93 @@
         ]
       }
     },
+    "/api/v1/me/markets/{id}/sellable": {
+      "get": {
+        "operationId": "getMySellable",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Sellable"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "The account's holding of a market, YES then NO, with what it may sell now: the contracts held, the part in its resting sells (shown apart, never quoted) and the rest quoted as an immediate sell with price protection (null when nothing is free or the market has no width; fewer filled than free means only part can sell now). Zeros when nothing is held; a market not open answers a rejected quote with its reason",
+        "tags": [
+          "trades"
+        ]
+      }
+    },
     "/api/v1/markets/{id}/orders": {
       "post": {
         "operationId": "placeOrder",
@@ -8808,6 +8895,170 @@
           }
         ],
         "summary": "The account's fills, newest first, each as its own order took it: the order, outcome, side, quantity, price per contract and Coin, the recorded YES price and the fee (0). The counterparty is never named; marketId narrows to one market",
+        "tags": [
+          "orders"
+        ]
+      }
+    },
+    "/api/v1/markets/{id}/book": {
+      "get": {
+        "operationId": "getOrderBook",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/OrderBook"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The public order book, YES then NO: every price level of each side with its summed quantity — asks (what a buyer meets: the direct sells and the other outcome’s buys at 100 − their price, merged per price, cheapest first) and bids (the direct buys only, highest first) — and the best of each, null when the side is empty. No order, account or order count. A market not open shows empty sides with marketRejectReason (not_open_yet, paused, closed)",
+        "tags": [
+          "orders"
+        ]
+      }
+    },
+    "/api/v1/markets/{id}/quote": {
+      "post": {
+        "operationId": "quoteOrder",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteOrderBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/OrderQuote"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ORDER_INTAKE_CLOSED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Quote an order on the book as it stands, as the order intake would match it, writing nothing: the limit it would match with (an immediate order’s narrowed to the best opposite quote ± the market’s price-protection width; with none sent, 99 for a buy and 1 for a sell — send it as the order’s limit), the contracts filling at once and their Coin, what is left, a buy’s whole lock, the fee (0), why the walk stopped and the state the order would end in. A market not open answers a rejected quote with its reason. Public: no session, and open while order intake is closed",
         "tags": [
           "orders"
         ]
@@ -28231,6 +28482,182 @@
         ],
         "additionalProperties": false
       },
+      "Sellable": {
+        "type": "object",
+        "properties": {
+          "marketId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "contracts": {
+            "minItems": 2,
+            "maxItems": 2,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SellableContract"
+            }
+          }
+        },
+        "required": [
+          "marketId",
+          "contracts"
+        ],
+        "additionalProperties": false
+      },
+      "SellableContract": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "YES",
+              "NO"
+            ]
+          },
+          "qty": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "restingSellQty": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "unlockedQty": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "quote": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OrderQuote"
+              }
+            ]
+          }
+        },
+        "required": [
+          "outcome",
+          "qty",
+          "restingSellQty",
+          "unlockedQty",
+          "quote"
+        ],
+        "additionalProperties": false
+      },
+      "OrderQuote": {
+        "type": "object",
+        "properties": {
+          "protectedLimitPriceCoin": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 99
+          },
+          "filledQty": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "filledAmountCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
+          "remainingQty": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "unspentCoin": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CoinAmount"
+              }
+            ]
+          },
+          "maxSpendCoin": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CoinAmount"
+              }
+            ]
+          },
+          "feeCoin": {
+            "type": "string",
+            "enum": [
+              "0"
+            ]
+          },
+          "stop": {
+            "nullable": true,
+            "type": "string",
+            "enum": [
+              "filled",
+              "budget_spent",
+              "no_quote",
+              "price_limit",
+              "self_trade"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "partially_filled",
+              "filled",
+              "cancelled",
+              "expired",
+              "rejected"
+            ]
+          },
+          "rejectReason": {
+            "nullable": true,
+            "type": "string",
+            "enum": [
+              "insufficient_coin",
+              "insufficient_contracts",
+              "not_open_yet",
+              "closed",
+              "paused",
+              "no_quote",
+              "price_limit",
+              "budget_too_small",
+              "self_trade"
+            ]
+          },
+          "cancelReason": {
+            "nullable": true,
+            "type": "string",
+            "enum": [
+              "by_owner",
+              "ioc_remainder",
+              "self_trade",
+              "paused",
+              "admin_role",
+              "restricted",
+              "account_closed"
+            ]
+          }
+        },
+        "required": [
+          "protectedLimitPriceCoin",
+          "filledQty",
+          "filledAmountCoin",
+          "remainingQty",
+          "unspentCoin",
+          "maxSpendCoin",
+          "feeCoin",
+          "stop",
+          "status",
+          "rejectReason",
+          "cancelReason"
+        ],
+        "additionalProperties": false
+      },
       "PlaceOrderBody": {
         "type": "object",
         "properties": {
@@ -28547,6 +28974,155 @@
           "yesPriceCoin",
           "feeCoin",
           "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "OrderBook": {
+        "type": "object",
+        "properties": {
+          "marketId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "marketRejectReason": {
+            "nullable": true,
+            "type": "string",
+            "enum": [
+              "not_open_yet",
+              "paused",
+              "closed"
+            ]
+          },
+          "contracts": {
+            "minItems": 2,
+            "maxItems": 2,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrderBookContract"
+            }
+          }
+        },
+        "required": [
+          "marketId",
+          "marketRejectReason",
+          "contracts"
+        ],
+        "additionalProperties": false
+      },
+      "OrderBookContract": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "YES",
+              "NO"
+            ]
+          },
+          "asks": {
+            "maxItems": 99,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrderBookLevel"
+            }
+          },
+          "bids": {
+            "maxItems": 99,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrderBookLevel"
+            }
+          },
+          "bestAskCoin": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 99
+          },
+          "bestBidCoin": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 99
+          }
+        },
+        "required": [
+          "outcome",
+          "asks",
+          "bids",
+          "bestAskCoin",
+          "bestBidCoin"
+        ],
+        "additionalProperties": false
+      },
+      "OrderBookLevel": {
+        "type": "object",
+        "properties": {
+          "priceCoin": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 99
+          },
+          "qty": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "priceCoin",
+          "qty"
+        ],
+        "additionalProperties": false
+      },
+      "QuoteOrderBody": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "YES",
+              "NO"
+            ]
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "buy",
+              "sell"
+            ]
+          },
+          "timeInForce": {
+            "type": "string",
+            "enum": [
+              "ioc",
+              "gtc"
+            ]
+          },
+          "limitPriceCoin": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 99
+          },
+          "qty": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000
+          },
+          "budgetCoin": {
+            "maxLength": 17,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CoinAmount"
+              }
+            ]
+          }
+        },
+        "required": [
+          "outcome",
+          "side",
+          "timeInForce"
         ],
         "additionalProperties": false
       },

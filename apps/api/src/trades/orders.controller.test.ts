@@ -8,7 +8,8 @@
  * And the owner's cancel (#178, ADR-0113: `POST /me/orders/:id/cancel`): the final state as the
  * answer, the lock back, nothing revealed of another account's order, no order limit, intake,
  * onboarding, restriction or role check, the ledger-held market's refusal, and its race with a
- * crossing order; the cancel processing itself is packages/db order-cancel.test.ts's.
+ * crossing order; the cancel processing itself is packages/db order-cancel.test.ts's. And the
+ * `market:book` signal (#179, ADR-0114) both publish after COMMIT when the live book changed.
  */
 import { randomUUID } from 'node:crypto';
 import {
@@ -39,6 +40,7 @@ import {
 import {
   ORDER_ACCEPTING_SETTING,
   ORDER_RATE_LIMIT_SETTING,
+  orderBookSchema,
   myFillSchema,
   orderSchema,
   placeOrderResultSchema,
@@ -508,7 +510,8 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
   it('matches a resting order and answers both owners’ orders, fills and positions, the counterparty anonymous', async () => {
     await open();
     const publish = vi.spyOn(t.app.get(MarketPublisher), 'publishUser');
-    // A bids NO at 40 for 2: it rests, its Coin locked, and nothing is published (a lock alone).
+    // A bids NO at 40 for 2: it rests, its Coin locked, and no `user:` event is published (a lock
+    // alone; its `market:book` is the next test's).
     const resting = placed(await send(a, { outcome: 'NO', qty: 2 }));
     expect(resting.order).toMatchObject({
       outcome: 'NO',
@@ -683,6 +686,110 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
     expect(await balanceOf(t.db, b.id)).toMatchObject({
       availableCoin: START_COIN - 120n + 70n,
     });
+  });
+
+  it('publishes market:book after COMMIT for an order that rested or filled, and none for one that changed no live order (#179)', async () => {
+    const publisher = t.app.get(MarketPublisher);
+    // Each signal with the public book read the moment it is sent: the change is committed.
+    const signals: { marketId: string; ts: string; book: unknown }[] = [];
+    vi.spyOn(publisher, 'publishMarket').mockImplementation(async (marketId, event) => {
+      expect(event.type).toBe('market:book');
+      const book = orderBookSchema.parse(dataOf(await read(`/markets/${marketId}/book`, null)));
+      signals.push({ marketId, ts: event.ts, book: book.contracts[0] });
+    });
+    const expectSignals = (count: number) => {
+      expect(signals).toHaveLength(count);
+      signals.length = 0;
+    };
+    // Intake closed: nothing written, nothing published.
+    errorOf(await send(a), 409, 'ORDER_INTAKE_CLOSED');
+    expectSignals(0);
+    await open();
+
+    // A rests a GTC NO buy at 40 for 2: the YES side shows 60 × 2, at the order's own instant.
+    const requestId = randomUUID();
+    const bid = placed(await send(a, { outcome: 'NO', qty: 2 }, { requestId })).order;
+    expect(signals).toEqual([
+      {
+        marketId: market.id,
+        ts: bid.createdAt,
+        book: {
+          outcome: 'YES',
+          asks: [{ priceCoin: 60, qty: 2 }],
+          bids: [],
+          bestAskCoin: 60,
+          bestBidCoin: null,
+        },
+      },
+    ]);
+    signals.length = 0;
+    // Its replay changes nothing.
+    expect(placed(await send(a, { outcome: 'NO', qty: 2 }, { requestId })).replayed).toBe(true);
+    expectSignals(0);
+    // An IOC YES buy that fills one: the level shrinks, read after the commit.
+    placed(await send(b, { timeInForce: 'ioc', limitPriceCoin: 99 }));
+    expect(signals).toMatchObject([{ book: { asks: [{ priceCoin: 60, qty: 1 }] } }]);
+    signals.length = 0;
+    // A GTC YES buy for 3 at 70 that fills the last one and rests 2 at 70: one signal.
+    const rested = placed(await send(b, { limitPriceCoin: 70, qty: 3 })).order;
+    expect(rested).toMatchObject({ status: 'partially_filled', filledQty: 1 });
+    expect(signals).toMatchObject([{ book: { asks: [], bids: [{ priceCoin: 70, qty: 2 }] } }]);
+    signals.length = 0;
+    // An immediate order that fills nothing writes a rejected row and changes no book: no signal.
+    // B's YES bid at 70 is NO supply at 30, beyond an IOC NO buy limited to 29.
+    expect(
+      placed(await send(a, { outcome: 'NO', timeInForce: 'ioc', limitPriceCoin: 29 })).order,
+    ).toMatchObject({ status: 'rejected', rejectReason: 'price_limit', filledQty: 0 });
+    expectSignals(0);
+    // A rejected order (a scheduled market) writes a row and changes no book: no signal.
+    const scheduled = await createMarket(t.db, { status: 'scheduled' });
+    expect(placed(await send(a, {}, { marketId: scheduled.id })).order.status).toBe('rejected');
+    expectSignals(0);
+
+    // The owner's cancel: one signal at the cancel's instant; asked again (ended), none.
+    const cancel = (id: string) =>
+      t.app.inject({
+        method: 'POST',
+        url: `/api/v1/me/orders/${id}/cancel`,
+        headers: { origin: ORIGIN, 'content-type': 'application/json', cookie: b.cookie },
+        payload: JSON.stringify({ expectedAccountId: b.id }),
+      });
+    const ended = dataOf<Order>(await cancel(rested.id));
+    expect(signals).toEqual([
+      {
+        marketId: market.id,
+        ts: ended.endedAt,
+        book: {
+          outcome: 'YES',
+          asks: [],
+          bids: [],
+          bestAskCoin: null,
+          bestBidCoin: null,
+        },
+      },
+    ]);
+    signals.length = 0;
+    dataOf<Order>(await cancel(rested.id));
+    expectSignals(0);
+    // A live order held for a ledger failure: refused, nothing changed, nothing published.
+    const held = placed(await send(b, { limitPriceCoin: 30 })).order;
+    signals.length = 0;
+    await createMarketPause(t.db, { marketId: market.id, reason: 'ledger_failure' });
+    errorOf(await cancel(held.id), 409, 'MARKET_NOT_OPEN');
+    expectSignals(0);
+  });
+
+  it('publishes nothing when the transaction rolls back after the intake (#179)', async () => {
+    await open();
+    const publish = vi.spyOn(t.app.get(MarketPublisher), 'publishMarket');
+    // The order's own answer fails after `placeOrder` wrote it: the whole transaction rolls back.
+    vi.spyOn(
+      OrderService.prototype as unknown as { marketRef: () => Promise<never> },
+      'marketRef',
+    ).mockRejectedValueOnce(new Error('after the intake'));
+    expect((await send(a)).statusCode).toBe(500);
+    expect(await orderRows()).toBe(0);
+    expect(publish).not.toHaveBeenCalled();
   });
 
   async function positionsOf(who: TestUser) {

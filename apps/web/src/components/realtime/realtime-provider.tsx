@@ -8,6 +8,7 @@ import {
   type RealtimeEventType,
   type SubscribeBody,
   errorEnvelopeSchema,
+  marketBookEventSchema,
   marketStatusEventSchema,
   marketTickEventSchema,
   marketTradeEventSchema,
@@ -34,12 +35,14 @@ import { type Market, type Position } from '@/lib/api';
 import { useSession } from '@/lib/use-session';
 import {
   MARKETS_KEY,
+  MARKET_BOOK_KEY,
   MARKET_FILLS_KEY,
   MARKET_KEY,
   ORDERS_KEY,
   POSITIONS_KEY,
   TICKS_KEY,
   WATCHLIST_PAGES_KEY,
+  marketBookKey,
   marketFillsKey,
   marketKey,
 } from '@/lib/market-keys';
@@ -73,8 +76,12 @@ import { type CachedSeries, appendTick } from '@/lib/ticks';
  * so whichever arrives second is a no-op instead of a rollback. Nothing here restates a reducer.
  *
  * `market:tick` and `market:trade` have no publisher until the market figures (#121): the CLOB
- * fills since #119 but publishes only `user:` events (ADR-0112); their handlers stay so a fill
- * arrives already wired.
+ * fills since #119 and publishes `user:` events (ADR-0112) and `market:book` (#179, ADR-0114),
+ * not those two; their handlers stay so a fill arrives already wired.
+ *
+ * `market:book` (#179, ADR-0114) is a signal with no state: the public book changed, so its
+ * `['market-book', id]` is asked again (`refreshBook`). Nothing reads that key until the 호가창
+ * (#122), so the handler costs nothing before then.
  */
 
 /**
@@ -99,6 +106,13 @@ const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000').rep
 const FILLS_INVALIDATE_MS = 1_000;
 
 /**
+ * At most one book refetch per market per second, leading and trailing like the fills: every
+ * order that rests, fills or is cancelled publishes `market:book`, and a bot market (#129) moves
+ * its book many times a second.
+ */
+const BOOK_INVALIDATE_MS = 1_000;
+
+/**
  * At most one first-fetch restart per market per second (`tickRestartsMarket`).
  *
  * LEADING EDGE ONLY, unlike `refreshFills` below — do NOT copy its trailing timer in here. A
@@ -110,7 +124,13 @@ const FILLS_INVALIDATE_MS = 1_000;
 const MARKET_RESTART_MS = 1_000;
 
 /** The public caches a reconnect re-reads; any of them may have moved during the gap. */
-const SNAPSHOT_KEYS = [MARKET_KEY, MARKETS_KEY, TICKS_KEY, MARKET_FILLS_KEY] as const;
+const SNAPSHOT_KEYS = [
+  MARKET_KEY,
+  MARKETS_KEY,
+  TICKS_KEY,
+  MARKET_FILLS_KEY,
+  MARKET_BOOK_KEY,
+] as const;
 /**
  * The same for a signed-in tab. Never SSR'd, so they exist only once the client has fetched.
  *
@@ -316,6 +336,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
      * of a timer: `lib.dom` and `@types/node` are both in scope and disagree about it.
      */
     const fillsPending = new Map<string, () => void>();
+    // The book's pair of the two above (`refreshBook`), per connection for the same reasons.
+    const book = new Throttle(BOOK_INVALIDATE_MS);
+    const bookPending = new Map<string, () => void>();
 
     /**
      * PLAN 8's "클라이언트 재연결 시 스냅샷 재요청", once per gap rather than once per event.
@@ -396,6 +419,33 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         fills.retryDelay(marketId, now),
       );
       fillsPending.set(marketId, () => {
+        clearTimeout(timer);
+      });
+    };
+
+    /**
+     * One book refetch per market per window, leading and trailing — `refreshFills`' shape, for
+     * its reasons: `['market-book', id]` has no other writer (the signal carries no level), so a
+     * refused restart that is dropped leaves the 호가 behind until an unrelated trigger, and
+     * `restartQueries` because a first fetch in flight left before the change. Kept apart from
+     * `refreshFills` rather than folded into one helper: two short copies read plainer than a
+     * shared one parameterised over its key, throttle and timers.
+     */
+    const refreshBook = (marketId: string) => {
+      const now = Date.now();
+      if (book.take(marketId, now)) {
+        void restartQueries(queryClient, marketBookKey(marketId));
+        return;
+      }
+      if (bookPending.has(marketId)) return;
+      const timer = setTimeout(
+        () => {
+          bookPending.delete(marketId);
+          refreshBook(marketId);
+        },
+        book.retryDelay(marketId, now),
+      );
+      bookPending.set(marketId, () => {
         clearTimeout(timer);
       });
     };
@@ -605,6 +655,10 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // what these entries need: they are `['ticks', id, range]`, one per range this tab opened.
         void restartQueries(queryClient, marketKey(event.marketId));
         void restartQueries(queryClient, [...TICKS_KEY, event.marketId]);
+        // The first kind again: a transition empties a book (a non-OPEN market shows no 호가,
+        // #179, ADR-0114) or fills it back, and a `market:status` is published without a
+        // `market:book` when no order was cancelled — so a status also means "read the book".
+        refreshBook(event.marketId);
         // The first kind of the RULE again: a theme page's results list (#81, ADR-0088) cannot
         // build the row of a market whose result has just been confirmed — the event carries no
         // title, slug or decided time — while its card beside it already says so. Restarted only
@@ -625,6 +679,14 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // `Fill` does, and `['market-fills', id]` is SHARED with the admin detail, which
         // renders formatCoin(parseCoinAmount(fill.amountCoin)) and would throw on a null.
         refreshFills(parsed.data.marketId);
+      },
+
+      'market:book': (raw: unknown) => {
+        const parsed = marketBookEventSchema.safeParse(raw);
+        if (!parsed.success) return;
+        // The first kind of the RULE: the signal carries no level, so the book is asked again.
+        // No ordering key is needed — the newest read wins (`restartQueries`).
+        refreshBook(parsed.data.marketId);
       },
 
       'user:balance': (raw: unknown) => {
@@ -724,6 +786,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       // teardown would invalidate on behalf of a connection this tab no longer has.
       for (const cancel of fillsPending.values()) cancel();
       fillsPending.clear();
+      for (const cancel of bookPending.values()) cancel();
+      bookPending.clear();
     };
   }, [identity, queryClient]);
 

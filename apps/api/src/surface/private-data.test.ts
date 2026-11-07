@@ -107,6 +107,7 @@ import {
   createThemeNotice,
   createUser,
   createWatch,
+  openOrderIntake,
   resolveMarketNow,
   resumeMarket,
   setReleaseSetting,
@@ -177,7 +178,8 @@ interface Fixture {
    * supplemented once at A's request (#80), so its detail carries a rule version history; two
    * later supplements A asked for were never approved — one rejected, one waiting. Paused twice by
    * A and resumed each time at A's request (#114), so it is open again with a pause history only
-   * operators read.
+   * operators read. The 운영 마켓메이커 rests a NO bid in it (#179's watch value, ADR-0107 결정 5
+   * '#179·#119'): its public book shows the level, never the account or the order.
    */
   market: MarketRow;
   /** The open market linked to `market` (#65): the one item of `market`'s 관련 시장. */
@@ -467,6 +469,9 @@ const publicParamsOf = (key: string) => ({ ...PUBLIC_PARAMS, ...PUBLIC_ROUTE_PAR
 /** Bodies of the public routes that take one: A's own address, the request most about A. */
 const PUBLIC_BODIES: Readonly<Record<string, (fixture: Fixture) => unknown>> = {
   'POST /auth/register': (fixture) => ({ email: fixture.a.email }),
+  // An immediate buy of 3 YES on A's market (#179): it meets the other member's resting sell at
+  // 62 (numbers no sentinel holds), the same for whoever asks.
+  'POST /markets/:id/quote': () => ({ outcome: 'YES', side: 'buy', timeInForce: 'ioc', qty: 3 }),
 };
 
 /**
@@ -677,6 +682,13 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
     query: { status: () => 'open' },
     status: 200,
     own: ['position qty', 'cost basis', 'realized pnl'],
+  },
+  // B's sellable figure on A's market (#179): B's own holding, none — never A's, whose answer
+  // holds A's quantity (the path names a market, never an account).
+  'GET /me/markets/:id/sellable': {
+    params: { id: (fixture) => fixture.market.id },
+    status: 200,
+    own: ['position qty'],
   },
   // B's orders, paged from A's and filtered to A's market: B ordered nothing, so nothing of A's
   // may come back (#119, N04 §7). The ended ones: A's are its filled order.
@@ -1478,6 +1490,18 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     const filled = record.incoming;
     const filledKey = filled.idempotencyKey;
     const counterpartyOrder = record.resting;
+    // A resting bid of the 운영 마켓메이커 on A's market (ADR-0107 결정 5 '#179·#119': '#113 감시 값에
+    // 봇 주문을 넣는다'): NO at 37 for 9, YES supply at 63 in the public book and the quote. A row
+    // with no lock (`createOrder`), like A's, so nothing here may cancel it.
+    const makerBidKey = `leak-market-maker-${tag}`;
+    const makerBid = await createOrder(t.db, {
+      userId: marketMaker,
+      marketId: market.id,
+      outcome: 'NO',
+      limitPriceCoin: 37,
+      qty: 9,
+      requestId: makerBidKey,
+    });
     const openKey = `leak-open-${tag}`;
     const open = await createOrder(t.db, {
       userId: a.id,
@@ -2202,6 +2226,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('counterparty order id', counterpartyOrder.id),
         text('counterparty order key', counterpartyOrder.idempotencyKey),
         text('market maker account id', marketMaker),
+        text('market maker order id', makerBid.id),
+        text('market maker order key', makerBidKey),
         // An account's type is recorded on a fill and never answered (결정 5 '#179·#119').
         text('market maker account type', 'market_maker'),
         text('payment id', payment!.id),
@@ -2276,6 +2302,27 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
   const leaked = (body: string) => leakedValues(body, f.sentinels);
 
   // ---- public routes ----------------------------------------------------------------------
+
+  it('shows the 운영 마켓메이커’s order in the public book and quote as quantity alone (ADR-0107 결정 5 #179·#119)', async () => {
+    const book = parse(
+      (await call(routeOf('GET /markets/:id/book'), { params: { id: f.market.id } })).body,
+    ) as { data: { contracts: { outcome: string; asks: unknown[]; bids: unknown[] }[] } };
+    const [yes, no] = book.data.contracts;
+    // Its NO bid at 37 for 9: a NO bid level, and YES supply at 63 — counted, never named.
+    expect(no!.bids).toContainEqual({ priceCoin: 37, qty: 9 });
+    expect(yes!.asks).toContainEqual({ priceCoin: 63, qty: 9 });
+    // Past the other member's 1,000 at 62, a quote for 1,005 reaches it.
+    const quote = await call(routeOf('POST /markets/:id/quote'), {
+      params: { id: f.market.id },
+      body: { outcome: 'YES', side: 'buy', timeInForce: 'ioc', qty: 1_005 },
+    });
+    expect(parse(quote.body)).toMatchObject({
+      data: { filledQty: 1_005, filledAmountCoin: String(1_000 * 62 + 5 * 63) },
+    });
+    for (const body of [JSON.stringify(book), quote.body]) {
+      expect([...leaked(body), ...forbiddenFields(body)]).toEqual([]);
+    }
+  });
 
   it('answers every public route without A’s private data, whoever asks', async () => {
     const answers: { route: string; caller: string; status: number; leaks: string[] }[] = [];
@@ -3090,10 +3137,18 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     // admin role of A's), for the approval that publishes its provisional result below.
     const closed = await createMarket(t.db, { createdBy: f.admin.id, status: 'closed' });
     const registration = await createJudgementRequest(t.db, { marketId: closed.id, by: f.a.id });
+    // An open market a member orders in through the intake, for its `market:book` (#179).
+    const booked = await createMarket(t.db, { createdBy: f.admin.id });
     const watchers = { anonymous: await openSocket(), B: await openSocket(f.b.cookie) };
     const received: { watcher: string; event: string; payload: unknown }[] = [];
     for (const [watcher, socket] of Object.entries(watchers)) {
-      for (const marketId of [f.market.id, closed.id, f.disputedMarket.id, f.delayedMarket.id]) {
+      for (const marketId of [
+        f.market.id,
+        closed.id,
+        f.disputedMarket.id,
+        f.delayedMarket.id,
+        booked.id,
+      ]) {
         const refusal = JSON.stringify(await subscribe(socket, marketId));
         // The refusal envelope a socket is sent directly carries nothing of A's either.
         expect({
@@ -3248,18 +3303,56 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       });
       expect(delayLeaks(res.body)).toEqual([]);
     }
+    // And the public book's signal (#179): a member's order rests through the real intake — the
+    // market and the time alone, never the order, its owner or its account type.
+    const trader = await signUpTestUser(t);
+    await completeOnboarding(t.db, { userId: trader.id });
+    await createStartGrant(t.db, { userId: trader.id, amountCoin: 1_000n });
+    await openOrderIntake(t.db, { adminId: f.admin.id });
+    const ordered = await t.app.inject({
+      method: 'POST',
+      url: `/api/v1/markets/${booked.id}/orders`,
+      headers: {
+        origin: ORIGIN,
+        'content-type': 'application/json',
+        'idempotency-key': randomUUID(),
+        cookie: trader.cookie,
+      },
+      payload: {
+        outcome: 'YES',
+        side: 'buy',
+        timeInForce: 'gtc',
+        limitPriceCoin: 41,
+        qty: 2,
+        expectedAccountId: trader.id,
+      },
+    });
+    expect(ordered.statusCode, ordered.body).toBe(200);
+    const restingId = ordered.json<{ data: { order: { id: string } } }>().data.order.id;
     const started = Date.now();
-    while (received.filter((entry) => entry.event === 'market:status').length < 10) {
-      if (Date.now() - started > 5_000) throw new Error('market:status did not reach both');
+    const count = (event: string) => received.filter((entry) => entry.event === event).length;
+    while (count('market:status') < 10 || count('market:book') < 2) {
+      if (Date.now() - started > 5_000) throw new Error('the events did not reach both');
       await sleep(20);
     }
 
     // Delivered in publish order on one subscriber connection, so everything A's events could
     // have caused has arrived by now.
     expect(received.map(({ watcher, event }) => `${watcher} ${event}`).sort()).toEqual([
+      'B market:book',
       ...Array.from({ length: 5 }, () => 'B market:status'),
+      'anonymous market:book',
       ...Array.from({ length: 5 }, () => 'anonymous market:status'),
     ]);
+    for (const { event, payload } of received.filter((entry) => entry.event === 'market:book')) {
+      expect({ event, payload }).toEqual({
+        event,
+        payload: { type: 'market:book', marketId: booked.id, ts: expect.any(String) as string },
+      });
+      for (const value of [restingId, trader.id, 'market_maker', 'human']) {
+        expect(JSON.stringify(payload)).not.toContain(value);
+      }
+    }
     const payloadsOf = (marketId: string) =>
       received
         .map(

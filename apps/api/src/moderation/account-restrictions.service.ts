@@ -1,5 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { cancelLockedOrders, lockAccountOrders, lockAdminRoles, schema, type Db } from '@buddha/db';
+import {
+  cancelLockedOrders,
+  cancelledMarketIds,
+  lockAccountOrders,
+  lockAdminRoles,
+  schema,
+  type Db,
+} from '@buddha/db';
 import {
   ACCOUNT_RESTRICTION_APPROVAL_KINDS,
   ACCOUNT_RESTRICTION_DAYS,
@@ -25,6 +32,7 @@ import {
 import { AppError } from '../common/errors/app-error.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import { ModerationReadsService, accountRestrictionMoot } from './moderation-reads.service.js';
 import {
   ModerationService,
@@ -102,8 +110,10 @@ interface LockedAction {
  * any member. An `apply`'s approval cancels the member's resting orders in every market as
  * 취소 완료(계정 제한), their locks given back (#178, ADR-0113; ADR-0107 결정 4 #119 '계정 제한 중
  * 대기 주문', #57-13), but those in a market held for a ledger failure, which keep their locks until
- * its recovery (the owner's answer 2026-11-06) — the restriction applies all the same. They are not
- * restored when it ends, is brought forward, lifted or cancelled. Nothing else here touches a
+ * its recovery (the owner's answer 2026-11-06) — the restriction applies all the same. After
+ * COMMIT each market an order was cancelled in gets `market:book` (#179, ADR-0114: its public
+ * book changed). They are not restored when it ends, is brought forward, lifted or cancelled.
+ * Nothing else here touches a
  * balance, a holding or a record of trades (N02 §9: «잔액·기록·이의제기 경로는 유지»).
  */
 @Injectable()
@@ -113,6 +123,7 @@ export class AccountRestrictionService {
     private readonly approvals: ApprovalService,
     private readonly moderation: ModerationService,
     private readonly reads: ModerationReadsService,
+    private readonly publisher: MarketPublisher,
   ) {}
 
   // ---- requests ---------------------------------------------------------------------------------
@@ -300,7 +311,8 @@ export class AccountRestrictionService {
    *   ending `days` after the approval (or 무기한), with the pending reports on the subject
    *   resolved (조치함). A member restricted already keeps the one that ends later. Then the
    *   member's resting orders are cancelled 계정 제한 at the approval's instant (the class doc),
-   *   the audit naming them (`cancelledOrderIds`) and those left for a recovery (`heldOrderIds`).
+   *   the audit naming them (`cancelledOrderIds`) and those left for a recovery (`heldOrderIds`);
+   *   after COMMIT `market:book` in each market one was cancelled in (#179).
    * - `shorten`, `lift`: the restriction's end brought forward to the end asked for, or to now —
    *   the change recorded as the asking operator's, with its approval.
    * - `cancel`: the restriction cancelled at once, as the asking operator's, with its approval.
@@ -331,7 +343,7 @@ export class AccountRestrictionService {
     requestId: string,
     reason: string,
   ): Promise<AccountRestrictionDecision> {
-    const actionId = await this.db.transaction(async (tx) => {
+    const { actionId, book } = await this.db.transaction(async (tx) => {
       const { request, change, memberId } = await this.decidable(tx, deciderId, requestId);
       // Every lock first, then the decision and its instant (see above).
       await lockAdminRoles(tx, 'shared');
@@ -354,6 +366,8 @@ export class AccountRestrictionService {
         cancelledOrderIds: [],
         heldOrderIds: [],
       };
+      // The markets whose public book the cancels changed (#179): none for a held market's.
+      let bookMarketIds: string[] = [];
       if (locked.change === 'apply') {
         done = await this.applyApproved(tx, request, memberId, locked.apply, at);
         const ended = await cancelLockedOrders(tx, orders!, { reason: 'restricted', at });
@@ -361,6 +375,7 @@ export class AccountRestrictionService {
           cancelledOrderIds: ended.cancelled.map((order) => order.id),
           heldOrderIds: ended.held.map((order) => order.id),
         };
+        bookMarketIds = cancelledMarketIds(ended);
       } else if (locked.change === 'cancel') {
         done = {
           actionId: await this.cancelApproved(tx, request, locked.action, at),
@@ -392,8 +407,9 @@ export class AccountRestrictionService {
           ...cancelled,
         },
       );
-      return done.actionId;
+      return { actionId: done.actionId, book: { marketIds: bookMarketIds, at } };
     });
+    await this.publisher.publishBook(book.marketIds, book.at);
     return {
       request: await this.reads.request(this.db, requestId, deciderId),
       action: await this.answer(actionId, deciderId),

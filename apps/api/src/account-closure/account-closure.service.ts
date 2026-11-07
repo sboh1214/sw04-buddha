@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   cancelLockedOrders,
+  cancelledMarketIds,
   cancelStartGrant,
   ledgerKeys,
   lockAccountOrders,
@@ -33,6 +34,7 @@ import { DB } from '../infra/db/db.provider.js';
 import { OBJECT_STORAGE } from '../media/object-storage.provider.js';
 import { queueRemoval, removeQueuedObject } from '../media/queued-removal.js';
 import { assertNotRestricted, restrictionInForce } from '../moderation/restrictions.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 type Executor = Db | Tx;
@@ -67,6 +69,8 @@ interface Closed {
    * null when there was none.
    */
   imageKey: string | null;
+  /** The markets a waiting order of the account was cancelled in: `market:book` for each (#179). */
+  bookMarketIds: string[];
 }
 
 /**
@@ -97,7 +101,8 @@ interface Closed {
  *    market's recovery, and a closed account cannot keep locked Coin). Every other waiting order
  *    is cancelled first (N02 §9 «대기 주문을 취소하고 … 계정 폐쇄»; ADR-0107 결정 5 '#178 탈퇴 때 대기
  *    주문'): 취소 완료(탈퇴) at the closure's instant, its lock given back (order-cancel.ts), in
- *    the same transaction — a refusal rolls the cancels back with the rest.
+ *    the same transaction — a refusal rolls the cancels back with the rest. After the commit each
+ *    market one was cancelled in gets `market:book` (#179, ADR-0114: its public book changed).
  * 2. A start grant still waiting for its amount is cancelled (`cancelStartGrant`, owner decision
  *    2026-10-18 on #70: the number did not receive it, so the next account verifying it may), and
  *    the 본인확인 record — the verified number and real name — is deleted. The code-send records
@@ -144,6 +149,7 @@ export class AccountClosureService {
     @Inject(DB) private readonly db: Db,
     @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
     private readonly approvals: ApprovalService,
+    private readonly publisher: MarketPublisher,
   ) {}
 
   /**
@@ -216,7 +222,10 @@ export class AccountClosureService {
   /** `POST /me/closure`: closes the account (see the class); the confirmation was checked. */
   async close(userId: string): Promise<AccountClosureResult> {
     const closed = await this.db.transaction((tx) => this.closeIn(tx, userId));
-    if (closed.imageKey !== null) await this.removeObject(closed.imageKey);
+    await Promise.all([
+      closed.imageKey === null ? undefined : this.removeObject(closed.imageKey),
+      this.publisher.publishBook(closed.bookMarketIds, closed.closedAt),
+    ]);
     return {
       closedAt: closed.closedAt.toISOString(),
       forfeitedCoin: serializeCoinAmount(closed.forfeitedCoin),
@@ -244,6 +253,7 @@ export class AccountClosureService {
         closedAt: profile.closedAt,
         forfeitedCoin: await this.forfeitedBy(tx, userId),
         imageKey: null,
+        bookMarketIds: [],
       };
     }
     // The role is fixed now (the admin-roles lock shared, the profile FOR UPDATE), so an admin is
@@ -283,11 +293,11 @@ export class AccountClosureService {
     const closedAt = await clockTimestamp(tx);
     // Every waiting order ends 취소 완료(탈퇴) at the closure's instant, its lock given back; none
     // waits in a held market (`orders_awaiting_recovery` refused that above, under the locks).
-    const { held } = await cancelLockedOrders(tx, orders, {
+    const cancelled = await cancelLockedOrders(tx, orders, {
       reason: 'account_closed',
       at: closedAt,
     });
-    if (held.length !== 0) {
+    if (cancelled.held.length !== 0) {
       throw new AppError('INTERNAL', { message: 'An order awaits a recovery past the refusals' });
     }
     // The balance as the releases left it: what is forfeited.
@@ -313,7 +323,7 @@ export class AccountClosureService {
     await tx.delete(schema.marketSearches).where(eq(schema.marketSearches.userId, userId));
     await this.endSignIn(tx, userId);
     await this.closeRequests(tx, userId, closedAt);
-    return { closedAt, forfeitedCoin, imageKey };
+    return { closedAt, forfeitedCoin, imageKey, bookMarketIds: cancelledMarketIds(cancelled) };
   }
 
   /**

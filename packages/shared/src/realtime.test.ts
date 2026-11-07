@@ -9,6 +9,8 @@ import {
   REALTIME_EXCEPTION_EVENT,
   RESYNC_EVENT,
   USER_CHANNEL_PATTERN,
+  marketBookEvent,
+  marketBookEventSchema,
   marketChannel,
   marketRealtimeEventSchema,
   marketStatusEventSchema,
@@ -55,6 +57,7 @@ const status = {
   statusEventId: '12',
   ts,
 };
+const book = { type: 'market:book', marketId, ts };
 const balance = {
   type: 'user:balance',
   availableCoin: '9480',
@@ -79,9 +82,10 @@ describe('realtime events (PLAN 8)', () => {
     expect(marketTickEventSchema.parse(tick)).toEqual(tick);
     expect(marketTradeEventSchema.parse(trade)).toEqual(trade);
     expect(marketStatusEventSchema.parse(status)).toEqual(status);
+    expect(marketBookEventSchema.parse(book)).toEqual(book);
     expect(userBalanceEventSchema.parse(balance)).toEqual(balance);
     expect(userPositionEventSchema.parse(position)).toEqual(position);
-    for (const event of [tick, trade, status, balance, position]) {
+    for (const event of [tick, trade, status, book, balance, position]) {
       const parsed = realtimeEventSchema.parse(event);
       expect(parsed).toEqual(event);
       expect(REALTIME_EVENT_TYPES).toContain(parsed.type);
@@ -179,6 +183,18 @@ describe('ordering keys', () => {
     expect(userPositionEventSchema.safeParse(positionWithoutSettled).success).toBe(false);
   });
 
+  it('leaves the book signal keyless: it carries no state, so the receiver re-reads the book', () => {
+    // #179 (ADR-0114): a late or duplicate signal costs one read and never takes anything back.
+    expect(marketBookEvent(marketId, new Date(ts))).toEqual(book);
+    expect(Object.keys(marketBookEventSchema.shape).sort()).toEqual(['marketId', 'ts', 'type']);
+    // Strip, not pass: a level or an order smuggled into the signal never reaches the room.
+    expect(marketBookEventSchema.parse({ ...book, asks: [{ priceCoin: 60, qty: 1 }] })).toEqual(
+      book,
+    );
+    expect(marketBookEventSchema.safeParse({ ...book, marketId: 'm' }).success).toBe(false);
+    expect(marketBookEventSchema.safeParse({ ...book, ts: undefined }).success).toBe(false);
+  });
+
   it('supersedes compares keys as integers, not as strings', () => {
     expect(supersedes('10', '9')).toBe(true); // '10' < '9' as strings: the reason it exists
     expect(supersedes('9', '10')).toBe(false);
@@ -270,7 +286,7 @@ describe('subscribe payload', () => {
 });
 
 describe('per-family event unions', () => {
-  const marketEvents = [tick, trade, status];
+  const marketEvents = [tick, trade, status, book];
   const userEvents = [balance, position];
 
   it('parses its own family and refuses the other, which is the authorization check', () => {

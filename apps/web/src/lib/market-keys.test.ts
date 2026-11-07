@@ -20,6 +20,7 @@ import {
   MARKETS_KEY,
   MARKET_RELATED_KEY,
   MARKET_SEARCH_KEY,
+  MARKET_BOOK_KEY,
   MARKET_FILLS_KEY,
   MARKET_KEY,
   ORDERS_KEY,
@@ -33,6 +34,7 @@ import {
   type MarketSearch,
   dehydratePublic,
   isPrivateQueryKey,
+  marketBookKey,
   marketFillsKey,
   marketKey,
   marketSearchKey,
@@ -68,6 +70,12 @@ describe('the market key builders', () => {
 
   it('hangs the fills off their own root', () => {
     expect(marketFillsKey(ID)).toEqual([...MARKET_FILLS_KEY, ID]);
+  });
+
+  it('hangs the public book off its own root, on the lower-cased uuid (#179)', () => {
+    // `market:book` names the row's own id, so a key on the id as typed would never restart.
+    expect(marketBookKey(ID.toUpperCase())).toEqual([...MARKET_BOOK_KEY, ID]);
+    expect(partialMatchKey(marketBookKey(ID), MARKET_FILLS_KEY)).toBe(false);
   });
 });
 
@@ -335,11 +343,13 @@ describe('isPrivateQueryKey', () => {
       MARKET_KEY,
       TICKS_KEY,
       MARKET_FILLS_KEY,
+      MARKET_BOOK_KEY,
       CATEGORIES_QUERY_KEY,
       marketsKey(DEFAULT_MARKET_FILTERS),
       marketKey(ID),
       ticksKey(ID, '1D'),
       marketFillsKey(ID),
+      marketBookKey(ID),
       relatedMarketsKey(ID),
       // A profile's lists (#51): public, the same for every reader (read in the browser only).
       AUTHORED_KEY,

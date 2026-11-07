@@ -15,7 +15,7 @@ import {
 } from '../infra/redis/redis.provider.js';
 import { createTestApp, type TestApp } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
-import { sleep } from '../test/wait.js';
+import { sleep, waitForMessages } from '../test/wait.js';
 import { MarketPublisher } from './market-publisher.js';
 
 const MARKET_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
@@ -161,6 +161,36 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
     expect(JSON.parse(received[0]!.message)).toMatchObject({ type: 'market:tick', lastPrice: 52 });
   });
 
+  it('publishes market:book once per market however often it is named, and nothing for none (#179)', async () => {
+    const other = '3f2504e0-4f89-41d3-9a0c-0305e82c3302';
+    const received: { channel: string; message: string }[] = [];
+    const listener = (channel: string, message: string) => received.push({ channel, message });
+    await subscriber.subscribe(marketChannel(other));
+    subscriber.on('message', listener);
+    try {
+      const publisher = t.app.get(MarketPublisher);
+      const at = new Date();
+      await publisher.publishBook([], at);
+      await publisher.publishBook([MARKET_ID, other, MARKET_ID], at);
+      await waitForMessages(received, 2, 'market:book');
+      await sleep(100);
+      expect(
+        received.map(({ channel, message }) => [channel, JSON.parse(message) as unknown]),
+      ).toEqual(
+        [MARKET_ID, other].map((marketId) => [
+          marketChannel(marketId),
+          { type: 'market:book', marketId, ts: at.toISOString() },
+        ]),
+      );
+      for (const { message } of received) {
+        expect(realtimeEventSchema.safeParse(JSON.parse(message)).success).toBe(true);
+      }
+    } finally {
+      subscriber.off('message', listener);
+      await subscriber.unsubscribe(marketChannel(other));
+    }
+  });
+
   it('never throws after the transaction has committed: a dead Redis is logged, not raised', async () => {
     const dead = new Redis('redis://127.0.0.1:1', {
       maxRetriesPerRequest: 0,
@@ -178,6 +208,7 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
         ts: new Date().toISOString(),
       }),
     ).resolves.toBeUndefined();
+    await expect(publisher.publishBook([MARKET_ID], new Date())).resolves.toBeUndefined();
     dead.disconnect();
   });
 

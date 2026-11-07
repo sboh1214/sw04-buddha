@@ -1988,6 +1988,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/markets/{id}/book": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The public order book, YES then NO: every price level of each side with its summed quantity — asks (what a buyer meets: the direct sells and the other outcome’s buys at 100 − their price, merged per price, cheapest first) and bids (the direct buys only, highest first) — and the best of each, null when the side is empty. No order, account or order count. A market not open shows empty sides with marketRejectReason (not_open_yet, paused, closed) */
+        get: operations["getOrderBook"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/markets/{id}/disputes": {
         parameters: {
             query?: never;
@@ -2050,6 +2067,23 @@ export type paths = {
         get: operations["listMarketPosts"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/markets/{id}/quote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Quote an order on the book as it stands, as the order intake would match it, writing nothing: the limit it would match with (an immediate order’s narrowed to the best opposite quote ± the market’s price-protection width; with none sent, 99 for a buy and 1 for a sell — send it as the order’s limit), the contracts filling at once and their Coin, what is left, a buy’s whole lock, the fee (0), why the walk stopped and the state the order would end in. A market not open answers a rejected quote with its reason. Public: no session, and open while order intake is closed */
+        post: operations["quoteOrder"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2322,6 +2356,23 @@ export type paths = {
         };
         /** Whether the account likes a post and which of the comments under it it likes (by its account, or by its verified number for a like a withdrawn account left); no count and nobody else’s */
         get: operations["getMyPostLikes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/markets/{id}/sellable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The account's holding of a market, YES then NO, with what it may sell now: the contracts held, the part in its resting sells (shown apart, never quoted) and the rest quoted as an immediate sell with price protection (null when nothing is free or the market has no width; fewer filled than free means only part can sell now). Zeros when nothing is held; a market not open answers a rejected quote with its reason */
+        get: operations["getMySellable"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5116,6 +5167,43 @@ export type components = {
             timeInForce: "ioc" | "gtc";
             unspentCoin: components["schemas"]["CoinAmount"] | null;
         };
+        OrderBook: {
+            contracts: components["schemas"]["OrderBookContract"][];
+            /** Format: uuid */
+            marketId: string;
+            /** @enum {string|null} */
+            marketRejectReason: "not_open_yet" | "paused" | "closed" | null;
+        };
+        OrderBookContract: {
+            asks: components["schemas"]["OrderBookLevel"][];
+            bestAskCoin: number | null;
+            bestBidCoin: number | null;
+            bids: components["schemas"]["OrderBookLevel"][];
+            /** @enum {string} */
+            outcome: "YES" | "NO";
+        };
+        OrderBookLevel: {
+            priceCoin: number;
+            qty: number;
+        };
+        OrderQuote: {
+            /** @enum {string|null} */
+            cancelReason: "by_owner" | "ioc_remainder" | "self_trade" | "paused" | "admin_role" | "restricted" | "account_closed" | null;
+            /** @enum {string} */
+            feeCoin: "0";
+            filledAmountCoin: components["schemas"]["CoinAmount"];
+            filledQty: number;
+            maxSpendCoin: components["schemas"]["CoinAmount"] | null;
+            protectedLimitPriceCoin: number;
+            /** @enum {string|null} */
+            rejectReason: "insufficient_coin" | "insufficient_contracts" | "not_open_yet" | "closed" | "paused" | "no_quote" | "price_limit" | "budget_too_small" | "self_trade" | null;
+            remainingQty: number | null;
+            /** @enum {string} */
+            status: "open" | "partially_filled" | "filled" | "cancelled" | "expired" | "rejected";
+            /** @enum {string|null} */
+            stop: "filled" | "budget_spent" | "no_quote" | "price_limit" | "self_trade" | null;
+            unspentCoin: components["schemas"]["CoinAmount"] | null;
+        };
         PageMeta: {
             nextCursor: string | null;
         };
@@ -5487,6 +5575,17 @@ export type components = {
             state: "published";
             title: string | null;
         };
+        QuoteOrderBody: {
+            budgetCoin?: components["schemas"]["CoinAmount"];
+            limitPriceCoin?: number;
+            /** @enum {string} */
+            outcome: "YES" | "NO";
+            qty?: number;
+            /** @enum {string} */
+            side: "buy" | "sell";
+            /** @enum {string} */
+            timeInForce: "ioc" | "gtc";
+        };
         RecentSearch: {
             /** Format: uuid */
             id: string;
@@ -5780,6 +5879,19 @@ export type components = {
         RuleVersionItem: "title" | "description" | "yesCondition" | "noCondition" | "eventDeadline" | "primarySource" | "fallbackSources" | "fallbackCondition" | "longDelayDays" | "delayHandling" | "scheduledOpenAt" | "closeAt" | "scheduledAnnouncementAt" | "scheduledJudgementAt" | "judgementTimeZone";
         SearchHistoryWriteBody: {
             expectedAccountId: string;
+        };
+        Sellable: {
+            contracts: components["schemas"]["SellableContract"][];
+            /** Format: uuid */
+            marketId: string;
+        };
+        SellableContract: {
+            /** @enum {string} */
+            outcome: "YES" | "NO";
+            qty: number;
+            quote: components["schemas"]["OrderQuote"] | null;
+            restingSellQty: number;
+            unlockedQty: number;
         };
         SetInterestCategoriesBody: {
             categoryIds: number[];
@@ -15936,6 +16048,56 @@ export interface operations {
             };
         };
     };
+    getOrderBook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["OrderBook"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     submitMarketDispute: {
         parameters: {
             query?: never;
@@ -16188,6 +16350,69 @@ export interface operations {
             };
             /** @description NOT_FOUND */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    quoteOrder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuoteOrderBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["OrderQuote"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ORDER_INTAKE_CLOSED */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -17282,6 +17507,65 @@ export interface operations {
             };
             /** @description UNAUTHENTICATED */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getMySellable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Sellable"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

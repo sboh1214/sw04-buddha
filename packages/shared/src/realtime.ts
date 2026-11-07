@@ -25,7 +25,10 @@ import {
  * bumped on every write under the market lock), `market:tick.tradeCount` and
  * `market:trade.fillId` (both per market, under the market lock). `ts` is for display, and
  * keys are compared within one event type, never across them (they come from different
- * sequences).
+ * sequences). `market:book` is the one event with no key: it is a signal that carries no state
+ * — the receiver re-reads `GET /markets/:id/book` — so a late or duplicate one costs one read and
+ * never takes anything back. A `market:status` also means "re-read the book": a market that is not
+ * OPEN shows an empty one (#179, ADR-0114).
  *
  * `market:status` is ordered by `statusEventId` — the `market_events.id` of the transition, or
  * of a correction's `judgement_corrected` (#176, ADR-0105), drawn while the writer holds the
@@ -52,6 +55,7 @@ export const REALTIME_EVENT_TYPES = [
   'market:tick',
   'market:trade',
   'market:status',
+  'market:book',
   'user:balance',
   'user:position',
 ] as const;
@@ -183,6 +187,31 @@ export const marketStatusEventSchema = z
 export type MarketStatusEvent = z.infer<typeof marketStatusEventSchema>;
 
 /**
+ * Room `market:<id>`: the market's public book changed (#179, ADR-0114) — published after COMMIT,
+ * best effort, by every writer whose transaction changed its live orders: an intake that rested
+ * an order or filled one (#119), an own cancel (#178), a pause, a pause's end or a ledger
+ * recovery's approval that cancelled any, an account restriction's or a closure's batch; #120's
+ * expiry, #20, #143's role-grant cancel and #129's bot join them (`marketBookEvent`: the API's
+ * writers through `MarketPublisher.publishBook`, the worker's through its own `Publish` on
+ * `marketChannel`, once per market — the worker cannot import the API's publisher). Only the market
+ * and the time: no level, order, account, account type or bot split (ADR-0107 결정 5 '#179·#119').
+ * The receiver re-reads `GET /markets/:id/book`; no key orders it (see the module doc).
+ */
+export const marketBookEventSchema = z
+  .object({
+    type: z.literal('market:book'),
+    marketId: z.uuid(),
+    ts: tsSchema,
+  })
+  .meta({ id: 'MarketBookEvent' });
+export type MarketBookEvent = z.infer<typeof marketBookEventSchema>;
+
+/** The `market:book` signal for `marketId` at `at`: one builder for the API and the worker. */
+export function marketBookEvent(marketId: string, at: Date): MarketBookEvent {
+  return { type: 'market:book', marketId, ts: at.toISOString() };
+}
+
+/**
  * Room `user:<id>`: the balance after a ledger entry changed it (a fill, a payout).
  * `ledgerEntryId` is that ledger row — the account's strict order key (see `supersedes`).
  */
@@ -222,13 +251,15 @@ export const realtimeEventSchema = z
     marketTickEventSchema,
     marketTradeEventSchema,
     marketStatusEventSchema,
+    marketBookEventSchema,
     userBalanceEventSchema,
     userPositionEventSchema,
   ])
   .meta({ id: 'RealtimeEvent' });
 export type RealtimeEvent = z.infer<typeof realtimeEventSchema>;
 
-export type MarketRealtimeEvent = MarketTickEvent | MarketTradeEvent | MarketStatusEvent;
+export type MarketRealtimeEvent =
+  MarketTickEvent | MarketTradeEvent | MarketStatusEvent | MarketBookEvent;
 export type UserRealtimeEvent = UserBalanceEvent | UserPositionEvent;
 
 /** Redis channel and Socket.IO room for one market (public). */
@@ -328,6 +359,7 @@ export const marketRealtimeEventSchema = z.discriminatedUnion('type', [
   marketTickEventSchema,
   marketTradeEventSchema,
   marketStatusEventSchema,
+  marketBookEventSchema,
 ]);
 
 /**

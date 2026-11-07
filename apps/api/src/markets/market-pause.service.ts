@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  cancelledMarketIds,
   currentMarketPause,
   endMarketPause,
   lockAdminRoles,
@@ -36,6 +37,7 @@ import { AppError } from '../common/errors/app-error.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
 import { MarketJobs } from '../jobs/market-jobs.service.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import { type Page } from '../wallet/wallet.service.js';
 import { MarketAdminService, decisionInstant, snapshot } from './market-admin.service.js';
 import { fieldError, lockedMarketRow, type Tx } from './market-item-rules.js';
@@ -160,9 +162,11 @@ const END_SKIPS: Readonly<Record<EndPauseSkipReason, () => AppError>> = {
  * before the status changes (`endMarketPause`, 결정 4 #178 rows). Both take the market's orders and
  * their owners' Coin accounts (`lockMarketOrders`) before the clock, so balance rows come last: the
  * pause right after the market row (it takes no admin-roles lock), the decision's approval after
- * the row and `decidable`'s shared admin-roles lock. A refusal rolls every cancel back. Nothing
- * more is published (a lock change alone has no event). The intake (#119) refuses new orders on a
- * paused market as 일시 중단 (ADR-0112 10-13).
+ * the row and `decidable`'s shared admin-roles lock. A refusal rolls every cancel back. After
+ * COMMIT, when it cancelled any, `market:book` beside `market:status` (#179, ADR-0114: the public
+ * book changed); a `ledger_failure` pause cancels none and publishes the status alone (a lock
+ * change alone has no event). The intake (#119) refuses new orders on a paused market as 일시 중단
+ * (ADR-0112 10-13).
  */
 @Injectable()
 export class MarketPauseService {
@@ -171,6 +175,7 @@ export class MarketPauseService {
     private readonly markets: MarketAdminService,
     private readonly approvals: ApprovalService,
     private readonly jobs: MarketJobs,
+    private readonly publisher: MarketPublisher,
   ) {}
 
   /**
@@ -182,14 +187,14 @@ export class MarketPauseService {
    * `paused` event (the admin its actor, payload `{pauseId, reason, resultPublishedAt}`) and the
    * pause row, then cancels the market's resting orders (the class's Orders); `market_pause`
    * records the pause, the note and the market before and after. After COMMIT `market:status`
-   * (paused, the event's key).
+   * (paused, the event's key) and, when it cancelled any order, `market:book` (#179).
    */
   async pause(
     adminId: string,
     id: string,
     body: WithoutExpectedAccount<PauseMarketBody>,
   ): Promise<AdminMarket> {
-    const market = await this.db.transaction(async (tx) => {
+    const { market, book } = await this.db.transaction(async (tx) => {
       await lockMarket(tx, id);
       const current = await lockedMarketRow(tx, id);
       // Its resting orders and their owners' Coin accounts, before the clock (#178): the pause
@@ -226,11 +231,17 @@ export class MarketPauseService {
         } satisfies MarketPauseActionPayload,
         createdAt: now,
       });
-      return this.markets.toAdminMarket(tx, result.market, tags, sources);
+      return {
+        market: await this.markets.toAdminMarket(tx, result.market, tags, sources),
+        book: { marketIds: cancelledMarketIds(result.cancelled), at: now },
+      };
     });
     // Outside the transaction, as every market write publishes: a subscriber answers
     // `market:status` with a REFETCH, which must find the committed row.
-    await this.markets.publishStatus(market);
+    await Promise.all([
+      this.markets.publishStatus(market),
+      this.publisher.publishBook(book.marketIds, book.at),
+    ]);
     return market;
   }
 
@@ -326,8 +337,9 @@ export class MarketPauseService {
    * source: 'early_close', …}`, the market CLOSED with `close_at` kept as the scheduled close
    * (#80's rule-version item); and the pause's end with the review result.
    * `market_pause_decision_approve` records the request, the approver's reason and the market
-   * before and after. After COMMIT `market:status` (open or closed, the event's key) and, for an
-   * early close, the close job under `close_at` cancelled.
+   * before and after. After COMMIT `market:status` (open or closed, the event's key), `market:book`
+   * when the end cancelled any order (#179) and, for an early close, the close job under
+   * `close_at` cancelled.
    */
   async approve(
     adminId: string,
@@ -335,7 +347,7 @@ export class MarketPauseService {
     requestId: string,
     body: WithoutExpectedAccount<ApprovePauseDecisionBody>,
   ): Promise<AdminMarket> {
-    const { market, cancelCloseAt } = await this.db.transaction(async (tx) => {
+    const { market, book, cancelCloseAt } = await this.db.transaction(async (tx) => {
       await lockMarket(tx, id);
       const current = await lockedMarketRow(tx, id);
       const request = await this.decidable(tx, adminId, id, requestId);
@@ -384,6 +396,7 @@ export class MarketPauseService {
       });
       return {
         market: await this.markets.toAdminMarket(tx, result.market, tags, sources),
+        book: { marketIds: cancelledMarketIds(result.cancelled), at },
         // The delayed close job is keyed by market AND instant (marketCloseJobId); the early close
         // keeps `close_at`, so the job under it is the one to cancel.
         cancelCloseAt: payload.path === 'early_close' ? current.closeAt : null,
@@ -391,6 +404,7 @@ export class MarketPauseService {
     });
     await Promise.all([
       this.markets.publishStatus(market),
+      this.publisher.publishBook(book.marketIds, book.at),
       cancelCloseAt ? this.jobs.cancelClose(market.id, cancelCloseAt) : undefined,
     ]);
     return market;

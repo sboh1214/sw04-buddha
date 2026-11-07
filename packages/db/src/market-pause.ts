@@ -48,7 +48,8 @@ type Reader = Pick<NodePgDatabase<typeof schema>, 'select'>;
  * `FOR UPDATE` after the lock, its orders locked after that (`lockMarketOrders`, required by
  * `pauseMarket` and `endMarketPause`) and `now` the DB clock read after the last lock, in the
  * caller's transaction; each writes no admin action (the API's) and publishes nothing (the caller
- * publishes `market:status` after COMMIT; a lock change alone has no event).
+ * publishes `market:status` after COMMIT, and `market:book` when it cancelled any order, #179; a
+ * lock change alone has no event).
  */
 
 /**

@@ -5,6 +5,7 @@ import { IdentityModule } from '../identity/identity.module.js';
 import { DbModule } from '../infra/db/db.module.js';
 import { RedisModule } from '../infra/redis/redis.module.js';
 import { MediaModule } from '../media/media.module.js';
+import { RealtimeModule } from '../realtime/realtime.module.js';
 import { AdminAccountRestrictionsController } from './account-restrictions.controller.js';
 import { AccountRestrictionService } from './account-restrictions.service.js';
 import {
@@ -34,8 +35,17 @@ import { ReportsService } from './reports.service.js';
   // DbModule and AuthModule also serve the guards (SessionGuard, OnboardedGuard, AdminGuard — which
   // caches roles in Redis); IdentityModule is the keyed hash of the verified number a person's
   // reports are counted by (ADR-0069 decision 7); MediaModule's store serves operators' images;
-  // ApprovalsModule is the two-person rule every account restriction step goes through (#139).
-  imports: [DbModule, RedisModule, AuthModule, IdentityModule, MediaModule, ApprovalsModule],
+  // ApprovalsModule is the two-person rule every account restriction step goes through (#139);
+  // RealtimeModule publishes the `market:book` an approved restriction's cancels cause (#179).
+  imports: [
+    DbModule,
+    RedisModule,
+    AuthModule,
+    IdentityModule,
+    MediaModule,
+    ApprovalsModule,
+    RealtimeModule,
+  ],
   controllers: [
     PostReportsController,
     CommentReportsController,

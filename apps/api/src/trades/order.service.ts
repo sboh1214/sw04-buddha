@@ -4,6 +4,7 @@ import {
   findOrderByRequest,
   lockMarket,
   placeOrder,
+  placeOrderChangedBook,
   schema,
   type CancelTouched,
   type Db,
@@ -36,6 +37,7 @@ import { assertOnboarded } from '../onboarding/onboarded.guard.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
 import { RELEASE_SETTINGS_REGISTRY } from '../release-settings/release-settings.registry.js';
 import { balanceEvent, type Page } from '../wallet/wallet.service.js';
+import { priceProtectionClosed } from './price-protection-closed.js';
 
 const { fills, markets, orders, profiles } = schema;
 
@@ -133,9 +135,11 @@ const notFound = (what: 'Market' | 'Order') =>
  *   NOT_FOUND for a market that is not public. Every other answer is an order row — taken, or
  *   rejected with its reason (#177 7항) — in 200. After COMMIT, best effort, `user:balance` for
  *   each person whose ledger the fills moved and `user:position` for each position row they or a
- *   sell lock wrote; the 운영 마켓메이커 has no room. A buy that only rests publishes nothing (no
- *   ledger entry; the submitter reads its own answer); a sell that only rests publishes its
- *   position row's `user:position` (its lock is on that row).
+ *   sell lock wrote; the 운영 마켓메이커 has no room. A buy that only rests publishes no `user:`
+ *   event (no ledger entry; the submitter reads its own answer); a sell that only rests publishes
+ *   its position row's `user:position` (its lock is on that row). An order that rested or filled
+ *   publishes `market:book` in its market's room (#179, ADR-0114: the public book changed); one
+ *   rejected, or an immediate one that filled nothing, changed no live order and publishes none.
  * - 취소 (`cancel`, #178, ADR-0113): the whole remainder of one of the session's live orders, ended
  *   in one transaction by `cancelOrder` (@buddha/db order-cancel.ts: the market's lock, the order
  *   again under it, the owner's Coin account, then the release and the row as 취소 완료(본인 취소))
@@ -146,8 +150,9 @@ const notFound = (what: 'Market' | 'Order') =>
  *   failure is MARKET_NOT_OPEN 'paused' with nothing written (ADR-0107 결정 4 #178 rows: the
  *   recovery approval ends it — 취소 완료(일시 중단) at a resume or early close, 만료 when the
  *   market closed before its recovery, #93's kind). After COMMIT, best effort, a sell's
- *   `user:position` (its lock was on that row); a buy's release writes no ledger entry and
- *   publishes nothing, as its resting.
+ *   `user:position` (its lock was on that row) — a buy's release writes no ledger entry and
+ *   publishes no `user:` event, as its resting — and `market:book` (#179). An order that had
+ *   ended, or a held one, changed nothing and publishes nothing.
  * - The owner's reads (`listMine`, `mine`, `mineByRequest`, `listMyFills`): the session's own
  *   rows only — another account's order is NOT_FOUND, as if it did not exist (N04 §7) — and a
  *   fill as the caller's own order took it, the counterparty anonymous (결정 5 '#179·#119').
@@ -167,7 +172,7 @@ export class OrderService {
     requestId: string,
     body: WithoutExpectedAccount<PlaceOrderBody>,
   ): Promise<PlaceOrderResult> {
-    const { answer, touched } = await this.db.transaction(async (tx) => {
+    const { answer, touched, book } = await this.db.transaction(async (tx) => {
       await assertCanTrade(tx, userId);
       await lockMarket(tx, marketId);
       const [profile] = await tx
@@ -204,15 +209,9 @@ export class OrderService {
             message: 'This Idempotency-Key was already used for a different order',
           });
         case 'closed':
-          throw new AppError(
-            'ORDER_INTAKE_CLOSED',
-            result.why === 'intake'
-              ? { message: 'Orders are not taken now' }
-              : {
-                  message: 'This market takes no immediate order before it has a width',
-                  details: [{ path: ['priceProtection'], message: 'undecided' }],
-                },
-          );
+          throw result.why === 'intake'
+            ? new AppError('ORDER_INTAKE_CLOSED', { message: 'Orders are not taken now' })
+            : priceProtectionClosed();
         case 'replayed':
         case 'placed': {
           const market = await this.marketRef(tx, result.order.marketId);
@@ -220,11 +219,20 @@ export class OrderService {
             order: toOrder(result.order, market),
             replayed: result.kind === 'replayed',
           };
-          return { answer, touched: result.kind === 'placed' ? result.touched : null };
+          const placed = result.kind === 'placed' ? result : null;
+          return {
+            answer,
+            touched: placed?.touched ?? null,
+            // At the order's own instant (the database clock's), the signal's display time.
+            book:
+              placed && placeOrderChangedBook(placed)
+                ? { marketId: placed.order.marketId, at: placed.order.createdAt }
+                : null,
+          };
         }
       }
     });
-    if (touched) await this.publish(touched);
+    if (touched) await this.publish(touched, book);
     return answer;
   }
 
@@ -248,7 +256,7 @@ export class OrderService {
         }
       }
     });
-    if (touched) await this.publishCancel(touched);
+    if (touched) await this.publishCancel(answer.marketId, touched, new Date(answer.endedAt!));
     return answer;
   }
 
@@ -388,22 +396,30 @@ export class OrderService {
     return market;
   }
 
-  /** A cancel's realtime, after COMMIT and best effort: each person's position row a sell freed. */
-  private async publishCancel(touched: CancelTouched): Promise<void> {
-    await this.publish({ balances: [], positions: touched.positions });
+  /**
+   * A cancel's realtime, after COMMIT and best effort: each person's position row a sell freed,
+   * then the market's `market:book` at the cancel's instant.
+   */
+  private async publishCancel(marketId: string, touched: CancelTouched, at: Date): Promise<void> {
+    await this.publish({ balances: [], positions: touched.positions }, { marketId, at });
   }
 
   /**
    * The intake's realtime, after COMMIT and best effort (`MarketPublisher` logs a failed send):
    * each person's balance with the last ledger entry of the intake as its key, then each position
-   * row. Issued together, awaited together (realtime.ts).
+   * row, then — when the live book changed — the market's `market:book`. Issued together, awaited
+   * together (realtime.ts).
    */
-  private async publish(touched: PlaceOrderTouched): Promise<void> {
+  private async publish(
+    touched: PlaceOrderTouched,
+    book: { marketId: string; at: Date } | null,
+  ): Promise<void> {
     await Promise.all([
       ...touched.balances.map(({ userId, balance, entry }) =>
         this.publisher.publishUser(userId, balanceEvent(balance, entry)),
       ),
       ...touched.positions.map((row) => this.publisher.publishUser(row.userId, positionEvent(row))),
+      book && this.publisher.publishBook([book.marketId], book.at),
     ]);
   }
 }

@@ -58,10 +58,11 @@ import {
   type RestrictedDetails,
 } from '@buddha/shared';
 import { and, eq, inArray, notInArray } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApprovalService } from '../approvals/approval.service.js';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { PhoneHasher } from '../identity/phone-hash.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import { PUBLIC_ROUTES } from '../surface/registry.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { pngOf } from '../test/png.js';
@@ -1743,8 +1744,14 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
       return row!;
     }
     const expectSound = async () => expect(await checkOrderInvariants(t.db)).toEqual([]);
+    /** The market events published from here on (`market:book`, #179), as [market, type, ts]. */
+    const marketEvents = () => {
+      const spy = vi.spyOn(t.app.get(MarketPublisher), 'publishMarket');
+      return () => spy.mock.calls.map(([marketId, event]) => [marketId, event.type, event.ts]);
+    };
 
     beforeEach(async () => {
+      vi.restoreAllMocks();
       await openOrderIntake(t.db, { adminId: admin.id });
       for (const who of [member, other]) {
         await createStartGrant(t.db, { userId: who.id, amountCoin: 1_000n });
@@ -1778,11 +1785,20 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
         filledQty: 1,
       });
       const request = requestOf(await ask(7));
-      // The one who asked is refused: nothing is cancelled.
+      const published = marketEvents();
+      // The one who asked is refused: nothing is cancelled, nothing published.
       expect(approvalRefusalOf(await approve(request.id, admin))).toBe('requester');
       expect((await orderOf(resting.id)).status).toBe('open');
+      expect(published()).toEqual([]);
 
       const action = decisionOf(await approve(request.id)).action!;
+      // After COMMIT, one `market:book` per market an order was cancelled in (#179).
+      expect(published().sort()).toEqual(
+        [
+          [market.id, 'market:book', action.createdAt],
+          [another.id, 'market:book', action.createdAt],
+        ].sort(),
+      );
       for (const id of [partly.id, resting.id]) {
         const row = await orderOf(id);
         expect(row).toMatchObject({ status: 'cancelled', cancelReason: 'restricted' });
@@ -1833,6 +1849,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
       const before = await orderOf(resting.id);
       const balance = await balanceOf(t.db, member.id);
       expect(balance).toMatchObject({ lockedCoin: 30n });
+      const published = marketEvents();
 
       await change(standing.id, 'shorten', { endsAt: new Date(Date.now() + DAY_MS).toISOString() });
       await change(standing.id, 'lift');
@@ -1850,6 +1867,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
       for (const row of approvals) {
         expect(row.payload).toMatchObject({ cancelledOrderIds: [], heldOrderIds: [] });
       }
+      expect(published()).toEqual([]);
       await expectSound();
     });
 
@@ -1859,7 +1877,10 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
       const resting = await place({ marketId: market.id, ownerId: member.id, limitPriceCoin: 30 });
       await createMarketPause(t.db, { marketId: held.id, reason: 'ledger_failure', by: admin.id });
       const before = await orderOf(waiting.id);
+      const published = marketEvents();
       const action = await restrict(null);
+      // The held market's book did not change: its signal is the recovery's (#179).
+      expect(published()).toEqual([[market.id, 'market:book', action.createdAt]]);
       expect(await mine()).toMatchObject({ accountRestriction: { kind: 'account', endsAt: null } });
       expect(await orderOf(waiting.id)).toEqual(before);
       expect(await orderOf(resting.id)).toMatchObject({
