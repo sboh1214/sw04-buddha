@@ -45,9 +45,11 @@ import {
 import {
   cancelTestAccountOrders,
   cancelTestOrder,
+  checkMarketStats,
   checkOrderInvariants,
   closeTestMarket,
   openOrderIntake,
+  MARKET_STATS_CHECK_SQL,
   ORDER_LOCKS_CHECK_SQL,
   passMarketClose,
   placeTestOrder,
@@ -949,6 +951,7 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
         expect([one.order.status, two.order.status]).toEqual(['filled', 'filled']);
       }
       expect(await checkOrderInvariants(t.db)).toEqual([]);
+      expect(await checkMarketStats(t.db)).toEqual([]);
     });
 
     it('meets a pause and a close on the market lock: rejected after, resting before', async () => {
@@ -1288,12 +1291,10 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
         const mms = [];
         for (const m of marketIds) {
           mms.push(await fundMarketMakerFunds(t.db, m, 3_000n));
-          await mintTestPairs(t.db, {
-            marketId: m,
-            yesHolderId: people[0]!,
-            noHolderId: people[1]!,
-            qty: 4,
-          });
+          // Four pairs minted through the intake (the orders and the fill `mintTestPairs` writes,
+          // with the market's statistics, #121).
+          await order(people[1]!, m, 'NO', 'buy', 'gtc', 50, 4);
+          await order(people[0]!, m, 'YES', 'buy', 'ioc', 50, 4);
         }
         const owners = [...people, mms[0]!];
         for (let step = 0; step < 60; step += 1) {
@@ -1333,6 +1334,7 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
           }
         }
         expect(await checkOrderInvariants(t.db)).toEqual([]);
+        expect(await checkMarketStats(t.db)).toEqual([]);
         // The operators' check (docs/OPERATIONS.md '주문 접수') as buddha_app: nothing to show.
         expect((await t.db.$client.query(ORDER_LOCKS_CHECK_SQL)).rows).toEqual([]);
         // The exported rule says the same: Σ `orderRemainingLock(orderLockFactsOf(row))` over
@@ -1391,6 +1393,7 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
           .where(and(eq(orders.cancelReason, 'paused'), eq(orders.endedAt, paused.pause.pausedAt)));
         seen.set('paused', (seen.get('paused') ?? 0) + pausedRows.length);
         expect(await checkOrderInvariants(t.db)).toEqual([]);
+        expect(await checkMarketStats(t.db)).toEqual([]);
         // The second market's close (#120): every live order left, the 운영 마켓메이커's too,
         // ends 만료 with its lock back; no contract moves and every lock is still an order's.
         const book = await contractBook(t.db, marketIds[1]!);
@@ -1417,6 +1420,7 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
         });
         expect((await written()).entries).toBe(entriesBefore);
         expect(await checkOrderInvariants(t.db)).toEqual([]);
+        expect(await checkMarketStats(t.db)).toEqual([]);
       }
       for (const kind of [
         'fill',
@@ -1439,6 +1443,14 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
       const section = doc.slice(doc.indexOf('## 주문 접수 (#119, ADR-0112)'));
       const query = /```sql\n([\s\S]*?)```/.exec(section.slice(0, section.indexOf('\n## ')))?.[1];
       expect(query).toBe(ORDER_LOCKS_CHECK_SQL);
+    });
+
+    it('is the market statistics’ check docs/OPERATIONS.md gives operators, word for word', () => {
+      // docs/OPERATIONS.md '시장 통계 (#121, ADR-0116)': its first SQL block is the helper's.
+      const doc = readFileSync(new URL('../../../docs/OPERATIONS.md', import.meta.url), 'utf8');
+      const section = doc.slice(doc.indexOf('## 시장 통계 (#121, ADR-0116)'));
+      const query = /```sql\n([\s\S]*?)```/.exec(section.slice(0, section.indexOf('\n## ')))?.[1];
+      expect(query).toBe(MARKET_STATS_CHECK_SQL);
     });
 
     it('shows a lock no live order explains in the operators’ check', async () => {

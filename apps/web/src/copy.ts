@@ -1355,7 +1355,6 @@ export const copy = {
   // 관리자 상세의 거래 현황: 체결·포지션에서 나온 값만 보인다(직접 AMM 상태는 #125에서 지웠다).
   adminMarketTradeStats: '거래 현황',
   tradeStatsLastPrice: '현재가',
-  tradeStatsNetCollected: '순 수취 코인',
   tradeStatsOpenInterestYes: '미결제 YES',
   tradeStatsOpenInterestNo: '미결제 NO',
   marketTradeCount: '거래 수',
@@ -1605,6 +1604,9 @@ export const copy = {
   sell: '매도',
   fillQty: '수량',
   fillAvgPrice: '평균가',
+  // 공개 최근 체결 한 줄의 가격: 그 계약의 체결가(#121, ADR-0116). 시장 단위의 평균 체결가는 없고
+  // (ADR-0107 결정 1 #177 12항), '평균가'는 MY 주문 한 건의 것이다. 공개 행에는 매수·매도가 없다.
+  fillPrice: '체결가',
   errMarketTitle: '질문은 1~120자로 입력해 주세요.',
   errMarketText: '5,000자 이하로 입력해 주세요.',
   // 출처 한 개의 규칙(@buddha/shared marketSourceSchema): 이름과 주소는 각각 500자까지, 주소는 비우거나
@@ -2047,7 +2049,7 @@ export const copy = {
   marketMyPositionEmpty: '아직 이 시장에 참여하지 않았습니다.',
   // 상세의 배치 틀 (#122, ADR-0067). 배경은 시장의 설명(description)이다. 나머지는 내용을 아직
   // 만들 수 없어 제목과 comingSoon('준비 중입니다.')으로 보이는 자리다(ADR-0061 결정 3의 #122 행):
-  // 호가창(#179), 내 거래(#121), 내 대기 주문(#123), 공개 판정 기록(#24). 자리의 제목은 그 결정의
+  // 호가창(#179), 내 거래(#123, ADR-0116 결정 10의 18), 내 대기 주문(#123), 공개 판정 기록(#24). 자리의 제목은 그 결정의
   // 글 그대로다(오너 결정 2026-10-17). 내 거래와 내 대기 주문은 로그인한 본인에게만 보인다
   // (ADR-0061 결정 1의 18).
   marketBackground: '배경',

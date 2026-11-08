@@ -148,7 +148,6 @@ async function standingOf(context: APIRequestContext, marketId: string): Promise
 async function expectNoMarketSignal(element: Locator): Promise<void> {
   for (const label of [
     copy.tradeStatsLastPrice,
-    copy.tradeStatsNetCollected,
     copy.tradeStatsOpenInterestYes,
     copy.tradeStatsOpenInterestNo,
     copy.marketVolume,

@@ -89,7 +89,8 @@ export class MarketsController {
     operationId: 'getMarket',
     summary:
       'One market by id or slug, with its tags in order and its rule versions, the current ' +
-      'first (each one’s full text, changed items, reason and time, and nobody’s name); a ' +
+      'first (each one’s full text, changed items, reason and time, and nobody’s name), and ' +
+      'its market price as of 24 hours ago (the last fill by then, null with none); a ' +
       'draft or in-review one is NOT_FOUND to the public',
   })
   @ApiData(marketSchema)
@@ -101,7 +102,9 @@ export class MarketsController {
   @Get(':id/fills')
   @ApiOperation({
     operationId: 'listMarketFills',
-    summary: `Newest ${String(FILLS_RECENT_LIMIT)} fills, anonymous`,
+    summary:
+      `Newest ${String(FILLS_RECENT_LIMIT)} fills, anonymous: each one’s contract, price, YES ` +
+      'value, quantity, amount and server time — no account, order, taker side or account type',
   })
   @ApiData(fillSchema.array())
   @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')
@@ -140,11 +143,13 @@ export class MarketsController {
     operationId: 'listMarketTicks',
     summary:
       `Price series, ascending, at most ${String(TICKS_MAX_POINTS)} points. ` +
-      '`raw` returns stored ticks, downsampled from the newest ' +
+      'Every point is a fill: its YES value in basis points at its server time (the open and a ' +
+      'judgement are no point). `raw` returns the fills, downsampled from the newest ' +
       `${String(TICKS_SCAN_MAX)} of the range (\`truncated\` says when older ones were left ` +
-      'out). `1m`/`1h` sample the probability in force on an absolute grid, coarsening the ' +
+      'out). `1m`/`1h` sample the price in force on an absolute grid, coarsening the ' +
       'stride until the window fits; `bucketSeconds` reports the stride served, and the point ' +
-      'at `from` carries the last value at or before it, so the left edge is never empty.',
+      'at `from` carries the last fill at or before it, if any — before the first fill the ' +
+      'series starts empty.',
   })
   @ApiData(priceSeriesSchema)
   @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')

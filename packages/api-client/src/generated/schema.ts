@@ -2029,7 +2029,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Newest 20 fills, anonymous */
+        /** Newest 20 fills, anonymous: each one’s contract, price, YES value, quantity, amount and server time — no account, order, taker side or account type */
         get: operations["listMarketFills"];
         put?: never;
         post?: never;
@@ -2131,7 +2131,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Price series, ascending, at most 500 points. `raw` returns stored ticks, downsampled from the newest 10000 of the range (`truncated` says when older ones were left out). `1m`/`1h` sample the probability in force on an absolute grid, coarsening the stride until the window fits; `bucketSeconds` reports the stride served, and the point at `from` carries the last value at or before it, so the left edge is never empty. */
+        /** Price series, ascending, at most 500 points. Every point is a fill: its YES value in basis points at its server time (the open and a judgement are no point). `raw` returns the fills, downsampled from the newest 10000 of the range (`truncated` says when older ones were left out). `1m`/`1h` sample the price in force on an absolute grid, coarsening the stride until the window fits; `bucketSeconds` reports the stride served, and the point at `from` carries the last fill at or before it, if any — before the first fill the series starts empty. */
         get: operations["listMarketTicks"];
         put?: never;
         post?: never;
@@ -2148,7 +2148,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** One market by id or slug, with its tags in order and its rule versions, the current first (each one’s full text, changed items, reason and time, and nobody’s name); a draft or in-review one is NOT_FOUND to the public */
+        /** One market by id or slug, with its tags in order and its rule versions, the current first (each one’s full text, changed items, reason and time, and nobody’s name), and its market price as of 24 hours ago (the last fill by then, null with none); a draft or in-review one is NOT_FOUND to the public */
         get: operations["getMarket"];
         put?: never;
         post?: never;
@@ -3498,11 +3498,13 @@ export type components = {
             judgementDelays: components["schemas"]["AdminJudgementDelay"][];
             judgementTimeZone: string | null;
             judgementVersion: number | null;
+            /** Format: date-time */
+            lastFillAt: string | null;
             lastPrice: number | null;
+            lastPrice24hAgo: number | null;
             leadCloseGapMinutes: number | null;
             longDelayDays: number | null;
             missingOpenItems: components["schemas"]["OpenItem"][];
-            netCollectedCoin: components["schemas"]["CoinAmount"];
             noCondition: string;
             /** Format: date-time */
             openAt: string | null;
@@ -3919,6 +3921,8 @@ export type components = {
             imageUrl: string | null;
             judgementDelayed: boolean;
             judgementVersion: number | null;
+            /** Format: date-time */
+            lastFillAt: string | null;
             lastPrice: number | null;
             /** Format: date-time */
             linkedAt: string;
@@ -4066,6 +4070,8 @@ export type components = {
             imageUrl: string | null;
             judgementDelayed: boolean;
             judgementVersion: number | null;
+            /** Format: date-time */
+            lastFillAt: string | null;
             lastPrice: number | null;
             /** Format: date-time */
             linkedAt: string;
@@ -4485,10 +4491,9 @@ export type components = {
             id: string;
             /** @enum {string} */
             outcome: "YES" | "NO";
-            priceAvgBp: number;
+            priceCoin: number;
             qty: number;
-            /** @enum {string} */
-            side: "buy" | "sell";
+            yesPriceCoin: number;
         };
         HiddenComment: {
             /** Format: uuid */
@@ -4591,7 +4596,10 @@ export type components = {
             judgementDelayed: boolean;
             judgementTimeZone: string | null;
             judgementVersion: number | null;
+            /** Format: date-time */
+            lastFillAt: string | null;
             lastPrice: number | null;
+            lastPrice24hAgo: number | null;
             longDelayDays: number | null;
             noCondition: string;
             /** Format: date-time */
@@ -4816,6 +4824,8 @@ export type components = {
             imageUrl: string | null;
             judgementDelayed: boolean;
             judgementVersion: number | null;
+            /** Format: date-time */
+            lastFillAt: string | null;
             lastPrice: number | null;
             /** Format: date-time */
             openAt: string | null;

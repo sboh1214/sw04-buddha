@@ -648,8 +648,10 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     expect(market.status).toBe('open');
     // N02 §5: no fill, no price — the direct AMM's initial probability is gone (#125).
     expect(market.lastPrice).toBeNull();
+    expect(market.lastFillAt).toBeNull();
     expect(market.volumeCoin).toBe(0n);
     expect(market.tradeCount).toBe(0);
+    expect(market.traderCount).toBe(0);
     expect(market).not.toHaveProperty('qYes');
     expect(market).not.toHaveProperty('mechanism');
     const withCategory = await t.db.query.markets.findFirst({
@@ -2187,6 +2189,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         categoryId: category.id,
         imageUrl: 'https://example.com/image.png',
         lastPrice: 55,
+        lastFillAt: new Date(),
         tradeCount: 1,
         status: 'closed',
         statusEventId: 1,
@@ -8425,23 +8428,56 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     }
     const [priced] = await t.db
       .update(markets)
-      .set({ lastPrice: 52 })
+      .set({ lastPrice: 52, lastFillAt: new Date() })
       .where(eq(markets.id, market.id))
       .returning();
     expect(priced!.lastPrice).toBe(52);
     const [cleared] = await t.db
       .update(markets)
-      .set({ lastPrice: null })
+      .set({ lastPrice: null, lastFillAt: null })
       .where(eq(markets.id, market.id))
       .returning();
     expect(cleared!.lastPrice).toBeNull();
   });
 
+  it('keeps the 시장가격 and its 갱신시각 together (markets_last_fill_at_check, #121)', async () => {
+    const market = await createMarket(t.db);
+    // One without the other is refused, either way round.
+    for (const set of [{ lastPrice: 52 }, { lastFillAt: new Date() }]) {
+      await expect(
+        t.db.update(markets).set(set).where(eq(markets.id, market.id)),
+        JSON.stringify(set),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'markets_last_fill_at_check',
+      );
+    }
+    const at = new Date('2026-11-07T01:02:03.456Z');
+    const [both] = await t.db
+      .update(markets)
+      .set({ lastPrice: 52, lastFillAt: at })
+      .where(eq(markets.id, market.id))
+      .returning();
+    expect(both).toMatchObject({ lastPrice: 52, lastFillAt: at });
+    await expect(
+      t.db.update(markets).set({ lastFillAt: null }).where(eq(markets.id, market.id)),
+    ).rejects.toSatisfy((e) => sqlState(e) === '23514');
+  });
+
   it('createMarket accepts a last price and statistics overrides', async () => {
-    const market = await createMarket(t.db, { lastPrice: 37, volumeCoin: 12_345n, tradeCount: 7 });
+    const market = await createMarket(t.db, {
+      lastPrice: 37,
+      volumeCoin: 12_345n,
+      tradeCount: 7,
+      traderCount: 3,
+    });
     expect(market.lastPrice).toBe(37);
+    // The pair CHECK: the time of the last fill comes with its price (the clock by default).
+    expect(market.lastFillAt).toBeInstanceOf(Date);
     expect(market.volumeCoin).toBe(12_345n);
     expect(market.tradeCount).toBe(7);
+    expect(market.traderCount).toBe(3);
+    const at = new Date('2026-11-01T00:00:00.000Z');
+    expect((await createMarket(t.db, { lastPrice: 60, lastFillAt: at })).lastFillAt).toEqual(at);
     for (const lastPrice of [0, 100, 52.5]) {
       await expect(createMarket(t.db, { lastPrice }), String(lastPrice)).rejects.toThrow(
         RangeError,

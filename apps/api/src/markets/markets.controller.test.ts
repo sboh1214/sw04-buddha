@@ -1,17 +1,25 @@
 /**
  * Public market reads (PLAN 7.1, M3 design 3.2) against the docker `test` profile: list
  * filters and the three sort-specific keysets, id/slug lookup, fills, ticks, categories, the
- * market times and '판정 지연' (#22), and the rule versions (#80). Skips when TEST_* are unset.
+ * market times and '판정 지연' (#22), the rule versions (#80), and the statistics the intake writes
+ * with its fills (#121: 시장가격 and its time, the price a day ago, volume, participants; the
+ * recent fills and the chart read the fills themselves). Skips when TEST_* are unset.
  */
 import { clockTimestamp, schema } from '@buddha/db';
 import {
   createCategory,
   createFill,
   createFillRecord,
+  createFillSeries,
   createMarket,
   createOpenedMarket,
   createSupplementedMarket,
   createUser,
+  fundMarketMakerFunds,
+  openOrderIntake,
+  placeTestOrder,
+  type CreateFillRecordInput,
+  type PlaceTestOrderInput,
 } from '@buddha/db/test';
 import {
   CURSOR_NULL,
@@ -41,7 +49,13 @@ type ListPage = { data: MarketSummary[]; meta: { nextCursor: string | null } };
 type MarketRowLike = { id: string; openAt: Date | null };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const HOUR_MS = 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
+
+/** A YES price 1..99 that moves with `i`, for a long price history. */
+const yesOf = (i: number) => 1 + (i % 99);
+/** `yesOf(i)` as a point's basis points (`yes_price_coin × 100`, #121). */
+const bpOf = (i: number) => yesOf(i) * 100;
 
 describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
   let t: TestApp;
@@ -100,6 +114,21 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     return { ids, cursors };
   }
 
+  /**
+   * A price history of one-YES fills at `points` (#121: the history is the fills; a read fixture
+   * that moves no statistic), between two fresh people.
+   */
+  async function writeHistory(marketId: string, points: readonly { at: number; yes: number }[]) {
+    const incoming = (await createUser(t.db)).user.id;
+    const resting = (await createUser(t.db)).user.id;
+    return createFillSeries(t.db, {
+      marketId,
+      incomingOwnerId: incoming,
+      restingOwnerId: resting,
+      points: points.map((point) => ({ at: new Date(point.at), yesPriceCoin: point.yes })),
+    });
+  }
+
   /** `walkPages`' ids alone. */
   async function walk(url: string): Promise<string[]> {
     return (await walkPages(url)).ids;
@@ -121,8 +150,9 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       title: '열린 시장',
       category: { slug: 'economy', nameKo: '경제' },
       status: 'open',
-      // Never traded: no price, which a client shows as '체결 없음' (N02 §5).
+      // Never traded: no price and no time, which a client shows as '체결 없음' (N02 §5).
       lastPrice: null,
+      lastFillAt: null,
       volumeCoin: '0',
       tradeCount: 0,
       traderCount: 0,
@@ -939,7 +969,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     for (const field of ['createdBy', 'pYesBp', 'qYes', 'qNo', 'liquidityB', 'reserveCoin']) {
       expect(detail).not.toHaveProperty(field);
     }
-    expect(detail.lastPrice).toBeNull();
+    expect(detail).toMatchObject({ lastPrice: null, lastFillAt: null, lastPrice24hAgo: null });
 
     const bySlug = await get(`/api/v1/markets/${encodeURIComponent('한글-시장-2026')}`);
     expect(bySlug.json<{ data: Market }>().data.id).toBe(open.id);
@@ -1246,48 +1276,274 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
         .reverse()
         .map((fill) => fill.id.toString()),
     );
-    // The incoming contract's price on either outcome (ADR-0112 결정 7: `price_coin` × 100), never
-    // the YES price a NO fill records beside it.
+    // The contract, its price and its YES value (#121, ADR-0107 결정 6 '남은 것'의 #60
+    // 3·6·17·20항): a NO fill at 30 reads 70 on the YES scale; the amount is the contract's price ×
+    // qty (#177 12항).
     const shown = written.slice(-FILLS_RECENT_LIMIT).reverse();
     expect(
-      fills.map(({ outcome, priceAvgBp, amountCoin }) => [outcome, priceAvgBp, amountCoin]),
+      fills.map(({ outcome, priceCoin, yesPriceCoin, qty, amountCoin }) => [
+        outcome,
+        priceCoin,
+        yesPriceCoin,
+        qty,
+        amountCoin,
+      ]),
     ).toEqual(
-      shown.map((row) => [row.outcome, row.priceCoin * 100, String(row.qty * row.priceCoin)]),
+      shown.map((row) => [
+        row.outcome,
+        row.priceCoin,
+        row.outcome === 'NO' ? 100 - row.priceCoin : row.priceCoin,
+        row.qty,
+        String(row.qty * row.priceCoin),
+      ]),
     );
     expect(shown.some((row) => row.outcome === 'NO' && row.priceCoin !== 50)).toBe(true);
-    // Anonymous: no order, owner or account type of either side (ADR-0107 결정 5 '#179·#119').
+    // Anonymous: no order, owner, taker direction or account type of either side.
     for (const fill of fills) {
       expect(Object.keys(fill).sort()).toEqual(
-        ['amountCoin', 'createdAt', 'id', 'outcome', 'priceAvgBp', 'qty', 'side'].sort(),
+        ['amountCoin', 'createdAt', 'id', 'outcome', 'priceCoin', 'qty', 'yesPriceCoin'].sort(),
       );
     }
+  });
+
+  it('carries the 시장가격, its fill time and the statistics the intake wrote, and 체결 없음 before (#121)', async () => {
+    await openOrderIntake(t.db, { adminId: creatorId });
+    const m = await market({ title: '체결되는 시장' });
+    const quiet = await market({ title: '조용한 시장' });
+    const member = async () => (await createUser(t.db, { balanceCoin: 1_000n })).user.id;
+    const order = async (input: PlaceTestOrderInput) => {
+      const result = await placeTestOrder(t.db, input);
+      if (result.kind !== 'placed') throw new Error(`expected a placed order, got ${result.kind}`);
+      return result;
+    };
+    const card = async () => {
+      const page = (await get('/api/v1/markets?sort=recommended')).json<ListPage>();
+      return page.data.find((row) => row.id === m.id)!;
+    };
+    const detail = async () => (await get(`/api/v1/markets/${m.id}`)).json<{ data: Market }>().data;
+
+    // Before any fill: no price, no time, no baseline, nothing counted, no row, no point.
+    const none = {
+      lastPrice: null,
+      lastFillAt: null,
+      volumeCoin: '0',
+      tradeCount: 0,
+      traderCount: 0,
+    };
+    expect(await card()).toMatchObject(none);
+    expect(await detail()).toMatchObject({ ...none, lastPrice24hAgo: null });
+    expect((await get(`/api/v1/markets/${m.id}/fills`)).json<{ data: Fill[] }>().data).toEqual([]);
+    expect((await series(`/api/v1/markets/${m.id}/ticks`)).points).toEqual([]);
+
+    // The 운영 마켓메이커 rests a NO bid at 40; a member's IOC YES buy meets it — a pair mint, one
+    // fill at its YES value 60 (#177 11·12항). It counts in price and volume, never as a person.
+    const mm = await fundMarketMakerFunds(t.db, m.id, 1_000n);
+    await order({ ownerId: mm, marketId: m.id, outcome: 'NO', limitPriceCoin: 40, qty: 2 });
+    const a = await member();
+    const first = await order({
+      ownerId: a,
+      marketId: m.id,
+      timeInForce: 'ioc',
+      limitPriceCoin: 65,
+    });
+    const firstAt = first.fills[0]!.createdAt.toISOString();
+    expect(await card()).toMatchObject({
+      lastPrice: 60,
+      lastFillAt: firstAt,
+      volumeCoin: '60',
+      tradeCount: 1,
+      traderCount: 1,
+    });
+    // 추천 counts the bot↔member fill: the market with it is ahead of the quiet one.
+    const ranked = (await get('/api/v1/markets?sort=recommended')).json<ListPage>().data;
+    expect(ranked.map((row) => row.id)).toEqual([m.id, quiet.id]);
+
+    // A member's YES bid at 55 met by another's IOC NO buy: the incoming contract is NO at 45,
+    // whose YES value is 55 — one row, the volume +45 (not +100).
+    await order({ ownerId: a, marketId: m.id, limitPriceCoin: 55 });
+    const b = await member();
+    const second = await order({
+      ownerId: b,
+      marketId: m.id,
+      outcome: 'NO',
+      timeInForce: 'ioc',
+      limitPriceCoin: 99,
+    });
+    const secondAt = second.fills[0]!.createdAt.toISOString();
+    const shown = await detail();
+    expect(shown).toMatchObject({
+      lastPrice: 55,
+      lastFillAt: secondAt,
+      volumeCoin: '105',
+      tradeCount: 2,
+      traderCount: 2,
+      // Both fills are minutes old: no 시장가격 a day ago, so no change badge (N02 §5).
+      lastPrice24hAgo: null,
+    });
+    const rows = (await get(`/api/v1/markets/${m.id}/fills`)).json<{ data: Fill[] }>().data;
+    expect(
+      rows.map(({ outcome, priceCoin, yesPriceCoin, qty, amountCoin }) => ({
+        outcome,
+        priceCoin,
+        yesPriceCoin,
+        qty,
+        amountCoin,
+      })),
+    ).toEqual([
+      { outcome: 'NO', priceCoin: 45, yesPriceCoin: 55, qty: 1, amountCoin: '45' },
+      { outcome: 'YES', priceCoin: 60, yesPriceCoin: 60, qty: 1, amountCoin: '60' },
+    ]);
+    expect(rows.map((row) => row.createdAt)).toEqual([secondAt, firstAt]);
+    // The volume is the sum of the public rows' amounts (#177 12항).
+    expect(String(rows.reduce((sum, row) => sum + BigInt(row.amountCoin), 0n))).toBe(
+      shown.volumeCoin,
+    );
+    // No person's or the bot's id anywhere in the public answers.
+    const wire = JSON.stringify([rows, shown, await card()]);
+    for (const id of [a, b, mm]) expect(wire).not.toContain(id);
+    // The chart is the fills: each one's YES value at its time, a trade point, nothing for the
+    // open.
+    expect((await series(`/api/v1/markets/${m.id}/ticks?resolution=raw`)).points).toEqual([
+      { ts: firstAt, pYesBp: 6_000, trigger: 'trade' },
+      { ts: secondAt, pYesBp: 5_500, trigger: 'trade' },
+    ]);
+    expect((await series(`/api/v1/markets/${m.id}/ticks`)).tradeCount).toBe(2);
+  });
+
+  it('charts each fill at its YES value on the 1m and 1h grid too: NO fills, a NO pair mint, one intake (#121)', async () => {
+    // The product chart reads only the grid (1D → 1m, 1W and all → 1h, apps/web lib/ticks.ts),
+    // and its SQL spells the YES value on its own, apart from the raw path's. Every other grid
+    // case is YES fills, where the contract price and the YES value are the same number.
+    const history = await market();
+    const incoming = (await createUser(t.db)).user.id;
+    const resting = (await createUser(t.db)).user.id;
+    const t0 = new Date('2026-09-01T00:00:00.000Z').getTime();
+    const record = (at: number, fill: Partial<CreateFillRecordInput>) =>
+      createFillRecord(t.db, {
+        marketId: history.id,
+        incomingOwnerId: incoming,
+        restingOwnerId: resting,
+        createdAt: new Date(at),
+        ...fill,
+      });
+    // A NO buy at 45 against a resting NO sell (YES 55), an incoming NO pair mint at 30 against a
+    // YES bid at 70 (YES 70), a NO sell at 20 into a NO bid (YES 80).
+    await record(t0, { outcome: 'NO', side: 'buy', kind: 'trade', priceCoin: 45 });
+    await record(t0 + MINUTE_MS, { outcome: 'NO', side: 'buy', kind: 'pair_mint', priceCoin: 30 });
+    await record(t0 + 2 * MINUTE_MS, { outcome: 'NO', side: 'sell', priceCoin: 20 });
+    const byMinute = await series(
+      `/api/v1/markets/${history.id}/ticks?from=${iso(t0)}&to=${iso(t0 + 3 * MINUTE_MS)}&resolution=1m`,
+    );
+    expect(byMinute.points).toEqual([
+      { ts: iso(t0), pYesBp: 5_500, trigger: 'trade' },
+      { ts: iso(t0 + MINUTE_MS), pYesBp: 7_000, trigger: 'trade' },
+      { ts: iso(t0 + 2 * MINUTE_MS), pYesBp: 8_000, trigger: 'trade' },
+      { ts: iso(t0 + 3 * MINUTE_MS), pYesBp: 8_000, trigger: 'trade' },
+    ]);
+    const byHour = await series(
+      `/api/v1/markets/${history.id}/ticks?from=${iso(t0)}&to=${iso(t0 + HOUR_MS)}&resolution=1h`,
+    );
+    expect(byHour.points).toEqual([
+      { ts: iso(t0), pYesBp: 5_500, trigger: 'trade' },
+      { ts: iso(t0 + HOUR_MS), pYesBp: 8_000, trigger: 'trade' },
+    ]);
+
+    // One real intake whose fills share its instant: a member's IOC NO buy for 2 meets two YES
+    // bids, the 55 first (NO 45) and then the 52 (NO 48) — two pair mints. The grid picks the
+    // later fill (the larger id) at that instant, the 시장가격 the statistics writer stored: 52.
+    await openOrderIntake(t.db, { adminId: creatorId });
+    const live = await market();
+    const bidder = (await createUser(t.db, { balanceCoin: 1_000n })).user.id;
+    const taker = (await createUser(t.db, { balanceCoin: 1_000n })).user.id;
+    for (const limitPriceCoin of [55, 52]) {
+      const rested = await placeTestOrder(t.db, {
+        ownerId: bidder,
+        marketId: live.id,
+        limitPriceCoin,
+      });
+      expect(rested.kind).toBe('placed');
+    }
+    const walked = await placeTestOrder(t.db, {
+      ownerId: taker,
+      marketId: live.id,
+      outcome: 'NO',
+      timeInForce: 'ioc',
+      limitPriceCoin: 99,
+      qty: 2,
+    });
+    if (walked.kind !== 'placed') throw new Error(`expected a placed order, got ${walked.kind}`);
+    expect(walked.fills.map((fill) => [fill.priceCoin, fill.yesPriceCoin])).toEqual([
+      [45, 55],
+      [48, 52],
+    ]);
+    expect(new Set(walked.fills.map((fill) => fill.createdAt.getTime())).size).toBe(1);
+    const { lastPrice } = (await get(`/api/v1/markets/${live.id}`)).json<{ data: Market }>().data;
+    expect(lastPrice).toBe(52);
+    for (const resolution of ['1m', '1h'] as const) {
+      const { points } = await series(`/api/v1/markets/${live.id}/ticks?resolution=${resolution}`);
+      expect(points.length, resolution).toBeGreaterThan(0);
+      expect(new Set(points.map((point) => point.pYesBp)), resolution).toEqual(new Set([5_200]));
+    }
+  });
+
+  it('carries the 시장가격 as of 24 hours ago on the detail: the last fill by then, else null (#121)', async () => {
+    const now = Date.now();
+    const m = await market({ lastPrice: 70 });
+    await writeHistory(m.id, [
+      { at: now - 26 * HOUR_MS, yes: 35 },
+      { at: now - 25 * HOUR_MS, yes: 40 },
+      { at: now - 23 * HOUR_MS, yes: 70 },
+    ]);
+    const detailOf = async (id: string) =>
+      (await get(`/api/v1/markets/${id}`)).json<{ data: Market }>().data;
+    expect((await detailOf(m.id)).lastPrice24hAgo).toBe(40);
+    // A card carries none: the change badge is the detail's (ADR-0107 결정 4 '변화량').
+    const [card] = (await get('/api/v1/markets')).json<ListPage>().data;
+    expect(card).not.toHaveProperty('lastPrice24hAgo');
+    // Only fills within the day: no baseline — the open's 50% never is one.
+    const young = await market({ lastPrice: 70 });
+    await writeHistory(young.id, [{ at: now - 23 * HOUR_MS, yes: 70 }]);
+    expect((await detailOf(young.id)).lastPrice24hAgo).toBeNull();
+    // Carried whatever the status: the screen decides where the badge shows.
+    const closed = await market({ status: 'closed', lastPrice: 61 });
+    await writeHistory(closed.id, [{ at: now - 30 * HOUR_MS, yes: 61 }]);
+    expect((await detailOf(closed.id)).lastPrice24hAgo).toBe(61);
+    // The open writes no fill, so a market just opened has no point and no baseline.
+    const { market: opened } = await createOpenedMarket(t.db, {
+      createdBy: creatorId,
+      categoryId: category.id,
+    });
+    expect(await detailOf(opened.id)).toMatchObject({
+      lastPrice: null,
+      lastFillAt: null,
+      lastPrice24hAgo: null,
+    });
+    expect((await series(`/api/v1/markets/${opened.id}/ticks`)).points).toEqual([]);
   });
 
   it('downsamples ticks in SQL to about TICKS_MAX_POINTS, keeping the first and last', async () => {
     const open = await market();
     const base = new Date('2026-09-01T00:00:00.000Z').getTime();
     const total = 1_200;
-    const values = Array.from({ length: total }, (_, i) => ({
-      marketId: open.id,
-      ts: new Date(base + i * 1_000),
-      pYesBp: 4_000 + (i % 100),
-      trigger: 'trade' as const,
-    }));
-    // One statement per chunk: a 1,200-row VALUES list is fine for Postgres.
-    for (let i = 0; i < total; i += 400) {
-      await t.db.insert(schema.priceTicks).values(values.slice(i, i + 400));
-    }
+    await writeHistory(
+      open.id,
+      Array.from({ length: total }, (_, i) => ({ at: base + i * 1_000, yes: yesOf(i) })),
+    );
 
     const raw = await series(`/api/v1/markets/${open.id}/ticks`);
-    // `raw` serves stored ticks, so it reports no stride at all; nothing was left out either.
+    // `raw` serves the fills, so it reports no stride at all; nothing was left out either.
     expect(raw).toMatchObject({ resolution: 'raw', bucketSeconds: 0, truncated: false });
     const ticks = raw.points;
     expect(ticks.length).toBeLessThanOrEqual(TICKS_MAX_POINTS);
     expect(ticks.length).toBeGreaterThanOrEqual(TICKS_MAX_POINTS / 2);
-    expect(ticks[0]).toEqual({ ts: new Date(base).toISOString(), pYesBp: 4_000, trigger: 'trade' });
+    expect(ticks[0]).toEqual({
+      ts: new Date(base).toISOString(),
+      pYesBp: bpOf(0),
+      trigger: 'trade',
+    });
     expect(ticks.at(-1)).toEqual({
       ts: new Date(base + (total - 1) * 1_000).toISOString(),
-      pYesBp: 4_000 + ((total - 1) % 100),
+      pYesBp: bpOf(total - 1),
       trigger: 'trade',
     });
     for (let i = 1; i < ticks.length; i += 1) {
@@ -1298,15 +1554,10 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     // the oldest row, which is where the answer used to come back one point over the maximum.
     const dense = await market();
     const denseTotal = TICKS_MAX_POINTS * 2;
-    const denseValues = Array.from({ length: denseTotal }, (_, i) => ({
-      marketId: dense.id,
-      ts: new Date(base + i * 1_000),
-      pYesBp: 5_000 + (i % 100),
-      trigger: 'trade' as const,
-    }));
-    for (let i = 0; i < denseTotal; i += 500) {
-      await t.db.insert(schema.priceTicks).values(denseValues.slice(i, i + 500));
-    }
+    await writeHistory(
+      dense.id,
+      Array.from({ length: denseTotal }, (_, i) => ({ at: base + i * 1_000, yes: yesOf(i + 7) })),
+    );
     const capped = await series(`/api/v1/markets/${dense.id}/ticks`);
     const cappedTicks = capped.points;
     expect(capped.truncated).toBe(false);
@@ -1325,7 +1576,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     // The SAME window at `1m` is no longer served raw: it is a 60-second grid binned from the
     // epoch, with both ends of the window pinned as boundaries. 00:01:40 and 00:03:20 are the
     // requested edges; 00:02:00 and 00:03:00 are the only interior grid points, each carrying
-    // the tick in force there (one tick per second, so the boundary tick itself).
+    // the fill in force there (one fill per second, so the boundary fill itself).
     const minute = await series(
       `/api/v1/markets/${open.id}/ticks?from=${from}&to=${to}&resolution=1m`,
     );
@@ -1337,10 +1588,10 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       to,
     });
     expect(minute.points).toEqual([
-      { ts: from, pYesBp: 4_000, trigger: 'trade' },
-      { ts: new Date(base + 120_000).toISOString(), pYesBp: 4_020, trigger: 'trade' },
-      { ts: new Date(base + 180_000).toISOString(), pYesBp: 4_080, trigger: 'trade' },
-      { ts: to, pYesBp: 4_000, trigger: 'trade' },
+      { ts: from, pYesBp: bpOf(100), trigger: 'trade' },
+      { ts: new Date(base + 120_000).toISOString(), pYesBp: bpOf(120), trigger: 'trade' },
+      { ts: new Date(base + 180_000).toISOString(), pYesBp: bpOf(180), trigger: 'trade' },
+      { ts: to, pYesBp: bpOf(200), trigger: 'trade' },
     ]);
 
     const inverted = await get(`/api/v1/markets/${open.id}/ticks?from=${to}&to=${from}`);
@@ -1350,7 +1601,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     });
     expect((await get(`/api/v1/markets/${open.id}/ticks?resolution=5m`)).statusCode).toBe(400);
 
-    // A market without ticks (no fill yet: opening writes none) is an empty series — at every
+    // A market without fills (opening writes none) is an empty series — at every
     // resolution: the boundaries have nothing to carry forward and vanish.
     const bare = await market();
     for (const resolution of ['raw', '1m', '1h']) {
@@ -1371,18 +1622,14 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     const base = new Date('2026-09-01T00:00:00.000Z').getTime();
     const extra = 50;
     const total = TICKS_SCAN_MAX + extra;
-    const values = Array.from({ length: total }, (_, i) => ({
-      marketId: open.id,
-      ts: new Date(base + i * 1_000),
-      pYesBp: 3_000 + (i % 100),
-      trigger: 'trade' as const,
+    const points = Array.from({ length: total }, (_, i) => ({
+      at: base + i * 1_000,
+      yes: yesOf(i),
     }));
-    // The two ticks astride the bound share a millisecond: the (ts, id) DESC order keeps the
-    // later id (#extra) and drops #extra - 1.
-    values[extra - 1]!.ts = values[extra]!.ts;
-    for (let i = 0; i < total; i += 500) {
-      await t.db.insert(schema.priceTicks).values(values.slice(i, i + 500));
-    }
+    // The two fills astride the bound share a millisecond (as an intake's fills do): the
+    // (created_at, id) DESC order keeps the later id (#extra) and drops #extra - 1.
+    points[extra - 1]!.at = points[extra]!.at;
+    await writeHistory(open.id, points);
 
     const res = await series(`/api/v1/markets/${open.id}/ticks`);
     const ticks = res.points;
@@ -1395,7 +1642,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     // The first served point is the oldest of the newest TICKS_SCAN_MAX, not tick #0.
     expect(ticks[0]).toEqual({
       ts: new Date(base + extra * 1_000).toISOString(),
-      pYesBp: 3_000 + (extra % 100),
+      pYesBp: bpOf(extra),
       trigger: 'trade',
     });
     expect(ticks.at(-1)!.ts).toBe(new Date(base + (total - 1) * 1_000).toISOString());
@@ -1430,14 +1677,9 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     // 1970 epoch with a +00 origin, never from `from` and never from the session time zone.
     const open = await market();
     const t0 = new Date('2026-09-01T00:00:00.000Z').getTime();
-    await t.db.insert(schema.priceTicks).values([
-      { marketId: open.id, ts: new Date(t0), pYesBp: 4_000, trigger: 'trade' as const },
-      {
-        marketId: open.id,
-        ts: new Date(t0 + 3 * HOUR_MS),
-        pYesBp: 6_500,
-        trigger: 'trade' as const,
-      },
+    await writeHistory(open.id, [
+      { at: t0, yes: 40 },
+      { at: t0 + 3 * HOUR_MS, yes: 65 },
     ]);
 
     const window = await series(
@@ -1471,21 +1713,19 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
   });
 
   it('coarsens the stride until the window fits and stays bounded by the answer', async () => {
-    // 20,000 ticks across one day: a bucketed read costs one index descent per OUTPUT point,
+    // 20,000 fills across one day: a bucketed read costs one index descent per OUTPUT point,
     // so the TICKS_SCAN_MAX row cap does not apply and density cannot push the answer over
     // TICKS_MAX_POINTS or set `truncated`.
     const open = await market();
     const base = new Date('2026-09-01T00:00:00.000Z').getTime();
     const total = 20_000;
-    const values = Array.from({ length: total }, (_, i) => ({
-      marketId: open.id,
-      ts: new Date(base + Math.floor((i * DAY_MS) / total)),
-      pYesBp: 1_000 + (i % 9_000),
-      trigger: 'trade' as const,
-    }));
-    for (let i = 0; i < total; i += 1_000) {
-      await t.db.insert(schema.priceTicks).values(values.slice(i, i + 1_000));
-    }
+    await writeHistory(
+      open.id,
+      Array.from({ length: total }, (_, i) => ({
+        at: base + Math.floor((i * DAY_MS) / total),
+        yes: yesOf(i),
+      })),
+    );
 
     const day = await series(
       `/api/v1/markets/${open.id}/ticks?from=${iso(base)}&to=${iso(base + DAY_MS)}&resolution=1m`,
@@ -1531,12 +1771,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     // still measures correctly, so that is what the client sends now.
     const open = await market();
     const twoHoursAgo = open.openAt!.getTime() - 2 * HOUR_MS;
-    await t.db.insert(schema.priceTicks).values({
-      marketId: open.id,
-      ts: new Date(twoHoursAgo),
-      pYesBp: 4_000,
-      trigger: 'trade' as const,
-    });
+    await writeHistory(open.id, [{ at: twoHoursAgo, yes: 40 }]);
 
     const windowed = await series(
       `/api/v1/markets/${open.id}/ticks?windowSeconds=3600&resolution=1m`,
@@ -1544,7 +1779,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     // The window is exactly an hour wide and both ends are the service's own reading.
     const span = Date.parse(windowed.to) - Date.parse(windowed.from);
     expect(span).toBe(HOUR_MS);
-    // And it is anchored to NOW, not to anything the caller said: the older tick is outside it.
+    // And it is anchored to NOW, not to anything the caller said: the older fill is outside it.
     expect(Date.parse(windowed.from)).toBeGreaterThan(twoHoursAgo);
   });
 
@@ -1559,9 +1794,9 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     const openedAt = open.openAt!.getTime();
     const outside = openedAt - 2 * HOUR_MS;
     const inside = openedAt - 5 * 60 * 1_000;
-    await t.db.insert(schema.priceTicks).values([
-      { marketId: open.id, ts: new Date(outside), pYesBp: 4_000, trigger: 'trade' as const },
-      { marketId: open.id, ts: new Date(inside), pYesBp: 5_500, trigger: 'trade' as const },
+    await writeHistory(open.id, [
+      { at: outside, yes: 40 },
+      { at: inside, yes: 55 },
     ]);
 
     // No `resolution` at all: this is the default the schema fills in, and it is the raw path.
@@ -1599,12 +1834,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     // DEFAULTED end, never the caller's.
     const open = await market();
     const tickAt = open.openAt!.getTime() - HOUR_MS;
-    await t.db.insert(schema.priceTicks).values({
-      marketId: open.id,
-      ts: new Date(tickAt),
-      pYesBp: 4_000,
-      trigger: 'trade' as const,
-    });
+    await writeHistory(open.id, [{ at: tickAt, yes: 40 }]);
 
     // A client paging backwards asks for history older than the market itself. Both
     // resolutions must answer the window that was asked for, and answer it empty: `to` used
@@ -1653,18 +1883,9 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
 
   it('lists each market as its summary alone: no sparkline, the participant count as stored', async () => {
     // ADR-0062: the card draws no price trend (ADR-0061 decision 1, item 4), so the list row is
-    // `MarketSummary` field for field, even for a market whose ticks the old card sampled.
-    const traded = await market({ title: '틱 있는 시장', lastPrice: 61 });
-    await t.db.insert(schema.priceTicks).values({
-      marketId: traded.id,
-      ts: new Date(Date.now() - 30 * 60 * 1_000),
-      pYesBp: 6_100,
-      trigger: 'trade' as const,
-    });
-    await t.db
-      .update(schema.markets)
-      .set({ traderCount: 3 })
-      .where(eq(schema.markets.id, traded.id));
+    // `MarketSummary` field for field, even for a market with a price history.
+    const traded = await market({ title: '틱 있는 시장', lastPrice: 61, traderCount: 3 });
+    await writeHistory(traded.id, [{ at: Date.now() - 30 * 60 * 1_000, yes: 61 }]);
     const quiet = await market({ title: '체결 없는 시장' });
 
     const page = (await get('/api/v1/markets')).json<ListPage>();

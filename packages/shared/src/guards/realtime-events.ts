@@ -20,11 +20,13 @@ export interface RealtimeEventEntry {
 export const REALTIME_EVENT_REGISTRY = {
   'market:tick': {
     channel: 'market',
-    reason: '체결 뒤 시장가격·거래량·참여자 수(N02 §5): 시장 상세와 같은 공개 집계',
+    reason:
+      '체결 뒤 시장가격·그 체결의 서버 시각·누적 거래량·체결 수·참여자 수(사람 계정, #121): 시장 상세와 같은 공개 집계',
   },
   'market:trade': {
     channel: 'market',
-    reason: '최근 체결 한 건: 계정·주문 없이 익명으로만(N01 §5)',
+    reason:
+      '최근 체결 한 건(N01 §5, #121): 계약·체결가·YES 기준 값·수량·금액·서버 시각. 계정·주문 id·테이커 방향·계정 유형은 싣지 않는다',
   },
   'market:status': {
     channel: 'market',

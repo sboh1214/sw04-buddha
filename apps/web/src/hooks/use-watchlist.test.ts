@@ -192,6 +192,7 @@ describe('the watchlist queries', () => {
       judgementDelayed: false,
       disputeUnderReview: false,
       lastPrice: 63,
+      lastFillAt: '2026-09-07T00:00:00.000Z',
       volumeCoin: '130000',
       tradeCount: 11,
       traderCount: 5,

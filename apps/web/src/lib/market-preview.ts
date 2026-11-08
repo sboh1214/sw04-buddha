@@ -53,6 +53,7 @@ export function toPreviewMarket(
     base !== undefined && isPublicMarketStatus(base.status)
       ? {
           lastPrice: base.lastPrice,
+          lastFillAt: base.lastFillAt,
           status: base.status,
           judgementDelayed: base.judgementDelayed,
           disputeUnderReview: base.disputeUnderReview,
@@ -68,6 +69,7 @@ export function toPreviewMarket(
         }
       : {
           lastPrice: null,
+          lastFillAt: null,
           status: 'open' as const,
           judgementDelayed: false,
           disputeUnderReview: false,

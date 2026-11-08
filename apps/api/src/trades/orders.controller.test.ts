@@ -9,7 +9,9 @@
  * answer, the lock back, nothing revealed of another account's order, no order limit, intake,
  * onboarding, restriction or role check, the ledger-held market's refusal, and its race with a
  * crossing order; the cancel processing itself is packages/db order-cancel.test.ts's. And the
- * `market:book` signal (#179, ADR-0114) both publish after COMMIT when the live book changed.
+ * `market:book` signal (#179, ADR-0114) both publish after COMMIT when the live book changed, and
+ * an intake that filled publishes its anonymous `market:trade` rows and one `market:tick` after it
+ * (#121, ADR-0116).
  */
 import { randomUUID } from 'node:crypto';
 import { lockAdminRoles, lockLedgerAccounts, lockMarket, schema } from '@buddha/db';
@@ -35,17 +37,24 @@ import {
   ORDER_ACCEPTING_SETTING,
   ORDER_RATE_LIMIT_SETTING,
   orderBookSchema,
+  marketTickEventSchema,
+  marketTradeEventSchema,
   myFillSchema,
   orderSchema,
   placeOrderResultSchema,
   type AdminMarket,
+  type Fill,
+  type Market,
+  type MarketRealtimeEvent,
   type MyFill,
   type Order,
   type PlaceOrderResult,
 } from '@buddha/shared';
 import { count, eq } from 'drizzle-orm';
+import { type Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
+import { REDIS } from '../infra/redis/redis.provider.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
 import { OrderService } from './order.service.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
@@ -687,6 +696,8 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
     // Each signal with the public book read the moment it is sent: the change is committed.
     const signals: { marketId: string; ts: string; book: unknown }[] = [];
     vi.spyOn(publisher, 'publishMarket').mockImplementation(async (marketId, event) => {
+      // A fill's `market:trade` and `market:tick` (#121) are the next test's.
+      if (event.type === 'market:trade' || event.type === 'market:tick') return;
       expect(event.type).toBe('market:book');
       const book = orderBookSchema.parse(dataOf(await read(`/markets/${marketId}/book`, null)));
       signals.push({ marketId, ts: event.ts, book: book.contracts[0] });
@@ -784,6 +795,174 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
     expect((await send(a)).statusCode).toBe(500);
     expect(await orderRows()).toBe(0);
     expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('publishes one market:tick and each fill as an anonymous market:trade after COMMIT, and neither for an intake that filled nothing (#121)', async () => {
+    const publisher = t.app.get(MarketPublisher);
+    // Every market event in issue order; at each tick the public detail, read the moment it is
+    // sent — the statistics it carries are committed.
+    const events: MarketRealtimeEvent[] = [];
+    const detailAtTick: Market[] = [];
+    vi.spyOn(publisher, 'publishMarket').mockImplementation(async (marketId, event) => {
+      events.push(event);
+      if (event.type === 'market:tick') {
+        detailAtTick.push(dataOf<Market>(await read(`/markets/${marketId}`, null)));
+      }
+    });
+    /** The events since the last call, the book signals left out (the #179 test's). */
+    const fillEvents = () => {
+      const out = events.filter((event) => event.type !== 'market:book');
+      events.length = 0;
+      return out;
+    };
+    const c = await member();
+    await open();
+
+    // A rests a NO bid at 40 for 2: no fill, no trade, no tick.
+    placed(await send(a, { outcome: 'NO', qty: 2 }));
+    expect(fillEvents()).toEqual([]);
+
+    // B's IOC YES buy meets it: a pair mint, ONE fill at its YES value 60 (#177 11·12항).
+    const requestId = randomUUID();
+    placed(await send(b, { timeInForce: 'ioc', limitPriceCoin: 99 }, { requestId }));
+    const [bFill] = dataOf<MyFill[]>(await read(`/me/fills?marketId=${market.id}`, b));
+    const first = fillEvents();
+    // The tick leads the burst (any order works: the gateway sends every event reliably).
+    expect(first.map((event) => event.type)).toEqual(['market:tick', 'market:trade']);
+    const trade = marketTradeEventSchema.parse(first[1]);
+    expect(trade).toEqual({
+      type: 'market:trade',
+      marketId: market.id,
+      fillId: bFill!.id,
+      outcome: 'YES',
+      priceCoin: 60,
+      yesPriceCoin: 60,
+      qty: 1,
+      amountCoin: '60',
+      ts: bFill!.createdAt,
+    });
+    // Exactly the public row's names: no account, order, taker direction or account type.
+    expect(Object.keys(first[1]!).sort()).toEqual(
+      [
+        'amountCoin',
+        'fillId',
+        'marketId',
+        'outcome',
+        'priceCoin',
+        'qty',
+        'ts',
+        'type',
+        'yesPriceCoin',
+      ].sort(),
+    );
+    // The same fill as the public recent fills answer it (`publicFill`, one mapping).
+    const [row] = dataOf<Fill[]>(await read(`/markets/${market.id}/fills`, null));
+    const { fillId, ts, type: _type, marketId: _marketId, ...rest } = trade;
+    expect(row).toEqual({ id: fillId, ...rest, createdAt: ts });
+    expect(marketTickEventSchema.parse(first[0])).toEqual({
+      type: 'market:tick',
+      marketId: market.id,
+      lastPrice: 60,
+      volumeCoin: '60',
+      tradeCount: 1,
+      traderCount: 2,
+      ts: bFill!.createdAt,
+    });
+    expect(detailAtTick.at(-1)).toMatchObject({
+      lastPrice: 60,
+      lastFillAt: bFill!.createdAt,
+      volumeCoin: '60',
+      tradeCount: 1,
+      traderCount: 2,
+    });
+    // Its replay wrote nothing and publishes nothing.
+    expect(
+      placed(await send(b, { timeInForce: 'ioc', limitPriceCoin: 99 }, { requestId })).replayed,
+    ).toBe(true);
+    expect(fillEvents()).toEqual([]);
+
+    // A rests a NO bid at 45; B's IOC for 2 takes YES 55 (it) then 60 (the first bid's last):
+    // one tick with the intake's final values, then two trades in fill order.
+    placed(await send(a, { outcome: 'NO', limitPriceCoin: 45 }));
+    expect(fillEvents()).toEqual([]);
+    placed(await send(b, { timeInForce: 'ioc', limitPriceCoin: 99, qty: 2 }));
+    const two = fillEvents();
+    expect(two.map((event) => event.type)).toEqual(['market:tick', 'market:trade', 'market:trade']);
+    const [t1, t2] = two.slice(1).map((event) => marketTradeEventSchema.parse(event));
+    expect([t1?.yesPriceCoin, t2?.yesPriceCoin]).toEqual([55, 60]);
+    expect(BigInt(t1!.fillId)).toBeLessThan(BigInt(t2!.fillId));
+    expect(two[0]).toMatchObject({
+      lastPrice: 60,
+      volumeCoin: '175',
+      tradeCount: 3,
+      traderCount: 2,
+      ts: t2!.ts,
+    });
+
+    // A sells one NO at 45 (rests); C's IOC NO buy takes it: a NO row at 45 whose YES value is
+    // 55, and a third person.
+    placed(await send(a, { outcome: 'NO', side: 'sell', limitPriceCoin: 45 }));
+    expect(fillEvents()).toEqual([]);
+    placed(await send(c, { outcome: 'NO', timeInForce: 'ioc', limitPriceCoin: 99 }));
+    const no = fillEvents();
+    expect(no[1]).toMatchObject({
+      outcome: 'NO',
+      priceCoin: 45,
+      yesPriceCoin: 55,
+      amountCoin: '45',
+    });
+    expect(no[0]).toMatchObject({
+      lastPrice: 55,
+      volumeCoin: '220',
+      tradeCount: 4,
+      traderCount: 3,
+    });
+    expect(detailAtTick.at(-1)).toMatchObject({ lastPrice: 55, volumeCoin: '220', traderCount: 3 });
+
+    // No person's id rides in any of them (the 운영 마켓메이커 has none to hide either: #177 13항).
+    const wire = JSON.stringify([first, two, no]);
+    for (const id of [a.id, b.id, c.id]) expect(wire).not.toContain(id);
+
+    // Nothing for an immediate order that fills nothing, a rejected one, or one that only rests.
+    placed(await send(c, { outcome: 'NO', timeInForce: 'ioc', limitPriceCoin: 5 }));
+    const scheduled = await createMarket(t.db, { status: 'scheduled' });
+    placed(await send(c, {}, { marketId: scheduled.id }));
+    placed(await send(c, { limitPriceCoin: 10 }));
+    expect(fillEvents()).toEqual([]);
+
+    // A filling intake that rolls back afterwards publishes nothing and moves no statistic: A's
+    // IOC NO buy would meet C's YES bid at 10 as NO at 90.
+    vi.spyOn(
+      OrderService.prototype as unknown as { marketRef: () => Promise<never> },
+      'marketRef',
+    ).mockRejectedValueOnce(new Error('after the intake'));
+    expect(
+      (await send(a, { outcome: 'NO', timeInForce: 'ioc', limitPriceCoin: 99 })).statusCode,
+    ).toBe(500);
+    expect(fillEvents()).toEqual([]);
+    expect(dataOf<Market>(await read(`/markets/${market.id}`, null))).toMatchObject({
+      tradeCount: 4,
+      volumeCoin: '220',
+    });
+  });
+
+  it('answers a filled order when Redis refuses the trade and tick it publishes after COMMIT (#121)', async () => {
+    await open();
+    placed(await send(a, { outcome: 'NO' }));
+    const publish = vi
+      .spyOn(t.app.get<Redis>(REDIS), 'publish')
+      .mockRejectedValue(new Error('redis down'));
+    const answer = placed(await send(b, { timeInForce: 'ioc', limitPriceCoin: 99 }));
+    expect(answer.order).toMatchObject({ status: 'filled', filledQty: 1 });
+    const types = publish.mock.calls.map(
+      ([, message]) => (JSON.parse(String(message)) as { type: string }).type,
+    );
+    expect(types).toEqual(expect.arrayContaining(['market:book', 'market:trade', 'market:tick']));
+    publish.mockRestore();
+    expect(dataOf<Market>(await read(`/markets/${market.id}`, null))).toMatchObject({
+      lastPrice: 60,
+      tradeCount: 1,
+    });
   });
 
   async function positionsOf(who: TestUser) {

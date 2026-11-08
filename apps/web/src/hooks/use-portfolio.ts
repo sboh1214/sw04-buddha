@@ -397,8 +397,9 @@ export function liveMarketStatus(held: MarketStatus, live: MarketStatus | undefi
  *
  * The live row is the fresher of the two in the ordinary case: MY joins every held
  * market's room, so `market:tick` patches it, while `marketLastPrice` is a join frozen when the
- * list was fetched. For it to be the OLDER one it has to have MISSED a move — `market:tick` goes
- * out `.volatile`, so a congested tab may simply lose one (A-M4-7); a first page load is
+ * list was fetched. For it to be the OLDER one it has to have MISSED a move — `market:tick` is
+ * no longer volatile (ADR-0116 10-6 replaced A-M4-7), but a socket misses what was sent while it
+ * was disconnected; a first page load is
  * subscribed only after the SSR read (A-M4-8); past `REALTIME_ROOMS_MAX` some held markets are
  * in no room at all; and a failed refetch keeps the row it last answered.
  *

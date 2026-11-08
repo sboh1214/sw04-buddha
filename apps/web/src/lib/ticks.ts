@@ -78,8 +78,9 @@ export function ticksQueryFor(range: TickRange): TicksQuery {
 /**
  * What the CACHE holds under `['ticks', id, range]`: a server answer, plus the points this
  * tab's own socket drew onto it. The tag is the only difference — a point the socket appended
- * names the trade it came from, and a server point never does, because `price_ticks` carries
- * no counter and the wire DTO is not widened for one.
+ * names the trade it came from, and a server point never does, because the wire `PriceTick`
+ * carries no counter (its points are fills since #121, ADR-0116) and the DTO is not widened
+ * for one.
  *
  * The tag answers what a window cannot: could this answer have held this point? `PriceSeries`'
  * own `tradeCount` asks the same question about the right edge, and both are compared with
@@ -191,9 +192,9 @@ export function appendTickToSeries(
   if (!ordered) return undefined;
 
   // The event carries no `trigger`, and nothing draws one — the chart is a single step line.
-  // 'trade' is the honest label for a live point; a tick published by a status transition is
-  // relabelled by the next fetch, which reads the stored row. The fill's price is a whole
-  // percent and the series is in basis points, hence the ×100.
+  // Only an order intake that filled publishes a tick (#121, ADR-0116), and every server point
+  // is a fill labelled 'trade', so the live point carries what the next fetch returns. The
+  // fill's price is a whole percent and the series is in basis points, hence the ×100.
   const point: CachedTick = {
     ts: event.ts,
     pYesBp: event.lastPrice * 100,

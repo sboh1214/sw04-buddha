@@ -75,9 +75,10 @@ import { type CachedSeries, appendTick } from '@/lib/ticks';
  * answers are joined through as well (query-client.ts): one ordering rule for both deliveries,
  * so whichever arrives second is a no-op instead of a rollback. Nothing here restates a reducer.
  *
- * `market:tick` and `market:trade` have no publisher until the market figures (#121): the CLOB
- * fills since #119 and publishes `user:` events (ADR-0112) and `market:book` (#179, ADR-0114),
- * not those two; their handlers stay so a fill arrives already wired.
+ * `market:tick` and `market:trade` come from the order intake after the COMMIT of an intake that
+ * filled (#121, ADR-0116), beside its `user:` events (ADR-0112) and `market:book` (#179,
+ * ADR-0114): one `market:trade` per fill (the public 최근 체결 row, anonymous) and one
+ * `market:tick` with the market's figures after the intake (`ts` = the last fill's time).
  *
  * `market:book` (#179, ADR-0114) is a signal with no state: the public book changed, so its
  * `['market-book', id]` is asked again (`refreshBook`). Nothing reads that key until the 호가창
@@ -677,9 +678,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       'market:trade': (raw: unknown) => {
         const parsed = marketTradeEventSchema.safeParse(raw);
         if (!parsed.success) return;
-        // Invalidate, never prepend a synthetic row: the event has no `amountCoin` while the REST
-        // `Fill` does, and `['market-fills', id]` is SHARED with the admin detail, which
-        // renders formatCoin(parseCoinAmount(fill.amountCoin)) and would throw on a null.
+        // Invalidate, never prepend a row: the event carries the public row since #121 (ADR-0116),
+        // but merging it into `['market-fills', id]` — SHARED with the admin detail — and trimming
+        // the list to its twenty is the recent-fill area's (#122), so the refetch stays the path.
         refreshFills(parsed.data.marketId);
       },
 

@@ -26,6 +26,8 @@ import { orders } from './orders.js';
  * write for the operators' and the metrics' reads (#20 '사람이 낀 체결', #121) and never leave in
  * a response: the public fill (`Fill`) and an owner's own fill (`MyFill`) name no counterparty
  * (ADR-0107 결정 5 '#179·#119'). No rule version (결정 5) and no personal probability (N04 §5).
+ * The rows are the market's price history (#121, ADR-0116): its chart, its recent fills and its
+ * statistics (`markets.last_price` …, market-stats.ts) all read these, never a copy.
  */
 export const fills = pgTable(
   'fills',
@@ -70,7 +72,12 @@ export const fills = pgTable(
     createdAt: createdAt(),
   },
   (t) => [
-    index('fills_market_id_created_at_idx').on(t.marketId, desc(t.createdAt)),
+    // (market_id, created_at, id): the market's price history (#121) read as one index scan in
+    // either direction — the public recent fills (`created_at DESC, id DESC LIMIT n`), the
+    // chart's raw series, grid samples and truncation probe, the 24-hours-ago price
+    // (`marketPriceAt`) and 추천's `(asOf − 24h, asOf]` volume. The key shape of
+    // `price_ticks_market_id_ts_id_idx` (migration 0010), which the chart read before.
+    index('fills_market_id_created_at_id_idx').on(t.marketId, t.createdAt, t.id),
     index('fills_incoming_order_id_idx').on(t.incomingOrderId),
     index('fills_resting_order_id_idx').on(t.restingOrderId),
     // An owner's own fills, newest first, from either side (`GET /me/fills`).

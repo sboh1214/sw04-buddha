@@ -37,6 +37,7 @@ import {
   positionsQuerySchema,
   priceSeriesSchema,
   priceTickSchema,
+  publicFill,
   slugify,
   ticksQuerySchema,
   updateMarketBodySchema,
@@ -59,6 +60,7 @@ const summary = {
   judgementDelayed: false,
   disputeUnderReview: false,
   lastPrice: 52,
+  lastFillAt: at,
   volumeCoin: '12345',
   tradeCount: 3,
   traderCount: 2,
@@ -106,6 +108,7 @@ const market = {
   ruleVersion: 1,
   ruleVersions: [versionOne],
   judgementDelay: null,
+  lastPrice24hAgo: 48,
 };
 const event = {
   id: '1',
@@ -142,10 +145,10 @@ const order = {
 const fill = {
   id: '7',
   outcome: 'YES',
-  side: 'buy',
+  priceCoin: 52,
+  yesPriceCoin: 52,
   qty: 10,
   amountCoin: '520',
-  priceAvgBp: 5200,
   createdAt: at,
 };
 const position = {
@@ -202,16 +205,27 @@ describe('read DTOs', () => {
     const untraded = {
       ...summary,
       lastPrice: null,
+      lastFillAt: null,
       volumeCoin: '0',
       tradeCount: 0,
       traderCount: 0,
     };
     expect(marketSummarySchema.parse(untraded).lastPrice).toBeNull();
+    expect(marketSummarySchema.parse(untraded).lastFillAt).toBeNull();
+    expect(
+      marketSchema.parse({ ...market, ...untraded, lastPrice24hAgo: null }).lastPrice24hAgo,
+    ).toBeNull();
     expect(marketSchema.parse({ ...market, lastPrice: null }).lastPrice).toBeNull();
     expect(positionSchema.parse({ ...position, marketLastPrice: null }).marketLastPrice).toBeNull();
     // The field stays required, so a mapper that forgot it fails instead of reading as untraded.
     const { lastPrice: _price, ...withoutPrice } = summary;
     expect(marketSummarySchema.safeParse(withoutPrice).success).toBe(false);
+    const { lastFillAt: _at, ...withoutTime } = summary;
+    expect(marketSummarySchema.safeParse(withoutTime).success).toBe(false);
+    const { lastPrice24hAgo: _dayAgo, ...withoutDayAgo } = market;
+    expect(marketSchema.safeParse(withoutDayAgo).success).toBe(false);
+    // The 24-hour-ago price is the detail's: no card carries it.
+    expect(marketSummarySchema.parse(market)).not.toHaveProperty('lastPrice24hAgo');
     // The AMM probability and the slippage guards are gone from the shapes.
     expect(marketSummarySchema.parse({ ...summary, pYesBp: 5250 })).not.toHaveProperty('pYesBp');
     expect(orderSchema.parse({ ...order, maxCostCoin: '600' })).not.toHaveProperty('maxCostCoin');
@@ -222,7 +236,6 @@ describe('read DTOs', () => {
       ...market,
       createdBy: 'admin-1',
       updatedAt: at,
-      netCollectedCoin: '520',
       openInterest: { yes: 10, no: 0 },
       settlementSteps: [
         {
@@ -376,7 +389,10 @@ describe('read DTOs', () => {
     expect(
       adminMarketSchema.safeParse({ ...admin, missingOpenItems: ['tags', 'deadline'] }).success,
     ).toBe(false);
-    expect(marketSchema.parse(admin)).not.toHaveProperty('netCollectedCoin');
+    // The AMM's net collection is gone (#121): a CLOB market collects nothing.
+    expect(adminMarketSchema.parse({ ...admin, netCollectedCoin: '520' })).not.toHaveProperty(
+      'netCollectedCoin',
+    );
     // The rule items are in the open-items check's list (#23); the old single item is not.
     expect(
       adminMarketSchema.parse({ ...admin, missingOpenItems: ['title', 'eventDeadline', 'tags'] })
@@ -442,8 +458,12 @@ describe('read DTOs', () => {
     expect(marketSummarySchema.safeParse({ ...summary, lastPrice: 0 }).success).toBe(false);
     expect(marketSummarySchema.safeParse({ ...summary, lastPrice: 100 }).success).toBe(false);
     expect(marketSummarySchema.safeParse({ ...summary, volumeCoin: '1.5' }).success).toBe(false);
+    expect(marketSchema.safeParse({ ...market, lastPrice24hAgo: 0 }).success).toBe(false);
+    expect(marketSchema.safeParse({ ...market, lastPrice24hAgo: 100 }).success).toBe(false);
     expect(fillSchema.safeParse({ ...fill, userId: 'u' }).success).toBe(true); // stripped
     expect(fillSchema.parse({ ...fill, userId: 'u' })).not.toHaveProperty('userId');
+    expect(fillSchema.safeParse({ ...fill, yesPriceCoin: 100 }).success).toBe(false);
+    expect(fillSchema.safeParse({ ...fill, priceCoin: 0 }).success).toBe(false);
   });
 
   it('carry no card sparkline on any market shape (ADR-0062)', () => {
@@ -674,7 +694,6 @@ describe('read DTOs', () => {
       ...delayed,
       createdBy: 'admin-1',
       updatedAt: at,
-      netCollectedCoin: '0',
       openInterest: { yes: 0, no: 0 },
       settlementSteps: [],
       events: [],
@@ -840,6 +859,69 @@ describe('own order and fill DTOs (#119)', () => {
     expect(myOrdersQuerySchema.safeParse({ state: 'open' }).success).toBe(false);
     expect(myOrdersQuerySchema.safeParse({ marketId: 'x' }).success).toBe(false);
     expect(myFillsQuerySchema.parse({ marketId })).toEqual({ marketId, limit: 20 });
+  });
+});
+
+describe('the public fill (#121)', () => {
+  // A `fills` row as @buddha/db reads it: owners, orders, account types and the direction too.
+  const row = {
+    id: 12,
+    marketId,
+    kind: 'trade' as const,
+    incomingOrderId: marketId,
+    restingOrderId: marketId,
+    incomingOwnerId: 'member-a',
+    restingOwnerId: 'mm',
+    incomingAccountType: 'member' as const,
+    restingAccountType: 'market_maker' as const,
+    outcome: 'NO' as const,
+    side: 'buy' as const,
+    qty: 3,
+    priceCoin: 37,
+    yesPriceCoin: 63,
+    amountCoin: 111n,
+    feeCoin: 0n,
+    createdAt: new Date(at),
+  };
+
+  it('keeps the contract, its price, its YES value, qty, amount and time, and nothing else', () => {
+    const made = publicFill(row);
+    expect(made).toEqual({
+      id: '12',
+      outcome: 'NO',
+      priceCoin: 37,
+      yesPriceCoin: 63,
+      qty: 3,
+      amountCoin: '111',
+      createdAt: at,
+    });
+    expect(Object.keys(made).sort()).toEqual(
+      ['amountCoin', 'createdAt', 'id', 'outcome', 'priceCoin', 'qty', 'yesPriceCoin'].sort(),
+    );
+    expect(fillSchema.parse(made)).toEqual(made);
+    expect(publicFill({ ...row, id: 9007199254740993n }).id).toBe('9007199254740993');
+  });
+
+  it('strips a taker direction, an order, an owner or a type from a parsed fill', () => {
+    const parsed = fillSchema.parse({
+      ...fill,
+      side: 'buy',
+      priceAvgBp: 5200,
+      incomingOrderId: marketId,
+      restingOwnerId: 'mm',
+      restingAccountType: 'market_maker',
+      kind: 'pair_mint',
+    });
+    for (const hidden of [
+      'side',
+      'priceAvgBp',
+      'incomingOrderId',
+      'restingOwnerId',
+      'restingAccountType',
+      'kind',
+    ]) {
+      expect(parsed, hidden).not.toHaveProperty(hidden);
+    }
   });
 });
 

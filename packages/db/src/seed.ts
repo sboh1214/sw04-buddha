@@ -24,6 +24,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import { ensureMarketMakerAccount } from './account-types.js';
 import { closeDb, createDb, type Db } from './client.js';
 import { loadRootEnv } from './env.js';
+import type { MarketRowWrite } from './market-stats.js';
 import { SEED_MARKETS, type SeedMarket, seedScheduledOpenAt } from './seed-markets.js';
 import { clockTimestamp, lockAdminRoles } from './tx-helpers.js';
 import {
@@ -534,7 +535,7 @@ function seedRuleColumns(seed: SeedMarket) {
     fallbackCondition: seed.fallbackCondition,
     longDelayDays: seed.longDelayDays,
     delayHandling: seed.delayHandling,
-  } satisfies Partial<typeof markets.$inferInsert>;
+  } satisfies MarketRowWrite;
 }
 
 /**
@@ -619,7 +620,7 @@ function seedTimeColumns(seed: SeedMarket, scheduledOpenAt: Date) {
       seed.scheduledAnnouncementAt === null ? null : new Date(seed.scheduledAnnouncementAt),
     scheduledJudgementAt: new Date(seed.scheduledJudgementAt),
     judgementTimeZone: seed.judgementTimeZone,
-  } satisfies Partial<typeof markets.$inferInsert>;
+  } satisfies MarketRowWrite;
 }
 
 /** The time columns (#22) a market row is read with, to tell whether they are blank. */
@@ -667,8 +668,8 @@ type SeedMarketOutcome =
  * admin create path writes them (M3 design 3.4; #17; #23; #22), so a crash never leaves a market
  * without its history or with half its tags or sources. Drafts, because a market opens only once
  * another reviewer has checked its rules (N03 §2; #125) — the seed never opens one. No price and
- * no tick: a market has none before its first fill (N02 §5). Runs after `seedAdmins`: the first
- * admin is `created_by` and the actor of the event.
+ * no statistic: a market has none before its first fill (N02 §5; #121's 0063 needs that). Runs
+ * after `seedAdmins`: the first admin is `created_by` and the actor of the event.
  *
  * One deliberate divergence from that path: `close_at` is an absolute instant (ADR-0027), and
  * `assertFutureCloseAt` refuses a past one on create while this writes it anyway, so a late-run
@@ -737,7 +738,8 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
       }
     }
     const closeAt = new Date(seed.closeAt);
-    const times = seedTimeColumns(seed, seedScheduledOpenAt(closeAt, reportedAt));
+    // Typed, not only its helper: the stats-writer guard pins `...times` by its text (#121).
+    const times: MarketRowWrite = seedTimeColumns(seed, seedScheduledOpenAt(closeAt, reportedAt));
     // The names the API would take (#17), as written: the literal is the spelling a tag the seed
     // makes is stored with, so it must be normalised already.
     const parsedTags = marketTagsSchema.safeParse(seed.tags);

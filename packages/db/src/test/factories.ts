@@ -299,9 +299,20 @@ export interface CreateMarketInput {
    * (N02 §5). A test that needs a traded market sets it with the statistics below.
    */
   lastPrice?: number | null;
-  /** Statistics overrides (list sorting tests). Default 0 like a market nobody traded. */
+  /**
+   * The last fill's time (`last_fill_at`, #121), set exactly when `lastPrice` is
+   * (`markets_last_fill_at_check`). Default: the database clock when `lastPrice` is given, else
+   * null.
+   */
+  lastFillAt?: Date | null;
+  /**
+   * Statistics overrides (list and read tests), as a row holds them, not as fills made them: only
+   * the intake writes them from fills (#121, market-stats.ts). Default 0 like a market nobody
+   * traded.
+   */
   volumeCoin?: bigint;
   tradeCount?: number;
+  traderCount?: number;
   /**
    * The actual open time. Default: now for every status that has opened, none for `draft`,
    * `review` and `scheduled` (the open path stamps it). A list-order test sets it, or sets `null`
@@ -498,8 +509,15 @@ export async function createMarket(db: Db, input: CreateMarketInput = {}) {
       categoryId,
       status,
       lastPrice,
+      lastFillAt:
+        input.lastFillAt !== undefined
+          ? input.lastFillAt
+          : lastPrice === null
+            ? null
+            : sql`date_trunc('milliseconds', clock_timestamp())`,
       volumeCoin: input.volumeCoin ?? 0n,
       tradeCount: input.tradeCount ?? 0,
+      traderCount: input.traderCount ?? 0,
       openAt:
         input.openAt !== undefined
           ? input.openAt
@@ -687,8 +705,9 @@ export interface CreateFillInput {
  * One execution as the intake records it (#119, `createFillRecord`): an IOC order of `userId`
  * filled against a resting GTC order of `makerId` — a buy minting a pair with a buy of the other
  * outcome, a sell trading with a buy of its outcome — and the `fills` row between them, its
- * amount `amountCoin` (price × qty). No balance, position, ledger entry, tick or market statistic
- * moves: a test that needs those sets them itself (`createMarket`'s statistics). The two orders
+ * amount `amountCoin` (price × qty). No balance, position, ledger entry or market statistic moves —
+ * only the intake writes the statistics (#121): a test that needs both pairs this with
+ * `createMarket`'s statistics. The two orders
  * share the fill's instant, and both owners have a fill on the market (`hasMarketFill`).
  */
 export async function createFill(db: Db, input: CreateFillInput) {

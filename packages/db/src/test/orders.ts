@@ -2,9 +2,10 @@
  * Order and fill test helpers (#119, ADR-0112). `createOrder` and `createFillRecord` write
  * `orders` and `fills` rows as the intake leaves them — every CHECK and trigger of migration 0062
  * holds — under the market lock, and move no asset: no balance, lock, position or ledger entry
- * changes there. A test that needs the assets too records them against the fill (`mintTestPairs`,
- * `spendCoin` in ledger.ts), or goes through the intake itself (`placeTestOrder`), and reads the
- * books back with `checkOrderInvariants`.
+ * changes there, and no market statistic: only the intake writes those (#121, market-stats.ts). A
+ * test that needs the assets too records them against the fill (`mintTestPairs`, `spendCoin` in
+ * ledger.ts), or goes through the intake itself (`placeTestOrder`), and reads the books back with
+ * `checkOrderInvariants` and the statistics with `checkMarketStats`.
  */
 import { randomUUID } from 'node:crypto';
 import {
@@ -23,7 +24,7 @@ import {
   type Outcome,
   type TimeInForce,
 } from '@buddha/shared';
-import { eq, sql } from 'drizzle-orm';
+import { asc, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../client.js';
 import { closeMarketAtClose, type CloseMarketAtCloseResult } from '../market-close.js';
 import {
@@ -216,7 +217,9 @@ export interface FillRecord {
  * order (live, its price the fill's), the incoming IOC order in its end state (전량 체결, its
  * reference the fill's price and the test width), the fill — both owners and their account types,
  * the price, the YES price and the amount (price × qty) — and the resting order then filled. No
- * asset moves. `String(fill.id)` is the key a test's ledger events of the fill use.
+ * asset and no market statistic moves (#121: the intake's alone; pair with `createMarket`'s
+ * statistics when a read needs both). `String(fill.id)` is the key a test's ledger events of the
+ * fill use.
  */
 export async function createFillRecord(db: Db, input: CreateFillRecordInput): Promise<FillRecord> {
   const outcome = input.outcome ?? 'YES';
@@ -305,6 +308,102 @@ export async function createFillRecord(db: Db, input: CreateFillRecordInput): Pr
       .where(eq(orders.id, restingOrder!.id))
       .returning();
     return { fill: fill!, incoming: incomingOrder!, resting: restingFilled! };
+  });
+}
+
+export interface CreateFillSeriesInput {
+  marketId: string;
+  /** The incoming order's owner: a person (a fill has one, `fills_check`). */
+  incomingOwnerId: string;
+  /** The resting orders' owner, another account. */
+  restingOwnerId: string;
+  /** One fill of one YES each, in this order (ids follow it): its instant and its YES price. */
+  points: readonly { at: Date; yesPriceCoin: number }[];
+}
+
+/**
+ * A price history of many fills for the chart and the 24-hours-ago reads (#121: the history is
+ * `fills`), written set-based in one transaction under the market lock: one resting YES sell GTC
+ * per distinct price (live, `ORDER_QTY_MAX` contracts), one incoming YES buy IOC after them (전량
+ * 체결, protected limit 99), then every point as a one-contract trade fill at its price and instant
+ * in one INSERT … SELECT. Every row passes 0062's CHECKs and `fills_check`. A read fixture: the
+ * orders' filled amounts do not add up and no asset or statistic moves, so never pair it with
+ * `checkOrderInvariants` or `checkMarketStats`. Up to `ORDER_QTY_MAX` points; returns the fills in
+ * point order.
+ */
+export async function createFillSeries(db: Db, input: CreateFillSeriesInput): Promise<FillRow[]> {
+  const { marketId, points } = input;
+  if (points.length === 0) return [];
+  if (points.length > ORDER_QTY_MAX) throw new RangeError('createFillSeries: too many points');
+  const prices = [...new Set(points.map((point) => point.yesPriceCoin))];
+  for (const price of prices) {
+    if (!Number.isInteger(price) || price < 1 || price > 99) {
+      throw new RangeError(`createFillSeries: ${String(price)} is no contract price`);
+    }
+  }
+  return db.transaction(async (tx) => {
+    await lockMarket(tx, marketId);
+    const first = new Date(Math.min(...points.map((point) => point.at.getTime())));
+    const resting = await tx
+      .insert(orders)
+      .values(
+        prices.map((price) => ({
+          userId: input.restingOwnerId,
+          marketId,
+          outcome: 'YES' as const,
+          side: 'sell' as const,
+          timeInForce: 'gtc' as const,
+          limitPrice: price,
+          protectedLimitPrice: price,
+          qty: ORDER_QTY_MAX,
+          status: 'open' as const,
+          idempotencyKey: randomUUID(),
+          createdAt: first,
+        })),
+      )
+      .returning({ id: orders.id, price: orders.protectedLimitPrice });
+    const amount = points.reduce((sum, point) => sum + BigInt(point.yesPriceCoin), 0n);
+    const [incoming] = await tx
+      .insert(orders)
+      .values({
+        userId: input.incomingOwnerId,
+        marketId,
+        outcome: 'YES',
+        side: 'buy',
+        timeInForce: 'ioc',
+        limitPrice: 99,
+        protectedLimitPrice: 99,
+        protectionTicks: TEST_PRICE_PROTECTION_TICKS,
+        qty: points.length,
+        filledQty: points.length,
+        filledAmountCoin: amount,
+        status: 'filled',
+        idempotencyKey: randomUUID(),
+        createdAt: first,
+        endedAt: first,
+      })
+      .returning();
+    const restingIds = JSON.stringify(Object.fromEntries(resting.map((r) => [r.price, r.id])));
+    const listed = JSON.stringify(
+      points.map((point) => ({ at: point.at.toISOString(), price: point.yesPriceCoin })),
+    );
+    // One statement: the point list in order (WITH ORDINALITY), each joined to its price's order.
+    const { rows } = await tx.execute<{ id: string }>(sql`
+      INSERT INTO fills (market_id, kind, incoming_order_id, resting_order_id, incoming_owner_id,
+                         resting_owner_id, incoming_account_type, resting_account_type, outcome,
+                         side, qty, price_coin, yes_price_coin, amount_coin, created_at)
+      SELECT ${marketId}, 'trade', ${incoming!.id},
+             (${restingIds}::jsonb ->> (p.point ->> 'price'))::uuid,
+             ${input.incomingOwnerId}, ${input.restingOwnerId},
+             (SELECT u.account_type FROM "user" u WHERE u.id = ${input.incomingOwnerId}),
+             (SELECT u.account_type FROM "user" u WHERE u.id = ${input.restingOwnerId}),
+             'YES', 'buy', 1, (p.point ->> 'price')::smallint, (p.point ->> 'price')::smallint,
+             (p.point ->> 'price')::bigint, (p.point ->> 'at')::timestamptz
+      FROM jsonb_array_elements(${listed}::jsonb) WITH ORDINALITY AS p(point, ord)
+      ORDER BY p.ord
+      RETURNING id`);
+    const ids = rows.map((row) => Number(row.id));
+    return tx.select().from(fills).where(inArray(fills.id, ids)).orderBy(asc(fills.id));
   });
 }
 
@@ -475,6 +574,83 @@ GROUP BY p.user_id, p.market_id, p.outcome, p.locked_qty
 HAVING p.locked_qty <> coalesce(sum(o.qty - o.filled_qty), 0)
 ORDER BY 1, 3, 4, 2;
 `;
+
+/**
+ * Every market whose statistics are not what its fills say (#121, ADR-0116; ADR-0107 결정 1 #177
+ * 11–13항): `last_price`/`last_fill_at` against the YES price and the time of its last fill by
+ * (`created_at`, `id`), `volume_coin` against Σ `amount_coin`, `trade_count` against its fills,
+ * `trader_count` against the distinct owners on either side whose copied account type is a
+ * person's (ADR-0112 결정 6). A market with no fill must read null, null, 0, 0, 0. No row: every
+ * statistic is its fills'. Read-only; docs/OPERATIONS.md '시장 통계' carries it for operators, and
+ * #132 recounts with it once it leaves abnormal fills out.
+ */
+export const MARKET_STATS_CHECK_SQL = `WITH totals AS (
+  SELECT market_id, sum(amount_coin) AS volume, count(*)::int AS trades
+  FROM fills GROUP BY market_id
+), last AS (
+  SELECT DISTINCT ON (market_id) market_id, yes_price_coin, created_at
+  FROM fills ORDER BY market_id, created_at DESC, id DESC
+), people AS (
+  SELECT market_id, count(DISTINCT owner_id)::int AS traders
+  FROM (SELECT market_id, incoming_owner_id AS owner_id FROM fills
+        WHERE is_human_account_type(incoming_account_type)
+        UNION ALL
+        SELECT market_id, resting_owner_id FROM fills
+        WHERE is_human_account_type(resting_account_type)) AS sides
+  GROUP BY market_id
+)
+SELECT m.id AS market_id,
+       m.last_price, l.yes_price_coin AS fills_last_price,
+       m.last_fill_at, l.created_at AS fills_last_fill_at,
+       m.volume_coin::text AS volume_coin, coalesce(t.volume, 0)::text AS fills_volume_coin,
+       m.trade_count, coalesce(t.trades, 0) AS fills_trade_count,
+       m.trader_count, coalesce(p.traders, 0) AS fills_trader_count
+FROM markets m
+LEFT JOIN totals t ON t.market_id = m.id
+LEFT JOIN last l ON l.market_id = m.id
+LEFT JOIN people p ON p.market_id = m.id
+WHERE m.last_price IS DISTINCT FROM l.yes_price_coin
+   OR m.last_fill_at IS DISTINCT FROM l.created_at
+   OR m.volume_coin <> coalesce(t.volume, 0)
+   OR m.trade_count <> coalesce(t.trades, 0)
+   OR m.trader_count <> coalesce(p.traders, 0)
+ORDER BY m.id;
+`;
+
+/** The five statistics of a market as `markets` holds them (#121, market-stats.ts writes them). */
+export async function marketStatsOf(db: Db, marketId: string) {
+  const [row] = await db
+    .select({
+      lastPrice: markets.lastPrice,
+      lastFillAt: markets.lastFillAt,
+      volumeCoin: markets.volumeCoin,
+      tradeCount: markets.tradeCount,
+      traderCount: markets.traderCount,
+    })
+    .from(markets)
+    .where(eq(markets.id, marketId));
+  if (row === undefined) throw new Error(`marketStatsOf: no market ${marketId}`);
+  return row;
+}
+
+/** `marketStatsOf` a market nobody has filled in: '체결 없음' (N02 §5). */
+export const NO_MARKET_STATS = {
+  lastPrice: null,
+  lastFillAt: null,
+  volumeCoin: 0n,
+  tradeCount: 0,
+  traderCount: 0,
+} as const;
+
+/**
+ * `MARKET_STATS_CHECK_SQL` as buddha_app, as a list of what breaks (empty when every market's
+ * statistics are its fills'). Apart from `checkOrderInvariants`: fill fixtures (`createFillRecord`,
+ * `createFillSeries`) write fills with no statistic on purpose.
+ */
+export async function checkMarketStats(db: Db): Promise<string[]> {
+  const { rows } = await db.$client.query(MARKET_STATS_CHECK_SQL);
+  return rows.map((row) => `market stats ${JSON.stringify(row)}`);
+}
 
 /**
  * The intake's invariants over the whole database, as a list of what breaks them (empty when all

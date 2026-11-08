@@ -28,7 +28,8 @@ type SelectSource = Pick<Db, 'select'>;
  *
  * - 추천 (`recommended`): the volume of the fills of the last 24 hours (`recentVolume`), largest
  *   first; ties by the actual open time, latest first; then the id. Every fill counts until #132
- *   excludes abnormal ones, and the volume is `fills.amount_coin` until #177/#121 define it.
+ *   excludes abnormal ones; the volume is Σ `fills.amount_coin`, #177 12항's (ADR-0107 결정 1,
+ *   #121): each match once, at the incoming contract's price × qty.
  * - 신규 (`newest`): the actual open time, latest first, then the id.
  * - 마감 임박 (`closing`): the close time, soonest first, then the id; no window. On a list that
  *   can hold a closed market — anything but one status that has not closed yet: the search's 모든
@@ -123,8 +124,15 @@ export const recentVolumeCoin: SQL = sql`${sql.identifier(RECENT_VOLUME)}.${sql.
  * `(asOf − 24h, asOf]`, as a LATERAL subquery the caller joins after `markets`
  * (`crossJoinLateral`) and reads as `recentVolumeCoin`: one row per market, a bigint, 0 for a
  * market with no fill in the window (an aggregate with no GROUP BY always answers one row). It
- * reads `fills_market_id_created_at_idx` as one range per market, so a list costs the fills of its
- * candidate markets' last day and nothing older.
+ * reads `fills_market_id_created_at_id_idx` as one range per market, so a list costs the fills of
+ * its candidate markets' last day and nothing older.
+ *
+ * The volume is #177 12항's '넣는 체결' (ADR-0107 결정 1, #121, ADR-0116): every fill with a person
+ * on a side — 0062's `fills_check` lets no other fill exist (the 운영 마켓메이커 never meets
+ * itself), so the sum needs no filter of its own and a second spelling of the rule would be a
+ * second definition — each match once at the incoming contract's price × qty (a pair mint against
+ * a NO bid at 40 is 60), the same amounts `markets.volume_coin` adds up since the open. The window
+ * ends where `Market.lastPrice24hAgo`'s begins: a fill exactly 24 hours old is that baseline.
  *
  * `asOf` is a timestamptz expression: the database clock truncated to the millisecond for a first
  * page, the instant a cursor carries for the pages after it (`marketOrder`). The upper bound is

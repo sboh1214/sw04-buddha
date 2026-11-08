@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { readPublicJudgementDelay, schema, type Db } from '@buddha/db';
+import { DAY_AGO, marketPriceAt, readPublicJudgementDelay, schema, type Db } from '@buddha/db';
 import {
   ALL_MARKET_STATUSES,
   FILLS_RECENT_LIMIT,
@@ -10,6 +10,7 @@ import {
   isDisputeUnderReview,
   isJudgementDelayed,
   marketJudgementDelayOf,
+  publicFill,
   serializeCoinAmount,
   tagKey,
   tickBucketSeconds,
@@ -51,15 +52,9 @@ import { readMarketSources, type MarketSources } from './market-sources.js';
 import { readPublicRuleVersions } from './market-supplement.js';
 
 export type MarketRow = typeof schema.markets.$inferSelect;
-type FillRow = typeof schema.fills.$inferSelect;
 /** The handle `db.transaction` hands its callback; @buddha/db exports no alias for it. */
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
-/**
- * One row of the sampled-grid tick query. It runs through `db.execute`, which hands back the
- * driver's own rows with no ORM mapping: `ts` is a Date (timestamptz), `p_yes_bp` an int4 and
- * `trigger` a PG enum, i.e. a string (packages/db/src/client.ts registers no type parsers).
- */
 /**
  * One row of the bucketed tick query. `tsMs` is epoch millis as text, not a Date: drizzle's
  * node-postgres session installs its own timestamp parsers, so a raw `db.execute` never hands
@@ -68,8 +63,20 @@ type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 interface SampledRow {
   tsMs: string;
   pYesBp: number;
-  trigger: PriceTick['trigger'];
 }
+
+/**
+ * Every point of the price history is a fill (#121, ADR-0116: the history is the `fills` rows,
+ * ADR-0107 결정 1 #177 11항), so every point's trigger is a trade: the open's 50% and a judgement
+ * are no point. `'resolve'` stays a reserved value nothing serves.
+ */
+const FILL_TRIGGER: PriceTick['trigger'] = 'trade';
+
+/**
+ * A fill's YES value as a point's basis points (`yes_price_coin × 100`, lossless: a YES value is
+ * a whole Coin 1..99).
+ */
+const fillYesBp = sql<number>`${schema.fills.yesPriceCoin} * 100`;
 
 /** The category half of every market read: the list card shows slug and name only. */
 export interface CategoryRef {
@@ -135,6 +142,7 @@ export function toMarketSummary(
     judgementDelayed: isJudgementDelayed(display, nowMs),
     disputeUnderReview: isDisputeUnderReview(display),
     lastPrice: row.lastPrice,
+    lastFillAt: row.lastFillAt?.toISOString() ?? null,
     volumeCoin: serializeCoinAmount(row.volumeCoin),
     tradeCount: row.tradeCount,
     traderCount: row.traderCount,
@@ -196,7 +204,9 @@ export function timesOf(row: MarketRow): MarketTimes {
  * (`readPublicJudgementDelay`, which names nobody and carries no record time), the admin detail's
  * every record (`readJudgementDelays`). Every display is read at ONE `nowMs`, the card's flags
  * (`toMarketSummary`) and the record's '갱신 대기' alike, so `judgementDelayed` and
- * `judgementDelay` never disagree.
+ * `judgementDelay` never disagree. `lastPrice24hAgo` is the 시장가격 a day before the answer
+ * (`marketPriceAt` at `DAY_AGO`, #121, ADR-0116), read by the caller in the same snapshot as the
+ * row: the change badge's baseline, null when no fill came by then, whatever the status.
  */
 export function toMarket(
   row: MarketRow,
@@ -205,6 +215,7 @@ export function toMarket(
   sources: MarketSources,
   ruleVersions: MarketRuleVersion[],
   judgementDelays: readonly JudgementDelayRecord[],
+  lastPrice24hAgo: number | null,
   nowMs: number = Date.now(),
 ): Market {
   return {
@@ -221,6 +232,7 @@ export function toMarket(
       { ...displayStateOf(row), judgementVersion: row.judgementVersion },
       nowMs,
     ),
+    lastPrice24hAgo,
   };
 }
 
@@ -237,23 +249,6 @@ export async function marketTagNames(executor: Db | Tx, marketId: string): Promi
     .where(eq(schema.marketTags.marketId, marketId))
     .orderBy(asc(schema.marketTags.position));
   return rows.map((row) => row.name);
-}
-
-/**
- * Anonymous (PLAN 7.1): the orders, their owners and their account types never leave the server.
- * The incoming order's outcome and side, and its contract price as basis points (`price_coin` ×
- * 100: one fill is one price since #119) — #121 reshapes this answer with `market:trade`.
- */
-export function toFill(row: FillRow): Fill {
-  return {
-    id: row.id.toString(),
-    outcome: row.outcome,
-    side: row.side,
-    qty: row.qty,
-    amountCoin: serializeCoinAmount(row.amountCoin),
-    priceAvgBp: row.priceCoin * 100,
-    createdAt: row.createdAt.toISOString(),
-  };
 }
 
 /**
@@ -377,8 +372,8 @@ export class MarketService {
    * `GET /markets/:idOrSlug`: a uuid-shaped parameter is an id, anything else a slug (which
    * `marketSlugSchema` keeps from ever looking like a uuid). The slug is NFC-normalised like
    * the stored one, so a decomposed Korean URL still finds the market. The tags and the sources
-   * are a statement each (#17, #23), and so are the rule versions (#80) and the current 판정 지연
-   * 기록 (#142): the detail alone carries them.
+   * are a statement each (#17, #23), and so are the rule versions (#80), the current 판정 지연
+   * 기록 (#142) and the 시장가격 a day ago (#121): the detail alone carries them.
    */
   async getPublic(idOrSlug: string): Promise<Market> {
     const { markets, categories } = schema;
@@ -393,7 +388,8 @@ export class MarketService {
     // 200 with the draft's new tags and sources. The rule versions too (#80): a supplement
     // approved between the reads would otherwise pair the old text with the new history. And the
     // delay record (#142): the current one as of the row, never a newer record beside an older
-    // status, reason or '판정 지연' reading.
+    // status, reason or '판정 지연' reading. And the price a day ago (#121): never a fill newer
+    // than the row's `last_price` beside it.
     return this.db.transaction(
       async (tx) => {
         const [row] = await tx
@@ -414,6 +410,7 @@ export class MarketService {
         const sources = await readMarketSources(tx, row.market.id);
         const ruleVersions = await readPublicRuleVersions(tx, row.market.id);
         const delay = await readPublicJudgementDelay(tx, row.market);
+        const lastPrice24hAgo = await marketPriceAt(tx, row.market.id, DAY_AGO);
         return toMarket(
           row.market,
           row.category,
@@ -421,6 +418,7 @@ export class MarketService {
           sources,
           ruleVersions,
           delay === null ? [] : [delay],
+          lastPrice24hAgo,
         );
       },
       { isolationLevel: 'repeatable read', accessMode: 'read only' },
@@ -430,7 +428,7 @@ export class MarketService {
   /**
    * The market row for a public sub-resource (fills, ticks, related markets, themes): NOT_FOUND
    * for an unknown id and for a DRAFT or REVIEW market alike — with the database clock read in
-   * the same statement, so a window the caller left open ends on the clock ticks are stamped with
+   * the same statement, so a window the caller left open ends on the clock fills are stamped with
    * and not the API host's, at no extra round trip (clock.ts, A-M3-16). Epoch millis as text, like
    * `clockTimestamp`: no driver-side date parser is involved.
    */
@@ -455,7 +453,12 @@ export class MarketService {
     return (await this.requirePublicAt(marketId)).market;
   }
 
-  /** Newest FILLS_RECENT_LIMIT fills, anonymous (PLAN 7.1). */
+  /**
+   * 최근 체결: the newest FILLS_RECENT_LIMIT fills, anonymous (PLAN 7.1; ADR-0107 결정 6 '남은
+   * 것'의 #60 3·6·17·20항): `publicFill`, the one shape `market:trade` carries too — the contract, its
+   * price, the YES value, qty, amount and time; no owner, order, taker direction or account type. A
+   * backward walk of `fills_market_id_created_at_id_idx` (#121).
+   */
   async listFills(marketId: string): Promise<Fill[]> {
     await this.requirePublic(marketId);
     const rows = await this.db
@@ -464,22 +467,27 @@ export class MarketService {
       .where(eq(schema.fills.marketId, marketId))
       .orderBy(desc(schema.fills.createdAt), desc(schema.fills.id))
       .limit(FILLS_RECENT_LIMIT);
-    return rows.map(toFill);
+    return rows.map(publicFill);
   }
 
   /**
    * Price history for the chart (PLAN 7.1, 11.4). At most TICKS_MAX_POINTS points, ascending.
    *
-   * `raw` is the stored ticks of the range, downsampled by the newest-anchored stride
+   * The points are the market's fills (#121, ADR-0116): each one's YES value at its server time,
+   * read off `fills_market_id_created_at_id_idx` — the key shape `price_ticks` had (0010), which
+   * nothing reads or writes any more.
+   *
+   * `raw` is the fills of the range, downsampled by the newest-anchored stride
    * (A-M3-25) over the newest TICKS_SCAN_MAX rows (A-M3-20); it now reports `truncated`,
    * which a client previously could not tell (Q-M3-8 (1)).
    *
    * `1m`/`1h` are a sampled grid instead: for each of at most TICKS_MAX_POINTS boundaries the
-   * query reads the last tick at or before it (one index descent each), so the cost is bounded
-   * by the ANSWER, not by the market's tick count, and the row cap does not apply. That also
+   * query reads the last fill at or before it (one index descent each), so the cost is bounded
+   * by the ANSWER, not by the market's fill count, and the row cap does not apply. That also
    * settles the two things bucketing usually needs extra machinery for: a bucket with no trade
    * repeats the value in force (dropped again below as a duplicate), and the boundary at
-   * `from` looks back past `from`, so the chart's left edge is never empty.
+   * `from` looks back past `from`, so the chart's left edge is filled whenever a fill precedes
+   * it (before the market's first fill there is no point — the open writes none, ADR-0116).
    *
    * The stride is coarsened until the window fits (`tickBucketSeconds`) rather than striped,
    * so points stay evenly spaced; `bucketSeconds` reports what was served. A bucketed answer
@@ -518,8 +526,8 @@ export class MarketService {
     // than the `from` beside them. Reachable on the DEFAULT resolution: `resolution` defaults to
     // `raw` (market.ts), which is the one value `tickBucketSeconds` answers 0 for.
     //
-    // `market.openAt` deliberately stays OUT of the filter. No tick can predate a market's
-    // opening — ticks come from fills, and a market not yet open takes no orders — so flooring
+    // `market.openAt` deliberately stays OUT of the filter. No point can predate a market's
+    // opening — points are fills, and a market not yet open takes no orders — so flooring
     // there would only make the answer depend on a bound it cannot need, and the suite pins that
     // reading outright ("`from` older than the bound is a filter, not a floor").
     const filterFrom =
@@ -537,8 +545,9 @@ export class MarketService {
     // says so. `truncated` stays false and keeps the raw path's verified meaning — "points
     // older than the served ones exist INSIDE the served window but were left out" — which no
     // bucketed answer can hit: the boundary at `start` looks back past `start`, so the oldest
-    // point returned is always the window's own left edge. Reporting the trim here instead
-    // would assert dropped history without ever probing for it.
+    // point returned is the window's own left edge, or the first boundary after the first fill
+    // when the window opens before it — nothing inside the window is dropped either way. Reporting
+    // the trim here instead would assert dropped history without ever probing for it.
     const maxSpanMs = bucketSeconds * 1_000 * (TICKS_MAX_POINTS - 2);
     const start = new Date(Math.max(from.getTime(), to.getTime() - maxSpanMs));
     return {
@@ -561,7 +570,7 @@ export class MarketService {
   /**
    * The probability in force at every boundary of the absolute `bucketSeconds` grid over
    * [from, to]. Exact, not an approximation: the series is a step function (the price holds
-   * between fills), so the last tick at or before a boundary IS the value there.
+   * between fills), so the last fill at or before a boundary IS the value there.
    */
   private async sampleTicks(
     marketId: string,
@@ -584,10 +593,10 @@ export class MarketService {
     // - `date_bin(stride, from, epoch) + stride` is the first grid point strictly after
     //   `from` in both the on-grid and the mid-bucket case, so the explicit `from` boundary is
     //   never shadowed and every returned `ts` lies inside [from, to].
-    // - `cross join lateral`, not `left join`: boundaries before the market's first tick
-    //   produce no row and vanish, so a tickless market answers with no points at all.
-    // - `order by p.ts desc, p.id desc limit 1` is the exact prefix of
-    //   price_ticks_market_id_ts_id_idx, i.e. one backward index descent per boundary.
+    // - `cross join lateral`, not `left join`: boundaries before the market's first fill
+    //   produce no row and vanish, so a market with no fill answers with no points at all.
+    // - `order by f.created_at desc, f.id desc limit 1` is the exact prefix of
+    //   fills_market_id_created_at_id_idx, i.e. one backward index descent per boundary.
     // - `previous_bp is distinct from p_yes_bp or rn = cnt` keeps the first row (`lag` is
     //   NULL, hence distinct), every change and the last row: lossless for a step curve, and
     //   a flat 24 h window costs two points instead of 288.
@@ -609,26 +618,25 @@ export class MarketService {
         select ${end}
       ),
       sampled as (
-        select boundaries.b as ts, tick.p_yes_bp, tick.trigger
+        select boundaries.b as ts, fill.p_yes_bp
         from boundaries
         cross join lateral (
-          select p.p_yes_bp, p.trigger
-          from price_ticks p
-          where p.market_id = ${marketId}::uuid and p.ts <= boundaries.b
-          order by p.ts desc, p.id desc
+          select f.yes_price_coin * 100 as p_yes_bp
+          from fills f
+          where f.market_id = ${marketId}::uuid and f.created_at <= boundaries.b
+          order by f.created_at desc, f.id desc
           limit 1
-        ) as tick
+        ) as fill
       ),
       shaped as (
-        select ts, p_yes_bp, trigger,
+        select ts, p_yes_bp,
                lag(p_yes_bp) over (order by ts) as previous_bp,
                row_number() over (order by ts) as rn,
                count(*) over () as cnt
         from sampled
       )
       select (extract(epoch FROM ts) * 1000)::bigint::text as "tsMs",
-             p_yes_bp as "pYesBp",
-             trigger
+             p_yes_bp as "pYesBp"
       from shaped
       where previous_bp is distinct from p_yes_bp or rn = cnt
       order by ts
@@ -637,26 +645,26 @@ export class MarketService {
     return rows.map((row) => ({
       ts: new Date(Number(row.tsMs)).toISOString(),
       pYesBp: row.pYesBp,
-      trigger: row.trigger,
+      trigger: FILL_TRIGGER,
     }));
   }
 
   /**
-   * `resolution=raw`: the stored ticks of the range, downsampled IN SQL to at most
-   * TICKS_MAX_POINTS rows (PLAN 7.1). The window ranks the ticks by (ts, id), and the outer
-   * query keeps a grid anchored at the NEWEST tick — it and every
+   * `resolution=raw`: the fills of the range, downsampled IN SQL to at most
+   * TICKS_MAX_POINTS rows (PLAN 7.1). The window ranks the fills by (created_at, id), and the
+   * outer query keeps a grid anchored at the NEWEST fill — it and every
    * `ceil(count / TICKS_MAX_POINTS)`-th row walking back from it, at most
    * TICKS_MAX_POINTS - 1 of them — plus the oldest row, ascending.
    *
    * Anchoring the grid at the newest end is what makes the cap exact. Anchored at the oldest
-   * row instead, the grid holds up to TICKS_MAX_POINTS rows and the newest tick — the live
+   * row instead, the grid holds up to TICKS_MAX_POINTS rows and the newest fill — the live
    * right edge of a chart, which the route promises to keep — falls off the stride, so the
-   * answer carried one row too many for 190 of the possible counts (from 1,000 ticks up).
+   * answer carried one row too many for 190 of the possible counts (from 1,000 points up).
    * The unevenly spaced gap is now the first one, at the left edge, where nothing is live.
-   * Node never holds the full series (a busy market writes a tick per trade), and neither does
-   * the window: only the newest TICKS_SCAN_MAX ticks of the range are ranked — a backward
-   * index scan with a LIMIT on (market_id, ts, id), so an anonymous request costs the same on
-   * a market with a million ticks as on one with ten thousand.
+   * Node never holds the full series (a busy market has a point per fill), and neither does
+   * the window: only the newest TICKS_SCAN_MAX fills of the range are ranked — a backward
+   * index scan with a LIMIT on (market_id, created_at, id), so an anonymous request costs the
+   * same on a market with a million fills as on one with ten thousand.
    *
    * The WHERE floors on the window the CALLER named — `filterFrom`, which is `query.from` or the
    * instant `windowSeconds` counts back from — and never on a defaulted one, so a defaulted
@@ -672,28 +680,23 @@ export class MarketService {
     to: Date,
     tradeCount: number,
   ): Promise<PriceSeries> {
-    const { priceTicks } = schema;
+    const { fills } = schema;
     const recent = this.db
-      .select({
-        id: priceTicks.id,
-        ts: priceTicks.ts,
-        pYesBp: priceTicks.pYesBp,
-        trigger: priceTicks.trigger,
-      })
-      .from(priceTicks)
+      .select({ id: fills.id, ts: fills.createdAt, pYesBp: fillYesBp.as('p_yes_bp') })
+      .from(fills)
       .where(
         and(
-          eq(priceTicks.marketId, marketId),
-          filterFrom ? gte(priceTicks.ts, filterFrom) : undefined,
+          eq(fills.marketId, marketId),
+          filterFrom ? gte(fills.createdAt, filterFrom) : undefined,
           // The window's own end, not `query.to`. `listTicks` closes the window on the database
           // clock when the caller sends no `to`, and this statement runs afterwards under its
           // own snapshot — so filtering on the REQUEST let a trade committing in between answer
           // with `ts` past the `to` this response echoes, and past the `tradeCount` read with
           // it. The bucketed path never had the gap: its grid is built from the same `to`.
-          lte(priceTicks.ts, to),
+          lte(fills.createdAt, to),
         ),
       )
-      .orderBy(desc(priceTicks.ts), desc(priceTicks.id))
+      .orderBy(desc(fills.createdAt), desc(fills.id))
       .limit(TICKS_SCAN_MAX)
       .as('recent');
     const ranked = this.db
@@ -701,7 +704,6 @@ export class MarketService {
         id: recent.id,
         ts: recent.ts,
         pYesBp: recent.pYesBp,
-        trigger: recent.trigger,
         rn: sql<number>`row_number() over (order by ${recent.ts}, ${recent.id})`.as('rn'),
         cnt: sql<number>`count(*) over ()`.as('cnt'),
       })
@@ -710,18 +712,12 @@ export class MarketService {
     // `cnt` is cast, not the literal: a `${n}.0` would reach Postgres as `$1.0`.
     const stride = sql`greatest(1, ceil(${ranked.cnt}::numeric / ${TICKS_MAX_POINTS}))::bigint`;
     const rows = await this.db
-      .select({
-        id: ranked.id,
-        ts: ranked.ts,
-        pYesBp: ranked.pYesBp,
-        trigger: ranked.trigger,
-        cnt: ranked.cnt,
-      })
+      .select({ id: ranked.id, ts: ranked.ts, pYesBp: ranked.pYesBp, cnt: ranked.cnt })
       .from(ranked)
       .where(
         or(
           // The oldest row, and the grid running back from the newest: offset 0 (the newest
-          // tick itself) up to (TICKS_MAX_POINTS - 2) strides, so at most TICKS_MAX_POINTS - 1
+          // fill itself) up to (TICKS_MAX_POINTS - 2) strides, so at most TICKS_MAX_POINTS - 1
           // rows, and the oldest adds at most one more.
           eq(ranked.rn, 1),
           sql`(${ranked.cnt} - ${ranked.rn}) % ${stride} = 0
@@ -736,7 +732,7 @@ export class MarketService {
     const truncated =
       first !== undefined &&
       Number(first.cnt) >= TICKS_SCAN_MAX &&
-      (await this.hasOlderTick(marketId, first.ts, first.id, filterFrom));
+      (await this.hasOlderFill(marketId, first.ts, first.id, filterFrom));
     return {
       resolution,
       bucketSeconds: 0,
@@ -748,31 +744,32 @@ export class MarketService {
       points: rows.map((row) => ({
         ts: row.ts.toISOString(),
         pYesBp: row.pYesBp,
-        trigger: row.trigger,
+        trigger: FILL_TRIGGER,
       })),
     };
   }
 
   /**
-   * Does a tick inside the requested range predate the first served point? One index probe on
-   * (market_id, ts, id) via a row comparison, which is why the served point's id is carried:
-   * ticks can share a millisecond, and `ts <` alone would call such a pair truncation.
+   * Does a fill inside the requested range predate the first served point? One index probe on
+   * (market_id, created_at, id) via a row comparison, which is why the served point's id is
+   * carried: fills share their intake's instant, and `created_at <` alone would call such a pair
+   * truncation.
    */
-  private async hasOlderTick(
+  private async hasOlderFill(
     marketId: string,
     ts: Date,
     id: number,
     filterFrom: Date | undefined,
   ): Promise<boolean> {
-    const { priceTicks } = schema;
+    const { fills } = schema;
     const [row] = await this.db
       .select({ one: sql<number>`1` })
-      .from(priceTicks)
+      .from(fills)
       .where(
         and(
-          eq(priceTicks.marketId, marketId),
-          sql`(${priceTicks.ts}, ${priceTicks.id}) < (${ts.toISOString()}::timestamptz, ${id}::bigint)`,
-          filterFrom ? gte(priceTicks.ts, filterFrom) : undefined,
+          eq(fills.marketId, marketId),
+          sql`(${fills.createdAt}, ${fills.id}) < (${ts.toISOString()}::timestamptz, ${id}::bigint)`,
+          filterFrom ? gte(fills.createdAt, filterFrom) : undefined,
         ),
       )
       .limit(1);

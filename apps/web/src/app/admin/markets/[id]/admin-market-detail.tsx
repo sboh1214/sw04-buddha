@@ -67,7 +67,7 @@ import {
   MARKET_STATUS_PALETTE,
   compactJson,
   editsAfterOpen,
-  formatBp,
+  formatPricePerContract,
   formatYesPrice,
   isAwaitingResolution,
   isAwaitingSettlement,
@@ -1197,8 +1197,11 @@ export function RelatedMarketLine({
 
 /**
  * 거래 현황: what fills and positions say about this market. The direct AMM's own state (q, b,
- * 준비금) and its probability went with #125; 순 수취 and 미결제 stay because they are read off the
- * fills and the positions, not the curve. 현재가 is 체결 없음 until the first fill (N02 §5).
+ * 준비금) and its probability went with #125; 미결제 stays because it is read off the positions,
+ * not the curve. 순 수취 went with #121 (ADR-0116): incoming buys less incoming sells was the
+ * AMM's take, and a CLOB market takes nothing (a pair mint and a direct sell are both an incoming
+ * buy); the collateral view is #93's. 현재가 is 체결 없음 until the first fill (N02 §5), and the
+ * volume, trade and participant counts are the ones the intake writes with each fill.
  */
 function TradeStatsPanel({ market }: { market: AdminMarket }) {
   return (
@@ -1209,9 +1212,6 @@ function TradeStatsPanel({ market }: { market: AdminMarket }) {
       <Card.Body>
         <DataList.Root orientation="horizontal" size="sm" data-testid="market-trade-stats">
           <Item label={copy.tradeStatsLastPrice}>{formatYesPrice(market.lastPrice)}</Item>
-          <Item label={copy.tradeStatsNetCollected}>
-            {formatCoin(parseCoinAmount(market.netCollectedCoin))}
-          </Item>
           <Item label={copy.tradeStatsOpenInterestYes}>{String(market.openInterest.yes)}</Item>
           <Item label={copy.tradeStatsOpenInterestNo}>{String(market.openInterest.no)}</Item>
           <Item label={copy.marketTradeCount}>{String(market.tradeCount)}</Item>
@@ -1346,13 +1346,12 @@ function RecentFills({ market }: { market: AdminMarket }) {
                 <Badge colorPalette={fill.outcome === 'YES' ? 'yes' : 'no'} variant="subtle">
                   {fill.outcome === 'YES' ? copy.yes : copy.no}
                 </Badge>
-                <Text>{fill.side === 'buy' ? copy.buy : copy.sell}</Text>
                 <Text>
                   {copy.fillQty} {String(fill.qty)}
                 </Text>
                 <Text>{formatCoin(parseCoinAmount(fill.amountCoin))}</Text>
                 <Text color="fg.muted">
-                  {copy.fillAvgPrice} {formatBp(fill.priceAvgBp)}
+                  {copy.fillPrice} {formatPricePerContract(fill.priceCoin * 100)}
                 </Text>
               </HStack>
             ))}

@@ -18,6 +18,8 @@ const delayed: Market = {
   judgementDelayed: true,
   disputeUnderReview: false,
   lastPrice: 63,
+  lastFillAt: '2026-09-07T00:00:00.000Z',
+  lastPrice24hAgo: null,
   volumeCoin: '123456',
   tradeCount: 789,
   traderCount: 321,

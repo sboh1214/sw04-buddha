@@ -202,6 +202,52 @@ describe.skipIf(!hasTestInfra)('MarketGateway (integration)', () => {
     }
   });
 
+  it.each([['websocket'], ['polling']])(
+    'keeps every tick of a burst Redis delivers in one read, behind other events, over %s (#121)',
+    async (transport) => {
+      // Two intakes publishing close together — two markets on one list page, or the API beside
+      // the bot's worker — reach the subscriber in one TCP read, and ioredis hands every message of
+      // it over in one synchronous loop; and one intake that fills publishes its tick beside its
+      // `market:book` and `market:trade`s. A volatile packet is dropped while the transport is not
+      // writable (socket.io client.ts, engine.io `writable`): over websocket while the packet
+      // before it is still being written, over polling from the moment a packet answers the waiting
+      // GET until the client's next GET. A volatile tick was so lost on websocket whenever it
+      // followed another event in the same turn, and on polling every time it went out after the
+      // book signal — so the tick is not volatile (ADR-0116 10-6). One pipeline makes the read
+      // deterministic: Redis flushes a pipeline's replies to a subscriber together.
+      const [first, second] = uuids(2);
+      const socket = await open({ transports: [transport] });
+      const ticks = collect<MarketTickEvent>(socket, 'market:tick');
+      const books = collect<unknown>(socket, 'market:book');
+      socket.emit('subscribe', { marketIds: [first, second] });
+      await roundTrip(socket);
+
+      const book = (marketId: string) =>
+        JSON.stringify({ type: 'market:book', marketId, ts: new Date().toISOString() });
+      const raw = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
+      try {
+        await raw
+          .pipeline()
+          .publish(marketChannel(first!), JSON.stringify(tickEvent(first!, 1)))
+          .publish(marketChannel(first!), book(first!))
+          .publish(marketChannel(second!), JSON.stringify(tickEvent(second!, 1)))
+          .publish(marketChannel(second!), book(second!))
+          .publish(marketChannel(first!), JSON.stringify(tickEvent(first!, 2)))
+          .exec();
+      } finally {
+        await raw.quit();
+      }
+      await waitForMessages(books, 2, 'market:book');
+      await waitForMessages(ticks, 3, 'market:tick');
+      // In publish order: each market's newest tick is the one a quiet market is left showing.
+      expect(ticks.map((tick) => [tick.marketId, tick.tradeCount])).toEqual([
+        [first, 1],
+        [second, 1],
+        [first, 2],
+      ]);
+    },
+  );
+
   it('delivers to the subscribed socket only', async () => {
     const marketId = randomUUID();
     const subscribed = await open();
@@ -614,7 +660,8 @@ describe.skipIf(!hasTestInfra)('MarketGateway subscription lifecycle', () => {
       // And the patterns really are live again, not merely reported so.
       emits.splice(0);
       await publishUntilForwarded(publisher, channel, message, emits);
-      expect(emits[0]).toMatchObject({ room: channel, event: 'market:tick', volatile: true });
+      // Not volatile (#121, ADR-0116 10-6): a dropped tick left a polling viewer's figures stale.
+      expect(emits[0]).toMatchObject({ room: channel, event: 'market:tick', volatile: false });
     } finally {
       gateway.onApplicationShutdown();
       await subscriber.quit();

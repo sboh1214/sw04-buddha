@@ -245,11 +245,12 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       category: { slug: 'economy', nameKo: '경제' },
       // No fill yet, so no price (N02 §5): nothing stands in for one.
       lastPrice: null,
+      lastFillAt: null,
+      lastPrice24hAgo: null,
       volumeCoin: '0',
       tradeCount: 0,
       openAt: null,
       createdBy: admin.id,
-      netCollectedCoin: '0',
       openInterest: { yes: 0, no: 0 },
       settlementSteps: [],
       primarySource: { name: '한국은행 보도자료', url: 'https://www.bok.or.kr' },
@@ -1669,7 +1670,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect((await get('/api/v1/admin/markets?status=nope')).statusCode).toBe(400);
   });
 
-  it('shows net collected Coin, open interest and the event log on the detail', async () => {
+  it('shows open interest, the 시장가격 a day ago and the event log on the detail, and no AMM collection (#121)', async () => {
     const row = await market({ status: 'open', lastPrice: 55, tradeCount: 2 });
     const trader = (await createUser(t.db)).user.id;
     await createPosition(t.db, {
@@ -1695,9 +1696,11 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       costBasisCoin: 300n,
       settled: true,
     });
-    // Two fills of the trader's orders against resting orders of another account: a buy of 12
-    // at 50 (600) and a sell of 2 at 55 (110), each recorded as the intake records it.
+    // Two fills of the trader's orders against resting orders of another account, each recorded
+    // as the intake records it: a buy of 12 at 50 a day and an hour ago, a sell of 2 at 55 an hour
+    // ago — so the price a day ago is 50, the panel reading what the public detail reads.
     const counterparty = (await createUser(t.db)).user.id;
+    const now = Date.now();
     await createFillRecord(t.db, {
       marketId: row.id,
       incomingOwnerId: trader,
@@ -1705,6 +1708,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       side: 'buy',
       priceCoin: 50,
       qty: 12,
+      createdAt: new Date(now - 25 * 60 * 60 * 1_000),
     });
     await createFillRecord(t.db, {
       marketId: row.id,
@@ -1713,6 +1717,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       side: 'sell',
       priceCoin: 55,
       qty: 2,
+      createdAt: new Date(now - 60 * 60 * 1_000),
     });
     await t.db.insert(schema.marketEvents).values([
       {
@@ -1738,12 +1743,15 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect(shown).toMatchObject({
       id: row.id,
       lastPrice: 55,
+      lastPrice24hAgo: 50,
       tradeCount: 2,
       createdBy: admin.id,
-      netCollectedCoin: '490',
       openInterest: { yes: 12, no: 5 },
       settlementSteps: [],
     });
+    // Σ incoming buys − Σ incoming sells was the AMM's collection; a CLOB market collects nothing
+    // of its own (#121, ADR-0116: the collateral is #93's reconciliation).
+    expect(shown).not.toHaveProperty('netCollectedCoin');
     for (const field of AMM_FIELDS) expect(shown).not.toHaveProperty(field);
     expect(
       shown.events.map((event) => [event.type, event.actorId, event.fromStatus, event.toStatus]),

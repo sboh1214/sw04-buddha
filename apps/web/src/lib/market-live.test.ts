@@ -43,6 +43,7 @@ const summary: MarketSummary = {
   judgementDelayed: false,
   disputeUnderReview: false,
   lastPrice: 50,
+  lastFillAt: '2026-09-06T23:00:00.000Z',
   volumeCoin: '120000',
   tradeCount: 10,
   traderCount: 4,
@@ -63,6 +64,7 @@ const card: MarketSummary = { ...summary };
 /** The detail: the same volatile fields plus the ones only a resolution moves. */
 const detail: Market = {
   ...summary,
+  lastPrice24hAgo: null,
   description: null,
   yesCondition: '한국은행 발표 기준.',
   noCondition: '',
@@ -193,6 +195,8 @@ describe('applyTick', () => {
     expect(applyTick(detail, tick())).toEqual({
       ...detail,
       lastPrice: 63,
+      // The tick's `ts` is the last fill's server time (#121, ADR-0116): the row's 갱신시각.
+      lastFillAt: '2026-09-07T00:00:00.000Z',
       volumeCoin: '130000',
       tradeCount: 11,
       // Moves with the same trade, so the patch carries it: a first-time buyer raises it, and
@@ -217,6 +221,7 @@ describe('applyTick', () => {
     expect(applyTick(card, tick())).toEqual({
       ...card,
       lastPrice: 63,
+      lastFillAt: '2026-09-07T00:00:00.000Z',
       volumeCoin: '130000',
       tradeCount: 11,
       traderCount: 5,
@@ -229,6 +234,17 @@ describe('applyTick', () => {
     // No fill price (체결 없음): the row says so, rather than keeping the price it held.
     expect(applyTick(card, tick({ lastPrice: null }))?.lastPrice).toBeNull();
     expect(applyTick(detail, tick({ lastPrice: null }))?.lastPrice).toBeNull();
+  });
+
+  it("moves the fill time with the price, from the tick's ts, and never with a late tick (#121)", () => {
+    const at = '2026-09-07T03:04:05.678Z';
+    expect(applyTick(card, tick({ ts: at }))?.lastFillAt).toBe(at);
+    expect(applyTick(detail, tick({ ts: at }))?.lastFillAt).toBe(at);
+    // A late tick (an older `tradeCount`) brings neither its price nor its time.
+    const held = { ...detail, lastPrice: 63, lastFillAt: at, tradeCount: 11 };
+    expect(
+      applyTick(held, tick({ tradeCount: 10, ts: '2026-09-07T03:00:00.000Z' })),
+    ).toBeUndefined();
   });
 });
 
@@ -531,6 +547,7 @@ describe('joinMarket', () => {
   const live: Market = {
     ...detail,
     lastPrice: 63,
+    lastFillAt: '2026-09-07T00:00:00.000Z',
     volumeCoin: '130000',
     tradeCount: 11,
     traderCount: 7,
@@ -546,6 +563,8 @@ describe('joinMarket', () => {
   it('keeps the live stats under an older snapshot while taking its descriptive fields', () => {
     const joined = joinMarket(live, stale);
     expect(joined.lastPrice).toBe(63);
+    // The fill time rides with the price (#121): the older snapshot's earlier one stays out.
+    expect(joined.lastFillAt).toBe(live.lastFillAt);
     expect(joined.volumeCoin).toBe('130000');
     expect(joined.tradeCount).toBe(11);
     expect(joined.title).toBe(stale.title);

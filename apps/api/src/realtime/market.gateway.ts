@@ -368,14 +368,17 @@ export class MarketGateway
     }
 
     const event = parsed.data;
-    // `.local`: see the invariant at the top of this file. `market:tick` is additionally
-    // volatile — it is a tradeCount-ordered snapshot that the next one supersedes, so a client
-    // whose transport is backed up may lose one; every other event is a fact that must arrive.
-    const to =
-      event.type === 'market:tick'
-        ? namespace.local.volatile.to(channel)
-        : namespace.local.to(channel);
-    to.emit(event.type, event);
+    // `.local`: see the invariant at the top of this file. Every event goes out reliably, the
+    // tick included (#121, ADR-0116 10-6; A-M4-7 sent it volatile). Socket.IO drops a volatile
+    // packet whenever the transport is not writable: over websocket while the packet before it is
+    // still being written, over polling from the moment a packet answers the waiting GET until
+    // the client's next one. An intake that fills publishes its tick beside its reliable
+    // `market:book` and `market:trade`s, and Redis hands this subscriber a whole read in one
+    // loop, so a volatile tick that followed another event of the read was lost on both
+    // transports (on polling every time once it was deferred behind the book signal) — and the
+    // tick is the one event that refreshes the statistics.
+    // It is absolute and keyed by `tradeCount`, so a late or repeated one changes nothing.
+    namespace.local.to(channel).emit(event.type, event);
   };
 
   /**

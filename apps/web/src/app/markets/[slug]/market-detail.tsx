@@ -349,9 +349,9 @@ function PersonalArea({ viewer, children }: { viewer: PersonalAreaView; children
 
 /**
  * 호가 and 거래 내역 (N02 §4): from md up the 호가창 slot (#179) and, under it, 최근 체결 with 내 거래
- * (#121, signed-in only — a visitor's prompt is the one at 내 포지션's place); below md a switch
- * between the two, opening on 호가 (ADR-0061 decision 1, item 16: 거래 내역 is the market's recent
- * fills and the reader's own trades).
+ * (#123, ADR-0116 결정 10의 18; signed-in only — a visitor's prompt is the one at 내 포지션's place);
+ * below md a switch between the two, opening on 호가 (ADR-0061 decision 1, item 16: 거래 내역 is the
+ * market's recent fills and the reader's own trades).
  *
  * Both panels are always rendered and the switch only decides which is displayed below md
  * (`viewDisplay`), so one DOM serves both widths: 최근 체결 is mounted once and never refetched by a

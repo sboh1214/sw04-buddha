@@ -306,7 +306,7 @@ docker compose exec -e PSQL_HISTORY=/dev/null postgres psql -U buddha_app -d bud
 - **Coin.** 시작 Coin을 받지 않고(API와 DB가 거절한다) 사용자 원장 계정도 잔고 행도 없다 — 사용자 원장 계정은 사람 계정의 것이고 DB가 이 계정의 것을 거절한다(#116, ADR-0109). 봇이 쓸 Coin은 시장마다의 '마켓메이커 자금' 원장 계정(`ledger_accounts`의 `market_maker_funds`, 주인이 이 계정)에 두고, 그 원장 계정은 봇이 그 시장에 처음 배정받을 때(M10 #129) 생긴다. 아래 [원장 계정](#원장-계정-116-adr-0109).
 - **쌍 소각.** 이 계정이 한 시장에서 잠기지 않은 YES와 NO를 함께 가지면 봇(M10 #129)이 그 수만큼 바로 소각하고, 쌍마다 100 Coin이 그 시장의 담보에서 마켓메이커 자금으로 돌아온다('쌍 소각 반환', ADR-0107 결정 2 #73 12항). 거래 중·거래 일시 중단인 시장에서 거래 마감 시각 전에만 하고, 마감 뒤와 '담보·원장 장애' 일시 중단 동안에는 하지 않는다(이미 다른 사유로 일시 중단된 시장에 기록된 원장 장애는 아직 막지 않는다 — 그 기록을 만드는 #93이 소각 거절에 더한다). 운영자가 할 일은 없다. 아래 [계약과 담보](#계약과-담보-118-adr-0110).
 - **체결.** 이 계정의 주문도 회원의 주문과 같은 매칭 규칙으로 체결한다(#117, ADR-0111). 봇은 매수 호가만 내므로 회원이 봇에게서 계약을 사는 것은 늘 반대 결과 매수의 쌍 발행이고, 봇의 매수 호가에 바로 파는 것은 계약을 가진 회원의 매도다. 사람이 아닌 계정은 모두 한 자기 체결 묶음이라 봇끼리는 체결하지 않는다(봇의 YES 매수와 NO 매수도 쌍을 만들지 않는다). 운영자가 할 일은 없다.
-- **사람 수에서 빠진다.** 참여자 수·거래량·'사용자 체결 0건'과 판정 이의의 자격은 사람 계정만 센다(ADR-0107 결정 1 #177 13항). 사람 계정인지는 한 규칙(`isHumanAccountType`, SQL `is_human_account`)으로만 가린다.
+- **사람 수에서 빠진다.** 참여자 수·'사용자 체결 0건'과 판정 이의의 자격은 사람 계정만 센다(ADR-0107 결정 1 #177 13항). 사람 계정인지는 한 규칙(`isHumanAccountType`, SQL `is_human_account`)으로만 가린다. 참여자 수(#121)는 주문 접수가 책을 읽을 때 그 규칙으로 가린 주인(`OrderOwner.human`)으로 세고, 확인 SQL은 체결에 복사한 계정 유형으로 다시 센다([시장 통계](#시장-통계-121-adr-0116)). 거래량은 사람 계정이 한쪽인 모든 체결을 센다(봇과의 체결 포함, #177 12항) — 봇끼리의 체결은 생기지 않으므로(0062 `fills_check`) 모든 체결이다.
 
 **확인(읽기만).** [휴대전화 번호 바꾸기](#회원의-휴대전화-번호-바꾸기-57-3항)의 2단계(셸)와 4단계(psql)로 붙어 돌린다. 줄이 하나이고 `profiles`·`sign_ins`·`sessions`·`user_ledger_accounts`가 0이어야 한다. `funds_accounts`는 봇이 자금을 둔 시장의 수다(#129 전에는 0). 줄이 아예 없을 때만 아직 시드가 돌지 않은 DB다 — 손으로 만들지 않고 호스트 셸에서 시드를 돌린다(`sudo docker compose -f /data/buddha/compose.yaml run --rm migrate`, 초기화가 [RESET.md](RESET.md) 8단계에서 도는 것과 같은 일).
 
@@ -509,6 +509,49 @@ ORDER BY o.market_id, o.arrival_seq;
 - **원장 장애로 묶인 시장.** 복구 전에 거래 마감 시각이 오면 시장은 예정대로 마감하고(일시 중단 기록은 '예정 마감') 대기 주문은 잠금과 함께 남는다. 그 주문을 만료로 끝내는 복구는 #93이다. [주문 취소](#주문-취소-178-adr-0113)의 확인 (d)가 그 주문을 보인다.
 - **거래가 전혀 없던 시장.** 사람의 체결이 한 건도 없는 시장을 마감과 함께 취소(CANCELLED, 결과 유형 없음 — 판정·지급이 없다)로 보내는 것은 #20이다 — 그 전까지는 그런 시장도 마감한다.
 - **마감이 매 분 실패할 때.** 잠금이 주문이 가리키는 것을 쥐고 있지 않으면 마감 전체가 되돌아가고, 워커 로그의 `market close` 스캔이 매 분 그 시장 id와 함께 실패를 알린다. 그동안 시장은 상태로는 거래 중이지만 거래 마감 시각이 지나 주문·체결은 거절된다. [주문 접수](#주문-접수-119-adr-0112)의 확인 (a)와 [계약과 담보](#계약과-담보-118-adr-0110)의 확인을 돌려 어긋난 줄을 오너에게 알린다(대사와 정정은 #93). 원장 장애 일시 중단을 요청해도 거래 마감 시각이 지나 거절된다(`close_passed`, 화면은 `closeAt` `closed`) — ADR-0113 12-13의 나가는 길은 마감에 없다. 그래서 #93 전에는 그 시장을 멈추거나 마감하거나 판정으로 보낼 관리자 길이 없다는 것도 함께 오너에게 알린다. SQL로 주문이나 잠금을 고치지 않는다.
+
+## 시장 통계 (#121, ADR-0116)
+
+시장의 시장가격(마지막 체결의 YES 기준 값, `markets.last_price`)과 그 갱신시각(`last_fill_at`), 누적 거래량(`volume_coin`), 체결 수(`trade_count`), 참여자 수(`trader_count`)는 체결이 있었던 주문 접수가 그 체결과 같은 트랜잭션에서 시장 잠금 아래 한 번 쓴다(`@buddha/db` market-stats.ts). 개장·거래 일시 중단·마감과 주문 만료·취소·판정·정산·시드는 이 값을 쓰지 않는다. 운영자가 고칠 값은 없다.
+
+- **값의 뜻.** 시장가격은 마지막 체결(서버 시각, 같은 시각이면 체결 번호가 큰 것)의 YES 기준 값이다 — NO 37의 체결은 63, 쌍 발행은 체결 하나이고 100 − NO 가격이다. 첫 체결 전에는 둘 다 비어 있다('체결 없음', 개장의 50%는 가격이 아니다). 거래량은 체결마다 들어온 주문의 계약 가격 × 수량을 한 번 더한 것이라 공개 최근 체결의 금액을 모두 더한 값과 같다. 참여자는 그 시장에서 체결이 한 건이라도 있는 사람 계정(계정 유형 규칙, 운영 마켓메이커는 빠지고 관리자는 든다)의 수로, 전량 매도나 탈퇴로 줄지 않는다 — 판정 이의 자격(`hasMarketFill`)과 같은 기준이다.
+- **가격 기록.** 차트와 최근 체결은 체결 행(`fills`)을 그대로 읽는다. 체결 행은 바뀌거나 지워지지 않으므로 위의 값은 언제든 체결에서 다시 셀 수 있다. 옛 AMM의 `price_ticks`는 그대로 두고 아무것도 읽거나 쓰지 않는다.
+- **확인.** 아래 SQL은 읽기만 하며, 행이 없으면 모든 시장의 통계가 그 체결과 같다. 행이 나오면 고치지 말고 오너에게 알린다(바로잡기는 #93의 대사, 이상 체결을 빼는 다시 세기는 #132).
+- **배포 때.** 마이그레이션 0063은 체결이 하나라도 있거나 통계가 기본값이 아닌 시장이 있는 DB에서 아무것도 하지 않고 멈춘다(다시 세기는 UPDATE라 오너의 결정이다). 운영 DB는 0060이 비웠고 주문 접수가 닫혀 있어 지나간다. 로컬 개발 DB가 멈추면 [RESET.md](RESET.md)대로 비운다.
+
+```sql
+WITH totals AS (
+  SELECT market_id, sum(amount_coin) AS volume, count(*)::int AS trades
+  FROM fills GROUP BY market_id
+), last AS (
+  SELECT DISTINCT ON (market_id) market_id, yes_price_coin, created_at
+  FROM fills ORDER BY market_id, created_at DESC, id DESC
+), people AS (
+  SELECT market_id, count(DISTINCT owner_id)::int AS traders
+  FROM (SELECT market_id, incoming_owner_id AS owner_id FROM fills
+        WHERE is_human_account_type(incoming_account_type)
+        UNION ALL
+        SELECT market_id, resting_owner_id FROM fills
+        WHERE is_human_account_type(resting_account_type)) AS sides
+  GROUP BY market_id
+)
+SELECT m.id AS market_id,
+       m.last_price, l.yes_price_coin AS fills_last_price,
+       m.last_fill_at, l.created_at AS fills_last_fill_at,
+       m.volume_coin::text AS volume_coin, coalesce(t.volume, 0)::text AS fills_volume_coin,
+       m.trade_count, coalesce(t.trades, 0) AS fills_trade_count,
+       m.trader_count, coalesce(p.traders, 0) AS fills_trader_count
+FROM markets m
+LEFT JOIN totals t ON t.market_id = m.id
+LEFT JOIN last l ON l.market_id = m.id
+LEFT JOIN people p ON p.market_id = m.id
+WHERE m.last_price IS DISTINCT FROM l.yes_price_coin
+   OR m.last_fill_at IS DISTINCT FROM l.created_at
+   OR m.volume_coin <> coalesce(t.volume, 0)
+   OR m.trade_count <> coalesce(t.trades, 0)
+   OR m.trader_count <> coalesce(p.traders, 0)
+ORDER BY m.id;
+```
 
 ## API 컨테이너의 메모리 확인 (#46, ADR-0073 9-46)
 

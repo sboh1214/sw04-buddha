@@ -442,6 +442,13 @@
       "when": 1793872020074,
       "tag": "0062_order_intake",
       "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1794060983520,
+      "tag": "0063_market_stats",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,4 @@
-import { schema, type Db } from '@buddha/db';
+import { schema, type Db, type MarketRowWrite } from '@buddha/db';
 import {
   TIME_ORDER_RULES,
   missingRuleItems,
@@ -183,7 +183,7 @@ export function withContent(
   };
 }
 
-/** The `markets` columns of the time items (#22). */
+/** The `markets` columns of the time items (#22); never a statistic (`MarketRowWrite`, #121). */
 export function timeColumns(times: MarketTimeItems) {
   const at = (iso: string | null) => (iso === null ? null : new Date(iso));
   return {
@@ -192,10 +192,13 @@ export function timeColumns(times: MarketTimeItems) {
     scheduledAnnouncementAt: at(times.scheduledAnnouncementAt),
     scheduledJudgementAt: at(times.scheduledJudgementAt),
     judgementTimeZone: times.judgementTimeZone,
-  };
+  } satisfies MarketRowWrite;
 }
 
-/** The `markets` columns of the rule items; the sources are `market_sources` rows. */
+/**
+ * The `markets` columns of the rule items; the sources are `market_sources` rows. Never a
+ * statistic (`MarketRowWrite`, #121).
+ */
 export function ruleItemColumns(items: MarketRuleItems) {
   return {
     description: items.description,
@@ -205,7 +208,7 @@ export function ruleItemColumns(items: MarketRuleItems) {
     fallbackCondition: items.fallbackCondition,
     longDelayDays: items.longDelayDays,
     delayHandling: items.delayHandling,
-  };
+  } satisfies MarketRowWrite;
 }
 
 /** The fields a time rule compares that a write's body sends, null included (#22). */
