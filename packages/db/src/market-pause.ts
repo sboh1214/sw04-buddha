@@ -88,8 +88,10 @@ export interface PauseMarketInput {
   /** The pausing admin (#173 item 2: one admin), the event's actor. */
   actorId: string;
   reason: MarketPauseReason;
-  /** What happened (approvalReasonSchema: trimmed, 1–500 characters), admins only. */
+  /** What happened (approvalReasonSchema: trimmed, 1–500 characters). Private unless confirmed. */
   note: string;
+  /** Explicit publication consent for this note; omitted by legacy/internal callers. */
+  notePublic?: true;
   /**
    * For `early_result` alone, when the result was published (decision 3, the operator's); null
    * for any other reason. A mismatch is a caller's bug (the body refuses it first) and throws.
@@ -120,7 +122,8 @@ export type PauseMarketResult =
  *
  * The pause is `transitionMarket`'s `paused` event — from `open`, to `paused`, the admin, payload
  * `{pauseId, reason, resultPublishedAt}` (MarketPausedPayload: the instant as ISO, null but for
- * `early_result`), at `now`, the market's `status_event_id` — then its `market_pauses` row with
+ * `early_result`; `notePublic: true` only when publication was explicitly confirmed), at `now`,
+ * the market's `status_event_id` — then its `market_pauses` row with
  * that id (generated first, so the event names it), the reason, the note, the instant, `now`, the
  * admin and the event, lasting. Nothing else of the market changes: `close_at` stays, and the
  * close still comes at it, on schedule (#173 item 3). Orders: after the pause row, every resting
@@ -131,7 +134,7 @@ export type PauseMarketResult =
  */
 export async function pauseMarket(
   tx: Tx,
-  { market, orders, now, actorId, reason, note, resultPublishedAt }: PauseMarketInput,
+  { market, orders, now, actorId, reason, note, notePublic, resultPublishedAt }: PauseMarketInput,
 ): Promise<PauseMarketResult> {
   assertMarketOrders(orders, market.id);
   if (pauseReasonNeedsPublishedAt(reason) !== (resultPublishedAt !== null)) {
@@ -152,6 +155,7 @@ export async function pauseMarket(
     pauseId,
     reason,
     resultPublishedAt: resultPublishedAt?.toISOString() ?? null,
+    ...(notePublic === true ? { notePublic } : {}),
   };
   const eventId = await transitionMarket(tx, {
     marketId: market.id,

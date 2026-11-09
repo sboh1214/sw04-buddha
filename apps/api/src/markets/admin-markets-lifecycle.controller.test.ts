@@ -183,6 +183,7 @@ describe.skipIf(!hasTestInfra)('admin markets lifecycle (integration)', () => {
     const approver = await anotherAdmin();
     const url = `/api/v1/admin/markets/${marketId}`;
     const paused = await post(`${url}/pause`, {
+      publicNoteConfirmed: true,
       reason: 'basis_change',
       note: '사건 일정이 앞당겨졌다.',
     });
@@ -329,6 +330,7 @@ describe.skipIf(!hasTestInfra)('admin markets lifecycle (integration)', () => {
     // A pause leaves it (the close still comes on schedule, #173 item 3); an approved early close
     // is the job's job done before its time (#114): the registration is dropped.
     const paused = await post(`/api/v1/admin/markets/${row.id}/pause`, {
+      publicNoteConfirmed: true,
       reason: 'ledger_failure',
       note: '원장 장애로 멈춘다.',
     });

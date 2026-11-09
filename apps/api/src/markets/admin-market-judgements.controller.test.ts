@@ -9,7 +9,7 @@
  * as 판정 불가 and evidence collected after now; a VOID with no source and its reason; an approval
  * by another admin — PROVISIONAL with the result, the version and the dispute deadline fixed from
  * the window read then, the append-only judgement, the record, the status published, the resolve
- * job at the deadline, nothing settled and nothing of it public — the event deadline confirmed
+ * job at the deadline, nothing settled, approved grounds public without identity/approval — the event deadline confirmed
  * before the scheduled judgement, and refused for an unknown request, one no longer waiting, its
  * registrant, a market no longer CLOSED and the undecided window; a 반려 and a 철회 writing the
  * record alone, the market registered again by any admin; 판정 정정 (#176, ADR-0105; #173 items
@@ -655,7 +655,7 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
   });
 
   // --- 승인 ------------------------------------------------------------------------------------
-  it('approves by another admin: PROVISIONAL with the result, the version, the deadline fixed, the judgement, the record, the status published, the resolve job; nothing settled, nothing of it public', async () => {
+  it('approves by another admin: PROVISIONAL with the result, version, deadline, public grounds, record, status and resolve job; no settlement or public identity/approval', async () => {
     const market = await closedEarly();
     const primary = await primaryOf(market.id);
     await setWindow(90);
@@ -830,8 +830,7 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
 
     // The public detail: the status and the provisional result (labels and notice are the web's),
     // the version and its dispute deadline, which anonymous visitors see with the submission link
-    // (#175, #173 item 6) — and nothing else of the judgement: the record is #24's, the accounts
-    // nobody's (#173 item 13).
+    // (#175, #173 item 6), with the approved grounds (#24); accounts and approval stay private.
     const pub = await publicDetail(market.slug);
     expect(pub.statusCode).toBe(200);
     expect(data<Market>(pub)).toMatchObject({
@@ -847,14 +846,14 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
     });
     expect(data<Market>(pub)).not.toHaveProperty('judgement');
     expect(data<Market>(pub)).not.toHaveProperty('disputes');
-    for (const hidden of [
-      DESCRIPTION,
-      LINK,
-      APPROVAL,
-      registrant.id,
-      reviewer.id,
-      collectedAt.toISOString(),
-    ]) {
+    expect(data<Market>(pub).judgingRecord.versions).toEqual([
+      expect.objectContaining({
+        version: 1,
+        description: DESCRIPTION,
+        evidence: { links: [LINK], collectedAt: collectedAt.toISOString() },
+      }),
+    ]);
+    for (const hidden of [APPROVAL, registrant.id, reviewer.id]) {
       expect(pub.body).not.toContain(hidden);
     }
 
@@ -1610,8 +1609,7 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
         delay: 90 * MINUTE_MS,
       });
     });
-    // The public detail: the new result, version and deadline, disputes taken again — nothing of
-    // the correction itself (#24, #173 item 13).
+    // The public detail includes both approved versions and the correction's grounds (#24).
     const pub = await publicDetail(market.slug);
     expect(data<Market>(pub)).toMatchObject({
       status: 'provisional',
@@ -1623,7 +1621,12 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
       disputeUnderReview: false,
       judgementDelayed: false,
     });
-    for (const hidden of [CORRECTION, grounds, third.id, registrant.id]) {
+    expect(data<Market>(pub).judgingRecord.versions[0]).toMatchObject({
+      version: 2,
+      correctionReason: CORRECTION,
+      description: grounds,
+    });
+    for (const hidden of [third.id, registrant.id, APPROVAL]) {
       expect(pub.body).not.toContain(hidden);
     }
     // Decided once; v1 is no longer the one to correct, v2 is.

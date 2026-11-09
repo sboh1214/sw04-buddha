@@ -64,7 +64,7 @@ import { ruleVersionNumberSchema } from './market-supplement.js';
  *
  * The registration, the 반려 and the 철회 are admin actions alone (`market_judgement_request` …,
  * enums.ts); the approval also writes the `provisional` event, a correction's the
- * `judgement_corrected` one. Admins alone read the registrations and the judgements for now: the
+ * `judgement_corrected` one. Admins alone read the registrations and approval reasons; the
  * public judging record (#24) shows the source, the evidence, the collection instant, a VOID's
  * reason, the earlier versions and the correction reasons, never who registered or approved one
  * (#173 item 13). The public `Market` carries the status, `resolvedResult`, and since #175 the

@@ -84,6 +84,14 @@ const detail: Market = {
   tags: [],
   // No rule version (#80): not opened yet, or opened before #80 (D4).
   ruleVersion: null,
+  judgingRecord: {
+    versions: [],
+    pauses: [],
+    delays: [],
+    disputes: { total: 0, byVersion: [], decisions: [] },
+    cancellation: null,
+    payoutDelayed: false,
+  },
   ruleVersions: [],
   // No 판정 지연 기록 (#142): not reading 판정 지연.
   judgementDelay: null,
@@ -249,6 +257,27 @@ describe('applyTick', () => {
 });
 
 describe('applyStatus', () => {
+  it('clears status-specific public delay flags while retaining recorded history (#24)', () => {
+    const held: Market = {
+      ...detail,
+      status: 'settling',
+      statusEventId: '8',
+      judgingRecord: {
+        ...detail.judgingRecord,
+        payoutDelayed: true,
+        delays: [{ reason: '자료 확인', nextReviewAt: '2026-11-10T00:00:00.000Z', current: true }],
+      },
+    };
+    const next = applyStatus(held, statusEvent({ status: 'settled', statusEventId: '9' }));
+    expect(next?.judgingRecord).toEqual({
+      ...held.judgingRecord,
+      payoutDelayed: false,
+      delays: [{ ...held.judgingRecord.delays[0], current: false }],
+    });
+    expect(next?.judgingRecordStale).toBe(true);
+    expect(applyStatus(card, statusEvent())).not.toHaveProperty('judgingRecord');
+    expect(applyStatus(card, statusEvent())).not.toHaveProperty('judgingRecordStale');
+  });
   /** The market judged YES: the transition that wrote the result is event 4 of this market. */
   const resolved: Market = {
     ...detail,
@@ -264,22 +293,32 @@ describe('applyStatus', () => {
     // group the latest transition delivered — nothing else: the 이의 기한 and the judgement version
     // (public since #175, ADR-0104) are no event's, and come with the REST refetch beside it.
     const closed = applyStatus(detail, statusEvent({ status: 'closed', statusEventId: '3' }));
-    expect(closed).toEqual({ ...detail, status: 'closed', statusEventId: '3' });
+    expect(closed).toEqual({
+      ...detail,
+      status: 'closed',
+      statusEventId: '3',
+      judgingRecordStale: true,
+    });
     const provisional = applyStatus(
       closed,
       statusEvent({ status: 'provisional', resolvedResult: 'YES', statusEventId: '4' }),
     );
-    expect(provisional).toEqual({ ...resolved, status: 'provisional' });
+    expect(provisional).toEqual({ ...resolved, status: 'provisional', judgingRecordStale: true });
     const judged = applyStatus(
       provisional,
       statusEvent({ status: 'resolved', resolvedResult: 'YES', statusEventId: '5' }),
     );
-    expect(judged).toEqual({ ...resolved, statusEventId: '5' });
+    expect(judged).toEqual({ ...resolved, statusEventId: '5', judgingRecordStale: true });
     const settled = applyStatus(
       judged,
       statusEvent({ status: 'settled', resolvedResult: 'YES', statusEventId: '6' }),
     );
-    expect(settled).toEqual({ ...resolved, status: 'settled', statusEventId: '6' });
+    expect(settled).toEqual({
+      ...resolved,
+      status: 'settled',
+      statusEventId: '6',
+      judgingRecordStale: true,
+    });
     expect(settled).not.toHaveProperty('disputeUntil');
   });
 
@@ -321,6 +360,7 @@ describe('applyStatus', () => {
       judgementDelayed: false,
       disputeUnderReview: false,
       disputeOpen: false,
+      judgingRecordStale: true,
     });
     // A repeat on the same key (a dispute's submission republishes it, A-M4-36) writes nothing:
     // the refetch beside it brings the new flags.
@@ -346,6 +386,7 @@ describe('applyStatus', () => {
       judgementDelayed: false,
       disputeUnderReview: false,
       disputeOpen: false,
+      judgingRecordStale: true,
     });
   });
 
@@ -394,7 +435,7 @@ describe('applyStatus', () => {
     // Approved again later: a public status under a newer key applies as ever.
     expect(
       applyStatus(scheduled, statusEvent({ status: 'scheduled', statusEventId: '10' })),
-    ).toEqual({ ...scheduled, statusEventId: '10' });
+    ).toEqual({ ...scheduled, statusEventId: '10', judgingRecordStale: true });
   });
 
   it('keeps settled when the judgement arrives after it', () => {
@@ -452,6 +493,7 @@ describe('applyStatus', () => {
       ...resolved,
       resolvedResult: 'NO',
       statusEventId: '5',
+      judgingRecordStale: true,
     });
   });
 
@@ -544,6 +586,106 @@ describe('applyToPages', () => {
 });
 
 describe('joinMarket', () => {
+  it.each(['5', '6'])(
+    'keeps corrected history stale through old REST/ticks until REST key %s arrives (#24)',
+    (freshKey) => {
+      const previous: Market = {
+        ...detail,
+        status: 'provisional',
+        statusEventId: '4',
+        resolvedResult: 'YES',
+        judgingRecord: {
+          ...detail.judgingRecord,
+          versions: [
+            {
+              version: 1,
+              result: 'YES',
+              source: null,
+              fallbackReason: null,
+              voidReason: null,
+              correctionReason: null,
+              evidence: {
+                links: ['https://example.com/evidence'],
+                collectedAt: '2026-11-09T00:00:00.000Z',
+              },
+              description: '정정 전 근거',
+              ruleVersion: 1,
+              publishedAt: '2026-11-09T01:00:00.000Z',
+              disputeDeadline: '2026-11-10T01:00:00.000Z',
+            },
+          ],
+        },
+      };
+      const correction = statusEvent({
+        status: 'provisional',
+        resolvedResult: 'NO',
+        statusEventId: '5',
+      });
+      const moved = applyStatus(previous, correction);
+      expect(moved?.resolvedResult).toBe('NO');
+      expect(moved?.judgingRecordStale).toBe(true);
+      expect(moved?.judgingRecord.versions[0]?.result).toBe('YES');
+
+      // The old request can complete after the correction event, but cannot certify its record.
+      const joined = joinMarket(moved, previous);
+      expect(joined.statusEventId).toBe('5');
+      expect(joined.judgingRecordStale).toBe(true);
+      expect(joinMarket(joined, previous).judgingRecordStale).toBe(true);
+      expect(applyTick(joined, tick())?.judgingRecordStale).toBe(true);
+      expect(applyStatus(joined, correction)).toBeUndefined();
+
+      const fresh: Market = {
+        ...previous,
+        statusEventId: freshKey,
+        resolvedResult: 'NO',
+        judgingRecord: {
+          ...previous.judgingRecord,
+          versions: previous.judgingRecord.versions.map((version) => ({
+            ...version,
+            version: 2,
+            result: 'NO',
+            correctionReason: '정정된 근거',
+          })),
+        },
+      };
+      const recovered = joinMarket(joined, fresh);
+      expect(recovered.judgingRecordStale).toBeUndefined();
+      expect(recovered.judgingRecord).toEqual(fresh.judgingRecord);
+      expect(recovered.judgingRecord.versions[0]?.result).toBe('NO');
+      // A duplicate/later delivery of this same event cannot hide freshly read history again.
+      expect(applyStatus(recovered, correction)).toBeUndefined();
+    },
+  );
+
+  it('keeps public history and completion times with their newer status snapshot (#24)', () => {
+    const older: Market = {
+      ...detail,
+      status: 'settling',
+      statusEventId: '8',
+      judgingRecord: { ...detail.judgingRecord, payoutDelayed: true },
+    };
+    const newer: Market = {
+      ...detail,
+      status: 'settled',
+      statusEventId: '9',
+      resolvedAt: '2026-11-09T00:00:00.000Z',
+      settledAt: '2026-11-09T00:01:00.000Z',
+      judgingRecord: {
+        ...detail.judgingRecord,
+        disputes: { ...detail.judgingRecord.disputes, total: 2 },
+      },
+    };
+    for (const joined of [joinMarket(newer, older), joinMarket(older, newer)]) {
+      expect(joined.judgingRecord).toEqual(newer.judgingRecord);
+      expect(joined.resolvedAt).toBe(newer.resolvedAt);
+      expect(joined.settledAt).toBe(newer.settledAt);
+    }
+    // A repeated status event can accompany newly recorded public facts: same-key REST wins.
+    expect(
+      joinMarket(newer, { ...newer, judgingRecord: older.judgingRecord }).judgingRecord,
+    ).toEqual(older.judgingRecord);
+    expect(joinMarket({ ...card, statusEventId: '9' }, card)).not.toHaveProperty('judgingRecord');
+  });
   const live: Market = {
     ...detail,
     lastPrice: 63,

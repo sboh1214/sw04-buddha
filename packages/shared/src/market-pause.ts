@@ -42,9 +42,9 @@ import { storableInstantSchema } from './market-rules.js';
  *
  * The pause and the approval write a market event (`paused`; `resumed`, `closed` or `cancelled`,
  * enums.ts), and every step an `admin_actions` row (`market_pause`, `market_pause_decision_request`
- * …). Admins alone read the pauses for now: the public judging record shows the reason and the
- * pause and resume times (#173 item 13) from #24, which reads `market_pauses`; neither the note nor
- * the publication instant is promised public.
+ * …). The public judging record (#24, ADR-0107) reads the pause reason, note, publication instant,
+ * pause/end times and completed review from `market_pauses`, without operator identities or
+ * the request/approval/rejection reasons.
  */
 
 /** `approval_requests.kind` of a paused market's next path (#171: lower-case words, `_`). */
@@ -191,7 +191,7 @@ export function pauseDecisionRefusal(
 // ---- bodies ---------------------------------------------------------------------------
 /**
  * `POST /admin/markets/:id/pause` (one admin, OPEN → PAUSED): the reason, the note saying what
- * happened (required and trimmed, approvals.ts; admins only), the result's publication instant —
+ * happened (required and trimmed, approvals.ts; public in #24), the result's publication instant —
  * required for `early_result` and refused for any other reason (null or left out), from
  * STORABLE_INSTANT_MIN on, not after the pause (the service's) — and the admin on screen
  * (ADR-0092).
@@ -200,6 +200,8 @@ export const pauseMarketBodySchema = z
   .object({
     reason: marketPauseReasonSchema,
     note: approvalReasonSchema,
+    /** A new public note needs an explicit acknowledgement; old clients fail before writes. */
+    publicNoteConfirmed: z.literal(true),
     resultPublishedAt: storableInstantSchema.nullish(),
     expectedAccountId: expectedAccountIdSchema,
   })
@@ -297,6 +299,8 @@ export interface MarketPausedPayload {
   pauseId: string;
   reason: MarketPauseReason;
   resultPublishedAt: string | null;
+  /** Present only when this immutable event recorded a note intended for public readers. */
+  notePublic?: true;
 }
 
 /**

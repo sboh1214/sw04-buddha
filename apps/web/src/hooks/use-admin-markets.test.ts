@@ -95,6 +95,14 @@ const draft: AdminMarket = {
   tags: [],
   // No rule version (#80): not opened yet, or opened before #80 (D4).
   ruleVersion: null,
+  judgingRecord: {
+    versions: [],
+    pauses: [],
+    delays: [],
+    disputes: { total: 0, byVersion: [], decisions: [] },
+    cancellation: null,
+    payoutDelayed: false,
+  },
   ruleVersions: [],
   supplement: { pending: null, log: [] },
   pause: { history: [], pending: null, log: [] },

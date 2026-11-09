@@ -1807,6 +1807,7 @@ export async function sendPause(
       reason,
       note,
       resultPublishedAt: published,
+      publicNoteConfirmed: true,
       expectedAccountId: await accountIdOf(context),
     },
   });

@@ -1089,6 +1089,7 @@ describe.skipIf(!hasTestInfra)('admin market supplements (integration)', () => {
     expect(
       (
         await post(`${marketUrl(paused.id)}/pause`, third, {
+          publicNoteConfirmed: true,
           reason: 'basis_change',
           note: '판정 기준을 검토한다.',
         })

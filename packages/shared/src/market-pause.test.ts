@@ -204,6 +204,7 @@ describe('the pause body', () => {
   const body = {
     reason: 'ledger_failure',
     note: ' 원장 대사가 맞지 않는다. ',
+    publicNoteConfirmed: true,
     expectedAccountId: account,
   };
 
@@ -211,6 +212,7 @@ describe('the pause body', () => {
     expect(pauseMarketBodySchema.parse(body)).toEqual({
       reason: 'ledger_failure',
       note: '원장 대사가 맞지 않는다.',
+      publicNoteConfirmed: true,
       expectedAccountId: account,
     });
     for (const reason of ['ledger_failure', 'basis_change']) {
@@ -223,9 +225,18 @@ describe('the pause body', () => {
     ).toEqual({
       reason: 'early_result',
       note: '원장 대사가 맞지 않는다.',
+      publicNoteConfirmed: true,
       resultPublishedAt: at,
       expectedAccountId: account,
     });
+  });
+
+  it('requires a literal public-note acknowledgement from new clients', () => {
+    for (const publicNoteConfirmed of [undefined, null, false, 'true', 1]) {
+      expect(paths(pauseMarketBodySchema.safeParse({ ...body, publicNoteConfirmed }))).toEqual([
+        'publicNoteConfirmed',
+      ]);
+    }
   });
 
   it('requires the publication instant for an early result and refuses it for any other', () => {

@@ -666,7 +666,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Pause an open market’s trading (거래 일시 중단) by one admin, at once: one of the three reasons, a note saying what happened (admins only) and, for an early result, when the result was published — not after the pause. The close still comes on schedule; resuming or closing early is another admin’s approval of a next-path request */
+        /** Pause an open market’s trading (거래 일시 중단) by one admin, at once: one of the three reasons, a public note with explicit publicNoteConfirmed=true and, for an early result, when the result was published — not after the pause. The close still comes on schedule; resuming or closing early is another admin’s approval of a next-path request */
         post: operations["adminPauseMarket"];
         delete?: never;
         options?: never;
@@ -2506,7 +2506,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** One market by id or slug, with its tags in order and its rule versions, the current first (each one’s full text, changed items, reason and time, and nobody’s name), and its market price as of 24 hours ago (the last fill by then, null with none); a draft or in-review one is NOT_FOUND to the public */
+        /** One market by id or slug, with its tags in order and its rule versions, the current first (each one’s full text, changed items, reason and time, and nobody’s name), and its market price as of 24 hours ago (the last fill by then, null with none). Includes an anonymous judging record: approved versions and grounds, pause and delay history, dispute counts and decision reasons, cancellation and payout delay; no operator identity, unapproved judgement, approval reason or dispute submission. A draft or in-review one is NOT_FOUND to the public */
         get: operations["getMarket"];
         put?: never;
         post?: never;
@@ -3880,6 +3880,7 @@ export type components = {
             judgementDelays: components["schemas"]["AdminJudgementDelay"][];
             judgementTimeZone: string | null;
             judgementVersion: number | null;
+            judgingRecord: components["schemas"]["MarketJudgingRecord"];
             /** Format: date-time */
             lastFillAt: string | null;
             lastPrice: number | null;
@@ -5036,6 +5037,7 @@ export type components = {
             judgementDelayed: boolean;
             judgementTimeZone: string | null;
             judgementVersion: number | null;
+            judgingRecord: components["schemas"]["MarketJudgingRecord"];
             /** Format: date-time */
             lastFillAt: string | null;
             lastPrice: number | null;
@@ -5163,6 +5165,18 @@ export type components = {
             ruleVersion: number | null;
             source: components["schemas"]["JudgementSource"] | null;
             voidReason: string | null;
+        };
+        MarketJudgingRecord: {
+            cancellation: {
+                /** Format: date-time */
+                cancelledAt: string;
+                reason: string;
+            } | null;
+            delays: components["schemas"]["PublicMarketJudgementDelay"][];
+            disputes: components["schemas"]["PublicMarketDisputes"];
+            pauses: components["schemas"]["PublicMarketPause"][];
+            payoutDelayed: boolean;
+            versions: components["schemas"]["PublicMarketJudgement"][];
         };
         MarketPauseDecisionLogEntry: {
             /** Format: date-time */
@@ -5705,6 +5719,8 @@ export type components = {
         PauseMarketBody: {
             expectedAccountId: string;
             note: string;
+            /** @enum {boolean} */
+            publicNoteConfirmed: true;
             reason: components["schemas"]["MarketPauseReason"];
             /** Format: date-time */
             resultPublishedAt?: string | null;
@@ -6028,6 +6044,61 @@ export type components = {
         ProposalStatus: "submitted" | "reviewing" | "adopted" | "rejected" | "retracted";
         ProposalWriteBody: {
             expectedAccountId: string;
+        };
+        PublicDisputeCounts: {
+            accepted: number;
+            closed_by_correction: number;
+            dismissed: number;
+            pending: number;
+            retracted: number;
+        };
+        PublicDisputeDecision: {
+            /** @enum {string} */
+            decision: "accepted" | "dismissed";
+            judgementVersion: number;
+            reason: string;
+        };
+        PublicMarketDisputes: {
+            byVersion: {
+                counts: components["schemas"]["PublicDisputeCounts"];
+                judgementVersion: number;
+                total: number;
+            }[];
+            decisions: components["schemas"]["PublicDisputeDecision"][];
+            total: number;
+        };
+        PublicMarketJudgement: {
+            correctionReason: string | null;
+            description: string;
+            /** Format: date-time */
+            disputeDeadline: string;
+            evidence: components["schemas"]["JudgementEvidence"];
+            fallbackReason: string | null;
+            /** Format: date-time */
+            publishedAt: string;
+            result: components["schemas"]["MarketResult"];
+            ruleVersion: number | null;
+            source: components["schemas"]["JudgementSource"] | null;
+            version: number;
+            voidReason: string | null;
+        };
+        PublicMarketJudgementDelay: {
+            current: boolean;
+            /** Format: date-time */
+            nextReviewAt: string;
+            reason: string;
+        };
+        PublicMarketPause: {
+            /** Format: date-time */
+            endedAt: string | null;
+            endKind: components["schemas"]["MarketPauseEndKind"] | null;
+            note: string | null;
+            /** Format: date-time */
+            pausedAt: string;
+            reason: components["schemas"]["MarketPauseReason"];
+            /** Format: date-time */
+            resultPublishedAt: string | null;
+            reviewResult: components["schemas"]["MarketPauseReviewResult"] | null;
         };
         PublicProfile: {
             bio: string | null;

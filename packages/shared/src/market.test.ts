@@ -108,6 +108,14 @@ const market = {
   ruleVersion: 1,
   ruleVersions: [versionOne],
   judgementDelay: null,
+  judgingRecord: {
+    versions: [],
+    pauses: [],
+    delays: [],
+    disputes: { total: 0, byVersion: [], decisions: [] },
+    cancellation: null,
+    payoutDelayed: false,
+  },
   lastPrice24hAgo: 48,
 };
 const event = {
@@ -189,6 +197,8 @@ describe('read DTOs', () => {
     ).toBe(false);
     expect(marketSummarySchema.parse(summary)).toEqual(summary);
     expect(marketSchema.parse(market)).toEqual(market);
+    const { judgingRecord: _judgingRecord, ...withoutJudgingRecord } = market;
+    expect(issuePaths(marketSchema.safeParse(withoutJudgingRecord))).toEqual(['judgingRecord']);
     expect(orderSchema.parse(order)).toEqual(order);
     expect(fillSchema.parse(fill)).toEqual(fill);
     expect(positionSchema.parse(position)).toEqual(position);

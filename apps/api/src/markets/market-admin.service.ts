@@ -1,3 +1,4 @@
+import { readMarketJudgingRecord } from './market-judging-record.js';
 import { marketCreationTimestamp } from '@buddha/db';
 import { assertMarketConflictAdmin } from './market-conflicts.js';
 import { Inject, Injectable } from '@nestjs/common';
@@ -1681,6 +1682,7 @@ export class MarketAdminService {
         [],
         judgementDelays,
         lastPrice24hAgo,
+        await readMarketJudgingRecord(executor, row),
       ),
       // The admin's form of the history, in the public list's place (`AdminMarket.ruleVersions`).
       ruleVersions,

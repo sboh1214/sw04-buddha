@@ -164,7 +164,7 @@ describe.skipIf(!hasTestDb())('market pauses (#114, docker test profile)', () =>
   }
 
   describe('pauseMarket', () => {
-    it('pauses an OPEN market: the paused event, the row and a lasting pause, keyed by the event', async () => {
+    it('keeps a pause note private without explicit publication confirmation and records its transition', async () => {
       const { market } = await createOpenedMarket(t.db);
       const before = await eventsOf(market.id);
       const actorId = await admin();
@@ -215,6 +215,26 @@ describe.skipIf(!hasTestDb())('market pauses (#114, docker test profile)', () =>
         endApprovalId: null,
       });
       expect(await currentMarketPause(t.db, market.id)).toEqual(result.pause);
+    });
+
+    it('records explicit note publication provenance without copying the note into the event', async () => {
+      const market = await createMarket(t.db);
+      const actorId = await admin();
+      const result = await createMarketPause(t.db, {
+        marketId: market.id,
+        by: actorId,
+        reason: 'basis_change',
+        note: NOTE,
+        notePublic: true,
+        resultPublishedAt: null,
+      });
+      expect((await eventsOf(market.id)).at(-1)?.payload).toEqual({
+        pauseId: result.pause.id,
+        reason: 'basis_change',
+        resultPublishedAt: null,
+        notePublic: true,
+      });
+      expect(result.pause.note).toBe(NOTE);
     });
 
     it('records the publication instant of an early result, up to the pause’s own instant', async () => {

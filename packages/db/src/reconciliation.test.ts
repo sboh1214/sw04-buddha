@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
-import { orderBookOf, quoteOrder } from '@buddha/shared';
+import { orderBookOf, quoteOrder, RECONCILIATION_SYSTEM_PAUSE_NOTE } from '@buddha/shared';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeMarketAtClose } from './market-close.js';
 import { endMarketPause } from './market-pause.js';
@@ -30,6 +30,7 @@ import {
   positions,
   ledgerEntries,
   marketPauses,
+  marketEvents,
   reconciliationHolds,
   reconciliationRecoveries,
   reconciliationResults,
@@ -433,6 +434,17 @@ describe.skipIf(!hasTestDb())('reconciliation and persistent recovery (#93)', ()
       .from(marketPauses)
       .where(eq(marketPauses.marketId, market.id));
     expect(pause?.pausedBy).toBeNull();
+    expect(pause?.note).toBe(RECONCILIATION_SYSTEM_PAUSE_NOTE);
+    const [event] = await t.db
+      .select()
+      .from(marketEvents)
+      .where(eq(marketEvents.id, pause!.pauseEventId));
+    expect(event?.payload).toEqual({
+      pauseId: pause!.id,
+      reason: 'ledger_failure',
+      resultPublishedAt: null,
+      notePublic: true,
+    });
     expect(await t.db.transaction((tx) => closeMarketAtClose(tx, market.id))).toMatchObject({
       closed: true,
       status: 'cancelled',

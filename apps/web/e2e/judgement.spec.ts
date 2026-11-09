@@ -47,8 +47,8 @@ import {
  * note, and the API refuses them — and alone may retract it. It waits in 판정 승인 대기, under 검수
  * 대기, where another admin finds it; before the scheduled judgement both screens warn, and the
  * approver confirms the NO condition's event deadline, shown in the dialog. The approval publishes
- * the 잠정 결과: a visitor's open detail reads it without a reload, with its result and nothing of
- * the judgement's record (#24 shows it, without the admins). A 반려 leaves the market CLOSED for
+ * the 잠정 결과: a visitor's open detail reads it without a reload, with its result and approved
+ * grounds (#24, ADR-0121), without identities or internal approval reasons. A 반려 leaves the market CLOSED for
  * the next registration — by any admin, the one who rejected included, and the first registrant
  * may approve that one. A market closed early as 판정 불가 (#114) is judged 무효 alone. The one-admin
  * 판정 is gone: no button, and its route answers 404. Once PROVISIONAL the panel offers 판정 정정
@@ -529,28 +529,37 @@ test.describe('판정', () => {
       await expect(notice.getByTestId('market-detail-result')).toHaveText(copy.no);
       await expect(page.getByTestId('order-area')).toHaveCount(0);
       expect(await documentSurvived(page)).toBe(true);
-      // The public market says 잠정 결과 and its result, and — since #175 (ADR-0104; #173 item 6:
-      // 기한과 접수 링크는 비로그인에게도 보인다) — the judgement version and the 이의 기한 the
-      // approval fixed, the link's (dispute.spec.ts walks it), and nothing else of the judgement
-      // (#24 shows the record later, without the admins): no evidence, no description, no reason,
-      // no request, no admin — in the answer, and in the server's HTML.
+      // Approved grounds are public under #24 (ADR-0121 decisions 1–2), in both the API and
+      // server HTML. The administrator-only judgement, request, identities and internal
+      // approval reason remain private; the public record is an explicit allowlist.
       const publicMarket = await publicMarketOf(request, market.id);
       expect(publicMarket.status).toBe('provisional');
       expect(publicMarket.resolvedResult).toBe('NO');
       expect(publicMarket.judgementVersion).toBe(1);
       expect(publicMarket.disputeDeadline).toBe(current.disputeDeadline);
       expect(Object.keys(publicMarket)).not.toContain('judgement');
+      expect(publicMarket.judgingRecord.versions).toEqual([
+        {
+          version: 1,
+          result: 'NO',
+          source: { priority: 0, name: primary.name, url: primary.url },
+          fallbackReason: null,
+          voidReason: null,
+          evidence: { links: [link, secondLink], collectedAt },
+          description,
+          ruleVersion: 1,
+          publishedAt: current.publishedAt,
+          disputeDeadline: current.disputeDeadline,
+          correctionReason: null,
+        },
+      ]);
       const publicBody = await (await request.get(`/api/v1/markets/${market.id}`)).text();
       const html = await (await request.get(`/markets/${market.slug}`)).text();
-      for (const hidden of [
-        link,
-        secondLink,
-        description,
-        approval,
-        requestId,
-        first.id,
-        second.id,
-      ]) {
+      for (const shown of [link, secondLink, description]) {
+        expect(publicBody).toContain(shown);
+        expect(html).toContain(shown);
+      }
+      for (const hidden of [approval, requestId, first.id, second.id]) {
         expect(publicBody).not.toContain(hidden);
         expect(html).not.toContain(hidden);
       }

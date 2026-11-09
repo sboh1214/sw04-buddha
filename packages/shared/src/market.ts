@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { marketJudgingRecordSchema } from './market-judging-record.js';
 import { cursorQuerySchema } from './api/pagination.js';
 import { coinAmountSchema, serializeCoinAmount } from './api/coin-amount.js';
 import { uuidParamSchema } from './api/path-param.js';
@@ -260,9 +261,12 @@ export const marketSchema = z
      * next review time and whether that has passed ('갱신 대기', owner answer 2026-11-03 (2)), on
      * the server's clock at the read (`marketJudgementDelayOf`). Null while the market does not
      * read '판정 지연', and while it has no such record: past its scheduled judgement it reads so
-     * with none. Nobody's name, no record time and no earlier record (#24); cards carry none.
+     * with none. Nobody's name or record time; earlier records are in judgingRecord (#24).
+     * Cards carry neither field.
      */
     judgementDelay: marketJudgementDelaySchema.nullable(),
+    /** Public judgement, pause, delay and dispute history, read in the detail snapshot (#24). */
+    judgingRecord: marketJudgingRecordSchema,
     /**
      * The 시장가격 as of `RECOMMENDED_VOLUME_HOURS` hours before the answer (ADR-0107 결정 4 #121
      * '변화량'): the YES value of the last fill at or before that instant, on the DB clock. Null
@@ -942,8 +946,8 @@ export const adminMarketSchema = marketSchema
     /**
      * 거래 일시 중단 (#114, ADR-0102), in every status: every pause with how it ended, the
      * next-path request waiting and every request with how it ended — one still waiting at the
-     * close is shown for its 반려 or 철회. The public `Market` carries none of it (#24 shows the
-     * reason and the times, #173 item 13).
+     * close is shown for its 반려 or 철회. The public judgingRecord has anonymous pause facts
+     * (#24), without these pending requests and decision reasons (#173 item 13).
      */
     pause: adminMarketPauseStateSchema,
     /**
@@ -958,26 +962,25 @@ export const adminMarketSchema = marketSchema
      * replaced (#176, ADR-0105), the registration waiting for another admin's approval — a first
      * judgement or a correction — and every registration with how it ended — one still waiting
      * once the market left the status it needs is shown for its 반려 or 철회 — and whether the
-     * dispute window is undecided. The public `Market` carries none of it but the version and its
-     * deadline (`judgementVersion`, `disputeDeadline`; #24 shows the record without the names,
-     * #173 item 13).
+     * dispute window is undecided. The public judgingRecord has the approved versions and grounds,
+     * without registrations, approval reasons or identities (#24, #173 item 13).
      */
     judgement: adminMarketJudgementStateSchema,
     /**
      * 판정 이의 (#175, ADR-0104), in every status: the current judgement version's disputes, the
      * oldest first, with who submitted and who decided them, and how many hold the confirmation
      * (an earlier version's, a correction replaced, are in 이의 접수's 처리됨 list, #176).
-     * The public `Market` carries none of it but `disputeUnderReview` (#24 publishes the count,
-     * the statuses and the reasons without the names; the submitter and the body stay private,
-     * #173 item 13).
+     * The public judgingRecord has counts, statuses and decision reasons (#24), without the
+     * submitter, submission body or deciding operator (#173 item 13).
      */
     disputes: adminMarketDisputesSchema,
     /**
      * 판정 지연 기록 (#142, ADR-0106), in every status: every record of the market, the newest
      * first, with the status and judgement version it was made on, who made it and when, and
      * which one is current — none is edited or withdrawn (owner answer 2026-11-03 (4)). The
-     * public `Market` carries the current one's reason and next review time alone
-     * (`judgementDelay`, inherited here; #173 item 13).
+     * public `Market` carries the current one's reason and next review time in judgementDelay,
+     * and those fields of every previous record in judgingRecord (#24), without recorder or
+     * recording time (#173 item 13).
      */
     judgementDelays: z.array(adminJudgementDelaySchema),
   })

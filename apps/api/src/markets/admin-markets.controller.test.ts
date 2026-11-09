@@ -54,7 +54,11 @@ const MINUTE_MS = 60_000;
 /** U+0000: Postgres refuses it in text and jsonb, so the pipe must refuse it first. */
 const NUL = String.fromCharCode(0);
 /** A pause's body (#114): the reason and the note, as the pause dialog sends them. */
-const PAUSE_BODY = { reason: 'basis_change', note: '판정 기준을 검토한다.' };
+const PAUSE_BODY = {
+  publicNoteConfirmed: true,
+  reason: 'basis_change',
+  note: '판정 기준을 검토한다.',
+};
 /** What the direct AMM kept on a market and the admin detail showed (#125 removed them). */
 const AMM_FIELDS = ['liquidityB', 'qYes', 'qNo', 'initialProbBp', 'reserveCoin', 'pYesBp'] as const;
 

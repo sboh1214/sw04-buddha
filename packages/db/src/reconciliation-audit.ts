@@ -450,7 +450,7 @@ export async function runMarketReconciliation(
       type: 'paused',
       actorId: null,
       at,
-      payload: { pauseId, reason: 'ledger_failure', resultPublishedAt: null },
+      payload: { pauseId, reason: 'ledger_failure', resultPublishedAt: null, notePublic: true },
     });
     await tx.insert(marketPauses).values({
       id: pauseId,

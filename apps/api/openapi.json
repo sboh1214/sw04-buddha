@@ -4646,7 +4646,7 @@
             }
           }
         },
-        "summary": "One market by id or slug, with its tags in order and its rule versions, the current first (each one’s full text, changed items, reason and time, and nobody’s name), and its market price as of 24 hours ago (the last fill by then, null with none); a draft or in-review one is NOT_FOUND to the public",
+        "summary": "One market by id or slug, with its tags in order and its rule versions, the current first (each one’s full text, changed items, reason and time, and nobody’s name), and its market price as of 24 hours ago (the last fill by then, null with none). Includes an anonymous judging record: approved versions and grounds, pause and delay history, dispute counts and decision reasons, cancellation and payout delay; no operator identity, unapproved judgement, approval reason or dispute submission. A draft or in-review one is NOT_FOUND to the public",
         "tags": [
           "markets"
         ]
@@ -7624,7 +7624,7 @@
             "session": []
           }
         ],
-        "summary": "Pause an open market’s trading (거래 일시 중단) by one admin, at once: one of the three reasons, a note saying what happened (admins only) and, for an early result, when the result was published — not after the pause. The close still comes on schedule; resuming or closing early is another admin’s approval of a next-path request",
+        "summary": "Pause an open market’s trading (거래 일시 중단) by one admin, at once: one of the three reasons, a public note with explicit publicNoteConfirmed=true and, for an early result, when the result was published — not after the pause. The close still comes on schedule; resuming or closing early is another admin’s approval of a next-path request",
         "tags": [
           "admin"
         ]
@@ -27953,6 +27953,9 @@
               }
             ]
           },
+          "judgingRecord": {
+            "$ref": "#/components/schemas/MarketJudgingRecord"
+          },
           "lastPrice24hAgo": {
             "nullable": true,
             "type": "integer",
@@ -28001,6 +28004,7 @@
           "ruleVersion",
           "ruleVersions",
           "judgementDelay",
+          "judgingRecord",
           "lastPrice24hAgo"
         ],
         "additionalProperties": false
@@ -28195,6 +28199,388 @@
           "reason",
           "nextReviewAt",
           "nextReviewPassed"
+        ],
+        "additionalProperties": false
+      },
+      "MarketJudgingRecord": {
+        "type": "object",
+        "properties": {
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicMarketJudgement"
+            }
+          },
+          "pauses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicMarketPause"
+            }
+          },
+          "delays": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicMarketJudgementDelay"
+            }
+          },
+          "disputes": {
+            "$ref": "#/components/schemas/PublicMarketDisputes"
+          },
+          "cancellation": {
+            "nullable": true,
+            "type": "object",
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "cancelledAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              }
+            },
+            "required": [
+              "reason",
+              "cancelledAt"
+            ],
+            "additionalProperties": false
+          },
+          "payoutDelayed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "versions",
+          "pauses",
+          "delays",
+          "disputes",
+          "cancellation",
+          "payoutDelayed"
+        ],
+        "additionalProperties": false
+      },
+      "PublicMarketJudgement": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "result": {
+            "$ref": "#/components/schemas/MarketResult"
+          },
+          "source": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JudgementSource"
+              }
+            ]
+          },
+          "fallbackReason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "voidReason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/JudgementEvidence"
+          },
+          "description": {
+            "type": "string"
+          },
+          "ruleVersion": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "publishedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "disputeDeadline": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "correctionReason": {
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "result",
+          "source",
+          "fallbackReason",
+          "voidReason",
+          "evidence",
+          "description",
+          "ruleVersion",
+          "publishedAt",
+          "disputeDeadline",
+          "correctionReason"
+        ],
+        "additionalProperties": false
+      },
+      "JudgementSource": {
+        "type": "object",
+        "properties": {
+          "priority": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3
+          },
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "priority",
+          "name",
+          "url"
+        ],
+        "additionalProperties": false
+      },
+      "JudgementEvidence": {
+        "type": "object",
+        "properties": {
+          "links": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "collectedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "links",
+          "collectedAt"
+        ],
+        "additionalProperties": false
+      },
+      "PublicMarketPause": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/MarketPauseReason"
+          },
+          "note": {
+            "nullable": true,
+            "type": "string"
+          },
+          "resultPublishedAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "pausedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "reviewResult": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketPauseReviewResult"
+              }
+            ]
+          },
+          "endKind": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketPauseEndKind"
+              }
+            ]
+          },
+          "endedAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "reason",
+          "note",
+          "resultPublishedAt",
+          "pausedAt",
+          "reviewResult",
+          "endKind",
+          "endedAt"
+        ],
+        "additionalProperties": false
+      },
+      "MarketPauseReason": {
+        "type": "string",
+        "enum": [
+          "early_result",
+          "ledger_failure",
+          "basis_change"
+        ]
+      },
+      "MarketPauseReviewResult": {
+        "type": "string",
+        "enum": [
+          "judgeable",
+          "not_judgeable"
+        ]
+      },
+      "MarketPauseEndKind": {
+        "type": "string",
+        "enum": [
+          "resumed",
+          "early_closed",
+          "closed_at_close"
+        ]
+      },
+      "PublicMarketJudgementDelay": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "nextReviewAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "current": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "reason",
+          "nextReviewAt",
+          "current"
+        ],
+        "additionalProperties": false
+      },
+      "PublicMarketDisputes": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "byVersion": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "judgementVersion": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 2147483647
+                },
+                "total": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "counts": {
+                  "$ref": "#/components/schemas/PublicDisputeCounts"
+                }
+              },
+              "required": [
+                "judgementVersion",
+                "total",
+                "counts"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "decisions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicDisputeDecision"
+            }
+          }
+        },
+        "required": [
+          "total",
+          "byVersion",
+          "decisions"
+        ],
+        "additionalProperties": false
+      },
+      "PublicDisputeCounts": {
+        "type": "object",
+        "properties": {
+          "pending": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "dismissed": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "accepted": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "retracted": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "closed_by_correction": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "pending",
+          "dismissed",
+          "accepted",
+          "retracted",
+          "closed_by_correction"
+        ],
+        "additionalProperties": false
+      },
+      "PublicDisputeDecision": {
+        "type": "object",
+        "properties": {
+          "judgementVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "dismissed"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "judgementVersion",
+          "decision",
+          "reason"
         ],
         "additionalProperties": false
       },
@@ -28769,6 +29155,9 @@
               }
             ]
           },
+          "judgingRecord": {
+            "$ref": "#/components/schemas/MarketJudgingRecord"
+          },
           "lastPrice24hAgo": {
             "nullable": true,
             "type": "integer",
@@ -28899,6 +29288,7 @@
           "ruleVersion",
           "ruleVersions",
           "judgementDelay",
+          "judgingRecord",
           "lastPrice24hAgo",
           "createdBy",
           "updatedAt",
@@ -29770,29 +30160,6 @@
         ],
         "additionalProperties": false
       },
-      "MarketPauseReason": {
-        "type": "string",
-        "enum": [
-          "early_result",
-          "ledger_failure",
-          "basis_change"
-        ]
-      },
-      "MarketPauseReviewResult": {
-        "type": "string",
-        "enum": [
-          "judgeable",
-          "not_judgeable"
-        ]
-      },
-      "MarketPauseEndKind": {
-        "type": "string",
-        "enum": [
-          "resumed",
-          "early_closed",
-          "closed_at_close"
-        ]
-      },
       "MarketPauseDecisionPending": {
         "type": "object",
         "properties": {
@@ -30172,49 +30539,6 @@
           "approvalId",
           "registeredBy",
           "approvedBy"
-        ],
-        "additionalProperties": false
-      },
-      "JudgementSource": {
-        "type": "object",
-        "properties": {
-          "priority": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 3
-          },
-          "name": {
-            "type": "string"
-          },
-          "url": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "priority",
-          "name",
-          "url"
-        ],
-        "additionalProperties": false
-      },
-      "JudgementEvidence": {
-        "type": "object",
-        "properties": {
-          "links": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "collectedAt": {
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          }
-        },
-        "required": [
-          "links",
-          "collectedAt"
         ],
         "additionalProperties": false
       },
@@ -31298,6 +31622,12 @@
             "minLength": 1,
             "maxLength": 500
           },
+          "publicNoteConfirmed": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
           "resultPublishedAt": {
             "nullable": true,
             "type": "string",
@@ -31313,6 +31643,7 @@
         "required": [
           "reason",
           "note",
+          "publicNoteConfirmed",
           "expectedAccountId"
         ]
       },

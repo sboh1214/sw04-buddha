@@ -2,8 +2,11 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { type Market, type MarketJudgementDelay } from '@/lib/api';
+import { marketKey } from '@/lib/market-keys';
+import { applyTick } from '@/lib/market-live';
+import { getQueryClient } from '@/lib/query-client';
 import { byTestId, renderWithQueries } from '@/test/render';
-import { StatusNotice } from './market-detail';
+import { MarketRefreshAlert, StatusNotice } from './market-detail';
 
 const SCHEDULED_JUDGEMENT_AT = '2026-12-01T01:00:00.000Z';
 
@@ -49,6 +52,14 @@ const delayed: Market = {
   settledAt: null,
   tags: [],
   ruleVersion: 1,
+  judgingRecord: {
+    versions: [],
+    pauses: [],
+    delays: [],
+    disputes: { total: 0, byVersion: [], decisions: [] },
+    cancellation: null,
+    payoutDelayed: false,
+  },
   ruleVersions: [],
 };
 
@@ -60,6 +71,73 @@ const record: MarketJudgementDelay = {
 
 const notice = (market: Market, now?: number) =>
   renderWithQueries(<StatusNotice market={market} now={now} />);
+
+describe('MarketRefreshAlert: stale public history (#24)', () => {
+  it('keeps retry available when a tick clears a failed refetch without refreshing history', async () => {
+    const client = getQueryClient();
+    const key = marketKey(delayed.id);
+    // A resume event already moved the row to OPEN while its public history still awaits REST.
+    client.setQueryData<Market>(key, { ...delayed, status: 'open', judgingRecordStale: true });
+    await expect(
+      client.fetchQuery<Market>({
+        queryKey: key,
+        staleTime: 0,
+        retry: false,
+        queryFn: () => Promise.reject(new Error('temporary failure')),
+      }),
+    ).rejects.toThrow('temporary failure');
+    expect(client.getQueryState(key)?.status).toBe('error');
+    client.setQueryData<Market>(key, (held) =>
+      applyTick(held, {
+        marketId: delayed.id,
+        tradeCount: delayed.tradeCount + 1,
+        lastPrice: 64,
+        volumeCoin: '123520',
+        traderCount: delayed.traderCount,
+        ts: '2026-11-09T06:00:00.000Z',
+      }),
+    );
+    const state = client.getQueryState<Market>(key)!;
+    expect(state.status).toBe('success');
+    expect(state.error).toBeNull();
+    expect(state.data?.judgingRecordStale).toBe(true);
+    const html = renderWithQueries(
+      <MarketRefreshAlert
+        market={{
+          data: state.data,
+          isRefetchError: state.status === 'error',
+          error: state.error,
+          isFetching: state.fetchStatus === 'fetching',
+          refetch: () => undefined,
+        }}
+      />,
+    );
+    expect(byTestId(html, 'market-detail-refresh-failed')?.text).toContain(copy.judgingRecordStale);
+    expect(byTestId(html, 'market-detail-refresh-retry')?.attributes.disabled).toBeUndefined();
+    expect(byTestId(html, 'market-detail-refresh-retry')?.text).toBe(copy.retry);
+    client.clear();
+  });
+
+  it('keeps the action disabled during the read and removes it only for fresh content', () => {
+    const state = {
+      data: { judgingRecordStale: true },
+      isRefetchError: false,
+      error: null,
+      isFetching: true,
+      refetch: () => undefined,
+    };
+    const busy = renderWithQueries(<MarketRefreshAlert market={state} />);
+    expect(byTestId(busy, 'market-detail-refresh-retry')?.attributes.disabled).toBeDefined();
+    const fresh = renderWithQueries(
+      <MarketRefreshAlert market={{ ...state, data: {}, isFetching: false }} />,
+    );
+    expect(byTestId(fresh, 'market-detail-refresh-failed')).toBeUndefined();
+    const noData = renderWithQueries(
+      <MarketRefreshAlert market={{ ...state, data: undefined, isRefetchError: true }} />,
+    );
+    expect(byTestId(noData, 'market-detail-refresh-retry')).toBeUndefined();
+  });
+});
 
 /**
  * The detail's 상태별 안내 with a 판정 지연 기록 (#142, ADR-0106; ADR-0093 decision 3 '#142 지연

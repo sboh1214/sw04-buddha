@@ -55,10 +55,10 @@ import { ruleVersionName } from './rule-versions';
  * is a registration too — the same approval kind and routes — told apart by its `correction`
  * (the version it replaces and its reason), never by the market's status. The panel, its form and
  * dialogs (app/admin/markets/[id]/market-judgement-*.tsx) and the 판정 승인 대기 queue draw them.
- * Admin-only (excluded-features.test.ts): the evidence, the reasons, the instants and the admins
- * are never a member's — the public judging record (#24) decides what of it is shown (a
- * correction's previous versions and reason included, #173 item 13), never who registered or
- * approved it. The event rows' names (`judgementVersionName`, `judgementVersionMove`, the results)
+ * These administration controls remain private. The public judging record (#24) separately
+ * allowlists approved evidence, public reasons and instants, including previous versions and
+ * correction reasons (#173 item 13); operator identities and internal approval reasons stay
+ * private. The event rows' names (`judgementVersionName`, `judgementVersionMove`, the results)
  * are lib/market-admin.ts', which the 이벤트 로그 reads too.
  */
 

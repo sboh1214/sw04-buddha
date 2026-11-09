@@ -90,7 +90,10 @@ export class MarketsController {
     summary:
       'One market by id or slug, with its tags in order and its rule versions, the current ' +
       'first (each one’s full text, changed items, reason and time, and nobody’s name), and ' +
-      'its market price as of 24 hours ago (the last fill by then, null with none); a ' +
+      'its market price as of 24 hours ago (the last fill by then, null with none). ' +
+      'Includes an anonymous judging record: approved versions and grounds, pause and delay ' +
+      'history, dispute counts and decision reasons, cancellation and payout delay; no ' +
+      'operator identity, unapproved judgement, approval reason or dispute submission. A ' +
       'draft or in-review one is NOT_FOUND to the public',
   })
   @ApiData(marketSchema)

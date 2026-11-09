@@ -287,7 +287,15 @@ test.describe('거래 일시 중단', () => {
       await expect(confirm).toBeDisabled();
       await published.fill(kstLocalOf(publishedAt));
       await expect(dialog.getByTestId('market-pause-published-at-error')).toHaveCount(0);
+      const publicNote = dialog.getByTestId('market-pause-public-note-confirmed');
+      await expect(publicNote).toHaveAttribute('data-state', 'unchecked');
+      await expect(publicNote).toContainText(copy.adminMarketPausePublicNoteConfirm);
+      await expect(confirm).toBeDisabled();
+      await publicNote.click();
       await expect(confirm).toBeEnabled();
+      await publicNote.click();
+      await expect(confirm).toBeDisabled();
+      await publicNote.click();
       const paused = nextWrite(firstPage, market.id, '/pause');
       await confirm.click();
       // Sent in UTC (ADR-0093 decision 3), naming admin 1.
@@ -295,6 +303,7 @@ test.describe('거래 일시 중단', () => {
         reason: 'early_result',
         note,
         resultPublishedAt: publishedAt,
+        publicNoteConfirmed: true,
         expectedAccountId: first.id,
       });
       await expect(firstPage.getByText(copy.adminMarketPaused)).toBeVisible();
@@ -347,13 +356,24 @@ test.describe('거래 일시 중단', () => {
       await expect(page.getByTestId('market-status-notice')).toContainText(copy.marketPausedNotice);
       await expect(page.getByTestId('order-area')).toHaveCount(0);
       expect(await documentSurvived(page)).toBe(true);
-      // The public market says 거래 일시 중단 and nothing of the pause (#24 shows the reason and
-      // the times later): no note, no publication instant (the ISO instant sent), no admin.
+      // #24 (ADR-0121 decision 1) publishes the pause's note and result-publication instant
+      // through its allowlisted history, without the administrator-only pause or identity.
       const publicPaused = await publicMarketOf(request, market.id);
       expect(publicPaused.status).toBe('paused');
       expect(Object.keys(publicPaused)).not.toContain('pause');
+      expect(publicPaused.judgingRecord.pauses).toMatchObject([
+        {
+          reason: 'early_result',
+          note,
+          resultPublishedAt: publishedAt,
+          reviewResult: null,
+          endKind: null,
+          endedAt: null,
+        },
+      ]);
       const publicBody = await (await request.get(`/api/v1/markets/${market.id}`)).text();
-      for (const hidden of [note, publishedAt, first.id]) expect(publicBody).not.toContain(hidden);
+      for (const shown of [note, publishedAt]) expect(publicBody).toContain(shown);
+      expect(publicBody).not.toContain(first.id);
 
       // --- 재개·조기 마감 요청: the dialog names the pause's reason; an early result's next path
       // takes no review result, and the operator picks it.
@@ -536,6 +556,30 @@ test.describe('거래 일시 중단', () => {
     });
     expect(resumed.pause.pending).toBeNull();
     expect(resumed.pause.log.map((entry) => entry.status)).toEqual(['approved']);
+    // The public history survives resumption, but the now-stored internal request/approval
+    // reasons and the administrators remain private in both the API and server HTML.
+    const publicResumed = await publicMarketOf(request, market.id);
+    expect(publicResumed.judgingRecord.pauses).toEqual([
+      {
+        reason: 'early_result',
+        note,
+        resultPublishedAt: publishedAt,
+        pausedAt: pause.pausedAt,
+        reviewResult: null,
+        endKind: 'resumed',
+        endedAt: pause.endedAt,
+      },
+    ]);
+    const publicBody = JSON.stringify(publicResumed);
+    const html = await (await request.get(`/markets/${market.slug}`)).text();
+    for (const shown of [note, publishedAt]) {
+      expect(publicBody).toContain(shown);
+      expect(html).toContain(shown);
+    }
+    for (const hidden of [first.id, second.id, pause.id, requestReason, approval]) {
+      expect(publicBody).not.toContain(hidden);
+      expect(html).not.toContain(hidden);
+    }
   });
 
   test('두 번째 일시 중단은 실질 기준 변경이고 검토 결과가 판정 불가면 재개를 고를 수 없어 조기 마감만 요청하며, 다른 관리자가 승인하면 방문자의 상세가 리프레시 없이 마감되고 거래 마감 시각은 예정된 그대로다', async ({
@@ -597,12 +641,14 @@ test.describe('거래 일시 중단', () => {
       await dialog.getByTestId('market-pause-reason-basis_change').click();
       await expect(dialog.getByTestId('market-pause-published-at')).toHaveCount(0);
       await dialog.getByTestId('market-pause-note').fill(note);
+      await dialog.getByTestId('market-pause-public-note-confirmed').click();
       const paused = nextWrite(firstPage, market.id, '/pause');
       await dialog.getByTestId('market-pause-dialog-confirm').click();
       expect((await paused).postDataJSON()).toEqual({
         reason: 'basis_change',
         note,
         resultPublishedAt: null,
+        publicNoteConfirmed: true,
         expectedAccountId: first.id,
       });
       await expect(firstPage.getByText(copy.adminMarketPaused)).toBeVisible();
@@ -1071,7 +1117,7 @@ test.describe('거래 일시 중단', () => {
       await expect(adminPage.getByTestId('market-pause-start')).toHaveCount(0);
 
       // --- pressed, the pause dialog opens as 실질 기준 변경 with the 반려's 설명 as its note, and
-      // sends that at once.
+      // requires the operator to confirm that the prefilled explanation may be public.
       await letToastsGo(adminPage);
       await adminPage.getByTestId('market-pause-offer-pause').click();
       const dialog = adminPage.getByTestId('market-pause-dialog');
@@ -1081,6 +1127,12 @@ test.describe('거래 일시 중단', () => {
       );
       await expect(dialog.getByTestId('market-pause-note')).toHaveValue(rejection);
       const confirm = dialog.getByTestId('market-pause-dialog-confirm');
+      await expect(confirm).toBeDisabled();
+      await expect(dialog.getByTestId('market-pause-public-note-confirmed')).toHaveAttribute(
+        'data-state',
+        'unchecked',
+      );
+      await dialog.getByTestId('market-pause-public-note-confirmed').click();
       await expect(confirm).toBeEnabled();
       const paused = nextWrite(adminPage, market.id, '/pause');
       await confirm.click();
@@ -1088,6 +1140,7 @@ test.describe('거래 일시 중단', () => {
         reason: 'basis_change',
         note: rejection,
         resultPublishedAt: null,
+        publicNoteConfirmed: true,
         expectedAccountId: first.id,
       });
       await expect(adminPage.getByText(copy.adminMarketPaused)).toBeVisible();
@@ -1269,6 +1322,7 @@ test.describe('거래 일시 중단 · 375px', () => {
       // Paused for 실질 기준 변경, then its request dialog with 판정 불가 picked.
       await dialog.getByTestId('market-pause-reason-basis_change').click();
       await dialog.getByTestId('market-pause-note').fill(`좁은 화면의 일시 중단 ${market.tag}`);
+      await dialog.getByTestId('market-pause-public-note-confirmed').click();
       await dialog.getByTestId('market-pause-dialog-confirm').click();
       await expect(page.getByTestId('market-pause')).toHaveAttribute('data-status', 'paused');
       await letToastsGo(page);
