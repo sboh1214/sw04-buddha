@@ -2585,10 +2585,9 @@ export async function leaveNoJudgement(
  * — and the worker confirms it once its dispute deadline passes (`waitForResolved`): no spec
  * holds it with a 판정 이의 (#175, ADR-0104 — none can submit one without a fill on it), and a 판정
  * 정정 (#176, `registerCorrection`) holds it only until the spec approves or rejects it. The API,
- * not the UI: judgement.spec.ts walks the screens. A 무효 judged here goes on, once confirmed, to
- * stay 지급 중 with a failed step until #126 pays 무효 (ADR-0103) — on a database kept between runs,
- * so the specs leave a 무효 judgement at its registration. Retracts what it left waiting on a
- * failure.
+ * not the UI: judgement.spec.ts walks the screens. A confirmed 무효 pays 50 Coin per contract
+ * on both outcomes (#126, ADR-0118), which settlement.spec.ts checks. Retracts what it left
+ * waiting on a failure.
  */
 export async function judgeMarket(
   admin: APIRequestContext,
@@ -2633,8 +2632,8 @@ export interface CorrectionOptions extends Omit<JudgementOptions, 'correction'> 
  * over the current judgement's 1차 출처 with the other of YES and NO for its result, the evidence
  * link of the next version (`judgementEvidenceLink(marketId, version + 1)`) and
  * HELPER_CORRECTION_DESCRIPTION, so the result and its grounds change (one that changes nothing is
- * refused 'unchanged', #173 item 7). A 무효 base takes a `result`: a spec never approves a 무효,
- * which stays 지급 중 until #126. The answer is the market as the registration left it — still
+ * refused 'unchanged', #173 item 7). A 무효 base takes an explicit replacement `result`.
+ * The answer is the market as the registration left it — still
  * PROVISIONAL with its version, result and deadline, the correction in `judgement.pending`, what
  * `approveJudgementAsReviewer` approves — and the confirmation is held while it waits, past the
  * deadline too (decision 3 '#176 정정 대기'). So it is registered within the version's dispute
@@ -2747,8 +2746,8 @@ export async function waitForResolved(
 }
 
 /**
- * `waitForResolved`, then the worker's payout (ADR-0046): the market as it reads 지급 완료. Only
- * for a YES or NO result — a 무효 one stays 지급 중 until #126.
+ * `waitForResolved`, then the worker's payout (ADR-0046, ADR-0118): the market as it reads
+ * 지급 완료 for YES, NO or VOID.
  */
 export async function waitForSettled(
   admin: APIRequestContext,

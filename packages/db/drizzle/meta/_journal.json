@@ -449,6 +449,13 @@
       "when": 1794060983520,
       "tag": "0063_market_stats",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1794196223840,
+      "tag": "0064_position_settlements",
+      "breakpoints": true
     }
   ]
 }

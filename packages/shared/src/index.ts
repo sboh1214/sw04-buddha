@@ -78,3 +78,4 @@ export * from './time-zone.js';
 export * from './wallet.js';
 export * from './watchlist.js';
 export * from './write-limits.js';
+export * from './market-settlement.js';

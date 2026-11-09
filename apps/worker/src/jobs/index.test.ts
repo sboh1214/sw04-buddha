@@ -23,7 +23,8 @@ import {
   passMarketClose,
   resolveMarketNow,
   setReleaseSetting,
-  spendCoin,
+  fundMarketMakerFunds,
+  mintTestPairs,
   tradeOnce,
   type TestDb,
 } from '@buddha/db/test';
@@ -372,10 +373,13 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
   it('market.finalize with a market id returns a JSON-safe result: paidCoin a decimal string, settledAt ISO', async () => {
     const market = await judged();
     const alice = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
-    await createPosition(t.db, { userId: alice, marketId: market.id, outcome: 'YES', qty: 3 });
-    // The 300 Coin her 3 contracts are paid, put into the market's collateral (#116) as a pair
-    // mint moves it — here all from her, with no other side's row, as only the shape is tested.
-    await spendCoin(t.db, alice, 300n, { marketId: market.id });
+    const maker = await fundMarketMakerFunds(t.db, market.id, 150n);
+    await mintTestPairs(t.db, {
+      marketId: market.id,
+      yesHolderId: alice,
+      noHolderId: maker,
+      qty: 3,
+    });
 
     const result = await run({ name: JOB_NAMES.marketFinalize, data: { marketId: market.id } });
     expect(() => JSON.stringify(result)).not.toThrow();
@@ -384,8 +388,8 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
       marketId: market.id,
       statusEventId: expect.any(Number) as number,
       settledAt: expect.stringMatching(ISO_INSTANT) as string,
-      positions: 1,
-      settledAccounts: 1,
+      positions: 2,
+      settledAccounts: 2,
       paidAccounts: 1,
       paidCoin: '300',
     });
@@ -433,7 +437,9 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
       failures: [
         {
           marketId: poisoned.id,
-          message: expect.stringMatching(/collateral holds 0 Coin/) as string,
+          message: expect.stringMatching(
+            /contract supply does not match pair collateral/,
+          ) as string,
         },
       ],
     });
@@ -451,7 +457,9 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
     expect(errors[0]).toMatchObject({
       msg: 'market finalize failed in scan',
       marketId: poisoned.id,
-      err: { message: expect.stringMatching(/collateral holds 0 Coin/) as string },
+      err: {
+        message: expect.stringMatching(/contract supply does not match pair collateral/) as string,
+      },
     });
     // The counts line is promoted to info when something failed, even with nothing settled.
     expect(logs.at(-1)).toMatchObject({ level: 30, msg: 'market finalize scan', failed: 1 });

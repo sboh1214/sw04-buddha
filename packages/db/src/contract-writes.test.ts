@@ -15,9 +15,8 @@ const CONTRACTS = 'packages/db/src/contracts.ts';
 /** Who else writes `positions`, and why. */
 const POSITION_WRITERS: Record<string, string> = {
   [CONTRACTS]: 'pair mint, fill, burn and sell lock',
-  // Settlement zeroes each row it pays (ADR-0109 12-12 interim, until #126 reworks it); the CHECK
-  // `positions_locked_qty_check` fails its qty-0 UPDATE while a sell lock remains.
-  'apps/worker/src/jobs/market-finalize.ts': 'settlement',
+  // Settlement preserves the original holding in an immutable record before retiring it (#126).
+  'packages/db/src/market-settlement.ts': 'settlement and permanent records',
   // `createPosition`: a holding for reads and settlement inputs, with no ledger (its doc says so).
   'packages/db/src/test/factories.ts': 'test fixture',
 };
@@ -36,6 +35,8 @@ const CONTRACT_RECORDERS: Record<string, string> = {
  */
 const NAMING_RECORDERS: Record<string, string> = {
   'packages/db/src/ledger.ts': 'defines recordLedgerEntry; names the types in its key docs',
+  'packages/db/src/market-settlement.ts':
+    'reads mint and burn events to reconcile the supply; records SETTLEMENT_PAYOUT only',
 };
 
 /** The trees the static guard scans, each `<group>/<name>/src` (ledger-writes.test.ts's). */

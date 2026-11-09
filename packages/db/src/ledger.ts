@@ -215,10 +215,14 @@ export const ledgerKeys = {
   paymentCancelReversal: (cancelEntryId: number) => String(cancelEntryId),
   /**
    * SETTLEMENT_PAYOUT: the settlement key (market, judgement version, holder, outcome) — a
-   * corrected judgement's version pays again under its own key (#126).
+   * final judgement's version pays once (#126); NULL uses the pre-version `legacy` key.
    */
-  settlement: (marketId: string, judgementVersion: number, holderId: string, outcome: Outcome) =>
-    `${marketId}:${judgementVersion}:${holderId}:${outcome}`,
+  settlement: (
+    marketId: string,
+    judgementVersion: number | null,
+    holderId: string,
+    outcome: Outcome,
+  ) => `${marketId}:${judgementVersion ?? 'legacy'}:${holderId}:${outcome}`,
   /** TRADE_FILL: the fill. */
   fill: (fillId: string) => fillId,
   /** PAIR_MINT_COLLATERAL: the fill that minted the pair, by the buyer's side (two buyers). */
