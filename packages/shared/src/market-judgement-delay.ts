@@ -288,8 +288,8 @@ export type MarketDelayRecordActionPayload = MarketJudgementDelayRecordedPayload
 /**
  * `Market.judgementDelay` (`marketJudgementDelayOf`): the current record's reason, its next review
  * time (ISO) and whether it has passed on the server's clock at the read ('갱신 대기'). Nobody's
- * name and no record time (#173 item 13, decision 3); no earlier record (#24 decides any public
- * history).
+ * name and no record time (#173 item 13, decision 3). Earlier reasons and review times are in
+ * `Market.judgingRecord` (#24).
  */
 export const marketJudgementDelaySchema = z
   .object({

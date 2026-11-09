@@ -2096,6 +2096,8 @@ export interface CreateMarketPauseInput {
   reason?: MarketPauseReason;
   /** What happened. Default: a sentence. Stored as given (the database holds 1–500, trimmed). */
   note?: string;
+  /** Explicit public-note provenance; omitted fixtures represent legacy/private notes. */
+  notePublic?: true;
   /**
    * The result's publication instant: for `early_result` alone, a minute before the pause unless
    * given; null (or left out) for the other reasons — given for one, the factory throws, as
@@ -2153,6 +2155,7 @@ export async function createMarketPause(
       actorId: by,
       reason,
       note: input.note ?? PAUSE_NOTE,
+      ...(input.notePublic === true ? { notePublic: input.notePublic } : {}),
       resultPublishedAt,
     });
     if (!result.paused) {
@@ -2183,12 +2186,13 @@ export async function createPausedMarket(
   db: Db,
   input: CreatePausedMarketInput = {},
 ): Promise<PausedMarket> {
-  const { reason, note, resultPublishedAt, by, ...openedInput } = input;
+  const { reason, note, notePublic, resultPublishedAt, by, ...openedInput } = input;
   const opened = await createOpenedMarket(db, openedInput);
   const paused = await createMarketPause(db, {
     marketId: opened.market.id,
     ...(reason === undefined ? {} : { reason }),
     ...(note === undefined ? {} : { note }),
+    ...(notePublic === true ? { notePublic } : {}),
     ...(resultPublishedAt === undefined ? {} : { resultPublishedAt }),
     ...(by === undefined ? {} : { by }),
   });

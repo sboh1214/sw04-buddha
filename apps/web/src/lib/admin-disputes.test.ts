@@ -89,8 +89,11 @@ describe('who may dismiss or accept (#173 item 2)', () => {
     // the 수용 is no longer said to be final.
     expect(DISPUTE_DECISION_DIALOG.accept.body).toContain('검토 중으로 돌아갑니다');
     expect(DISPUTE_DECISION_DIALOG.accept.body).not.toContain('되돌릴 수 없습니다');
-    // The reason is the submitter's to read (#173 item 7), public without the decider (#173 13).
-    expect(copy.adminMarketDisputeDecisionHint).toContain('이의를 낸 회원이');
+    // #24 makes the decision reason public to every visitor, including the submitter; the
+    // operator's identity stays private even though the reason is no longer submitter-only.
+    expect(copy.adminMarketDisputeDecisionHint).toContain('공개 판정 기록');
+    expect(copy.adminMarketDisputeDecisionHint).toContain('모든 방문자');
+    expect(copy.adminMarketDisputeDecisionHint).toContain('관리자는 공개하지 않습니다');
   });
 });
 

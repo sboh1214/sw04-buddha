@@ -56,6 +56,14 @@ const provisional: Market = {
   settledAt: null,
   tags: [],
   ruleVersion: 1,
+  judgingRecord: {
+    versions: [],
+    pauses: [],
+    delays: [],
+    disputes: { total: 0, byVersion: [], decisions: [] },
+    cancellation: null,
+    payoutDelayed: false,
+  },
   ruleVersions: [],
 };
 

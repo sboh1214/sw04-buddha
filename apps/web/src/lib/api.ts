@@ -67,7 +67,10 @@ export type ChargeResult = components['schemas']['ChargeResult'];
 export type Coupon = components['schemas']['Coupon'];
 /** `POST /coupons/redeem`: the code and the account the wallet shows (A-M2-9). */
 export type RedeemCouponBody = components['schemas']['RedeemCouponBody'];
-export type Market = components['schemas']['Market'];
+export type Market = components['schemas']['Market'] & {
+  /** Client-only: a newer status event is waiting for its public history REST snapshot. */
+  judgingRecordStale?: boolean;
+};
 /** A list row — `GET /markets` and `GET /admin/markets` — and what a market card draws. */
 export type MarketSummary = components['schemas']['MarketSummary'];
 export type AdminMarket = components['schemas']['AdminMarket'];

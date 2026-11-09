@@ -886,8 +886,7 @@ export const copy = {
   // 설명으로 바로 멈추고(조기 결과면 결과가 공개된 시각도 KST로 적는다), 재개(→ 거래 중)나 조기 마감(→ 거래
   // 마감)은 한 관리자가 요청하고 요청하지 않은 다른 관리자가 승인한다. 거래 마감 시각은 일시 중단 중에도
   // 예정대로 오고 늦추지 않는다. 마감 전에 무효로 정하지 않는다: 판정 불가면 조기 마감한 뒤 판정에서 무효 규칙을
-  // 적용한다(#152: 그 시장의 판정은 무효로만 등록한다). 설명과 결과 공개 시각은 지금 관리자만 본다(공개 판정
-  // 기록은 #24).
+  // 적용한다(#152: 그 시장의 판정은 무효로만 등록한다). 설명과 결과 공개 시각은 공개 판정 기록(#24)에 보인다.
   adminMarketPause: '거래 일시 중단',
   adminMarketPauseIntro:
     '관리자 한 명이 사유와 함께 바로 일시 중단합니다. 재개나 조기 마감은 한 관리자가 요청하고 요청하지 않은 다른 관리자가 승인합니다. 거래 마감 시각은 일시 중단 중에도 예정대로 옵니다.',
@@ -909,7 +908,9 @@ export const copy = {
   adminMarketPauseBody:
     '일시 중단하면 바로 거래가 멈추고 공개 화면에 거래 일시 중단으로 보입니다. 걸려 있던 대기 주문은 모두 취소됩니다(담보·원장 장애로 멈추면 재개·조기 마감을 승인할 때 취소됩니다). 거래 마감 시각은 그대로입니다. 재개나 조기 마감은 다른 관리자의 승인으로 합니다.',
   adminMarketPauseNoteHint:
-    '무슨 일이 있었는지 적어 주세요. 일시 중단 기록에 관리자·시각과 함께 남고 관리자만 봅니다. 500자까지 쓸 수 있습니다.',
+    '무슨 일이 있었는지 적어 주세요. 이 설명과 중단·결과 공개 시각은 모든 방문자에게 보입니다. 개인정보나 내부 조사 메모는 넣지 마세요. 관리자의 신원은 공개하지 않습니다. 500자까지 쓸 수 있습니다.',
+  adminMarketPausePublicNoteConfirm: '이 설명이 모든 방문자에게 공개되는 것을 확인했습니다.',
+  errMarketPausePublicNoteConfirm: '설명의 공개 여부를 확인해 주세요.',
   adminMarketPauseResultPublishedAtHint:
     '결과가 공개된 시각을 KST로 적습니다. 일시 중단 시각보다 늦을 수 없습니다.',
   adminMarketPaused: '거래를 일시 중단했습니다.',
@@ -1069,7 +1070,7 @@ export const copy = {
     '요청하지 않은 다른 관리자가 승인하면 시장이 열리지 않고 바로 취소됩니다. 결과를 정하지 않고, 판정·이의·지급도 없습니다. 승인되기 전에는 개장 예정이 이어지고, 그 사이 예정 개장 시각이 오면 시장이 열려 이 요청은 승인할 수 없습니다. 한 시장에 기다리는 요청은 하나입니다.',
   adminMarketCancelReason: '취소 사유',
   adminMarketCancelReasonHint:
-    '시장의 공개 판정 기록에 취소 사유로 실립니다. 500자까지 쓸 수 있습니다.',
+    '승인되면 시장의 공개 판정 기록에 취소 사유로 실려 모든 방문자에게 보입니다. 500자까지 쓸 수 있습니다.',
   adminMarketCancelRequested: '시장 취소를 요청했습니다. 다른 관리자가 승인하거나 반려합니다.',
   adminMarketCancelPending: '승인을 기다리는 취소 요청',
   // 요청한 뒤 시장이 열렸거나 초안으로 되돌아간 요청은 승인할 수 없고, 반려와 철회로 끝낸다.
@@ -1104,8 +1105,8 @@ export const copy = {
   // 기간(출시 설정, 승인한 순간에 시장마다 고정)이 흐른다. 이의 기한이 지나고 처리하지 않았거나 수용한 판정
   // 이의(#175)와 승인을 기다리는 판정 정정(#176)이 없으면 워커가 결과를 확정하고 지급이 이어진다. 반려하면 거래
   // 마감에 남고 다시 등록한다. 무효도 같은 길을 간다. 잠정 결과인 동안의 판정 정정은 같은 등록과 승인을 거친다
-  // (아래 '판정 정정'). 시장 가격·거래량은 판정 화면에 없다(#152 AC 8). 등록·승인한 관리자와 증거는 지금
-  // 관리자만 본다(공개 판정 기록은 #24).
+  // (아래 '판정 정정'). 시장 가격·거래량은 판정 화면에 없다(#152 AC 8). 승인된 증거는 공개 판정 기록(#24)에
+  // 보이고, 등록·승인한 관리자와 내부 승인 사유는 관리자만 본다.
   adminMarketJudgement: '판정',
   adminMarketJudgementIntro:
     '거래 마감한 시장의 결과를 한 관리자가 출처·증거와 함께 등록하고, 등록하지 않은 다른 관리자가 승인합니다. 승인하면 잠정 결과가 공개되고, 이의 기한이 지나도록 처리하지 않았거나 수용한 판정 이의와 승인을 기다리는 판정 정정이 없으면 결과가 자동으로 확정됩니다. 반려하면 거래 마감 상태로 남고 다시 등록합니다. 잠정 결과인 동안에는 같은 등록과 승인으로 판정을 정정합니다.',
@@ -1125,7 +1126,7 @@ export const copy = {
   // 등록 칸.
   adminMarketJudgementFormTitle: '판정 등록',
   adminMarketJudgementFormHint:
-    '규칙의 출처에서 확인한 결과를 적습니다. 등록만으로는 시장 상태가 바뀌지 않고, 다른 관리자가 승인하면 잠정 결과가 공개됩니다. 한 시장에 기다리는 판정은 하나입니다.',
+    '규칙의 출처에서 확인한 결과를 적습니다. 등록만으로는 시장 상태가 바뀌지 않고, 다른 관리자가 승인하면 잠정 결과가 공개됩니다. 승인된 출처·증거·확인 내용·사유는 모든 방문자에게 보입니다. 한 시장에 기다리는 판정은 하나입니다.',
   adminMarketJudgementResult: '결과',
   adminMarketJudgementSource: '판정 출처',
   adminMarketJudgementSourceHint:
@@ -1141,7 +1142,7 @@ export const copy = {
     '대체 출처를 고른 까닭을 적습니다. 판정 기록에 남습니다. 500자까지 쓸 수 있습니다.',
   adminMarketJudgementVoidReason: '무효 사유',
   adminMarketJudgementVoidReasonHint:
-    '무효로 판정하는 까닭을 적습니다. 판정 기록에 남고 공개 판정 기록이 보일 사유입니다. 500자까지 쓸 수 있습니다.',
+    '무효로 판정하는 까닭을 적습니다. 승인되면 공개 판정 기록에서 모든 방문자에게 보입니다. 500자까지 쓸 수 있습니다.',
   adminMarketJudgementLinks: '증거 링크',
   adminMarketJudgementLinksHint:
     '확인한 자료의 주소를 1~5개 적습니다. http 또는 https 주소만 됩니다. 파일은 첨부하지 않습니다.',
@@ -1234,10 +1235,10 @@ export const copy = {
   adminMarketJudgementCorrect: '판정 정정',
   adminMarketJudgementCorrectionFormTitle: '판정 정정',
   adminMarketJudgementCorrectionFormHint:
-    '지금 판정의 내용으로 채워 두었습니다. 고칠 결과나 근거를 바꿔 적고 정정 사유를 씁니다. 등록만으로는 판정과 결과가 바뀌지 않지만, 정정이 승인되거나 반려·철회되기 전에는 이의 기한이 지나도 결과가 확정되지 않습니다. 다른 관리자가 승인하면 판정 버전이 하나 올라가고 새 결과가 잠정 결과로 공개됩니다. 결과나 근거를 바꿀 것이 없으면 정정하지 않습니다.',
+    '지금 판정의 내용으로 채워 두었습니다. 고칠 결과나 근거를 바꿔 적고 정정 사유를 씁니다. 등록만으로는 판정과 결과가 바뀌지 않지만, 정정이 승인되거나 반려·철회되기 전에는 이의 기한이 지나도 결과가 확정되지 않습니다. 다른 관리자가 승인하면 판정 버전이 하나 올라가고 새 결과가 잠정 결과로 공개됩니다. 승인된 정정의 출처·증거·확인 내용·사유와 이전 판정은 모든 방문자에게 보입니다. 결과나 근거를 바꿀 것이 없으면 정정하지 않습니다.',
   adminMarketJudgementCorrectionVersion: '판정 버전',
   adminMarketJudgementCorrectionReasonHint:
-    '판정을 고치는 까닭을 적습니다. 판정 버전 이력에 남고 공개 판정 기록이 보일 사유입니다. 500자까지 쓸 수 있습니다.',
+    '판정을 고치는 까닭을 적습니다. 승인되면 공개 판정 기록에서 이전 판정과 함께 모든 방문자에게 보입니다. 500자까지 쓸 수 있습니다.',
   // '이 정정과 함께 등록되는 수용한 판정 이의 2건'(등록 칸)과 '이 정정과 함께 등록된 수용한 판정 이의 2건'(기다리는
   // 정정): 뒤에 수와 adminMarketDisputesHoldingUnit이 붙는다. 그 아래 줄의 안내는 수와 상관없이 쓴다.
   adminMarketJudgementCorrectionDisputes: '이 정정과 함께 등록되는 수용한 판정 이의',
@@ -2109,7 +2110,7 @@ export const copy = {
   marketMyPositionEmpty: '아직 이 시장에 참여하지 않았습니다.',
   // 상세의 배치 틀 (#122, ADR-0067). 배경은 시장의 설명(description)이다. 나머지는 내용을 아직
   // 만들 수 없어 제목과 comingSoon('준비 중입니다.')으로 보이는 자리다(ADR-0061 결정 3의 #122 행):
-  // 호가창(#179), 내 거래(#123, ADR-0116 결정 10의 18), 내 대기 주문(#123), 공개 판정 기록(#24). 자리의 제목은 그 결정의
+  // 호가창(#179), 내 거래(#123, ADR-0116 결정 10의 18), 내 대기 주문(#123). 공개 판정 기록은 #24가 채운다. 자리의 제목은 그 결정의
   // 글 그대로다(오너 결정 2026-10-17). 내 거래와 내 대기 주문은 로그인한 본인에게만 보인다
   // (ADR-0061 결정 1의 18).
   marketBackground: '배경',
@@ -2117,6 +2118,7 @@ export const copy = {
   marketMyTrades: '내 거래',
   marketMyOpenOrders: '내 대기 주문',
   marketJudgingRecord: '공개 판정 기록',
+  judgingRecordStale: '새 상태의 판정 기록을 아직 불러오지 못했습니다.',
   // 토론 (#47, ADR-0075): 이 시장의 근거 글을 시장 줄을 뺀 커뮤니티 목록의 카드로 최신순으로, 상세
   // 안에서 모두(20개씩 더 보기), 글 수와 함께(ADR-0069 결정 4 #47). 모든 공개 상태가 글을 받으므로
   // (#45-6) 글쓰기 진입(copy.communityWrite '글쓰기')은 늘 있다. 글 수는 목록이 보이는 글의 수다
@@ -2195,9 +2197,7 @@ export const copy = {
   watchRemoveFailed: '관심 해제를 하지 못했습니다. 잠시 후 다시 시도해 주세요.',
 
   // 상태별 안내 (PLAN 11.3). 색과 배지는 MARKET_STATUS_LABEL/PALETTE가 맡고, 이 문구는
-  // 그 아래에서 "지금 무엇을 할 수 있는지"를 말한다. 그 상태의 사실만 적고, 다른 이슈가 만들 것
-  // (중단 사유와 시각의 공개 #24, 무효 지급 #126)은 약속하지 않는다(#174의 글; #114는 사유를 관리자 화면에만
-  // 둔다). 판정 정정(#176)은 알리지 않는다: 바뀐 결과와 새 이의 기한이 그대로 보이고, 이전 버전과 정정 사유는
+  // 그 아래에서 "지금 무엇을 할 수 있는지"를 말한다. 중단 사유와 시각, 이전 버전과 정정 사유는
   // 공개 판정 기록(#24)이 보인다. 개장 예정의 안내는 예정 개장
   // 시각의 자동 개장(#21) 뒤에도 여는 시각을 약속하지 않는다: 그 시각은 바뀔 수 있고, 그 전에 거래 마감
   // 시각이 지나면 열리지 않는다(ADR-0100).
@@ -2212,7 +2212,7 @@ export const copy = {
   // 판정 지연으로 보이는 시장(예정 판정 시각이 지난 거래 마감, 이의 기한이 지나도 확정되지 않은 잠정 결과)에
   // 운영자가 남긴 최신 기록의 공개 문장 하나와 다음 검토 시각이 상태별 안내 안의 줄로 보인다. 누가·언제
   // 기록했는지는 보이지 않는다. 다음 검토 시각이 지나도록 새 기록이 없으면 사유를 그대로 두고 '갱신 대기'로
-  // 표시하며, 시각이 지난 것만으로 결과가 정해지지 않는다고 말한다. 이전 기록의 공개는 #24.
+  // 표시하며, 시각이 지난 것만으로 결과가 정해지지 않는다고 말한다. 이전 기록은 #24 공개 판정 기록에 보인다.
   marketJudgementDelayReason: '지연 사유',
   marketNextReviewAt: '다음 검토 시각',
   marketNextReviewPassed: '갱신 대기',
@@ -3865,7 +3865,7 @@ export const copy = {
     '수용은 판정 정정으로 이어지고, 정정은 다시 등록과 다른 관리자의 승인을 거칩니다. 정정이 끝날 때까지 이 시장은 잠정 결과에 머물고 결과가 확정되지 않습니다. 수용한 뒤 등록된 정정을 다른 관리자가 반려하거나 등록한 관리자가 철회하면 이 이의는 검토 중으로 돌아갑니다.',
   adminMarketDisputeDecisionReason: '처리 사유',
   adminMarketDisputeDecisionHint:
-    '이의를 낸 회원이 이 사유를 봅니다. 공개 판정 기록에는 처리한 관리자 없이 사유가 보일 수 있습니다. 500자까지 쓸 수 있습니다.',
+    '처리 사유는 공개 판정 기록에서 모든 방문자에게 보입니다. 처리한 관리자는 공개하지 않습니다. 500자까지 쓸 수 있습니다.',
   adminMarketDisputeDismissed: '판정 이의를 기각했습니다.',
   adminMarketDisputeAccepted:
     '판정 이의를 수용했습니다. 기다리는 판정이 없으면 이 이의의 정정 등록으로 판정 정정을 등록합니다.',
@@ -4070,6 +4070,59 @@ export const copy = {
     '관리자 권한을 회수한 뒤 생성된 시장에서만 새 주문을 낼 수 있습니다. 기존 보유 계약과 지급은 유지됩니다.',
   adminRoleRevokedOrder: '관리자 권한이 회수된 뒤 생성된 시장에서만 주문할 수 있습니다.',
   errTransactionBusy: '처리 중입니다. 잠시 뒤 다시 시도해 주세요.',
+  judgingPrinciple: '판정은 규칙의 출처와 증거로 하며 시장가격이나 다수 의견으로 정하지 않습니다.',
+  judgingCurrentStatus: '현재 상태',
+  judgingNoVersion: '아직 공개된 판정이 없습니다.',
+  judgingLegacyNoGrounds: '별도 판정 근거 기록이 없습니다.',
+  judgingCancelledNoJudgement: '취소된 시장은 판정하지 않습니다.',
+  judgingCurrentVersion: '현재 판정',
+  judgingPastVersion: '이전 판정',
+  judgingOperator: '운영자',
+  judgingResult: '판정 결과',
+  judgingSource: '판정 출처',
+  judgingPrimarySource: '1차 출처',
+  judgingFallbackSource: '대체 출처',
+  judgingNoSource: '지정 출처 없음',
+  judgingFallbackReason: '대체 출처를 사용한 사유',
+  judgingVoidReason: '무효 사유',
+  judgingCorrectionReason: '정정 사유',
+  judgingEvidence: '증거 링크',
+  judgingCollectedAt: '증거 수집 시각',
+  judgingDescription: '확인 내용',
+  judgingPublishedAt: '잠정 결과 공개 시각',
+  judgingDisputeDeadline: '이의 접수 기한',
+  judgingRuleVersion: '적용 규칙 버전',
+  judgingNoRuleVersion: '별도 규칙 버전 없음',
+  judgingResolvedAt: '결과 확정 시각',
+  judgingSettledAt: '지급 완료 시각',
+  judgingPayoutDelayed: '지급 지연',
+  judgingPayoutDelayedHint:
+    '지급 확인 과정이 끝나지 않아 지급이 지연되고 있습니다. 확인이 끝나면 지급을 이어갑니다.',
+  judgingCancelled: '시장 취소',
+  judgingCancelledAt: '취소 시각',
+  judgingDisputes: '이의 처리 기록',
+  judgingDisputeCount: '접수된 이의',
+  judgingDisputeEmpty: '접수된 이의가 없습니다.',
+  judgingDisputePending: '검토 중',
+  judgingDisputeDismissed: '기각',
+  judgingDisputeAccepted: '수용',
+  judgingDisputeRetracted: '철회',
+  judgingDisputeCorrected: '정정으로 종결',
+  judgingDecisionReasons: '이의 처리 사유',
+  judgingPauseHistory: '거래 일시 중단 기록',
+  judgingPausedAt: '중단 시각',
+  judgingPauseReason: '중단 사유',
+  judgingPauseNote: '중단 설명',
+  judgingResultPublishedAt: '결과 공개 시각',
+  judgingPauseReview: '중단 검토 결과',
+  judgingResumedAt: '거래 재개 시각',
+  judgingEarlyClosedAt: '조기 마감 시각',
+  judgingClosedAt: '거래 마감 시각',
+  judgingStillPaused: '거래 일시 중단 중',
+  judgingDelayHistory: '판정 지연 기록',
+  judgingCurrentDelay: '최신 지연 기록',
+  judgingPreviousDelay: '이전 지연 기록',
+  judgingNextReviewAt: '다음 검토 시각',
 } as const;
 
 export type CopyKey = keyof typeof copy;

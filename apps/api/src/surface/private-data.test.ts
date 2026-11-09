@@ -22,26 +22,26 @@
  * first — each with its note, review and reasons; and a market judged at A's registration (#152):
  * one VOID registration of A's an admin rejected, then a judgement on a fallback source another
  * admin approved — its description, evidence links, collection instant, fallback reason, the
- * reasons and the publication all operators' until #24 (the publication's instant reaches a
- * watcher only as the `ts` of the live `market:status` it sent, as every status change's does; no
- * REST read may carry it), its version and dispute deadline public since #175 — a 판정 이의 A
+ * approved grounds and publication public in the detail since #24, the approval reasons and
+ * identities still private, its version and dispute deadline public since #175 — a 판정 이의 A
  * submitted on it with a fill, which the admin dismissed with a reason, and the market confirmed
  * at its deadline; and a PROVISIONAL market in the same theme, its deadline ahead, where A has a
  * fill and a pending 판정 이의 (#175: the submitter and the body — the links and the reason — are
  * A's and the operators' alone, the decider the operators' alone, #173 item 13); and one more
  * there whose v1 a 판정 정정 A registered replaced, another admin approving it (#176: v1's grounds,
- * the 정정 사유, the new grounds and both approvals are operators' until #24, the card and the
- * detail carry v2 alone); and 판정 지연 기록 A made (#142) — two on a CLOSED market past its scheduled
+ * the 정정 사유 and grounds of both versions public in the detail since #24, both approvals
+ * and their identities still private); and 판정 지연 기록 A made (#142) — two on a CLOSED market past its scheduled
  * judgement, and on a PROVISIONAL one a waiting 판정 정정 holds past its deadline one made while it was
  * CLOSED and one on its version: the detail shows the current record's reason and next review time
- * alone, never who recorded one, when, its id or an earlier record (#173 item 13, decision 3; #24
- * decides any public history). Then:
+ * and previous reasons and review times in judgingRecord (#24), never who recorded one, when
+ * or its id (#173 item 13, decision 3). Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability — except that a route registered
  *   as showing a person (`showsPerson`: a post's or a comment's author, a profile's member,
  *   ADR-0069 decision 5) may hold A's nickname and public id, and must, so the allowance is not
- *   vacuous;
+ *   vacuous. Only the market detail may carry the explicit JUDGING_RECORD_LABELS allowlist
+ *   (#24), never an operator identity, approval reason or dispute submission;
  * - every registered owner-only route is called as B, aimed at A wherever it takes an id or an
  *   account — in its path, its query (a page cursor made from A's row) or its body — and no
  *   answer may hold A's values; the same request as A shows them, so the check is not blind
@@ -447,6 +447,25 @@ const PUBLIC_PARAMS: Readonly<Record<string, (fixture: Fixture) => string>> = {
  * the email and every other value stay sentinels there as everywhere.
  */
 const PERSON_LABELS: readonly string[] = ['nickname', 'public id', 'profile image'];
+/** #24 / ADR-0107: only the market detail publishes these approved, anonymous records. */
+const JUDGING_RECORD_LABELS: readonly string[] = [
+  'result published at',
+  'judgement description',
+  'judgement evidence link',
+  'judgement fallback reason',
+  'judgement collected at',
+  'judgement published at',
+  'dispute decision reason',
+  'corrected v1 description',
+  'corrected v1 evidence link',
+  'correction reason',
+  'correction description',
+  'correction evidence link',
+  'earlier delay reason',
+  'earlier delay next review',
+  'closed-era delay reason',
+  'closed-era delay next review',
+];
 
 /** A post body B sends in its refused writes: one paragraph, nothing of A's. */
 const B_POST_BODY = {
@@ -1426,9 +1445,9 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     // Then it was paused twice and resumed (#114), A the pausing admin and the one who asked each
     // time — A holds no admin role; the records are written as the routes write them: for an early
     // result with when it was published, then for a basis change, whose early close A asked for
-    // reviewed 판정 불가 and the admin rejected before a resume reviewed 판정 가능. The pause notes,
-    // the publication instant, the review and the requests' and decisions' reasons are operators'
-    // until #24 shows the reason and the times, naming nobody (#173 item 13).
+    // reviewed 판정 불가 and the admin rejected before a resume reviewed 판정 가능. These legacy
+    // pause notes were entered as admin-only and remain private. Publication instant and completed
+    // review are public in #24; requests and decisions' reasons and all identities stay private.
     const pauseText = {
       note: `leak-pause-note-${tag}`,
       secondNote: `leak-second-pause-note-${tag}`,
@@ -1843,10 +1862,9 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     // 판정 (#152): the resolved market was judged as the routes leave it — A, holding no admin role
     // (the records are written as the routes write them), registered a VOID the admin rejected,
     // then a YES on the rules' fallback source the admin approved, which the worker confirmed at
-    // its dispute deadline. Every registration's words, its evidence and instants, the decisions'
-    // reasons and who registered or approved are operators' until #24 shows the record naming
-    // nobody (#173 item 13): the public status and result alone. Odd milliseconds, so no other
-    // instant of an answer holds them.
+    // its dispute deadline. #24 publishes approved grounds and instants, while rejected
+    // registrations, approval reasons and identities stay private. Odd milliseconds make the
+    // record-time privacy assertions independent of other public instants.
     const judgementText = {
       description: `leak-judgement-description-${tag}`,
       link: `https://example.com/leak-judgement-evidence-${tag}`,
@@ -1923,8 +1941,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     // 판정 정정 (#176): a PROVISIONAL market in the same theme whose v1 — its evidence and
     // description — a correction A registered replaced with v2, with its 정정 사유 and new
     // grounds, another admin approving it (the records as the routes write them). The earlier
-    // versions and the reasons are operators' until #24 (#173 item 13); who registered or
-    // approved one is nobody's.
+    // versions and correction reasons are public in #24; registration/approval identities
+    // and approval reasons stay private (#173 item 13).
     const correctionText = {
       v1Description: `leak-corrected-v1-description-${tag}`,
       v1Link: `https://example.com/leak-corrected-v1-evidence-${tag}`,
@@ -2346,7 +2364,11 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     for (const key of Object.keys(PUBLIC_ROUTES)) {
       // A route that shows a person (ADR-0069 decision 5) may hold A's nickname and public id as
       // the author it shows; every other value of A — the account id first — is still a leak.
-      const allowed = PUBLIC_ROUTES[key]!.showsPerson === undefined ? [] : PERSON_LABELS;
+      const personAllowed = PUBLIC_ROUTES[key]!.showsPerson === undefined ? [] : PERSON_LABELS;
+      const allowed = [
+        ...personAllowed,
+        ...(key === 'GET /markets/:idOrSlug' ? JUDGING_RECORD_LABELS : []),
+      ];
       for (const [caller, cookie] of callers) {
         const res = await call(routeOf(key), {
           params: valuesOf(publicParamsOf(key), f),
@@ -2355,11 +2377,11 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         });
         if (caller === 'anonymous') bodies.set(key, res.body);
         const held = leaked(res.body);
-        if (allowed.length > 0) {
+        if (personAllowed.length > 0) {
           persons.push({
             route: key,
             caller,
-            shown: held.filter((label) => allowed.includes(label)),
+            shown: held.filter((label) => personAllowed.includes(label)),
           });
         }
         answers.push({
@@ -2375,8 +2397,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         });
       }
     }
-    // And the corrected market's own detail (#176), where its judgement is read: v2 alone, nothing
-    // of v1's grounds, the correction, either approval or who registered them.
+    // #24 publishes approved versions and correction grounds, never either approval or its actors.
     const correctedDetail = routeOf('GET /markets/:idOrSlug');
     let correctedBody = '';
     for (const [caller, cookie] of callers) {
@@ -2389,11 +2410,13 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         route: correctedDetail.key,
         caller,
         status: res.statusCode,
-        leaks: [...leaked(res.body), ...forbiddenFields(res.body)],
+        leaks: [
+          ...leaked(res.body).filter((label) => !JUDGING_RECORD_LABELS.includes(label)),
+          ...forbiddenFields(res.body),
+        ],
       });
     }
-    // And the delayed markets' own details (#142), where their records are read: the current
-    // one's reason and next review time alone — no recorder, record time, id or earlier record.
+    // #24 also publishes previous delay reasons and review times, without recorder, record time or id.
     const delayBodies = new Map<string, string>();
     for (const delayedMarket of [f.delayedMarket, f.heldMarket]) {
       for (const [caller, cookie] of callers) {
@@ -2406,7 +2429,10 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
           route: correctedDetail.key,
           caller,
           status: res.statusCode,
-          leaks: [...leaked(res.body), ...forbiddenFields(res.body)],
+          leaks: [
+            ...leaked(res.body).filter((label) => !JUDGING_RECORD_LABELS.includes(label)),
+            ...forbiddenFields(res.body),
+          ],
         });
       }
     }
@@ -3217,7 +3243,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       await raw.quit();
     }
     // Then a real public event, published after them: the admin pauses the market (#114) — the
-    // one-admin transition — with a note only operators read.
+    // one-admin transition — with a public note absent from the event itself.
     const paused = await t.app.inject({
       method: 'POST',
       url: `/api/v1/admin/markets/${f.market.id}/pause`,
@@ -3225,6 +3251,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       payload: {
         reason: 'ledger_failure',
         note: f.sentinels.find((s) => s.label === 'pause note')!.value,
+        publicNoteConfirmed: true,
         expectedAccountId: f.admin.id,
       },
     });
@@ -3250,8 +3277,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     });
     expect(approved.statusCode, approved.body).toBe(200);
     // And a 판정 이의's decision (#175): the admin dismisses A's pending dispute with a reason, and
-    // the market's unchanged status is published again so open details refetch their labels —
-    // never the dispute, its submitter, its body or the decision's reason.
+    // the market's unchanged status is published again so open details refetch their labels and
+    // public decision reason (#24). The event never carries that reason or the private submission.
     const dismissed = await t.app.inject({
       method: 'POST',
       url: `/api/v1/admin/markets/${f.disputedMarket.id}/disputes/${f.disputeId}/dismiss`,
@@ -3265,8 +3292,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     expect(dismissed.statusCode, dismissed.body).toBe(200);
     // And a 판정 정정 (#176): A registers one of the judgement just published, with its 정정 사유
     // and grounds (the record, as the fixture's, needs no admin role of A's), and the admin
-    // approves it with a reason — v2's result goes public under a new key, never the reason, the
-    // grounds, the registrant or the approval.
+    // approves it with a reason — v2's result goes public under a new key. The detail has approved
+    // grounds (#24); the event carries none of them, the registrant or the approval.
     const sentinel = (label: string) => f.sentinels.find((s) => s.label === label)!.value;
     const correction = await createCorrectionRequest(t.db, {
       marketId: closed.id,

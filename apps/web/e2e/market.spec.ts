@@ -152,7 +152,7 @@ test.describe('시장 상세', () => {
     /*
      * The frame (#122). 배경 is the server's too, as plain text under its heading. The mobile
      * 매수 bar is in the HTML of an open market with its two entry points and no price on either;
-     * its sheet is not (it mounts on a press). The public 준비 중 slots are there — 공개 판정 기록,
+     * its sheet is not (it mounts on a press). The public judging record (#24) is there,
      * like 배경 and 규칙, once for each width's place, since the two widths draw them in different
      * places and each reads its own copy where it is drawn (ADR-0067); CSS shows one. So is 토론's
      * frame, public too and no longer one of them (#47, ADR-0075) — its heading, 글쓰기 and its
@@ -183,7 +183,11 @@ test.describe('시장 상세', () => {
       for (const section of ['market-background', 'market-rules', 'market-judging-record']) {
         expect(html, `${section}-${width}`).toContain(`data-testid="${section}-${width}"`);
       }
+      expect(html).toContain(`data-testid="market-judging-record-${width}-principle"`);
+      expect(html).toContain(`data-testid="market-judging-record-${width}-empty"`);
     }
+    expect(html).toContain(copy.judgingPrinciple);
+    expect(html).toContain(copy.judgingNoVersion);
     const memberHtml = await (await admin.get(`/markets/${market.slug}`)).text();
     for (const page of [html, memberHtml]) {
       expect(page).not.toContain('data-testid="market-my-position"');

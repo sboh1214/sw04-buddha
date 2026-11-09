@@ -2,6 +2,7 @@
 
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { type Market, api, unwrap } from '@/lib/api';
+import { settlementPollInterval } from '@/lib/market-admin';
 import {
   type MarketFilters,
   type MarketSearch,
@@ -154,6 +155,10 @@ export function marketQueryOptions(marketId: string) {
     queryFn: async (): Promise<Market> =>
       unwrap(await api.GET('/api/v1/markets/{idOrSlug}', { params: { path: { idOrSlug: id } } }))
         .data,
+    // A failed payout writes its step after SETTLING without a new status event. Read it while
+    // visible, every five seconds until completion, so the public delay flag cannot stay stale.
+    refetchInterval: (query: { state: { data: Market | undefined } }) =>
+      settlementPollInterval(query.state.data),
   };
 }
 

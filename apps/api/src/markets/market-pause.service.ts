@@ -217,6 +217,9 @@ export class MarketPauseService {
         actorId: adminId,
         reason: body.reason,
         note: body.note,
+        // The route requires an explicit publication confirmation, including from old clients.
+        // Record server-owned provenance, never a client-supplied event payload.
+        notePublic: body.publicNoteConfirmed,
         resultPublishedAt: body.resultPublishedAt == null ? null : new Date(body.resultPublishedAt),
       });
       if (!result.paused) throw PAUSE_SKIPS[result.reason]();

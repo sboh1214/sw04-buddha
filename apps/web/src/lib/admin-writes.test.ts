@@ -66,7 +66,7 @@ const SCREENS: Readonly<Record<string, readonly string[]>> = {
   // 마감 요청 (naming the pause its dialog opened on) from their dialogs, then 승인 · 반려 · 철회
   // (each naming the request in its path)
   '../app/admin/markets/[id]/market-pause-dialogs.tsx': [
-    'body: { reason, note, resultPublishedAt, expectedAccountId: by },',
+    'body: {\n            reason,\n            note,\n            publicNoteConfirmed: true,\n            resultPublishedAt,\n            expectedAccountId: by,\n          },',
     'body: { pauseId, path, reviewResult, reason, expectedAccountId: by },',
     'body: { reason, expectedAccountId: by },',
     'body: { expectedAccountId: by },',

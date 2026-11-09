@@ -321,6 +321,7 @@ test.describe('탭의 계정이 바뀌는 틈의 관리자 쓰기 (ADR-0092)', (
       const dialog = page.getByTestId('market-pause-dialog');
       await dialog.getByTestId('market-pause-reason-ledger_failure').click();
       await dialog.getByTestId('market-pause-note').fill(note);
+      await dialog.getByTestId('market-pause-public-note-confirmed').click();
       const path = `/api/v1/admin/markets/${market.id}/pause`;
       const answered = answerOf(page, 'POST', path);
       await dialog.getByTestId('market-pause-dialog-confirm').click();
@@ -336,6 +337,7 @@ test.describe('탭의 계정이 바뀌는 틈의 관리자 쓰기 (ADR-0092)', (
             reason: 'ledger_failure',
             note,
             resultPublishedAt: null,
+            publicNoteConfirmed: true,
             expectedAccountId: a.id,
           },
         },

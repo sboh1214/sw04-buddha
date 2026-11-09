@@ -11,7 +11,13 @@ import {
   supersedes,
 } from '@buddha/shared';
 import { type InfiniteData } from '@tanstack/react-query';
-import { type MarketJudgementDelay, type MarketSummary, type Me, type Position } from './api';
+import {
+  type Market,
+  type MarketJudgementDelay,
+  type MarketSummary,
+  type Me,
+  type Position,
+} from './api';
 
 /**
  * The reducers every realtime writer shares (PLAN 8, 11.5), in two contracts.
@@ -81,6 +87,12 @@ export interface LiveMarket {
    * (`applyStatus`) and moves with the status group (`joinMarket`).
    */
   judgementDelay?: MarketJudgementDelay | null;
+  /** Public history and completion instants are read with the same status snapshot (#24). */
+  judgingRecord?: Market['judgingRecord'];
+  /** Client-only: the held history predates a status event and must not read as current. */
+  judgingRecordStale?: boolean;
+  resolvedAt?: string | null;
+  settledAt?: string | null;
 }
 
 /**
@@ -243,6 +255,17 @@ export function applyStatus<T extends LiveMarket>(
     ...NO_STATUS_DISPLAY,
     // A card has none to reset, and gains none.
     ...(held.judgementDelay === undefined ? {} : { judgementDelay: null }),
+    ...(held.judgingRecord === undefined
+      ? {}
+      : {
+          judgingRecordStale: true,
+          judgingRecord: {
+            ...held.judgingRecord,
+            // Keep recorded history, but an old status's current flags cannot describe this event.
+            payoutDelayed: false,
+            delays: held.judgingRecord.delays.map((delay) => ({ ...delay, current: false })),
+          },
+        }),
   };
 }
 
@@ -318,6 +341,16 @@ export function joinMarket<T extends LiveMarket>(held: T | undefined, incoming: 
       judgementVersion: held.judgementVersion,
       disputeDeadline: held.disputeDeadline,
       ...(held.judgementDelay === undefined ? {} : { judgementDelay: held.judgementDelay }),
+      ...(held.judgingRecord === undefined
+        ? {}
+        : {
+            judgingRecord: held.judgingRecord,
+            // Older REST cannot freshen history from before this status. On a tie/newer
+            // snapshot, incoming wins above: REST has no client-only marker, clearing it.
+            judgingRecordStale: held.judgingRecordStale,
+          }),
+      ...(held.resolvedAt === undefined ? {} : { resolvedAt: held.resolvedAt }),
+      ...(held.settledAt === undefined ? {} : { settledAt: held.settledAt }),
     };
   }
   return next;

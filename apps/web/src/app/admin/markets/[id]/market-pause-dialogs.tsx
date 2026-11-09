@@ -1,6 +1,6 @@
 'use client';
 
-import { Field, Input, RadioGroup, Stack, Text } from '@chakra-ui/react';
+import { Checkbox, Field, Input, RadioGroup, Stack, Text } from '@chakra-ui/react';
 import {
   MARKET_PAUSE_PATHS,
   MARKET_PAUSE_REASONS,
@@ -208,6 +208,9 @@ export function PauseFields({
   note,
   onNote,
   noteError,
+  publicNoteConfirmed,
+  onPublicNoteConfirmed,
+  publicNoteError,
   publishedLocal,
   onPublishedLocal,
   publishedAtError,
@@ -219,6 +222,9 @@ export function PauseFields({
   note: string;
   onNote: (value: string) => void;
   noteError: string | null;
+  publicNoteConfirmed: boolean;
+  onPublicNoteConfirmed: (confirmed: boolean) => void;
+  publicNoteError: string | null;
   publishedLocal: string;
   onPublishedLocal: (value: string) => void;
   publishedAtError: string | null;
@@ -271,6 +277,20 @@ export function PauseFields({
         error={noteError}
         disabled={disabled}
       />
+      <Field.Root invalid={publicNoteError !== null} required>
+        <Checkbox.Root
+          checked={publicNoteConfirmed}
+          onCheckedChange={(details) => onPublicNoteConfirmed(details.checked === true)}
+          disabled={disabled}
+          data-testid="market-pause-public-note-confirmed"
+          alignItems="start"
+        >
+          <Checkbox.HiddenInput />
+          <Checkbox.Control />
+          <Checkbox.Label>{copy.adminMarketPausePublicNoteConfirm}</Checkbox.Label>
+        </Checkbox.Root>
+        <Field.ErrorText>{publicNoteError}</Field.ErrorText>
+      </Field.Root>
       {picked !== undefined && pauseReasonNeedsPublishedAt(picked) && (
         <Field.Root invalid={publishedAtError !== null} required>
           <Field.Label>{copy.adminMarketPauseResultPublishedAt}</Field.Label>
@@ -309,6 +329,7 @@ function PauseMarketDialog({
   const operatorId = useOperatorId();
   const [value, setValue] = useState<string>(preset?.reason ?? '');
   const [noteText, setNoteText] = useState(preset?.note ?? '');
+  const [publicNoteConfirmed, setPublicNoteConfirmed] = useState(false);
   const [publishedLocal, setPublishedLocal] = useState('');
   const [sentLocal, setSentLocal] = useState<string | null>(null);
   const draft = pauseDraft(value, noteText, publishedLocal);
@@ -333,7 +354,13 @@ function PauseMarketDialog({
       unwrap(
         await api.POST('/api/v1/admin/markets/{id}/pause', {
           params: { path: { id: market.id } },
-          body: { reason, note, resultPublishedAt, expectedAccountId: by },
+          body: {
+            reason,
+            note,
+            publicNoteConfirmed: true,
+            resultPublishedAt,
+            expectedAccountId: by,
+          },
         }),
       ).data,
   );
@@ -347,11 +374,11 @@ function PauseMarketDialog({
       body={copy.adminMarketPauseBody}
       confirmLabel={copy.adminMarketPause}
       pending={mutation.isPending}
-      confirmDisabled={!draft.ready || operatorId === undefined}
+      confirmDisabled={!draft.ready || !publicNoteConfirmed || operatorId === undefined}
       refusal={refusal}
       onClose={() => onClose(false)}
       onConfirm={() => {
-        if (operatorId === undefined || draft.reason === null) return;
+        if (operatorId === undefined || draft.reason === null || !publicNoteConfirmed) return;
         setSentLocal(publishedLocal);
         mutation.mutate({
           reason: draft.reason,
@@ -368,6 +395,9 @@ function PauseMarketDialog({
         note={noteText}
         onNote={setNoteText}
         noteError={errorOf('note')}
+        publicNoteConfirmed={publicNoteConfirmed}
+        onPublicNoteConfirmed={setPublicNoteConfirmed}
+        publicNoteError={errorOf('publicNoteConfirmed')}
         publishedLocal={publishedLocal}
         onPublishedLocal={setPublishedLocal}
         publishedAtError={draft.publishedAtError ?? serverAtError}

@@ -21,6 +21,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { Fragment, type ReactNode, useState } from 'react';
+import { MarketJudgingRecord } from '@/components/market/market-judging-record';
 import { ComingSoonSection } from '@/components/market/coming-soon-section';
 import { CountdownBadge } from '@/components/market/countdown-badge';
 import { MyPosition } from '@/components/market/my-position';
@@ -105,7 +106,7 @@ import { MarketTags } from './market-tags';
  *   거래 내역 (최근 체결 and 내 거래), then the rest (N02 §4). The order panel is a bottom sheet
  *   opened from a YES 매수 · NO 매수 bar on an open market (`OrderEntryBar`); a signed-out visitor
  *   finds a sign-in prompt in it instead of 거래 준비 중 (N02 §2).
- * - Sections whose content another issue brings — 호가창, 내 거래, 내 대기 주문, 공개 판정 기록 —
+ * - Sections whose content another issue brings — 호가창, 내 거래, 내 대기 주문 —
  *   are their title and 준비 중 (`ComingSoonSection`, the owner's #122 row). The personal areas —
  *   내 포지션, 내 거래 and 내 대기 주문 — are drawn for a signed-in reader only; a signed-out visitor
  *   gets one sign-in prompt where 내 포지션 · 내 대기 주문 stand, and neither is ever in the server's
@@ -194,14 +195,7 @@ export function MarketDetail({
         {/* A failed REFETCH keeps the row that is already drawn — the numbers on screen are
             simply the last ones that arrived, which is what the notice says; a NOT_FOUND says the
             market is not public any more (#78: sent back to a draft). */}
-        {data !== undefined && market.isRefetchError && (
-          <Alert.Root status="warning" role="status" data-testid="market-detail-refresh-failed">
-            <Alert.Indicator />
-            <Alert.Content>
-              <Alert.Description>{marketRefreshNotice(market.error)}</Alert.Description>
-            </Alert.Content>
-          </Alert.Root>
-        )}
+        <MarketRefreshAlert market={market} />
         <Stack gap="3">
           {data !== undefined && <MarketHeaderRow market={data} now={now} />}
           {question}
@@ -289,10 +283,7 @@ export function MarketDetail({
     // state, the result and the 출처 together), on every public status (owner decision
     // 2026-10-17).
     judging: perWidth((width) => (
-      <ComingSoonSection
-        title={copy.marketJudgingRecord}
-        testId={copyTestId('market-judging-record', width)}
-      />
+      <MarketJudgingRecord market={data} testId={copyTestId('market-judging-record', width)} />
     )),
   };
 
@@ -487,6 +478,47 @@ function MarketHeaderRow({ market, now }: { market: Market; now?: number }) {
         <WatchButton marketId={market.id} />
       </Box>
     </HStack>
+  );
+}
+
+/** Keep recovery tied to stale content: a tick can clear the query's error without re-reading it. */
+export function MarketRefreshAlert({
+  market,
+}: {
+  market: {
+    data: { judgingRecordStale?: boolean } | undefined;
+    isRefetchError: boolean;
+    error: unknown;
+    isFetching: boolean;
+    refetch: () => unknown;
+  };
+}) {
+  const data = market.data;
+  if (data === undefined || (!market.isRefetchError && !data.judgingRecordStale)) return null;
+  return (
+    <Alert.Root status="warning" role="status" data-testid="market-detail-refresh-failed">
+      <Alert.Indicator />
+      <Alert.Content>
+        <Alert.Description>
+          {market.isRefetchError ? marketRefreshNotice(market.error) : copy.judgingRecordStale}
+        </Alert.Description>
+        {data.judgingRecordStale && (
+          <Button
+            size="sm"
+            variant="outline"
+            alignSelf="flex-start"
+            loading={market.isFetching}
+            disabled={market.isFetching}
+            onClick={() => {
+              void market.refetch();
+            }}
+            data-testid="market-detail-refresh-retry"
+          >
+            {copy.retry}
+          </Button>
+        )}
+      </Alert.Content>
+    </Alert.Root>
   );
 }
 

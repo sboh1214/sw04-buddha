@@ -655,6 +655,11 @@ describe('pauseFailure', () => {
       field: 'note',
       message: copy.errMarketPauseNote,
     });
+    expect(pauseFailure(refused('publicNoteConfirmed', 'Invalid input'), 'pause')).toEqual({
+      kind: 'field',
+      field: 'publicNoteConfirmed',
+      message: copy.errMarketPausePublicNoteConfirm,
+    });
     for (const [message, said] of [
       [resultPublishedAt.required, copy.errMarketPausePublishedAtRequired],
       [resultPublishedAt.earlyResultOnly, copy.errMarketPausePublishedAtOnly],

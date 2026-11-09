@@ -103,6 +103,14 @@ const detail: Market = {
   tags: [],
   // No rule version (#80): not opened yet, or opened before #80 (D4).
   ruleVersion: null,
+  judgingRecord: {
+    versions: [],
+    pauses: [],
+    delays: [],
+    disputes: { total: 0, byVersion: [], decisions: [] },
+    cancellation: null,
+    payoutDelayed: false,
+  },
   ruleVersions: [],
   // No 판정 지연 기록 (#142): not reading 판정 지연.
   judgementDelay: null,
@@ -735,6 +743,51 @@ describe('a detail’s 관련 시장 (#65, ADR-0068)', () => {
 });
 
 describe('marketQueryOptions', () => {
+  it('re-reads a pending payout even with no status event and stops after completion (#24)', () => {
+    const options = marketQueryOptions(ID);
+    const queryClient = getQueryClient();
+    const interval = () =>
+      options.refetchInterval({
+        state: {
+          data: queryClient.getQueryData<Market>(options.queryKey),
+        },
+      });
+    expect(interval()).toBe(false);
+    for (const status of ['resolved', 'settling'] as const) {
+      queryClient.setQueryData<Market>(options.queryKey, { ...detail, status, statusEventId: '8' });
+      expect(interval()).toBe(5_000);
+    }
+    // A successful read discovers a failed payout under the SAME status key.
+    queryClient.setQueryData<Market>(options.queryKey, {
+      ...detail,
+      status: 'settling',
+      statusEventId: '8',
+      judgingRecord: { ...detail.judgingRecord, payoutDelayed: true },
+    });
+    expect(queryClient.getQueryData<Market>(options.queryKey)?.judgingRecord.payoutDelayed).toBe(
+      true,
+    );
+    expect(interval()).toBe(5_000);
+    queryClient.setQueryData<Market>(options.queryKey, {
+      ...detail,
+      status: 'settled',
+      statusEventId: '9',
+    });
+    expect(interval()).toBe(false);
+    for (const status of [
+      'scheduled',
+      'open',
+      'paused',
+      'closed',
+      'provisional',
+      'cancelled',
+    ] as const) {
+      // A new query is used because status keys must never move backward.
+      const isolated = { state: { data: { ...detail, status } } };
+      expect(options.refetchInterval(isolated)).toBe(false);
+    }
+    queryClient.clear();
+  });
   it('lands a market opened from an upper-case uuid on the entry the live path writes', () => {
     // A uuid is accepted in either case and answered in lower, and `market:tick` names its market
     // by the row's own id. A screen keyed on the segment as typed would therefore hold a row that

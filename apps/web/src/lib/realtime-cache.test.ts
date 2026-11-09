@@ -94,6 +94,14 @@ const snapshot: Market = {
   tags: [],
   // No rule version (#80): not opened yet, or opened before #80 (D4).
   ruleVersion: null,
+  judgingRecord: {
+    versions: [],
+    pauses: [],
+    delays: [],
+    disputes: { total: 0, byVersion: [], decisions: [] },
+    cancellation: null,
+    payoutDelayed: false,
+  },
   ruleVersions: [],
   // No 판정 지연 기록 (#142): not reading 판정 지연.
   judgementDelay: null,

@@ -496,7 +496,16 @@ describe.skipIf(!hasTestInfra)('admin market cancels (integration)', () => {
       id: market.id,
       status: 'cancelled',
       resolvedResult: null,
+      judgingRecord: {
+        cancellation: {
+          reason: REASON,
+          cancelledAt: (await eventsFor(market.id)).at(-1)!.createdAt.toISOString(),
+        },
+      },
     });
+    for (const hidden of [APPROVAL, asker.id, approver.id]) {
+      expect(publicDetail.body).not.toContain(hidden);
+    }
     // Home lists OPEN alone; the search finds it by its label's status, and in `all`.
     const ids = async (query: string) =>
       (await get(`/api/v1/markets${query}`, null)).json<ListPage>().data.map((row) => row.id);
@@ -564,6 +573,7 @@ describe.skipIf(!hasTestInfra)('admin market cancels (integration)', () => {
     );
     expectRefused(
       await post(`${marketUrl(market.id)}/pause`, approver, {
+        publicNoteConfirmed: true,
         reason: 'basis_change',
         note: '기준이 바뀌었다.',
       }),

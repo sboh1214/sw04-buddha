@@ -81,6 +81,14 @@ const open: AdminMarket = {
     log: [],
   },
   ruleVersion: 1,
+  judgingRecord: {
+    versions: [],
+    pauses: [],
+    delays: [],
+    disputes: { total: 0, byVersion: [], decisions: [] },
+    cancellation: null,
+    payoutDelayed: false,
+  },
   ruleVersions: [],
   supplement: { pending: null, log: [] },
   pause: { history: [], pending: null, log: [] },
@@ -457,6 +465,9 @@ describe('PauseFields', () => {
         note=""
         onNote={() => {}}
         noteError={null}
+        publicNoteConfirmed={false}
+        onPublicNoteConfirmed={() => {}}
+        publicNoteError={null}
         publishedLocal=""
         onPublishedLocal={() => {}}
         publishedAtError={null}
@@ -473,6 +484,12 @@ describe('PauseFields', () => {
     }
     expect(byTestId(html, 'market-pause-note')).toBeDefined();
     expect(html).toContain(copy.adminMarketPauseNoteHint);
+    expect(byTestId(html, 'market-pause-public-note-confirmed')?.text).toContain(
+      copy.adminMarketPausePublicNoteConfirm,
+    );
+    expect(byTestId(html, 'market-pause-public-note-confirmed')?.attributes['data-state']).toBe(
+      'unchecked',
+    );
     expect(byTestId(html, 'market-pause-published-at')).toBeUndefined();
     expect(byTestId(fields('ledger_failure'), 'market-pause-published-at')).toBeUndefined();
     const early = fields('early_result');

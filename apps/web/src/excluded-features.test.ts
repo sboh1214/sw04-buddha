@@ -526,11 +526,11 @@ describe('excluded features on screens (#113)', () => {
       at('lib', 'market-form.ts'),
       // 규칙 보충's (#80): the 정산 영향 검토 and the operators are an admin's alone.
       at('lib', 'market-supplement.ts'),
-      // 거래 일시 중단's (#114): the note, the publication instant and the operators likewise (what
-      // the public judging record shows of a pause is #24's).
+      // 거래 일시 중단's writes (#114): operator identities and internal decision reasons stay
+      // admin-only; #24 renders the public pause facts from its separate allowlisted record.
       at('lib', 'market-pause.ts'),
-      // 판정's (#152): the evidence, the reasons, the instants and the registrant and approver
-      // likewise (#24 decides what the public judging record shows, never who judged: #173 13).
+      // 판정's writes (#152): its pending/rejected registrations and operator identities stay
+      // admin-only; #24 reads approved evidence and public reasons without importing this code.
       at('lib', 'market-judgement.ts'),
       // 판정 이의's operator side (#175): the submitter, the body and the decider are no member's
       // (#173 13) — 이의 접수 and the 판정 panel's block alone read it.
@@ -552,6 +552,9 @@ describe('excluded features on screens (#113)', () => {
       // 규칙 버전 on the public detail (#80), whose names the admin's 이벤트 로그 says too.
       at('lib', 'rule-versions.ts'),
       at('components', 'market', 'rule-versions-section.tsx'),
+      // Approved grounds, public pause/delay facts and dispute decisions (#24), never the
+      // registrant/approver or a member's dispute body: this is a public screen's text.
+      at('components', 'market', 'market-judging-record.tsx'),
       // 판정 이의's member side (#175): the detail's deadline and link, the discussion's and the
       // write screen's note, the submission screen and MY — whose statuses' words the operators'
       // screens read too, so they are held to the member's rules.

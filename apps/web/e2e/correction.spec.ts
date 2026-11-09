@@ -513,6 +513,24 @@ test.describe('판정 정정', () => {
       // Nothing was published but the labels: the visitor's detail reads YES as before.
       await expect(badge).toHaveText(copy.marketStatusProvisional);
       await expect(notice.getByTestId('market-detail-result')).toHaveText(copy.yes);
+      // #24 publishes approved versions only. The pending correction's new grounds and
+      // request remain private even though the already approved v1 is now public history.
+      const unpublished = await publicMarketOf(request, market.id);
+      expect(unpublished.judgingRecord.versions.map((version) => version.version)).toEqual([1]);
+      const unpublishedBody = JSON.stringify(unpublished);
+      const unpublishedHtml = await (await request.get(`/markets/${market.slug}`)).text();
+      for (const hidden of [
+        reason,
+        secondLink,
+        description,
+        approval,
+        requestId,
+        first.id,
+        second.id,
+      ]) {
+        expect(unpublishedBody).not.toContain(hidden);
+        expect(unpublishedHtml).not.toContain(hidden);
+      }
 
       // --- admin 2 finds it in 판정 승인 대기, marked as a correction 'v1 → v2', with its result
       // and registrant.
@@ -634,10 +652,8 @@ test.describe('판정 정정', () => {
       );
       await expect(notice.getByTestId('market-dispute-link')).toHaveText(copy.marketDisputeSubmit);
       expect(await documentSurvived(page)).toBe(true);
-      // The public market: v2, its result and deadline, disputes taken, none under review — and
-      // nothing of the correction (#24 publishes the versions and reasons later, without the
-      // admins): no reason, no evidence, no description, no request, no admin, in the answer and
-      // in the server's HTML.
+      // #24 publishes the approved v2 and earlier v1 through the exact public allowlist.
+      // Approval internals and administrator identities stay out of both JSON and server HTML.
       const publicMarket = await publicMarketOf(request, market.id);
       expect(publicMarket).toMatchObject({
         status: 'provisional',
@@ -649,19 +665,41 @@ test.describe('판정 정정', () => {
         judgementDelayed: false,
       });
       expect(Object.keys(publicMarket)).not.toContain('judgement');
+      expect(publicMarket.judgingRecord.versions).toEqual([
+        {
+          version: 2,
+          result: 'NO',
+          source: v2.source,
+          fallbackReason: null,
+          voidReason: null,
+          evidence: { links: [link, secondLink], collectedAt: v1.evidence.collectedAt },
+          description,
+          ruleVersion: 1,
+          publishedAt: v2.publishedAt,
+          disputeDeadline: newDeadline,
+          correctionReason: reason,
+        },
+        {
+          version: 1,
+          result: 'YES',
+          source: v1.source,
+          fallbackReason: null,
+          voidReason: null,
+          evidence: { links: [link], collectedAt: v1.evidence.collectedAt },
+          description: HELPER_JUDGEMENT_DESCRIPTION,
+          ruleVersion: 1,
+          publishedAt: v1.publishedAt,
+          disputeDeadline: deadline,
+          correctionReason: null,
+        },
+      ]);
       const publicBody = await (await request.get(`/api/v1/markets/${market.id}`)).text();
       const html = await (await request.get(`/markets/${market.slug}`)).text();
-      for (const hidden of [
-        reason,
-        link,
-        secondLink,
-        HELPER_JUDGEMENT_DESCRIPTION,
-        description,
-        approval,
-        requestId,
-        first.id,
-        second.id,
-      ]) {
+      for (const visible of [reason, link, secondLink, HELPER_JUDGEMENT_DESCRIPTION, description]) {
+        expect(publicBody).toContain(visible);
+        expect(html).toContain(visible);
+      }
+      for (const hidden of [approval, requestId, v1.approvalId, first.id, second.id]) {
         expect(publicBody).not.toContain(hidden);
         expect(html).not.toContain(hidden);
       }

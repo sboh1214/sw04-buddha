@@ -19,6 +19,7 @@ import {
   type Fill,
   type JudgementDelayRecord,
   type Market,
+  type MarketJudgingRecord,
   type MarketDisplayState,
   type MarketListQuery,
   type MarketRuleItems,
@@ -49,6 +50,7 @@ import { DB } from '../infra/db/db.provider.js';
 import { type Page } from '../wallet/wallet.service.js';
 import { marketOrder } from './market-order.js';
 import { readMarketSources, type MarketSources } from './market-sources.js';
+import { readMarketJudgingRecord } from './market-judging-record.js';
 import { readPublicRuleVersions } from './market-supplement.js';
 
 export type MarketRow = typeof schema.markets.$inferSelect;
@@ -216,6 +218,7 @@ export function toMarket(
   ruleVersions: MarketRuleVersion[],
   judgementDelays: readonly JudgementDelayRecord[],
   lastPrice24hAgo: number | null,
+  judgingRecord: MarketJudgingRecord,
   nowMs: number = Date.now(),
 ): Market {
   return {
@@ -233,6 +236,7 @@ export function toMarket(
       nowMs,
     ),
     lastPrice24hAgo,
+    judgingRecord,
   };
 }
 
@@ -419,6 +423,7 @@ export class MarketService {
           ruleVersions,
           delay === null ? [] : [delay],
           lastPrice24hAgo,
+          await readMarketJudgingRecord(tx, row.market),
         );
       },
       { isolationLevel: 'repeatable read', accessMode: 'read only' },

@@ -2,7 +2,7 @@
  * 거래 일시 중단·재개·조기 마감 (#114, ADR-0102; ADR-0093 decision 1 #173 items 1–4, decision 3 '#114
  * 조기 결과의 공개 시각', the owner's answers Q1·Q2 of 2026-11-02) through the admin routes against
  * the docker `test` profile: a pause by one admin — the `paused` event, the pause row, the record,
- * the published status, the close job kept, nothing public of it — and refused for the body, the
+ * the published status, the close job kept, anonymous public facts (#24) — and refused for the body, the
  * status, the close by the clock and a publication instant after it; a next path asked for —
  * changing nothing — and refused for the status, the close, a pause ended since (the one its
  * author saw is named), one waiting, no decider and what the pause's reason allows (판정 불가: the
@@ -163,7 +163,12 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
   const decisionsUrl = (id: string) => `${marketUrl(id)}/pause-decisions`;
   /** 거래 일시 중단: a basis change and the note unless the payload says otherwise. */
   const pause = (id: string, who: TestUser = asker, payload: Record<string, unknown> = {}) =>
-    post(`${marketUrl(id)}/pause`, who, { reason: 'basis_change', note: NOTE, ...payload });
+    post(`${marketUrl(id)}/pause`, who, {
+      publicNoteConfirmed: true,
+      reason: 'basis_change',
+      note: NOTE,
+      ...payload,
+    });
   /**
    * 다음 경로 요청: `decision` holds the path and, for a basis change, the review result. It names
    * the pause the admin detail shows its author (`shownPause`) unless the payload names another.
@@ -343,7 +348,35 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
   }
 
   // --- the pause --------------------------------------------------------------------------------
-  it('pauses an open market at once: the event, the pause, the record, the status published, the close job kept, nothing public', async () => {
+  it('refuses old-client or non-boolean publication confirmation before any write or event', async () => {
+    const market = await opened();
+    const before = {
+      market: await marketRow(market.id),
+      events: await eventsFor(market.id),
+      pauses: await pausesOf(market.id),
+      actions: await pauseActionsFor(market.id),
+    };
+    await listening(market.id, async (received) => {
+      for (const publicNoteConfirmed of [undefined, false, 'true']) {
+        const res = await pause(market.id, asker, { publicNoteConfirmed });
+        expect(res.statusCode, res.body).toBe(400);
+        expect(errorOf(res)).toMatchObject({
+          code: 'VALIDATION_ERROR',
+          details: [{ path: ['publicNoteConfirmed'] }],
+        });
+      }
+      expect({
+        market: await marketRow(market.id),
+        events: await eventsFor(market.id),
+        pauses: await pausesOf(market.id),
+        actions: await pauseActionsFor(market.id),
+      }).toEqual(before);
+      await sleep(50);
+      expect(received).toEqual([]);
+    });
+  });
+
+  it('pauses an open market at once: the event, pause, record, status published, close job kept and anonymous public pause facts', async () => {
     const market = await opened();
     // The approval (#78) registered the close job at the close; the pause leaves it (#173 item 3).
     await t.app.get(MarketJobs).scheduleClose(market.id, market.closeAt, new Date());
@@ -364,7 +397,12 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
         actorId: asker.id,
         fromStatus: 'open',
         toStatus: 'paused',
-        payload: { pauseId: row!.id, reason: 'basis_change', resultPublishedAt: null },
+        payload: {
+          pauseId: row!.id,
+          reason: 'basis_change',
+          resultPublishedAt: null,
+          notePublic: true,
+        },
       });
       expect(row).toMatchObject({
         marketId: market.id,
@@ -448,13 +486,20 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
     });
     expect(await jobQueue.getJob(marketCloseJobId(market.id, market.closeAt))).toBeDefined();
 
-    // The public detail says PAUSED (its label and notice are the web's, #174) and nothing of the
-    // pause: the reason and the times are #24's, the note and the admin nobody's (#173 item 13).
+    // #24 publishes pause facts and the note, while the operator's identity stays private.
     const pub = await publicDetail(market.slug);
     expect(pub.statusCode).toBe(200);
     expect(data<Market>(pub).status).toBe('paused');
     expect(data<Market>(pub)).not.toHaveProperty('pause');
-    for (const hidden of [NOTE, asker.id]) expect(pub.body).not.toContain(hidden);
+    const [publicPause] = await pausesOf(market.id);
+    expect(data<Market>(pub).judgingRecord.pauses).toEqual([
+      expect.objectContaining({
+        reason: 'basis_change',
+        note: NOTE,
+        pausedAt: publicPause!.pausedAt.toISOString(),
+      }),
+    ]);
+    expect(pub.body).not.toContain(asker.id);
   });
 
   it('records an early result’s publication instant, in UTC, on the pause and its event', async () => {
@@ -478,6 +523,7 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
       pauseId: row!.id,
       reason: 'early_result',
       resultPublishedAt: publishedAt.toISOString(),
+      notePublic: true,
     });
     expect((await pauseActionsFor(market.id))[0]!.payload).toMatchObject({
       reason: 'early_result',
@@ -1587,7 +1633,11 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
         payload,
       });
     for (const res of [
-      await unnamed(`${marketUrl(market.id)}/pause`, { reason: 'basis_change', note: NOTE }),
+      await unnamed(`${marketUrl(market.id)}/pause`, {
+        publicNoteConfirmed: true,
+        reason: 'basis_change',
+        note: NOTE,
+      }),
       await unnamed(decisionsUrl(held.id), {
         pauseId: await shownPause(held.id),
         path: 'resume',

@@ -188,6 +188,17 @@ describe('the detail sections (#122, ADR-0061 decision 1, item 16)', () => {
       expect(source, slot).toContain(`testId="${slot}"`);
     }
   });
+
+  it('draws the public judging record from the live market in each responsive slot (#24)', () => {
+    const source = readFileSync(path.join(SRC, 'app/markets/[slug]/market-detail.tsx'), 'utf8');
+    const judging = source.slice(
+      source.indexOf('judging: perWidth('),
+      source.indexOf('\n  };', source.indexOf('judging: perWidth(')),
+    );
+    expect(judging).toMatch(/<MarketJudgingRecord\s+market=\{data\}/);
+    expect(judging).toContain("testId={copyTestId('market-judging-record', width)}");
+    expect(judging).not.toContain('ComingSoonSection');
+  });
 });
 
 describe('the mobile 호가·거래 내역 switch', () => {

@@ -450,7 +450,8 @@ export type PauseWrite = 'pause' | 'request' | 'decision';
  * refusals are said above the buttons (`pauseFailure`), and the request dialog's draft keeps the
  * confirm off until the pair is one the pause's reason allows (`pauseDecisionDraft`).
  */
-export type PauseField = 'pauseReason' | 'note' | 'resultPublishedAt' | 'path' | 'reason';
+export type PauseField =
+  'pauseReason' | 'note' | 'publicNoteConfirmed' | 'resultPublishedAt' | 'path' | 'reason';
 
 /**
  * Where a refused pause write is said (#114):
@@ -536,6 +537,8 @@ export function pauseFailure(error: unknown, write: PauseWrite): PauseFailure {
         : field('reason', copy.errMarketReviewReason);
     case 'note':
       return field('note', copy.errMarketPauseNote);
+    case 'publicNoteConfirmed':
+      return field('publicNoteConfirmed', copy.errMarketPausePublicNoteConfirm);
     case 'resultPublishedAt':
       switch (message) {
         case refused.resultPublishedAt.required:

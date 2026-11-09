@@ -57,12 +57,12 @@ export class AdminMarketPausesController {
     operationId: 'adminPauseMarket',
     summary:
       'Pause an open market’s trading (거래 일시 중단) by one admin, at once: one of the three ' +
-      'reasons, a note saying what happened (admins only) and, for an early result, when the ' +
+      'reasons, a public note with explicit publicNoteConfirmed=true and, for an early result, when the ' +
       'result was published — not after the pause. The close still comes on schedule; resuming ' +
       'or closing early is another admin’s approval of a next-path request',
   })
   @ApiData(adminMarketSchema)
-  // VALIDATION_ERROR names, from the body, `reason`, `note` or `resultPublishedAt` ('required' for
+  // VALIDATION_ERROR names, from the body, `publicNoteConfirmed`, `reason`, `note` or `resultPublishedAt` ('required' for
   // early_result, 'only for early_result' otherwise, or not an instant); then, in this order,
   // `status` 'not open' (a paused market included), `closeAt` 'closed' (its close has come, by the
   // clock too) and `resultPublishedAt` 'after the pause'.
