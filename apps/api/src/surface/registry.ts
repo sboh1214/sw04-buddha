@@ -331,6 +331,10 @@ export const OWNER_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
   'GET /me/ledger': {
     reason: '본인 Coin 원장(N04 §3 지갑)',
   },
+  'GET /me/reconciliation-corrections': {
+    reason:
+      '본인의 승인 완료 Coin 보정 이력(#93): 종류·보정액·실제 잔고 변화·변경 뒤 잔고·사용자용 사유·시각만. 내부 요청/승인 사유·실패 근거·관리자 신원과 타인의 이력은 싣지 않는다. 실제 잔고 복원은 원장 이동 행을 만들지 않는다.',
+  },
   'GET /me/payments': {
     reason: '본인의 지난 결제(보존한 결제 코드, D9)',
   },

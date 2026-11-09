@@ -46,6 +46,22 @@ import { discoverRoutes, isAdminPath } from '../test/routes.js';
  * call site.
  */
 const AUDITED: Readonly<Record<string, AdminActionType>> = {
+  'POST /admin/reconciliation/results/:resultId/correction-requests':
+    'reconciliation_correction_request',
+  'POST /admin/reconciliation/results/:resultId/correction-requests/:requestId/approve':
+    'reconciliation_correction_approve',
+  'POST /admin/reconciliation/results/:resultId/correction-requests/:requestId/reject':
+    'reconciliation_correction_reject',
+  'POST /admin/reconciliation/results/:resultId/correction-requests/:requestId/retract':
+    'reconciliation_correction_retract',
+  'POST /admin/reconciliation/run': 'reconciliation_run',
+  'POST /admin/reconciliation/holds/:holdId/recovery-requests': 'reconciliation_recovery_request',
+  'POST /admin/reconciliation/holds/:holdId/recovery-requests/:requestId/approve':
+    'reconciliation_recovery_approve',
+  'POST /admin/reconciliation/holds/:holdId/recovery-requests/:requestId/reject':
+    'reconciliation_recovery_reject',
+  'POST /admin/reconciliation/holds/:holdId/recovery-requests/:requestId/retract':
+    'reconciliation_recovery_retract',
   'POST /admin/charge-packages': 'charge_package_create',
   'PATCH /admin/charge-packages/:id': 'charge_package_update',
   'DELETE /admin/charge-packages/:id': 'charge_package_delete',

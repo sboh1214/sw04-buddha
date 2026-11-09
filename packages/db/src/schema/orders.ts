@@ -64,7 +64,7 @@ export const orders = pgTable(
     protectedLimitPrice: smallint().notNull(),
     /** IOC: the best opposite entry at intake (1..99); null with none, for GTC, or not reached. */
     referencePrice: smallint(),
-    /** IOC: the market's 가격 보호 폭 the intake used (1..98); null for GTC or a market reject. */
+    /** IOC: the 가격 보호 폭 used (1..98); null for GTC or a reject before quote lookup. */
     protectionTicks: smallint(),
     /** A quantity order's contracts, 1..1,000,000; null exactly for a budget order. */
     qty: integer(),
@@ -141,8 +141,9 @@ export const orders = pgTable(
     ),
     /**
      * 가격 보호 (#177 2항): a GTC order keeps its own limit and records no reference or width; an
-     * IOC order records the width it used — none only when the market's status rejected it before
-     * — and its protected limit is its own (no reference) or the narrowed one.
+     * IOC order records the width it used — none when the market gate or account reconciliation
+     * hold rejected it before quote lookup — and its protected limit is its own (no reference)
+     * or the narrowed one.
      */
     check(
       'orders_protection_check',
@@ -152,7 +153,7 @@ export const orders = pgTable(
         ELSE CASE WHEN ${t.protectionTicks} IS NULL
           THEN ${t.referencePrice} IS NULL AND ${t.protectedLimitPrice} = ${t.limitPrice}
             AND ${t.rejectReason} IS NOT NULL
-            AND ${t.rejectReason} IN ('not_open_yet', 'paused', 'closed')
+            AND ${t.rejectReason}::text IN ('not_open_yet', 'paused', 'closed', 'ledger_hold')
           ELSE (${t.referencePrice} IS NULL AND ${t.protectedLimitPrice} = ${t.limitPrice})
             OR (${t.side} = 'buy' AND ${t.protectedLimitPrice}
                 = LEAST(${t.limitPrice}, ${t.referencePrice} + ${t.protectionTicks}, 99))

@@ -1,6 +1,16 @@
 'use client';
 
-import { Alert, Badge, Button, Card, HStack, Stack, Text } from '@chakra-ui/react';
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  HStack,
+  Link as ChakraLink,
+  Stack,
+  Text,
+} from '@chakra-ui/react';
+import NextLink from 'next/link';
 import { type ReactNode, type RefObject, useEffect, useRef } from 'react';
 import { copy } from '@/copy';
 import { useHeldForOperator, useOperatorId } from '@/hooks/use-operator';
@@ -147,6 +157,26 @@ export function PausePanelBody({
       </Card.Header>
       <Card.Body>
         <Stack gap="5">
+          {(market.status === 'paused' ||
+            market.pause.history.some(
+              (pause) => pause.reason === 'ledger_failure' && pause.endKind === 'closed_at_close',
+            )) && (
+            <Stack gap="2" data-testid="market-pause-reconciliation">
+              <Text fontSize="sm" color="fg.muted">
+                {market.status === 'paused'
+                  ? copy.reconciliationPauseGuide
+                  : copy.reconciliationIntro}
+              </Text>
+              <ChakraLink asChild alignSelf="flex-start" fontSize="sm">
+                <NextLink
+                  href="/admin/audit-failures"
+                  data-testid="market-pause-reconciliation-link"
+                >
+                  {copy.reconciliationTitle}
+                </NextLink>
+              </ChakraLink>
+            </Stack>
+          )}
           {market.status === 'open' && (
             <PauseStart market={market} readAt={readAt} operatorId={operatorId} onOpen={onOpen} />
           )}

@@ -24,6 +24,7 @@ import { useSession } from '@/lib/use-session';
 import { IdempotencyKeys } from '@/lib/idempotency';
 import { type PaymentsPoll, endedFetches, paymentsPoll } from '@/lib/payments';
 import { ME_QUERY_KEY } from './use-me';
+import { MEMBER_CORRECTIONS_KEY } from './use-reconciliation-corrections';
 
 /** PLAN 11.5 key rules. Ledger and payments hang off their own roots. */
 export const LEDGER_QUERY_KEY = ['ledger'] as const;
@@ -35,7 +36,11 @@ export const PAYMENTS_QUERY_KEY = ['payments'] as const;
  * `user:balance` handler restarts (and a resnapshot with them): 원장 gains the change's row, and
  * 결제 내역 follows the payment behind it — an admin refund's claw-back (완료 → 환불 처리 중).
  */
-export const BALANCE_HISTORY_KEYS = [LEDGER_QUERY_KEY, PAYMENTS_QUERY_KEY] as const;
+export const BALANCE_HISTORY_KEYS = [
+  LEDGER_QUERY_KEY,
+  PAYMENTS_QUERY_KEY,
+  MEMBER_CORRECTIONS_KEY,
+] as const;
 
 interface Page<T> {
   items: T[];

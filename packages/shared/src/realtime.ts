@@ -19,9 +19,10 @@ import { publicFill, type PublicFillFacts } from './market.js';
  * Ordering. Events may reach a client out of commit order (two API instances, a Redis
  * offline queue flushed late), and the millisecond `ts` two serialised writes carry can tie,
  * so every event whose entity can change again carries a strictly ordered key the client
- * compares with `supersedes`: `user:balance.ledgerEntryId` (the ledger row of the change —
+ * compares with `supersedes`: `user:balance.ledgerEntryId` (the ledger or approved restoration's
+ * shared sequence id —
  * drawn under the account's balance lock, so strictly increasing per account in commit
- * order; `/me/ledger` shows the current one), `user:position.version` (the row's version,
+ * order; `/me/ledger` or `/me/reconciliation-corrections` shows it), `user:position.version` (the row's version,
  * bumped on every write under the market lock), `market:tick.tradeCount` and
  * `market:trade.fillId` (both per market, under the market lock: the intake that fills publishes
  * one `market:tick` — the gateway sends it reliably, not volatile (ADR-0116 10-6) — and one
@@ -259,8 +260,8 @@ export function marketBookEvent(marketId: string, at: Date): MarketBookEvent {
 }
 
 /**
- * Room `user:<id>`: the balance after a ledger entry changed it (a fill, a payout).
- * `ledgerEntryId` is that ledger row — the account's strict order key (see `supersedes`).
+ * Room `user:<id>`: the balance after a ledger entry or approved actual-only restoration.
+ * `ledgerEntryId` is their shared sequence id — the account's strict order key (see `supersedes`).
  */
 export const userBalanceEventSchema = z
   .object({

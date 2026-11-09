@@ -2,11 +2,12 @@
  * The BullMQ handler layer (jobs/index.ts) on the docker `test` database: dispatch by job
  * name, the payload check, and the shape of what a handler hands back — BullMQ stores it as
  * JSON, and a bigint or an Error in it is exactly what this layer exists to keep out. Jobs are
- * stubs carrying the fields a handler reads (a real Job needs a queue and a connection), and
- * publishes go to a recording stub: Redis is not what is under test here. Skips when TEST_* are
- * unset, like ledger-audit.test.ts.
+ * stubs carrying the fields a handler reads, except the daily-audit retry tests which use a real
+ * BullMQ queue and its configured retry options. Publishes go to a recording stub. Skips when
+ * TEST_* are unset, like ledger-audit.test.ts.
  */
-import { schema } from '@buddha/db';
+import { randomUUID } from 'node:crypto';
+import { schema, type Db } from '@buddha/db';
 import {
   connectTestDb,
   createMarket,
@@ -26,6 +27,7 @@ import {
   fundMarketMakerFunds,
   mintTestPairs,
   tradeOnce,
+  withLedgerGuardsOff,
   type TestDb,
 } from '@buddha/db/test';
 import {
@@ -37,18 +39,24 @@ import {
   type MarketRealtimeEvent,
   type UserRealtimeEvent,
 } from '@buddha/shared';
-import { UnrecoverableError, type Job } from 'bullmq';
-import { eq } from 'drizzle-orm';
+import { Queue, QueueEvents, UnrecoverableError, type Job } from 'bullmq';
+import { eq, sql } from 'drizzle-orm';
+import { Redis } from 'ioredis';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { MemoryObjectStorage } from '@buddha/storage';
 import { type EnqueueFinalize } from '../market-jobs.js';
 import { type Publish } from '../realtime.js';
+import { BULLMQ_REDIS_OPTIONS, DEFAULT_JOB_OPTIONS, createWorker } from '../queues.js';
 import { createProcessor } from './index.js';
 
 const MINUTE_MS = 60_000;
 const DAY_MS = 24 * 60 * MINUTE_MS;
 const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+type AuditOutcome = { result: typeof schema.reconciliationResults.$inferSelect };
+// hasTestDb loads the root test environment before checking Redis, as market-jobs.test.ts does.
+const hasRedis = hasTestDb() && Boolean(process.env.TEST_REDIS_URL);
 
 interface JobStub {
   name: string;
@@ -669,11 +677,149 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
     expect(await t.db.select().from(schema.retentionPurges)).toEqual([]);
   });
 
-  it('ledger.audit runs on the audit connection and reports the mismatch count', async () => {
+  it('ledger.audit uses the audit connection and reports account and supply results', async () => {
     await createUser(t.db, { balanceCoin: 10_000n });
-    await expect(run({ name: JOB_NAMES.ledgerAudit })).resolves.toEqual({
-      checked: 1,
-      mismatches: 0,
+    const unusableMainDb = new Proxy(t.db, {
+      get() {
+        throw new Error('daily audit must use the separate audit pool');
+      },
     });
+    const processor = createProcessor({ ...deps, db: unusableMainDb });
+    await expect(processor(job({ name: JOB_NAMES.ledgerAudit }))).resolves.toEqual({
+      checked: 2,
+      passed: 2,
+      mismatched: 0,
+      held: 0,
+      paused: 0,
+      scopes: { account: 1, market: 0, supply: 1 },
+      failed: 0,
+      failures: [],
+    });
+  });
+
+  it.skipIf(!hasRedis).each(['account', 'supply'] as const)(
+    'ledger.audit finishes the other targets after a transient %s failure, then BullMQ retries it',
+    async (failedScope) => {
+      const first = await createUser(t.db, { balanceCoin: 100n });
+      const second = await createUser(t.db, { balanceCoin: 100n });
+      const firstUserId = [first.user.id, second.user.id].sort()[0]!;
+      const failedKey = failedScope === 'account' ? `user:${firstUserId}` : 'supply';
+      let failedOnce = false;
+      const failing = new Proxy(t.db, {
+        get(target, property, receiver) {
+          if (property === 'transaction') {
+            return (run: (tx: Tx) => Promise<AuditOutcome>) =>
+              target.transaction(async (tx) => {
+                const done = await run(tx);
+                if (!failedOnce && done.result.targetKey === failedKey) {
+                  failedOnce = true;
+                  // An actual transient PostgreSQL timeout rolls back even the result row.
+                  // SET LOCAL disappears with this failed transaction; all other checks proceed.
+                  await tx.execute(sql`SET LOCAL statement_timeout = '1ms'`);
+                  await tx.execute(sql`SELECT pg_sleep(0.1)`);
+                }
+                return done;
+              });
+          }
+          return Reflect.get(target, property, receiver) as unknown;
+        },
+      });
+      const processor = createProcessor({ ...deps, auditDb: failing });
+      const prefix = `daily-audit-retry-${randomUUID()}`;
+      const connection = new Redis(process.env.TEST_REDIS_URL!, BULLMQ_REDIS_OPTIONS);
+      const queue = new Queue('audit', {
+        connection,
+        prefix,
+        defaultJobOptions: DEFAULT_JOB_OPTIONS,
+      });
+      const events = new QueueEvents('audit', { connection, prefix });
+      let attempts = 0;
+      let beforeRetry: AuditOutcome['result'][] = [];
+      const worker = createWorker(
+        'audit',
+        async (job) => {
+          attempts++;
+          if (attempts === 2) beforeRetry = await t.db.select().from(schema.reconciliationResults);
+          const result: unknown = await processor(job);
+          return result;
+        },
+        connection,
+        { prefix, concurrency: 1 },
+      );
+      try {
+        await events.waitUntilReady();
+        const queued = await queue.add(JOB_NAMES.ledgerAudit, {});
+        const result: unknown = await queued.waitUntilFinished(events, 10_000);
+        expect(result).toMatchObject({ checked: 3, passed: 3, failed: 0, mismatched: 0 });
+        expect(attempts).toBe(2);
+        expect(beforeRetry).toHaveLength(2);
+        expect(beforeRetry.every((row) => row.targetKey !== failedKey)).toBe(true);
+        expect(beforeRetry.map((row) => row.scope).sort()).toEqual(
+          failedScope === 'account' ? ['account', 'supply'] : ['account', 'account'],
+        );
+        const stored = await queue.getJob(queued.id!);
+        expect(stored?.attemptsMade).toBe(2);
+        expect(stored?.opts).toMatchObject(DEFAULT_JOB_OPTIONS);
+        expect(await stored?.getState()).toBe('completed');
+        const records = await t.db.select().from(schema.reconciliationResults);
+        expect(records).toHaveLength(5);
+        expect(records.filter((row) => row.targetKey === failedKey)).toHaveLength(1);
+        expect(await t.db.select().from(schema.reconciliationHolds)).toEqual([]);
+        expect(logs.filter((line) => line.msg === 'ledger audit')).toEqual([
+          expect.objectContaining({ level: 50, checked: 2, failed: 1, mismatched: 0 }),
+          expect.objectContaining({ level: 30, checked: 3, failed: 0, mismatched: 0 }),
+        ]);
+        expect(published).toEqual([]);
+      } finally {
+        await worker.close();
+        await events.close();
+        await queue.obliterate({ force: true });
+        await queue.close();
+        await connection.quit();
+      }
+    },
+  );
+
+  it('ledger.audit completes a recorded mismatch without requesting a retry', async () => {
+    const { user } = await createUser(t.db, { balanceCoin: 100n });
+    await withLedgerGuardsOff((client) =>
+      client.query('UPDATE balances SET available_coin=available_coin+1 WHERE user_id=$1', [
+        user.id,
+      ]),
+    );
+    await expect(run({ name: JOB_NAMES.ledgerAudit })).resolves.toMatchObject({
+      checked: 2,
+      passed: 0,
+      mismatched: 2,
+      held: 1,
+      failed: 0,
+    });
+    expect(await t.db.select().from(schema.reconciliationResults)).toHaveLength(2);
+    expect(await t.db.select().from(schema.reconciliationHolds)).toHaveLength(1);
+  });
+
+  it('market.audit uses the regular pool for the scan and accepts an explicit target', async () => {
+    const market = await createMarket(t.db, { status: 'open' });
+    const unusableAuditDb = new Proxy(t.db, {
+      get() {
+        throw new Error('minute audit must not wait behind the daily audit pool');
+      },
+    });
+    const processor = createProcessor({ ...deps, auditDb: unusableAuditDb });
+    const scanned: unknown = await processor(job({ name: JOB_NAMES.marketAudit }));
+    expect(scanned).toMatchObject({ checked: 1, passed: 1, failed: 0 });
+    const explicit: unknown = await processor(
+      job({ name: JOB_NAMES.marketAudit, data: { marketId: market.id } }),
+    );
+    expect(explicit).toMatchObject({ marketId: market.id, passed: true, held: false });
+    expect(() => JSON.stringify(explicit)).not.toThrow();
+    expect(published).toEqual([]);
+  });
+
+  it('market.audit refuses malformed targets before checking any market', async () => {
+    await expect(run({ name: JOB_NAMES.marketAudit, data: { marketId: 'nope' } })).rejects.toThrow(
+      UnrecoverableError,
+    );
+    expect(await t.db.select().from(schema.reconciliationResults)).toEqual([]);
   });
 });

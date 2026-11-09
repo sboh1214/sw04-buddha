@@ -3,7 +3,6 @@ import {
   LIVE_ORDER_STATUSES,
   settlePosition,
   settlementPayoutPerContract,
-  type MarketResult,
 } from '@buddha/shared';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
@@ -60,13 +59,11 @@ function failed(marketId: string, reason: string): never {
 const positionKey = (row: Pick<PositionRow, 'userId' | 'outcome'>): string =>
   JSON.stringify([row.userId, row.outcome]);
 
-/** Re-read every authority under the market lock, including pre-version markets (NULL). */
-async function settlementMarket(tx: Tx, marketId: string) {
-  await lockMarket(tx, marketId);
-  const [market] = await tx.select().from(markets).where(eq(markets.id, marketId)).for('update');
-  if (!market) failed(marketId, 'market not found');
-  if (market.status !== 'settling') failed(marketId, 'market is not settling');
-  if (market.resolvedResult === null) failed(marketId, 'result is missing');
+/** The same immutable judgement authority gates payout, final reconciliation and audit recovery.
+ * A NULL judgement version is the explicit legacy path; it still needs a final result.
+ */
+async function settlementJudgement(tx: Tx, market: MarketRow) {
+  if (market.resolvedResult === null) failed(market.id, 'result is missing');
   let ruleVersion = market.ruleVersion;
   if (market.judgementVersion !== null) {
     const [judgement] = await tx
@@ -74,18 +71,28 @@ async function settlementMarket(tx: Tx, marketId: string) {
       .from(marketJudgements)
       .where(
         and(
-          eq(marketJudgements.marketId, marketId),
+          eq(marketJudgements.marketId, market.id),
           eq(marketJudgements.version, market.judgementVersion),
         ),
       );
     if (!judgement || judgement.result !== market.resolvedResult) {
-      failed(marketId, 'approved judgement does not match the final result');
+      failed(market.id, 'approved judgement does not match the final result');
     }
     ruleVersion = judgement.ruleVersion;
     if (ruleVersion !== market.ruleVersion) {
-      failed(marketId, 'approved judgement does not match the final rules');
+      failed(market.id, 'approved judgement does not match the final rules');
     }
   }
+  return { ruleVersion, result: market.resolvedResult };
+}
+
+/** Re-read every authority under the market lock, including pre-version markets (NULL). */
+async function settlementMarket(tx: Tx, marketId: string) {
+  await lockMarket(tx, marketId);
+  const [market] = await tx.select().from(markets).where(eq(markets.id, marketId)).for('update');
+  if (!market) failed(marketId, 'market not found');
+  if (market.status !== 'settling') failed(marketId, 'market is not settling');
+  const judgement = await settlementJudgement(tx, market);
   if (await confirmationHold(tx, market)) failed(marketId, 'judgement review is still held');
   if ((await ledgerHeldMarketIds(tx, [marketId])).has(marketId)) {
     failed(marketId, 'ledger recovery approval is pending');
@@ -96,7 +103,7 @@ async function settlementMarket(tx: Tx, marketId: string) {
     .where(and(eq(orders.marketId, marketId), inArray(orders.status, [...LIVE_ORDER_STATUSES])))
     .limit(1);
   if (live) failed(marketId, 'live orders remain');
-  return { market, ruleVersion, result: market.resolvedResult };
+  return { market, ...judgement };
 }
 
 async function rowsOf(tx: Tx, marketId: string) {
@@ -119,16 +126,16 @@ async function rowsOf(tx: Tx, marketId: string) {
  * cannot make an empty set of records pass. No aggregate of account-wide order locks is used:
  * a person's other markets may still hold Coin while this market pays them.
  */
-async function checkBooks(
+export async function checkMarketSettlementBooks(
   tx: Tx,
   market: MarketRow,
-  result: MarketResult,
-  ruleVersion: number | null,
   holdings: PositionRow[],
   records: RecordRow[],
   requireRetired: boolean,
+  allowOrderLocks = false,
 ): Promise<void> {
   const marketId = market.id;
+  const { result, ruleVersion } = await settlementJudgement(tx, market);
   const byPosition = new Map(holdings.map((row) => [positionKey(row), row]));
   const recorded = new Map(records.map((row) => [positionKey(row), row]));
   const collateral = await findLedgerAccount(tx, { kind: 'market_collateral', marketId });
@@ -139,7 +146,8 @@ async function checkBooks(
   if (funds) {
     const [fundsBalance] = await tx.select().from(balances).where(eq(balances.accountId, funds.id));
     if (!fundsBalance) failed(marketId, 'market maker funds balance is missing');
-    if (fundsBalance.lockedCoin !== 0n) failed(marketId, 'market maker Coin locks remain');
+    if (!allowOrderLocks && fundsBalance.lockedCoin !== 0n)
+      failed(marketId, 'market maker Coin locks remain');
   }
   const entries = await tx
     .select()
@@ -175,7 +183,9 @@ async function checkBooks(
     else no += BigInt(qty);
   };
   for (const row of holdings) {
-    if (row.lockedQty !== 0) failed(marketId, 'contract locks remain');
+    if (row.qty === 0 && row.costBasisCoin !== 0n)
+      failed(marketId, 'an empty holding still has cost basis');
+    if (!allowOrderLocks && row.lockedQty !== 0) failed(marketId, 'contract locks remain');
     if (row.settled) {
       if (row.qty !== 0 || row.costBasisCoin !== 0n)
         failed(marketId, 'retired holding is not empty');
@@ -278,7 +288,7 @@ export async function reconcileMarketSettlement(
   tx: Tx,
   marketId: string,
 ): Promise<MarketSettlementSummary> {
-  const { market, result, ruleVersion } = await settlementMarket(tx, marketId);
+  const { market } = await settlementMarket(tx, marketId);
   const { holdings, records } = await rowsOf(tx, marketId);
   // A done-step retry did not run the payout's account-locking phase. Hold both existing market
   // accounts through SETTLED, including funds with no remaining contracts or no winning payout.
@@ -288,7 +298,7 @@ export async function reconcileMarketSettlement(
     if (await findLedgerAccount(tx, ref)) marketAccounts.push(ref);
   }
   await lockLedgerAccounts(tx, marketAccounts);
-  await checkBooks(tx, market, result, ruleVersion, holdings, records, true);
+  await checkMarketSettlementBooks(tx, market, holdings, records, true);
   return summary(holdings, records, await clockTimestamp(tx));
 }
 
@@ -331,7 +341,7 @@ export async function settleMarketPositions(
     ...(fundsExist ? [funds] : []),
     ...new Map(paying.map((row) => [row.userId, recipients.get(row.userId)!])).values(),
   ]);
-  await checkBooks(tx, market, result, ruleVersion, holdings, records, false);
+  await checkMarketSettlementBooks(tx, market, holdings, records, false);
   const at = await clockTimestamp(tx);
   const settlements: MarketSettlementResult['settlements'] = [];
   for (const row of pending) {

@@ -6,12 +6,17 @@ import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { useLedger } from '@/hooks/use-wallet';
-import { type LedgerEntry } from '@/lib/api';
+import { useMemberCorrections } from '@/hooks/use-reconciliation-corrections';
+import { type LedgerEntry, type MemberReconciliationCorrection } from '@/lib/api';
 import { readFailed } from '@/lib/query-client';
 import { LEDGER_TYPE_LABEL } from '@/lib/wallet';
 
 export function LedgerList() {
   const list = useLedger();
+  const corrections = useMemberCorrections();
+  const byEvent = new Map(
+    corrections.data?.pages.flatMap((page) => page.items).map((row) => [row.eventId, row]),
+  );
   const { data, isPending, fetchNextPage, hasNextPage, isFetchingNextPage, refetch } = list;
   const entries = data?.pages.flatMap((page) => page.items) ?? [];
 
@@ -41,7 +46,7 @@ export function LedgerList() {
           <Stack gap="3">
             <Stack gap="3" divideY="1px">
               {entries.map((entry) => (
-                <LedgerRow key={entry.id} entry={entry} />
+                <LedgerRow key={entry.id} entry={entry} correction={byEvent.get(entry.id)} />
               ))}
             </Stack>
             {hasNextPage && (
@@ -74,16 +79,34 @@ export function LedgerList() {
   );
 }
 
-export function LedgerRow({ entry }: { entry: LedgerEntry }) {
+export function LedgerRow({
+  entry,
+  correction,
+}: {
+  entry: LedgerEntry;
+  correction?: MemberReconciliationCorrection;
+}) {
   const amount = parseCoinAmount(entry.amountCoin);
   const credit = amount >= 0n;
   const formatDateTime = useFormatDateTime();
+  const replenished =
+    entry.type === 'RECONCILIATION_CORRECTION' &&
+    correction?.eventId === entry.id &&
+    correction.mode === 'replenish_ledger' &&
+    correction.balanceDeltaCoin === '0';
   return (
     <HStack justify="space-between" pt="3" _first={{ pt: 0 }} align="start">
       <Stack gap="0.5">
         <Text fontWeight="medium" data-testid="ledger-type">
-          {LEDGER_TYPE_LABEL[entry.type]}
+          {replenished ? copy.reconciliationCorrectionReplenish : LEDGER_TYPE_LABEL[entry.type]}
         </Text>
+        {entry.type === 'RECONCILIATION_CORRECTION' && (
+          <Text fontSize="xs" color="fg.muted" data-testid="ledger-correction-effect">
+            {replenished
+              ? copy.reconciliationCorrectionReplenishHint
+              : copy.reconciliationCorrectionLedgerAmountHint}
+          </Text>
+        )}
         <Text fontSize="xs" color="fg.muted">
           {formatDateTime(entry.createdAt)}
         </Text>

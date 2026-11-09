@@ -67,7 +67,8 @@ export type CloseMarketAtCloseResult =
  *    변경'), never `scheduled_judgement_at`; the clock only moves forward and `close_at` cannot
  *    change under the lock, so a market due now is due at the instant read in 4;
  * 3. every live order's owner's Coin account at once (`lockMarketOrders`: people and the 운영
- *    마켓메이커's 마켓메이커 자금, ADR-0110 결정 4), whether the market is held read there;
+ *    마켓메이커's 마켓메이커 자금, ADR-0110 결정 4), unless the market is held: then only its
+ *    orders and hold are read, because the close changes no asset and must survive broken books;
  * 4. the close's instant, the DB clock after the last lock;
  * 5. '사용자 체결 0건' judged from the fills under the lock (`marketHasHumanFill`, #20: any fill a
  *    person's account is on, abnormal or not — never `trader_count`); a fill that committed before
@@ -108,7 +109,7 @@ export async function closeMarketAtClose(
   // have committed while this transaction queued, and the close is judged after it.
   if (current.closeAt > (await clockTimestamp(tx))) return { closed: false, reason: 'not_due' };
 
-  const orders = await lockMarketOrders(tx, marketId);
+  const orders = await lockMarketOrders(tx, marketId, { preserveHold: true });
   const at = await clockTimestamp(tx);
   // '사용자 체결 0건' under the market lock (#20): no fill a person's account is on → cancelled.
   const traded = await marketHasHumanFill(tx, marketId);

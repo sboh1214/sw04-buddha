@@ -190,6 +190,33 @@ const isOff = (html: string, testId: string) => {
  * drives the dialogs.
  */
 describe('PausePanelBody', () => {
+  it('links every paused market and a ledger-held close to reconciliation without claiming the hold is already cleared', () => {
+    for (const reason of ['ledger_failure', 'basis_change', 'early_result'] as const) {
+      const market: AdminMarket = {
+        ...paused,
+        pause: { ...paused.pause, history: [{ ...lasting, reason }] },
+      };
+      const html = draw(market, THIRD);
+      expect(byTestId(html, 'market-pause-reconciliation')?.text).toContain(
+        copy.reconciliationPauseGuide,
+      );
+      expect(byTestId(html, 'market-pause-reconciliation-link')?.attributes.href).toBe(
+        '/admin/audit-failures',
+      );
+    }
+    const closed: AdminMarket = {
+      ...paused,
+      status: 'cancelled',
+      pause: {
+        ...paused.pause,
+        history: [{ ...earlier, endKind: 'closed_at_close', endedBy: null }],
+      },
+    };
+    expect(byTestId(draw(closed, THIRD), 'market-pause-reconciliation')?.text).toContain(
+      copy.reconciliationIntro,
+    );
+    expect(byTestId(draw(open, THIRD), 'market-pause-reconciliation')).toBeUndefined();
+  });
   it('offers 거래 일시 중단 on an open market before its close, once the admin is known', () => {
     const html = draw(open, THIRD);
     expect(byTestId(html, 'market-pause')?.attributes['data-status']).toBe('open');

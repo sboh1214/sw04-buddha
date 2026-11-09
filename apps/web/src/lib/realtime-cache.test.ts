@@ -7,6 +7,9 @@ import { QueryObserver, hydrate } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 import { ME_QUERY_KEY, storeBalanceEvent } from '@/hooks/use-me';
 import { positionsKey } from '@/hooks/use-portfolio';
+import { BALANCE_HISTORY_KEYS } from '@/hooks/use-wallet';
+import { MEMBER_CORRECTIONS_KEY } from '@/hooks/use-reconciliation-corrections';
+import { memberCorrection } from '@/test/reconciliation-corrections';
 import { type Market, type MarketSummary, type Me, type Position, type PriceSeries } from './api';
 import {
   DEFAULT_MARKET_FILTERS,
@@ -24,6 +27,7 @@ import {
   applyPositionEvent,
   applyTick,
   applyToPages,
+  BalanceOrder,
 } from './market-live';
 import { extendToNow, toChartPoints, withLiveEdge } from './chart';
 import { getQueryClient, restartQueries } from './query-client';
@@ -329,6 +333,111 @@ describe('the market list caches', () => {
 describe('the me cache', () => {
   // Every case drives `storeBalanceEvent`, the write realtime-provider.tsx's `user:balance`
   // handler makes once an event passes its order gate — the provider's own steps, not a copy.
+
+  it.each([true, false])(
+    'keeps a restoration and its history when older REST completes (cached=%s)',
+    async (seeded) => {
+      const client = getQueryClient();
+      const before: Me = { ...me, balance: { availableCoin: '90', lockedCoin: '0' } };
+      const after: Me = { ...me, balance: { availableCoin: '100', lockedCoin: '0' } };
+      const empty = {
+        pages: [{ items: [] as (typeof memberCorrection)[], nextCursor: null }],
+        pageParams: [undefined],
+      };
+      const completed = { ...empty, pages: [{ items: [memberCorrection], nextCursor: null }] };
+      if (seeded) {
+        client.setQueryData(ME_QUERY_KEY, before);
+        client.setQueryData(MEMBER_CORRECTIONS_KEY, empty);
+      }
+      let oldMe!: (value: Me) => void;
+      let oldHistory!: (value: typeof empty) => void;
+      let meReads = 0;
+      let historyReads = 0;
+      const meObserver = new QueryObserver(client, {
+        queryKey: ME_QUERY_KEY,
+        retry: false,
+        staleTime: 0,
+        queryFn: () =>
+          ++meReads === 1
+            ? new Promise<Me>((resolve) => {
+                oldMe = resolve;
+              })
+            : Promise.resolve(after),
+      });
+      const historyObserver = new QueryObserver(client, {
+        queryKey: MEMBER_CORRECTIONS_KEY,
+        retry: false,
+        staleTime: 0,
+        queryFn: () =>
+          ++historyReads === 1
+            ? new Promise<typeof empty>((resolve) => {
+                oldHistory = resolve;
+              })
+            : Promise.resolve(completed),
+      });
+      const offMe = meObserver.subscribe(() => undefined);
+      const offHistory = historyObserver.subscribe(() => undefined);
+      try {
+        const order = new BalanceOrder();
+        const restoration: UserBalanceEvent = {
+          ...balance,
+          availableCoin: '100',
+          lockedCoin: '0',
+          ledgerEntryId: memberCorrection.eventId,
+        };
+        expect(order.accept(restoration)).toBe(true);
+        // The event id is reserved from the ledger sequence without a synthetic ledger row.
+        storeBalanceEvent(client, restoration);
+        await Promise.all(BALANCE_HISTORY_KEYS.map((key) => restartQueries(client, key)));
+        oldMe(before);
+        oldHistory(empty);
+        await vi.waitFor(() => {
+          expect(meObserver.getCurrentResult().data?.balance).toEqual(after.balance);
+          expect(historyObserver.getCurrentResult().data).toEqual(completed);
+        });
+        expect(order.accept({ ...restoration, availableCoin: '90', ledgerEntryId: '7' })).toBe(
+          false,
+        );
+        expect(order.accept(restoration)).toBe(false);
+        expect(historyReads).toBe(2);
+        expect(meReads).toBe(seeded ? 1 : 2);
+        // These account-specific facts are never part of a public SSR hydration payload.
+        expect(dehydratePublic(client).queries).toHaveLength(0);
+      } finally {
+        offMe();
+        offHistory();
+        client.clear();
+      }
+    },
+  );
+
+  it('reads completed restoration facts in a fresh session without depending on the old socket cursor', async () => {
+    const client = getQueryClient();
+    try {
+      await client.fetchQuery({
+        queryKey: ME_QUERY_KEY,
+        queryFn: () => ({ ...me, balance: { availableCoin: '100', lockedCoin: '0' } }),
+      });
+      await client.fetchQuery({
+        queryKey: MEMBER_CORRECTIONS_KEY,
+        queryFn: () => ({
+          pages: [{ items: [memberCorrection], nextCursor: null }],
+          pageParams: [undefined],
+        }),
+      });
+      expect(client.getQueryData<Me>(ME_QUERY_KEY)?.balance.availableCoin).toBe('100');
+      expect(client.getQueryData(MEMBER_CORRECTIONS_KEY)).toMatchObject({
+        pages: [
+          {
+            items: [{ eventId: memberCorrection.eventId, userReason: memberCorrection.userReason }],
+          },
+        ],
+      });
+      expect(dehydratePublic(client).queries).toHaveLength(0);
+    } finally {
+      client.clear();
+    }
+  });
 
   it('is not created by a balance event for a visitor who is not signed in', () => {
     // `user:balance` is only delivered to a signed-in socket, but a sign-out that races the

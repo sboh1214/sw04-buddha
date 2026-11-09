@@ -33,6 +33,7 @@ import {
 import { relatedSearchQuery } from '@/lib/related-markets';
 import { THEME_MARKETS_KEY, THEME_RESULTS_KEY } from '@/lib/themes';
 import { ADMIN_THEME_MARKETS_KEY } from './use-admin-themes';
+import { ADMIN_RECONCILIATION_KEY } from './use-reconciliation';
 
 /**
  * Query keys the admin market screens share (PLAN 11.5 rules, admin-prefixed like
@@ -507,6 +508,8 @@ function invalidateMarket(queryClient: QueryClient, id: string) {
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_REVIEWS_KEY }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_SUPPLEMENTS_KEY }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_PAUSE_DECISIONS_KEY }),
+    // A pause decision can recover a ledger hold and append a fresh audit in the same commit.
+    queryClient.invalidateQueries({ queryKey: ADMIN_RECONCILIATION_KEY }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_CANCEL_REQUESTS_KEY }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_JUDGEMENTS_KEY }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_DISPUTES_KEY }),

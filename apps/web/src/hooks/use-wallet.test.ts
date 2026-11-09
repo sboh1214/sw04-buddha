@@ -5,6 +5,7 @@ import { ApiError, type Payment, isForAnotherAccount } from '@/lib/api';
 import { restartQueries } from '@/lib/query-client';
 import { PAYMENT_POLL_INTERVAL_MS, PAYMENT_POLL_LIMIT, paymentsPoll } from '@/lib/payments';
 import { ME_QUERY_KEY } from './use-me';
+import { MEMBER_CORRECTIONS_KEY } from './use-reconciliation-corrections';
 import {
   BALANCE_HISTORY_KEYS,
   CHARGE_PACKAGES_QUERY_KEY,
@@ -132,17 +133,23 @@ describe('isCouponRejection', () => {
 });
 
 describe('BALANCE_HISTORY_KEYS', () => {
-  it('reaches 원장 and 결제 내역, and nothing else of the wallet', async () => {
+  it('refreshes ledger, payments and correction history together with a balance event', async () => {
     // What the `user:balance` handler restarts: an admin refund moves a payment as well as the
     // balance, and 결제 내역 must not go on saying 완료 beside the ledger.
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const page = { pages: [{ items: [], nextCursor: null }], pageParams: [undefined] };
-    const held = [LEDGER_QUERY_KEY, PAYMENTS_QUERY_KEY, ME_QUERY_KEY, CHARGE_PACKAGES_QUERY_KEY];
+    const held = [
+      LEDGER_QUERY_KEY,
+      PAYMENTS_QUERY_KEY,
+      MEMBER_CORRECTIONS_KEY,
+      ME_QUERY_KEY,
+      CHARGE_PACKAGES_QUERY_KEY,
+    ];
     for (const key of held) queryClient.setQueryData(key, page);
     try {
       for (const key of BALANCE_HISTORY_KEYS) await restartQueries(queryClient, key);
       const invalidated = held.map((key) => queryClient.getQueryState(key)?.isInvalidated ?? false);
-      expect(invalidated).toEqual([true, true, false, false]);
+      expect(invalidated).toEqual([true, true, true, false, false]);
     } finally {
       queryClient.clear();
     }

@@ -4,6 +4,7 @@ import {
   MARKET_PAUSE_PATH_END_KINDS,
   MARKET_PAUSE_REASONS,
   MARKET_PAUSE_REVIEW_RESULTS,
+  RECONCILIATION_SYSTEM_PAUSE_NOTE,
   type MarketPauseEndKind,
   type MarketPauseReason,
   type MarketPauseReviewResult,
@@ -76,9 +77,7 @@ export const marketPauses = pgTable(
     note: text().notNull(),
     resultPublishedAt: timestampTz(),
     pausedAt: timestampTz().notNull(),
-    pausedBy: text()
-      .notNull()
-      .references(() => user.id, { onDelete: 'restrict' }),
+    pausedBy: text().references(() => user.id, { onDelete: 'restrict' }),
     pauseEventId: bigint({ mode: 'number' })
       .notNull()
       .references(() => marketEvents.id, { onDelete: 'restrict' }),
@@ -96,6 +95,10 @@ export const marketPauses = pgTable(
   },
   (t) => [
     check('market_pauses_reason_check', sql`${t.reason} IN (${REASONS_SQL})`),
+    check(
+      'market_pauses_system_actor_check',
+      sql`${t.pausedBy} IS NOT NULL OR (${t.reason}='ledger_failure' AND ${t.note}=${sql.raw("'" + RECONCILIATION_SYSTEM_PAUSE_NOTE.replaceAll("'", "''") + "'")})`,
+    ),
     check(
       'market_pauses_note_check',
       sql`btrim(${t.note}) <> '' AND char_length(${t.note}) <= ${sql.raw(String(APPROVAL_REASON_MAX_LENGTH))}`,

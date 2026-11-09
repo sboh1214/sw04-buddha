@@ -561,8 +561,9 @@ export function applyBalanceEvent(held: Me | undefined, event: UserBalanceEvent)
  * There is deliberately NO `reset()`, and the absence is the guard. It used to have one, called
  * from `resnapshot()` on every reconnect and every `realtime:resync`, on the reading that "the
  * events it has seen belong to the connection that delivered them". That reading was wrong:
- * `ledger_entries.id` is a bigserial drawn while the ACCOUNT's balance row is held FOR UPDATE
- * (wallet.service.ts and the admin and settle paths all lock before they insert), so it is that account's commit order and has nothing to do with which socket carried
+ * The ledger id sequence is drawn while the ACCOUNT's balance row is held FOR UPDATE;
+ * #93 restoration reserves a correction event id from the same sequence without a ledger row.
+ * Wallet, admin and settlement writers lock before allocation, so this is that account's commit order and has nothing to do with which socket carried
  * it. Clearing it discarded a bound that was still true and re-opened the one window this class
  * cannot order — its FIRST event, which `supersedes(x, null)` takes whatever it says — on every
  * reconnect. A new tab or a new identity still starts clean, because the provider builds a fresh

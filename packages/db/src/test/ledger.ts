@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { pairPrices, type Outcome } from '@buddha/shared';
 import { asc, eq, isNull, or, sql } from 'drizzle-orm';
 import { Client } from 'pg';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import type { Db } from '../client.js';
 import { applyPairMintFill, lockForOrder, lockOrderHolders } from '../contracts.js';
 import {
@@ -21,7 +22,9 @@ import {
   lockLedgerAccounts,
   recordLedgerEntry,
   type LedgerAccountRef,
+  type LedgerEntryInput,
 } from '../ledger.js';
+import * as schema from '../schema/index.js';
 import { balances, ledgerEntries, markets } from '../schema/index.js';
 import { clockTimestamp, lockMarket } from '../tx-helpers.js';
 import { createMarket, createMarketMakerAccount } from './factories.js';
@@ -312,6 +315,8 @@ export async function withLedgerGuardsOff<T>(
   if (options.entries) {
     triggers.push(['ledger_entries', 'ledger_entries_check']);
     triggers.push(['ledger_entries', 'ledger_entries_fill_binding']);
+    triggers.push(['ledger_entries', 'ledger_entries_reconciliation_binding']);
+    triggers.push(['ledger_entries', 'ledger_entries_restore_cursor']);
     triggers.push(['ledger_entries', 'ledger_entries_follow_balances']);
   }
   try {
@@ -336,4 +341,51 @@ export async function withLedgerGuardsOff<T>(
   } finally {
     await client.end();
   }
+}
+
+/** Owner-only incident fixture in the configured TEST database: leave the immutable ledger and
+ * its copy untouched, changing only actual available Coin. Never use on a development database.
+ */
+export async function damageActualCoinForTest(accountId: number, deltaCoin: bigint): Promise<void> {
+  await withLedgerGuardsOff(async (client) => {
+    const changed = await client.query(
+      'UPDATE balances SET available_coin=available_coin+$1 WHERE account_id=$2',
+      [String(deltaCoin), accountId],
+    );
+    if (changed.rowCount !== 1) throw new Error('Incident fixture account not found');
+  });
+}
+
+/** Fund the test treasury using its existing real mint type; no issued supply is hidden. */
+export async function fundTestTreasury(db: Db, amountCoin: bigint): Promise<void> {
+  await db.transaction((tx) =>
+    recordLedgerEntry(tx, {
+      type: 'TREASURY_MINT',
+      amountCoin,
+      from: null,
+      to: { kind: 'treasury' },
+      refType: 'approval_request',
+      refId: randomUUID(),
+      idempotencyKey: randomUUID(),
+    }),
+  );
+}
+
+/** A pre-0065 unbound correction entry, or an owner-created corruption incident. Only TEST
+ * migrate credentials and the owner's explicit disabled-guard transaction may make this fixture.
+ * Production/app callers must use the actual two-admin correction path.
+ */
+export async function recordLegacyCorrectionForTest(
+  input: Omit<LedgerEntryInput, 'type'>,
+): Promise<void> {
+  await withLedgerGuardsOff(
+    async (client) => {
+      const owner = drizzle({ client, schema, casing: 'snake_case' });
+      await recordLedgerEntry(owner as unknown as Parameters<typeof recordLedgerEntry>[0], {
+        ...input,
+        type: 'RECONCILIATION_CORRECTION',
+      });
+    },
+    { entries: true },
+  );
 }

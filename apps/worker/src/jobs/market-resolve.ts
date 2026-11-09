@@ -66,7 +66,7 @@ export interface ResolveScanResult {
  * key, A-M3-19) is published, then `market.finalize` registered at once (`enqueueFinalize`, under
  * `marketFinalizeJobId(marketId, resolvedAt)`): RESOLVED → SETTLING is the finalize's own first
  * transaction (ADR-0095 8-5), so RESOLVED is visible, and its per-minute scan settles a market
- * whose job was lost. A VOID result is confirmed too and settles at 50 Coin per contract (#126).
+ * whose job was lost. A VOID result is confirmed too, and its payout fails in SETTLING until #126.
  */
 export async function resolveMarket(
   db: Db,

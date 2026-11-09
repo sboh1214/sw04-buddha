@@ -7,7 +7,13 @@ import * as z from 'zod';
 import { JOB_NAMES } from '../queues.js';
 import { type EnqueueFinalize } from '../market-jobs.js';
 import { type Publish } from '../realtime.js';
-import { runLedgerAudit } from './ledger-audit.js';
+import {
+  reconcileDueMarkets,
+  reconcileLedger,
+  reconcileTarget,
+  reconciliationBatchSummary,
+  type ReconciliationBatch,
+} from './reconciliation.js';
 import { purgeCommunityRecords } from './community-records-purge.js';
 import { closeDueMarkets, closeMarket } from './market-close.js';
 import { finalizeDueMarkets, finalizeMarket } from './market-finalize.js';
@@ -40,7 +46,7 @@ type JobResult = Record<string, unknown>;
 type Handler = (job: Job, context: JobContext) => Promise<JobResult>;
 
 /**
- * `market.open` / `market.close` / `market.resolve` / `market.finalize` payload (jobs.ts in
+ * `market.open` / `market.close` / `market.resolve` / `market.finalize` / `market.audit` payload (jobs.ts in
  * @buddha/shared). A
  * payload the schema refuses is a producer bug, not a transient failure: retrying it three times
  * with backoff would only delay the failed-set entry, so it is UnrecoverableError. A scheduler job
@@ -117,17 +123,26 @@ const HANDLERS: Partial<Record<string, Handler>> = {
     const { settled, skipped, failed, failures } = await finalizeDueMarkets(db, publish, logger);
     return reportScan({ settled, skipped, failed }, failures, 'market finalize', settled, logger);
   },
-  [JOB_NAMES.ledgerAudit]: async (_job, { auditDb, logger }) => {
-    const result = await runLedgerAudit(auditDb);
-    if (result.recorded > 0) {
-      logger.error(
-        { checked: result.checked, recorded: result.recorded },
-        'ledger audit found balance mismatches',
-      );
-    } else {
-      logger.info({ checked: result.checked }, 'ledger audit clean');
+  [JOB_NAMES.ledgerAudit]: async (_job, { auditDb, publish, logger }) => {
+    const result = await reconcileLedger(auditDb, publish);
+    const summary = reportReconciliation(result, 'ledger audit', logger, true);
+    // Finish every target first, then let BullMQ retry execution failures. Unlike markets,
+    // accounts and supply have no per-minute scan. Recorded mismatches already have durable
+    // evidence/holds and do not fail the job; only transactions that could not finish do.
+    if (result.failed > 0) {
+      throw new Error(`Ledger audit could not complete ${String(result.failed)} check(s)`);
     }
-    return { checked: result.checked, mismatches: result.recorded };
+    return summary;
+  },
+  [JOB_NAMES.marketAudit]: async (job, { db, publish, logger }) => {
+    const { marketId } = parseMarketJob(job);
+    if (marketId) {
+      const result = await reconcileTarget(db, { scope: 'market', marketId }, publish);
+      logger[result.passed ? 'info' : 'error'](result, 'market audit');
+      return { ...result };
+    }
+    const result = await reconcileDueMarkets(db, publish);
+    return reportReconciliation(result, 'market audit', logger, false);
   },
   [JOB_NAMES.startGrantPay]: async (_job, { db, publish, logger }) => {
     const { undecided, paid, skipped, failed, failures } = await payPendingStartGrants(db, publish);
@@ -218,6 +233,26 @@ const HANDLERS: Partial<Record<string, Handler>> = {
     return result;
   },
 };
+
+function reportReconciliation(
+  result: ReconciliationBatch,
+  label: string,
+  logger: Logger,
+  daily: boolean,
+): JobResult {
+  for (const { target, err } of result.failures) {
+    logger.error({ target, err }, `${label} check failed`);
+  }
+  const summary = reconciliationBatchSummary(result);
+  logger[
+    result.mismatched > 0 || result.failed > 0
+      ? 'error'
+      : daily || result.paused > 0
+        ? 'info'
+        : 'debug'
+  ](summary, label);
+  return summary;
+}
 
 /**
  * BullMQ stores a job's return value as JSON, and pino serialises the log object the same

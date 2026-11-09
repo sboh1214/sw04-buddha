@@ -4,8 +4,9 @@ import {
   type HoldingFacts,
   type MarketTradingFacts,
 } from '@buddha/shared';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
+import { ledgerHeldMarketSql } from './ledger-held-markets.js';
 import { readLiveBook } from './orders.js';
 import { markets, positions } from './schema/index.js';
 import { clockTimestamp } from './tx-helpers.js';
@@ -44,12 +45,13 @@ export async function readMarketTradingFacts(
       status: markets.status,
       widthTicks: markets.priceProtectionTicks,
       closeAt: markets.closeAt,
+      ledgerHeld: ledgerHeldMarketSql(sql`${marketId}`),
     })
     .from(markets)
     .where(eq(markets.id, marketId));
   if (!row || row.status === 'draft' || row.status === 'review') return null;
   const now = await clockTimestamp(executor);
-  return { status: row.status, widthTicks: row.widthTicks, closeAt: row.closeAt, now };
+  return { ...row, now };
 }
 
 /**

@@ -1594,6 +1594,244 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/reconciliation/correction-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List correction requests, including requests waiting for treasury funds */
+        get: operations["adminListReconciliationCorrectionRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/reconciliation/holds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List reconciliation holds with their latest evidence and recovery requests; active holds by default */
+        get: operations["adminListReconciliationHolds"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/reconciliation/holds/{holdId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a hold, its latest check, target and recovery history */
+        get: operations["adminGetReconciliationHold"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/reconciliation/holds/{holdId}/recovery-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Request recovery of a clean, active hold; paused markets use their existing resume or early-close approval */
+        post: operations["adminRequestReconciliationRecovery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/reconciliation/holds/{holdId}/recovery-requests/{requestId}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Recheck and recover a hold with another administrator’s approval, atomically ending deferred orders */
+        post: operations["adminApproveReconciliationRecovery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/reconciliation/holds/{holdId}/recovery-requests/{requestId}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject another administrator’s pending recovery request without releasing the hold */
+        post: operations["adminRejectReconciliationRecovery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/reconciliation/holds/{holdId}/recovery-requests/{requestId}/retract": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retract the acting administrator’s pending recovery request */
+        post: operations["adminRetractReconciliationRecovery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/reconciliation/results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List immutable reconciliation results, newest first, optionally for one target */
+        get: operations["adminListReconciliationResults"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/reconciliation/results/{resultId}/correction-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Request one server-calculated correction with separate internal and member reasons */
+        post: operations["adminRequestReconciliationCorrection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/reconciliation/results/{resultId}/correction-requests/{requestId}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revalidate and apply a correction atomically; insufficient treasury keeps it pending */
+        post: operations["adminApproveReconciliationCorrection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/reconciliation/results/{resultId}/correction-requests/{requestId}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject another administrator’s pending correction without changing Coin */
+        post: operations["adminRejectReconciliationCorrection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/reconciliation/results/{resultId}/correction-requests/{requestId}/retract": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retract the acting administrator’s pending correction without changing Coin */
+        post: operations["adminRetractReconciliationCorrection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/reconciliation/results/{resultId}/corrections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read fixed correction candidates and requests for a failed reconciliation result */
+        get: operations["adminGetReconciliationCorrections"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/reconciliation/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Recheck a market, account or total supply; a clean check does not release a hold */
+        post: operations["adminRunReconciliation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/release-settings": {
         parameters: {
             query?: never;
@@ -2824,6 +3062,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/reconciliation-corrections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller’s completed Coin corrections and member-facing reasons, newest first */
+        get: operations["getMyReconciliationCorrections"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/reports": {
         parameters: {
             query?: never;
@@ -3734,7 +3989,7 @@ export type components = {
             note: string;
             /** Format: date-time */
             pausedAt: string;
-            pausedBy: components["schemas"]["AdminAccountActor"];
+            pausedBy: components["schemas"]["AdminAccountActor"] | null;
             reason: components["schemas"]["MarketPauseReason"];
             /** Format: date-time */
             resultPublishedAt: string | null;
@@ -4542,6 +4797,10 @@ export type components = {
             expectedAccountId: string;
             reason: string;
         };
+        DecideReconciliationRecoveryBody: {
+            expectedAccountId: string;
+            reason: string;
+        };
         DeleteCommentBody: {
             expectedAccountId: string;
         };
@@ -4649,7 +4908,7 @@ export type components = {
             memo: string | null;
             refId: string;
             /** @enum {string} */
-            refType: "payment" | "fill" | "market" | "coupon" | "start_grant" | "account_closure" | "approval_request" | "audit_failure";
+            refType: "payment" | "fill" | "market" | "coupon" | "start_grant" | "account_closure" | "approval_request" | "audit_failure" | "reconciliation_correction";
             /** @enum {string} */
             type: "START_GRANT" | "PAIR_MINT_COLLATERAL" | "TRADE_FILL" | "SETTLEMENT_PAYOUT" | "CLOSURE_FORFEIT" | "RECONCILIATION_CORRECTION" | "DEPOSIT" | "BONUS" | "PAYMENT_CANCEL" | "PAYMENT_CANCEL_REVERSAL";
         };
@@ -5055,6 +5314,19 @@ export type components = {
             startGrant: components["schemas"]["StartGrant"] | null;
             verification: components["schemas"]["PhoneVerification"] | null;
         };
+        MemberReconciliationCorrection: {
+            amountCoin: string;
+            balanceAfterCoin: string;
+            balanceDeltaCoin: string;
+            /** Format: date-time */
+            createdAt: string;
+            eventId: string;
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            mode: "restore_actual" | "replenish_ledger" | "fund_collateral" | "return_collateral";
+            userReason: string;
+        };
         ModerationActionBody: {
             expectedAccountId: string;
             /** @description The explanation the member reads, plain text, at most 500 characters after trimming; required with the reason other */
@@ -5302,7 +5574,7 @@ export type components = {
             protectedLimitPriceCoin: number;
             qty: number | null;
             /** @enum {string|null} */
-            rejectReason: "insufficient_coin" | "insufficient_contracts" | "not_open_yet" | "closed" | "paused" | "no_quote" | "price_limit" | "budget_too_small" | "self_trade" | null;
+            rejectReason: "insufficient_coin" | "insufficient_contracts" | "not_open_yet" | "closed" | "paused" | "no_quote" | "price_limit" | "budget_too_small" | "self_trade" | "ledger_hold" | null;
             requestId: string;
             /** @enum {string} */
             side: "buy" | "sell";
@@ -5341,7 +5613,7 @@ export type components = {
             maxSpendCoin: components["schemas"]["CoinAmount"] | null;
             protectedLimitPriceCoin: number;
             /** @enum {string|null} */
-            rejectReason: "insufficient_coin" | "insufficient_contracts" | "not_open_yet" | "closed" | "paused" | "no_quote" | "price_limit" | "budget_too_small" | "self_trade" | null;
+            rejectReason: "insufficient_coin" | "insufficient_contracts" | "not_open_yet" | "closed" | "paused" | "no_quote" | "price_limit" | "budget_too_small" | "self_trade" | "ledger_hold" | null;
             remainingQty: number | null;
             /** @enum {string} */
             status: "open" | "partially_filled" | "filled" | "cancelled" | "expired" | "rejected";
@@ -5738,6 +6010,126 @@ export type components = {
             /** Format: date-time */
             searchedAt: string;
         };
+        ReconciliationCorrectionCandidate: {
+            accountId: string;
+            /** @enum {string} */
+            accountKind: "user" | "treasury" | "market_collateral" | "market_maker_funds";
+            amountCoin: string;
+            balanceAfterCoin: string;
+            balanceBeforeCoin: string;
+            balanceDeltaCoin: string;
+            /** Format: uuid */
+            holdId: string | null;
+            ledgerAfterCoin: string;
+            ledgerBeforeCoin: string;
+            /** Format: uuid */
+            marketId: string | null;
+            /** @enum {string} */
+            mode: "restore_actual" | "replenish_ledger" | "fund_collateral" | "return_collateral";
+            snapshotKey: string;
+            userId: string | null;
+        };
+        ReconciliationCorrectionDetail: {
+            candidates: components["schemas"]["ReconciliationCorrectionCandidate"][];
+            requests: components["schemas"]["ReconciliationCorrectionRequest"][];
+            result: components["schemas"]["ReconciliationResult"];
+        };
+        ReconciliationCorrectionRequest: {
+            candidate: components["schemas"]["ReconciliationCorrectionCandidate"];
+            /** Format: date-time */
+            decidedAt: string | null;
+            decidedBy: components["schemas"]["AdminAccountActor"] | null;
+            decisionReason: string | null;
+            /** Format: uuid */
+            id: string;
+            reason: string;
+            /** Format: date-time */
+            requestedAt: string;
+            requestedBy: components["schemas"]["AdminAccountActor"];
+            resultId: string;
+            /** Format: date-time */
+            retractedAt: string | null;
+            status: components["schemas"]["ApprovalStatus"];
+            userReason: string | null;
+        };
+        ReconciliationHold: {
+            failureResultId: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            legacyPauseId: string | null;
+            /** Format: uuid */
+            marketId: string | null;
+            /** Format: date-time */
+            recoveredAt: string | null;
+            /** @enum {string} */
+            scope: "market" | "account";
+            /** Format: date-time */
+            startedAt: string;
+            targetKey: string;
+            userId: string | null;
+        };
+        ReconciliationHoldDetail: {
+            hold: components["schemas"]["ReconciliationHold"];
+            latestResult: components["schemas"]["ReconciliationResult"] | null;
+            market: {
+                /** Format: uuid */
+                id: string;
+                /** @enum {string} */
+                status: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
+                title: string;
+            } | null;
+            requests: components["schemas"]["ReconciliationRecoveryRequest"][];
+            user: components["schemas"]["AdminAccountActor"] | null;
+        };
+        ReconciliationRecoveryRequest: {
+            /** Format: date-time */
+            decidedAt: string | null;
+            decidedBy: components["schemas"]["AdminAccountActor"] | null;
+            decisionReason: string | null;
+            failureResultId: string | null;
+            /** Format: uuid */
+            holdId: string;
+            /** Format: uuid */
+            id: string;
+            reason: string;
+            /** Format: date-time */
+            requestedAt: string;
+            requestedBy: components["schemas"]["AdminAccountActor"];
+            /** Format: date-time */
+            retractedAt: string | null;
+            status: components["schemas"]["ApprovalStatus"];
+        };
+        ReconciliationResult: {
+            accountId: string | null;
+            /** Format: date-time */
+            checkedAt: string;
+            facts: {
+                [key: string]: unknown;
+            };
+            findings: {
+                actual: string;
+                /** @enum {string} */
+                code: "balance_missing" | "account_balance" | "account_ledger_copy" | "coin_lock" | "negative_coin" | "contract_lock" | "market_maker_account_missing" | "retired_position" | "closed_position_holder" | "empty_position_cost" | "settlement_books" | "pair_supply" | "pair_collateral" | "unexpected_settlement_records" | "pair_ledger" | "settled_live_orders" | "ledger_account_missing" | "supply_balance" | "supply_ledger_copy";
+                detail?: string;
+                expected: string;
+            }[];
+            id: string;
+            ledgerCursor: string;
+            /** Format: uuid */
+            marketId: string | null;
+            passed: boolean;
+            /** @enum {string} */
+            scope: "market" | "account" | "supply";
+            /** @enum {string} */
+            source: "scheduled" | "manual" | "recovery";
+            targetKey: string;
+            userId: string | null;
+        };
+        ReconciliationRun: {
+            hold: components["schemas"]["ReconciliationHold"] | null;
+            result: components["schemas"]["ReconciliationResult"];
+        };
         RecordConsentsBody: {
             consents: {
                 age?: {
@@ -5984,6 +6376,21 @@ export type components = {
             phone: string;
             realName: string;
         };
+        RequestReconciliationCorrectionBody: {
+            accountId: string;
+            amountCoin: string;
+            expectedAccountId: string;
+            /** @enum {string} */
+            mode: "restore_actual" | "replenish_ledger" | "fund_collateral" | "return_collateral";
+            reason: string;
+            snapshotKey: string;
+            userReason: string | null;
+        };
+        RequestReconciliationRecoveryBody: {
+            expectedAccountId: string;
+            failureResultId: string | null;
+            reason: string;
+        };
         RescheduleMarketOpenBody: {
             expectedAccountId: string;
             reason: string;
@@ -6030,6 +6437,26 @@ export type components = {
         };
         /** @enum {string} */
         RuleVersionItem: "title" | "description" | "yesCondition" | "noCondition" | "eventDeadline" | "primarySource" | "fallbackSources" | "fallbackCondition" | "longDelayDays" | "delayHandling" | "scheduledOpenAt" | "closeAt" | "scheduledAnnouncementAt" | "scheduledJudgementAt" | "judgementTimeZone";
+        RunReconciliationBody: {
+            expectedAccountId: string;
+            target: {
+                /** Format: uuid */
+                marketId: string;
+                /** @enum {string} */
+                scope: "market";
+            } | {
+                /** @enum {string} */
+                scope: "account";
+                userId: string;
+            } | {
+                accountId: string;
+                /** @enum {string} */
+                scope: "account";
+            } | {
+                /** @enum {string} */
+                scope: "supply";
+            };
+        };
         SearchHistoryWriteBody: {
             expectedAccountId: string;
         };
@@ -14396,6 +14823,1108 @@ export interface operations {
             };
         };
     };
+    adminListReconciliationCorrectionRequests: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                status?: "pending" | "all";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ReconciliationCorrectionRequest"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListReconciliationHolds: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                marketId?: string;
+                state?: "active" | "all";
+                userId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ReconciliationHoldDetail"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminGetReconciliationHold: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                holdId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ReconciliationHoldDetail"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRequestReconciliationRecovery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                holdId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestReconciliationRecoveryBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ReconciliationHoldDetail"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminApproveReconciliationRecovery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                holdId: string;
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecideReconciliationRecoveryBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ReconciliationHoldDetail"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRejectReconciliationRecovery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                holdId: string;
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecideReconciliationRecoveryBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ReconciliationHoldDetail"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRetractReconciliationRecovery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                holdId: string;
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedAccountBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ReconciliationHoldDetail"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListReconciliationResults: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                targetKey?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ReconciliationResult"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRequestReconciliationCorrection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                resultId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestReconciliationCorrectionBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ReconciliationCorrectionDetail"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminApproveReconciliationCorrection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: string;
+                resultId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecideReconciliationRecoveryBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ReconciliationCorrectionDetail"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRejectReconciliationCorrection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: string;
+                resultId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecideReconciliationRecoveryBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ReconciliationCorrectionDetail"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRetractReconciliationCorrection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: string;
+                resultId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedAccountBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ReconciliationCorrectionDetail"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminGetReconciliationCorrections: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                resultId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ReconciliationCorrectionDetail"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRunReconciliation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunReconciliationBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ReconciliationRun"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     adminListReleaseSettings: {
         parameters: {
             query?: {
@@ -19533,6 +21062,59 @@ export interface operations {
             };
             /** @description VERIFICATION_REQUIRED */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getMyReconciliationCorrections: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["MemberReconciliationCorrection"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };

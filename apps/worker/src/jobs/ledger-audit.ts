@@ -85,6 +85,11 @@ export interface LedgerAuditOptions {
 }
 
 /**
+ * Compatibility check for the pre-#93 regression fixtures. The scheduled job and manual CLI
+ * now use reconciliation.ts, whose DB operations also check locks, supply and persistent holds.
+ * This older balance-only checker remains available for tests that deliberately construct
+ * incomplete order/contract books while proving a ledger invariant in isolation.
+ *
  * Verifies the PLAN 5.6 invariant for every ledger account (#116, ADR-0109) — every person's
  * own, the treasury, every market's collateral and every market's 마켓메이커 자금:
  *

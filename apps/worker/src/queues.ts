@@ -47,7 +47,7 @@ export const QUEUE_JOBS: Record<QueueName, readonly JobName[]> = {
     JOB_NAMES.marketResolve,
     JOB_NAMES.marketFinalize,
   ],
-  audit: [JOB_NAMES.ledgerAudit],
+  audit: [JOB_NAMES.ledgerAudit, JOB_NAMES.marketAudit],
   // Reserved: nothing schedules it — the intake keeps `markets.trader_count` (#121, ADR-0116).
   stats: [JOB_NAMES.marketTraderCount],
   wallet: [JOB_NAMES.startGrantPay],
@@ -90,6 +90,13 @@ export const JOB_SCHEDULES = [
     name: JOB_NAMES.ledgerAudit,
     // 04:00 KST every day; BullMQ resolves the pattern in this zone, DST-free for Seoul.
     repeat: { pattern: '0 4 * * *', tz: 'Asia/Seoul' },
+  },
+  {
+    // #93: a new scheduler id; the existing daily ledger audit keeps its own id and hour.
+    id: 'market-audit-scan',
+    queue: 'audit',
+    name: JOB_NAMES.marketAudit,
+    repeat: EVERY_MINUTE,
   },
   // No `data`: a scan is the job without a market id (marketJobDataSchema).
   // #21 (ADR-0100): the SCHEDULED markets whose scheduled open has come. Never rename this id or
@@ -167,5 +174,12 @@ export function createWorker(
   connection: ConnectionOptions,
   opts: Omit<WorkerOptions, 'connection'> = {},
 ): Worker {
-  return new Worker(name, processor, { concurrency: 1, ...opts, connection });
+  // A daily whole-ledger scan may take minutes. One other audit slot lets market checks keep
+  // running meanwhile; the two handlers also use different database pools. Each market run is
+  // serialised by its database lock, including a scheduler retry that overlaps an earlier run.
+  return new Worker(name, processor, {
+    concurrency: name === 'audit' ? 2 : 1,
+    ...opts,
+    connection,
+  });
 }

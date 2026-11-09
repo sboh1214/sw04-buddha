@@ -115,6 +115,8 @@ const LOCKED: unique symbol = Symbol('LockedOrders');
  */
 export interface LockedOrders {
   readonly [LOCKED]: true;
+  /** The caller will leave held orders untouched; this batch must never end their hold. */
+  readonly preservesHold?: true;
   readonly scope: { kind: 'market'; marketId: string } | { kind: 'account'; ownerId: string };
   readonly markets: readonly LockedMarketOrders[];
 }
@@ -263,9 +265,16 @@ export async function cancelOrder(tx: Tx, input: CancelOrderInput): Promise<Canc
  * cancel; #93 later): `lockMarket`, the market's live orders in arrival order, whether it is held,
  * then every owner's Coin account at once — the people's and the 운영 마켓메이커's 마켓메이커 자금 in one
  * `lockOrderHolders` (ADR-0110 결정 4) — even when nothing will be cancelled (a `ledger_failure`
- * pause): it locks rows and writes nothing.
+ * pause): it locks rows and writes nothing. The scheduled close sets `preserveHold` because a
+ * held market changes only its status: missing/broken balances must not prevent that exit.
+ * Such a batch reads the live orders under the market lock without locking assets and cannot
+ * be reused to release held orders. Recovery uses the default, complete asset lock path.
  */
-export async function lockMarketOrders(tx: Tx, marketId: string): Promise<LockedOrders> {
+export async function lockMarketOrders(
+  tx: Tx,
+  marketId: string,
+  options: { preserveHold?: boolean } = {},
+): Promise<LockedOrders> {
   await lockMarket(tx, marketId);
   const rows = await tx
     .select()
@@ -273,13 +282,16 @@ export async function lockMarketOrders(tx: Tx, marketId: string): Promise<Locked
     .where(and(eq(orders.marketId, marketId), LIVE))
     .orderBy(asc(orders.arrivalSeq));
   const held = (await ledgerHeldMarketIds(tx, [marketId])).has(marketId);
-  await lockOrderHolders(
-    tx,
-    marketId,
-    rows.map((row) => row.userId),
-  );
+  if (!held || !options.preserveHold) {
+    await lockOrderHolders(
+      tx,
+      marketId,
+      rows.map((row) => row.userId),
+    );
+  }
   return {
     [LOCKED]: true,
+    ...(options.preserveHold ? { preservesHold: true as const } : {}),
     scope: { kind: 'market', marketId },
     markets: [{ marketId, held, orders: rows }],
   };
@@ -350,6 +362,9 @@ async function endLockedOrders(
   const endsHold = options.endsHold ?? false;
   if (endsHold && locked.scope.kind !== 'market') {
     throw new Error("only a market's batch ends its hold");
+  }
+  if (endsHold && locked.preservesHold) {
+    throw new Error('a batch preserving a ledger hold cannot end it');
   }
   const ended: OrderRow[] = [];
   const held: OrderRow[] = [];

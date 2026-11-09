@@ -710,8 +710,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // the row it cannot draw (a `LedgerEntry` is type, amount, 잔고 후, memo and instant; a
         // `UserBalanceEvent` is two figures, that id and a `ts`), and a /my/wallet on its first
         // fetch could not take it either. Not 남발: the accept gate is `ledger_entries.id`, the
-        // account's own commit order, so an ACCEPTED event always names a row this tab has never
-        // held and a late or duplicate delivery spends nothing.
+        // account's own commit order, so a late or duplicate delivery spends nothing. A #93
+        // actual-balance restoration reserves an id from the same sequence for its permanent
+        // correction record, without creating a synthetic ledger entry.
         //
         // Whatever `storeBalanceEvent` makes of `['me']` below — including the tab whose
         // `GET /me` is in flight, which on /my/wallet is precisely the tab whose FIRST
@@ -728,6 +729,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // step that moves a balance, so the list lands on 환불 처리 중, and its finish (환불 완료)
         // publishes nothing; the list's own bounded poll while a row is still moving
         // (`paymentsPoll`, use-wallet.ts) carries that row the rest of the way.
+        // The separately listed correction history follows this same accepted event, including
+        // restoration without a ledger row and replenishment with no actual balance increase.
         for (const queryKey of BALANCE_HISTORY_KEYS) void restartQueries(queryClient, queryKey);
         // The balance chip and the 잔고 요약: the figure at once, and `GET /me` asked again where
         // the event cannot say the rest (a first load it interrupted, a start Coin that waits).

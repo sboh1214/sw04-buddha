@@ -261,6 +261,9 @@ export const PAYMENT_STATUS_PALETTE: Record<PaymentStatus, string> = {
 
 export const AUDIT_FAILURE_KIND_LABEL: Record<AuditFailureKind, string> = {
   ledger_balance_mismatch: copy.auditKindLedgerMismatch,
+  market_reconciliation_mismatch: copy.auditKindMarketReconciliation,
+  account_reconciliation_mismatch: copy.auditKindAccountReconciliation,
+  supply_reconciliation_mismatch: copy.auditKindSupplyReconciliation,
 };
 
 /**

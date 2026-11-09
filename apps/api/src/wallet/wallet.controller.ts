@@ -18,6 +18,7 @@ import {
   couponSchema,
   cursorQuerySchema,
   ledgerEntrySchema,
+  memberReconciliationCorrectionSchema,
   paymentProviderInfoSchema,
   paymentSchema,
   redeemCouponBodySchema,
@@ -27,6 +28,7 @@ import {
   type ChargeResult,
   type CursorQuery,
   type LedgerEntry,
+  type MemberReconciliationCorrection,
   type Payment,
   type PaymentProviderInfo,
   type RedeemCouponBody,
@@ -215,6 +217,27 @@ export class CouponsController {
 @UseGuards(SessionGuard)
 export class MeWalletController {
   constructor(private readonly wallet: WalletService) {}
+
+  @Get('reconciliation-corrections')
+  @ApiOperation({
+    operationId: 'getMyReconciliationCorrections',
+    summary: 'The caller’s completed Coin corrections and member-facing reasons, newest first',
+  })
+  @ApiQuery(CURSOR_QUERY_PARAMS[0])
+  @ApiQuery(CURSOR_QUERY_PARAMS[1])
+  @ApiPageOf(memberReconciliationCorrectionSchema)
+  @ApiErrors('UNAUTHENTICATED', 'VALIDATION_ERROR')
+  async getCorrections(
+    @CurrentUser() user: SessionUser,
+    @Query({ schema: cursorQuerySchema }) query: CursorQuery,
+  ): Promise<ApiPage<MemberReconciliationCorrection>> {
+    const { items, nextCursor } = await this.wallet.listCorrections(
+      user.id,
+      query.cursor,
+      query.limit,
+    );
+    return new ApiPage(items, { nextCursor });
+  }
 
   @Get('ledger')
   @ApiOperation({ operationId: 'getMyLedger', summary: 'Ledger entries, newest first' })

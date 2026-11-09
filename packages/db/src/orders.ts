@@ -1,3 +1,4 @@
+import { lockReconciliationUserKey, reconciliationUserHeld } from './reconciliation-holds.js';
 import {
   idempotencyKeySchema,
   intakeMarketGate,
@@ -41,6 +42,7 @@ import {
   type PositionRow,
 } from './contracts.js';
 import type { BalanceRow, LedgerEntryRow } from './ledger.js';
+import { ledgerHeldMarketSql } from './ledger-held-markets.js';
 import { newHumanParticipants, recordFillStats } from './market-stats.js';
 import { getReleaseSetting } from './release-settings.js';
 import { balances, fills, markets, orders, positions, user } from './schema/index.js';
@@ -380,6 +382,7 @@ export async function placeOrder(
       status: markets.status,
       widthTicks: markets.priceProtectionTicks,
       closeAt: markets.closeAt,
+      ledgerHeld: ledgerHeldMarketSql(sql`${marketId}`),
     })
     .from(markets)
     .where(eq(markets.id, marketId));
@@ -458,6 +461,11 @@ export async function placeOrder(
 
   const owner = await ownerOf(tx, ownerId);
   if (owner === null) throw new RangeError(`account ${ownerId} does not exist`);
+  if (owner.human) {
+    await lockReconciliationUserKey(tx, ownerId);
+    if (await reconciliationUserHeld(tx, ownerId))
+      return rejected('ledger_hold', market.now, gateProtection);
+  }
   // #128 trims the 운영 마켓메이커's quantities on this book before matching, and the quote's
   // book (apps/api OrderBookService) the same way: a trim here alone parts the quote from the fill.
   const book = await readLiveBook(tx, marketId);
@@ -476,6 +484,8 @@ export async function placeOrder(
   // last lock that can wait, so the clock is read after it.
   await lockOrderHolders(tx, marketId, [ownerId, ...result.counterpartyOwnerIds]);
   const at = await clockTimestamp(tx);
+  if (owner.human && (await reconciliationUserHeld(tx, ownerId)))
+    return rejected('ledger_hold', at, gateProtection);
   // The close again at the fill instant (#120, ADR-0115): the gate's clock came before
   // `lockOrderHolders`, which can wait on another market's intake, and no order or fill may carry
   // an instant at or past `close_at`. Only 'closed' can answer here (the status cannot change under

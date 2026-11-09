@@ -254,6 +254,7 @@ describe.skipIf(!hasTestDb())('the time passing creates nothing (#142, integrati
       'market.resolve',
       'market.finalize',
       'ledger.audit',
+      'market.audit',
       'market.trader_count',
       'start_grant.pay',
       'media.orphan_cleanup',

@@ -331,6 +331,9 @@ function assertLock(lock: OrderLock, allowZero: boolean): void {
 export async function lockForOrder(tx: Tx, input: OrderLockInput): Promise<OrderLockResult> {
   assertLock(input.lock, false);
   await lockMarket(tx, input.marketId);
+  if ((await ledgerHeldMarketIds(tx, [input.marketId])).has(input.marketId)) {
+    throw new ContractError('refused', `market ${input.marketId} is held for reconciliation`);
+  }
   if (input.lock.kind === 'contracts') {
     const { qty, outcome } = input.lock;
     const row = await lockPosition(tx, input.ownerId, input.marketId, outcome);
@@ -448,7 +451,11 @@ export async function lockOrderHolders(
     holders.set(ownerId, await resolveHolder(tx, ownerId, marketId));
   }
   const refs: LedgerAccountRef[] = [];
-  for (const ref of [{ kind: 'market_collateral', marketId } as const, ...holders.values()]) {
+  for (const ref of [
+    { kind: 'market_collateral', marketId } as const,
+    { kind: 'market_maker_funds', marketId } as const,
+    ...holders.values(),
+  ]) {
     if (ref.kind === 'user' || (await findLedgerAccount(tx, ref)) !== null) refs.push(ref);
   }
   await lockLedgerAccounts(tx, refs);
@@ -523,6 +530,9 @@ async function assertTrading(tx: Tx, marketId: string): Promise<void> {
       'refused',
       `market ${marketId} is ${market?.status ?? 'missing'}: a fill only while it trades`,
     );
+  }
+  if ((await ledgerHeldMarketIds(tx, [marketId])).has(marketId)) {
+    throw new ContractError('refused', `market ${marketId} is held for reconciliation`);
   }
 }
 

@@ -149,7 +149,7 @@ export async function readMarketPause(
     note: pause.note,
     resultPublishedAt: pause.resultPublishedAt?.toISOString() ?? null,
     pausedAt: pause.pausedAt.toISOString(),
-    pausedBy: actor(pause.pausedBy, pausedByNickname),
+    pausedBy: pause.pausedBy === null ? null : actor(pause.pausedBy, pausedByNickname),
     reviewResult: pause.reviewResult,
     endKind: pause.endKind,
     endedAt: pause.endedAt?.toISOString() ?? null,

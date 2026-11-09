@@ -18,6 +18,11 @@ const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'u
 
 /** Each screen, with the writes it must send as the admin on screen. */
 const SCREENS: Readonly<Record<string, readonly string[]>> = {
+  '../app/admin/audit-failures/reconciliation-correction-dialogs.tsx': [
+    'expectedAccountId: by,',
+    'body: { expectedAccountId: by, reason: draft.reason }',
+    'body: { expectedAccountId: by }',
+  ],
   '../app/admin/moderation/link-flags/admin-link-flags.tsx': [
     'toLinkFlagReviewBody(group, chosen, note, by)',
   ],
@@ -146,6 +151,12 @@ const SCREENS: Readonly<Record<string, readonly string[]>> = {
 };
 
 describe('the admin the admin writes name (ADR-0092)', () => {
+  it('pins all four monetary correction writes to the operator on screen', () => {
+    const text = source('../app/admin/audit-failures/reconciliation-correction-dialogs.tsx');
+    expect(text.match(/api\.POST\(/g)).toHaveLength(4);
+    expect(text.match(/expectedAccountId: by/g)).toHaveLength(4);
+    expect(text.match(/body: \{ expectedAccountId: by, reason: draft.reason \}/g)).toHaveLength(2);
+  });
   it('is the admin of the `Me` the screen is drawn from, never the session’s', () => {
     for (const [file, sends] of Object.entries(SCREENS)) {
       const text = source(file);
@@ -172,6 +183,7 @@ describe('the admin the admin writes name (ADR-0092)', () => {
     // Since owner decision 2026-10-26 17:21 answer 1 the buttons that open a dialog held for the
     // admin and the fields of a form drawn for it wait too (the describe below).
     const waits: Readonly<Record<string, number>> = {
+      '../app/admin/audit-failures/reconciliation-correction-dialogs.tsx': 3,
       // 확인함, and the button that opens its dialog
       '../app/admin/moderation/link-flags/admin-link-flags.tsx': 2,
       // 만들기, and the form's fields
@@ -285,6 +297,12 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
    * each per area.
    */
   const HELD: Readonly<Record<string, readonly string[]>> = {
+    '../app/admin/audit-failures/admin-reconciliation-corrections.tsx': [
+      'const [dialog, setDialog] = useHeldForOperator<CorrectionDialogTarget>();',
+    ],
+    '../app/admin/audit-failures/admin-reconciliation.tsx': [
+      'const [dialog, setDialog] = useHeldForOperator<DialogState>();',
+    ],
     // A related market's 해제 (마감 went with #114, 판정 with #152 — the 판정 panel's, below)
     '../app/admin/markets/[id]/admin-market-detail.tsx': [
       'const [unlinking, setUnlinking] = useHeldForOperator<AdminRelatedMarket>();',

@@ -606,6 +606,7 @@ describe.skipIf(!hasTestDb())('the public book and quotes (#179, docker test pro
       const after = await clockTimestamp(t.db);
       expect(facts).toEqual({
         status: 'open',
+        ledgerHeld: false,
         widthTicks: null,
         closeAt: stored!.closeAt,
         now: expect.any(Date) as unknown,
