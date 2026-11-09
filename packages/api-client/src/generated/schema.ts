@@ -21,6 +21,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/admins/{userId}/grant-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read trade history and pending order counts before granting an admin role */
+        get: operations["adminPreviewAdminGrant"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/admins/{userId}/revoke": {
         parameters: {
             query?: never;
@@ -497,6 +514,24 @@ export type paths = {
         put?: never;
         /** Retract a waiting cancel request the acting admin made (철회), in any status, before anyone decides it; nothing changes */
         post: operations["adminRetractMarketCancel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/conflicts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the acting administrator’s trading interest and immutable declarations for a market */
+        get: operations["adminGetMarketConflicts"];
+        put?: never;
+        /** Declare the acting administrator’s interest irrevocably, retracting their pending judgement or correction atomically */
+        post: operations["adminDeclareMarketConflict"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3724,6 +3759,12 @@ export type components = {
             reason: string;
             userId: string;
         };
+        AdminGrantPreview: {
+            filledMarketCount: number;
+            heldOrderCount: number;
+            liveOrderCount: number;
+            userId: string;
+        };
         AdminJudgementDelay: {
             current: boolean;
             /** Format: uuid */
@@ -3906,6 +3947,21 @@ export type components = {
         AdminMarketCancelState: {
             log: components["schemas"]["MarketCancelLogEntry"][];
             pending: components["schemas"]["MarketCancelRequest"] | null;
+        };
+        AdminMarketConflicts: {
+            declarations: components["schemas"]["MarketConflictDeclaration"][];
+            /** Format: uuid */
+            marketId: string;
+            operator: {
+                conflicted: boolean;
+                declaration: components["schemas"]["MarketConflictDeclaration"] | null;
+                hasFill: boolean;
+                userId: string;
+            };
+        };
+        AdminMarketConflictWrite: {
+            conflicts: components["schemas"]["AdminMarketConflicts"];
+            market: components["schemas"]["AdminMarket"];
         };
         AdminMarketDispute: {
             /** Format: date-time */
@@ -4354,6 +4410,11 @@ export type components = {
                 id: string;
                 nickname: string | null;
             };
+            tradeEffects?: {
+                cancelledOrderCount: number;
+                filledMarketCount: number;
+                heldOrderCount: number;
+            };
             type: components["schemas"]["AdminRoleChangeType"];
         };
         /** @enum {string} */
@@ -4533,6 +4594,8 @@ export type components = {
         ApproveJudgementBody: {
             eventDeadlineConfirmed: boolean;
             expectedAccountId: string;
+            /** @enum {boolean} */
+            noConflictConfirmed: true;
             reason: string;
         };
         ApproveMarketCancelBody: {
@@ -4795,9 +4858,15 @@ export type components = {
         };
         DecideDisputeBody: {
             expectedAccountId: string;
+            /** @enum {boolean} */
+            noConflictConfirmed: true;
             reason: string;
         };
         DecideReconciliationRecoveryBody: {
+            expectedAccountId: string;
+            reason: string;
+        };
+        DeclareMarketConflictBody: {
             expectedAccountId: string;
             reason: string;
         };
@@ -4844,7 +4913,7 @@ export type components = {
             title: string;
         };
         /** @enum {string} */
-        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "REPORT_NOT_ALLOWED" | "REPORT_LIMITED" | "MODERATION_NOT_ALLOWED" | "RESTRICTED" | "WRITE_LIMITED" | "CLOSURE_NOT_ALLOWED" | "ACCOUNT_CLOSED" | "PROPOSAL_LIMITED" | "OPEN_ITEMS_MISSING" | "DISPUTE_NOT_ALLOWED" | "ORDER_INTAKE_CLOSED" | "INTERNAL";
+        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "TRANSACTION_BUSY" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "REPORT_NOT_ALLOWED" | "REPORT_LIMITED" | "MODERATION_NOT_ALLOWED" | "RESTRICTED" | "WRITE_LIMITED" | "CLOSURE_NOT_ALLOWED" | "ACCOUNT_CLOSED" | "PROPOSAL_LIMITED" | "OPEN_ITEMS_MISSING" | "DISPUTE_NOT_ALLOWED" | "ORDER_INTAKE_CLOSED" | "INTERNAL";
         ErrorEnvelope: {
             error: {
                 code: components["schemas"]["ErrorCode"];
@@ -5022,6 +5091,14 @@ export type components = {
             requestedBy: components["schemas"]["AdminAccountActor"];
             /** Format: uuid */
             requestId: string;
+        };
+        MarketConflictDeclaration: {
+            /** Format: date-time */
+            declaredAt: string;
+            declaredBy: components["schemas"]["AdminAccountActor"];
+            /** Format: uuid */
+            id: string;
+            reason: string;
         };
         /** @enum {string} */
         MarketDisputeStatus: "pending" | "dismissed" | "accepted" | "retracted" | "closed_by_correction";
@@ -5574,7 +5651,7 @@ export type components = {
             protectedLimitPriceCoin: number;
             qty: number | null;
             /** @enum {string|null} */
-            rejectReason: "insufficient_coin" | "insufficient_contracts" | "not_open_yet" | "closed" | "paused" | "no_quote" | "price_limit" | "budget_too_small" | "self_trade" | "ledger_hold" | null;
+            rejectReason: "insufficient_coin" | "insufficient_contracts" | "not_open_yet" | "closed" | "paused" | "no_quote" | "price_limit" | "budget_too_small" | "self_trade" | "ledger_hold" | "admin_role_revoked" | null;
             requestId: string;
             /** @enum {string} */
             side: "buy" | "sell";
@@ -5613,7 +5690,7 @@ export type components = {
             maxSpendCoin: components["schemas"]["CoinAmount"] | null;
             protectedLimitPriceCoin: number;
             /** @enum {string|null} */
-            rejectReason: "insufficient_coin" | "insufficient_contracts" | "not_open_yet" | "closed" | "paused" | "no_quote" | "price_limit" | "budget_too_small" | "self_trade" | "ledger_hold" | null;
+            rejectReason: "insufficient_coin" | "insufficient_contracts" | "not_open_yet" | "closed" | "paused" | "no_quote" | "price_limit" | "budget_too_small" | "self_trade" | "ledger_hold" | "admin_role_revoked" | null;
             remainingQty: number | null;
             /** @enum {string} */
             status: "open" | "partially_filled" | "filled" | "cancelled" | "expired" | "rejected";
@@ -6201,6 +6278,8 @@ export type components = {
             };
             expectedAccountId: string;
             fallbackReason?: string | null;
+            /** @enum {boolean} */
+            noConflictConfirmed: true;
             result: components["schemas"]["MarketResult"];
             source: {
                 priority: number;
@@ -6842,7 +6921,84 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description ONBOARDING_REQUIRED | ROLE_CHANGE_NOT_ALLOWED | ACCOUNT_CLOSED */
+            /** @description ONBOARDING_REQUIRED | ROLE_CHANGE_NOT_ALLOWED | ACCOUNT_CLOSED | TRANSACTION_BUSY */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminPreviewAdminGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminGrantPreview"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -9417,6 +9573,164 @@ export interface operations {
             };
         };
     };
+    adminGetMarketConflicts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarketConflicts"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminDeclareMarketConflict: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeclareMarketConflictBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarketConflictWrite"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     adminAcceptMarketDispute: {
         parameters: {
             query?: never;
@@ -11627,7 +11941,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED | APPROVAL_NOT_ALLOWED */
+            /** @description ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED | APPROVAL_NOT_ALLOWED | TRANSACTION_BUSY */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -15,6 +15,7 @@ import {
   isApiUnreachable,
   isForAnotherAccount,
   validationField,
+  validationMessage,
 } from './api';
 import { disputeRefusalOf } from './disputes';
 
@@ -147,7 +148,16 @@ export function disputeDecisionFailure(error: unknown): DisputeDecisionFailure {
   }
   // Not the account check above: AdminGuard's, once another admin revoked this one's role.
   if (isApiError(error, 'FORBIDDEN'))
-    return { kind: 'alert', message: copy.adminOnly, refresh: false };
+    return {
+      kind: 'alert',
+      message:
+        validationMessage(error) === 'market_conflict'
+          ? copy.marketConflictRefused
+          : copy.adminOnly,
+      refresh: validationMessage(error) === 'market_conflict',
+    };
+  if (isApiError(error, 'VALIDATION_ERROR') && validationField(error) === 'noConflictConfirmed')
+    return { kind: 'alert', message: copy.marketConflictConfirmRequired, refresh: false };
   if (isApiError(error, 'VALIDATION_ERROR') && validationField(error) === 'reason') {
     return { kind: 'field', message: copy.errMarketReviewReason };
   }

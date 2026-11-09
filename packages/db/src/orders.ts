@@ -43,6 +43,7 @@ import {
 } from './contracts.js';
 import type { BalanceRow, LedgerEntryRow } from './ledger.js';
 import { ledgerHeldMarketSql } from './ledger-held-markets.js';
+import { latestAdminRevocation } from './role-boundary.js';
 import { newHumanParticipants, recordFillStats } from './market-stats.js';
 import { getReleaseSetting } from './release-settings.js';
 import { balances, fills, markets, orders, positions, user } from './schema/index.js';
@@ -382,6 +383,7 @@ export async function placeOrder(
       status: markets.status,
       widthTicks: markets.priceProtectionTicks,
       closeAt: markets.closeAt,
+      createdAt: markets.createdAt,
       ledgerHeld: ledgerHeldMarketSql(sql`${marketId}`),
     })
     .from(markets)
@@ -462,6 +464,9 @@ export async function placeOrder(
   const owner = await ownerOf(tx, ownerId);
   if (owner === null) throw new RangeError(`account ${ownerId} does not exist`);
   if (owner.human) {
+    const revokedAt = await latestAdminRevocation(tx, ownerId);
+    if (revokedAt !== null && row.createdAt.getTime() <= revokedAt.getTime())
+      return rejected('admin_role_revoked', market.now, gateProtection);
     await lockReconciliationUserKey(tx, ownerId);
     if (await reconciliationUserHeld(tx, ownerId))
       return rejected('ledger_hold', market.now, gateProtection);

@@ -75,10 +75,10 @@ const SCREENS: Readonly<Record<string, readonly string[]>> = {
   // the event-deadline confirmation) · 반려 · 철회 from their dialogs (each naming the registration
   // in its path)
   '../app/admin/markets/[id]/market-judgement-panel.tsx': [
-    'body: { ...registration, expectedAccountId: by },',
+    'body: { ...registration, expectedAccountId: by, noConflictConfirmed: true },',
   ],
   '../app/admin/markets/[id]/market-judgement-dialogs.tsx': [
-    'body: { reason, eventDeadlineConfirmed, expectedAccountId: by },',
+    'expectedAccountId: by,\n            noConflictConfirmed: true,',
     'body: { reason, expectedAccountId: by },',
     'body: { expectedAccountId: by },',
   ],
@@ -90,8 +90,8 @@ const SCREENS: Readonly<Record<string, readonly string[]>> = {
   // 판정 이의 (#175, ADR-0104), new since and written the same way: 기각 · 수용 from their dialog
   // (each naming the dispute in its path), the block holding it for the admin who opened it
   '../app/admin/markets/[id]/market-dispute-dialogs.tsx': [
-    "await api.POST('/api/v1/admin/markets/{id}/disputes/{disputeId}/dismiss', {\n            params: { path: { id: market.id, disputeId } },\n            body: { reason, expectedAccountId: by },",
-    "await api.POST('/api/v1/admin/markets/{id}/disputes/{disputeId}/accept', {\n            params: { path: { id: market.id, disputeId } },\n            body: { reason, expectedAccountId: by },",
+    "await api.POST('/api/v1/admin/markets/{id}/disputes/{disputeId}/dismiss', {\n            params: { path: { id: market.id, disputeId } },\n            body: { reason, expectedAccountId: by, noConflictConfirmed: true },",
+    "await api.POST('/api/v1/admin/markets/{id}/disputes/{disputeId}/accept', {\n            params: { path: { id: market.id, disputeId } },\n            body: { reason, expectedAccountId: by, noConflictConfirmed: true },",
   ],
   '../app/admin/themes/admin-themes.tsx': [
     '.mutateAsync({ ...toCreateThemeBody(values), expectedAccountId: operatorId })',

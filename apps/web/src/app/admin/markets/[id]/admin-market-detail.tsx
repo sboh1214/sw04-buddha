@@ -104,6 +104,7 @@ import {
 import { LONG_DELAY_SEPARATOR, longDelayText } from '@/lib/market-detail';
 import { timeZoneLabel } from '@/lib/time-zone';
 import { MarketFormFields } from '../market-form-fields';
+import { MarketConflictPanel } from './market-conflict-panel';
 import { MarketCancelPanel } from './market-cancel-panel';
 import { MarketJudgementPanel } from './market-judgement-panel';
 import { MarketPausePanel } from './market-pause-panel';
@@ -210,6 +211,7 @@ export function AdminMarketDetail({ id }: { id: string }) {
           panel's '판정 이의' block, whose last 기각 starts the re-reads again) nor while a 판정 정정
           waits for its approval (#176: its 반려 or 철회 starts them again when nothing else holds
           it). */}
+      <MarketConflictPanel key={`conflicts-${data.id}`} marketId={data.id} />
       <MarketJudgementPanel
         key={`judgement-${data.id}`}
         market={data}

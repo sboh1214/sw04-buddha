@@ -461,6 +461,7 @@ describe('enums', () => {
       'budget_too_small',
       'self_trade',
       'ledger_hold',
+      'admin_role_revoked',
     ]);
     expect(enums.orderRejectReasonSchema.options).toEqual([...enums.ORDER_REJECT_REASONS]);
     // 본인 취소·즉시 거래 잔량·자기 체결·일시 중단·관리자 권한·계정 제한·탈퇴.

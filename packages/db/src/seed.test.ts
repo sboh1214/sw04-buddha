@@ -31,6 +31,8 @@ import {
   marketTags,
   markets,
   phoneVerifications,
+  orders,
+  positions,
   priceTicks,
   profiles,
   releaseSettings,
@@ -45,9 +47,10 @@ import {
   type SeedMarket,
   seedScheduledOpenAt,
 } from './seed-markets.js';
-import { createMarket, createUser } from './test/factories.js';
+import { createMarket, createMarketPause, createUser } from './test/factories.js';
 import { connectTestDb, hasTestDb, testDbUrls, type TestDb } from './test/harness.js';
-import { ledgerOf } from './test/ledger.js';
+import { balanceOf, ledgerOf, mintTestPairs } from './test/ledger.js';
+import { openOrderIntake, placeTestOrder } from './test/orders.js';
 
 /**
  * `pnpm db:seed` against the docker `test` profile database (PLAN 14). seed.ts is a CLI entry
@@ -316,14 +319,24 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
         adminId: first.id,
         targetType: 'user',
         targetId: first.id,
-        payload: { reason: SEED_ADMIN_GRANT_REASON },
+        payload: {
+          reason: SEED_ADMIN_GRANT_REASON,
+          tradeEffects: { filledMarketCount: 0, cancelledOrderCount: 0, heldOrderCount: 0 },
+          cancelledOrderIds: [],
+          heldOrderIds: [],
+        },
       }),
       expect.objectContaining({
         type: 'admin_grant',
         adminId: second.id,
         targetType: 'user',
         targetId: second.id,
-        payload: { reason: SEED_ADMIN_GRANT_REASON },
+        payload: {
+          reason: SEED_ADMIN_GRANT_REASON,
+          tradeEffects: { filledMarketCount: 0, cancelledOrderCount: 0, heldOrderCount: 0 },
+          cancelledOrderIds: [],
+          heldOrderIds: [],
+        },
       }),
     ]);
     expect(records[1]!.createdAt.getTime()).toBeGreaterThan(records[0]!.createdAt.getTime());
@@ -519,6 +532,49 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     const before = await adminState();
     runSeed();
     expect(await adminState()).toMatchObject({ password: before.password, role: 'admin' });
+  });
+
+  it('atomically cancels an existing bootstrap member’s ordinary orders while keeping held orders and positions (#143)', async () => {
+    const person = (await createUser(t.db, { email: ADMIN_EMAIL, balanceCoin: 1000n })).user.id;
+    const other = (await createUser(t.db, { balanceCoin: 1000n })).user.id;
+    const market = await createMarket(t.db);
+    const heldMarket = await createMarket(t.db, { createdBy: market.createdBy });
+    await openOrderIntake(t.db, { adminId: market.createdBy });
+    await mintTestPairs(t.db, {
+      marketId: market.id,
+      yesHolderId: person,
+      noHolderId: other,
+      qty: 1,
+    });
+    const ordinary = await placeTestOrder(t.db, { marketId: market.id, ownerId: person });
+    const held = await placeTestOrder(t.db, { marketId: heldMarket.id, ownerId: person });
+    if (ordinary.kind !== 'placed' || held.kind !== 'placed') throw new Error('Orders not placed');
+    await createMarketPause(t.db, {
+      marketId: heldMarket.id,
+      by: market.createdBy,
+      reason: 'ledger_failure',
+    });
+    const owned = () => t.db.select().from(positions).where(eq(positions.userId, person));
+    const before = await owned();
+    // Bootstrap only runs with no current administrator. This pre-bootstrap fixture has no
+    // historical revoke, so the existing account is eligible for the configured seed grant.
+    await t.db.update(profiles).set({ role: 'user' }).where(eq(profiles.role, 'admin'));
+
+    runSeed();
+
+    expect(await adminState()).toMatchObject({ id: person, role: 'admin' });
+    const [cancelled] = await t.db.select().from(orders).where(eq(orders.id, ordinary.order.id));
+    const [preserved] = await t.db.select().from(orders).where(eq(orders.id, held.order.id));
+    expect(cancelled).toMatchObject({ status: 'cancelled', cancelReason: 'admin_role' });
+    expect(preserved).toEqual(held.order);
+    expect(await owned()).toEqual(before);
+    expect(await balanceOf(t.db, person)).toMatchObject({ lockedCoin: 50n });
+    expect((await roleRecords()).find((row) => row.targetId === person)?.payload).toEqual({
+      reason: SEED_ADMIN_GRANT_REASON,
+      tradeEffects: { filledMarketCount: 1, cancelledOrderCount: 1, heldOrderCount: 1 },
+      cancelledOrderIds: [ordinary.order.id],
+      heldOrderIds: [held.order.id],
+    });
   });
 
   it('gives the admin no Coin at sign-up, like every account (migration 0031, #70)', async () => {

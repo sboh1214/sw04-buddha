@@ -304,8 +304,16 @@ describe('the retraction and decision bodies', () => {
   });
 
   it('decides with a reason the submitter reads, 1..500 characters, and the admin', () => {
-    const body = { reason: '출처의 원문과 같다.', expectedAccountId: 'admin-2' };
+    const body = {
+      noConflictConfirmed: true,
+      reason: '출처의 원문과 같다.',
+      expectedAccountId: 'admin-2',
+    };
     expect(decideDisputeBodySchema.parse(body)).toEqual(body);
+    for (const noConflictConfirmed of [undefined, false])
+      expect(paths(decideDisputeBodySchema.safeParse({ ...body, noConflictConfirmed }))).toEqual([
+        'noConflictConfirmed',
+      ]);
     expect(decideDisputeBodySchema.parse({ ...body, reason: ' 같다 ' }).reason).toBe('같다');
     for (const reason of ['', '  ', 'a'.repeat(APPROVAL_REASON_MAX_LENGTH + 1)]) {
       expect(paths(decideDisputeBodySchema.safeParse({ ...body, reason })), reason).toEqual([

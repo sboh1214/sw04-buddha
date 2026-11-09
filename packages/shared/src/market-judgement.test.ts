@@ -365,12 +365,31 @@ describe('the judgement helpers', () => {
 
 describe('the registration body', () => {
   const body = {
+    noConflictConfirmed: true,
     result: 'YES',
     source: { priority: 0 },
     evidence: { links: [link], collectedAt: at },
     description: '한국은행 발표에서 기준금리 인하를 확인했다.',
     expectedAccountId: account,
   };
+
+  it('requires a fresh explicit conflict acknowledgement without defaulting it', () => {
+    for (const noConflictConfirmed of [undefined, false]) {
+      expect(
+        paths(registerJudgementBodySchema.safeParse({ ...body, noConflictConfirmed })),
+      ).toEqual(['noConflictConfirmed']);
+      expect(
+        paths(
+          approveJudgementBodySchema.safeParse({
+            reason: '확인',
+            eventDeadlineConfirmed: true,
+            expectedAccountId: account,
+            noConflictConfirmed,
+          }),
+        ),
+      ).toEqual(['noConflictConfirmed']);
+    }
+  });
 
   it('takes each result with its source, reasons and evidence, trimmed', () => {
     expect(registerJudgementBodySchema.parse(body)).toEqual({ ...body, correction: null });
@@ -548,11 +567,17 @@ describe('the decision bodies', () => {
     for (const eventDeadlineConfirmed of [true, false]) {
       expect(
         approveJudgementBodySchema.parse({
+          noConflictConfirmed: true,
           reason: ' 근거 확인 ',
           eventDeadlineConfirmed,
           expectedAccountId: account,
         }),
-      ).toEqual({ reason: '근거 확인', eventDeadlineConfirmed, expectedAccountId: account });
+      ).toEqual({
+        noConflictConfirmed: true,
+        reason: '근거 확인',
+        eventDeadlineConfirmed,
+        expectedAccountId: account,
+      });
     }
     for (const [bad, path] of [
       [{ reason: '확인', expectedAccountId: account }, 'eventDeadlineConfirmed'],
@@ -563,7 +588,10 @@ describe('the decision bodies', () => {
       [{ reason: '', eventDeadlineConfirmed: true, expectedAccountId: account }, 'reason'],
       [{ reason: '확인', eventDeadlineConfirmed: true }, 'expectedAccountId'],
     ] as const) {
-      expect(paths(approveJudgementBodySchema.safeParse(bad)), path).toEqual([path]);
+      expect(
+        paths(approveJudgementBodySchema.safeParse({ noConflictConfirmed: true, ...bad })),
+        path,
+      ).toEqual([path]);
     }
   });
 

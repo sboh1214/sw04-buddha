@@ -6541,6 +6541,228 @@
         ]
       }
     },
+    "/api/v1/admin/markets/{id}/conflicts": {
+      "get": {
+        "operationId": "adminGetMarketConflicts",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AdminMarketConflicts"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Read the acting administrator’s trading interest and immutable declarations for a market",
+        "tags": [
+          "admin"
+        ]
+      },
+      "post": {
+        "operationId": "adminDeclareMarketConflict",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeclareMarketConflictBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AdminMarketConflictWrite"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Declare the acting administrator’s interest irrevocably, retracting their pending judgement or correction atomically",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/v1/admin/market-reviews": {
       "get": {
         "operationId": "adminListMarketReviews",
@@ -14274,7 +14496,7 @@
             }
           },
           "409": {
-            "description": "ONBOARDING_REQUIRED | ROLE_CHANGE_NOT_ALLOWED | ACCOUNT_CLOSED",
+            "description": "ONBOARDING_REQUIRED | ROLE_CHANGE_NOT_ALLOWED | ACCOUNT_CLOSED | TRANSACTION_BUSY",
             "content": {
               "application/json": {
                 "schema": {
@@ -14300,6 +14522,113 @@
           }
         ],
         "summary": "Make an account an admin with a reason (recorded); only an account with a verified email that has verified its mobile number",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/admins/{userId}/grant-preview": {
+      "get": {
+        "operationId": "adminPreviewAdminGrant",
+        "parameters": [
+          {
+            "name": "userId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AdminGrantPreview"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Read trade history and pending order counts before granting an admin role",
         "tags": [
           "admin"
         ]
@@ -22054,7 +22383,7 @@
             }
           },
           "409": {
-            "description": "ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED | APPROVAL_NOT_ALLOWED",
+            "description": "ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED | APPROVAL_NOT_ALLOWED | TRANSACTION_BUSY",
             "content": {
               "application/json": {
                 "schema": {
@@ -25084,6 +25413,7 @@
           "PRICE_MOVED",
           "DUPLICATE_REQUEST",
           "RATE_LIMITED",
+          "TRANSACTION_BUSY",
           "RULES_REQUIRED",
           "VERIFICATION_REQUIRED",
           "REFUND_NOT_ALLOWED",
@@ -30639,6 +30969,120 @@
           "expectedAccountId"
         ]
       },
+      "AdminMarketConflicts": {
+        "type": "object",
+        "properties": {
+          "marketId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "operator": {
+            "type": "object",
+            "properties": {
+              "userId": {
+                "type": "string"
+              },
+              "hasFill": {
+                "type": "boolean"
+              },
+              "conflicted": {
+                "type": "boolean"
+              },
+              "declaration": {
+                "nullable": true,
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/MarketConflictDeclaration"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "userId",
+              "hasFill",
+              "conflicted",
+              "declaration"
+            ],
+            "additionalProperties": false
+          },
+          "declarations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MarketConflictDeclaration"
+            }
+          }
+        },
+        "required": [
+          "marketId",
+          "operator",
+          "declarations"
+        ],
+        "additionalProperties": false
+      },
+      "MarketConflictDeclaration": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "declaredAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "declaredBy": {
+            "$ref": "#/components/schemas/AdminAccountActor"
+          }
+        },
+        "required": [
+          "id",
+          "reason",
+          "declaredAt",
+          "declaredBy"
+        ],
+        "additionalProperties": false
+      },
+      "DeclareMarketConflictBody": {
+        "type": "object",
+        "properties": {
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "expectedAccountId",
+          "reason"
+        ]
+      },
+      "AdminMarketConflictWrite": {
+        "type": "object",
+        "properties": {
+          "conflicts": {
+            "$ref": "#/components/schemas/AdminMarketConflicts"
+          },
+          "market": {
+            "$ref": "#/components/schemas/AdminMarket"
+          }
+        },
+        "required": [
+          "conflicts",
+          "market"
+        ],
+        "additionalProperties": false
+      },
       "AdminMarketReviewItem": {
         "type": "object",
         "properties": {
@@ -31163,6 +31607,12 @@
       "RegisterJudgementBody": {
         "type": "object",
         "properties": {
+          "noConflictConfirmed": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
           "result": {
             "$ref": "#/components/schemas/MarketResult"
           },
@@ -31248,6 +31698,7 @@
           }
         },
         "required": [
+          "noConflictConfirmed",
           "result",
           "source",
           "evidence",
@@ -31266,6 +31717,12 @@
           "eventDeadlineConfirmed": {
             "type": "boolean"
           },
+          "noConflictConfirmed": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
           "expectedAccountId": {
             "type": "string",
             "minLength": 1,
@@ -31275,6 +31732,7 @@
         "required": [
           "reason",
           "eventDeadlineConfirmed",
+          "noConflictConfirmed",
           "expectedAccountId"
         ]
       },
@@ -31609,11 +32067,18 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 255
+          },
+          "noConflictConfirmed": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
           }
         },
         "required": [
           "reason",
-          "expectedAccountId"
+          "expectedAccountId",
+          "noConflictConfirmed"
         ]
       },
       "AdminDisputeQueueItem": {
@@ -32110,7 +32575,8 @@
               "price_limit",
               "budget_too_small",
               "self_trade",
-              "ledger_hold"
+              "ledger_hold",
+              "admin_role_revoked"
             ]
           },
           "cancelReason": {
@@ -32329,7 +32795,8 @@
               "price_limit",
               "budget_too_small",
               "self_trade",
-              "ledger_hold"
+              "ledger_hold",
+              "admin_role_revoked"
             ]
           },
           "cancelReason": {
@@ -33412,6 +33879,38 @@
         ],
         "additionalProperties": false
       },
+      "AdminGrantPreview": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "filledMarketCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "liveOrderCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "heldOrderCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "userId",
+          "filledMarketCount",
+          "liveOrderCount",
+          "heldOrderCount"
+        ],
+        "additionalProperties": false
+      },
       "AdminRoleChange": {
         "type": "object",
         "properties": {
@@ -33455,6 +33954,32 @@
             "type": "string",
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "tradeEffects": {
+            "type": "object",
+            "properties": {
+              "filledMarketCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "cancelledOrderCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "heldOrderCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "filledMarketCount",
+              "cancelledOrderCount",
+              "heldOrderCount"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [

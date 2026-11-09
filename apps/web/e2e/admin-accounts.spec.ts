@@ -14,8 +14,8 @@ import {
   signUp,
   switchAccountUnderScreen,
   switchMeBeforeSession,
-  test,
 } from './helpers';
+import { test } from './admin-role-fixture';
 
 /**
  * 운영자 계정 (#171, ADR-0056): an admin grants the role on the screen to an account that has a
@@ -91,6 +91,7 @@ async function openGrant(page: Page, email: string): Promise<void> {
     .getByTestId('admin-grant-open')
     .click();
   await expect(page.getByTestId('admin-role-dialog')).toContainText(email);
+  await expect(page.getByTestId('admin-grant-preview')).toBeVisible();
 }
 
 test.describe('관리자 권한 부여·회수 (#171)', () => {
@@ -448,6 +449,7 @@ test.describe('탭의 계정이 바뀌는 틈의 부여·회수 (ADR-0091)', () 
       await open.click();
       const dialog = page.getByTestId('admin-role-dialog');
       await expect(dialog).toContainText(memberEmail);
+      await expect(dialog.getByTestId('admin-grant-preview')).toBeVisible();
       await expect(dialog.getByTestId('admin-role-submit')).toBeEnabled();
       await dialog.getByTestId('admin-role-cancel').click();
       await expect(dialog).toBeHidden();

@@ -1,5 +1,8 @@
 'use client';
 
+import { MARKET_CONFLICTS_KEY, useMarketConflicts } from '@/hooks/use-market-conflicts';
+import { NoConflictConfirmation } from './market-conflict-panel';
+
 import { Checkbox, Stack, Text } from '@chakra-ui/react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -153,6 +156,7 @@ function useJudgementWrite<V>(
       }
       setRefusal(failure.message);
       if (failure.refresh) {
+        void queryClient.invalidateQueries({ queryKey: [...MARKET_CONFLICTS_KEY, market.id] });
         void queryClient.invalidateQueries({ queryKey: adminMarketKey(market.id) });
       }
     },
@@ -335,6 +339,9 @@ function ApproveJudgementDialog({
   const [early] = useState(() => judgementEarly(market));
   const [reasonText, setReasonText] = useState('');
   const [confirmed, setConfirmed] = useState(false);
+  const [noConflict, setNoConflict] = useState(false);
+  const conflicts = useMarketConflicts(market.id);
+  const conflictBlocked = conflicts.data?.operator.conflicted === true;
   const end = judgementCorrectionEnd(decided.request, market, readAt);
   const correction = end !== null;
   const texts = judgementDecisionTexts('approve', end);
@@ -346,7 +353,12 @@ function ApproveJudgementDialog({
       unwrap(
         await api.POST('/api/v1/admin/markets/{id}/judgements/{requestId}/approve', {
           params: { path: { id: market.id, requestId } },
-          body: { reason, eventDeadlineConfirmed, expectedAccountId: by },
+          body: {
+            reason,
+            eventDeadlineConfirmed,
+            expectedAccountId: by,
+            noConflictConfirmed: true,
+          },
         }),
       ).data,
   );
@@ -363,12 +375,19 @@ function ApproveJudgementDialog({
       body={texts.body}
       confirmLabel={copy.adminMarketJudgementApprove}
       pending={mutation.isPending}
-      confirmDisabled={!draft.ready || operatorId === undefined || decided.changed}
+      confirmDisabled={
+        !noConflict ||
+        conflictBlocked ||
+        !draft.ready ||
+        operatorId === undefined ||
+        decided.changed
+      }
       refusal={refusal ?? (decided.changed ? copy.adminMarketJudgementRequestChanged : null)}
       onClose={() => onClose(false)}
       onConfirm={() => {
         const requestId = decided.request?.requestId;
-        if (operatorId === undefined || requestId === undefined) return;
+        if (!noConflict || conflictBlocked || operatorId === undefined || requestId === undefined)
+          return;
         mutation.mutate({
           requestId,
           reason: draft.reason,
@@ -380,6 +399,13 @@ function ApproveJudgementDialog({
       <Stack gap="4">
         <PinnedJudgementLine request={decided.request} testId="market-judgement-approve-request" />
         {correction && <CorrectionWindowLine market={market} />}
+        <NoConflictConfirmation
+          blocked={conflictBlocked}
+          checked={noConflict}
+          onChecked={setNoConflict}
+          disabled={mutation.isPending}
+          testId="market-judgement-approve-confirm-conflict"
+        />
         <ApproveJudgementFields
           asked={asked}
           noCondition={market.noCondition}

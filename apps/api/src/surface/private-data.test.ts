@@ -3243,6 +3243,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       headers: { origin: ORIGIN, 'content-type': 'application/json', cookie: f.admin.cookie },
       payload: {
         reason: f.sentinels.find((s) => s.label === 'judgement approval reason')!.value,
+        noConflictConfirmed: true,
         eventDeadlineConfirmed: true,
         expectedAccountId: f.admin.id,
       },
@@ -3257,6 +3258,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       headers: { origin: ORIGIN, 'content-type': 'application/json', cookie: f.admin.cookie },
       payload: {
         reason: f.sentinels.find((s) => s.label === 'dispute decision reason')!.value,
+        noConflictConfirmed: true,
         expectedAccountId: f.admin.id,
       },
     });
@@ -3280,6 +3282,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       headers: { origin: ORIGIN, 'content-type': 'application/json', cookie: f.admin.cookie },
       payload: {
         reason: sentinel('correction approval reason'),
+        noConflictConfirmed: true,
         eventDeadlineConfirmed: true,
         expectedAccountId: f.admin.id,
       },

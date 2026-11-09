@@ -5,6 +5,8 @@ import {
   lockAccountOrders,
   lockAdminRoles,
   schema,
+  withTransactionRetry,
+  TransactionBusyError,
   type Db,
 } from '@buddha/db';
 import {
@@ -343,7 +345,7 @@ export class AccountRestrictionService {
     requestId: string,
     reason: string,
   ): Promise<AccountRestrictionDecision> {
-    const { actionId, book } = await this.db.transaction(async (tx) => {
+    const { actionId, book } = await withTransactionRetry(this.db, async (tx) => {
       const { request, change, memberId } = await this.decidable(tx, deciderId, requestId);
       // Every lock first, then the decision and its instant (see above).
       await lockAdminRoles(tx, 'shared');
@@ -354,11 +356,10 @@ export class AccountRestrictionService {
           : { change, action: await this.lockAction(tx, request.targetId!) };
       // An `apply` cancels the member's resting orders (#178): their markets, then the member's
       // Coin accounts in them, last before the decision (the member's profile is held FOR UPDATE).
-      // Open (ADR-0113 결정 4): a member holding the admin role with an order placed before the
-      // grant, deciding a request on that market meanwhile (`lockMarket`, then their profile FOR
-      // SHARE in migration 0021's `approval_requests_keep_record`), meets this in a 40P01 — until
-      // #143's grant cancels those orders; a held market's stay to its recovery.
-      const orders = change === 'apply' ? await lockAccountOrders(tx, memberId) : null;
+      // #143: a held administrator's market decision may need their profile. Do not wait
+      // for that market while holding this profile; retry the entire approval after rollback.
+      const orders =
+        change === 'apply' ? await lockAccountOrders(tx, memberId, { wait: 'nowait' }) : null;
       const decided = await this.approvals.approve(deciderId, request.id, reason, tx);
       const at = decided.decidedAt!;
       let done: { actionId: string; reportIds: string[] };
@@ -408,6 +409,13 @@ export class AccountRestrictionService {
         },
       );
       return { actionId: done.actionId, book: { marketIds: bookMarketIds, at } };
+    }).catch((error: unknown) => {
+      if (error instanceof TransactionBusyError)
+        throw new AppError('TRANSACTION_BUSY', {
+          message: 'The account is busy; retry the approval',
+          cause: error,
+        });
+      throw error;
     });
     await this.publisher.publishBook(book.marketIds, book.at);
     return {

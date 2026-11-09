@@ -8,11 +8,28 @@
  */
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { schema } from '@buddha/db';
+import {
+  applyReconciliationCorrection,
+  findLedgerAccount,
+  lockMarket,
+  lockReconciliationCorrection,
+  previewReconciliationCorrections,
+  runAccountReconciliation,
+  schema,
+} from '@buddha/db';
 import {
   completeOnboarding,
+  createApprovalRequest,
+  damageActualCoinForTest,
   createMarketMakerAccount,
   createPhoneVerification,
+  createMarket,
+  createMarketPause,
+  createUser,
+  mintTestPairs,
+  balanceOf,
+  openOrderIntake,
+  placeTestOrder,
 } from '@buddha/db/test';
 import { type AdminAccount, type AdminRoleChange } from '@buddha/shared';
 import { asc, eq, inArray, sql } from 'drizzle-orm';
@@ -20,9 +37,11 @@ import { type Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminGuard, roleCacheKey } from '../auth/admin.guard.js';
 import { REDIS } from '../infra/redis/redis.provider.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { discoverRoutes, isAdminPath } from '../test/routes.js';
 import { hasTestInfra } from '../test/setup-env.js';
+import { waitForLockWaiter } from '../test/wait.js';
 
 const jsonHeaders = { origin: 'http://localhost:3000', 'content-type': 'application/json' };
 const BASE = '/api/v1/admin/admins';
@@ -191,6 +210,7 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
       actor: { id: a.id, nickname: await nicknameOf(a.id) },
       reason: '운영 인원 추가',
       createdAt: record!.createdAt.toISOString(),
+      tradeEffects: { filledMarketCount: 0, cancelledOrderCount: 0, heldOrderCount: 0 },
     });
     expect(record).toMatchObject({
       adminId: a.id,
@@ -202,6 +222,214 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
     expect(await roleOf(c.id)).toBe('admin');
     // From the next request, on the session C already had.
     expect((await get(BASE, c.cookie)).statusCode).toBe(200);
+  });
+
+  it('previews fill history, atomically cancels non-held orders on grant and preserves holdings', async () => {
+    await openOrderIntake(t.db, { adminId: a.id });
+    const person = (await createUser(t.db, { balanceCoin: 1000n })).user.id;
+    const other = (await createUser(t.db, { balanceCoin: 1000n })).user.id;
+    const normal = await createMarket(t.db, { createdBy: a.id });
+    const held = await createMarket(t.db, { createdBy: a.id });
+    await mintTestPairs(t.db, {
+      marketId: normal.id,
+      yesHolderId: person,
+      noHolderId: other,
+      qty: 1,
+    });
+    const ordinary = await placeTestOrder(t.db, { marketId: normal.id, ownerId: person });
+    const deferred = await placeTestOrder(t.db, { marketId: held.id, ownerId: person });
+    if (ordinary.kind !== 'placed' || deferred.kind !== 'placed') throw new Error('order');
+    await createMarketPause(t.db, { marketId: held.id, by: a.id, reason: 'ledger_failure' });
+    const beforePositions = await t.db
+      .select()
+      .from(schema.positions)
+      .where(eq(schema.positions.userId, person));
+    expect(data(await get(`${BASE}/${person}/grant-preview`))).toEqual({
+      userId: person,
+      filledMarketCount: 1,
+      liveOrderCount: 2,
+      heldOrderCount: 1,
+    });
+    const published = vi.spyOn(t.app.get(MarketPublisher), 'publishBook');
+    const response = await grant({ userId: person, reason: '체결 이력 유지' });
+    expect(response.statusCode, response.body).toBe(201);
+    expect(data<AdminRoleChange>(response).tradeEffects).toEqual({
+      filledMarketCount: 1,
+      cancelledOrderCount: 1,
+      heldOrderCount: 1,
+    });
+    const rows = await t.db
+      .select()
+      .from(schema.orders)
+      .where(inArray(schema.orders.id, [ordinary.order.id, deferred.order.id]));
+    expect(rows.find((row) => row.id === ordinary.order.id)).toMatchObject({
+      status: 'cancelled',
+      cancelReason: 'admin_role',
+    });
+    expect(rows.find((row) => row.id === deferred.order.id)).toEqual(deferred.order);
+    expect((await balanceOf(t.db, person))?.lockedCoin).toBe(50n);
+    expect(
+      await t.db.select().from(schema.positions).where(eq(schema.positions.userId, person)),
+    ).toEqual(beforePositions);
+    expect(published).toHaveBeenCalledExactlyOnceWith([normal.id], expect.any(Date));
+    published.mockRestore();
+  });
+
+  it.each(['profile', 'market', 'balance'] as const)(
+    'rolls back every busy %s grant attempt, then grants exactly once after release',
+    async (resource) => {
+      await openOrderIntake(t.db, { adminId: a.id });
+      const person = (await createUser(t.db, { balanceCoin: 1000n })).user.id;
+      const market = await createMarket(t.db, { createdBy: a.id });
+      const placed = await placeTestOrder(t.db, { marketId: market.id, ownerId: person });
+      if (placed.kind !== 'placed') throw new Error('order');
+      const before = await balanceOf(t.db, person);
+      const published = vi.spyOn(t.app.get(MarketPublisher), 'publishBook');
+      await t.db.transaction(async (tx) => {
+        if (resource === 'market') await lockMarket(tx, market.id);
+        else if (resource === 'profile')
+          await tx
+            .select()
+            .from(schema.profiles)
+            .where(eq(schema.profiles.userId, person))
+            .for('update');
+        else
+          await tx
+            .select()
+            .from(schema.balances)
+            .where(eq(schema.balances.userId, person))
+            .for('update');
+        const refused = await grant({ userId: person, reason: '바쁜 부여' });
+        expect(refused.statusCode, refused.body).toBe(409);
+        expect(errorOf(refused).code).toBe('TRANSACTION_BUSY');
+        expect(await roleOf(person)).toBe('user');
+        expect(await balanceOf(t.db, person)).toEqual(before);
+        expect(
+          (await t.db.select().from(schema.orders).where(eq(schema.orders.id, placed.order.id)))[0],
+        ).toEqual(placed.order);
+        expect(published).not.toHaveBeenCalled();
+      });
+      expect((await grant({ userId: person, reason: '잠금 해제 뒤 부여' })).statusCode).toBe(201);
+      expect(
+        (await records()).filter(
+          (record) => record.type === 'admin_grant' && record.targetId === person,
+        ),
+      ).toHaveLength(1);
+      expect(published).toHaveBeenCalledExactlyOnceWith([market.id], expect.any(Date));
+      published.mockRestore();
+    },
+  );
+
+  async function pendingCorrection(userId: string) {
+    const account = (await findLedgerAccount(t.db, { kind: 'user', userId }))!;
+    await damageActualCoinForTest(account.id, -10n);
+    const audit = await t.db.transaction((tx) =>
+      runAccountReconciliation(tx, { userId }, { source: 'manual' }),
+    );
+    const [correction] = await t.db.transaction((tx) =>
+      previewReconciliationCorrections(tx, audit.result.id),
+    );
+    expect(correction?.mode).toBe('restore_actual');
+    const request = await createApprovalRequest(t.db, {
+      kind: 'reconciliation_correction',
+      targetType: 'ledger_account',
+      targetId: String(account.id),
+      requestedBy: a.id,
+      payload: {
+        failureResultId: String(audit.result.id),
+        candidate: correction!,
+        userReason: '확인한 부족 Coin 복원',
+      },
+    });
+    return { account, audit, request };
+  }
+
+  async function applyPendingCorrection(
+    tx: Parameters<Parameters<TestApp['db']['transaction']>[0]>[0],
+    pending: Awaited<ReturnType<typeof pendingCorrection>>,
+  ) {
+    await tx
+      .update(schema.approvalRequests)
+      .set({
+        status: 'approved',
+        decidedBy: b.id,
+        decisionReason: '장부 확인 뒤 승인',
+        decidedAt: new Date(pending.request.requestedAt.getTime() + 1),
+      })
+      .where(eq(schema.approvalRequests.id, pending.request.id));
+    return applyReconciliationCorrection(tx, {
+      approvalId: pending.request.id,
+      requestedBy: a.id,
+      approverId: b.id,
+    });
+  }
+
+  it('rolls back a busy grant during Coin correction, then grants and cancels once after restoration', async () => {
+    await openOrderIntake(t.db, { adminId: a.id });
+    const person = (await createUser(t.db, { balanceCoin: 1000n })).user.id;
+    const market = await createMarket(t.db, { createdBy: a.id });
+    const placed = await placeTestOrder(t.db, { marketId: market.id, ownerId: person });
+    if (placed.kind !== 'placed') throw new Error('order');
+    const pending = await pendingCorrection(person);
+    const before = await balanceOf(t.db, person);
+    const ledgerBefore = await t.db.select().from(schema.ledgerEntries);
+    const published = vi.spyOn(t.app.get(MarketPublisher), 'publishBook');
+    await t.db.transaction(async (tx) => {
+      await lockReconciliationCorrection(tx, pending.audit.result.id, pending.account.id);
+      const busy = await grant({ userId: person, reason: '보정 중 역할 부여' });
+      expect(busy.statusCode, busy.body).toBe(409);
+      expect(errorOf(busy).code).toBe('TRANSACTION_BUSY');
+      expect(await roleOf(person)).toBe('user');
+      expect(await balanceOf(t.db, person)).toEqual(before);
+      expect(await records()).toEqual([]);
+      expect(
+        (await t.db.select().from(schema.orders).where(eq(schema.orders.id, placed.order.id)))[0],
+      ).toEqual(placed.order);
+      expect(published).not.toHaveBeenCalled();
+      const applied = await applyPendingCorrection(tx, pending);
+      expect(applied.outcome).toBe('recorded');
+      expect(applied.balance.availableCoin + applied.balance.lockedCoin).toBe(1000n);
+    });
+    const granted = await grant({ userId: person, reason: '복원 완료 뒤 역할 부여' });
+    expect(granted.statusCode, granted.body).toBe(201);
+    expect(await roleOf(person)).toBe('admin');
+    expect(await balanceOf(t.db, person)).toMatchObject({ availableCoin: 1000n, lockedCoin: 0n });
+    expect(await t.db.select().from(schema.ledgerEntries)).toEqual(ledgerBefore);
+    expect(await t.db.select().from(schema.reconciliationCorrections)).toHaveLength(1);
+    expect((await t.db.select().from(schema.reconciliationHolds))[0]!.recoveredAt).toBeNull();
+    expect((await records()).filter((record) => record.type === 'admin_grant')).toHaveLength(1);
+    expect(published).toHaveBeenCalledExactlyOnceWith([market.id], expect.any(Date));
+    published.mockRestore();
+  });
+
+  it('lets an approved correction commit before a waiting role revocation without losing its record', async () => {
+    await createUser(t.db, { role: 'admin' }); // Leave the two-admin floor after revoking B.
+    const person = (await createUser(t.db, { balanceCoin: 100n })).user.id;
+    const pending = await pendingCorrection(person);
+    const inspector = await t.db.$client.connect();
+    let revoking: Promise<Awaited<ReturnType<typeof revoke>>> | undefined;
+    try {
+      await t.db.transaction(async (tx) => {
+        await lockReconciliationCorrection(tx, pending.audit.result.id, pending.account.id);
+        revoking = revoke(b.id, { reason: '진행 중 보정 이후 회수' }).then((response) => response);
+        await waitForLockWaiter(inspector, 'role revocation waits for Coin correction');
+        expect(await roleOf(b.id)).toBe('admin');
+        const applied = await applyPendingCorrection(tx, pending);
+        expect(applied.outcome).toBe('recorded');
+      });
+      const revoked = await revoking!;
+      expect(revoked.statusCode, revoked.body).toBe(200);
+    } finally {
+      await revoking;
+      inspector.release();
+    }
+    expect(await roleOf(b.id)).toBe('user');
+    expect(await balanceOf(t.db, person)).toMatchObject({ availableCoin: 100n, lockedCoin: 0n });
+    const corrections = await t.db.select().from(schema.reconciliationCorrections);
+    expect(corrections).toHaveLength(1);
+    expect(corrections[0]).toMatchObject({ approvalId: pending.request.id, approvedBy: b.id });
+    expect((await t.db.select().from(schema.reconciliationHolds))[0]!.recoveredAt).toBeNull();
+    expect((await records()).filter((record) => record.type === 'admin_revoke')).toHaveLength(1);
   });
 
   it('refuses a grant the conditions do not allow, writing nothing', async () => {
@@ -574,7 +802,7 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
           ),
         config as never,
       )) as never);
-    let revoking: ReturnType<typeof revoke> | undefined;
+    let revoking: Promise<Awaited<ReturnType<typeof revoke>>> | undefined;
     try {
       revoking = revoke(c.id, { reason: '담당 종료' });
       await atDelete;

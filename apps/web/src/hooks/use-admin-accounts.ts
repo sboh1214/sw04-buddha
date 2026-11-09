@@ -17,6 +17,7 @@ import {
   type AdminRoleChange,
   unwrap,
 } from '@/lib/api';
+import { MARKET_CONFLICTS_KEY } from './use-market-conflicts';
 import { useSession } from '@/lib/use-session';
 
 /**
@@ -24,6 +25,18 @@ import { useSession } from '@/lib/use-session';
  * the grant search share this prefix, so one invalidation refreshes all three.
  */
 export const ADMIN_ACCOUNTS_KEY = ['admin', 'admins'] as const;
+export function useAdminGrantPreview(userId: string | undefined) {
+  return useQuery({
+    queryKey: [...ADMIN_ACCOUNTS_KEY, 'grant-preview', userId],
+    enabled: userId !== undefined,
+    queryFn: async () =>
+      unwrap(
+        await api.GET('/api/v1/admin/admins/{userId}/grant-preview', {
+          params: { path: { userId: userId! } },
+        }),
+      ).data,
+  });
+}
 const LIST_KEY = [...ADMIN_ACCOUNTS_KEY, 'list'] as const;
 const CHANGES_KEY = [...ADMIN_ACCOUNTS_KEY, 'changes'] as const;
 const CANDIDATES_KEY = [...ADMIN_ACCOUNTS_KEY, 'candidates'] as const;
@@ -113,6 +126,7 @@ function useRefreshAdminAccounts() {
     Promise.all([
       queryClient.invalidateQueries({ queryKey: ADMIN_ACCOUNTS_KEY }),
       queryClient.invalidateQueries({ queryKey: ADMIN_USERS_KEY }),
+      queryClient.invalidateQueries({ queryKey: MARKET_CONFLICTS_KEY }),
     ]);
   return {
     refresh,

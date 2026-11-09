@@ -26,7 +26,11 @@ import { closeDb, createDb, type Db } from './client.js';
 import { loadRootEnv } from './env.js';
 import type { MarketRowWrite } from './market-stats.js';
 import { SEED_MARKETS, type SeedMarket, seedScheduledOpenAt } from './seed-markets.js';
-import { clockTimestamp, lockAdminRoles } from './tx-helpers.js';
+import { clockTimestamp, tryLockAdminRoles } from './tx-helpers.js';
+import { cancelLockedOrders, lockAccountOrders } from './order-cancel.js';
+import { countFilledMarkets } from './market-conflicts.js';
+import { adminRoleChangeTimestamp, marketCreationTimestamp } from './role-boundary.js';
+import { withTransactionRetry } from './transaction-retry.js';
 import {
   account,
   adminActions,
@@ -270,7 +274,7 @@ type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
  * changing nothing, for an account that was revoked once: the seed never gives the role back
  * (owner decision 2026-10-13).
  */
-async function seedOneAdmin(tx: Tx, input: AdminInput, at: Date): Promise<string | undefined> {
+async function seedOneAdmin(tx: Tx, input: AdminInput): Promise<string | undefined> {
   const { email } = input;
   const now = new Date();
   let created = false;
@@ -278,7 +282,8 @@ async function seedOneAdmin(tx: Tx, input: AdminInput, at: Date): Promise<string
   let [existing] = await tx
     .select({ id: user.id, emailVerified: user.emailVerified })
     .from(user)
-    .where(eq(user.email, email));
+    .where(eq(user.email, email))
+    .for('update', { noWait: true });
   if (existing) {
     const [revoked] = await tx
       .select({ id: adminActions.id })
@@ -337,10 +342,15 @@ async function seedOneAdmin(tx: Tx, input: AdminInput, at: Date): Promise<string
   const [profile] = await tx
     .select({ role: profiles.role })
     .from(profiles)
-    .where(eq(profiles.userId, userId));
+    .where(eq(profiles.userId, userId))
+    .for('update', { noWait: true });
   if (!profile) {
     throw new Error('[db:seed] the "user" trigger did not create a profile (run db:migrate)');
   }
+  const locked = await lockAccountOrders(tx, userId, { wait: 'nowait' });
+  const filledMarketCount = await countFilledMarkets(tx, userId);
+  const at = await adminRoleChangeTimestamp(tx, 'admin_grant');
+  const cancelled = await cancelLockedOrders(tx, locked, { reason: 'admin_role', at });
   await tx
     .update(profiles)
     .set({ role: 'admin', updatedAt: at })
@@ -350,7 +360,16 @@ async function seedOneAdmin(tx: Tx, input: AdminInput, at: Date): Promise<string
     type: 'admin_grant',
     targetType: 'user',
     targetId: userId,
-    payload: { reason: SEED_ADMIN_GRANT_REASON },
+    payload: {
+      reason: SEED_ADMIN_GRANT_REASON,
+      tradeEffects: {
+        filledMarketCount,
+        cancelledOrderCount: cancelled.cancelled.length,
+        heldOrderCount: cancelled.held.length,
+      },
+      cancelledOrderIds: cancelled.cancelled.map((order) => order.id),
+      heldOrderIds: cancelled.held.map((order) => order.id),
+    },
     createdAt: at,
   });
 
@@ -397,11 +416,11 @@ async function seedAdmins(
   first: AdminInput,
   second: AdminInput | undefined,
 ): Promise<string | undefined> {
-  return db.transaction(async (tx) => {
+  return withTransactionRetry(db, async (tx) => {
     await lockSeed(tx);
     // After the seed lock, like every taker of both: the admin screen's grants and revokes hold
     // this one too, so "no admin yet" stays true until this commits.
-    await lockAdminRoles(tx, 'exclusive');
+    await tryLockAdminRoles(tx);
     const [anyAdmin] = await tx
       .select({ userId: profiles.userId })
       .from(profiles)
@@ -411,11 +430,9 @@ async function seedAdmins(
     if (!anyAdmin) {
       // One instant per grant, the second strictly after the first, so the history lists them
       // in the order they were made.
-      const firstAt = await dbNow(tx);
-      const firstId = await seedOneAdmin(tx, first, firstAt);
+      const firstId = await seedOneAdmin(tx, first);
       if (second) {
-        const secondAt = new Date(Math.max((await dbNow(tx)).getTime(), firstAt.getTime() + 1));
-        await seedOneAdmin(tx, second, secondAt);
+        await seedOneAdmin(tx, second);
       } else {
         console.log(
           '[db:seed] SEED_SECOND_ADMIN_EMAIL / SEED_SECOND_ADMIN_PASSWORD not set: one admin only — a two-person approval needs a second (#171)',
@@ -848,6 +865,14 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
       const categoryId = categoryIds.get(seed.category);
       if (categoryId === undefined) return { kind: 'no-category' };
 
+      const createdAt = await marketCreationTimestamp(tx);
+      const [creator] = await tx
+        .select({ role: profiles.role })
+        .from(profiles)
+        .where(eq(profiles.userId, adminId));
+      if (creator?.role !== 'admin')
+        throw new Error('[db:seed] market creator no longer holds the admin role');
+
       // `created_at`, `last_price` (NULL: no fill yet) and the statistics are column defaults.
       const [market] = await tx
         .insert(markets)
@@ -862,6 +887,8 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
           closeAt,
           ...times,
           createdBy: adminId,
+          createdAt,
+          updatedAt: createdAt,
         })
         .returning({ id: markets.id, status: markets.status });
       if (!market) throw new Error(`[db:seed] market ${seed.slug}: insert returned no row`);
@@ -875,13 +902,14 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
           actorId: adminId,
           toStatus: 'draft',
           payload: { source: 'seed' },
+          createdAt,
         })
         .returning({ id: marketEvents.id });
       // The status key every transition writes (M5): the 'created' event is what put the row in
       // `draft`, so a `market:status` a client compares this row against orders after it.
       await tx
         .update(markets)
-        .set({ statusEventId: created?.id ?? null })
+        .set({ statusEventId: created?.id ?? null, updatedAt: createdAt })
         .where(eq(markets.id, market.id));
       return { kind: 'inserted', status: market.status, closeAt };
     });

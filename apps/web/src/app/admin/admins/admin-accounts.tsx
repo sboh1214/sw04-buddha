@@ -23,6 +23,7 @@ import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import {
   useAdminGrantCandidates,
+  useAdminGrantPreview,
   useAdminRoleChanges,
   useAdmins,
   useGrantAdmin,
@@ -369,6 +370,7 @@ function RoleChangeDialog({ change, onClose }: { change: PendingRoleChange; onCl
   });
   const loading = grant.isPending || revoke.isPending;
   const isGrant = change.kind === 'grant';
+  const preview = useAdminGrantPreview(isGrant ? change.account.id : undefined);
   const self = isGrant ? false : revokesSelf(change.account.id, operatorId);
 
   const onError = (error: unknown) => {
@@ -387,6 +389,7 @@ function RoleChangeDialog({ change, onClose }: { change: PendingRoleChange; onCl
 
   const submit = handleSubmit(({ reason }) => {
     if (operatorId === undefined) return;
+    if (isGrant && preview.data === undefined) return;
     setRefusal(null);
     const userId = change.account.id;
     if (isGrant) {
@@ -449,6 +452,40 @@ function RoleChangeDialog({ change, onClose }: { change: PendingRoleChange; onCl
                 <Text fontSize="sm" color="fg.muted">
                   {isGrant ? copy.adminAccountsGrantNotice : copy.adminAccountsRevokeNotice}
                 </Text>
+                <Text fontSize="sm">
+                  {isGrant ? copy.adminGrantTradeNotice : copy.adminRevokeTradeNotice}
+                </Text>
+                {isGrant &&
+                  (preview.isPending ? (
+                    <Skeleton height="16" />
+                  ) : preview.data === undefined ? (
+                    <Stack gap="2">
+                      <Text role="alert">{copy.errUnknown}</Text>
+                      <Button size="sm" onClick={() => void preview.refetch()}>
+                        {copy.retry}
+                      </Button>
+                    </Stack>
+                  ) : (
+                    <Stack gap="1" fontSize="sm" data-testid="admin-grant-preview">
+                      <Text fontWeight="medium">{copy.adminGrantTradeEffects}</Text>
+                      <Text>
+                        {copy.adminGrantFilledMarkets}:{' '}
+                        {preview.data.filledMarketCount.toLocaleString('ko-KR')}
+                      </Text>
+                      <Text>
+                        {copy.adminGrantLiveOrders}:{' '}
+                        {preview.data.liveOrderCount.toLocaleString('ko-KR')}
+                      </Text>
+                      <Text>
+                        {copy.adminGrantHeldOrders}:{' '}
+                        {preview.data.heldOrderCount.toLocaleString('ko-KR')}
+                      </Text>
+                      <Text color="fg.muted">{copy.adminGrantPreviewNotice}</Text>
+                      {preview.isRefetchError && (
+                        <Text role="status">{copy.adminMarketRefreshFailed}</Text>
+                      )}
+                    </Stack>
+                  ))}
                 {self === true && (
                   <Alert.Root status="warning">
                     <Alert.Indicator />
@@ -490,7 +527,7 @@ function RoleChangeDialog({ change, onClose }: { change: PendingRoleChange; onCl
                 size="sm"
                 colorPalette={isGrant ? undefined : 'red'}
                 loading={loading}
-                disabled={operatorId === undefined}
+                disabled={operatorId === undefined || (isGrant && preview.data === undefined)}
                 onClick={() => void submit()}
                 data-testid="admin-role-submit"
               >
@@ -584,6 +621,21 @@ function ChangeRow({ entry }: { entry: AdminRoleChange }) {
       <Text fontSize="xs" color="fg.muted" data-testid="admin-role-change-actor">
         {copy.adminAccountsChangeActor} {nicknameShown(entry.actor.nickname)}
       </Text>
+      {entry.tradeEffects !== undefined && (
+        <Stack gap="0.5" fontSize="xs" data-testid="admin-role-change-trades">
+          <Text>
+            {copy.adminGrantFilledMarkets}:{' '}
+            {entry.tradeEffects.filledMarketCount.toLocaleString('ko-KR')}
+          </Text>
+          <Text>
+            {copy.adminGrantCancelledOrders}:{' '}
+            {entry.tradeEffects.cancelledOrderCount.toLocaleString('ko-KR')}
+          </Text>
+          <Text>
+            {copy.adminGrantHeldOrders}: {entry.tradeEffects.heldOrderCount.toLocaleString('ko-KR')}
+          </Text>
+        </Stack>
+      )}
     </Stack>
   );
 }

@@ -1,3 +1,5 @@
+import { marketCreationTimestamp } from '@buddha/db';
+import { assertMarketConflictAdmin } from './market-conflicts.js';
 import { Inject, Injectable } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import {
@@ -633,6 +635,8 @@ export class MarketAdminService {
     // already saw. Its refusal is thrown after the close time's, so the error precedence is
     // unchanged: a past closeAt is named before the category.
     const category = await readCategorySelectability(tx, body.categoryId);
+    const createdAt = await marketCreationTimestamp(tx);
+    await assertMarketConflictAdmin(tx, adminId);
     const now = await clockTimestamp(tx);
     assertFutureCloseAt(closeAt, now);
     assertSelectableCategory(category);
@@ -655,6 +659,8 @@ export class MarketAdminService {
           ...timeColumns(times),
           priceProtectionTicks,
           createdBy: adminId,
+          createdAt,
+          updatedAt: createdAt,
         })
         .returning();
     } catch (error) {
@@ -690,13 +696,13 @@ export class MarketAdminService {
         // The body is JSON-safe as parsed: strings, numbers, nulls, the tag names and the sources
         // as sent.
         payload: { ...body, slug },
-        createdAt: now,
+        createdAt,
       })
       .returning({ id: schema.marketEvents.id });
     if (!event) throw new AppError('INTERNAL', { message: 'Market event insert failed' });
     const [row] = await tx
       .update(schema.markets)
-      .set({ statusEventId: event.id })
+      .set({ statusEventId: event.id, updatedAt: createdAt })
       .where(eq(schema.markets.id, inserted.id))
       .returning();
     if (!row) throw new AppError('INTERNAL', { message: 'Market update failed' });
@@ -706,7 +712,7 @@ export class MarketAdminService {
       targetType: 'market',
       targetId: row.id,
       payload: { after: snapshot(row, tags, sources) },
-      createdAt: now,
+      createdAt,
     });
     // Read the detail inside the transaction, as every other write path does: after the
     // commit it would be a fresh snapshot on the pool and could already show somebody

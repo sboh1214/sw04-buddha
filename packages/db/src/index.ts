@@ -229,6 +229,7 @@ export {
 export {
   clockTimestamp,
   lockAdminRoles,
+  tryLockAdminRoles,
   lockMarket,
   lockMarkets,
   type StatementExecutor,
@@ -237,3 +238,6 @@ export * from './market-settlement.js';
 export * from './reconciliation-audit.js';
 export * from './reconciliation-recovery.js';
 export * from './reconciliation-correction.js';
+export * from './market-conflicts.js';
+export * from './role-boundary.js';
+export * from './transaction-retry.js';

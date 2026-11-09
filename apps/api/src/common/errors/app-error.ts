@@ -87,6 +87,7 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   // `order.accepting`, or an immediate order on a market with no price-protection width — a
   // conflict with that state, no order row written; the same request passes once it opens.
   ORDER_INTAKE_CLOSED: HttpStatus.CONFLICT,
+  TRANSACTION_BUSY: HttpStatus.CONFLICT,
   INTERNAL: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 

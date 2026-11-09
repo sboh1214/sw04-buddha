@@ -2472,6 +2472,7 @@ export async function sendJudgementRegistration(
       },
       description: options.description ?? HELPER_JUDGEMENT_DESCRIPTION,
       correction: options.correction ?? null,
+      noConflictConfirmed: true,
       expectedAccountId: await accountIdOf(context),
     },
   });
@@ -2510,7 +2511,11 @@ export async function sendJudgementDecision(
   body: Record<string, unknown> = {},
 ): Promise<APIResponse> {
   return context.post(`/api/v1/admin/markets/${marketId}/judgements/${requestId}/${decision}`, {
-    data: { ...body, expectedAccountId: await accountIdOf(context) },
+    data: {
+      ...(decision === 'approve' ? { noConflictConfirmed: true } : {}),
+      ...body,
+      expectedAccountId: await accountIdOf(context),
+    },
   });
 }
 

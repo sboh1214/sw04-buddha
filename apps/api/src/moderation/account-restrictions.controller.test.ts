@@ -1908,11 +1908,10 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
       await expectSound();
     });
 
-    it('commits with an admin’s market action and a role grant at once: the queue is reordered, no deadlock (ADR-0113)', async () => {
+    it('rolls back busy approval before waiting on a market, lets role changes finish, then retries once', async () => {
       await place({ marketId: market.id, ownerId: member.id, limitPriceCoin: 40 });
       const request = requestOf(await ask(7));
       const grantee = await onboarded();
-      const observer = await t.db.$client.connect();
       let proceed = () => {};
       const asking = new Promise<void>((resolve) => {
         proceed = resolve;
@@ -1921,42 +1920,41 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
       const holding = new Promise<void>((resolve) => {
         held = resolve;
       });
-      // An admin's market action as MarketAdminService takes its locks: the market's, then the
-      // admin roles' (shared).
       const action = t.db.transaction(async (tx) => {
         await lockMarket(tx, market.id);
         held();
         await asking;
         await lockAdminRoles(tx, 'shared');
       });
-      let approving: Promise<Res> | undefined;
-      let granting: Promise<void> | undefined;
       try {
         await Promise.race([holding, action]);
-        // The approval holds the roles' lock (shared) and the member's profile, then waits on
-        // the market of the member's order.
-        approving = approve(request.id);
-        await waitForLockWaiter(observer, 'the approval behind the market action');
-        // A grant queues for the roles' lock (exclusive) behind the approval.
-        granting = t.db.transaction(async (tx) => {
+        // All bounded attempts roll back. No waiting market acquisition keeps the roles or
+        // target profile locked, and the client can safely repeat the complete operation.
+        const busy = await approve(request.id);
+        expect(busy.statusCode, busy.body).toBe(409);
+        expect(busy.json<{ error: { code: string } }>().error.code).toBe('TRANSACTION_BUSY');
+        expect(await accountActions()).toEqual([]);
+        expect(await audits('account_restriction_approve')).toEqual([]);
+        const [pending] = await t.db
+          .select()
+          .from(schema.approvalRequests)
+          .where(eq(schema.approvalRequests.id, request.id));
+        expect(pending?.status).toBe('pending');
+        // A role change finishes while the market is still held: the failed operation has
+        // released its shared role lock, rather than creating the old soft/hard lock cycle.
+        await t.db.transaction(async (tx) => {
           await lockAdminRoles(tx, 'exclusive');
           await tx
             .update(schema.profiles)
             .set({ role: 'admin' })
             .where(eq(schema.profiles.userId, grantee.id));
         });
-        await waitForLockWaiter(observer, 'the grant behind the approval', 2);
-        // The action now asks for the roles' lock behind the waiting grant: PostgreSQL moves it
-        // ahead (a soft cycle) after deadlock_timeout, and all three commit.
-        proceed();
-        await action;
-        expect(decisionOf(await approving).action).not.toBeNull();
-        await granting;
       } finally {
         proceed();
-        await Promise.allSettled([action, approving, granting]);
-        observer.release();
+        await action;
       }
+      expect(decisionOf(await approve(request.id)).action).not.toBeNull();
+      expect(await audits('account_restriction_approve')).toHaveLength(1);
       const [order] = await t.db
         .select()
         .from(schema.orders)

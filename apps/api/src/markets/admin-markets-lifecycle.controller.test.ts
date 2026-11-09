@@ -95,7 +95,13 @@ describe.skipIf(!hasTestInfra)('admin markets lifecycle (integration)', () => {
       method: 'POST',
       url,
       headers: { ...jsonHeaders, cookie: who.cookie },
-      payload: { expectedAccountId: who.id, ...payload },
+      payload: {
+        expectedAccountId: who.id,
+        ...(/\/judgements(?:$|\/[^/]+\/approve$)|\/disputes\/[^/]+\/(?:accept|dismiss)$/.test(url)
+          ? { noConflictConfirmed: true }
+          : {}),
+        ...payload,
+      },
     });
   const patch = (url: string, payload: Record<string, unknown>, who: TestUser = admin) =>
     t.app.inject({

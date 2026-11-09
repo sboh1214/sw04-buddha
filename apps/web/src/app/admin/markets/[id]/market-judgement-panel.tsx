@@ -1,5 +1,8 @@
 'use client';
 
+import { MARKET_CONFLICTS_KEY, useMarketConflicts } from '@/hooks/use-market-conflicts';
+import { NoConflictConfirmation } from './market-conflict-panel';
+
 import {
   Alert,
   Badge,
@@ -910,6 +913,9 @@ export function JudgementRegisterForm({
   );
   const set = (patch: Partial<JudgementFormValues>) => setValues((held) => ({ ...held, ...patch }));
   const [tried, setTried] = useState(false);
+  const [noConflict, setNoConflict] = useState(false);
+  const conflicts = useMarketConflicts(market.id);
+  const conflictBlocked = conflicts.data?.operator.conflicted === true;
   const [fieldError, setFieldError] = useState<FieldRefusal | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [sentLocal, setSentLocal] = useState<string | null>(null);
@@ -950,7 +956,7 @@ export function JudgementRegisterForm({
       unwrap(
         await api.POST('/api/v1/admin/markets/{id}/judgements', {
           params: { path: { id: market.id } },
-          body: { ...registration, expectedAccountId: by },
+          body: { ...registration, expectedAccountId: by, noConflictConfirmed: true },
         }),
       ).data,
     onMutate: () => {
@@ -983,6 +989,7 @@ export function JudgementRegisterForm({
       }
       setRefusal(failure.message);
       if (failure.refresh) {
+        void queryClient.invalidateQueries({ queryKey: [...MARKET_CONFLICTS_KEY, market.id] });
         void queryClient.invalidateQueries({ queryKey: adminMarketKey(market.id) });
       }
     },
@@ -991,7 +998,14 @@ export function JudgementRegisterForm({
   const submit = () => {
     setTried(true);
     setRefusal(null);
-    if (operatorId === undefined || unavailable !== null || draft.registration === null) return;
+    if (
+      !noConflict ||
+      conflictBlocked ||
+      operatorId === undefined ||
+      unavailable !== null ||
+      draft.registration === null
+    )
+      return;
     setSentLocal(values.collectedLocal);
     register.mutate({ registration: draft.registration, by: operatorId });
   };
@@ -1130,12 +1144,21 @@ export function JudgementRegisterForm({
               </Alert.Content>
             </Alert.Root>
           )}
+          <NoConflictConfirmation
+            blocked={conflictBlocked}
+            checked={noConflict}
+            onChecked={setNoConflict}
+            disabled={register.isPending}
+            testId="market-judgement-confirm-conflict"
+          />
           <HStack gap="2" flexWrap="wrap">
             <Button
               type="submit"
               size="sm"
               loading={register.isPending}
-              disabled={operatorId === undefined || unavailable !== null}
+              disabled={
+                !noConflict || conflictBlocked || operatorId === undefined || unavailable !== null
+              }
               data-testid="market-judgement-submit"
             >
               {correct

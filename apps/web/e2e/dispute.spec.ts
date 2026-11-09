@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { APIRequestContext, APIResponse, Locator, Page, Request } from '@playwright/test';
-import type {
-  AdminDisputeQueueItem,
-  AdminMarket,
-  Market,
-  MyDispute,
-  MyMarketDispute,
-  SubmitDisputeBody,
+import {
+  adminDisputeQueueItemSchema,
+  type AdminMarket,
+  type Market,
+  type MyDispute,
+  type MyMarketDispute,
+  type SubmitDisputeBody,
 } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { formatKst } from '../src/lib/datetime';
@@ -50,8 +50,9 @@ import {
  * The only fill on a market a spec judges is the helper's own pair before its close (helpers.ts
  * `closeMarket`: since #20 a market with no fill is cancelled, not closed) — two members of the
  * worker's own, never the spec's member — and only a member with a fill on the market may dispute
- * it (#173 item 6) — on the deployed environment too, where nobody is eligible while the order
- * intake stays closed (ADR-0107 결정 3). So a dispute is never submitted for real here: a
+ * it (#173 item 6). This file's member therefore submits no real dispute. Other specs now use
+ * eligible traders for real disputes (#143 conflicts, #24 judging-record), and their permanent
+ * decisions may already appear in the admin queue. The remaining boundaries — a
  * 판정 이의 that holds a market, its 기각 and 수용, the hold past the deadline ('판정 지연'), '이의 검토 중' and
  * the confirmation right after the last 기각 are the database's, the API's and the worker's
  * integration tests (packages/db market-dispute.test.ts, market-disputes.controller.test.ts,
@@ -67,10 +68,13 @@ import {
  * unit-tested (dispute-screen.test.tsx, my-disputes.test.tsx, market-dispute-panel.test.tsx,
  * admin-disputes.test.tsx). What stays here is real: the refusals a
  * member without a fill and an operator meet, the deadline the API keeps on its own clock, the
- * public data, the gates, the empty lists — and the market with no dispute confirmed at its
+ * public data, the gates, the member's empty list — and the market with no dispute confirmed at its
  * deadline as before. The form's 내기 and 철회 are walked once with the member's own reads and writes
  * answered in the browser (`page.route`, market.spec.ts' precedent): client-only, labelled so, and
- * nothing reaches the API. There the form and the dispute are held inside the screen's width,
+ * nothing reaches the API. The admin queue's empty-state rendering also uses browser-only empty
+ * responses, after checking the real API's authorization, DTOs and status filters; it makes no
+ * claim that the shared database is empty and never deletes another spec's history.
+ * There the form and the dispute are held inside the screen's width,
  * which the mobile-375 project measures at a phone's (PLAN 13 M4 AC 5's 375px).
  *
  * The dispute window is the 1분 the suite's global setup enters (global-setup.ts), so every
@@ -644,57 +648,78 @@ test.describe('판정 이의', () => {
     }
   });
 
-  test('관리자 메뉴의 이의 접수는 테마 다음에 있고, 검토 대기와 처리됨 모두 비어 있다고 말한다', async ({
+  test('관리자 메뉴의 이의 접수는 테마 다음에 있고, 빈 상태 화면 시험에서는 검토 대기와 처리됨 모두 비어 있다고 말한다', async ({
     admin,
     page,
   }) => {
-    // Only the helper's members trade on a market a spec judges, and they never dispute, so no
-    // database these specs run on holds a dispute: both halves are empty, in the API and on screen.
+    // The real API still checks this admin's access and returns the documented queue contract.
+    // Real disputes from other specs are permanent history; neither half must be globally empty.
     for (const status of ['pending', 'decided']) {
       const response = await admin.get(`/api/v1/admin/market-disputes?status=${status}`);
       const body = await response.text();
       expect(response.ok(), body).toBe(true);
+      const envelope = JSON.parse(body) as { data: unknown; meta: { nextCursor: unknown } };
+      const rows = adminDisputeQueueItemSchema.array().parse(envelope.data);
       expect(
-        JSON.parse(body) as { data: AdminDisputeQueueItem[]; meta: { nextCursor: string | null } },
+        rows.every((row) =>
+          status === 'pending' ? row.status === 'pending' : row.status !== 'pending',
+        ),
         status,
-      ).toEqual({ data: [], meta: { nextCursor: null } });
+      ).toBe(true);
+      expect(
+        envelope.meta.nextCursor === null || typeof envelope.meta.nextCursor === 'string',
+        status,
+      ).toBe(true);
     }
 
-    await signIn(page, adminAccount.email, adminAccount.password);
-    await page.goto('/admin/markets');
-    const nav = page.getByTestId('admin-nav');
-    expect((await nav.getByRole('link').allTextContents()).slice(0, 4)).toEqual([
-      copy.adminMarkets,
-      copy.adminMarketReviews,
-      copy.adminThemes,
-      copy.adminDisputes,
-    ]);
-    await nav.getByRole('link', { name: copy.adminDisputes, exact: true }).click();
-    await expect(page).toHaveURL('/admin/disputes');
-    const screen = page.getByTestId('admin-disputes');
-    await expect(screen).toHaveAttribute('data-status', 'pending');
-    await expect(screen.getByRole('heading', { level: 3 })).toHaveText(copy.adminDisputes);
-    await expect(screen).toContainText(copy.adminDisputesIntro);
-    const pending = page.getByTestId('admin-disputes-queue-pending');
-    const decided = page.getByTestId('admin-disputes-queue-decided');
-    await expect(pending).toHaveText(copy.adminDisputesPending);
-    await expect(pending).toHaveAttribute('aria-current', 'page');
-    await expect(page.getByTestId('admin-disputes-empty')).toHaveText(
-      copy.adminDisputesEmptyPending,
-    );
+    // Client-only empty states: keep the actual login/menu/navigation, but answer only this
+    // page's two queue GETs. No writes or shared database cleanup are involved.
+    const isQueueRead = (url: URL) =>
+      url.pathname === '/api/v1/admin/market-disputes' &&
+      ['pending', 'decided'].includes(url.searchParams.get('status') ?? 'pending');
+    await page.route(isQueueRead, (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      return route.fulfill({ status: 200, json: { data: [], meta: { nextCursor: null } } });
+    });
+    try {
+      await signIn(page, adminAccount.email, adminAccount.password);
+      await page.goto('/admin/markets');
+      const nav = page.getByTestId('admin-nav');
+      expect((await nav.getByRole('link').allTextContents()).slice(0, 4)).toEqual([
+        copy.adminMarkets,
+        copy.adminMarketReviews,
+        copy.adminThemes,
+        copy.adminDisputes,
+      ]);
+      await nav.getByRole('link', { name: copy.adminDisputes, exact: true }).click();
+      await expect(page).toHaveURL('/admin/disputes');
+      const screen = page.getByTestId('admin-disputes');
+      await expect(screen).toHaveAttribute('data-status', 'pending');
+      await expect(screen.getByRole('heading', { level: 3 })).toHaveText(copy.adminDisputes);
+      await expect(screen).toContainText(copy.adminDisputesIntro);
+      const pending = page.getByTestId('admin-disputes-queue-pending');
+      const decided = page.getByTestId('admin-disputes-queue-decided');
+      await expect(pending).toHaveText(copy.adminDisputesPending);
+      await expect(pending).toHaveAttribute('aria-current', 'page');
+      await expect(page.getByTestId('admin-disputes-empty')).toHaveText(
+        copy.adminDisputesEmptyPending,
+      );
 
-    await decided.click();
-    await expect(page).toHaveURL('/admin/disputes?status=decided');
-    await expect(screen).toHaveAttribute('data-status', 'decided');
-    await expect(decided).toHaveAttribute('aria-current', 'page');
-    await expect(pending).not.toHaveAttribute('aria-current', 'page');
-    await expect(page.getByTestId('admin-disputes-empty')).toHaveText(
-      copy.adminDisputesEmptyDecided,
-    );
+      await decided.click();
+      await expect(page).toHaveURL('/admin/disputes?status=decided');
+      await expect(screen).toHaveAttribute('data-status', 'decided');
+      await expect(decided).toHaveAttribute('aria-current', 'page');
+      await expect(pending).not.toHaveAttribute('aria-current', 'page');
+      await expect(page.getByTestId('admin-disputes-empty')).toHaveText(
+        copy.adminDisputesEmptyDecided,
+      );
 
-    await pending.click();
-    await expect(page).toHaveURL('/admin/disputes');
-    await expect(screen).toHaveAttribute('data-status', 'pending');
+      await pending.click();
+      await expect(page).toHaveURL('/admin/disputes');
+      await expect(screen).toHaveAttribute('data-status', 'pending');
+    } finally {
+      await page.unroute(isQueueRead);
+    }
   });
 
   test('방문자는 MY 판정 이의에서도 제출 화면에서도 로그인으로 가고, 가입 절차가 남은 계정은 MY 판정 이의를 열지만 제출 화면은 온보딩으로 가며 API도 그 제출을 거절한다', async ({

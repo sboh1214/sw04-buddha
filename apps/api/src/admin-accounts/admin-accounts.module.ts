@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module.js';
 import { DbModule } from '../infra/db/db.module.js';
 import { RedisModule } from '../infra/redis/redis.module.js';
+import { RealtimeModule } from '../realtime/realtime.module.js';
 import { AdminAccountsController } from './admin-accounts.controller.js';
 import { AdminAccountsService } from './admin-accounts.service.js';
 
@@ -11,7 +12,7 @@ import { AdminAccountsService } from './admin-accounts.service.js';
  * RedisModule are imported for it as well.
  */
 @Module({
-  imports: [DbModule, RedisModule, AuthModule],
+  imports: [DbModule, RedisModule, AuthModule, RealtimeModule],
   controllers: [AdminAccountsController],
   providers: [AdminAccountsService],
 })

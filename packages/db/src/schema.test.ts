@@ -1621,6 +1621,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(Object.keys(defs)).toEqual([
         'admin_actions_market_target_idx',
         'admin_actions_pkey',
+        'admin_actions_revocation_target_idx', // #143: latest recorded revocation per account
         'admin_actions_role_change_created_at_id_idx',
         'admin_actions_type_created_at_id_idx',
       ]);

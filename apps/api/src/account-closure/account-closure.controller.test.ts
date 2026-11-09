@@ -146,7 +146,13 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       method: 'POST',
       url: `/api/v1${url}`,
       headers: { origin: TRUSTED_ORIGIN, 'content-type': 'application/json', cookie: who.cookie },
-      payload: JSON.stringify({ expectedAccountId: who.id, ...payload }),
+      payload: JSON.stringify({
+        expectedAccountId: who.id,
+        ...(/\/disputes\/[^/]+\/(?:accept|dismiss)$/.test(url)
+          ? { noConflictConfirmed: true }
+          : {}),
+        ...payload,
+      }),
     });
   const close = (who: TestUser, confirmation = '탈퇴') =>
     post('/me/closure', { confirmation }, who);

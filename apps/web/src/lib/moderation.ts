@@ -1385,6 +1385,7 @@ export type ModerationFailure =
 
 export function moderationFailure(error: unknown): ModerationFailure {
   const alert = (message: string): ModerationFailure => ({ kind: 'alert', message });
+  if (isApiError(error, 'TRANSACTION_BUSY')) return alert(copy.errTransactionBusy);
   if (isForAnotherAccount(error)) return { kind: 'toast', message: copy.sessionChanged };
   if (isApiError(error, 'UNAUTHENTICATED')) return alert(copy.errUnauthenticated);
   // Not the account check above: AdminGuard's, once another admin revoked this one's role.

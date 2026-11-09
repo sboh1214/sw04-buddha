@@ -349,6 +349,7 @@ export type ReleaseSettingState = components['schemas']['ReleaseSettingState'];
 export type AdminAccount = components['schemas']['AdminAccount'];
 /** One admin grant or revoke as recorded: account, admin, reason and time (#171). */
 export type AdminRoleChange = components['schemas']['AdminRoleChange'];
+export type AdminMarketConflictWrite = components['schemas']['AdminMarketConflictWrite'];
 /**
  * `POST /admin/admins`: the account to make an admin and why (required, recorded), and the admin
  * on screen (`expectedAccountId`).

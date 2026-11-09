@@ -516,7 +516,10 @@ export interface JudgementFormErrors {
 }
 
 /** The registration's fields without the admin it names (ADR-0092). */
-export type JudgementRegistration = Omit<RegisterJudgementBody, 'expectedAccountId'>;
+export type JudgementRegistration = Omit<
+  RegisterJudgementBody,
+  'expectedAccountId' | 'noConflictConfirmed'
+>;
 
 /**
  * 판정 등록 as the form holds it (`registerJudgementBodySchema`'s rules, which the API checks again):
@@ -834,7 +837,7 @@ const JUDGEMENT_REFUSAL_MESSAGES: Readonly<Record<ApprovalRefusal, string>> = {
   not_requester: copy.errApprovalNotRequester,
   creator: copy.errApprovalCreator,
   editor: copy.errApprovalEditor,
-  no_decider: copy.errApprovalNoDecider,
+  no_decider: copy.marketConflictNoDecider,
 };
 
 /**
@@ -901,7 +904,13 @@ export function judgementFailure(error: unknown, write: JudgementWrite): Judgeme
   if (isForAnotherAccount(error)) return { kind: 'toast', message: copy.sessionChanged };
   if (isApiError(error, 'UNAUTHENTICATED')) return alert(copy.errUnauthenticated);
   // Not the account check above: AdminGuard's, once another admin revoked this one's role.
-  if (isApiError(error, 'FORBIDDEN')) return alert(copy.adminOnly);
+  if (isApiError(error, 'FORBIDDEN'))
+    return alert(
+      validationMessage(error) === 'market_conflict' ? copy.marketConflictRefused : copy.adminOnly,
+      validationMessage(error) === 'market_conflict',
+    );
+  if (isApiError(error, 'VALIDATION_ERROR') && validationField(error) === 'noConflictConfirmed')
+    return alert(copy.marketConflictConfirmRequired);
   if (isApiError(error, 'APPROVAL_NOT_ALLOWED')) {
     const refusal = APPROVAL_REFUSALS.find((reason) => reason === validationMessage(error));
     return alert(

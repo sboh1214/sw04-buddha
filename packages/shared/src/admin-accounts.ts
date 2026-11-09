@@ -111,7 +111,26 @@ export const adminRevokeBodySchema = z
 export type AdminRevokeBody = z.infer<typeof adminRevokeBodySchema>;
 
 /** `admin_actions.payload` of an `admin_grant` or `admin_revoke` row. */
-export const adminRoleChangePayloadSchema = z.object({ reason: z.string() });
+export const adminGrantTradeEffectsSchema = z.object({
+  filledMarketCount: z.number().int().nonnegative(),
+  cancelledOrderCount: z.number().int().nonnegative(),
+  heldOrderCount: z.number().int().nonnegative(),
+});
+export const adminGrantPreviewSchema = z
+  .object({
+    userId: adminAccountIdSchema,
+    filledMarketCount: z.number().int().nonnegative(),
+    liveOrderCount: z.number().int().nonnegative(),
+    heldOrderCount: z.number().int().nonnegative(),
+  })
+  .meta({ id: 'AdminGrantPreview' });
+export type AdminGrantPreview = z.infer<typeof adminGrantPreviewSchema>;
+export const adminRoleChangePayloadSchema = z.object({
+  reason: z.string(),
+  tradeEffects: adminGrantTradeEffectsSchema.optional(),
+  cancelledOrderIds: z.array(z.uuid()).optional(),
+  heldOrderIds: z.array(z.uuid()).optional(),
+});
 export type AdminRoleChangePayload = z.infer<typeof adminRoleChangePayloadSchema>;
 
 export const ADMIN_ROLE_CHANGE_TYPES = ['admin_grant', 'admin_revoke'] as const;
@@ -140,6 +159,7 @@ export const adminRoleChangeSchema = z
     actor: adminAccountActorSchema,
     reason: z.string(),
     createdAt: z.iso.datetime(),
+    tradeEffects: adminGrantTradeEffectsSchema.optional(),
   })
   .meta({ id: 'AdminRoleChange' });
 export type AdminRoleChange = z.infer<typeof adminRoleChangeSchema>;

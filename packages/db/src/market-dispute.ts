@@ -20,6 +20,7 @@ import { and, asc, desc, eq, gt, inArray, sql, type SQL, type SQLWrapper } from 
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { alias } from 'drizzle-orm/pg-core';
 import { isHumanAccountSql } from './account-types.js';
+import { assertNoMarketConflict } from './market-conflicts.js';
 import type * as schema from './schema/index.js';
 import {
   approvalRequests,
@@ -431,6 +432,7 @@ export async function decideMarketDispute(
   if (refusal === 'own')
     throw new Error('A dispute is decided by an admin other than its submitter');
   if (refusal !== null) return { decided: false, reason: refusal };
+  await assertNoMarketConflict(tx, market.id, [adminId]);
 
   const [decided] = await tx
     .update(marketDisputes)
