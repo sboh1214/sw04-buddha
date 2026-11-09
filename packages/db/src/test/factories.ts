@@ -9,6 +9,7 @@ import {
   AUTH_USER_NAME,
   CONSENT_ITEMS,
   DEFAULT_JUDGEMENT_TIME_ZONE,
+  MARKET_CANCEL_APPROVAL_KIND,
   MARKET_JUDGEMENT_APPROVAL_KIND,
   MARKET_PAUSE_DECISION_APPROVAL_KIND,
   MARKET_REVIEW_APPROVAL_KIND,
@@ -38,6 +39,7 @@ import {
   tagKey,
   type ImageContentType,
   type JudgementSource,
+  type MarketCancelRequestPayload,
   type MarketJudgementRequestPayload,
   type MarketPauseDecisionRequestPayload,
   type MarketPausePath,
@@ -68,6 +70,11 @@ import {
 import { and, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import { ensureMarketMakerAccount } from '../account-types.js';
 import type { Db } from '../client.js';
+import {
+  cancelScheduledMarket,
+  marketHasHumanFill,
+  type CancelScheduledMarketResult,
+} from '../market-cancel.js';
 import { confirmationHold, type MarketDisputeRow } from '../market-dispute.js';
 import { recordJudgementDelay, type MarketJudgementDelayRow } from '../market-judgement-delay.js';
 import {
@@ -2276,15 +2283,28 @@ export interface DecidePauseInput {
   pause?: Omit<CreateMarketPauseInput, 'marketId'>;
 }
 
+export interface CloseMarketEarlyInput extends DecidePauseInput {
+  /**
+   * Whether the market has a fill a person's account is on before the early close, so it ends
+   * CLOSED (#20): when it has none yet, one records-only fill of two fresh members (`createFill`,
+   * 1 YES at 50 — both orders filled, no live order, no asset and no statistic) is made first.
+   * False leaves the market as it is, so one with no such fill ends CANCELLED. Default true.
+   */
+  humanFill?: boolean;
+}
+
 /** A next path a factory approved: the market after it, the ended pause, the request, the event. */
 export interface PauseDecided {
-  /** The market read back after the approval: `open` or `closed`. */
+  /**
+   * The market read back after the approval: `open`, `closed`, or `cancelled` for an early close
+   * of a market with no fill a person's account is on (#20).
+   */
   market: typeof markets.$inferSelect;
   /** The pause, ended (`resumed` or `early_closed`). */
   pause: MarketPauseRow;
   /** The `market_pause_decision` request, approved. */
   request: typeof approvalRequests.$inferSelect;
-  /** The `resumed` or `closed` event's id, the market's `status_event_id`. */
+  /** The `resumed`, `closed` or `cancelled` event's id, the market's `status_event_id`. */
   eventId: number;
 }
 
@@ -2385,13 +2405,24 @@ async function approvePauseDecision(
  * as it was, the pause `early_closed`. The way a test reaches CLOSED now that the one-admin close
  * is gone: a `basis_change` pause reviewed `judgeable` unless told (Q2). Works on `createMarket`'s
  * bare OPEN market as on `createOpenedMarket`'s.
+ *
+ * Since #20 an early close of a market with no fill a person's account is on cancels it, so the
+ * factory first records one such fill when the market has none (`humanFill`, default true; a
+ * market that traded already gets nothing more). `{ humanFill: false }` leaves the market as it
+ * is: with no such fill it ends `cancelled` by the approver's `cancelled` event (payload
+ * `{cancelledAt, source: 'early_close', reason, pauseId, approvalId, requestedBy, reviewResult}`),
+ * the pause `early_closed` all the same.
  */
 export async function closeMarketEarly(
   db: Db,
   marketId: string,
-  input: DecidePauseInput = {},
+  input: CloseMarketEarlyInput = {},
 ): Promise<PauseDecided> {
-  return approvePauseDecision(db, marketId, 'early_close', input);
+  const { humanFill = true, ...decide } = input;
+  if (humanFill && !(await marketHasHumanFill(db, marketId))) {
+    await createFill(db, { marketId, amountCoin: 50n, qty: 1 });
+  }
+  return approvePauseDecision(db, marketId, 'early_close', decide);
 }
 
 /**
@@ -2407,6 +2438,143 @@ export async function resumeMarket(
   input: DecidePauseInput = {},
 ): Promise<PauseDecided> {
   return approvePauseDecision(db, marketId, 'resume', input);
+}
+
+/** The reason a market cancel factory writes unless given (the request's, the public one). */
+const MARKET_CANCEL_REASON = '사건이 개장 전에 끝나 결과가 이미 정해졌다.';
+
+/** The approval's reason a market cancel factory writes unless given. */
+const MARKET_CANCEL_APPROVAL_REASON = '개장 전 결과 확정을 확인함';
+
+export interface CreateMarketCancelRequestInput {
+  /** A SCHEDULED market: its current `status_event_id` is the request's pin unless given. */
+  marketId: string;
+  /** The requesting admin. Default: a fresh admin. */
+  by?: string;
+  /** The request's reason. Default: a sentence. */
+  reason?: string;
+  /** The pinned status event. Default: the market's `status_event_id` now. */
+  statusEventId?: number;
+  /** The request's instant. Default: the database clock. */
+  requestedAt?: Date;
+  /** A 반려 by another admin instead, a millisecond after the request unless `at` is given. */
+  rejected?: { by: string; reason?: string; at?: Date };
+  /** The requester's 철회 instead, a millisecond after the request unless `at` is given. */
+  retracted?: { at?: Date };
+}
+
+/**
+ * A SCHEDULED market's cancel request (#20, ADR-0117) as `POST /admin/markets/:id/cancel-requests`
+ * leaves it: a `market_cancel` approval request about the market (target `market`, payload
+ * `{statusEventId}` — MarketCancelRequestPayload — and the request's reason), pending, or
+ * rejected or retracted as asked. Changes nothing of the market and writes no event, as the route;
+ * nor its `market_cancel_request` record. The route's checks are not made (the status, one waiting
+ * per market, a decider): a test gives what the route would take, or tests its refusal.
+ */
+export async function createMarketCancelRequest(db: Db, input: CreateMarketCancelRequestInput) {
+  const [market] = await db
+    .select({ statusEventId: markets.statusEventId })
+    .from(markets)
+    .where(eq(markets.id, input.marketId));
+  if (!market) throw new Error(`createMarketCancelRequest: market ${input.marketId} not found`);
+  const statusEventId = input.statusEventId ?? market.statusEventId;
+  if (statusEventId === null) {
+    throw new Error(`createMarketCancelRequest: market ${input.marketId} has no status event`);
+  }
+  const by = input.by ?? (await createUser(db, { role: 'admin' })).user.id;
+  const payload: MarketCancelRequestPayload = { statusEventId };
+  return createApprovalRequest(db, {
+    kind: MARKET_CANCEL_APPROVAL_KIND,
+    targetType: 'market',
+    targetId: input.marketId,
+    payload: { ...payload },
+    requestedBy: by,
+    reason: input.reason ?? MARKET_CANCEL_REASON,
+    ...(input.requestedAt === undefined ? {} : { requestedAt: input.requestedAt }),
+    ...(input.rejected === undefined
+      ? {}
+      : { decision: { status: 'rejected', ...input.rejected } }),
+    ...(input.retracted === undefined ? {} : { retracted: input.retracted }),
+  });
+}
+
+export interface CancelScheduledMarketNowInput {
+  /** The requesting admin. Default: a fresh admin. */
+  requestedBy?: string;
+  /** The approving admin, never the requester (the factory throws). Default: a fresh admin. */
+  approvedBy?: string;
+  /** The request's reason. Default: a sentence. */
+  reason?: string;
+  /** The approval's reason. Default: a sentence. */
+  approvalReason?: string;
+}
+
+/** A SCHEDULED market a factory cancelled: `cancelScheduledMarket`'s result and the request. */
+export type ScheduledMarketCancelled = Extract<CancelScheduledMarketResult, { cancelled: true }> & {
+  /** The `market_cancel` request, approved. */
+  request: typeof approvalRequests.$inferSelect;
+};
+
+/**
+ * 시장 취소 of a SCHEDULED market (#20, ADR-0117; ADR-0107 결정 5 '#20 운영자의 취소 경로') as
+ * `POST /admin/markets/:id/cancel-requests/:requestId/approve` leaves it, in one transaction under
+ * the market lock with the row FOR UPDATE: a `market_cancel` request pinning the market's status
+ * event, approved by another admin with a reason a millisecond and two after the later of the
+ * database clock and the market's last write, its orders locked (`lockMarketOrders`), then
+ * `cancelScheduledMarket` at the approval's instant — the approver's `cancelled` event (payload
+ * `{cancelledAt, source: 'operator', reason, approvalId, requestedBy}`), the market `cancelled`
+ * with its result type null, every live order 만료. No admin records and no job change (the API's).
+ * A market not SCHEDULED throws with the skip reason.
+ */
+export async function cancelScheduledMarketNow(
+  db: Db,
+  marketId: string,
+  input: CancelScheduledMarketNowInput = {},
+): Promise<ScheduledMarketCancelled> {
+  const requestedBy = input.requestedBy ?? (await createUser(db, { role: 'admin' })).user.id;
+  const approvedBy = input.approvedBy ?? (await createUser(db, { role: 'admin' })).user.id;
+  if (approvedBy === requestedBy) {
+    throw new Error('cancelScheduledMarketNow: the requester never approves the cancel');
+  }
+  return db.transaction(async (tx) => {
+    await lockMarket(tx, marketId);
+    const [current] = await tx.select().from(markets).where(eq(markets.id, marketId)).for('update');
+    if (!current) throw new Error(`cancelScheduledMarketNow: market ${marketId} not found`);
+    const orders = await lockMarketOrders(tx, marketId);
+    const base = Math.max((await clockTimestamp(tx)).getTime(), current.updatedAt.getTime());
+    const at = new Date(base + 2);
+    const reason = input.reason ?? MARKET_CANCEL_REASON;
+    const request = await createMarketCancelRequest(tx as unknown as Db, {
+      marketId,
+      by: requestedBy,
+      reason,
+      requestedAt: new Date(base + 1),
+    });
+    const [approved] = await tx
+      .update(approvalRequests)
+      .set({
+        status: 'approved',
+        decidedBy: approvedBy,
+        decisionReason: input.approvalReason ?? MARKET_CANCEL_APPROVAL_REASON,
+        decidedAt: at,
+      })
+      .where(eq(approvalRequests.id, request.id))
+      .returning();
+    const result = await cancelScheduledMarket(tx, {
+      market: current,
+      orders,
+      now: at,
+      approverId: approvedBy,
+      approvalId: request.id,
+      requestedBy,
+      reason,
+      statusEventId: (request.payload as MarketCancelRequestPayload).statusEventId,
+    });
+    if (!result.cancelled) {
+      throw new Error(`cancelScheduledMarketNow: the market was not cancelled (${result.reason})`);
+    }
+    return { ...result, request: approved! };
+  });
 }
 
 /** The description a judgement factory writes unless given (확인한 내용의 설명, the request's reason). */

@@ -49,8 +49,9 @@ import { E2E_CONSENT_VERSIONS } from './consent-versions';
  * judgement since #152: the first registers it and the second approves it, which publishes the
  * 잠정 결과 (`judgeMarket`); the worker confirms it once its dispute window — the release setting
  * the suite's global setup enters while it is 미정 (global-setup.ts) — has passed, no 판정 이의
- * holding it (#175: only a member with a fill submits one, and no spec trades on a market it
- * judges — orders.spec.ts trades on its own open market alone, #119). And
+ * holding it (#175: only a member with a fill submits one, and the only fill on a market a spec
+ * judges is the helper's own pair before its close — `closeMarket`, two members of the worker's
+ * own that never dispute, since #20 makes a market with no fill CANCELLED). And
  * in every 판정 정정 since #176: the first registers it and the second approves it — the next
  * judgement version, its result and a new deadline of the first one's length (`registerCorrection`
  * and `approveJudgementAsReviewer`) — or rejects it; while it waits, it holds the confirmation.
@@ -316,6 +317,15 @@ async function chooseSeedAdminNickname(
 const reviewers = new WeakMap<APIRequestContext, APIRequestContext>();
 
 /**
+ * The two members who trade once on a market before `closeMarket` closes it (#20, ADR-0117: a
+ * market reaching its close with no fill of a person's account is CANCELLED, not CLOSED), each an
+ * API context with a member's cookie: made on first use, once per worker process (`test`'s
+ * `traders`), and paired with each `admin` context here, as `reviewers` are.
+ */
+export type HelperTraders = readonly [APIRequestContext, APIRequestContext];
+const traderPairs = new WeakMap<APIRequestContext, () => Promise<HelperTraders>>();
+
+/**
  * `admin` is an API context signed in as the first seed admin and `secondAdmin` as the second
  * (#171), each isolated from every browser context in the test: the specs' own `request`
  * fixture stays cookie-less, which is what lets AC 2 read the detail page's HTML as an
@@ -331,18 +341,25 @@ const reviewers = new WeakMap<APIRequestContext, APIRequestContext>();
  * depends on it and is paired with it here (`reviewers`); a spec that acts as the second admin
  * itself asks for `secondAdmin`. Worker-scoped fixtures see no test-scoped `baseURL`, so it reads
  * the project's.
+ *
+ * `traders` are two fresh members, once per worker process and only once a test asks for them
+ * (`closeMarket`, through `traderPairs`): since #20 (ADR-0117) a market whose close comes with no
+ * fill of a person's account is CANCELLED, so the helper's 조기 마감 trades one pair first — the
+ * members a spec signs up itself never trade. Signed up in a browser context of their own
+ * (`signUp`), closed when the worker ends.
  */
 export const test = base.extend<
   { admin: APIRequestContext; secondAdmin: APIRequestContext },
-  { reviewer: APIRequestContext }
+  { reviewer: APIRequestContext; traders: () => Promise<HelperTraders> }
 >({
   // The second argument is Playwright's `use`, renamed: this package lints with
   // eslint-plugin-react-hooks, which reads a call to `use(…)` outside a component as React's
   // own `use` hook and fails `rules-of-hooks`. Playwright passes it positionally.
-  admin: async ({ playwright, baseURL, reviewer }, provide) => {
+  admin: async ({ playwright, baseURL, reviewer, traders }, provide) => {
     const context = await playwright.request.newContext({ baseURL });
     await signInSeedAdmin(context, FIRST_ADMIN);
     reviewers.set(context, reviewer);
+    traderPairs.set(context, traders);
     await provide(context);
     await context.dispose();
   },
@@ -360,6 +377,25 @@ export const test = base.extend<
       await signInSeedAdmin(context, SECOND_ADMIN);
       await provide(context);
       await context.dispose();
+    },
+    { scope: 'worker' },
+  ],
+  traders: [
+    async ({ browser }, provide, workerInfo) => {
+      const contexts: BrowserContext[] = [];
+      let made: Promise<HelperTraders> | undefined;
+      const signUpTrader = async (): Promise<APIRequestContext> => {
+        const context = await browser.newContext({ baseURL: workerInfo.project.use.baseURL });
+        contexts.push(context);
+        const page = await context.newPage();
+        await signUp(page, freshEmail());
+        return page.request;
+      };
+      await provide(() => {
+        made ??= (async () => [await signUpTrader(), await signUpTrader()] as const)();
+        return made;
+      });
+      for (const context of contexts) await context.close();
     },
     { scope: 'worker' },
   ],
@@ -1399,9 +1435,10 @@ async function unwrap<T>(response: APIResponse): Promise<T> {
  * whatever the calendar says. Its scheduled open has passed (`timesFor`, #22), so the approval
  * opens it at once (#21, ADR-0100), and the open records its content as rule v1 (#80, ADR-0101):
  * its `ruleVersion` is 1, and its rule version items change by a supplement alone
- * (`requestSupplement`, `approveSupplementAsReviewer`). It has no fill — only orders.spec.ts
- * trades, through the API on its own markets (#119; the order panel is #66) — so its price reads
- * 체결 없음 and its chart is empty (N02 §5): opening writes no price tick.
+ * (`requestSupplement`, `approveSupplementAsReviewer`). It has no fill — orders.spec.ts trades
+ * through the API on its own markets (#119; the order panel is #66), and `closeMarket` trades one
+ * pair just before it closes one (#20) — so its price reads 체결 없음 and its chart is empty (N02
+ * §5): opening writes no price tick.
  */
 export async function createOpenMarket(
   admin: APIRequestContext,
@@ -1967,6 +2004,9 @@ export async function leaveNoPauseDecision(
  * `closedAt` is the actual one. A reader in the market's room is sent `market:status` twice — 거래
  * 일시 중단, then 거래 마감 — and keeps the newer. The API, not the UI, because closing is a means
  * here — the settlement spec measures what comes after it; pause.spec.ts walks the screens.
+ * First the helper's two members trade one pair on it (`tradeOnce`): since #20
+ * (ADR-0117) a market closed — early or at its close — with no fill of a person's account is
+ * CANCELLED, with no judgement; cancel.spec.ts and pause.spec.ts show that path.
  *
  * A market whose close comes while these steps run (a spec that made it close in seconds) has a
  * step refused for it — `closeAt` 'closed' by the clock — and is closed by the worker on schedule
@@ -1977,6 +2017,7 @@ export async function closeMarket(
   admin: APIRequestContext,
   marketId: string,
 ): Promise<AdminMarket> {
+  await tradeOnce(admin, marketId);
   const paused = await sendPause(admin, marketId, 'basis_change');
   if (!paused.ok()) return closedOnSchedule(admin, marketId, paused);
   // The pause's answer is the market it paused: its lasting pause is the one to close early.
@@ -2001,6 +2042,54 @@ export async function closeMarket(
   const closed = await unwrap<AdminMarket>(approved);
   expect(closed.status).toBe('closed');
   return closed;
+}
+
+/**
+ * The helper's two members paired with `admin` (`test`'s `traders`), signed up on first use — a
+ * spec whose clock starts after the market's making asks for them first, so their sign-up is not
+ * spent from its budget.
+ */
+export async function helperTraders(admin: APIRequestContext): Promise<HelperTraders> {
+  const traders = traderPairs.get(admin);
+  if (traders === undefined) {
+    throw new Error('the helper traders need the `admin` fixture of helpers.ts `test`');
+  }
+  return traders();
+}
+
+/**
+ * One pair mint between the helper's two members (`traders`, paired with `admin`), so the close
+ * that follows is a 거래 마감 rather than a 취소 (#20, ADR-0117 — a market with no fill of a person's
+ * account is CANCELLED at its close or early close): the first member's 지정가(GTC) NO buy of one at
+ * 50 rests, and the second's 즉시 거래(IOC) YES buy of one meets it at the resting price — each pays
+ * 50, nothing is left resting (orders.spec.ts's pattern, #119). The intake is open with the suite's
+ * test values (global-setup.ts) and each member sends one order per close, well under the 20 a
+ * minute. A buy the market refuses — its close came first, so the worker cancels it — throws:
+ * nothing the helper can close is left.
+ */
+export async function tradeOnce(admin: APIRequestContext, marketId: string): Promise<void> {
+  const [maker, taker] = await helperTraders(admin);
+  const order = async (
+    context: APIRequestContext,
+    terms: { outcome: 'YES' | 'NO'; timeInForce: 'gtc' | 'ioc'; limitPriceCoin: number },
+  ) => {
+    const placed = await unwrap<{ order: { status: string; rejectReason: string | null } }>(
+      await context.post(`/api/v1/markets/${marketId}/orders`, {
+        headers: { 'Idempotency-Key': crypto.randomUUID() },
+        data: { ...terms, side: 'buy', qty: 1, expectedAccountId: await accountIdOf(context) },
+      }),
+    );
+    return placed.order;
+  };
+  const resting = await order(maker, { outcome: 'NO', timeInForce: 'gtc', limitPriceCoin: 50 });
+  const taken = await order(taker, { outcome: 'YES', timeInForce: 'ioc', limitPriceCoin: 99 });
+  if (taken.status !== 'filled') {
+    throw new Error(
+      `the helper's trade on market ${marketId} did not fill (${resting.status} / ${taken.status}` +
+        ` ${String(taken.rejectReason)}): with no fill of a person's account the market is ` +
+        'cancelled at its close (#20), not closed',
+    );
+  }
 }
 
 /**
@@ -2039,6 +2128,16 @@ async function closedOnSchedule(
     .toBe('closed');
   return market;
 }
+
+// ---- 시장 취소 (#20) -----------------------------------------------------------------------
+
+/**
+ * The reason every automatic CANCELLED stores (#20, ADR-0117; `MARKET_NO_FILL_CANCEL_REASON`,
+ * restated: these specs import only types from `@buddha/shared`) — the worker's close and an
+ * approved early close that find no fill of a person's account.
+ */
+export const NO_FILL_CANCEL_REASON =
+  '거래가 끝날 때까지 체결이 한 건도 없어 결과를 정하지 않고 시장을 취소했습니다.';
 
 // ---- 이의 기간 (#152, 출시 설정) ----------------------------------------------------------
 

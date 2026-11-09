@@ -280,6 +280,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/market-cancel-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The cancel requests of scheduled markets waiting for a decision, the oldest first, with their market (its status, scheduled open and close too: one still waiting after the open is shown for its 반려 or 철회), the reason, and who asked and when */
+        get: operations["adminListMarketCancelRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/market-disputes": {
         parameters: {
             query?: never;
@@ -412,6 +429,74 @@ export type paths = {
         put?: never;
         /** review → scheduled (승인) by an admin who neither created, edited nor submitted the market, every checklist item confirmed, with a reason; the open-items check and the close are checked again. The market becomes public as scheduled — and opens at once (status open) when its scheduled open has passed; otherwise it opens at its scheduled open */
         post: operations["adminApproveMarket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/cancel-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ask to cancel a scheduled market (시장 취소 요청) with a reason — the cancel’s public reason. Another admin decides it; nothing changes until then, the scheduled open is not held, and one request waits per market at a time */
+        post: operations["adminRequestMarketCancel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/cancel-requests/{requestId}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve a waiting cancel request (승인) by an admin other than its requester, with a reason: the scheduled market is cancelled without opening (cancelled; no result, judgement or payout), its open and close jobs are removed, and the status is published */
+        post: operations["adminApproveMarketCancel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/cancel-requests/{requestId}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject a waiting cancel request (반려) by an admin other than its requester, in any status, with a reason; nothing changes and the market stays as it is */
+        post: operations["adminRejectMarketCancel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/cancel-requests/{requestId}/retract": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retract a waiting cancel request the acting admin made (철회), in any status, before anyone decides it; nothing changes */
+        post: operations["adminRetractMarketCancel"];
         delete?: never;
         options?: never;
         head?: never;
@@ -580,7 +665,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Approve a waiting next path (승인) by an admin other than its requester, with a reason: the market resumes trading (open) or closes early (closed; the scheduled close is kept and the judgement follows), the pause ends, and the status is published */
+        /** Approve a waiting next path (승인) by an admin other than its requester, with a reason: the market resumes trading (open) or closes early (closed; the scheduled close is kept and the judgement follows — or cancelled, with no result and no judgement, when no person filled), the pause ends, and the status is published */
         post: operations["adminApproveMarketPauseDecision"];
         delete?: never;
         options?: never;
@@ -3468,6 +3553,7 @@ export type components = {
             url: string;
         };
         AdminMarket: {
+            cancel: components["schemas"]["AdminMarketCancelState"];
             category: {
                 nameKo: string;
                 slug: string;
@@ -3543,6 +3629,28 @@ export type components = {
             updatedAt: string;
             volumeCoin: components["schemas"]["CoinAmount"];
             yesCondition: string;
+        };
+        AdminMarketCancelItem: {
+            /** Format: date-time */
+            closeAt: string;
+            /** Format: uuid */
+            marketId: string;
+            reason: string;
+            /** Format: date-time */
+            requestedAt: string;
+            requestedBy: components["schemas"]["AdminAccountActor"];
+            /** Format: uuid */
+            requestId: string;
+            /** Format: date-time */
+            scheduledOpenAt: string | null;
+            slug: string;
+            /** @enum {string} */
+            status: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
+            title: string;
+        };
+        AdminMarketCancelState: {
+            log: components["schemas"]["MarketCancelLogEntry"][];
+            pending: components["schemas"]["MarketCancelRequest"] | null;
         };
         AdminMarketDispute: {
             /** Format: date-time */
@@ -4172,6 +4280,10 @@ export type components = {
             expectedAccountId: string;
             reason: string;
         };
+        ApproveMarketCancelBody: {
+            expectedAccountId: string;
+            reason: string;
+        };
         ApproveMarketReviewBody: {
             checklist: components["schemas"]["MarketReviewChecklistItem"][];
             expectedAccountId: string;
@@ -4629,6 +4741,29 @@ export type components = {
             volumeCoin: components["schemas"]["CoinAmount"];
             yesCondition: string;
         };
+        MarketCancelLogEntry: {
+            /** Format: date-time */
+            decidedAt: string | null;
+            decidedBy: components["schemas"]["AdminAccountActor"] | null;
+            decisionReason: string | null;
+            reason: string;
+            /** Format: date-time */
+            requestedAt: string;
+            requestedBy: components["schemas"]["AdminAccountActor"];
+            /** Format: uuid */
+            requestId: string;
+            /** Format: date-time */
+            retractedAt: string | null;
+            status: components["schemas"]["ApprovalStatus"];
+        };
+        MarketCancelRequest: {
+            reason: string;
+            /** Format: date-time */
+            requestedAt: string;
+            requestedBy: components["schemas"]["AdminAccountActor"];
+            /** Format: uuid */
+            requestId: string;
+        };
         /** @enum {string} */
         MarketDisputeStatus: "pending" | "dismissed" | "accepted" | "retracted" | "closed_by_correction";
         MarketEvent: {
@@ -4642,7 +4777,7 @@ export type components = {
             /** @enum {string|null} */
             toStatus: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled" | null;
             /** @enum {string} */
-            type: "created" | "submitted" | "approved" | "rejected" | "reverted" | "open_rescheduled" | "opened" | "closed" | "finalized" | "rules_edited" | "resolved" | "settling" | "rules_supplemented" | "paused" | "resumed" | "provisional" | "judgement_corrected" | "judgement_delay_recorded" | "price_protection_changed";
+            type: "created" | "submitted" | "approved" | "rejected" | "reverted" | "open_rescheduled" | "opened" | "closed" | "finalized" | "rules_edited" | "resolved" | "settling" | "rules_supplemented" | "paused" | "resumed" | "provisional" | "judgement_corrected" | "judgement_delay_recorded" | "price_protection_changed" | "cancelled";
         };
         MarketJudgementCorrection: {
             baseVersion: number;
@@ -5688,6 +5823,10 @@ export type components = {
             expectedAccountId: string;
             reason: string;
         };
+        RejectMarketCancelBody: {
+            expectedAccountId: string;
+            reason: string;
+        };
         RejectMarketReviewBody: {
             expectedAccountId: string;
             reason: string;
@@ -5821,6 +5960,10 @@ export type components = {
         /** @enum {string} */
         ReportStatus: "pending" | "actioned" | "dismissed";
         ReportTarget: components["schemas"]["ReportedPostTarget"] | components["schemas"]["ReportedCommentTarget"] | components["schemas"]["ReportedProfileTarget"];
+        RequestMarketCancelBody: {
+            expectedAccountId: string;
+            reason: string;
+        };
         RequestMarketSupplementBody: {
             baseVersion: number;
             changes: components["schemas"]["MarketSupplementChanges"];
@@ -7695,6 +7838,77 @@ export interface operations {
             };
         };
     };
+    adminListMarketCancelRequests: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarketCancelItem"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     adminListMarketDisputes: {
         parameters: {
             query?: {
@@ -8431,6 +8645,333 @@ export interface operations {
             };
             /** @description OPEN_ITEMS_MISSING */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRequestMarketCancel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestMarketCancelBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminApproveMarketCancel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApproveMarketCancelBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRejectMarketCancel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RejectMarketCancelBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRetractMarketCancel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedAccountBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

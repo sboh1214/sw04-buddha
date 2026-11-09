@@ -52,6 +52,7 @@ import {
   openOrderIntake,
   passMarketClose,
   placeTestOrder,
+  tradeOnce,
   type PlaceTestOrderInput,
 } from './test/orders.js';
 import { waitForLockWaiter } from './test/wait.js';
@@ -408,62 +409,81 @@ describe.skipIf(!hasTestDb())('order cancel (#178, docker test profile)', () => 
       expect((await orderRow(row.id)).status).toBe('open');
     });
 
-    it('holds a live order of a ledger-failure market, until its close too, and answers an ended one', async () => {
-      const m = await market();
-      const a = await member();
-      const live = await resting(a, m, 'YES', 'buy', 40, 2);
-      const ended = await resting(a, m, 'YES', 'buy', 10, 1);
-      await cancelTestOrder(t.db, { ownerId: a, orderId: ended.id });
-      await ledgerPause(m);
-      // The ledger_failure pause cancelled nothing: the order waits with its lock.
-      expect(await orderRow(live.id)).toEqual(live);
-      const before = await written();
-      expect(await cancelTestOrder(t.db, { ownerId: a, orderId: live.id })).toEqual({
-        kind: 'held',
-        order: live,
-      });
-      expect(await cancelTestOrder(t.db, { ownerId: a, orderId: ended.id })).toMatchObject({
-        kind: 'ended',
-        order: { status: 'cancelled', cancelReason: 'by_owner' },
-      });
-      expect(await written()).toEqual(before);
-      // The close comes on schedule before the recovery: still held (#93 expires it), the
-      // close's expiry skipping it (#120).
-      expect(await closeNow(m)).toMatchObject({
-        closed: true,
-        expired: { expired: [], held: [live] },
-      });
-      expect(await cancelTestOrder(t.db, { ownerId: a, orderId: live.id })).toMatchObject({
-        kind: 'held',
-      });
-      expect(await coin(a)).toEqual({ available: 920n, locked: 80n });
-      expect(await ordersAwaitingRecovery(t.db, a)).toEqual([live]);
-      await expectSound();
-    });
+    // Traded, the close is CLOSED; with no fill a person's account is on, CANCELLED (#20) —
+    // held either way (`ledgerHeldMarketSql` reads the pause, not the status).
+    it.each([
+      { traded: true, status: 'closed' },
+      { traded: false, status: 'cancelled' },
+    ] as const)(
+      'holds a live order of a ledger-failure market, until its close too ($status), and answers an ended one',
+      async ({ traded, status }) => {
+        const m = await market();
+        const a = await member();
+        const live = await resting(a, m, 'YES', 'buy', 40, 2);
+        const ended = await resting(a, m, 'YES', 'buy', 10, 1);
+        await cancelTestOrder(t.db, { ownerId: a, orderId: ended.id });
+        // Two other members' pair at 50: it meets neither of A's buys.
+        if (traded) await tradeOnce(t.db, m);
+        await ledgerPause(m);
+        // The ledger_failure pause cancelled nothing: the order waits with its lock.
+        expect(await orderRow(live.id)).toEqual(live);
+        const before = await written();
+        expect(await cancelTestOrder(t.db, { ownerId: a, orderId: live.id })).toEqual({
+          kind: 'held',
+          order: live,
+        });
+        expect(await cancelTestOrder(t.db, { ownerId: a, orderId: ended.id })).toMatchObject({
+          kind: 'ended',
+          order: { status: 'cancelled', cancelReason: 'by_owner' },
+        });
+        expect(await written()).toEqual(before);
+        // The close comes on schedule before the recovery: still held (#93 expires it), the
+        // close's expiry skipping it (#120).
+        expect(await closeNow(m)).toMatchObject({
+          closed: true,
+          status,
+          expired: { expired: [], held: [live] },
+        });
+        expect(await cancelTestOrder(t.db, { ownerId: a, orderId: live.id })).toMatchObject({
+          kind: 'held',
+        });
+        expect(await coin(a)).toEqual({ available: 920n, locked: 80n });
+        expect(await ordersAwaitingRecovery(t.db, a)).toEqual([live]);
+        await expectSound();
+      },
+    );
 
-    it('answers an order the close expired as it is, and cancels a pre-#120 leftover', async () => {
-      // The close (#120) expired it: the owner's cancel answers its final state, nothing written.
-      const m = await market();
-      const a = await member();
-      const row = await resting(a, m, 'YES', 'buy', 40, 1);
-      await closeNow(m);
-      const before = await written();
-      expect(await cancelTestOrder(t.db, { ownerId: a, orderId: row.id })).toMatchObject({
-        kind: 'ended',
-        order: { status: 'expired', cancelReason: null },
-      });
-      expect(await written()).toEqual(before);
-      // A CLOSED market's live order from before #120 (ADR-0113 12-9) can still be cancelled.
-      const old = await market();
-      const left = await resting(a, old, 'YES', 'buy', 40, 1);
-      await closeWithoutExpiry(old);
-      expect(await cancelTestOrder(t.db, { ownerId: a, orderId: left.id })).toMatchObject({
-        kind: 'cancelled',
-        order: { status: 'cancelled', cancelReason: 'by_owner' },
-      });
-      expect(await coin(a)).toEqual({ available: 1_000n, locked: 0n });
-      await expectSound();
-    });
+    it.each([
+      { traded: true, status: 'closed' },
+      { traded: false, status: 'cancelled' },
+    ] as const)(
+      'answers an order the close expired as it is ($status), and cancels a pre-#120 leftover',
+      async ({ traded, status }) => {
+        // The close (#120) expired it: the owner's cancel answers its final state, nothing written
+        // — CLOSED after a person's fill, CANCELLED with none (#20).
+        const m = await market();
+        const a = await member();
+        const row = await resting(a, m, 'YES', 'buy', 40, 1);
+        if (traded) await tradeOnce(t.db, m);
+        expect(await closeNow(m)).toMatchObject({ closed: true, status });
+        const before = await written();
+        expect(await cancelTestOrder(t.db, { ownerId: a, orderId: row.id })).toMatchObject({
+          kind: 'ended',
+          order: { status: 'expired', cancelReason: null },
+        });
+        expect(await written()).toEqual(before);
+        // A CLOSED market's live order from before #120 (ADR-0113 12-9) can still be cancelled.
+        const old = await market();
+        const left = await resting(a, old, 'YES', 'buy', 40, 1);
+        await closeWithoutExpiry(old);
+        expect(await cancelTestOrder(t.db, { ownerId: a, orderId: left.id })).toMatchObject({
+          kind: 'cancelled',
+          order: { status: 'cancelled', cancelReason: 'by_owner' },
+        });
+        expect(await coin(a)).toEqual({ available: 1_000n, locked: 0n });
+        await expectSound();
+      },
+    );
 
     it('releases once when asked twice in a row', async () => {
       const m = await market();
@@ -980,9 +1000,9 @@ describe.skipIf(!hasTestDb())('order cancel (#178, docker test profile)', () => 
       // A close that left its order live (a pre-#120 leftover): (a) shows it.
       await closeWithoutExpiry(closed);
       await ledgerPause(heldMarket);
-      // Closed on schedule before its recovery (end_kind closed_at_close): still held, so the
-      // close's expiry skips it, (d) shows it and (a) leaves it out (ADR-0113 결과 4 — it waits
-      // for #93's recovery).
+      // Closed on schedule before its recovery (end_kind closed_at_close) — CANCELLED, as nobody
+      // filled (#20): still held, so the close's expiry skips it, (d) shows it and (a) leaves it
+      // out (ADR-0113 결과 4 — it waits for #93's recovery).
       await ledgerPause(closedHeld);
       await closeNow(closedHeld);
       await createMarketPause(t.db, { marketId: paused, by: adminId });
@@ -1015,7 +1035,7 @@ describe.skipIf(!hasTestDb())('order cancel (#178, docker test profile)', () => 
           }),
           expect.objectContaining({
             market_id: closedHeld,
-            market_status: 'closed',
+            market_status: 'cancelled',
             end_kind: 'closed_at_close',
             order_id: closedWaiting.id,
             remaining_qty: 1,

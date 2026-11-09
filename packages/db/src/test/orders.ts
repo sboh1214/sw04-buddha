@@ -501,11 +501,62 @@ export async function passMarketClose(
 
 /**
  * The close at `close_at` as the worker runs it (`closeMarketAtClose`, #120), in its own
- * transaction: OPEN or PAUSED → CLOSED with every live order ended 만료 (a held market's kept), or
- * a skip. The market must be due (`passMarketClose`, or a close already past). Publishes nothing.
+ * transaction: OPEN or PAUSED → CLOSED — or CANCELLED when no fill a person's account is on
+ * happened (#20; `tradeOnce` first for a CLOSED one) — with every live order ended 만료 (a held
+ * market's kept), or a skip. The market must be due (`passMarketClose`, or a close already past).
+ * Publishes nothing.
  */
 export async function closeTestMarket(db: Db, marketId: string): Promise<CloseMarketAtCloseResult> {
   return db.transaction((tx) => closeMarketAtClose(tx, marketId));
+}
+
+export interface TradeOnceInput {
+  /** The YES buyer: the incoming IOC order's owner. Default: a fresh member with 1,000 Coin. */
+  yesOwner?: string;
+  /** The NO buyer: the resting GTC order's owner. Default: a fresh member with 1,000 Coin. */
+  noOwner?: string;
+  /** The YES price, 1..99 (the NO order rests at 100 − it). Default 50. */
+  priceCoin?: number;
+  /** Default 1. */
+  qty?: number;
+}
+
+/**
+ * One real pair mint through the intake (`placeTestOrder`, each its own transaction): a GTC NO buy
+ * of `noOwner` resting at 100 − `priceCoin`, then an IOC YES buy of `yesOwner` at `priceCoin` that
+ * fills it whole — the fill, both positions, the collateral and the market's statistics, so
+ * `checkOrderInvariants` and `checkMarketStats` stay empty. The way a test makes a market that
+ * closes CLOSED rather than CANCELLED (#20). Intake must be open (`openOrderIntake`); throws unless
+ * both orders filled.
+ */
+export async function tradeOnce(
+  db: Db,
+  marketId: string,
+  input: TradeOnceInput = {},
+): Promise<{ yes: OrderRow; no: OrderRow; fills: FillRow[] }> {
+  const price = input.priceCoin ?? 50;
+  const qty = input.qty ?? 1;
+  const noOwner = input.noOwner ?? (await createUser(db, { balanceCoin: 1_000n })).user.id;
+  const yesOwner = input.yesOwner ?? (await createUser(db, { balanceCoin: 1_000n })).user.id;
+  const no = await placeTestOrder(db, {
+    marketId,
+    ownerId: noOwner,
+    outcome: 'NO',
+    limitPriceCoin: 100 - price,
+    qty,
+  });
+  const yes = await placeTestOrder(db, {
+    marketId,
+    ownerId: yesOwner,
+    timeInForce: 'ioc',
+    limitPriceCoin: price,
+    qty,
+  });
+  if (no.kind !== 'placed' || yes.kind !== 'placed' || yes.order.status !== 'filled') {
+    throw new Error(`tradeOnce: no pair minted on market ${marketId}`);
+  }
+  const [rested] = await db.select().from(orders).where(eq(orders.id, no.order.id));
+  return { yes: yes.order, no: rested!, fills: yes.fills };
 }
 
 export interface CancelTestOrderInput {
@@ -616,6 +667,54 @@ WHERE m.last_price IS DISTINCT FROM l.yes_price_coin
    OR m.trader_count <> coalesce(p.traders, 0)
 ORDER BY m.id;
 `;
+
+/**
+ * Every CANCELLED market with a fill a person's account is on (#20, ADR-0117; ADR-0107 결정 5
+ * '#20·#120'): a market the close or the early close should have closed, not cancelled. The
+ * database does not check it at commit — the close's transaction judges it under the market lock
+ * (`marketHasHumanFill`). No row: every cancel was right. Read-only; docs/OPERATIONS.md '거래 없는
+ * 시장의 취소' carries it for operators.
+ */
+export const CANCELLED_MARKET_HUMAN_FILLS_CHECK_SQL = `SELECT m.id AS market_id, count(f.id)::int AS human_fills
+FROM markets m
+JOIN fills f ON f.market_id = m.id
+  AND (is_human_account_type(f.incoming_account_type)
+       OR is_human_account_type(f.resting_account_type))
+WHERE m.status = 'cancelled'
+GROUP BY m.id
+ORDER BY m.id;
+`;
+
+/**
+ * Every live order of a CANCELLED market that is not held for a ledger failure (#20; ADR-0107
+ * 결정 5 '#20·#120·#177 7항', 결정 4 #178): each entry into CANCELLED ends what is live as 만료 in
+ * its transaction, but a held market keeps its orders locked until #93's recovery — the held
+ * predicate is `ledgerHeldMarketSql`'s. No row: nothing was left behind. Read-only;
+ * docs/OPERATIONS.md '거래 없는 시장의 취소' carries it for operators.
+ */
+export const CANCELLED_MARKET_LIVE_ORDERS_CHECK_SQL = `SELECT o.market_id, o.id AS order_id, o.user_id, o.status
+FROM orders o
+JOIN markets m ON m.id = o.market_id
+WHERE m.status = 'cancelled' AND o.status IN ('open', 'partially_filled')
+  AND NOT EXISTS (
+    SELECT 1 FROM market_pauses p
+    WHERE p.market_id = o.market_id AND p.reason = 'ledger_failure'
+      AND (p.ended_at IS NULL OR p.end_kind = 'closed_at_close'))
+ORDER BY o.market_id, o.arrival_seq;
+`;
+
+/**
+ * `CANCELLED_MARKET_HUMAN_FILLS_CHECK_SQL` and `CANCELLED_MARKET_LIVE_ORDERS_CHECK_SQL` as
+ * buddha_app, as a list of what breaks (empty when every CANCELLED market is as #20 leaves it).
+ */
+export async function checkCancelledMarkets(db: Db): Promise<string[]> {
+  const { rows: filled } = await db.$client.query(CANCELLED_MARKET_HUMAN_FILLS_CHECK_SQL);
+  const { rows: live } = await db.$client.query(CANCELLED_MARKET_LIVE_ORDERS_CHECK_SQL);
+  return [
+    ...filled.map((row) => `cancelled with a person's fill ${JSON.stringify(row)}`),
+    ...live.map((row) => `cancelled with a live order ${JSON.stringify(row)}`),
+  ];
+}
 
 /** The five statistics of a market as `markets` holds them (#121, market-stats.ts writes them). */
 export async function marketStatsOf(db: Db, marketId: string) {

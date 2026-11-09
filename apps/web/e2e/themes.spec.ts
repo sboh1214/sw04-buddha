@@ -41,8 +41,9 @@ import {
  * decision 2026-10-20 7, ADR-0075 5-14 — as every 더 보기 list), its pages shaped here.
  *
  * The status boundaries, the list's order and the cancelled and 무효 markets are the API's
- * integration tests' (themes.controller.test.ts): no product path cancels a market yet (#20), a
- * confirmed 무효 stays 지급 중 until #126 pays it (ADR-0103) — on an e2e database kept between runs,
+ * integration tests' (themes.controller.test.ts): no spec here sets up a cancelled market
+ * (cancel.spec.ts and pause.spec.ts drive the paths to CANCELLED, #20), a confirmed 무효 stays
+ * 지급 중 until #126 pays it (ADR-0103) — on an e2e database kept between runs,
  * so no spec confirms one — and the order is checked against themes of chosen dates where no other
  * spec's themes share the list, which the e2e database — shared by every spec and kept between
  * runs — cannot promise.

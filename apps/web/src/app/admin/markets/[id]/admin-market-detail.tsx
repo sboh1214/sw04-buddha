@@ -104,6 +104,7 @@ import {
 import { LONG_DELAY_SEPARATOR, longDelayText } from '@/lib/market-detail';
 import { timeZoneLabel } from '@/lib/time-zone';
 import { MarketFormFields } from '../market-form-fields';
+import { MarketCancelPanel } from './market-cancel-panel';
 import { MarketJudgementPanel } from './market-judgement-panel';
 import { MarketPausePanel } from './market-pause-panel';
 import { PriceProtectionItem } from './market-price-protection';
@@ -220,6 +221,10 @@ export function AdminMarketDetail({ id }: { id: string }) {
           stale card in the page on every render. `readAt` is when this row was read: the
           close-passed warning judges the row read after the close, not a stale one (#21). */}
       <MarketReviewPanel key={`review-${data.id}`} market={data} readAt={market.dataUpdatedAt} />
+      {/* 시장 취소 (#20, ADR-0117): keyed and prefixed as the review panel is — its dialogs name the
+          market and the request they were opened on. Beside the review: a SCHEDULED market is what
+          it offers to cancel. */}
+      <MarketCancelPanel key={`cancel-${data.id}`} market={data} />
       {/* 거래 일시 중단 (#114, ADR-0102): keyed and prefixed as the review panel is — its dialogs
           name the market and the request they were opened on. `readAt` judges the close: a pause
           and a next path are refused once it has come, and the detail re-reads an OPEN or PAUSED

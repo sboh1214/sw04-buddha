@@ -13,6 +13,7 @@ import { schema } from '@buddha/db';
 import {
   completeOnboarding,
   createCategory,
+  createFill,
   createMarket,
   createOpenedMarket,
   createProvisionalMarket,
@@ -167,9 +168,12 @@ describe.skipIf(!hasTestInfra)('admin markets lifecycle (integration)', () => {
   /**
    * 조기 마감 through the routes (#114, ADR-0102), the way a market reaches CLOSED before its close
    * now that the one-admin close is gone: the test admin pauses it (실질 기준 변경) and asks for the
-   * early close (reviewed 판정 가능, Q2), and another admin approves it. Answers the approval.
+   * early close (reviewed 판정 가능, Q2), and another admin approves it. Answers the approval. One
+   * fill between two members is recorded first (`createFill`: rows only), as a trade before the
+   * pause: without it the early close cancels the market (#20, ADR-0117).
    */
   async function closeEarly(marketId: string) {
+    await createFill(t.db, { marketId, amountCoin: 50n, qty: 1 });
     const approver = await anotherAdmin();
     const url = `/api/v1/admin/markets/${marketId}`;
     const paused = await post(`${url}/pause`, {

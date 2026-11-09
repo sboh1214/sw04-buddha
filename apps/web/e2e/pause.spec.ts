@@ -10,11 +10,13 @@ import {
   documentSurvived,
   expect,
   freshTag,
+  helperTraders,
   kstLocalOf,
   leaveNoPauseDecision,
   leaveNoSupplement,
   markDocument,
   meOf,
+  NO_FILL_CANCEL_REASON,
   pauseMarket,
   requestPauseDecision,
   requestSupplement,
@@ -26,6 +28,7 @@ import {
   signIn,
   subscribed,
   test,
+  tradeOnce,
   workerProbeDisabled,
 } from './helpers';
 
@@ -43,7 +46,10 @@ import {
  * alone). A request names the pause it was asked on, and one naming a pause since resumed is
  * refused (`stale`). The close still comes on schedule while PAUSED: the worker closes the market
  * and ends its pause as 예정 마감, and a request still waiting is then ended by a 반려 or a 철회
- * alone. A paused market's category and tags are edited as an open one's, its rule version items
+ * alone. An early close of a market with no fill of a person's account ends it 취소 instead — the
+ * result type empty, no judgement (#20, ADR-0117): the tests that close one trade a pair between
+ * the helper's members first (helpers.ts `tradeOnce`), and one shows the cancel. A paused market's
+ * category and tags are edited as an open one's, its rule version items
  * by a supplement alone. There is no one-admin 마감 any more: its button is gone and its route
  * answers 404. A supplement rejected as 의미 변경 leaves the market open, and the admin detail
  * offers the pause it calls for, filled in.
@@ -541,6 +547,9 @@ test.describe('거래 일시 중단', () => {
   }) => {
     const [first, second] = await Promise.all([meOf(admin), meOf(secondAdmin)]);
     const market = await createOpenMarket(admin);
+    // One pair traded by the helper's members: an early close with no fill of a person's account
+    // cancels the market instead (#20, the next test).
+    await tradeOnce(admin, market.id);
     const note = `사건의 판정 기준이 실질적으로 바뀌었습니다 ${market.tag}`;
     const requestReason = `바뀐 기준으로는 기존 규칙으로 판정할 수 없습니다 ${market.tag}`;
     const approval = `판정 불가 검토를 확인했습니다 ${market.tag}`;
@@ -791,6 +800,94 @@ test.describe('거래 일시 중단', () => {
     ).toEqual([{ path: ['status'], message: 'not open' }]);
   });
 
+  test('사용자가 낀 체결이 한 건도 없는 시장의 조기 마감을 다른 관리자가 승인하면 마감 대신 취소되고, 방문자의 상세가 리프레시 없이 취소가 되며, 이벤트 로그는 취소와 그 사유다', async ({
+    admin,
+    secondAdmin,
+    browser,
+    page,
+    request,
+  }) => {
+    // #20 (ADR-0117; ADR-0107 결정 4 '#120·#20'): nobody traded, so the approved early close ends
+    // the market CANCELLED — the result type empty, no judgement — with the system sentence.
+    const second = await meOf(secondAdmin);
+    const market = await createOpenMarket(admin);
+    await pauseMarket(admin, market.id, 'basis_change');
+    const requestId = pendingOf(
+      await requestPauseDecision(admin, market.id, 'early_close', { reviewResult: 'judgeable' }),
+    );
+
+    const joined = subscribed(page, market.id);
+    await page.goto(`/markets/${market.slug}`);
+    await joined;
+    const badge = page.getByTestId('market-status-badge');
+    await expect(badge).toHaveText(copy.marketStatusPaused);
+    await markDocument(page);
+
+    const secondContext = await browser.newContext();
+    try {
+      const secondPage = await secondContext.newPage();
+      await signIn(secondPage, secondAdminAccount.email, secondAdminAccount.password);
+      await secondPage.goto(`/admin/markets/${market.id}`);
+      await letToastsGo(secondPage);
+      await secondPage.getByTestId('market-pause-approve').click();
+      const approveDialog = secondPage.getByTestId('market-pause-approve-dialog');
+      // The dialog says a market nobody traded is cancelled rather than closed.
+      await expect(approveDialog).toContainText(copy.adminMarketPauseApproveEarlyCloseBody);
+      await approveDialog
+        .getByTestId('market-pause-approve-reason')
+        .fill(`체결 없는 시장의 조기 마감을 확인했습니다 ${market.tag}`);
+      const approved = nextWrite(secondPage, market.id, `/pause-decisions/${requestId}/approve`);
+      await approveDialog.getByTestId('market-pause-approve-dialog-confirm').click();
+      await approved;
+      await expect(secondPage.getByText(copy.adminMarketPauseEarlyCancelled)).toBeVisible();
+      await expect(secondPage.getByTestId('market-detail-status')).toHaveText(
+        copy.marketStatusCancelled,
+      );
+      // The pause ended as an early close all the same (the end kind says how the pause ended).
+      await expect(secondPage.getByTestId('market-pause-history-0')).toHaveAttribute(
+        'data-end',
+        'early_closed',
+      );
+      // The 이벤트 로그: 취소, by the early close, with the system sentence.
+      const cancelledEvent = (await adminMarketOf(admin, market.id)).events[0];
+      const cancelledRow = secondPage.getByTestId(`market-event-${String(cancelledEvent?.id)}`);
+      await expect(cancelledRow).toContainText(copy.eventCancelled);
+      await expect(cancelledRow).toContainText(
+        `${copy.eventCancelSource} ${copy.eventCancelSourceEarlyClose}`,
+      );
+      await expect(cancelledRow).toContainText(NO_FILL_CANCEL_REASON);
+    } finally {
+      await leaveNoPauseDecision(admin, market.id);
+      await secondContext.close();
+    }
+
+    // --- the visitor's detail, never reloaded: 취소 and its notice.
+    await expect(badge).toHaveText(copy.marketStatusCancelled);
+    await expect(page.getByTestId('market-status-notice')).toContainText(
+      copy.marketCancelledNotice,
+    );
+    expect(await documentSurvived(page)).toBe(true);
+
+    // --- the records: `cancelled` from PAUSED by admin 2, the result type empty; never reopened.
+    const cancelled = await adminMarketOf(admin, market.id);
+    expect(cancelled.status).toBe('cancelled');
+    expect(cancelled.resolvedResult).toBeNull();
+    expect(cancelled.events[0]).toMatchObject({
+      type: 'cancelled',
+      actorId: second.id,
+      fromStatus: 'paused',
+      toStatus: 'cancelled',
+      payload: { source: 'early_close', reason: NO_FILL_CANCEL_REASON },
+    });
+    expect(cancelled.pause.history[0]?.endKind).toBe('early_closed');
+    const shown = await publicMarketOf(request, market.id);
+    expect(shown.status).toBe('cancelled');
+    expect(shown.resolvedResult).toBeNull();
+    expect(
+      await refusalOf(await sendPause(admin, market.id, 'basis_change'), 400, 'VALIDATION_ERROR'),
+    ).toEqual([{ path: ['status'], message: 'not open' }]);
+  });
+
   test('거래 일시 중단 중인 시장도 카테고리·태그는 기록과 함께 바로 고치고 규칙 항목은 보충으로만 바뀌며, 기다리는 요청은 요청한 관리자만 철회하고 다른 관리자는 반려한다', async ({
     admin,
     secondAdmin,
@@ -1026,9 +1123,13 @@ test.describe('거래 일시 중단', () => {
     try {
       const secondPage = await secondContext.newPage();
       await signIn(secondPage, secondAdminAccount.email, secondAdminAccount.password);
+      // The helper's members too (their sign-up, once per worker): the market trades one pair
+      // before its pause, so the worker's close is 거래 마감 — with no fill it would be 취소 (#20).
+      await helperTraders(admin);
       const closeAt = new Date(Date.now() + CLOSE_IN_MS).toISOString();
       const market = await createOpenMarket(admin, { closeAt });
       try {
+        await tradeOnce(admin, market.id);
         await pauseMarket(admin, market.id, 'basis_change');
         const requestId = pendingOf(
           await requestPauseDecision(admin, market.id, 'resume', { reviewResult: 'judgeable' }),

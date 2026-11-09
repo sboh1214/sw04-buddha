@@ -26,11 +26,13 @@ import {
   ADMIN_MARKETS_KEY,
   ADMIN_MARKET_DISPUTES_KEY,
   ADMIN_MARKET_JUDGEMENTS_KEY,
+  ADMIN_MARKET_CANCEL_REQUESTS_KEY,
   ADMIN_MARKET_PAUSE_DECISIONS_KEY,
   ADMIN_MARKET_REVIEWS_KEY,
   ADMIN_MARKET_SUPPLEMENTS_KEY,
   ADMIN_RELATED_MARKETS_KEY,
   adminMarketDisputesKey,
+  adminMarketCancelRequestsQueryOptions,
   adminMarketDisputesQueryOptions,
   adminMarketJudgementsQueryOptions,
   adminMarketKey,
@@ -95,6 +97,7 @@ const draft: AdminMarket = {
   ruleVersions: [],
   supplement: { pending: null, log: [] },
   pause: { history: [], pending: null, log: [] },
+  cancel: { pending: null, log: [] },
   // Not judged (#152): no judgement, none waiting, the dispute window decided.
   judgementVersion: null,
   disputeDeadline: null,
@@ -785,6 +788,55 @@ describe('the 일시 중단 결정 대기 queue (#114, ADR-0102)', () => {
         pages: [],
         pageParams: [],
       });
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+});
+
+describe('the 시장 취소 대기 queue (#20, ADR-0117)', () => {
+  it('asks `GET /admin/market-cancel-requests` a page per cursor, under the private admin root', async () => {
+    const get = vi.spyOn(api, 'GET').mockResolvedValue({
+      data: { data: [], meta: { nextCursor: 'c2' } },
+      response: new Response(null, { status: 200 }),
+    } as never);
+    try {
+      const options = adminMarketCancelRequestsQueryOptions();
+      expect(options.queryKey).toEqual(['admin', 'market-cancel-requests']);
+      expect(await options.queryFn({ pageParam: undefined })).toEqual({
+        items: [],
+        nextCursor: 'c2',
+      });
+      expect(get).toHaveBeenLastCalledWith('/api/v1/admin/market-cancel-requests', {
+        params: { query: {} },
+      });
+      await options.queryFn({ pageParam: 'c2' });
+      expect(get).toHaveBeenLastCalledWith('/api/v1/admin/market-cancel-requests', {
+        params: { query: { cursor: 'c2' } },
+      });
+      expect(options.getNextPageParam({ items: [], nextCursor: null })).toBeUndefined();
+      // Its own root segment: neither a status filter of the admin list nor another queue.
+      for (const other of [
+        ADMIN_MARKETS_KEY,
+        ADMIN_MARKET_REVIEWS_KEY,
+        ADMIN_MARKET_SUPPLEMENTS_KEY,
+        ADMIN_MARKET_PAUSE_DECISIONS_KEY,
+        ADMIN_MARKET_JUDGEMENTS_KEY,
+      ]) {
+        expect(partialMatchKey(ADMIN_MARKET_CANCEL_REQUESTS_KEY, other)).toBe(false);
+      }
+    } finally {
+      get.mockRestore();
+    }
+  });
+
+  it('is asked again by every admin write to a market: a request adds a row, a decision takes one', async () => {
+    const { queryClient, unsubscribe } = await loadedDetail();
+    try {
+      queryClient.setQueryData(ADMIN_MARKET_CANCEL_REQUESTS_KEY, { pages: [], pageParams: [] });
+      await applyMarket(queryClient, ID, { ...draft, status: 'cancelled' });
+      expect(queryClient.getQueryState(ADMIN_MARKET_CANCEL_REQUESTS_KEY)?.isInvalidated).toBe(true);
     } finally {
       unsubscribe();
       queryClient.clear();

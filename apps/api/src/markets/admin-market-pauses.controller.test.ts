@@ -8,9 +8,10 @@
  * author saw is named), one waiting, no decider and what the pause's reason allows (판정 불가: the
  * early close alone); approved by another admin — 재개 back to
  * OPEN, 조기 마감 to CLOSED with the scheduled close kept and its job cancelled, each reason and
- * review (Q1, Q2) — and refused for a request no longer waiting, its requester, a market closed at
- * its close by the worker, its close come and a pause since ended; rejected and retracted in any
- * status; two pauses in a row; two writes at once; the 일시 중단 결정 대기 queue; the admin on
+ * review (Q1, Q2) — or to CANCELLED when no person filled (#20, ADR-0117: the result type empty,
+ * the judgement refused) — and refused for a request no longer waiting, its requester, a market
+ * closed at its close by the worker, its close come and a pause since ended; rejected and retracted
+ * in any status; two pauses in a row; two writes at once; the 일시 중단 결정 대기 queue; the admin on
  * screen; and the PATCH of a paused market (category and tags, never a version item). The removed
  * one-admin close is admin-markets.controller.test's. And the resting orders (#178, ADR-0113): a
  * pause cancels every one of the market's — people's and the 운영 마켓메이커's — as 일시 중단 at its
@@ -25,6 +26,7 @@ import {
   closeTestMarket,
   completeOnboarding,
   createCategory,
+  createFill,
   createMarket,
   createMarketPause,
   createOpenedMarket,
@@ -38,6 +40,7 @@ import {
   resumeMarket,
 } from '@buddha/db/test';
 import {
+  MARKET_NO_FILL_CANCEL_REASON,
   MARKET_PAUSE_DECISION_APPROVAL_KIND,
   floorToMinute,
   marketChannel,
@@ -217,10 +220,18 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
   }
 
   /**
+   * One fill between two members recorded on the market (`createFill`: rows only, no live order
+   * left), as a trade before the pause: its early close then takes it to CLOSED, not CANCELLED
+   * (#20).
+   */
+  const traded = (marketId: string) => createFill(t.db, { marketId, amountCoin: 50n, qty: 1 });
+
+  /**
    * The worker's close at `close_at` (apps/worker market-close.ts → `closeMarketAtClose`, #120),
    * once the clock has passed it: OPEN or PAUSED → CLOSED with `{closedAt, source: 'job'}` and no
-   * actor, ending a paused market's pause (`endPauseAtClose`) and expiring the live orders of a
-   * market not held. A close still ahead skips, and fails the test.
+   * actor — CANCELLED with no fill a person's account is on (#20) — ending a paused market's pause
+   * (`endPauseAtClose`) and expiring the live orders of a market not held. A close still ahead
+   * skips, and fails the test.
    */
   async function workerClose(marketId: string) {
     const done = await closeTestMarket(t.db, marketId);
@@ -867,6 +878,8 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
   it('closes a paused market early by another admin’s approval: CLOSED, the scheduled close kept, the close job cancelled, judged as any closed market', async () => {
     // The admin who paused may approve another's request (only the requester decides nothing).
     const { market, pause: current } = await paused();
+    // Traded before the pause: CLOSED (the twin below has no fill and is cancelled, #20).
+    await traded(market.id);
     await t.app.get(MarketJobs).scheduleClose(market.id, market.closeAt, new Date());
     expect(
       (
@@ -991,6 +1004,107 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
     expect(detail(judged)).toMatchObject({ status: 'provisional', resolvedResult: 'VOID' });
   });
 
+  it('cancels a paused market nobody traded on at its approved early close: CANCELLED, the result empty, the close job cancelled, no judgement (#20)', async () => {
+    // ADR-0107 결정 4 '#120·#20': PAUSED → CANCELLED, the result type empty, no judgement, 판정
+    // 이의 or payout; the pause ends `early_closed` all the same, its review result kept.
+    const { market, pause: current } = await paused();
+    await t.app.get(MarketJobs).scheduleClose(market.id, market.closeAt, new Date());
+    expect(
+      (
+        await requestDecision(
+          market.id,
+          { path: 'early_close', reviewResult: 'not_judgeable' },
+          third,
+        )
+      ).statusCode,
+    ).toBe(200);
+    const requestId = await pendingId(market.id);
+    await listening(market.id, async (received) => {
+      const res = await approve(market.id, requestId, asker);
+      expect(res.statusCode, res.body).toBe(200);
+      const answer = detail(res);
+      const at = (await requestsFor(market.id))[0]!.decidedAt!;
+      const event = (await eventsFor(market.id)).at(-1)!;
+      expect(event).toMatchObject({
+        type: 'cancelled',
+        actorId: asker.id,
+        fromStatus: 'paused',
+        toStatus: 'cancelled',
+        createdAt: at,
+        payload: {
+          cancelledAt: at.toISOString(),
+          source: 'early_close',
+          reason: MARKET_NO_FILL_CANCEL_REASON,
+          pauseId: current.id,
+          approvalId: requestId,
+          requestedBy: third.id,
+          reviewResult: 'not_judgeable',
+        },
+      });
+      expect((await pausesOf(market.id))[0]).toMatchObject({
+        endKind: 'early_closed',
+        endedAt: at,
+        endedBy: asker.id,
+        endEventId: event.id,
+        endApprovalId: requestId,
+        reviewResult: 'not_judgeable',
+      });
+      expect(answer).toMatchObject({
+        status: 'cancelled',
+        resolvedResult: null,
+        closeAt: market.closeAt.toISOString(),
+        statusEventId: String(event.id),
+      });
+      expect((await pauseActionsFor(market.id)).at(-1)).toMatchObject({
+        adminId: asker.id,
+        type: 'market_pause_decision_approve',
+        payload: {
+          path: 'early_close',
+          before: { status: 'paused' },
+          after: { status: 'cancelled' },
+        },
+      });
+      await waitForMessages(received, 1, 'market:status of the early close');
+      await sleep(100);
+      // No order expired (the pause cancelled them): the status alone.
+      expect(received.map((message) => JSON.parse(message) as unknown)).toEqual([
+        expect.objectContaining({
+          type: 'market:status',
+          status: 'cancelled',
+          resolvedResult: null,
+          statusEventId: String(event.id),
+        }),
+      ]);
+    });
+    expect(await jobQueue.getJob(marketCloseJobId(market.id, market.closeAt))).toBeUndefined();
+    // Public with its label's status (#174), and nothing follows: no pause, no next path, no
+    // judgement — even a VOID one (result type empty, never VOID).
+    expect(data<Market>(await publicDetail(market.id))).toMatchObject({
+      status: 'cancelled',
+      resolvedResult: null,
+    });
+    expectRefused(await pause(market.id), 'status', 'not open');
+    expectRefused(
+      await requestDecision(market.id, { path: 'resume', reviewResult: 'judgeable' }),
+      'status',
+      'not paused',
+    );
+    expectRefused(
+      await post(`${marketUrl(market.id)}/judgements`, approver, {
+        result: 'VOID',
+        source: null,
+        voidReason: '조기 마감 검토에서 판정 불가로 보았다.',
+        evidence: {
+          links: ['https://example.com/schedule'],
+          collectedAt: new Date(Date.now() - MINUTE_MS).toISOString(),
+        },
+        description: '사건 일정이 바뀌어 규칙으로 판정할 수 없다.',
+      }),
+      'status',
+      'not closed',
+    );
+  });
+
   it.each([
     // Q1: a basis change reviewed 판정 가능 leaves the operator the path.
     ['basis_change', 'resume', 'judgeable', 'open'],
@@ -1011,6 +1125,8 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
       status: string,
     ) => {
       const { market } = await paused({ reason });
+      // A person traded before the pause, so an early close is a CLOSED one (#20).
+      await traded(market.id);
       const requested = await requestDecision(market.id, {
         path,
         ...(reviewResult === null ? {} : { reviewResult }),
@@ -1027,6 +1143,36 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
       expect((await eventsFor(market.id)).at(-1)!.type).toBe(
         path === 'resume' ? 'resumed' : 'closed',
       );
+    },
+  );
+
+  // #20: with no fill, every reason and review result's early close cancels the market alike.
+  it.each([
+    ['basis_change', 'judgeable'],
+    ['basis_change', 'not_judgeable'],
+    ['early_result', null],
+    ['ledger_failure', null],
+  ] as const)(
+    'cancels a %s pause’s early close reviewed %s when nobody traded (#20)',
+    async (reason: MarketPauseReason, reviewResult: MarketPauseReviewResult | null) => {
+      const { market } = await paused({ reason });
+      const requested = await requestDecision(market.id, {
+        path: 'early_close',
+        ...(reviewResult === null ? {} : { reviewResult }),
+      });
+      expect(requested.statusCode).toBe(200);
+      const res = await approve(market.id, await pendingId(market.id));
+      expect(res.statusCode, res.body).toBe(200);
+      expect(detail(res)).toMatchObject({ status: 'cancelled', resolvedResult: null });
+      expect(detail(res).pause.history[0]).toMatchObject({
+        reason,
+        reviewResult,
+        endKind: 'early_closed',
+      });
+      expect((await eventsFor(market.id)).at(-1)).toMatchObject({
+        type: 'cancelled',
+        payload: { source: 'early_close', reason: MARKET_NO_FILL_CANCEL_REASON, reviewResult },
+      });
     },
   );
 
@@ -1105,7 +1251,8 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
       'closed',
     );
     expectRefused(await approve(market.id, requestId), 'closeAt', 'closed');
-    // The worker closes both at their close (`source: 'job'`) and ends the pauses.
+    // The worker ends both at their close (`source: 'job'`) — nobody traded, so it cancels them
+    // (#20) — and ends the pauses.
     await workerClose(market.id);
     await workerClose(other.id);
     expect((await pausesOf(market.id))[0]).toMatchObject({
@@ -1116,11 +1263,11 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
       reviewResult: null,
     });
     expectRefused(await approve(market.id, requestId), 'status', 'not paused');
-    // Still listed in the queue, closed, for its 반려 or 철회.
+    // Still listed in the queue, cancelled, for its 반려 or 철회.
     const page = (await queue()).json<QueuePage>();
     expect(page.data.map((item) => [item.marketId, item.status])).toEqual([
-      [market.id, 'closed'],
-      [other.id, 'closed'],
+      [market.id, 'cancelled'],
+      [other.id, 'cancelled'],
     ]);
     const rejected = await reject(market.id, requestId);
     expect(rejected.statusCode).toBe(200);
@@ -1131,10 +1278,12 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
     });
     const retracted = await retract(other.id, await pendingId(other.id));
     expect(retracted.statusCode).toBe(200);
-    expect(detail(retracted)).toMatchObject({ status: 'closed', pause: { pending: null } });
+    expect(detail(retracted)).toMatchObject({ status: 'cancelled', pause: { pending: null } });
     expect((await queue()).json<QueuePage>().data).toEqual([]);
-    // The worker's close is the only `closed` event, and no early close was recorded.
-    const closes = (await eventsFor(market.id)).filter((event) => event.type === 'closed');
+    // The worker's cancel is the only end event, and no early close was recorded.
+    const closes = (await eventsFor(market.id)).filter((event) =>
+      ['closed', 'cancelled'].includes(event.type),
+    );
     expect(closes.map((event) => [event.actorId, event.payload?.source])).toEqual([[null, 'job']]);
   });
 
@@ -1238,6 +1387,7 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
   // --- two pauses, at once, the queue ------------------------------------------------------------
   it('pauses a market again after a resume, keeping every pause and request, the newest first', async () => {
     const market = await opened();
+    await traded(market.id);
     expect((await pause(market.id, asker, { reason: 'ledger_failure' })).statusCode).toBe(200);
     expect((await requestDecision(market.id, { path: 'resume' })).statusCode).toBe(200);
     expect((await approve(market.id, await pendingId(market.id))).statusCode).toBe(200);
@@ -1641,12 +1791,14 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
           received = messages;
         });
         const event = (await eventsFor(market.id)).at(-1)!;
-        expect(event.type).toBe(path === 'resume' ? 'resumed' : 'closed');
+        // Nobody filled the order: the early close cancels the market (#20), after the
+        // recovery's cancels, as ADR-0107 결정 4 '#120·#20' has it.
+        expect(event.type).toBe(path === 'resume' ? 'resumed' : 'cancelled');
         // The recovery's cancels changed the public book (#179): its signal after the status.
         expect(received.map((message) => JSON.parse(message) as unknown)).toEqual([
           expect.objectContaining({
             type: 'market:status',
-            status: path === 'resume' ? 'open' : 'closed',
+            status: path === 'resume' ? 'open' : 'cancelled',
           }),
           { type: 'market:book', marketId: market.id, ts: event.createdAt.toISOString() },
         ]);
@@ -1690,7 +1842,9 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
         received = messages;
       });
       const event = (await eventsFor(market.id)).at(-1)!;
-      expect(event).toMatchObject({ type: 'closed', toStatus: 'closed' });
+      // The order never filled: no trade, so the early close cancels the market (#20), and the
+      // expiry is the same.
+      expect(event).toMatchObject({ type: 'cancelled', toStatus: 'cancelled' });
       // 만료 at the decision's instant, after the status changed — not 취소 완료(일시 중단).
       expect(await orderOf(order.id)).toMatchObject({
         status: 'expired',
@@ -1703,7 +1857,7 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
         lockedCoin: 0n,
       });
       expect(received.map((message) => JSON.parse(message) as unknown)).toEqual([
-        expect.objectContaining({ type: 'market:status', status: 'closed' }),
+        expect.objectContaining({ type: 'market:status', status: 'cancelled' }),
         { type: 'market:book', marketId: market.id, ts: event.createdAt.toISOString() },
       ]);
       await expectSound();

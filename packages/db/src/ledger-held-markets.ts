@@ -27,7 +27,8 @@ type Reader = Pick<NodePgDatabase<typeof schema>, 'select'>;
 
 /**
  * SQL: market `marketId` holds its order locks and ledger writes until a recovery approval — a
- * `ledger_failure` pause lasting, or one ended `closed_at_close`. A per-row filter too
+ * `ledger_failure` pause lasting, or one ended `closed_at_close` (the market closed or, with no
+ * fill a person's account is on, cancelled on schedule — #20). A per-row filter too
  * (`orders.market_id`).
  */
 export function ledgerHeldMarketSql(marketId: SQLWrapper): SQL<boolean> {

@@ -66,6 +66,14 @@ import { approvalStatusEnum } from './enums.js';
  * 0055) — or rejects it, and its registrant may retract it, in any status; a market that left the
  * status it needs refuses its approval.
  *
+ * A SCHEDULED market's cancel (#20, ADR-0117; ADR-0107 결정 5 '#20 운영자의 취소 경로') — `kind`
+ * `market_cancel` (target `market`, the market's id as text; payload `{statusEventId}`, the
+ * market's status event when it was asked; the request's reason the cancel's public one): at most
+ * one waiting per market, which the API holds under the market lock. An admin other than its
+ * requester approves it — SCHEDULED → CANCELLED, whose `cancelled` event names it (`approvalId`)
+ * — or rejects it, and its requester may retract it, in any status; once the market left that
+ * SCHEDULED state (opened, or sent back to a draft and approved again) its approval is refused.
+ *
  * #184's retention deletes none of the market kinds (migration 0044 names the account
  * restriction's kinds alone).
  */

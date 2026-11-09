@@ -94,6 +94,7 @@ const closed: AdminMarket = {
   ruleVersions: [],
   supplement: { pending: null, log: [] },
   pause: { history: [], pending: null, log: [] },
+  cancel: { pending: null, log: [] },
   judgementVersion: null,
   disputeDeadline: null,
   disputeOpen: false,

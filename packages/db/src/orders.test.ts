@@ -16,6 +16,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { applyPairMintFill, applyTradeFill } from './contracts.js';
 import { findLedgerAccount, LedgerEntryError } from './ledger.js';
 import { closeMarketAtClose } from './market-close.js';
+import { marketHasHumanFill } from './market-cancel.js';
 import { hasMarketFill } from './market-dispute.js';
 import { pauseMarket } from './market-pause.js';
 import { lockMarketOrders } from './order-cancel.js';
@@ -1131,6 +1132,8 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
       expect(rested.order.createdAt.getTime()).toBeLessThan(closeAt.getTime());
       const closed = await closing;
       if (!closed.closed) throw new Error('closed');
+      // A resting order is no trading: nobody filled, so the close cancels the market (#20).
+      expect(closed.status).toBe('cancelled');
       expect(closed.expired.expired.map((row) => row.id)).toEqual([rested.order.id]);
       expect(await orderRow(rested.order.id)).toMatchObject({
         status: 'expired',
@@ -1156,10 +1159,65 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
       const ordering = order(a, m2, 'YES', 'buy', 'gtc', 40, 1);
       await waitForLockWaiter(t.db.$client, 'the intake waits on the close');
       go2();
-      expect((await closing2).closed).toBe(true);
+      expect(await closing2).toMatchObject({ closed: true, status: 'cancelled' });
+      // A CANCELLED market refuses the order 마감, as a CLOSED one (#20, #177 8항).
       expect((await ordering).order).toMatchObject({ status: 'rejected', rejectReason: 'closed' });
       expect(await coin(a)).toEqual({ available: 1_000n, locked: 0n });
       expect(await checkOrderInvariants(t.db)).toEqual([]);
+    });
+
+    it('closes rather than cancels when a fill commits on the lock before the close (#20)', async () => {
+      // AC2 of #20: a fill made before the close, under the market lock, makes the market CLOSED.
+      const m = await market();
+      const a = await member();
+      const b = await member();
+      const resting = await order(b, m, 'NO', 'buy', 'gtc', 60, 2);
+      const closeAt = new Date((await clockTimestamp(t.db)).getTime() + 1_000);
+      await passMarketClose(t.db, m, closeAt);
+      let go!: () => void;
+      const held = new Promise<void>((resolve) => (go = resolve));
+      let entered!: () => void;
+      const inside = new Promise<void>((resolve) => (entered = resolve));
+      const intake = t.db.transaction(async (tx) => {
+        const done = await placeOrder(tx, {
+          ownerId: a,
+          marketId: m,
+          requestId: randomUUID(),
+          outcome: 'YES',
+          side: 'buy',
+          timeInForce: 'ioc',
+          limitPriceCoin: 40,
+          qty: 1,
+          budgetCoin: null,
+        });
+        entered();
+        await held;
+        return done;
+      });
+      await inside;
+      while ((await clockTimestamp(t.db)).getTime() < closeAt.getTime() + 50) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      }
+      const closing = closeTestMarket(t.db, m);
+      await waitForLockWaiter(t.db.$client, 'the close waits on the filling intake');
+      go();
+      const filled = await intake;
+      if (filled.kind !== 'placed') throw new Error('placed');
+      expect(filled.order.status).toBe('filled');
+      expect(filled.fills).toHaveLength(1);
+      const closed = await closing;
+      if (!closed.closed) throw new Error('closed');
+      expect(closed.status).toBe('closed');
+      expect((await t.db.select().from(markets).where(eq(markets.id, m)))[0]).toMatchObject({
+        status: 'closed',
+        statusEventId: closed.statusEventId,
+      });
+      // B's remainder (1 of 2) ends 만료, the filled one kept.
+      expect(closed.expired.expired).toEqual([
+        expect.objectContaining({ id: resting.order.id, status: 'expired', filledQty: 1 }),
+      ]);
+      expect(await checkOrderInvariants(t.db)).toEqual([]);
+      expect(await checkMarketStats(t.db)).toEqual([]);
     });
   });
 
@@ -1399,8 +1457,12 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
         const book = await contractBook(t.db, marketIds[1]!);
         const entriesBefore = (await written()).entries;
         await passMarketClose(t.db, marketIds[1]!);
+        const traded = await marketHasHumanFill(t.db, marketIds[1]!);
         const closed = await closeTestMarket(t.db, marketIds[1]!);
         if (!closed.closed) throw new Error('closed');
+        // Whether anyone filled is the round's chance: CLOSED with a person's fill, else
+        // CANCELLED (#20) — the same 만료 either way.
+        expect(closed.status).toBe(traded ? 'closed' : 'cancelled');
         seen.set('expired', (seen.get('expired') ?? 0) + closed.expired.expired.length);
         expect(
           await t.db

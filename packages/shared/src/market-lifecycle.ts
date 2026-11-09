@@ -33,14 +33,16 @@ export const MARKET_LIFECYCLE_TRANSITIONS: Readonly<Record<MarketStatus, readonl
     // by #78's reschedule (a move with a reason and no new review) that finds that time already
     // come — never once its close has passed, which an admin fixes by sending it back to a draft
     // (#173 item 1, #172 item 6). #78: sent back to a draft by any admin with a reason, to edit and
-    // review again (#172 item 6). #173·#20: ended without opening with another admin's approval
-    // (#173 item 10).
+    // review again (#172 item 6). #20: ended without opening by one admin's request with a reason
+    // and another admin's approval (`market_cancel`, #173 items 2·10) — the one operator path to
+    // CANCELLED.
     scheduled: ['open', 'draft', 'cancelled'],
-    // #114: paused by one admin (#173 item 2). At `close_at` the worker closes it, or (#120, #20)
-    // cancels it when no user fill happened.
+    // #114: paused by one admin (#173 item 2). At `close_at` the worker closes it (#120), or (#20)
+    // cancels it when no fill a person's account is on happened — never an operator directly.
     open: ['paused', 'closed', 'cancelled'],
     // #114: resumed (재개) or closed early (조기 마감), each asked for by one admin and approved by
     // another (#173 items 2·4); at `close_at` as above, on schedule and never later (#173 item 3).
+    // The approved 조기 마감 of a market with no such fill cancels it instead (#20).
     paused: ['open', 'closed', 'cancelled'],
     // #152: the judgement published once an admin other than its registrant approves it (#173
     // item 1, ADR-0103); a rejected one leaves the market CLOSED to be judged again.

@@ -32,6 +32,7 @@ export * from './link-review.js';
 export * from './ledger.js';
 export * from './lmsr.js';
 export * from './market.js';
+export * from './market-cancel.js';
 export * from './market-dispute.js';
 export * from './market-edits.js';
 export * from './market-judgement.js';

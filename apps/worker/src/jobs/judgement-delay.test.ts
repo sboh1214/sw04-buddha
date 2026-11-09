@@ -152,7 +152,7 @@ describe.skipIf(!hasTestDb())('the time passing creates nothing (#142, integrati
 
     expect(await runEveryScan()).toEqual({
       open: { opened: 0, skipped: 0, failed: 0, failures: [] },
-      close: { closed: 0, skipped: 0, failed: 0, failures: [] },
+      close: { closed: 0, cancelled: 0, skipped: 0, failed: 0, failures: [] },
       resolve: { resolved: 0, skipped: 0, failed: 0, failures: [] },
       finalize: { settled: 0, skipped: 0, failed: 0, failures: [] },
     });
@@ -221,7 +221,7 @@ describe.skipIf(!hasTestDb())('the time passing creates nothing (#142, integrati
     // The scan leaves it out (the hold is in its query), and the market's own job finds it held.
     expect(await runEveryScan()).toEqual({
       open: { opened: 0, skipped: 0, failed: 0, failures: [] },
-      close: { closed: 0, skipped: 0, failed: 0, failures: [] },
+      close: { closed: 0, cancelled: 0, skipped: 0, failed: 0, failures: [] },
       resolve: { resolved: 0, skipped: 0, failed: 0, failures: [] },
       finalize: { settled: 0, skipped: 0, failed: 0, failures: [] },
     });

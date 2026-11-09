@@ -23,7 +23,8 @@ import { storableInstantSchema } from './market-rules.js';
  *   `ledger_failure` market that closed meanwhile keeps them locked until #93's recovery approval
  *   ends them as 만료 (ADR-0107 decision 4). The intake (#119) refuses new orders 일시 중단
  *   (ADR-0112 10-13).
- * - 재개 (PAUSED → OPEN) or 조기 마감 (PAUSED → CLOSED): one admin asks for the next path
+ * - 재개 (PAUSED → OPEN) or 조기 마감 (PAUSED → CLOSED, or CANCELLED with no fill a person's
+ *   account is on — #20, market-cancel.ts): one admin asks for the next path
  *   (`POST /admin/markets/:id/pause-decisions`, MARKET_PAUSE_PATHS), a `basis_change` pause with
  *   its review result (MARKET_PAUSE_REVIEW_RESULTS), which opens a `market_pause_decision` approval
  *   request (#171, approvals.ts); an admin other than the requester approves it (#173 item 2) — the
@@ -33,16 +34,17 @@ import { storableInstantSchema } from './market-rules.js';
  *   operator the choice (Q1); a schedule moved earlier, the result still unknown, is a
  *   `basis_change` pause reviewed 판정 가능 and closed early (Q2).
  * - The close at `close_at` still comes while PAUSED, on schedule and never later (#173 items 1·3):
- *   the worker closes the market and ends its pause (`closed_at_close`). A decision still waiting
- *   is moot then — its approval is refused, while its 반려 (an admin other than the requester) and
- *   its 철회 (the requester) end it in any status. An early close keeps `close_at`, the scheduled
- *   close (a rule-version item, #80); the `closed` event's `closedAt` is the actual close.
+ *   the worker closes (or, with no fill a person's account is on, cancels — #20) the market and
+ *   ends its pause (`closed_at_close`). A decision still waiting is moot then — its approval is
+ *   refused, while its 반려 (an admin other than the requester) and its 철회 (the requester) end it
+ *   in any status. An early close keeps `close_at`, the scheduled close (a rule-version item, #80);
+ *   the `closed` event's `closedAt` is the actual close.
  *
- * The pause and the approval write a market event (`paused`; `resumed` or `closed`, enums.ts), and
- * every step an `admin_actions` row (`market_pause`, `market_pause_decision_request` …). Admins
- * alone read the pauses for now: the public judging record shows the reason and the pause and
- * resume times (#173 item 13) from #24, which reads `market_pauses`; neither the note nor the
- * publication instant is promised public.
+ * The pause and the approval write a market event (`paused`; `resumed`, `closed` or `cancelled`,
+ * enums.ts), and every step an `admin_actions` row (`market_pause`, `market_pause_decision_request`
+ * …). Admins alone read the pauses for now: the public judging record shows the reason and the
+ * pause and resume times (#173 item 13) from #24, which reads `market_pauses`; neither the note nor
+ * the publication instant is promised public.
  */
 
 /** `approval_requests.kind` of a paused market's next path (#171: lower-case words, `_`). */
@@ -94,7 +96,11 @@ export const MARKET_PAUSE_PATHS = ['resume', 'early_close'] as const;
 export type MarketPausePath = (typeof MARKET_PAUSE_PATHS)[number];
 export const marketPausePathSchema = z.enum(MARKET_PAUSE_PATHS).meta({ id: 'MarketPausePath' });
 
-/** The status each path takes a PAUSED market to (MARKET_LIFECYCLE_TRANSITIONS' paused edges). */
+/**
+ * The status each path takes a PAUSED market to (MARKET_LIFECYCLE_TRANSITIONS' paused edges) — for
+ * 조기 마감, of a market with a fill a person's account is on: with none, `endMarketPause`
+ * (@buddha/db) takes it to `cancelled` instead (#20, ADR-0107 결정 4 '#120·#20').
+ */
 export const MARKET_PAUSE_PATH_STATUSES = {
   resume: 'open',
   early_close: 'closed',
@@ -103,7 +109,10 @@ export const MARKET_PAUSE_PATH_STATUSES = {
 /**
  * How a pause ended (`market_pauses.end_kind`, null while it lasts): `resumed` and `early_closed`
  * by an approved next path (MARKET_PAUSE_PATH_END_KINDS), `closed_at_close` by the worker's close
- * at `close_at` — no review and no approval (#173 items 1·3).
+ * at `close_at` — no review and no approval (#173 items 1·3). It says how the pause ended, not
+ * where the market went: an early close or a close at `close_at` that cancels a market with no
+ * fill a person's account is on (#20) ends its pause the same way, and the market event says
+ * `cancelled`.
  */
 export const MARKET_PAUSE_END_KINDS = ['resumed', 'early_closed', 'closed_at_close'] as const;
 export type MarketPauseEndKind = (typeof MARKET_PAUSE_END_KINDS)[number];
@@ -300,7 +309,8 @@ export interface MarketResumedPayload {
  * `closed`'s payload for an approved early close (`source: 'early_close'`): the actual close
  * instant (ISO; `close_at` keeps the scheduled one) and `resumed`'s fields. The event's actor is
  * the approver. The worker's close at `close_at` writes `{closedAt, source: 'job'}`, a PAUSED
- * market's too.
+ * market's too. An early close of a market with no fill a person's account is on writes
+ * `cancelled` with the same fields instead (`MarketCancelledPayload`, market-cancel.ts; #20).
  */
 export interface MarketEarlyClosedPayload {
   closedAt: string;

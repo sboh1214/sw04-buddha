@@ -6,9 +6,11 @@ import {
   type JudgementDelayStatus,
   LEAD_CLOSE_GAP_UNDECIDED,
   LEAD_CLOSE_GAP_UNDECIDED_MESSAGE,
+  MARKET_CANCEL_SOURCES,
   MARKET_REVIEW_CHECKLIST,
   MARKET_SUPPLEMENT_STATUSES,
   MINUS_SIGN,
+  type MarketCancelSource,
   type MarketEventType,
   type MarketPauseReason,
   type MarketPauseReviewResult,
@@ -147,7 +149,9 @@ export const MARKET_RESULT_LABEL: Record<MarketResult, string> = {
  * 판정 정정 is #176's (ADR-0105): an approved correction, which changes no status. 판정 지연 기록 is
  * #142's (ADR-0106): one admin's record of a delay's reason and next review time, which changes no
  * status either. 가격 보호 폭 변경 is #119's (ADR-0112): one admin's change of an open or paused
- * market's width, with the reason, which changes no status.
+ * market's width, with the reason, which changes no status. 취소 is #20's (ADR-0117): the worker's
+ * close or an approved early close with no fill of a person's account, or an approved cancel of a
+ * SCHEDULED market — named, as the payout's two, by the status it leads to.
  */
 export const MARKET_EVENT_LABEL: Record<MarketEventType, string> = {
   created: copy.eventCreated,
@@ -169,6 +173,7 @@ export const MARKET_EVENT_LABEL: Record<MarketEventType, string> = {
   judgement_corrected: copy.eventJudgementCorrected,
   judgement_delay_recorded: copy.eventJudgementDelayRecorded,
   price_protection_changed: copy.eventPriceProtectionChanged,
+  cancelled: copy.eventCancelled,
 };
 
 /**
@@ -199,6 +204,16 @@ export const PAUSE_REASON_LABEL: Record<MarketPauseReason, string> = {
 export const PAUSE_REVIEW_RESULT_LABEL: Record<MarketPauseReviewResult, string> = {
   judgeable: copy.pauseReviewJudgeable,
   not_judgeable: copy.pauseReviewNotJudgeable,
+};
+
+/**
+ * How a market came to 취소 (#20, ADR-0117), the `cancelled` row's 취소 경로: the worker's close at
+ * `close_at`, an approved early close, an approved cancel of a SCHEDULED market.
+ */
+export const MARKET_CANCEL_SOURCE_LABEL: Record<MarketCancelSource, string> = {
+  job: copy.eventCancelSourceJob,
+  early_close: copy.eventCancelSourceEarlyClose,
+  operator: copy.eventCancelSourceOperator,
 };
 
 export const SETTLEMENT_STEP_LABEL: Record<SettlementStep, string> = {
@@ -711,6 +726,20 @@ const RULES_SUPPLEMENTED_PAYLOAD = z.object({
 });
 const CLOSED_PAYLOAD = z.object({ closedAt: kstInstant });
 /**
+ * 취소 (#20, ADR-0117: `cancelled`, `marketCancelledPayloadSchema`'s shape): the instant, the path
+ * (`source`: the worker's close at `close_at`, an approved early close, an approved operator's
+ * cancel of a SCHEDULED market), the reason — the system sentence for the first two, the request's
+ * reason for the third — and an early close's review result. The pause, the request and its
+ * requester are ids, which no row of this log prints: the 일시 중단 기록 and the 시장 취소 기록 show
+ * them, the requester by nickname.
+ */
+const CANCELLED_PAYLOAD = z.object({
+  cancelledAt: kstInstant,
+  source: z.enum(MARKET_CANCEL_SOURCES),
+  reason: z.string(),
+  reviewResult: marketPauseReviewResultSchema.nullable().optional(),
+});
+/**
  * An approved early close (#114, ADR-0102: `closed` with `source: 'early_close'`, the actor the
  * approver): the actual close instant and the review result (null but for a 실질 기준 변경 pause).
  * The pause, the request and its requester are ids, which no row of this log prints: the detail's
@@ -864,7 +893,8 @@ function interimResolveRows(detail: {
  * with its version and result (#152) — a 결과 확정 before #152 with its note and evidence — a 판정
  * 정정 with the version and result before and after it, the new deadline and the disputes it
  * closed (#176) — a 판정 지연 기록 with its reason, next review time and the status it was made on
- * (#142) — a 가격 보호 폭 변경 with the width before and after and the reason (#119) — the
+ * (#142) — a 가격 보호 폭 변경 with the width before and after and the reason (#119) — a 취소 with
+ * its path, instant and reason and an early close's review result (#20) — the
  * finalize summary, the 개설 검수's records
  * (#78, `reviewDetailRows`) — and no row at all for the start of the payout, whose only field is
  * the `source` the 시스템 actor beside it already says, nor for a resume without a review result.
@@ -990,6 +1020,17 @@ export function marketEventRows(type: MarketEventType, payload: unknown): EventR
       return [
         { label: copy.adminMarketCloseAtShort, value: formatKst(parsed.data.closedAt) },
         ...(early.success ? reviewResultRows(early.data.reviewResult) : []),
+      ];
+    }
+    case 'cancelled': {
+      const parsed = CANCELLED_PAYLOAD.safeParse(payload);
+      if (!parsed.success) return undefined;
+      const { cancelledAt, source, reason, reviewResult } = parsed.data;
+      return [
+        { label: copy.eventCancelSource, value: MARKET_CANCEL_SOURCE_LABEL[source] },
+        { label: copy.eventCancelledAt, value: formatKst(cancelledAt) },
+        { label: copy.eventCancelReason, value: reason },
+        ...reviewResultRows(reviewResult ?? null),
       ];
     }
     case 'paused': {

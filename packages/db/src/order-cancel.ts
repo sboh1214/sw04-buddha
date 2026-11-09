@@ -36,9 +36,10 @@ import { clockTimestamp, lockMarket, lockMarkets } from './tx-helpers.js';
  *
  * The same core ends a live order as 만료 (#120, ADR-0115; ADR-0107 결정 1 #177 7항): a state, not a
  * cancel reason (8항) — the market's close at `close_at` (market-close.ts), a non-held early close
- * (market-pause.ts), #20's CANCELLED and #93's recovery of a closed held market end every live
- * order of every account type so (`expireLockedOrders`), with the same single release, the filled
- * quantity and amount kept, and no cancel reason (migration 0062's `orders_status_check`).
+ * (market-pause.ts) — either one CLOSED or, with no fill a person's account is on, CANCELLED (#20)
+ * — #20's SCHEDULED cancel (market-cancel.ts) and #93's recovery of a closed held market end every
+ * live order of every account type so (`expireLockedOrders`), with the same single release, the
+ * filled quantity and amount kept, and no cancel reason (migration 0062's `orders_status_check`).
  *
  * A market held for a ledger failure (ledger-held-markets.ts) takes no order lock or ledger
  * write until its recovery (결정 4 #178 rows): one order there is answered `held` with nothing
@@ -258,9 +259,9 @@ export async function cancelOrder(tx: Tx, input: CancelOrderInput): Promise<Canc
 }
 
 /**
- * Phase 1 of a market's batch (a pause, the end of a pause, the close's expiry; #20, #93 later):
- * `lockMarket`, the market's live orders in arrival order, whether it is held, then every owner's
- * Coin account at once — the people's and the 운영 마켓메이커's 마켓메이커 자금 in one
+ * Phase 1 of a market's batch (a pause, the end of a pause, the close's expiry, #20's SCHEDULED
+ * cancel; #93 later): `lockMarket`, the market's live orders in arrival order, whether it is held,
+ * then every owner's Coin account at once — the people's and the 운영 마켓메이커's 마켓메이커 자금 in one
  * `lockOrderHolders` (ADR-0110 결정 4) — even when nothing will be cancelled (a `ledger_failure`
  * pause): it locks rows and writes nothing.
  */
@@ -391,14 +392,14 @@ export async function cancelLockedOrders(
 }
 
 /**
- * Phase 2 of a market's batch as 만료 (#120, ADR-0115; ADR-0107 결정 1 #177 7항 '마감·취소 때의
- * 잔량', 결정 5 '#20·#120·#177 7항'): every live order of every account type `locked` holds — a
- * person's, the 운영 마켓메이커's — ended 만료 at `at`, the instant the caller read after phase 1,
- * its remaining lock given back once (`releaseForOrder`, as a cancel): no cancel reason, the
- * filled quantity and amount kept, no ledger entry, fill or tick. The close at `close_at`, a
- * non-held early close, #20's CANCELLED and #93's recovery of a closed held market call it, each
- * after its transition in the same transaction: it throws unless `locked` is one market's batch
- * and that market has left trading (DRAFT…PAUSED refused — 만료 is a market's end, never an
+ * Phase 2 of a market's batch as 만료 (#120, ADR-0115; ADR-0107 결정 1 #177 7항 '마감·취소 때의 잔량', 결정 5
+ * '#20·#120·#177 7항'): every live order of every account type `locked` holds — a person's, the 운영
+ * 마켓메이커's — ended 만료 at `at`, the instant the caller read after phase 1, its remaining lock given
+ * back once (`releaseForOrder`, as a cancel): no cancel reason, the filled quantity and amount
+ * kept, no ledger entry, fill or tick. The close at `close_at`, a non-held early close (either
+ * CLOSED or CANCELLED, #20), #20's SCHEDULED cancel and #93's recovery of a closed held market call
+ * it, each after its transition in the same transaction: it throws unless `locked` is one market's
+ * batch and that market has left trading (DRAFT…PAUSED refused — 만료 is a market's end, never an
  * account's). A market held for a ledger failure keeps its orders live and locked, returned in
  * `held` (ADR-0107 결정 4 #178 '복구 전에 마감이 오면'), unless `endsHold`: #93's recovery passes it.
  */

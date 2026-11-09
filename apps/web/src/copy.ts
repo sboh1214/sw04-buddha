@@ -925,12 +925,13 @@ export const copy = {
   pauseReasonBasisChangeHint:
     '시장이 묻는 내용이 실질적으로 바뀌었습니다. 결과가 나오기 전에 사건 일정이 앞당겨져 거래 마감을 당겨야 할 때도 이 사유로 멈추고 조기 마감을 요청합니다.',
   // 실질 기준 변경으로 멈춘 시장의 검토 결과(MARKET_PAUSE_REVIEW_RESULTS, 오너 답 Q1): 판정 가능이면 운영자가
-  // 재개와 조기 마감 중에서 고르고, 판정 불가면 조기 마감뿐이다.
+  // 재개와 조기 마감 중에서 고르고, 판정 불가면 조기 마감뿐이다. 사용자가 낀 체결이 한 건도 없던 시장은 검토
+  // 결과와 상관없이 조기 마감 대신 취소되어 판정이 없다(#20).
   pauseReviewJudgeable: '기존 규칙으로 판정 가능',
   pauseReviewNotJudgeable: '판정 불가',
   pauseReviewJudgeableHint: '재개하거나 조기 마감할 수 있습니다.',
   pauseReviewNotJudgeableHint:
-    '조기 마감만 요청할 수 있습니다. 마감한 뒤 판정에서 무효 규칙을 적용합니다.',
+    '조기 마감만 요청할 수 있습니다. 마감한 뒤 판정에서 무효 규칙을 적용합니다(사용자가 낀 체결이 없던 시장은 판정 없이 취소됩니다).',
   // 다음 경로(MARKET_PAUSE_PATHS)와 일시 중단이 끝난 방식(MARKET_PAUSE_END_KINDS). 예정 마감은 거래 마감
   // 시각에 워커가 마감한 것이다(검토·승인 없음).
   pausePathResume: '재개',
@@ -942,12 +943,13 @@ export const copy = {
   // 재개·조기 마감 요청 창. 요청한 관리자는 승인·반려하지 않는다(APPROVAL_REFUSALS).
   adminMarketPauseRequest: '재개·조기 마감 요청',
   adminMarketPauseRequestUnavailableClosed:
-    '거래 마감 시각이 지나 재개·조기 마감을 요청할 수 없습니다. 시장은 거래 마감 시각에 마감됩니다.',
+    '거래 마감 시각이 지나 재개·조기 마감을 요청할 수 없습니다. 시장은 거래 마감 시각에 마감됩니다(사용자가 낀 체결이 없던 시장은 취소됩니다).',
   adminMarketPauseRequestTitle: '재개·조기 마감을 요청합니다',
   // 승인 전에도 거래 마감 시각은 온다(#173 1·3항): 워커가 일시 중단 시장을 승인 없이 마감하고, 기다리던
-  // 요청은 반려나 철회로만 끝난다.
+  // 요청은 반려나 철회로만 끝난다. 사용자가 낀 체결이 없던 시장은 승인된 조기 마감도 거래 마감 시각의
+  // 마감도 취소다(#20).
   adminMarketPauseRequestBody:
-    '요청하지 않은 다른 관리자가 승인하면 그때 거래가 다시 열리거나 시장이 마감됩니다. 승인되기 전에는 일시 중단이 이어지고, 그 사이 거래 마감 시각이 오면 승인 없이도 시장이 마감됩니다. 한 시장에 기다리는 요청은 하나입니다.',
+    '요청하지 않은 다른 관리자가 승인하면 그때 거래가 다시 열리거나 시장이 마감됩니다. 승인되기 전에는 일시 중단이 이어지고, 그 사이 거래 마감 시각이 오면 승인 없이도 시장이 마감됩니다. 사용자가 낀 체결이 한 건도 없던 시장은 어느 쪽이든 마감 대신 취소되어 결과를 정하지 않고 판정이 없습니다. 한 시장에 기다리는 요청은 하나입니다.',
   adminMarketPauseRequestPath: '다음 경로',
   adminMarketPauseRequestReview: '검토 결과',
   adminMarketPauseRequestReviewHint:
@@ -977,11 +979,14 @@ export const copy = {
   adminMarketPauseApproveResumeBody:
     '승인하면 거래가 바로 다시 열리고 일시 중단이 끝납니다. 남아 있던 대기 주문(담보·원장 장애로 멈춘 시장의 주문)은 그 전에 모두 취소됩니다.',
   // 조기 마감은 거래 마감 시각(예정된 시각, 규칙 버전의 항목)을 바꾸지 않고 실제로 마감한 시각을 남긴다.
+  // 사용자가 낀 체결이 한 건도 없던 시장은 마감 대신 취소된다(#20): 결과를 정하지 않고 판정·이의·지급이 없다.
   adminMarketPauseApproveEarlyCloseBody:
-    '승인하면 시장이 바로 마감되고 판정으로 넘어갑니다. 다시 열 수 없습니다. 남아 있던 대기 주문(담보·원장 장애로 멈춘 시장의 주문)은 그 전에 모두 취소됩니다. 거래 마감 시각은 예정된 시각으로 남고, 실제로 마감한 시각이 기록됩니다.',
+    '승인하면 시장이 바로 마감되고 판정으로 넘어갑니다. 다시 열 수 없습니다. 사용자가 낀 체결이 한 건도 없던 시장은 마감 대신 취소되어 결과를 정하지 않습니다. 남아 있던 대기 주문(담보·원장 장애로 멈춘 시장의 주문)은 그 전에 모두 취소됩니다. 거래 마감 시각은 예정된 시각으로 남고, 실제로 마감한 시각이 기록됩니다.',
   adminMarketPauseApproveReason: '승인 사유',
   adminMarketPauseResumed: '재개를 승인했습니다. 거래가 다시 열렸습니다.',
   adminMarketPauseEarlyClosed: '조기 마감을 승인했습니다. 시장이 마감되었습니다.',
+  adminMarketPauseEarlyCancelled:
+    '조기 마감을 승인했습니다. 사용자가 낀 체결이 없어 시장이 취소되었습니다.',
   adminMarketPauseRejectTitle: '요청을 반려합니다',
   adminMarketPauseRejectBody: '반려하면 요청이 끝나고 시장은 지금 상태 그대로입니다.',
   adminMarketPauseRejectReason: '반려 사유',
@@ -1049,6 +1054,50 @@ export const copy = {
   adminMarketPauseDecisionsColRequestedBy: '요청한 관리자',
   adminMarketPauseDecisionsColRequestedAt: '요청 시각',
   adminMarketPauseDecisionsColCloseAt: '거래 마감',
+  // 시장 취소 (#20, ADR-0117; ADR-0107 결정 5 '#20 운영자의 취소 경로'): 운영자는 개장 예정 시장만, 요청한
+  // 관리자가 아닌 관리자의 승인으로 취소한다(approval_requests 'market_cancel'). 거래 중·일시 중단·마감한
+  // 시장을 운영자가 바로 취소하는 길은 없다 — 그런 시장은 거래 마감이나 승인한 조기 마감 때 사용자가 낀 체결이
+  // 없으면 자동으로 취소된다. 요청 사유는 시장의 공개 판정 기록에 취소 사유로 실린다(#24가 보인다). 기다리는
+  // 요청은 예정 개장을 붙잡지 않는다: 그 전에 시장이 열리면 승인할 수 없고 반려나 철회로 끝낸다. 버튼·요청한
+  // 관리자·기록의 낱말은 일시 중단 요청과 같은 것을 쓴다(adminMarketPauseApprove 등).
+  adminMarketCancel: '시장 취소',
+  adminMarketCancelIntro:
+    '개장 예정인 시장을 열지 않고 끝냅니다. 요청하지 않은 다른 관리자가 승인하면 그때 취소되고, 다시 열 수 없습니다. 거래 중인 시장은 거래 마감이나 조기 마감 때 사용자가 낀 체결이 없으면 자동으로 취소됩니다.',
+  adminMarketCancelRequest: '시장 취소 요청',
+  adminMarketCancelRequestTitle: '시장 취소를 요청합니다',
+  adminMarketCancelRequestBody:
+    '요청하지 않은 다른 관리자가 승인하면 시장이 열리지 않고 바로 취소됩니다. 결과를 정하지 않고, 판정·이의·지급도 없습니다. 승인되기 전에는 개장 예정이 이어지고, 그 사이 예정 개장 시각이 오면 시장이 열려 이 요청은 승인할 수 없습니다. 한 시장에 기다리는 요청은 하나입니다.',
+  adminMarketCancelReason: '취소 사유',
+  adminMarketCancelReasonHint:
+    '시장의 공개 판정 기록에 취소 사유로 실립니다. 500자까지 쓸 수 있습니다.',
+  adminMarketCancelRequested: '시장 취소를 요청했습니다. 다른 관리자가 승인하거나 반려합니다.',
+  adminMarketCancelPending: '승인을 기다리는 취소 요청',
+  // 요청한 뒤 시장이 열렸거나 초안으로 되돌아간 요청은 승인할 수 없고, 반려와 철회로 끝낸다.
+  adminMarketCancelPendingNotScheduled:
+    '개장 예정 시장이 아니게 되어(열렸거나 초안으로 되돌아갔습니다) 승인할 수 없습니다. 반려하거나 철회해 끝내세요.',
+  adminMarketCancelApproveTitle: '시장 취소를 승인합니다',
+  adminMarketCancelApproveBody:
+    '승인하면 시장이 열리지 않고 바로 취소됩니다. 다시 열 수 없고, 결과를 정하지 않습니다. 요청 사유가 취소 사유로 남습니다.',
+  adminMarketCancelDecisionHint:
+    '시장 취소 기록에 관리자·시각과 함께 남습니다. 관리자만 봅니다. 500자까지 쓸 수 있습니다.',
+  adminMarketCancelled: '시장 취소를 승인했습니다. 시장이 취소되었습니다.',
+  adminMarketCancelRejectTitle: '시장 취소 요청을 반려합니다',
+  adminMarketCancelRetractTitle: '시장 취소 요청을 철회합니다',
+  adminMarketCancelHistory: '시장 취소 기록',
+  // 시장 취소 요청과 그 결정의 거절(VALIDATION_ERROR가 짚는 곳마다, MARKET_CANCEL_REFUSALS).
+  errMarketCancelStatus:
+    '개장 예정인 시장만 취소할 수 있습니다. 화면을 새로 고쳐 주세요. 기다리는 요청은 반려하거나 철회해 끝냅니다.',
+  errMarketCancelPending: '승인을 기다리는 취소 요청이 이미 있습니다. 화면을 새로 고쳐 주세요.',
+  errMarketCancelStale:
+    '요청한 뒤 시장이 초안으로 되돌아갔다가 다시 승인되어 이 요청은 승인할 수 없습니다. 반려하거나 철회해 끝내세요.',
+  errMarketCancelUnknown: '이 시장의 취소 요청이 아닙니다. 화면을 새로 고쳐 주세요.',
+  // 시장 취소 대기 (GET /admin/market-cancel-requests): 기다리는 취소 요청, 오래 기다린 것부터. 검수 대기
+  // 화면의 일시 중단 결정 대기 다음 묶음이다. 열이 같은 것은 일시 중단 결정 대기의 이름을 쓴다.
+  adminMarketCancelRequests: '시장 취소 대기',
+  adminMarketCancelRequestsIntro:
+    '개장 예정 시장의 취소 승인을 기다리는 요청입니다. 오래 기다린 것부터 보입니다. 요청한 관리자가 아닌 관리자가 시장 상세에서 승인하거나 반려합니다.',
+  adminMarketCancelRequestsEmpty: '승인을 기다리는 시장 취소 요청이 없습니다.',
+  adminMarketCancelRequestsColOpenAt: '예정 개장',
   // 판정 등록과 별도 검토자 승인 (#152, ADR-0103; ADR-0093 결정 1 #173 1·4·5·9·11~13항, 결정 3의 #152 행):
   // 거래 마감한 시장에 관리자 한 명이 결과(YES·NO·무효), 규칙의 출처에서 고른 판정 출처, 증거 링크와 수집
   // 시각, 확인한 내용을 등록하고, 등록하지 않은 다른 관리자가 승인하면 그 결과가 잠정 결과로 공개되고 이의
@@ -1417,6 +1466,17 @@ export const copy = {
   eventResumed: '재개',
   eventEarlyClosed: '조기 마감',
   eventSystem: '시스템',
+  // 시장 취소(#20): 거래 마감 시각에 워커가(행위자 시스템), 승인한 조기 마감이(행위자는 승인한 관리자) 사람
+  // 계정이 낀 체결을 하나도 찾지 못하면 마감 대신 취소로 옮기고, 개장 예정 시장은 요청하지 않은 관리자가 승인한
+  // 취소 요청으로 취소된다. 이름은 그 상태의 라벨을 따르고, 경로·시각·사유(자동 취소는 시스템 문장, 운영자
+  // 취소는 요청 사유)와 조기 마감의 검토 결과를 보인다.
+  eventCancelled: '취소',
+  eventCancelSource: '취소 경로',
+  eventCancelSourceJob: '거래 마감',
+  eventCancelSourceEarlyClose: '조기 마감',
+  eventCancelSourceOperator: '운영자 취소',
+  eventCancelledAt: '취소 시각',
+  eventCancelReason: '취소 사유',
   // 규칙 수정 기록(#23): 바뀐 항목의 이름(openItem…)을 ' · '로 잇고, 항목마다 이전·이후를 보인다. #23
   // 전의 기록은 규칙 글 하나의 이전·이후다.
   eventRulesItems: '바뀐 항목',

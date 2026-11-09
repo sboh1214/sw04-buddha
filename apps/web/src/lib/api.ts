@@ -95,6 +95,15 @@ export type MarketPauseDecisionPending = components['schemas']['MarketPauseDecis
 export type MarketPauseDecisionLogEntry = components['schemas']['MarketPauseDecisionLogEntry'];
 export type AdminMarketPauseDecisionItem = components['schemas']['AdminMarketPauseDecisionItem'];
 /**
+ * 시장 취소 (#20, ADR-0117): `AdminMarket.cancel` — the cancel request waiting on a SCHEDULED market
+ * and every request of the market — one request, one entry of the log, and a row of the 시장 취소
+ * 대기 queue (`GET /admin/market-cancel-requests`).
+ */
+export type AdminMarketCancelState = components['schemas']['AdminMarketCancelState'];
+export type MarketCancelRequest = components['schemas']['MarketCancelRequest'];
+export type MarketCancelLogEntry = components['schemas']['MarketCancelLogEntry'];
+export type AdminMarketCancelItem = components['schemas']['AdminMarketCancelItem'];
+/**
  * 판정 등록과 별도 검토자 승인 (#152, ADR-0103): `AdminMarket.judgement` — the current judgement,
  * the versions a correction replaced (`history`, #176, ADR-0105), the registration waiting on the
  * market and every registration — one judgement, a registration waiting and one entry of the log,

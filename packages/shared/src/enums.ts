@@ -244,8 +244,8 @@ export const marketResultSchema = z.enum(MARKET_RESULTS).meta({ id: 'MarketResul
 /**
  * market_events.type (varchar(40), PLAN 6.2). A row with a status change also carries
  * `from_status`/`to_status` (#174); each action issue adds the type of the transitions it
- * makes (#78 review, #114 pause, #152 judgement, #176 correction and #142 delay record, below;
- * #20 cancel) — #21's scheduled open writes the `opened` the interim open wrote before it, and
+ * makes (#78 review, #114 pause, #152 judgement, #176 correction, #142 delay record and #20
+ * cancel, below) — #21's scheduled open writes the `opened` the interim open wrote before it, and
  * #152's confirmation the `resolved` the interim judgement wrote.
  */
 export const MARKET_EVENT_TYPES = [
@@ -298,7 +298,8 @@ export const MARKET_EVENT_TYPES = [
    * approver), payload `{closedAt, source: 'early_close', pauseId, approvalId, requestedBy,
    * reviewResult}` (`MarketEarlyClosedPayload`, market-pause.ts). `closedAt` is the actual close;
    * `close_at` stays the scheduled one. Rows of the one-admin close that #114 retired (open →
-   * closed, ADR-0027) carry `{closedAt}` alone.
+   * closed, ADR-0027) carry `{closedAt}` alone. Since #20 both close a market with a fill a
+   * person's account is on; one with none goes to `cancelled` instead (below).
    */
   'closed',
   /** settling → settled: the worker finished every SETTLEMENT_STEPS step. */
@@ -389,6 +390,19 @@ export const MARKET_EVENT_TYPES = [
    * a market opened with none). Applies to the orders taken after it; resting orders keep theirs.
    */
   'price_protection_changed',
+  /**
+   * open, paused or scheduled → cancelled: 거래 없는 시장의 취소 (#20, ADR-0117; ADR-0107 결정 5
+   * '#20·#120 거래가 전혀 없던과 자동 CANCELLED', '#20 운영자의 취소 경로'). Payload
+   * `MarketCancelledPayload` (market-cancel.ts) — `{cancelledAt, source, reason}` and per source:
+   * `job`, the worker's close at `close_at` of an OPEN or PAUSED market with no fill a person's
+   * account is on (actor NULL); `early_close`, the approved 조기 마감 of a PAUSED market with none
+   * (the approver; `{pauseId, approvalId, requestedBy, reviewResult}` as `closed`'s); `operator`, a
+   * SCHEDULED market's `market_cancel` request approved by an admin other than its requester (the
+   * approver; `{approvalId, requestedBy}`). `reason` is the system sentence
+   * (MARKET_NO_FILL_CANCEL_REASON) for the first two, the request's reason for the third. The
+   * result type stays null; never from CLOSED (no closed → cancelled edge).
+   */
+  'cancelled',
 ] as const;
 export type MarketEventType = (typeof MARKET_EVENT_TYPES)[number];
 export const marketEventTypeSchema = z.enum(MARKET_EVENT_TYPES);
@@ -920,6 +934,24 @@ export const ADMIN_ACTION_TYPES = [
    * payload `{before, after, reason}` — as its `price_protection_changed` event.
    */
   'market_price_protection_change',
+  /**
+   * 시장 취소 (#20, ADR-0117; ADR-0107 결정 5 '#20 운영자의 취소 경로'): target `market` / its id,
+   * as each cancel record below. An admin asked to cancel a SCHEDULED market, which opens a
+   * `market_cancel` approval request and changes nothing yet: payload `{approvalId, statusEventId,
+   * reason}` (`MarketCancelRequestActionPayload`, market-cancel.ts) — the market's status event the
+   * request pins and its reason, the cancel's public one.
+   */
+  'market_cancel_request',
+  /**
+   * Another admin approved it, and the market went SCHEDULED → CANCELLED (`cancelled`, source
+   * `operator`) in the same transaction: payload `{approvalId, reason, before, after}` — the
+   * approver's reason and `market_update`'s snapshot before and after.
+   */
+  'market_cancel_approve',
+  /** Another admin rejected it, nothing changed: payload `{approvalId, reason}`. */
+  'market_cancel_reject',
+  /** Its requester retracted it before anyone decided it: payload `{approvalId}`. */
+  'market_cancel_retract',
 ] as const;
 export type AdminActionType = (typeof ADMIN_ACTION_TYPES)[number];
 export const adminActionTypeSchema = z.enum(ADMIN_ACTION_TYPES);

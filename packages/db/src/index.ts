@@ -74,6 +74,13 @@ export {
   type CloseSkipReason,
 } from './market-close.js';
 export {
+  cancelScheduledMarket,
+  marketHasHumanFill,
+  type CancelScheduledMarketInput,
+  type CancelScheduledMarketResult,
+  type CancelScheduledSkipReason,
+} from './market-cancel.js';
+export {
   openScheduledMarket,
   type OpenScheduledMarketInput,
   type OpenScheduledMarketResult,

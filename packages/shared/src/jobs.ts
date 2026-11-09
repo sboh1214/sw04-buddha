@@ -24,9 +24,16 @@ export const JOB_NAMES = {
    * 1): SCHEDULED → OPEN, actor NULL (the worker). The delayed job the API registers per market
    * when an approval or a reschedule leaves it SCHEDULED, and the worker's per-minute scan as the
    * backstop. A market whose close has passed is never opened: it stays SCHEDULED until an admin
-   * sends it back to a draft (ADR-0093 decision 2 #172 item 6).
+   * sends it back to a draft (ADR-0093 decision 2 #172 item 6). A market cancelled meanwhile
+   * (#20) is skipped as any other not SCHEDULED, and its cancel removes both delayed jobs.
    */
   marketOpen: 'market.open',
+  /**
+   * Closes an OPEN or PAUSED market at its 거래 마감 시각 (#120, ADR-0115; ADR-0093 decision 1 #173
+   * items 1·3), actor NULL: → CLOSED, or → CANCELLED when no fill a person's account is on
+   * happened (#20, ADR-0117), every remaining order ended 만료. The delayed job and the per-minute
+   * scan, as `market.open`.
+   */
   marketClose: 'market.close',
   /**
    * Confirms a PROVISIONAL market's result once its 이의 기한 has passed with nothing held (#152,
