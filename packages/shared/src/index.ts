@@ -79,3 +79,6 @@ export * from './wallet.js';
 export * from './watchlist.js';
 export * from './write-limits.js';
 export * from './market-settlement.js';
+export * from './reconciliation.js';
+export * from './reconciliation-api.js';
+export * from './reconciliation-correction.js';

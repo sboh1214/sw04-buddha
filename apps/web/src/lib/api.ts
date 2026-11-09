@@ -50,6 +50,18 @@ export type LedgerEntry = components['schemas']['LedgerEntry'];
 export type Payment = components['schemas']['Payment'];
 export type Balance = components['schemas']['Balance'];
 export type AdminUser = components['schemas']['AdminUser'];
+export type ReconciliationResult = components['schemas']['ReconciliationResult'];
+export type ReconciliationHoldDetail = components['schemas']['ReconciliationHoldDetail'];
+export type ReconciliationRecoveryRequest = components['schemas']['ReconciliationRecoveryRequest'];
+export type ReconciliationRun = components['schemas']['ReconciliationRun'];
+export type ReconciliationCorrectionDetail =
+  components['schemas']['ReconciliationCorrectionDetail'];
+export type ReconciliationCorrectionRequest =
+  components['schemas']['ReconciliationCorrectionRequest'];
+export type ReconciliationCorrectionCandidate =
+  components['schemas']['ReconciliationCorrectionCandidate'];
+export type MemberReconciliationCorrection =
+  components['schemas']['MemberReconciliationCorrection'];
 export type ChargePackage = components['schemas']['ChargePackage'];
 export type ChargeResult = components['schemas']['ChargeResult'];
 export type Coupon = components['schemas']['Coupon'];

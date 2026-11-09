@@ -1491,8 +1491,9 @@ export class MarketAdminService {
    * reschedule — when its scheduled open has come (#21, ADR-0100; ADR-0093 decision 2 #172 item 6,
    * decision 3 '#21 앞당긴 개장'): `openScheduledMarket` under the market lock the caller holds, at
    * the caller's instant `now`, the admin as its actor. Answers the OPEN row, or null while the
-   * scheduled open is still ahead (`not_due`). The caller checked on the same clock that the close
-   * is ahead, so any other skip is a broken invariant — INTERNAL, never an answer.
+   * scheduled open is still ahead (`not_due`) or a ledger hold awaits approved recovery
+   * (`ledger_hold`). The caller checked on the same clock that the close is ahead, so any other
+   * skip is a broken invariant — INTERNAL, never an answer.
    */
   private async openIfDue(
     tx: Tx,
@@ -1503,7 +1504,7 @@ export class MarketAdminService {
   ): Promise<MarketRow | null> {
     const result = await openScheduledMarket(tx, { market: row, now, actorId: adminId, source });
     if (result.opened) return result.row;
-    if (result.reason === 'not_due') return null;
+    if (result.reason === 'not_due' || result.reason === 'ledger_hold') return null;
     throw new AppError('INTERNAL', {
       message: `Market ${row.id} was not opened by its ${source}: ${result.reason}`,
     });

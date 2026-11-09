@@ -37,6 +37,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@buddha/db": "workspace:*",
     "@buddha/config-eslint": "workspace:*",
     "@buddha/config-ts": "workspace:*",
     "@playwright/test": "catalog:",

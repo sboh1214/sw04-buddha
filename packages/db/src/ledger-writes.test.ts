@@ -9,6 +9,8 @@ const ROOT = new URL('../../../', import.meta.url);
  * other writer of Coin calls it.
  */
 const WRITES_THE_BOOKS = 'packages/db/src/ledger.ts';
+/** Owner-only TEST incident injection, never imported by an application runtime. */
+const INCIDENT_FIXTURES = 'packages/db/src/test/ledger.ts';
 
 /** The trees the static guard scans, each `<group>/<name>/src` (account-types.test.ts's). */
 const SCANNED_GROUPS = ['apps', 'packages'];
@@ -66,7 +68,7 @@ describe('one writer of the books (#116, static)', () => {
     // is not its ledger's at COMMIT, migration 0060). Test files are not scanned: the one door a
     // test has around it is `withLedgerGuardsOff` (test/ledger.ts), on the migrate role.
     const offenders = sourceFiles()
-      .filter((file) => file !== WRITES_THE_BOOKS)
+      .filter((file) => file !== WRITES_THE_BOOKS && file !== INCIDENT_FIXTURES)
       .filter((file) => writesTheBooks(readFileSync(new URL(file, ROOT), 'utf8')));
     expect(offenders).toEqual([]);
     expect(writesTheBooks(readFileSync(new URL(WRITES_THE_BOOKS, ROOT), 'utf8'))).toBe(true);

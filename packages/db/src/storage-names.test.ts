@@ -25,6 +25,9 @@ import {
   PAYMENT_PROVIDERS,
   PHONE_VERIFICATION_SEND_OUTCOMES,
   RELEASE_SETTINGS,
+  RECONCILIATION_RECOVERY_APPROVAL_KIND,
+  RECONCILIATION_SCOPES,
+  RECONCILIATION_SOURCES,
   RESTRICTION_END_CHANGE_KINDS,
   RETENTION_PURGE_KINDS,
   RETENTION_PURGE_OUTCOMES,
@@ -88,6 +91,9 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   'market_events.type': MARKET_EVENT_TYPES,
   'market_settlement_steps.step': SETTLEMENT_STEPS,
   'market_settlement_steps.status': SETTLEMENT_STEP_STATUSES,
+  'reconciliation_results.scope': RECONCILIATION_SCOPES,
+  'reconciliation_results.source': RECONCILIATION_SOURCES,
+  'reconciliation_holds.scope': ['market', 'account'],
   'admin_actions.type': ADMIN_ACTION_TYPES,
   'audit_failures.kind': AUDIT_FAILURE_KINDS,
   // The slugs the seed starts the tree with. An operator's own (#17, `/admin/categories`) are
@@ -121,6 +127,7 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
     MARKET_PAUSE_DECISION_APPROVAL_KIND,
     MARKET_JUDGEMENT_APPROVAL_KIND,
     MARKET_CANCEL_APPROVAL_KIND,
+    RECONCILIATION_RECOVERY_APPROVAL_KIND,
   ],
   // #80: the items a rule version changed (a text[] of the version items' keys, held by a CHECK).
   'market_rule_versions.changed_items': RULE_VERSION_ITEMS,
@@ -409,6 +416,7 @@ describe('excluded features in stored data (#113)', () => {
         { where: 'table', name: 'market_pauses' },
         ...[
           'market_pauses_reason_check',
+          'market_pauses_system_actor_check',
           'market_pauses_note_check',
           'market_pauses_result_published_at_check',
           'market_pauses_review_result_check',

@@ -19,7 +19,9 @@ import { clockTimestamp } from './tx-helpers.js';
  * 원장 쓰기 (#116, ADR-0109; ADR-0107 결정 2 #73): the one place a balance changes with its
  * event. Every writer of Coin — the start grant, the closure, the kept payment and coupon paths,
  * the settlement payout, and #118's pair mints, #119's fills, #93's corrections, #129's treasury
- * — calls `recordLedgerEntry` in its own transaction, and nothing else inserts a ledger entry or
+ * — calls `recordLedgerEntry` in its own transaction, except #93's approved SQL function
+ * (migration 0065), which alone closes a gap with an immutable approval/evidence record and,
+ * unless restoring actual Coin, its precisely bound ledger transfer. Nothing else inserts a ledger entry or
  * changes a balance's total (ledger-writes.test.ts; the database checks it at every UPDATE and at
  * COMMIT, migration 0060). The order locks are here too (#118, ADR-0110): `lockCoin` and
  * `releaseCoin` move Coin between available and locked of one account, which is no event and

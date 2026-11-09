@@ -464,6 +464,13 @@ describe('marketTradingRejectReason (#179, #120)', () => {
     expect(marketTradingRejectReason(facts('open', 1))).toBe('closed');
   });
 
+  it('refuses an OPEN market under a persistent reconciliation hold', () => {
+    const held = { ...facts('open', -1), ledgerHeld: true };
+    expect(marketTradingRejectReason(held)).toBe('paused');
+    expect(intakeMarketGate(held, 'gtc')).toEqual({ kind: 'reject', reason: 'paused' });
+    expect(marketTradingRejectReason({ ...facts('open', 0), ledgerHeld: true })).toBe('closed');
+  });
+
   it('keeps the status’s own reason first, past the close too', () => {
     for (const status of MARKET_STATUSES) {
       if (status === 'draft' || status === 'review') {

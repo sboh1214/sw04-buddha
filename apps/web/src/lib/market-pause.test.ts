@@ -695,4 +695,19 @@ describe('pauseFailure', () => {
       refresh: false,
     });
   });
+
+  it('explains failed reconciliation and stale recovery evidence on pause writes and refreshes the market', () => {
+    for (const write of ['request', 'decision'] as const) {
+      for (const [reason, message] of [
+        ['not_passed', copy.reconciliationNotPassed],
+        ['stale', copy.reconciliationStale],
+      ] as const) {
+        expect(pauseFailure(refused('reconciliation', reason), write)).toEqual({
+          kind: 'alert',
+          message,
+          refresh: true,
+        });
+      }
+    }
+  });
 });

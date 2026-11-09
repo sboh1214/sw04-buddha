@@ -672,6 +672,12 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
     status: 200,
     own: ['ledger memo', 'start grant id', 'start grant amount'],
   },
+  // The correction controller suite also seeds real two-person corrections and checks both the
+  // positive own history and the other member's empty page, including private reason sentinels.
+  'GET /me/reconciliation-corrections': {
+    query: { cursor: (fixture) => fixture.cursors.payments, limit: LIMIT },
+    status: 200,
+  },
   'GET /me/payments': {
     query: { cursor: (fixture) => fixture.cursors.payments, limit: LIMIT },
     status: 200,

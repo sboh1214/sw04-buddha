@@ -334,7 +334,13 @@ describe('enums', () => {
     expect(
       enums.ADMIN_ACTION_TYPES.filter((type) => type.startsWith('market_judgement_')),
     ).toHaveLength(4);
-    expect(enums.ADMIN_ACTION_TYPES.filter((type) => type.includes('correct'))).toEqual([]);
+    // Coin reconciliation is separate; judgement corrections reuse the judgement actions.
+    expect(enums.ADMIN_ACTION_TYPES.filter((type) => type.includes('correct'))).toEqual([
+      'reconciliation_correction_request',
+      'reconciliation_correction_approve',
+      'reconciliation_correction_reject',
+      'reconciliation_correction_retract',
+    ]);
     expect(new Set(enums.MARKET_EVENT_TYPES).size).toBe(enums.MARKET_EVENT_TYPES.length);
   });
 
@@ -454,6 +460,7 @@ describe('enums', () => {
       'price_limit',
       'budget_too_small',
       'self_trade',
+      'ledger_hold',
     ]);
     expect(enums.orderRejectReasonSchema.options).toEqual([...enums.ORDER_REJECT_REASONS]);
     // 본인 취소·즉시 거래 잔량·자기 체결·일시 중단·관리자 권한·계정 제한·탈퇴.

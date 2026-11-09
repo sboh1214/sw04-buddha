@@ -32,6 +32,7 @@ import {
   ledgerAccountBalance,
   ledgerSupply,
   mintTestPairs,
+  recordLegacyCorrectionForTest,
   withLedgerGuardsOff,
 } from './test/ledger.js';
 import { clockTimestamp, lockMarket } from './tx-helpers.js';
@@ -425,15 +426,14 @@ describe.skipIf(!hasTestDb())('atomic market settlement (#126, integration)', ()
         refId: requestId,
         idempotencyKey: ledgerKeys.approvalRequest(requestId),
       });
-      await recordLedgerEntry(tx, {
-        type: 'RECONCILIATION_CORRECTION',
-        amountCoin: 1n,
-        from: { kind: 'treasury' },
-        to: collateral,
-        refType: 'audit_failure',
-        refId: randomUUID(),
-        idempotencyKey: ledgerKeys.approvalRequest(requestId),
-      });
+    });
+    await recordLegacyCorrectionForTest({
+      amountCoin: 1n,
+      from: { kind: 'treasury' },
+      to: collateral,
+      refType: 'audit_failure',
+      refId: randomUUID(),
+      idempotencyKey: ledgerKeys.approvalRequest(requestId),
     });
     // An owner-level fault changes both copies back to the expected zero. No normal payout is
     // due, so no write/deferred ledger guard will run during the final reconciliation.
@@ -455,17 +455,14 @@ describe.skipIf(!hasTestDb())('atomic market settlement (#126, integration)', ()
       );
     });
     const correctionId = randomUUID();
-    await t.db.transaction((tx) =>
-      recordLedgerEntry(tx, {
-        type: 'RECONCILIATION_CORRECTION',
-        amountCoin: 1n,
-        from: collateral,
-        to: { kind: 'treasury' },
-        refType: 'audit_failure',
-        refId: randomUUID(),
-        idempotencyKey: ledgerKeys.approvalRequest(correctionId),
-      }),
-    );
+    await recordLegacyCorrectionForTest({
+      amountCoin: 1n,
+      from: collateral,
+      to: { kind: 'treasury' },
+      refType: 'audit_failure',
+      refId: randomUUID(),
+      idempotencyKey: ledgerKeys.approvalRequest(correctionId),
+    });
     await expect(
       t.db.transaction((tx) => reconcileMarketSettlement(tx, market.id)),
     ).resolves.toMatchObject({ paidCoin: 300n });

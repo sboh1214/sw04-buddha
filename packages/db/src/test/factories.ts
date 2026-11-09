@@ -4,6 +4,8 @@
  * test can build its fixture state in a few lines. Never used outside tests.
  */
 import { randomBytes, randomInt, randomUUID } from 'node:crypto';
+import { ledgerHeldMarketIds } from '../ledger-held-markets.js';
+import { runMarketReconciliation } from '../reconciliation-audit.js';
 import {
   ACCOUNT_CLOSURE_DECISION_REASON,
   AUTH_USER_NAME,
@@ -2250,6 +2252,18 @@ export async function createPauseDecision(db: Db, input: CreatePauseDecisionInpu
     reviewResult:
       input.reviewResult === undefined ? defaultReviewResult(pause.reason) : input.reviewResult,
   };
+  if ((await ledgerHeldMarketIds(db, [input.marketId])).has(input.marketId)) {
+    const run = await db.transaction((tx) =>
+      runMarketReconciliation(tx, input.marketId, { source: 'recovery', actorId: by }),
+    );
+    payload.recovery = run.hold
+      ? {
+          holdId: run.hold.id,
+          failureResultId:
+            run.hold.failureResultId === null ? null : String(run.hold.failureResultId),
+        }
+      : null;
+  }
   return createApprovalRequest(db, {
     kind: MARKET_PAUSE_DECISION_APPROVAL_KIND,
     targetType: 'market',
@@ -2384,6 +2398,16 @@ async function approvePauseDecision(
       reviewResult,
       approvalId: request.id,
       requestedBy,
+      recovery: request.payload?.recovery
+        ? {
+            holdId: (request.payload.recovery as { holdId: string }).holdId,
+            failureResultId:
+              (request.payload.recovery as { failureResultId: string | null }).failureResultId ===
+              null
+                ? null
+                : Number((request.payload.recovery as { failureResultId: string }).failureResultId),
+          }
+        : null,
     });
     if (!result.ended) {
       throw new Error(`approvePauseDecision: the pause did not end (${result.reason})`);

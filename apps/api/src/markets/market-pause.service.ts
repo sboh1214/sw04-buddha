@@ -6,6 +6,8 @@ import {
   lockAdminRoles,
   lockMarketOrders,
   pauseMarket,
+  ReconciliationError,
+  runMarketReconciliation,
   schema,
   type Db,
   type EndPauseSkipReason,
@@ -32,6 +34,7 @@ import {
   type RequestPauseDecisionBody,
   type WithoutExpectedAccount,
 } from '@buddha/shared';
+import { and, eq, isNull } from 'drizzle-orm';
 import { ApprovalService, approvalNotAllowed } from '../approvals/approval.service.js';
 import { AppError } from '../common/errors/app-error.js';
 import { clockTimestamp } from '../infra/db/clock.js';
@@ -288,12 +291,41 @@ export class MarketPauseService {
       const decision = { path: body.path, reviewResult: body.reviewResult ?? null };
       const refusal = pauseDecisionRefusal(pause.reason, decision);
       if (refusal !== null) throw decisionRefused(refusal);
+      const [activeHold] = await tx
+        .select({ id: schema.reconciliationHolds.id })
+        .from(schema.reconciliationHolds)
+        .where(
+          and(
+            eq(schema.reconciliationHolds.marketId, id),
+            isNull(schema.reconciliationHolds.recoveredAt),
+          ),
+        )
+        .limit(1);
+      let recovery: MarketPauseDecisionRequestPayload['recovery'] = null;
+      if (pause.reason === 'ledger_failure' || activeHold) {
+        const checked = await runMarketReconciliation(tx, id, {
+          source: 'recovery',
+          actorId: adminId,
+        });
+        if (!checked.result.passed)
+          throw fieldError('reconciliation', 'Reconciliation has not passed', 'not_passed');
+        if (checked.hold !== null)
+          recovery = {
+            holdId: checked.hold.id,
+            failureResultId:
+              checked.hold.failureResultId === null ? null : String(checked.hold.failureResultId),
+          };
+      }
       const request = await this.approvals.request(
         {
           kind: MARKET_PAUSE_DECISION_APPROVAL_KIND,
           targetType: 'market',
           targetId: id,
-          payload: { pauseId: pause.id, ...decision } satisfies MarketPauseDecisionRequestPayload,
+          payload: {
+            pauseId: pause.id,
+            ...decision,
+            recovery,
+          } satisfies MarketPauseDecisionRequestPayload,
           requestedBy: adminId,
           reason: body.reason,
         },
@@ -386,6 +418,25 @@ export class MarketPauseService {
         reviewResult: payload.reviewResult,
         approvalId: request.id,
         requestedBy: request.requestedBy,
+        recovery:
+          payload.recovery == null
+            ? null
+            : {
+                holdId: payload.recovery.holdId,
+                failureResultId:
+                  payload.recovery.failureResultId === null
+                    ? null
+                    : Number(payload.recovery.failureResultId),
+              },
+      }).catch((error: unknown) => {
+        if (error instanceof ReconciliationError) {
+          throw fieldError(
+            'reconciliation',
+            'Reconciliation recovery is not available',
+            error.code,
+          );
+        }
+        throw error;
       });
       if (!result.ended) throw END_SKIPS[result.reason]();
       const tags = await marketTagNames(tx, id);

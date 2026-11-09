@@ -256,7 +256,8 @@ export function marketTradingRejectReason(
   const reason = marketRejectReason(market.status);
   if (reason !== null) return reason;
   // An OPEN market from its close_at on, by the DB clock, before the worker's transition (#120).
-  return market.closeAt.getTime() <= market.now.getTime() ? 'closed' : null;
+  if (market.closeAt.getTime() <= market.now.getTime()) return 'closed';
+  return market.ledgerHeld ? 'paused' : null;
 }
 
 /** What the intake's market gate answers: a rejected order with its reason, or nothing taken. */

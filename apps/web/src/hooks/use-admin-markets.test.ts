@@ -22,6 +22,7 @@ import {
 import { type MarketPage, type MarketPages } from '@/lib/market-live';
 import { relatedSearchSection } from '@/lib/related-markets';
 import { relatedMarketsInfiniteQueryOptions } from './use-markets';
+import { ADMIN_RECONCILIATION_KEY } from './use-reconciliation';
 import {
   ADMIN_MARKETS_KEY,
   ADMIN_MARKET_DISPUTES_KEY,
@@ -151,6 +152,27 @@ async function loadedDetail(
 }
 
 describe('applyMarket', () => {
+  it.each(['holds', 'results', 'hold'])(
+    'refreshes cached reconciliation %s on returning after a pause recovery inside staleTime',
+    async (part) => {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
+      });
+      const queryKey = [...ADMIN_RECONCILIATION_KEY, part];
+      await queryClient.fetchQuery({ queryKey, queryFn: () => Promise.resolve('before recovery') });
+      await applyMarket(queryClient, ID, opened);
+      const fetch = vi.fn(() => Promise.resolve('after recovery'));
+      const observer = new QueryObserver(queryClient, { queryKey, queryFn: fetch });
+      const unsubscribe = observer.subscribe(() => undefined);
+      try {
+        await vi.waitFor(() => expect(observer.getCurrentResult().data).toBe('after recovery'));
+        expect(fetch).toHaveBeenCalledTimes(1);
+      } finally {
+        unsubscribe();
+        queryClient.clear();
+      }
+    },
+  );
   it('keeps the transitioned row on screen when the invalidation refetch fails', async () => {
     // The bug this pins: the approval succeeded and opened the market at once (#21, ADR-0100),
     // so the admin was told it opened. With the response discarded and the refetch failing,

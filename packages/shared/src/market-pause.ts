@@ -278,6 +278,11 @@ export const marketPauseDecisionRequestPayloadSchema = z.object({
   pauseId: z.uuid(),
   path: marketPausePathSchema,
   reviewResult: marketPauseReviewResultSchema.nullable(),
+  /** Pinned by the server, never supplied by a client. Absent on requests made before #93. */
+  recovery: z
+    .object({ holdId: z.uuid(), failureResultId: z.string().nullable() })
+    .nullable()
+    .optional(),
 });
 export type MarketPauseDecisionRequestPayload = z.infer<
   typeof marketPauseDecisionRequestPayloadSchema
@@ -387,7 +392,7 @@ export const adminMarketPauseSchema = z
     note: z.string(),
     resultPublishedAt: z.iso.datetime().nullable(),
     pausedAt: z.iso.datetime(),
-    pausedBy: adminAccountActorSchema,
+    pausedBy: adminAccountActorSchema.nullable(),
     reviewResult: marketPauseReviewResultSchema.nullable(),
     endKind: marketPauseEndKindSchema.nullable(),
     endedAt: z.iso.datetime().nullable(),

@@ -65,9 +65,10 @@ async function main(): Promise<void> {
   // Jobs read and write Postgres (ledger audit, close, settlement), so the worker owns a
   // small pool of its own: it never talks to apps/api (PLAN 9).
   const db = createDb(env.DATABASE_URL, { max: 4, applicationName: 'buddha-worker' });
-  // The ledger audit aggregates the whole ledger in one statement, so it gets its own single
-  // connection with a timeout to match; the pool above keeps the 30-second guard for
-  // everything else (see LEDGER_AUDIT_QUERY_TIMEOUT_MS). Named apart from the manual
+  // The daily audit scans every account and the total supply, so it gets its own single
+  // connection with a longer timeout; per-minute market audits use the pool above with its
+  // 30-second guard and the audit queue's second slot (see LEDGER_AUDIT_QUERY_TIMEOUT_MS).
+  // Named apart from the manual
   // script's 'buddha-worker-audit' so pg_stat_activity tells the two apart. A SIGTERM during
   // the audit hits SHUTDOWN_TIMEOUT_MS below and force-exits; Postgres then finishes or
   // times out the orphaned statement on its own, and the next run records the same accounts.

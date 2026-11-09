@@ -50,6 +50,7 @@ export const JOB_NAMES = {
   marketResolve: 'market.resolve',
   marketFinalize: 'market.finalize',
   ledgerAudit: 'ledger.audit',
+  marketAudit: 'market.audit',
   /**
    * Reserved: nothing schedules it. `markets.trader_count` is kept exactly in the fill's own
    * transaction by the intake (#121, ADR-0116), so no job recounts it.

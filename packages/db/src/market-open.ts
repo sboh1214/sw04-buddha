@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import { ledgerHeldMarketIds } from './ledger-held-markets.js';
 import { insertRuleVersion } from './market-rules-content.js';
 import { transitionMarket } from './market-transitions.js';
 import type * as schema from './schema/index.js';
@@ -16,8 +17,10 @@ type Executor = Pick<NodePgDatabase<typeof schema>, 'insert' | 'update' | 'selec
  * - `not_due`: its scheduled open is still ahead, or it has none;
  * - `close_passed`: its close has come. It stays SCHEDULED, public as 개장 예정, until an admin
  *   sends it back to a draft to fix its times (ADR-0093 decision 2 #172 item 6).
+ * - `ledger_hold`: reconciliation recovery is still awaiting approval. A passing retest alone
+ *   does not open it; after recovery the normal open scan may open it while its close is ahead.
  */
-export type OpenSkipReason = 'not_scheduled' | 'not_due' | 'close_passed';
+export type OpenSkipReason = 'not_scheduled' | 'not_due' | 'close_passed' | 'ledger_hold';
 
 /**
  * Who opened it, the `opened` event's payload `source` (#21, ADR-0100): the worker's `market.open`
@@ -99,6 +102,8 @@ export async function openScheduledMarket(
     return { opened: false, reason: 'not_due' };
   }
   if (market.closeAt.getTime() <= now.getTime()) return { opened: false, reason: 'close_passed' };
+  if ((await ledgerHeldMarketIds(tx, [market.id])).has(market.id))
+    return { opened: false, reason: 'ledger_hold' };
 
   const statusEventId = await transitionMarket(tx, {
     marketId: market.id,

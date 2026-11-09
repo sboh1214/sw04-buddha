@@ -2429,7 +2429,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         { column: 'note', type: 'text', nullable: 'NO', default: null },
         { column: 'result_published_at', type: instant, nullable: 'YES', default: null },
         { column: 'paused_at', type: instant, nullable: 'NO', default: null },
-        { column: 'paused_by', type: 'text', nullable: 'NO', default: null },
+        { column: 'paused_by', type: 'text', nullable: 'YES', default: null },
         { column: 'pause_event_id', type: 'bigint', nullable: 'NO', default: null },
         { column: 'review_result', type: 'character varying', nullable: 'YES', default: null },
         { column: 'end_kind', type: 'character varying', nullable: 'YES', default: null },
@@ -2467,6 +2467,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         { name: 'market_pauses_result_published_at_check', type: 'c', action: ' ' },
         { name: 'market_pauses_review_check', type: 'c', action: ' ' },
         { name: 'market_pauses_review_result_check', type: 'c', action: ' ' },
+        { name: 'market_pauses_system_actor_check', type: 'c', action: ' ' },
       ]);
       const { rows: indexes } = await t.db.execute<{ name: string; definition: string }>(sql`
         SELECT indexname AS name, indexdef AS definition FROM pg_indexes
@@ -8271,15 +8272,21 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           'orders_budget_coin_check',
           'payments.amount_coin',
           'payments_amount_coin_check',
-          // #126 (migration 0064): facts retained after the live position is retired.
+          'positions.cost_basis_coin',
+          'positions.realized_pnl_coin',
+          'positions_cost_basis_coin_check',
           'position_settlements.cost_basis_coin',
+          'reconciliation_corrections.amount_coin',
+          'reconciliation_corrections.balance_delta_coin',
+          'reconciliation_corrections.balance_before_coin',
+          'reconciliation_corrections.balance_after_coin',
+          'reconciliation_corrections.ledger_before_coin',
+          'reconciliation_corrections.ledger_after_coin',
+          'reconciliation_corrections.locked_coin',
           'position_settlements.payout_coin',
           'position_settlements.payout_per_contract_coin',
           'position_settlements.realized_pnl_before_coin',
           'position_settlements.settlement_pnl_coin',
-          'positions.cost_basis_coin',
-          'positions.realized_pnl_coin',
-          'positions_cost_basis_coin_check',
           // The start grant (migration 0031, #70): coined that way from the start.
           'start_grants.amount_coin',
           'start_grants_amount_coin_check',

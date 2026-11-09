@@ -501,6 +501,15 @@ export function pauseFailure(error: unknown, write: PauseWrite): PauseFailure {
   const message = validationMessage(error);
   const refused = MARKET_PAUSE_REFUSALS;
   switch (validationField(error)) {
+    case 'reconciliation':
+      return alert(
+        message === 'not_passed'
+          ? copy.reconciliationNotPassed
+          : message === 'stale'
+            ? copy.reconciliationStale
+            : copy.errUnknown,
+        true,
+      );
     case 'status':
       return alert(
         write === 'pause' ? copy.errMarketPauseStatus : copy.errMarketPauseDecisionStatus,

@@ -1,7 +1,12 @@
 import { and, inArray, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type * as schema from './schema/index.js';
-import { marketPauses, markets } from './schema/index.js';
+import {
+  marketPauses,
+  markets,
+  reconciliationHolds,
+  reconciliationRecoveries,
+} from './schema/index.js';
 
 /** Anything that reads: a transaction handle or the pooled `Db`. */
 type Reader = Pick<NodePgDatabase<typeof schema>, 'select'>;
@@ -32,10 +37,11 @@ type Reader = Pick<NodePgDatabase<typeof schema>, 'select'>;
  * (`orders.market_id`).
  */
 export function ledgerHeldMarketSql(marketId: SQLWrapper): SQL<boolean> {
-  return sql<boolean>`EXISTS (
+  return sql<boolean>`(EXISTS (SELECT 1 FROM ${reconciliationHolds} h WHERE h.market_id=${marketId} AND h.recovered_at IS NULL) OR EXISTS (
     SELECT 1 FROM ${marketPauses} AS held_pause
     WHERE held_pause.market_id = ${marketId} AND held_pause.reason = 'ledger_failure'
-      AND (held_pause.ended_at IS NULL OR held_pause.end_kind = 'closed_at_close'))`;
+      AND (held_pause.ended_at IS NULL OR held_pause.end_kind = 'closed_at_close')
+      AND NOT EXISTS (SELECT 1 FROM ${reconciliationRecoveries} r WHERE r.legacy_pause_id=held_pause.id)))`;
 }
 
 /** The markets of `marketIds` that are held (`ledgerHeldMarketSql`), in one read. */

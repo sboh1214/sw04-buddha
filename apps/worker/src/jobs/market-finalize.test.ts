@@ -41,6 +41,7 @@ import {
   openOrderIntake,
   passMarketClose,
   placeTestOrder,
+  recordLegacyCorrectionForTest,
   resolveMarketNow,
   testDbUrls,
   withLedgerGuardsOff,
@@ -233,10 +234,9 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     `Market ${marketId} settlement: collateral does not match the remaining ${String(owedCoin)} Coin payout`;
 
   /**
-   * Makes a short collateral whole the way #93's 대사 정정 will: a 금고 발행 into the treasury,
-   * then a RECONCILIATION_CORRECTION from it into the market's collateral (ADR-0107 결정 2 #73
-   * 10항), both under one made-up approval request and audit failure (no rows: nothing reads
-   * them back).
+   * Repairs the owner-created collateral incident in these settlement tests. The correction
+   * ledger is explicitly a pre-0065/owner fixture; production #93 corrections require the real
+   * failure, fixed candidate and two-admin approval (covered by the correction suites).
    */
   async function correctCollateral(marketId: string, amountCoin: bigint) {
     const requestId = randomUUID();
@@ -251,31 +251,27 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
         refId: requestId,
         idempotencyKey: ledgerKeys.approvalRequest(requestId),
       });
-      await recordLedgerEntry(tx, {
-        type: 'RECONCILIATION_CORRECTION',
-        amountCoin,
-        from: { kind: 'treasury' },
-        to: collateralOf(marketId),
-        refType: 'audit_failure',
-        refId: randomUUID(),
-        idempotencyKey: ledgerKeys.approvalRequest(requestId),
-      });
+    });
+    await recordLegacyCorrectionForTest({
+      amountCoin,
+      from: { kind: 'treasury' },
+      to: collateralOf(marketId),
+      refType: 'audit_failure',
+      refId: randomUUID(),
+      idempotencyKey: ledgerKeys.approvalRequest(requestId),
     });
   }
 
   /** Simulates a collateral error without inventing contracts outside the pair ledger. */
   async function drainCollateral(marketId: string, amountCoin: bigint) {
-    await t.db.transaction((tx) =>
-      recordLedgerEntry(tx, {
-        type: 'RECONCILIATION_CORRECTION',
-        amountCoin,
-        from: collateralOf(marketId),
-        to: { kind: 'treasury' },
-        refType: 'audit_failure',
-        refId: randomUUID(),
-        idempotencyKey: ledgerKeys.approvalRequest(randomUUID()),
-      }),
-    );
+    await recordLegacyCorrectionForTest({
+      amountCoin,
+      from: collateralOf(marketId),
+      to: { kind: 'treasury' },
+      refType: 'audit_failure',
+      refId: randomUUID(),
+      idempotencyKey: ledgerKeys.approvalRequest(randomUUID()),
+    });
   }
 
   async function recordsOf(marketId: string) {

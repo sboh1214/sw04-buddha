@@ -39,6 +39,7 @@ import {
   ledgerOf,
   ledgerSupply,
   mintTestPairs,
+  recordLegacyCorrectionForTest,
   withLedgerGuardsOff,
 } from './test/ledger.js';
 import { waitForLockWaiter } from './test/wait.js';
@@ -264,6 +265,12 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
             from: from && (await balanceOf(from)),
             to: to && (await balanceOf(to)),
           };
+          // #93 keeps the direction table, but no ordinary caller may execute a correction
+          // without the exact permanent two-admin record. Its four modes have dedicated tests.
+          if (type === 'RECONCILIATION_CORRECTION') {
+            await expect(record({ type, amountCoin: 100n, from, to })).rejects.toThrow();
+            continue;
+          }
           const done = await record({
             type,
             amountCoin: 100n,
@@ -1695,12 +1702,13 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
     const left = (await ledgerAccountBalance(t.db, funds))!.availableCoin;
     await record({ type: 'BOT_RECALL', amountCoin: left, from: funds, to: { kind: 'treasury' } });
     await check('recall');
-    await record({
-      type: 'RECONCILIATION_CORRECTION',
+    await recordLegacyCorrectionForTest({
       amountCoin: 5n,
       from: { kind: 'treasury' },
       to: { kind: 'user', userId: b.id },
       refType: 'audit_failure',
+      refId: randomUUID(),
+      idempotencyKey: randomUUID(),
     });
     await check('correction');
     await record({ type: 'DEPOSIT', amountCoin: 300n, from: null, to: userB, refType: 'payment' });

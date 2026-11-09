@@ -18,6 +18,7 @@ import {
   type ChargeBody,
   type ChargeResult,
   type LedgerEntry,
+  type MemberReconciliationCorrection,
   type Payment,
   type PaymentStatus,
   type UserBalanceEvent,
@@ -54,8 +55,13 @@ type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
  * One ledger event as the person whose user ledger account is `accountId` sees it (#116): signed
  * from that account's side, its total after it — never the other side of the move.
  */
-export function toLedgerEntry(row: LedgerRow, accountId: number): LedgerEntry {
+export function toLedgerEntry(
+  row: LedgerRow,
+  accountId: number,
+  correction: { id: string; userReason: string | null } | null = null,
+): LedgerEntry {
   const seen = ledgerEntryForAccount(row, accountId);
+  const corrected = row.type === 'RECONCILIATION_CORRECTION';
   return {
     id: row.id.toString(),
     // A person's account takes only these (MEMBER_LEDGER_ENTRY_TYPES; migration 0060's pairs).
@@ -63,9 +69,13 @@ export function toLedgerEntry(row: LedgerRow, accountId: number): LedgerEntry {
     amountCoin: serializeCoinAmount(seen.amountCoin),
     balanceAfterCoin: serializeCoinAmount(seen.balanceAfterCoin),
     // The column is a plain varchar; the DTO narrows it to the known ref types.
-    refType: row.refType as LedgerEntry['refType'],
-    refId: row.refId,
-    memo: row.memo,
+    // The stored event points at internal audit evidence. Members get only the public correction
+    // record and its separately approved reason, never that failure id or an internal memo.
+    // Pre-0065 entries have no correction record: keep their actual ledger history with an
+    // explicit legacy reference, without inventing a completed approval or a public reason.
+    refType: corrected ? 'reconciliation_correction' : (row.refType as LedgerEntry['refType']),
+    refId: corrected ? (correction?.id ?? `legacy:${row.id}`) : row.refId,
+    memo: corrected ? (correction?.userReason ?? null) : row.memo,
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -547,10 +557,61 @@ export class WalletService {
     return row?.id ?? null;
   }
 
+  /** Completed corrections only, explicitly projected for this member rather than their admin. */
+  async listCorrections(
+    userId: string,
+    cursor: string | undefined,
+    limit: number,
+  ): Promise<Page<MemberReconciliationCorrection>> {
+    const keyset = decodeKeyset(cursor, 'uuid');
+    const corrections = schema.reconciliationCorrections;
+    const rows = await this.db
+      .select({
+        id: corrections.id,
+        eventId: corrections.eventId,
+        mode: corrections.mode,
+        amountCoin: corrections.amountCoin,
+        balanceDeltaCoin: corrections.balanceDeltaCoin,
+        balanceAfterCoin: corrections.balanceAfterCoin,
+        userReason: corrections.userReason,
+        createdAt: corrections.createdAt,
+      })
+      .from(corrections)
+      .where(
+        and(
+          eq(corrections.userId, userId),
+          keyset
+            ? keysetPredicate(corrections.createdAt, corrections.id, keyset, 'uuid')
+            : undefined,
+        ),
+      )
+      .orderBy(desc(corrections.createdAt), desc(corrections.id))
+      .limit(limit + 1);
+    return page(
+      rows,
+      limit,
+      (row) => ({ createdAt: row.createdAt, id: row.id }),
+      (row) => {
+        if (row.userReason === null)
+          throw new AppError('INTERNAL', { message: 'Completed member correction has no reason' });
+        return {
+          id: row.id,
+          eventId: String(row.eventId),
+          mode: row.mode,
+          amountCoin: serializeCoinAmount(row.amountCoin),
+          balanceDeltaCoin: serializeCoinAmount(row.balanceDeltaCoin),
+          balanceAfterCoin: serializeCoinAmount(row.balanceAfterCoin),
+          userReason: row.userReason,
+          createdAt: row.createdAt.toISOString(),
+        };
+      },
+    );
+  }
+
   /**
    * The events of the caller's own user ledger account, either side (#116), newest first,
-   * keyset-paginated over (created_at, id) — see @buddha/shared pagination. Each is shown from
-   * that account's side (`toLedgerEntry`). An account with no ledger account has none.
+   * keyset-paginated over (created_at, id). Actual-only restorations have no ledger row and
+   * appear solely in the completed correction history.
    */
   async listLedger(
     userId: string,
@@ -561,8 +622,21 @@ export class WalletService {
     const account = await findLedgerAccount(this.db, { kind: 'user', userId });
     if (!account) return { items: [], nextCursor: null };
     const rows = await this.db
-      .select()
+      .select({
+        entry: schema.ledgerEntries,
+        correction: {
+          id: schema.reconciliationCorrections.id,
+          userReason: schema.reconciliationCorrections.userReason,
+        },
+      })
       .from(schema.ledgerEntries)
+      .leftJoin(
+        schema.reconciliationCorrections,
+        and(
+          eq(schema.reconciliationCorrections.ledgerEntryId, schema.ledgerEntries.id),
+          eq(schema.reconciliationCorrections.userId, userId),
+        ),
+      )
       .where(
         and(
           // Each side has its own (account, created_at, id) index (migration 0060).
@@ -585,8 +659,8 @@ export class WalletService {
     return page(
       rows,
       limit,
-      (row) => ({ createdAt: row.createdAt, id: row.id.toString() }),
-      (row) => toLedgerEntry(row, account.id),
+      (row) => ({ createdAt: row.entry.createdAt, id: row.entry.id.toString() }),
+      (row) => toLedgerEntry(row.entry, account.id, row.correction),
     );
   }
 

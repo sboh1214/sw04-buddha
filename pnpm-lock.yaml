@@ -486,6 +486,9 @@ importers:
       '@buddha/config-ts':
         specifier: workspace:*
         version: link:../../packages/config-ts
+      '@buddha/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@playwright/test':
         specifier: 'catalog:'
         version: 1.62.1

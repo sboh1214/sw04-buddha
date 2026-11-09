@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { ADMIN_MARKETS_KEY } from '@/hooks/use-admin-markets';
 import { ACCOUNTS_QUERY_KEY, ME_QUERY_KEY } from '@/hooks/use-me';
 import { positionsKey } from '@/hooks/use-portfolio';
+import { MEMBER_CORRECTIONS_KEY } from '@/hooks/use-reconciliation-corrections';
 import {
   CHARGE_PACKAGES_QUERY_KEY,
   LEDGER_QUERY_KEY,
@@ -278,6 +279,7 @@ describe('isPrivateQueryKey', () => {
       ['ME_QUERY_KEY', ME_QUERY_KEY],
       ['ACCOUNTS_QUERY_KEY', ACCOUNTS_QUERY_KEY],
       ['LEDGER_QUERY_KEY', LEDGER_QUERY_KEY],
+      ['MEMBER_CORRECTIONS_KEY', MEMBER_CORRECTIONS_KEY],
       ['PAYMENTS_QUERY_KEY', PAYMENTS_QUERY_KEY],
       ['CHARGE_PACKAGES_QUERY_KEY', CHARGE_PACKAGES_QUERY_KEY],
       ['ADMIN_MARKETS_KEY', ADMIN_MARKETS_KEY],
@@ -322,6 +324,7 @@ describe('isPrivateQueryKey', () => {
         'admin',
         'charge-packages',
         'ledger',
+        'reconciliation-corrections',
         'me',
         'orders',
         'payments',

@@ -126,6 +126,8 @@ export const LEDGER_REF_TYPES = [
   'approval_request',
   /** The `audit_failures` row a RECONCILIATION_CORRECTION fixes (#93). */
   'audit_failure',
+  /** Public member-history reference only; hides the ledger's internal audit failure id (#93). */
+  'reconciliation_correction',
 ] as const;
 export type LedgerRefType = (typeof LEDGER_REF_TYPES)[number];
 export const ledgerRefTypeSchema = z.enum(LEDGER_REF_TYPES);
@@ -455,6 +457,7 @@ export const ORDER_REJECT_REASONS = [
   'price_limit',
   'budget_too_small',
   'self_trade',
+  'ledger_hold',
 ] as const;
 export type OrderRejectReason = (typeof ORDER_REJECT_REASONS)[number];
 export const orderRejectReasonSchema = z.enum(ORDER_REJECT_REASONS);
@@ -533,6 +536,15 @@ export const settlementStepStatusSchema = z
 
 // ---- admin / audit (varchar columns, PLAN 6.2) --------------------------------------
 export const ADMIN_ACTION_TYPES = [
+  'reconciliation_run',
+  'reconciliation_recovery_request',
+  'reconciliation_recovery_approve',
+  'reconciliation_recovery_reject',
+  'reconciliation_recovery_retract',
+  'reconciliation_correction_request',
+  'reconciliation_correction_approve',
+  'reconciliation_correction_reject',
+  'reconciliation_correction_retract',
   'charge_package_create',
   'charge_package_update',
   'charge_package_delete',
@@ -956,7 +968,12 @@ export const ADMIN_ACTION_TYPES = [
 export type AdminActionType = (typeof ADMIN_ACTION_TYPES)[number];
 export const adminActionTypeSchema = z.enum(ADMIN_ACTION_TYPES);
 
-export const AUDIT_FAILURE_KINDS = ['ledger_balance_mismatch'] as const;
+export const AUDIT_FAILURE_KINDS = [
+  'ledger_balance_mismatch',
+  'market_reconciliation_mismatch',
+  'account_reconciliation_mismatch',
+  'supply_reconciliation_mismatch',
+] as const;
 export type AuditFailureKind = (typeof AUDIT_FAILURE_KINDS)[number];
 export const auditFailureKindSchema = z.enum(AUDIT_FAILURE_KINDS);
 

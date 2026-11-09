@@ -18,6 +18,7 @@ import {
   type PauseMarketInput,
 } from './market-pause.js';
 import { ledgerHeldMarketIds } from './ledger-held-markets.js';
+import { runMarketReconciliation } from './reconciliation-audit.js';
 import { lockMarketOrders } from './order-cancel.js';
 import { approvalRequests, marketEvents, marketPauses, markets, orders } from './schema/index.js';
 import {
@@ -123,11 +124,30 @@ describe.skipIf(!hasTestDb())('market pauses (#114, docker test profile)', () =>
     const requestedBy = await admin();
     const approverId = await admin();
     const lasting = pauseId ?? (await currentMarketPause(t.db, marketId))!.id;
+    const run = (await ledgerHeldMarketIds(t.db, [marketId])).has(marketId)
+      ? await t.db.transaction((tx) =>
+          runMarketReconciliation(tx, marketId, { source: 'recovery', actorId: requestedBy }),
+        )
+      : null;
+    const recovery = run?.hold
+      ? { holdId: run.hold.id, failureResultId: run.hold.failureResultId }
+      : null;
     const request = await createApprovalRequest(t.db, {
       kind: MARKET_PAUSE_DECISION_APPROVAL_KIND,
       targetType: 'market',
       targetId: marketId,
-      payload: { pauseId: lasting, path, reviewResult },
+      payload: {
+        pauseId: lasting,
+        path,
+        reviewResult,
+        recovery: recovery
+          ? {
+              ...recovery,
+              failureResultId:
+                recovery.failureResultId === null ? null : String(recovery.failureResultId),
+            }
+          : null,
+      },
       requestedBy,
       decision: { status: 'approved', by: approverId },
     });
@@ -137,6 +157,7 @@ describe.skipIf(!hasTestDb())('market pauses (#114, docker test profile)', () =>
       path,
       reviewResult,
       approvalId: request.id,
+      recovery,
       requestedBy,
     };
     return { requestedBy, approverId, request, ending };

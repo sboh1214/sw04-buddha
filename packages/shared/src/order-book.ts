@@ -97,6 +97,8 @@ export function bookDepth(book: readonly BookOrder[]): ContractDepth[] {
  */
 export interface MarketTradingFacts {
   readonly status: MarketStatus;
+  /** A persistent market reconciliation hold blocks trading until an approved recovery. */
+  readonly ledgerHeld?: boolean;
   readonly widthTicks: number | null;
   /** The market's 거래 마감 시각 as stored now (a supplement only extends it, ADR-0093 #172 14항). */
   readonly closeAt: Date;

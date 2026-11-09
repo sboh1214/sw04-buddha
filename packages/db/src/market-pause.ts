@@ -1,3 +1,7 @@
+import {
+  recoverPausedMarketReconciliation,
+  type ReconciliationRecoveryEvidence,
+} from './reconciliation-recovery.js';
 import { randomUUID } from 'node:crypto';
 import {
   MARKET_NO_FILL_CANCEL_REASON,
@@ -222,6 +226,7 @@ export interface EndMarketPauseInput {
   approvalId: string;
   /** Its requester, in the event's payload. */
   requestedBy: string;
+  recovery?: ReconciliationRecoveryEvidence | null;
 }
 
 export type EndMarketPauseResult =
@@ -300,6 +305,13 @@ export async function endMarketPause(
     throw new Error(`A ${current.reason} pause's ${path} is refused: ${refusal.message}`);
   }
 
+  await recoverPausedMarketReconciliation(tx, {
+    marketId: market.id,
+    approvalId,
+    requestedBy,
+    approverId,
+    recovery: input.recovery,
+  });
   const held = orders.markets[0]?.held ?? false;
   // 재개, and the 조기 마감 of a held market (its approval is the recovery, ADR-0107 결정 4 #178):
   // 취소 완료(일시 중단) before the status changes.

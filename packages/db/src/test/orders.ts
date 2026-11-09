@@ -50,8 +50,13 @@ import { ledgerSupply } from './ledger.js';
 
 export type { FillRow, OrderRow };
 
-/** The reasons a market's status rejects an order with, before any width is read. */
-const MARKET_REASONS: readonly OrderRejectReason[] = ['not_open_yet', 'paused', 'closed'];
+/** The gate reasons that reject an order before any quote or protection width is read. */
+const BEFORE_QUOTE_REASONS: readonly OrderRejectReason[] = [
+  'not_open_yet',
+  'paused',
+  'closed',
+  'ledger_hold',
+];
 
 export interface CreateOrderInput {
   marketId: string;
@@ -70,7 +75,7 @@ export interface CreateOrderInput {
   /** IOC only. Default null. */
   referencePriceCoin?: number | null;
   /**
-   * IOC only. Default TEST_PRICE_PROTECTION_TICKS, null for a market-status reject; always null
+   * IOC only. Default TEST_PRICE_PROTECTION_TICKS, null for a pre-quote reject; always null
    * for GTC.
    */
   protectionTicks?: number | null;
@@ -134,7 +139,7 @@ export async function createOrder(db: Db, input: CreateOrderInput): Promise<Orde
       ? null
       : input.protectionTicks !== undefined
         ? input.protectionTicks
-        : rejectReason !== null && MARKET_REASONS.includes(rejectReason)
+        : rejectReason !== null && BEFORE_QUOTE_REASONS.includes(rejectReason)
           ? null
           : TEST_PRICE_PROTECTION_TICKS;
   const filledQty = input.filledQty ?? 0;
@@ -696,10 +701,16 @@ export const CANCELLED_MARKET_LIVE_ORDERS_CHECK_SQL = `SELECT o.market_id, o.id 
 FROM orders o
 JOIN markets m ON m.id = o.market_id
 WHERE m.status = 'cancelled' AND o.status IN ('open', 'partially_filled')
-  AND NOT EXISTS (
-    SELECT 1 FROM market_pauses p
-    WHERE p.market_id = o.market_id AND p.reason = 'ledger_failure'
-      AND (p.ended_at IS NULL OR p.end_kind = 'closed_at_close'))
+  AND NOT (
+    EXISTS (
+      SELECT 1 FROM reconciliation_holds h
+      WHERE h.market_id = o.market_id AND h.recovered_at IS NULL)
+    OR EXISTS (
+      SELECT 1 FROM market_pauses p
+      WHERE p.market_id = o.market_id AND p.reason = 'ledger_failure'
+        AND (p.ended_at IS NULL OR p.end_kind = 'closed_at_close')
+        AND NOT EXISTS (
+          SELECT 1 FROM reconciliation_recoveries r WHERE r.legacy_pause_id = p.id)))
 ORDER BY o.market_id, o.arrival_seq;
 `;
 

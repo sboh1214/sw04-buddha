@@ -309,6 +309,7 @@ export const PRIVATE_QUERY_ROOTS: ReadonlySet<string> = new Set([
   'positions',
   'orders',
   'ledger',
+  'reconciliation-corrections',
   'payments',
   'charge-packages',
   'admin',

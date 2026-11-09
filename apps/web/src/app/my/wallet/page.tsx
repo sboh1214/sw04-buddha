@@ -9,6 +9,7 @@ import { ChargeForm } from './charge-form';
 import { CouponForm } from './coupon-form';
 import { LedgerList } from './ledger-list';
 import { PaymentHistory } from './payment-history';
+import { ReconciliationCorrectionHistory } from './reconciliation-correction-history';
 
 export const metadata: Metadata = { title: `${copy.walletTitle} | ${copy.appName}` };
 
@@ -53,6 +54,7 @@ export default async function WalletPage({
         </>
       )}
       <LedgerList />
+      <ReconciliationCorrectionHistory />
     </Stack>
   );
 }
