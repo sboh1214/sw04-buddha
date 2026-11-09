@@ -1,4 +1,5 @@
 import { sql, type SQL } from 'drizzle-orm';
+import { TransactionBusyError } from './transaction-retry.js';
 
 /** Anything that can run a statement inside the current transaction (a drizzle `tx` or `Db`). */
 export interface StatementExecutor {
@@ -53,6 +54,7 @@ export async function lockMarket(tx: StatementExecutor, marketId: string): Promi
 export async function lockMarkets(
   tx: StatementExecutor,
   marketIds: readonly string[],
+  options: { wait?: 'wait' | 'nowait' } = {},
 ): Promise<void> {
   if (marketIds.length === 0) return;
   const listed = sql.join(
@@ -68,7 +70,13 @@ export async function lockMarkets(
   const rows = (result as { rows?: { key?: unknown }[] }).rows ?? [];
   // The int4 key, as `lockMarket` takes it (widened to the bigint form the same way).
   for (const { key } of rows) {
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(${String(key)}::int)`);
+    if (options.wait === 'nowait') {
+      const result = await tx.execute(
+        sql`SELECT pg_try_advisory_xact_lock(${String(key)}::int) AS locked`,
+      );
+      if (!(result as { rows: { locked: boolean }[] }).rows[0]?.locked)
+        throw new TransactionBusyError();
+    } else await tx.execute(sql`SELECT pg_advisory_xact_lock(${String(key)}::int)`);
   }
 }
 
@@ -93,6 +101,15 @@ export async function lockAdminRoles(
       ? sql`SELECT pg_advisory_xact_lock(hashtext('buddha:admin_roles'))`
       : sql`SELECT pg_advisory_xact_lock_shared(hashtext('buddha:admin_roles'))`,
   );
+}
+
+/** A role grant must never wait while holding an incomplete profile/market/asset lock set. */
+export async function tryLockAdminRoles(tx: StatementExecutor): Promise<void> {
+  const result = await tx.execute(
+    sql`SELECT pg_try_advisory_xact_lock(hashtext('buddha:admin_roles')) AS locked`,
+  );
+  if (!(result as { rows: { locked: boolean }[] }).rows[0]?.locked)
+    throw new TransactionBusyError();
 }
 
 /**

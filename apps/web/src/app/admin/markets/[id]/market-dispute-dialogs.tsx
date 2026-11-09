@@ -1,5 +1,8 @@
 'use client';
 
+import { MARKET_CONFLICTS_KEY, useMarketConflicts } from '@/hooks/use-market-conflicts';
+import { NoConflictConfirmation } from './market-conflict-panel';
+
 import { Stack, Text } from '@chakra-ui/react';
 import { type MarketDisputeDecision } from '@buddha/shared';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -73,13 +76,13 @@ function sendDecision(market: AdminMarket, kind: MarketDisputeDecision) {
       ? unwrap(
           await api.POST('/api/v1/admin/markets/{id}/disputes/{disputeId}/dismiss', {
             params: { path: { id: market.id, disputeId } },
-            body: { reason, expectedAccountId: by },
+            body: { reason, expectedAccountId: by, noConflictConfirmed: true },
           }),
         ).data
       : unwrap(
           await api.POST('/api/v1/admin/markets/{id}/disputes/{disputeId}/accept', {
             params: { path: { id: market.id, disputeId } },
-            body: { reason, expectedAccountId: by },
+            body: { reason, expectedAccountId: by, noConflictConfirmed: true },
           }),
         ).data;
 }
@@ -100,6 +103,9 @@ export function DisputeDecisionDialog({
   const pinned = usePinnedDispute(market, action.disputeId);
   const texts = DISPUTE_DECISION_DIALOG[action.kind];
   const [reasonText, setReasonText] = useState('');
+  const [noConflict, setNoConflict] = useState(false);
+  const conflicts = useMarketConflicts(market.id);
+  const conflictBlocked = conflicts.data?.operator.conflicted === true;
   const draft = revertDraft(reasonText);
   const [reasonError, setReasonError] = useState<string | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -130,6 +136,7 @@ export function DisputeDecisionDialog({
       }
       setRefusal(failure.message);
       if (failure.refresh) {
+        void queryClient.invalidateQueries({ queryKey: [...MARKET_CONFLICTS_KEY, market.id] });
         void queryClient.invalidateQueries({ queryKey: adminMarketKey(market.id) });
       }
     },
@@ -142,17 +149,27 @@ export function DisputeDecisionDialog({
       body={texts.body}
       confirmLabel={texts.confirm}
       pending={mutation.isPending}
-      confirmDisabled={!draft.ready || operatorId === undefined || pinned.changed}
+      confirmDisabled={
+        !noConflict || conflictBlocked || !draft.ready || operatorId === undefined || pinned.changed
+      }
       refusal={refusal ?? (pinned.changed ? copy.adminMarketDisputeChanged : null)}
       onClose={() => onClose(false)}
       onConfirm={() => {
         const disputeId = pinned.dispute?.id;
-        if (operatorId === undefined || disputeId === undefined) return;
+        if (!noConflict || conflictBlocked || operatorId === undefined || disputeId === undefined)
+          return;
         mutation.mutate({ disputeId, reason: draft.reason, by: operatorId });
       }}
     >
       <Stack gap="4">
         <PinnedDisputeLine dispute={pinned.dispute} testId={`${testId}-dispute`} />
+        <NoConflictConfirmation
+          blocked={conflictBlocked}
+          checked={noConflict}
+          onChecked={setNoConflict}
+          disabled={mutation.isPending}
+          testId={`market-dispute-${action.kind}-confirm-conflict`}
+        />
         <ReasonField
           testId={`${testId}-reason`}
           label={copy.adminMarketDisputeDecisionReason}

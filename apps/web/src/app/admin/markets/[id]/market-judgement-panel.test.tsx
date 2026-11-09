@@ -830,7 +830,9 @@ describe('JudgementRegisterForm', () => {
     expect(byTestId(html, 'market-judgement-collected-at')?.attributes.type).toBe('datetime-local');
     expect(html).toContain(copy.adminMarketJudgementCollectedAtHint);
     expect(byTestId(html, 'market-judgement-description')).toBeDefined();
-    expect(isOff(html, 'market-judgement-submit')).toBe(false);
+    // Each new form requires an explicit conflict confirmation.
+    expect(isOff(html, 'market-judgement-submit')).toBe(true);
+    expect(byTestId(html, 'market-judgement-confirm-conflict')).toBeDefined();
     expect(byTestId(html, 'market-judgement-form-early')).toBeUndefined();
     expect(byTestId(html, 'market-judgement-form-void-only')).toBeUndefined();
     expect(byTestId(html, 'market-judgement-form-unavailable')).toBeUndefined();
@@ -843,7 +845,9 @@ describe('JudgementRegisterForm', () => {
     expect(byTestId(html, 'market-judgement-form-early')?.text).toContain(
       copy.adminMarketJudgementEarly,
     );
-    expect(isOff(html, 'market-judgement-submit')).toBe(false);
+    // Each new form requires an explicit conflict confirmation.
+    expect(isOff(html, 'market-judgement-submit')).toBe(true);
+    expect(byTestId(html, 'market-judgement-confirm-conflict')).toBeDefined();
   });
 
   it('takes 무효 alone after an early close reviewed 판정 불가, and says why (ADR-0102)', () => {
@@ -981,7 +985,9 @@ describe('JudgementRegisterForm: 판정 정정 (#176)', () => {
     expect(byTestId(html, 'market-judgement-submit')?.text).toBe(
       copy.adminMarketJudgementCorrectionRegister,
     );
-    expect(isOff(html, 'market-judgement-submit')).toBe(false);
+    // Each new form requires an explicit conflict confirmation.
+    expect(isOff(html, 'market-judgement-submit')).toBe(true);
+    expect(byTestId(html, 'market-judgement-confirm-conflict')).toBeDefined();
     expect(byTestId(html, 'market-judgement-form-unavailable')).toBeUndefined();
     // Nothing is said before the form was sent once, 'unchanged' included.
     expect(byTestId(html, 'market-judgement-unchanged')).toBeUndefined();
@@ -1062,7 +1068,9 @@ describe('JudgementRegisterForm: 판정 정정 (#176)', () => {
   it('reads no dispute window: an undecided one neither warns nor stops it (#173 item 5)', () => {
     const html = drawn({ ...open, judgement: { ...open.judgement, disputeWindowUndecided: true } });
     expect(byTestId(html, 'market-judgement-form-unavailable')).toBeUndefined();
-    expect(isOff(html, 'market-judgement-submit')).toBe(false);
+    // Each new form requires an explicit conflict confirmation.
+    expect(isOff(html, 'market-judgement-submit')).toBe(true);
+    expect(byTestId(html, 'market-judgement-confirm-conflict')).toBeDefined();
   });
 
   it('warns before the scheduled judgement, as a first judgement does', () => {

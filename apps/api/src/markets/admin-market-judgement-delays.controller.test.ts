@@ -129,7 +129,13 @@ describe.skipIf(!hasTestInfra)('admin market judgement delays (integration)', ()
       method: 'POST',
       url,
       headers: { ...jsonHeaders, cookie: who.cookie },
-      payload: { expectedAccountId: who.id, ...payload },
+      payload: {
+        expectedAccountId: who.id,
+        ...(/\/judgements(?:$|\/[^/]+\/approve$)|\/disputes\/[^/]+\/(?:accept|dismiss)$/.test(url)
+          ? { noConflictConfirmed: true }
+          : {}),
+        ...payload,
+      },
     });
   const get = (url: string, who: TestUser = recorder) =>
     t.app.inject({ method: 'GET', url, headers: { cookie: who.cookie } });

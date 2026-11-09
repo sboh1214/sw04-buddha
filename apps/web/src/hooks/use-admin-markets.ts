@@ -499,7 +499,7 @@ export function useMarketFills(id: string, enabled: boolean) {
  * Not 남발 (PLAN 11.5): `refetchType` stays at its default `'active'`, so a list page that is
  * not mounted is only marked, and its next mount is the request.
  */
-function invalidateMarket(queryClient: QueryClient, id: string) {
+export function invalidateMarket(queryClient: QueryClient, id: string) {
   const ownLinks = hashKey(adminRelatedMarketsKey(id));
   return Promise.all([
     queryClient.invalidateQueries({ queryKey: adminMarketKey(id) }),

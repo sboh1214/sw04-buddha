@@ -396,6 +396,12 @@ test.describe('판정 정정', () => {
       const writes = judgementWrites(firstPage, market.id);
       const submit = form.getByTestId('market-judgement-submit');
       await expect(submit).toHaveText(copy.adminMarketJudgementCorrectionRegister);
+      await expect(form.getByTestId('market-judgement-confirm-conflict')).toHaveAttribute(
+        'data-state',
+        'unchecked',
+      );
+      await expect(submit).toBeDisabled();
+      await form.getByTestId('market-judgement-confirm-conflict').click();
       await submit.click();
       await expect(form.getByTestId('market-judgement-correction-reason-error')).toHaveText(
         copy.errMarketJudgementCorrectionReason,
@@ -424,6 +430,7 @@ test.describe('판정 정정', () => {
         evidence: { links: [link, secondLink], collectedAt: v1.evidence.collectedAt },
         description,
         correction: { baseVersion: 1, reason },
+        noConflictConfirmed: true,
         expectedAccountId: first.id,
       });
       await expect(
@@ -548,12 +555,15 @@ test.describe('판정 정정', () => {
       await dialog.getByTestId('market-judgement-approve-reason').fill(approval);
       await expect(confirm).toBeDisabled();
       await dialog.getByTestId('market-judgement-approve-confirm-deadline').click();
+      await expect(confirm).toBeDisabled();
+      await dialog.getByTestId('market-judgement-approve-confirm-conflict').click();
       await expect(confirm).toBeEnabled();
       const approved = nextWrite(secondPage, market.id, `/judgements/${requestId}/approve`);
       await confirm.click();
       expect((await approved).postDataJSON()).toEqual({
         reason: approval,
         eventDeadlineConfirmed: true,
+        noConflictConfirmed: true,
         expectedAccountId: second.id,
       });
       await expect(secondPage.getByText(copy.adminMarketJudgementCorrectionApproved)).toBeVisible();

@@ -1,3 +1,5 @@
+import { AdminMarketConflictsController } from './admin-market-conflicts.controller.js';
+import { MarketConflictsService } from './market-conflicts.service.js';
 import { Module } from '@nestjs/common';
 import { ApprovalsModule } from '../approvals/approvals.module.js';
 import { AuthModule } from '../auth/auth.module.js';
@@ -79,6 +81,7 @@ import { RelatedMarketsService } from './related-markets.service.js';
     MarketsController,
     CategoriesController,
     AdminMarketsController,
+    AdminMarketConflictsController,
     AdminMarketReviewsController,
     AdminMarketSupplementsController,
     AdminMarketSupplementQueueController,
@@ -97,6 +100,7 @@ import { RelatedMarketsService } from './related-markets.service.js';
   providers: [
     MarketService,
     MarketAdminService,
+    MarketConflictsService,
     MarketSupplementService,
     MarketPauseService,
     MarketCancelService,

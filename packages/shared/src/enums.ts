@@ -458,6 +458,7 @@ export const ORDER_REJECT_REASONS = [
   'budget_too_small',
   'self_trade',
   'ledger_hold',
+  'admin_role_revoked',
 ] as const;
 export type OrderRejectReason = (typeof ORDER_REJECT_REASONS)[number];
 export const orderRejectReasonSchema = z.enum(ORDER_REJECT_REASONS);
@@ -536,6 +537,7 @@ export const settlementStepStatusSchema = z
 
 // ---- admin / audit (varchar columns, PLAN 6.2) --------------------------------------
 export const ADMIN_ACTION_TYPES = [
+  'market_conflict_declare',
   'reconciliation_run',
   'reconciliation_recovery_request',
   'reconciliation_recovery_approve',

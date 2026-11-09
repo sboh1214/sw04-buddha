@@ -305,6 +305,26 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     ).toBe(404);
   });
 
+  it('records creation strictly after the latest role boundary even if the wall clock is behind', async () => {
+    const boundary = new Date(Date.now() + 60_000);
+    await t.db.insert(schema.adminActions).values({
+      adminId: admin.id,
+      type: 'admin_revoke',
+      targetType: 'user',
+      targetId: member.id,
+      payload: { reason: '기록 시각 경계 회귀' },
+      createdAt: boundary,
+    });
+    const response = await create();
+    expect(response.statusCode, response.body).toBe(201);
+    const created = detail(response);
+    const row = await marketRow(created.id);
+    expect(row.createdAt.getTime()).toBe(boundary.getTime() + 1);
+    expect(row.updatedAt).toEqual(row.createdAt);
+    expect((await eventsFor(created.id))[0]?.createdAt).toEqual(row.createdAt);
+    expect((await actionsFor(created.id))[0]?.createdAt).toEqual(row.createdAt);
+  });
+
   it('derives a slug from the title when none is given, or from a tag alone', async () => {
     const fromTitle = detail(await create({ title: '비트코인 10만 달러 돌파?' }));
     expect(fromTitle.slug).toMatch(/^비트코인-10만-달러-돌파-[a-z0-9]{4}$/);

@@ -36,13 +36,15 @@ import { StartGrantModule } from './start-grant.module.js';
 import { StartGrantService } from './start-grant.service.js';
 
 describe('the start grant has no route (#70)', () => {
-  it('declares no controller, and no route of the app names it', () => {
+  it('declares no controller; only the exact admin-role grant preview may use the grant name', () => {
     expect(Reflect.getMetadata(MODULE_METADATA.CONTROLLERS, StartGrantModule) ?? []).toEqual([]);
     expect(
       discoverRoutes()
         .map((route) => route.key)
         .filter((key) => /start|grant/i.test(key)),
-    ).toEqual([]);
+      // #143 previews an administrator role grant, not a Coin grant. Pin this one GET:
+      // another grant/start route, including a write at this path, still fails the guard.
+    ).toEqual(['GET /admin/admins/:userId/grant-preview']);
   });
 });
 

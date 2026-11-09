@@ -11,6 +11,8 @@ export const ERROR_CODES = [
   'PRICE_MOVED',
   'DUPLICATE_REQUEST',
   'RATE_LIMITED',
+  /** The complete transaction rolled back after bounded lock-contention retries. */
+  'TRANSACTION_BUSY',
   /**
    * A supplement of an open market would leave a rule item missing that was filled before it, as
    * the open-items check counts one (#23), or clear its judgement time zone, a judgement item too

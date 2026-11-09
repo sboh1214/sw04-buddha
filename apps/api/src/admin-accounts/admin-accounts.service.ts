@@ -2,7 +2,16 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   isHumanAccountTypeSql,
   isPhoneVerified,
+  adminRoleChangeTimestamp,
+  cancelLockedOrders,
+  cancelledMarketIds,
+  countFilledMarkets,
+  ledgerHeldMarketSql,
+  lockAccountOrders,
   lockAdminRoles,
+  tryLockAdminRoles,
+  TransactionBusyError,
+  withTransactionRetry,
   schema,
   type Db,
 } from '@buddha/db';
@@ -11,7 +20,10 @@ import {
   decodeKeyset,
   encodeKeyset,
   MIN_ADMINS,
+  LIVE_ORDER_STATUSES,
   type AdminAccount,
+  type AdminGrantPreview,
+  type AdminRoleChangePayload,
   type AdminRoleChange,
   type AdminRoleChangeRefusal,
   type AdminRoleChangeType,
@@ -21,8 +33,8 @@ import { alias } from 'drizzle-orm/pg-core';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
-import { clockTimestamp, strictlyAfter } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import { type Page } from '../wallet/wallet.service.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -75,7 +87,39 @@ export class AdminAccountsService {
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly guard: AdminGuard,
+    private readonly publisher: MarketPublisher,
   ) {}
+
+  async preview(userId: string): Promise<AdminGrantPreview> {
+    return this.db.transaction(
+      async (tx) => {
+        const [person] = await tx
+          .select({ id: schema.user.id })
+          .from(schema.user)
+          .where(and(eq(schema.user.id, userId), isHumanAccountTypeSql(schema.user.accountType)));
+        if (!person) throw new AppError('NOT_FOUND', { message: 'User not found' });
+        const [orders] = await tx
+          .select({
+            live: sql<number>`count(*)::int`,
+            held: sql<number>`count(*) FILTER (WHERE ${ledgerHeldMarketSql(sql.raw('"orders"."market_id"'))})::int`,
+          })
+          .from(schema.orders)
+          .where(
+            and(
+              eq(schema.orders.userId, userId),
+              inArray(schema.orders.status, [...LIVE_ORDER_STATUSES]),
+            ),
+          );
+        return {
+          userId,
+          filledMarketCount: await countFilledMarkets(tx, userId),
+          liveOrderCount: orders?.live ?? 0,
+          heldOrderCount: orders?.held ?? 0,
+        };
+      },
+      { isolationLevel: 'repeatable read', accessMode: 'read only' },
+    );
+  }
 
   /** Every account that holds the admin role, oldest account first, with its latest grant. */
   async list(): Promise<AdminAccount[]> {
@@ -142,8 +186,14 @@ export class AdminAccountsService {
    * that is no account does, before any other reason.
    */
   async grant(actorId: string, userId: string, reason: string): Promise<AdminRoleChange> {
-    const recordId = await this.db.transaction(async (tx) => {
-      await lockAdminRoles(tx, 'exclusive');
+    const done = await withTransactionRetry(this.db, async (tx) => {
+      await tryLockAdminRoles(tx);
+      await tx
+        .select({ id: schema.user.id })
+        .from(schema.user)
+        .where(inArray(schema.user.id, [...new Set([actorId, userId])]))
+        .orderBy(asc(schema.user.id))
+        .for('key share', { noWait: true });
       await this.assertAdmin(tx, actorId);
       const [target] = await tx
         .select({
@@ -157,7 +207,8 @@ export class AdminAccountsService {
         // person's account takes them: the role lives on the profile an operating account never
         // has (migration 0059), and the one rule says so here too.
         .where(and(eq(schema.user.id, userId), isHumanAccountTypeSql(schema.user.accountType)))
-        .limit(1);
+        .limit(1)
+        .for('update', { of: schema.profiles, noWait: true });
       if (!target) throw new AppError('NOT_FOUND', { message: 'User not found' });
       if (target.closedAt !== null) {
         throw new AppError('ACCOUNT_CLOSED', { message: 'The account was closed by its member' });
@@ -165,10 +216,33 @@ export class AdminAccountsService {
       if (target.role === 'admin') throw roleChangeNotAllowed('already_admin');
       if (!target.emailVerified) throw roleChangeNotAllowed('email_not_verified');
       if (!(await isPhoneVerified(tx, userId))) throw roleChangeNotAllowed('phone_not_verified');
-      return this.writeRole(tx, actorId, userId, 'admin_grant', reason);
+      const locked = await lockAccountOrders(tx, userId, { wait: 'nowait' });
+      const filledMarketCount = await countFilledMarkets(tx, userId);
+      const at = await adminRoleChangeTimestamp(tx, 'admin_grant');
+      const cancelled = await cancelLockedOrders(tx, locked, { reason: 'admin_role', at });
+      const recordId = await this.writeRole(tx, actorId, userId, 'admin_grant', reason, {
+        at,
+        tradeEffects: {
+          filledMarketCount,
+          cancelledOrderCount: cancelled.cancelled.length,
+          heldOrderCount: cancelled.held.length,
+        },
+        cancelledOrderIds: cancelled.cancelled.map((order) => order.id),
+        heldOrderIds: cancelled.held.map((order) => order.id),
+      });
+      return { recordId, marketIds: cancelledMarketIds(cancelled), at };
+    }).catch((error: unknown) => {
+      if (error instanceof TransactionBusyError)
+        throw new AppError('TRANSACTION_BUSY', {
+          message: 'The account is busy; retry the complete role grant',
+        });
+      throw error;
     });
-    await this.cacheAdmin(userId);
-    return this.change(recordId);
+    await Promise.all([
+      this.cacheAdmin(userId),
+      this.publisher.publishBook(done.marketIds, done.at),
+    ]);
+    return this.change(done.recordId);
   }
 
   /**
@@ -274,15 +348,10 @@ export class AdminAccountsService {
     userId: string,
     type: AdminRoleChangeType,
     reason: string,
+    details?: Omit<AdminRoleChangePayload, 'reason'> & { at: Date },
   ): Promise<string> {
-    const clock = await clockTimestamp(tx);
-    const [last] = await tx
-      .select({ createdAt: schema.adminActions.createdAt })
-      .from(schema.adminActions)
-      .where(IS_ROLE_CHANGE)
-      .orderBy(desc(schema.adminActions.createdAt))
-      .limit(1);
-    const at = strictlyAfter(clock, last?.createdAt);
+    const at = details?.at ?? (await adminRoleChangeTimestamp(tx, type));
+    const { at: _at, ...effects } = details ?? { at };
     const [record] = await tx
       .insert(schema.adminActions)
       .values({
@@ -290,7 +359,7 @@ export class AdminAccountsService {
         type,
         targetType: TARGET_TYPE,
         targetId: userId,
-        payload: { reason },
+        payload: { reason, ...effects },
         createdAt: at,
       })
       .returning({ id: schema.adminActions.id });
@@ -357,6 +426,7 @@ export class AdminAccountsService {
         actor: { id: row.actorId, nickname: row.actorNickname },
         reason: payload.data.reason,
         createdAt: row.createdAt.toISOString(),
+        ...(payload.data.tradeEffects ? { tradeEffects: payload.data.tradeEffects } : {}),
       };
     });
   }

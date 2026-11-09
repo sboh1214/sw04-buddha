@@ -279,6 +279,10 @@ test.describe('판정', () => {
       // Sent empty, nothing goes: each field says what it lacks.
       const writes = judgementWrites(firstPage, market.id);
       const submit = form.getByTestId('market-judgement-submit');
+      const noConflict = form.getByTestId('market-judgement-confirm-conflict');
+      await expect(noConflict).toHaveAttribute('data-state', 'unchecked');
+      await expect(submit).toBeDisabled();
+      await noConflict.click();
       await submit.click();
       await expect(form.getByTestId('market-judgement-result-error')).toHaveText(
         copy.errMarketJudgementResult,
@@ -327,6 +331,7 @@ test.describe('판정', () => {
         description,
         // A first judgement (#176: a 판정 정정 names the version it replaces, correction.spec.ts).
         correction: null,
+        noConflictConfirmed: true,
         expectedAccountId: first.id,
       });
       await expect(firstPage.getByText(copy.adminMarketJudgementRegistered)).toBeVisible();
@@ -439,12 +444,15 @@ test.describe('판정', () => {
       await dialog.getByTestId('market-judgement-approve-reason').fill(approval);
       await expect(confirm).toBeDisabled();
       await dialog.getByTestId('market-judgement-approve-confirm-deadline').click();
+      await expect(confirm).toBeDisabled();
+      await dialog.getByTestId('market-judgement-approve-confirm-conflict').click();
       await expect(confirm).toBeEnabled();
       const approved = nextWrite(secondPage, market.id, `/judgements/${requestId}/approve`);
       await confirm.click();
       expect((await approved).postDataJSON()).toEqual({
         reason: approval,
         eventDeadlineConfirmed: true,
+        noConflictConfirmed: true,
         expectedAccountId: second.id,
       });
       await expect(secondPage.getByText(copy.adminMarketJudgementApproved)).toBeVisible();
@@ -760,6 +768,8 @@ test.describe('판정', () => {
       await form.getByTestId('market-judgement-collected-at').fill(kstLocalOf(collectedAt));
       await form.getByTestId('market-judgement-description').fill(description);
       const writes = judgementWrites(page, market.id);
+      await expect(form.getByTestId('market-judgement-submit')).toBeDisabled();
+      await form.getByTestId('market-judgement-confirm-conflict').click();
       await form.getByTestId('market-judgement-submit').click();
       await expect(form.getByTestId('market-judgement-fallback-reason-error')).toHaveText(
         copy.errMarketJudgementFallbackReason,
@@ -785,6 +795,7 @@ test.describe('판정', () => {
         evidence: { links: [link], collectedAt },
         description,
         correction: null,
+        noConflictConfirmed: true,
         expectedAccountId: me.id,
       });
       await expect(page.getByText(copy.adminMarketJudgementRegistered)).toBeVisible();

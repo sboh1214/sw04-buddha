@@ -146,7 +146,13 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
       method: 'POST',
       url,
       headers: { ...jsonHeaders, cookie: who.cookie },
-      payload: { expectedAccountId: who.id, ...payload },
+      payload: {
+        expectedAccountId: who.id,
+        ...(/\/judgements(?:$|\/[^/]+\/approve$)|\/disputes\/[^/]+\/(?:accept|dismiss)$/.test(url)
+          ? { noConflictConfirmed: true }
+          : {}),
+        ...payload,
+      },
     });
   const get = (url: string, who: TestUser = registrant) =>
     t.app.inject({ method: 'GET', url, headers: { cookie: who.cookie } });
@@ -2123,12 +2129,14 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
       });
     for (const res of [
       await unnamed(judgementsUrl(market.id), {
+        noConflictConfirmed: true,
         result: 'YES',
         source: { priority: 0 },
         evidence: { links: [LINK], collectedAt: iso(Date.now() - MINUTE_MS) },
         description: DESCRIPTION,
       }),
       await unnamed(`${judgementsUrl(held.id)}/${requestId}/approve`, {
+        noConflictConfirmed: true,
         reason: APPROVAL,
         eventDeadlineConfirmed: false,
       }),

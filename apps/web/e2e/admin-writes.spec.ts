@@ -1065,6 +1065,7 @@ test.describe('탭의 세션이 아직 앞 관리자를 말하는데 `GET /me`�
       await form.getByTestId('market-judgement-result-yes').click();
       const description = form.getByTestId('market-judgement-description');
       await description.fill('앞 관리자가 적던 확인한 내용');
+      await form.getByTestId('market-judgement-confirm-conflict').click();
       const writes = adminWrites(page);
 
       await toB();
@@ -1077,6 +1078,12 @@ test.describe('탭의 세션이 아직 앞 관리자를 말하는데 `GET /me`�
       );
       expect(after.status).toBe('closed');
       expect(after.judgement.pending).toBeNull();
+      await page.getByTestId('market-judgement-register').click();
+      await expect(form.getByTestId('market-judgement-confirm-conflict')).toHaveAttribute(
+        'data-state',
+        'unchecked',
+      );
+      await expect(form.getByTestId('market-judgement-submit')).toBeDisabled();
     } finally {
       await close();
     }

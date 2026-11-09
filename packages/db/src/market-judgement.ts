@@ -22,6 +22,7 @@ import {
   type MarketDisputeRow,
 } from './market-dispute.js';
 import { transitionMarket } from './market-transitions.js';
+import { assertNoMarketConflict } from './market-conflicts.js';
 import type * as schema from './schema/index.js';
 import {
   type approvalRequests,
@@ -247,6 +248,7 @@ export async function approveMarketJudgement(
   input: ApproveMarketJudgementInput,
 ): Promise<ApproveMarketJudgementResult> {
   const { market, request, now, approverId, disputeWindowMinutes } = input;
+  await assertNoMarketConflict(tx, market.id, [approverId, request.requestedBy]);
   const registration = registrationOf(market, request, approverId);
   if (registration.correction !== null) {
     throw new Error(`Request ${request.id} is a correction: correctMarketJudgement approves it`);
@@ -383,6 +385,7 @@ export async function correctMarketJudgement(
   input: CorrectMarketJudgementInput,
 ): Promise<CorrectMarketJudgementResult> {
   const { market, request, now, approverId } = input;
+  await assertNoMarketConflict(tx, market.id, [approverId, request.requestedBy]);
   const registration = registrationOf(market, request, approverId);
   const { correction } = registration;
   if (correction === null) {

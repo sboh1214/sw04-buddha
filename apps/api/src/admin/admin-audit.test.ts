@@ -68,6 +68,7 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'POST /admin/coupons': 'coupon_create',
   'PATCH /admin/coupons/:id': 'coupon_update',
   'POST /admin/markets': 'market_create',
+  'POST /admin/markets/:id/conflicts': 'market_conflict_declare',
   'PATCH /admin/markets/:id': 'market_update',
   // #78: the review's writes, each with the market's own review event.
   'POST /admin/markets/:id/submit': 'market_submit',

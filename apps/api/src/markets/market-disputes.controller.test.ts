@@ -164,7 +164,13 @@ describe.skipIf(!hasTestInfra)('market disputes (integration)', () => {
       method: 'POST',
       url: `/api/v1${url}`,
       headers: { ...jsonHeaders, cookie: who.cookie },
-      payload: { expectedAccountId: who.id, ...payload },
+      payload: {
+        expectedAccountId: who.id,
+        ...(/\/judgements(?:$|\/[^/]+\/approve$)|\/disputes\/[^/]+\/(?:accept|dismiss)$/.test(url)
+          ? { noConflictConfirmed: true }
+          : {}),
+        ...payload,
+      },
     });
   const get = (url: string, who?: TestUser) =>
     t.app.inject({
@@ -719,7 +725,12 @@ describe.skipIf(!hasTestInfra)('market disputes (integration)', () => {
           targetType: 'market',
           targetId: market.id,
           createdAt: row!.decidedAt,
-          payload: { disputeId: submitted.id, judgementVersion: 1, reason: DECISION },
+          payload: {
+            disputeId: submitted.id,
+            judgementVersion: 1,
+            reason: DECISION,
+            noConflictConfirmed: true,
+          },
         }),
       ]);
       await waitForMessages(received, 1, 'market:status of the dismissal');
@@ -774,7 +785,12 @@ describe.skipIf(!hasTestInfra)('market disputes (integration)', () => {
       expect.objectContaining({
         adminId: third.id,
         type: 'market_dispute_accept',
-        payload: { disputeId: submitted.id, judgementVersion: 1, reason: DECISION },
+        payload: {
+          disputeId: submitted.id,
+          judgementVersion: 1,
+          reason: DECISION,
+          noConflictConfirmed: true,
+        },
       }),
     ]);
     expectNotAllowed(await decide('dismiss', market.id, submitted.id), 'decided');

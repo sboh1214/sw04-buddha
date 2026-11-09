@@ -838,7 +838,7 @@ describe('judgementFailure', () => {
         apiError(409, 'APPROVAL_NOT_ALLOWED', [{ path: ['request'], message: 'no_decider' }]),
         'register',
       ),
-    ).toMatchObject({ message: copy.errApprovalNoDecider });
+    ).toMatchObject({ message: copy.marketConflictNoDecider });
   });
 
   it('says the market’s state above the buttons and reads the detail again', () => {

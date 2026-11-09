@@ -158,6 +158,8 @@ test.describe('정산', () => {
       await form.getByTestId('market-judgement-link-0').fill(link);
       await form.getByTestId('market-judgement-collected-at').fill(kstLocalOf(collectedAt));
       await form.getByTestId('market-judgement-description').fill(description);
+      await expect(form.getByTestId('market-judgement-submit')).toBeDisabled();
+      await form.getByTestId('market-judgement-confirm-conflict').click();
       const registered = nextWrite(firstPage, market.id, '/judgements');
       await form.getByTestId('market-judgement-submit').click();
       await registered;
@@ -183,6 +185,8 @@ test.describe('정산', () => {
       await dialog.getByTestId('market-judgement-approve-reason').fill(approval);
       await expect(confirm).toBeDisabled();
       await dialog.getByTestId('market-judgement-approve-confirm-deadline').click();
+      await expect(confirm).toBeDisabled();
+      await dialog.getByTestId('market-judgement-approve-confirm-conflict').click();
       await expect(confirm).toBeEnabled();
       await confirm.click();
       await expect(secondPage.getByText(copy.adminMarketJudgementApproved)).toBeVisible();

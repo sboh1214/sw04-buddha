@@ -35,6 +35,9 @@ export const adminActions = pgTable(
     index('admin_actions_role_change_created_at_id_idx')
       .on(desc(t.createdAt), desc(t.id))
       .where(sql`${t.type} IN ('admin_grant', 'admin_revoke')`),
+    index('admin_actions_revocation_target_idx')
+      .on(t.targetId, desc(t.createdAt), desc(t.id))
+      .where(sql`${t.type} = 'admin_revoke' AND ${t.targetType} = 'user'`),
     /**
      * One market's records, oldest first (#78, ADR-0099; migration 0052). Read by the review's
      * editors lookup — every admin with a `market_update` or `market_reschedule` record on the

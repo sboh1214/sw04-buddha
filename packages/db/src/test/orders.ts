@@ -50,12 +50,13 @@ import { ledgerSupply } from './ledger.js';
 
 export type { FillRow, OrderRow };
 
-/** The gate reasons that reject an order before any quote or protection width is read. */
-const BEFORE_QUOTE_REASONS: readonly OrderRejectReason[] = [
+/** The reasons a market's status rejects an order with, before any width is read. */
+const MARKET_REASONS: readonly OrderRejectReason[] = [
   'not_open_yet',
   'paused',
   'closed',
   'ledger_hold',
+  'admin_role_revoked',
 ];
 
 export interface CreateOrderInput {
@@ -75,7 +76,7 @@ export interface CreateOrderInput {
   /** IOC only. Default null. */
   referencePriceCoin?: number | null;
   /**
-   * IOC only. Default TEST_PRICE_PROTECTION_TICKS, null for a pre-quote reject; always null
+   * IOC only. Default TEST_PRICE_PROTECTION_TICKS, null for a market-status reject; always null
    * for GTC.
    */
   protectionTicks?: number | null;
@@ -139,7 +140,7 @@ export async function createOrder(db: Db, input: CreateOrderInput): Promise<Orde
       ? null
       : input.protectionTicks !== undefined
         ? input.protectionTicks
-        : rejectReason !== null && BEFORE_QUOTE_REASONS.includes(rejectReason)
+        : rejectReason !== null && MARKET_REASONS.includes(rejectReason)
           ? null
           : TEST_PRICE_PROTECTION_TICKS;
   const filledQty = input.filledQty ?? 0;

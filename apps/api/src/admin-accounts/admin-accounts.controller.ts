@@ -4,11 +4,13 @@ import {
   adminAccountIdSchema,
   adminAccountSchema,
   adminGrantBodySchema,
+  adminGrantPreviewSchema,
   adminRevokeBodySchema,
   adminRoleChangeListQuerySchema,
   adminRoleChangeSchema,
   type AdminAccount,
   type AdminGrantBody,
+  type AdminGrantPreview,
   type AdminRevokeBody,
   type AdminRoleChange,
   type AdminRoleChangeListQuery,
@@ -55,6 +57,19 @@ export class AdminAccountsController {
     return this.accounts.list();
   }
 
+  @Get(':userId/grant-preview')
+  @ApiOperation({
+    operationId: 'adminPreviewAdminGrant',
+    summary: 'Read trade history and pending order counts before granting an admin role',
+  })
+  @ApiData(adminGrantPreviewSchema)
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
+  preview(
+    @Param('userId', { schema: adminAccountIdSchema }) userId: string,
+  ): Promise<AdminGrantPreview> {
+    return this.accounts.preview(userId);
+  }
+
   @Get('changes')
   @ApiOperation({
     operationId: 'adminListAdminChanges',
@@ -94,6 +109,7 @@ export class AdminAccountsController {
     'VALIDATION_ERROR',
     'ROLE_CHANGE_NOT_ALLOWED',
     'ACCOUNT_CLOSED',
+    'TRANSACTION_BUSY',
   )
   grant(
     @CurrentUser() admin: SessionUser,

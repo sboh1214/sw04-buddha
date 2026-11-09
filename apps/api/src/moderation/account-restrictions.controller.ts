@@ -211,7 +211,7 @@ export class AdminAccountRestrictionsController {
       'restriction as it stands',
   })
   @ApiData(accountRestrictionDecisionSchema)
-  @ApiErrors(...DECISION_ERRORS)
+  @ApiErrors(...DECISION_ERRORS, 'TRANSACTION_BUSY')
   approve(
     @CurrentUser() admin: SessionUser,
     @Param('requestId', { schema: uuidParamSchema }) requestId: string,

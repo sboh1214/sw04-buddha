@@ -4,6 +4,7 @@ import {
   confirmationHold,
   correctMarketJudgement,
   currentMarketJudgement,
+  hasUnconflictedMarketAdmin,
   lockAdminRoles,
   reopenAcceptedDisputes,
   schema,
@@ -39,6 +40,8 @@ import {
   approvalNotAllowed,
   type ApprovalRequest,
 } from '../approvals/approval.service.js';
+import { and, eq } from 'drizzle-orm';
+import { assertMarketDecisionEligibility, assertNoMarketConflict } from './market-conflicts.js';
 import { AppError } from '../common/errors/app-error.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
@@ -289,7 +292,7 @@ export class MarketJudgementService {
       const current = await lockedMarketRow(tx, id);
       // The class's lock order: the admin roles after the market's rows. `no_decider` reads the
       // roles under it, and the request row is written after it.
-      await lockAdminRoles(tx, 'shared');
+      await assertMarketDecisionEligibility(tx, id, adminId, body.noConflictConfirmed);
       const now = await clockTimestamp(tx);
       const status = statusRefused(current.status, correction);
       if (status !== null) throw status;
@@ -297,7 +300,7 @@ export class MarketJudgementService {
         throw staleCorrection();
       }
       if (await hasPendingJudgement(tx, id)) throw refused('judgement', 'pending');
-      if (!(await this.approvals.hasDecider([adminId], tx))) {
+      if (!(await hasUnconflictedMarketAdmin(tx, id, [adminId]))) {
         throw approvalNotAllowed('no_decider');
       }
       if (correction === null) {
@@ -331,6 +334,7 @@ export class MarketJudgementService {
         throw refused('evidence', 'collectedAfterNow', 'collectedAt');
       }
       const payload: MarketJudgementRequestPayload = {
+        noConflictConfirmed: true,
         result: body.result,
         source,
         fallbackReason: body.fallbackReason ?? null,
@@ -432,6 +436,8 @@ export class MarketJudgementService {
       await lockMarket(tx, id);
       const current = await lockedMarketRow(tx, id);
       const request = await this.decidable(tx, adminId, id, requestId);
+      await assertMarketDecisionEligibility(tx, id, adminId, body.noConflictConfirmed);
+      await assertNoMarketConflict(tx, id, request.requestedBy);
       const registration = judgementPayloadOf(request);
       const { correction } = registration;
       const status = statusRefused(current.status, correction);
@@ -450,6 +456,7 @@ export class MarketJudgementService {
         targetType: 'market',
         targetId: id,
         payload: {
+          noConflictConfirmed: true,
           approvalId: request.id,
           version: judgement.version,
           result: judgement.result,
@@ -589,6 +596,70 @@ export class MarketJudgementService {
     });
     if (ended !== null) await this.republish(market, ended.due);
     return market;
+  }
+
+  /** A self-declaration and its own pending registrations are one atomic operation (#143). */
+  async retractOwnPendingForConflict(
+    tx: Tx,
+    adminId: string,
+    current: MarketRow,
+    declarationId: string,
+  ): Promise<{ market: AdminMarket; ended: CorrectionEnd | null; requestIds: string[] }> {
+    const pending = await tx
+      .select()
+      .from(schema.approvalRequests)
+      .where(
+        and(
+          eq(schema.approvalRequests.kind, MARKET_JUDGEMENT_APPROVAL_KIND),
+          eq(schema.approvalRequests.targetType, 'market'),
+          eq(schema.approvalRequests.targetId, current.id),
+          eq(schema.approvalRequests.requestedBy, adminId),
+          eq(schema.approvalRequests.status, 'pending'),
+        ),
+      );
+    let row = current;
+    let ended: CorrectionEnd | null = null;
+    for (const request of pending) {
+      const registration = judgementPayloadOf(request);
+      const retracted = await this.approvals.retract(adminId, request.id, tx);
+      const at = retracted.retractedAt;
+      if (at === null)
+        throw new AppError('INTERNAL', { message: 'Approval retraction has no instant' });
+      if (registration.correction !== null) {
+        ended = await this.endCorrection(tx, row, registration.correction, at);
+        row = ended.market;
+      }
+      await tx.insert(schema.adminActions).values({
+        adminId,
+        type: 'market_judgement_retract',
+        targetType: 'market',
+        targetId: current.id,
+        payload: {
+          approvalId: request.id,
+          result: registration.result,
+          conflictDeclarationId: declarationId,
+          ...(ended === null ? {} : { reopenedDisputeIds: ended.reopenedDisputeIds }),
+        } satisfies MarketJudgementRetractActionPayload,
+        createdAt: at,
+      });
+    }
+    return {
+      market: await this.markets.toAdminMarket(
+        tx,
+        row,
+        await marketTagNames(tx, row.id),
+        await readMarketSources(tx, row.id),
+      ),
+      ended,
+      requestIds: pending.map((request) => request.id),
+    };
+  }
+
+  async publishConflictRetraction(done: {
+    market: AdminMarket;
+    ended: CorrectionEnd | null;
+  }): Promise<void> {
+    if (done.ended !== null) await this.republish(done.market, done.ended.due);
   }
 
   /** `GET /admin/market-judgements` (판정 승인 대기): the oldest registration first. */

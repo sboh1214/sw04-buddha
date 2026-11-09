@@ -141,7 +141,13 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
       method: 'POST',
       url,
       headers: { ...jsonHeaders, cookie: who.cookie },
-      payload: { expectedAccountId: who.id, ...payload },
+      payload: {
+        expectedAccountId: who.id,
+        ...(/\/judgements(?:$|\/[^/]+\/approve$)|\/disputes\/[^/]+\/(?:accept|dismiss)$/.test(url)
+          ? { noConflictConfirmed: true }
+          : {}),
+        ...payload,
+      },
     });
   const patch = (url: string, who: TestUser, payload: Record<string, unknown>) =>
     t.app.inject({

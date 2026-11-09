@@ -397,6 +397,7 @@ export type JudgementCorrectionBody = z.infer<typeof judgementCorrectionBodySche
  */
 export const registerJudgementBodySchema = z
   .object({
+    noConflictConfirmed: z.literal(true),
     result: marketResultSchema,
     source: z.object({ priority: judgementSourcePrioritySchema }).nullable(),
     fallbackReason: approvalReasonSchema.nullish(),
@@ -446,6 +447,7 @@ export const approveJudgementBodySchema = z
   .object({
     reason: approvalReasonSchema,
     eventDeadlineConfirmed: z.boolean(),
+    noConflictConfirmed: z.literal(true),
     expectedAccountId: expectedAccountIdSchema,
   })
   .meta({ id: 'ApproveJudgementBody' });
@@ -496,6 +498,8 @@ export type MarketJudgementCorrection = z.infer<typeof marketJudgementCorrection
  * is.
  */
 export const marketJudgementRequestPayloadSchema = z.object({
+  /** Absent on registrations recorded before #143; never invent a past confirmation. */
+  noConflictConfirmed: z.literal(true).optional(),
   result: marketResultSchema,
   source: judgementSourceSchema.nullable(),
   fallbackReason: z.string().nullable(),
@@ -592,6 +596,7 @@ export interface MarketJudgementPreviousVersion {
  * first judgement (rows written before #176 have none of the three).
  */
 export interface MarketJudgementApproveActionPayload {
+  noConflictConfirmed?: true;
   approvalId: string;
   version: number;
   result: MarketResult;
@@ -623,6 +628,8 @@ export interface MarketJudgementRejectActionPayload {
  * a correction (#176) also `reopenedDisputeIds`, as a 반려's (a retraction reopens them alike).
  */
 export interface MarketJudgementRetractActionPayload {
+  /** Present when an immutable self-declaration caused the retraction. */
+  conflictDeclarationId?: string;
   approvalId: string;
   result: MarketResult;
   reopenedDisputeIds?: string[];

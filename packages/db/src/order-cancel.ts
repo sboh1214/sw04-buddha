@@ -5,13 +5,13 @@ import {
   orderRemainingLock,
   type OrderCancelReason,
 } from '@buddha/shared';
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray, or } from 'drizzle-orm';
 import { isHumanAccountTypeSql } from './account-types.js';
 import type { Db } from './client.js';
 import { lockOrderHolders, releaseForOrder, type PositionRow } from './contracts.js';
 import { ledgerHeldMarketIds, ledgerHeldMarketSql } from './ledger-held-markets.js';
 import { orderLockFactsOf, type OrderRow } from './orders.js';
-import { markets, orders, user } from './schema/index.js';
+import { balances, ledgerAccounts, markets, orders, positions, user } from './schema/index.js';
 import { clockTimestamp, lockMarket, lockMarkets } from './tx-helpers.js';
 
 /*
@@ -312,7 +312,11 @@ export async function lockMarketOrders(
  * broken, and this throws; that check is partial: an order committing after the re-read is missed
  * with no error, so the profile lock is what makes the batch complete, not this throw.
  */
-export async function lockAccountOrders(tx: Tx, ownerId: string): Promise<LockedOrders> {
+export async function lockAccountOrders(
+  tx: Tx,
+  ownerId: string,
+  options: { wait?: 'wait' | 'nowait' } = {},
+): Promise<LockedOrders> {
   const marketIds = (
     await tx
       .selectDistinct({ marketId: orders.marketId })
@@ -321,7 +325,7 @@ export async function lockAccountOrders(tx: Tx, ownerId: string): Promise<Locked
   )
     .map((row) => row.marketId)
     .sort();
-  await lockMarkets(tx, marketIds);
+  await lockMarkets(tx, marketIds, options);
   const rows = await tx
     .select()
     .from(orders)
@@ -341,6 +345,56 @@ export async function lockAccountOrders(tx: Tx, ownerId: string): Promise<Locked
     const live = rows.filter((row) => row.marketId === marketId);
     if (live.length === 0) continue;
     markets.push({ marketId, held: held.has(marketId), orders: live });
+  }
+  if (options.wait === 'nowait') {
+    const active = markets.filter((entry) => !entry.held);
+    const ids = active.map((entry) => entry.marketId);
+    if (ids.length > 0) {
+      const accounts = await tx
+        .select()
+        .from(ledgerAccounts)
+        .where(
+          or(
+            and(eq(ledgerAccounts.kind, 'user'), eq(ledgerAccounts.ownerId, ownerId)),
+            and(
+              inArray(ledgerAccounts.marketId, ids),
+              inArray(ledgerAccounts.kind, ['market_collateral', 'market_maker_funds']),
+            ),
+          ),
+        );
+      if (!accounts.some((account) => account.kind === 'user'))
+        throw new Error(`account ${ownerId} has no ledger account`);
+      const lockedBalances = await tx
+        .select()
+        .from(balances)
+        .where(
+          inArray(
+            balances.accountId,
+            accounts.map((account) => account.id),
+          ),
+        )
+        .orderBy(asc(balances.accountId))
+        .for('update', { noWait: true });
+      if (lockedBalances.length !== accounts.length)
+        throw new Error('An order account has no balance row');
+      await tx
+        .select()
+        .from(positions)
+        .where(and(eq(positions.userId, ownerId), inArray(positions.marketId, ids)))
+        .orderBy(asc(positions.marketId), asc(positions.outcome))
+        .for('update', { noWait: true });
+      await tx
+        .select()
+        .from(orders)
+        .where(
+          inArray(
+            orders.id,
+            active.flatMap((entry) => entry.orders.map((order) => order.id)),
+          ),
+        )
+        .orderBy(asc(orders.arrivalSeq))
+        .for('update', { noWait: true });
+    }
   }
   // Every balance row before the first release (the releases come in `cancelLockedOrders`).
   for (const entry of markets) {

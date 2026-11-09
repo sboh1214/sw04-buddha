@@ -336,7 +336,11 @@ export type RetractDisputeBody = ExpectedAccountBody;
  * screen.
  */
 export const decideDisputeBodySchema = z
-  .object({ reason: approvalReasonSchema, expectedAccountId: expectedAccountIdSchema })
+  .object({
+    reason: approvalReasonSchema,
+    expectedAccountId: expectedAccountIdSchema,
+    noConflictConfirmed: z.literal(true),
+  })
   .meta({ id: 'DecideDisputeBody' });
 export type DecideDisputeBody = z.infer<typeof decideDisputeBodySchema>;
 
@@ -347,6 +351,7 @@ export type DecideDisputeBody = z.infer<typeof decideDisputeBodySchema>;
  * links or reason (#173 item 13).
  */
 export interface MarketDisputeDecisionActionPayload {
+  noConflictConfirmed?: true;
   disputeId: string;
   judgementVersion: number;
   reason: string;

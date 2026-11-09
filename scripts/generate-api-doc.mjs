@@ -386,6 +386,8 @@ const ERROR_NOTES = {
     'PG 가 요청을 거절했다. `details[0].message` 에 PG 의 `<결과 코드> <메시지>` 가 붙는다. 환불이면 회수했던 Coin 을 되돌려 놓았다. 단 환불 **재시도**가 거절되면 첫 시도가 이미 카드를 취소했을 수 있어 Coin 을 되돌리지 않고 `refunding` 으로 둔다 — 첫 시도라도 PG 의 답을 기다리는 사이 재시도가 결제를 넘겨받았으면 마찬가지다(그 재시도가 정한다). 거절됐어도 그사이 다른 시도가 환불을 끝냈으면 오류가 아니라 `refunded` 로 마친 결제로 답한다.',
   PAYMENT_GATEWAY_ERROR:
     'PG 에 닿지 못했거나 결과를 알 수 없다(502). 다른 5xx 처럼 본문에 내부 사정을 담지 않는다. 환불이면 `refunding` 으로 남으니 다시 시도한다. 단 그사이 다른 시도가 환불을 끝냈으면 오류가 아니라 `refunded` 로 마친 결제로 답한다.',
+  TRANSACTION_BUSY:
+    '다른 작업이 필요한 자원을 사용 중이다. 변경은 적용되지 않았으며 전체 요청을 다시 시도할 수 있다.',
   ROLE_CHANGE_NOT_ALLOWED:
     '관리자 권한 부여·회수의 규칙에 맞지 않는다. `details[0].message` 가 까닭을 말한다 — 부여는 `already_admin`(이미 관리자다), `email_not_verified`(이메일 인증을 마치지 않았다), `phone_not_verified`(휴대전화 본인확인을 마치지 않았다), 회수는 `not_admin`(관리자가 아니다), `min_admins`(회수하면 관리자가 2명 미만이 된다. 자기 회수도 같다).',
   APPROVAL_NOT_ALLOWED:

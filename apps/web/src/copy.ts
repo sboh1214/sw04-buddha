@@ -4038,6 +4038,38 @@ export const copy = {
   // 막아 둔 기능(유료 충전·결제·쿠폰, ADR-0049)의 요청이 거절됐을 때. 기능 이름을 말하지 않는다
   // (오너 결정 2026-10-13).
   unavailable: '이용할 수 없습니다.',
+  marketConflictTitle: '시장 이해충돌',
+  marketConflictPolicy:
+    '관리자는 거래할 수 없습니다. 체결 이력이 있거나 이해충돌을 신고한 시장에서는 판정·정정 등록과 승인, 이의 기각·인용을 할 수 없습니다.',
+  marketConflictNone: '현재 확인된 이해충돌이 없습니다.',
+  marketConflictFill: '이 시장의 체결 이력으로 이해충돌 대상입니다.',
+  marketConflictDeclared: '이 시장의 이해충돌을 신고했습니다.',
+  marketConflictDeclare: '이해충돌 신고',
+  marketConflictDeclareHint:
+    '본인의 이해충돌 사유를 남깁니다. 신고는 수정·철회할 수 없으며, 본인이 등록한 승인 대기 중 판정·정정은 즉시 철회됩니다. 연결된 인용 이의는 검토 중으로 돌아갑니다.',
+  marketConflictReason: '이해충돌 사유',
+  marketConflictReasonHint: '관리자에게만 보이는 사유를 1~500자로 입력해 주세요.',
+  marketConflictDeclaredDone: '이해충돌을 신고했습니다.',
+  marketConflictDeclarations: '이해충돌 신고 기록',
+  marketConflictEmpty: '신고 기록이 없습니다.',
+  marketConflictConfirm: '이 시장의 판정과 이의 처리에 영향을 줄 이해충돌이 없음을 확인합니다.',
+  marketConflictConfirmRequired: '이해충돌이 없음을 확인해 주세요.',
+  marketConflictRefused:
+    '이 시장의 이해충돌 대상이므로 판정·정정 등록과 승인, 이의 기각·인용을 할 수 없습니다.',
+  marketConflictNoDecider: '이 시장에서 이해충돌이 없는 다른 승인자가 필요합니다.',
+  marketConflictAlreadyDeclared: '이미 이해충돌을 신고했습니다.',
+  adminGrantTradeEffects: '거래 이력과 대기 주문',
+  adminGrantFilledMarkets: '체결 이력이 있는 시장',
+  adminGrantLiveOrders: '살아 있는 주문',
+  adminGrantCancelledOrders: '취소한 주문',
+  adminGrantHeldOrders: '원장 장애로 취소를 보류할 주문',
+  adminGrantTradeNotice:
+    '권한을 부여하면 대기 주문을 취소합니다. 원장 장애 시장의 주문은 복구까지 보류합니다. 보유 계약과 지급은 유지되며, 체결 이력이 있는 시장은 자동으로 이해충돌 대상이 됩니다.',
+  adminGrantPreviewNotice: '현재 조회 결과입니다. 권한 부여 시점에 다시 확인합니다.',
+  adminRevokeTradeNotice:
+    '관리자 권한을 회수한 뒤 생성된 시장에서만 새 주문을 낼 수 있습니다. 기존 보유 계약과 지급은 유지됩니다.',
+  adminRoleRevokedOrder: '관리자 권한이 회수된 뒤 생성된 시장에서만 주문할 수 있습니다.',
+  errTransactionBusy: '처리 중입니다. 잠시 뒤 다시 시도해 주세요.',
 } as const;
 
 export type CopyKey = keyof typeof copy;

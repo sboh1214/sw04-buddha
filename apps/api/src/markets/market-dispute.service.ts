@@ -1,3 +1,4 @@
+import { assertMarketDecisionEligibility } from './market-conflicts.js';
 import { Inject, Injectable } from '@nestjs/common';
 import {
   decideMarketDispute,
@@ -241,6 +242,7 @@ export class MarketDisputeService {
         dispute.userId,
       );
       if (refusal !== null) throw disputeNotAllowed(refusal);
+      await assertMarketDecisionEligibility(tx, marketId, adminId, body.noConflictConfirmed);
       const result = await decideMarketDispute(tx, {
         market: current,
         dispute,
@@ -258,6 +260,7 @@ export class MarketDisputeService {
         targetId: marketId,
         payload: {
           disputeId,
+          noConflictConfirmed: true,
           judgementVersion: result.dispute.judgementVersion,
           reason: result.dispute.decisionReason ?? body.reason,
         } satisfies MarketDisputeDecisionActionPayload,

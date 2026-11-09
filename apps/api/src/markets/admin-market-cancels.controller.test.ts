@@ -127,7 +127,13 @@ describe.skipIf(!hasTestInfra)('admin market cancels (integration)', () => {
       method: 'POST',
       url,
       headers: { ...jsonHeaders, cookie: who.cookie },
-      payload: { expectedAccountId: who.id, ...payload },
+      payload: {
+        expectedAccountId: who.id,
+        ...(/\/judgements(?:$|\/[^/]+\/approve$)|\/disputes\/[^/]+\/(?:accept|dismiss)$/.test(url)
+          ? { noConflictConfirmed: true }
+          : {}),
+        ...payload,
+      },
     });
   const get = (url: string, who: TestUser | null = asker) =>
     t.app.inject({ method: 'GET', url, headers: who ? { cookie: who.cookie } : {} });

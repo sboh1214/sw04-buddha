@@ -204,6 +204,7 @@ export function adminRoleChangeRefusal(error: unknown): AdminRoleChangeOutcome {
   if (isApiError(error, 'VALIDATION_ERROR') && validationField(error) === 'reason') {
     return { field: 'reason', message: copy.errAdminRoleReason };
   }
+  if (isApiError(error, 'TRANSACTION_BUSY')) return { alert: copy.errTransactionBusy };
   if (isApiError(error, 'ROLE_CHANGE_NOT_ALLOWED')) {
     const refusal = validationMessage(error);
     return {
