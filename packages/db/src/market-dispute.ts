@@ -141,7 +141,8 @@ export function marketConfirmationHeld(): SQL {
  * deployed environment opens with `order.accepting` (ADR-0107 결정 3). The same basis as
  * `markets.trader_count` (#121, market-stats.ts): it counts the accounts this answers true for, so
  * `trader_count = 0` is #20's '사용자 체결 0건', until #132 leaves abnormal fills out (#177 13항);
- * #20 decides from the fills on this basis, abnormal or not (#177 14항, ADR-0107 결정 5).
+ * #20 decides from the fills on this basis, abnormal or not (#177 14항, ADR-0107 결정 5): its
+ * market-wide twin is `marketHasHumanFill` (market-cancel.ts).
  */
 export async function hasMarketFill(
   executor: Reader,

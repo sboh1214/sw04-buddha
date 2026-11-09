@@ -156,6 +156,8 @@ describe('the names', () => {
     expect(PAUSE_REASON_HINT.basis_change).toContain('사건 일정이 앞당겨져');
     expect(PAUSE_REVIEW_RESULT_HINT.not_judgeable).toContain('조기 마감만');
     expect(PAUSE_REVIEW_RESULT_HINT.not_judgeable).toContain('무효 규칙');
+    // A market no person traded is cancelled at the early close instead, with no judgement (#20).
+    expect(PAUSE_REVIEW_RESULT_HINT.not_judgeable).toContain('판정 없이 취소됩니다');
     // VOID is the judgement's, after the close, and pays nothing back (#173 item 4, N03 §6).
     for (const text of Object.values(copy).filter((value) => value.includes('무효'))) {
       expect(text).not.toMatch(/환불|원금/);
@@ -168,6 +170,18 @@ describe('the names', () => {
     expect(copy.adminMarketPauseRequestBody).toContain('승인되기 전에는 일시 중단이 이어지고');
     expect(copy.adminMarketPauseRequestBody).toContain('승인 없이도 시장이 마감됩니다');
     expect(copy.adminMarketPauseRequestBody).not.toContain('아무것도 바뀌지 않습니다');
+  });
+
+  it('says the approved early close and the close at close_at cancel a market no person traded (#20)', () => {
+    // endMarketPause and the close job both go PAUSED → CANCELLED with no human fill, whatever
+    // the review result; the request side may not promise only a close and a judgement.
+    expect(copy.adminMarketPauseRequestBody).toContain(
+      '사용자가 낀 체결이 한 건도 없던 시장은 어느 쪽이든 마감 대신 취소되어',
+    );
+    expect(copy.adminMarketPauseRequestUnavailableClosed).toContain(
+      '사용자가 낀 체결이 없던 시장은 취소됩니다',
+    );
+    expect(copy.adminMarketPauseApproveEarlyCloseBody).toContain('마감 대신 취소되어');
   });
 });
 
@@ -522,6 +536,8 @@ describe('what each write may send', () => {
   it('says what an approval did by the status it answered', () => {
     expect(pauseApprovalSuccess('open')).toBe(copy.adminMarketPauseResumed);
     expect(pauseApprovalSuccess('closed')).toBe(copy.adminMarketPauseEarlyClosed);
+    // #20: an early close with no fill of a person's account cancels the market.
+    expect(pauseApprovalSuccess('cancelled')).toBe(copy.adminMarketPauseEarlyCancelled);
   });
 });
 

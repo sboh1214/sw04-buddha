@@ -66,9 +66,10 @@ import {
  * nothing holds, and a confirmed one takes no correction. Both tests wait for the worker, so they
  * skip on a database with a longer window or with no worker probe (`skipUnlessResolvable`).
  *
- * No member submits a 판정 이의 (no spec trades on a market it judges, dispute.spec.ts): a correction
- * from an accepted dispute, the pending disputes it closes as 정정으로 종결, the accepted ones a rejected
- * or retracted correction sends back to 검토 중, a second dispute on the corrected version, the
+ * No member submits a 판정 이의 (only the helper's own members trade on a market a spec judges, and
+ * they never dispute — dispute.spec.ts): a correction from an accepted dispute, the pending
+ * disputes it closes as 정정으로 종결, the accepted ones a rejected or retracted correction sends back
+ * to 검토 중, a second dispute on the corrected version, the
  * refusals' order and the records (the `market_judgements` row with its reason, the
  * `judgement_corrected` event, the admin actions, the hold and the old deadline's job) are the
  * API's, the database's and the worker's integration tests (admin-market-judgements.controller

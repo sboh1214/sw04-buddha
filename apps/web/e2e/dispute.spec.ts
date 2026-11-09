@@ -47,10 +47,11 @@ import {
  * operators' 이의 접수 (`/admin/disputes`, after 테마 in the menu) has 검토 대기 and 처리됨, and the
  * admin detail's 판정 panel a '판정 이의' block for the current judgement version.
  *
- * No spec makes a fill on a market it judges (orders.spec.ts trades through the API on its own
- * open markets, #119; the order panel is #66, D13), and only a member with a fill on the market
- * may dispute it (#173 item 6) — on the deployed environment too, where nobody is eligible while
- * the order intake stays closed (ADR-0107 결정 3). So a dispute is never submitted for real here: a
+ * The only fill on a market a spec judges is the helper's own pair before its close (helpers.ts
+ * `closeMarket`: since #20 a market with no fill is cancelled, not closed) — two members of the
+ * worker's own, never the spec's member — and only a member with a fill on the market may dispute
+ * it (#173 item 6) — on the deployed environment too, where nobody is eligible while the order
+ * intake stays closed (ADR-0107 결정 3). So a dispute is never submitted for real here: a
  * 판정 이의 that holds a market, its 기각 and 수용, the hold past the deadline ('판정 지연'), '이의 검토 중' and
  * the confirmation right after the last 기각 are the database's, the API's and the worker's
  * integration tests (packages/db market-dispute.test.ts, market-disputes.controller.test.ts,
@@ -426,7 +427,7 @@ test.describe('판정 이의', () => {
     }
   });
 
-  test('제출 양식(화면만 — 체결 이력을 만들 길이 없어 회원의 판정 이의 읽기와 쓰기를 브라우저에서 답한다): 링크와 사유를 확인하고, 낸 판정 이의를 검토 중으로 보이며, 기한 안에 철회하면 철회로 바뀌고 MY 판정 이의에도 그렇게 보인다', async ({
+  test('제출 양식(화면만 — 이 회원에게는 체결 이력이 없어 회원의 판정 이의 읽기와 쓰기를 브라우저에서 답한다): 링크와 사유를 확인하고, 낸 판정 이의를 검토 중으로 보이며, 기한 안에 철회하면 철회로 바뀌고 MY 판정 이의에도 그렇게 보인다', async ({
     admin,
     page,
   }) => {
@@ -647,8 +648,8 @@ test.describe('판정 이의', () => {
     admin,
     page,
   }) => {
-    // No spec trades on a market it judges, so no database these specs run on holds a dispute:
-    // both halves are empty, in the API and on screen.
+    // Only the helper's members trade on a market a spec judges, and they never dispute, so no
+    // database these specs run on holds a dispute: both halves are empty, in the API and on screen.
     for (const status of ['pending', 'decided']) {
       const response = await admin.get(`/api/v1/admin/market-disputes?status=${status}`);
       const body = await response.text();

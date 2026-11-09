@@ -34,6 +34,7 @@ import {
   signIn,
   subscribed,
   test,
+  tradeOnce,
 } from './helpers';
 
 /**
@@ -827,9 +828,12 @@ test.describe('판정', () => {
     page,
   }) => {
     // 실질 기준 변경, reviewed 판정 불가: the 조기 마감 another admin approves (#114, ADR-0102) —
-    // no VOID before the close (#173 item 4); the judgement after it applies the VOID rule.
+    // no VOID before the close (#173 item 4); the judgement after it applies the VOID rule. One
+    // pair traded by the helper's members first: an early close with no fill of a person's account
+    // is 취소, with no judgement at all (#20, ADR-0117).
     const market = await createOpenMarket(admin);
     try {
+      await tradeOnce(admin, market.id);
       await pauseMarket(admin, market.id, 'basis_change');
       await requestPauseDecision(admin, market.id, 'early_close', {
         reviewResult: 'not_judgeable',

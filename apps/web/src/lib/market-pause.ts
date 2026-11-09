@@ -409,9 +409,15 @@ export function pauseDecisionDraft(
   };
 }
 
-/** The toast of an approval that went through, from the status the market was answered in. */
+/**
+ * The toast of an approval that went through, from the status the market was answered in: 재개, or
+ * an early close — CANCELLED when no person's account had filled (#20, ADR-0117).
+ */
 export function pauseApprovalSuccess(status: MarketStatus): string {
-  return status === 'open' ? copy.adminMarketPauseResumed : copy.adminMarketPauseEarlyClosed;
+  if (status === 'open') return copy.adminMarketPauseResumed;
+  return status === 'cancelled'
+    ? copy.adminMarketPauseEarlyCancelled
+    : copy.adminMarketPauseEarlyClosed;
 }
 
 // ---- what a refusal says ---------------------------------------------------------------------

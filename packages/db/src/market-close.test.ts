@@ -1,5 +1,7 @@
+import { MARKET_NO_FILL_CANCEL_REASON, ORDER_ACCEPTING_SETTING } from '@buddha/shared';
 import { and, asc, count, eq, inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { ledgerHeldMarketIds } from './ledger-held-markets.js';
 import { closeMarketAtClose } from './market-close.js';
 import {
   cancelLockedOrders,
@@ -20,7 +22,12 @@ import {
   profiles,
 } from './schema/index.js';
 import { contractBook, positionOf } from './test/contracts.js';
-import { createMarket, createMarketPause, createUser } from './test/factories.js';
+import {
+  createMarket,
+  createMarketPause,
+  createUser,
+  setReleaseSetting,
+} from './test/factories.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
 import {
   balanceOf,
@@ -30,12 +37,18 @@ import {
   mintTestPairs,
 } from './test/ledger.js';
 import {
+  CANCELLED_MARKET_LIVE_ORDERS_CHECK_SQL,
+  NO_MARKET_STATS,
   cancelTestOrder,
+  checkCancelledMarkets,
+  checkMarketStats,
   checkOrderInvariants,
   closeTestMarket,
+  marketStatsOf,
   openOrderIntake,
   passMarketClose,
   placeTestOrder,
+  tradeOnce,
   type PlaceTestOrderInput,
 } from './test/orders.js';
 import { waitForLockWaiter } from './test/wait.js';
@@ -46,7 +59,8 @@ import { clockTimestamp, lockMarket } from './tx-helpers.js';
  * that lock and write nothing, the close of an OPEN and a PAUSED market with every live order of
  * every account type ended 만료 and its lock back (a held market's kept), the books it never moves,
  * and the races on the market lock (an own cancel, a second closer, an account's batch, another
- * market's pause of the same people).
+ * market's pause of the same people). Since #20 (ADR-0117) a market with no fill a person's
+ * account is on is CANCELLED instead, with the same 만료: both outcomes below.
  */
 describe.skipIf(!hasTestDb())('the close at close_at (#120, docker test profile)', () => {
   let t: TestDb;
@@ -107,7 +121,15 @@ describe.skipIf(!hasTestDb())('the close at close_at (#120, docker test profile)
     positions: await t.db.select().from(positions).orderBy(positions.userId, positions.outcome),
     balances: await t.db.select().from(balances).orderBy(balances.accountId),
   });
-  const expectSound = async () => expect(await checkOrderInvariants(t.db)).toEqual([]);
+  const expectSound = async () => {
+    expect(await checkOrderInvariants(t.db)).toEqual([]);
+    expect(await checkCancelledMarkets(t.db)).toEqual([]);
+  };
+  /** `expectSound`, and every market's statistics its fills' (none made by `mintTestPairs`). */
+  const expectSoundStats = async () => {
+    await expectSound();
+    expect(await checkMarketStats(t.db)).toEqual([]);
+  };
   /** Whether another connection can take `userId`'s balance row now (none held by a close). */
   const balanceFree = async (userId: string) => {
     const other = await t.db.$client.connect();
@@ -148,17 +170,36 @@ describe.skipIf(!hasTestDb())('the close at close_at (#120, docker test profile)
       const closed = (await createMarket(t.db, { createdBy: adminId, status: 'closed' })).id;
       await passMarketClose(t.db, scheduled);
       // A CLOSED market that still has A's live, locked order: a ledger-held market closed on
-      // schedule. Its skip must come before `lockMarketOrders`, or it would take A's row.
+      // schedule, traded (two other members' pair at 50, which A's buy at 20 does not meet) so it
+      // is CLOSED, not CANCELLED (#20). Its skip must come before `lockMarketOrders`, or it would
+      // take A's row. The untraded twin closes CANCELLED and skips the same way.
       const heldClosed = await market();
       const kept = await placed({ ownerId: a, marketId: heldClosed, limitPriceCoin: 20 });
+      await tradeOnce(t.db, heldClosed);
       await createMarketPause(t.db, {
         marketId: heldClosed,
         reason: 'ledger_failure',
         by: adminId,
       });
       await passMarketClose(t.db, heldClosed);
-      expect((await closeTestMarket(t.db, heldClosed)).closed).toBe(true);
+      expect(await closeTestMarket(t.db, heldClosed)).toMatchObject({
+        closed: true,
+        status: 'closed',
+      });
       expect(await orderRow(kept.id)).toEqual(kept);
+      const heldCancelled = await market();
+      const keptToo = await placed({ ownerId: a, marketId: heldCancelled, limitPriceCoin: 20 });
+      await createMarketPause(t.db, {
+        marketId: heldCancelled,
+        reason: 'ledger_failure',
+        by: adminId,
+      });
+      await passMarketClose(t.db, heldCancelled);
+      expect(await closeTestMarket(t.db, heldCancelled)).toMatchObject({
+        closed: true,
+        status: 'cancelled',
+      });
+      expect(await orderRow(keptToo.id)).toEqual(keptToo);
       const before = await written();
       for (const [m, reason] of [
         [ahead, 'not_due'],
@@ -166,6 +207,7 @@ describe.skipIf(!hasTestDb())('the close at close_at (#120, docker test profile)
         [scheduled, 'not_open_or_paused'],
         [closed, 'not_open_or_paused'],
         [heldClosed, 'not_open_or_paused'],
+        [heldCancelled, 'not_open_or_paused'],
       ] as const) {
         await t.db.transaction(async (tx) => {
           expect(await closeMarketAtClose(tx, m)).toEqual({ closed: false, reason });
@@ -235,6 +277,7 @@ describe.skipIf(!hasTestDb())('the close at close_at (#120, docker test profile)
       expect(done.expired.expired.map((row) => row.id)).toEqual([partial.id, sell.id, bot.id]);
       // One instant: the event's, the market row's, the payload's and every expired order's.
       const row = await marketRow(m);
+      expect(done.status).toBe('closed');
       expect(row).toMatchObject({ status: 'closed', statusEventId: done.statusEventId });
       expect(row.updatedAt).toEqual(done.closedAt);
       expect(row.scheduledJudgementAt!.getTime()).toBeGreaterThan(done.closedAt.getTime());
@@ -291,6 +334,8 @@ describe.skipIf(!hasTestDb())('the close at close_at (#120, docker test profile)
     it('closes a PAUSED market on schedule: its pause ended closed_at_close, nothing left to expire', async () => {
       const m = await market();
       const a = await member();
+      // A person's fill before the pause: CLOSED (with none it is CANCELLED, below — #20).
+      await tradeOnce(t.db, m);
       const row = await placed({ ownerId: a, marketId: m, limitPriceCoin: 40 });
       const paused = await createMarketPause(t.db, { marketId: m, by: adminId });
       expect(await orderRow(row.id)).toMatchObject({ status: 'cancelled', cancelReason: 'paused' });
@@ -304,8 +349,9 @@ describe.skipIf(!hasTestDb())('the close at close_at (#120, docker test profile)
         endEventId: done.statusEventId,
       });
       expect(done.expired).toEqual({ expired: [], held: [], touched: { positions: [] } });
+      expect(done.status).toBe('closed');
       expect((await marketRow(m)).status).toBe('closed');
-      await expectSound();
+      await expectSoundStats();
     });
 
     it('closes a ledger-held market on schedule and keeps its orders live and locked (#93’s)', async () => {
@@ -316,12 +362,184 @@ describe.skipIf(!hasTestDb())('the close at close_at (#120, docker test profile)
       await passMarketClose(t.db, m);
       const done = await closeTestMarket(t.db, m);
       if (!done.closed) throw new Error('closed');
+      // Nobody filled: CANCELLED on schedule (#20), and still held (결정 4 #178) — the pause ended
+      // `closed_at_close`, the one end the held rule keeps.
+      expect(done.status).toBe('cancelled');
       expect(done.pause).toMatchObject({ reason: 'ledger_failure', endKind: 'closed_at_close' });
       expect(done.expired).toEqual({ expired: [], held: [row], touched: { positions: [] } });
       expect(await orderRow(row.id)).toEqual(row);
       expect(await coin(a)).toEqual({ available: 920n, locked: 80n });
       expect(await ordersAwaitingRecovery(t.db, a)).toEqual([row]);
+      expect(await ledgerHeldMarketIds(t.db, [m])).toEqual(new Set([m]));
+      // The operators' check leaves a held market's live orders out (#93's).
+      expect((await t.db.$client.query(CANCELLED_MARKET_LIVE_ORDERS_CHECK_SQL)).rows).toEqual([]);
       await expectSound();
+    });
+  });
+
+  describe('no fill a person’s account is on: CANCELLED (#20, ADR-0117)', () => {
+    it('cancels an OPEN market nobody filled: the system sentence, no actor, the result empty', async () => {
+      const m = await market();
+      const a = await member();
+      const mm = await fundMarketMakerFunds(t.db, m, 1_000n);
+      const own = await placed({ ownerId: a, marketId: m, limitPriceCoin: 40, qty: 2 });
+      const bot = await placed({ ownerId: mm, marketId: m, outcome: 'NO', limitPriceCoin: 30 });
+      // A rejected order is no trading either.
+      const refused = await placeTestOrder(t.db, {
+        ownerId: a,
+        marketId: m,
+        timeInForce: 'ioc',
+        limitPriceCoin: 40,
+      });
+      expect(refused).toMatchObject({ kind: 'placed', order: { filledQty: 0 } });
+      const booksBefore = await books(m);
+      const statsBefore = await marketStatsOf(t.db, m);
+      expect(statsBefore).toEqual(NO_MARKET_STATS);
+      await passMarketClose(t.db, m);
+
+      const done = await closeTestMarket(t.db, m);
+      if (!done.closed) throw new Error('closed');
+      expect(done.status).toBe('cancelled');
+      expect(done.pause).toBeNull();
+      expect(done.expired.expired.map((row) => row.id)).toEqual([own.id, bot.id]);
+      const row = await marketRow(m);
+      expect(row).toMatchObject({
+        status: 'cancelled',
+        statusEventId: done.statusEventId,
+        resolvedResult: null,
+        resolvedAt: null,
+        updatedAt: done.closedAt,
+      });
+      const [event] = await t.db
+        .select()
+        .from(marketEvents)
+        .where(eq(marketEvents.id, done.statusEventId));
+      expect(event).toEqual({
+        id: done.statusEventId,
+        marketId: m,
+        type: 'cancelled',
+        actorId: null,
+        fromStatus: 'open',
+        toStatus: 'cancelled',
+        payload: {
+          cancelledAt: done.closedAt.toISOString(),
+          source: 'job',
+          reason: MARKET_NO_FILL_CANCEL_REASON,
+        },
+        createdAt: done.closedAt,
+      });
+      // Every order 만료 with its lock back, the 운영 마켓메이커's to its 마켓메이커 자금; no ledger
+      // entry, fill, contract or statistic moved.
+      for (const id of [own.id, bot.id]) {
+        expect(await orderRow(id)).toMatchObject({ status: 'expired', endedAt: done.closedAt });
+      }
+      expect(await live(m)).toEqual([]);
+      expect(await coin(a)).toEqual({ available: 1_000n, locked: 0n });
+      expect(
+        await ledgerAccountBalance(t.db, { kind: 'market_maker_funds', marketId: m }),
+      ).toMatchObject({ lockedCoin: 0n, availableCoin: 1_000n });
+      expect(await books(m)).toEqual(booksBefore);
+      expect(await marketStatsOf(t.db, m)).toEqual(statsBefore);
+      await expectSoundStats();
+      // CANCELLED takes no order (마감) and is terminal: a second close skips it.
+      const late = await placed({ ownerId: a, marketId: m, limitPriceCoin: 40 });
+      expect(late).toMatchObject({ status: 'rejected', rejectReason: 'closed' });
+      expect(await closeTestMarket(t.db, m)).toEqual({
+        closed: false,
+        reason: 'not_open_or_paused',
+      });
+    });
+
+    it('closes a market a person filled: with another person, with the 운영 마켓메이커, partly', async () => {
+      const mintedM = await market();
+      await tradeOnce(t.db, mintedM);
+      // The 운영 마켓메이커 rests, a person fills it.
+      const botM = await market();
+      const mm = await fundMarketMakerFunds(t.db, botM, 1_000n);
+      await placed({ ownerId: mm, marketId: botM, outcome: 'NO', limitPriceCoin: 50 });
+      await placed({ ownerId: await member(), marketId: botM, timeInForce: 'ioc' });
+      // A person's resting order partly filled, its remainder left.
+      const partialM = await market();
+      const partial = await placed({
+        ownerId: await member(),
+        marketId: partialM,
+        outcome: 'NO',
+        limitPriceCoin: 50,
+        qty: 3,
+      });
+      await placed({ ownerId: await member(), marketId: partialM, timeInForce: 'ioc' });
+      for (const m of [mintedM, botM, partialM]) {
+        await passMarketClose(t.db, m);
+        const done = await closeTestMarket(t.db, m);
+        expect(done, m).toMatchObject({ closed: true, status: 'closed' });
+        expect((await marketRow(m)).status).toBe('closed');
+      }
+      expect(await orderRow(partial.id)).toMatchObject({ status: 'expired', filledQty: 1 });
+      await expectSoundStats();
+    });
+
+    it('cancels a market where only the 운영 마켓메이커 rests, intake closed as in production', async () => {
+      // ADR-0107 결정 3 '주문 접수': while `order.accepting` is closed nobody fills, so every
+      // market that closes is cancelled; the bot's resting orders expire, its funds stay (#181).
+      const m = await market();
+      const mm = await fundMarketMakerFunds(t.db, m, 500n);
+      const bots = [
+        await placed({ ownerId: mm, marketId: m, limitPriceCoin: 30, qty: 2 }),
+        await placed({ ownerId: mm, marketId: m, outcome: 'NO', limitPriceCoin: 40, qty: 3 }),
+      ];
+      await setReleaseSetting(t.db, {
+        adminId,
+        key: ORDER_ACCEPTING_SETTING.key,
+        status: 'test',
+        value: false,
+      });
+      const funds = { kind: 'market_maker_funds', marketId: m } as const;
+      expect(await ledgerAccountBalance(t.db, funds)).toMatchObject({ lockedCoin: 180n });
+      const booksBefore = await books(m);
+      await passMarketClose(t.db, m);
+      const done = await closeTestMarket(t.db, m);
+      if (!done.closed) throw new Error('closed');
+      expect(done.status).toBe('cancelled');
+      expect(done.expired.expired.map((row) => row.id)).toEqual(bots.map((row) => row.id));
+      expect(done.expired.touched.positions).toEqual([]);
+      expect(await ledgerAccountBalance(t.db, funds)).toMatchObject({
+        lockedCoin: 0n,
+        availableCoin: 500n,
+      });
+      expect(await books(m)).toEqual(booksBefore);
+      expect(await marketStatsOf(t.db, m)).toEqual(NO_MARKET_STATS);
+      await expectSoundStats();
+    });
+
+    it('cancels a PAUSED market nobody filled on schedule: its pause ended closed_at_close', async () => {
+      const m = await market();
+      const a = await member();
+      await placed({ ownerId: a, marketId: m, limitPriceCoin: 40 });
+      const paused = await createMarketPause(t.db, { marketId: m, by: adminId });
+      await passMarketClose(t.db, m);
+      const done = await closeTestMarket(t.db, m);
+      if (!done.closed) throw new Error('closed');
+      expect(done.status).toBe('cancelled');
+      expect(done.pause).toMatchObject({
+        id: paused.pause.id,
+        endKind: 'closed_at_close',
+        endedAt: done.closedAt,
+        endEventId: done.statusEventId,
+      });
+      expect(await marketRow(m)).toMatchObject({ status: 'cancelled', resolvedResult: null });
+      const [event] = await t.db
+        .select()
+        .from(marketEvents)
+        .where(eq(marketEvents.id, done.statusEventId));
+      expect(event).toMatchObject({
+        type: 'cancelled',
+        actorId: null,
+        fromStatus: 'paused',
+        toStatus: 'cancelled',
+        payload: { source: 'job', reason: MARKET_NO_FILL_CANCEL_REASON },
+      });
+      expect(await ledgerHeldMarketIds(t.db, [m])).toEqual(new Set());
+      await expectSoundStats();
     });
   });
 
@@ -378,8 +596,11 @@ describe.skipIf(!hasTestDb())('the close at close_at (#120, docker test profile)
         { closed: false, reason: 'not_open_or_paused' },
       ]);
       expect(await coin(a)).toEqual({ available: 1_000n, locked: 0n });
+      // Nobody filled: one `cancelled` event (#20), and no `closed` one.
       const events = await t.db.select().from(marketEvents).where(eq(marketEvents.marketId, m));
-      expect(events.filter((e) => e.type === 'closed')).toHaveLength(1);
+      expect(events.filter((e) => e.toStatus === 'cancelled' || e.toStatus === 'closed')).toEqual([
+        expect.objectContaining({ type: 'cancelled' }),
+      ]);
       await expectSound();
     });
 

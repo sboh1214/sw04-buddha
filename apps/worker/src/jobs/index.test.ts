@@ -19,9 +19,12 @@ import {
   createUser,
   createWriteLimitEvent,
   hasTestDb,
+  openOrderIntake,
+  passMarketClose,
   resolveMarketNow,
   setReleaseSetting,
   spendCoin,
+  tradeOnce,
   type TestDb,
 } from '@buddha/db/test';
 import {
@@ -197,28 +200,43 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
   });
 
   it('market.close without a market id is the scan: closes what is due and returns the counts', async () => {
+    // One due market a person traded on (CLOSED) and one nobody did (CANCELLED, #20), the
+    // traded one's deadline first.
+    const admin = await createUser(t.db, { role: 'admin' });
+    await openOrderIntake(t.db, { adminId: admin.user.id });
+    const traded = await createMarket(t.db);
+    await tradeOnce(t.db, traded.id);
+    await passMarketClose(t.db, traded.id, new Date(Date.now() - 2 * MINUTE_MS));
     const due = await createMarket(t.db, { closeAt: new Date(Date.now() - MINUTE_MS) });
     const future = await createMarket(t.db, { closeAt: new Date(Date.now() + MINUTE_MS) });
 
     await expect(run({ name: JOB_NAMES.marketClose, data: {} })).resolves.toEqual({
       closed: 1,
+      cancelled: 1,
       skipped: 0,
       failed: 0,
       failures: [],
     });
-    expect((await marketRow(due.id)).status).toBe('closed');
+    expect((await marketRow(traded.id)).status).toBe('closed');
+    expect((await marketRow(due.id)).status).toBe('cancelled');
     expect((await marketRow(future.id)).status).toBe('open');
     expect(published).toEqual([
       {
-        channel: marketChannel(due.id),
+        channel: marketChannel(traded.id),
         event: expect.objectContaining({ type: 'market:status', status: 'closed' }) as unknown,
       },
+      {
+        channel: marketChannel(due.id),
+        event: expect.objectContaining({ type: 'market:status', status: 'cancelled' }) as unknown,
+      },
     ]);
+    expect(logs.at(-1)).toMatchObject({ level: 30, msg: 'market close scan', cancelled: 1 });
 
     // The scheduler job of queues.ts carries no data at all; that is the scan too, and with
     // nothing left to do it reports zeros (at debug — it runs every minute).
     await expect(run({ name: JOB_NAMES.marketClose })).resolves.toEqual({
       closed: 0,
+      cancelled: 0,
       skipped: 0,
       failed: 0,
       failures: [],
@@ -226,14 +244,36 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
     expect(logs.at(-1)).toMatchObject({ level: 20, msg: 'market close scan', closed: 0 });
   });
 
+  it('a market.close scan that only cancels is reported at info (#20)', async () => {
+    // Production's scan while order intake is closed: no market has a fill, so every due one is
+    // cancelled and none is closed — the cancels alone make it a scan that did something.
+    const due = await createMarket(t.db, { closeAt: new Date(Date.now() - MINUTE_MS) });
+
+    await expect(run({ name: JOB_NAMES.marketClose })).resolves.toEqual({
+      closed: 0,
+      cancelled: 1,
+      skipped: 0,
+      failed: 0,
+      failures: [],
+    });
+    expect((await marketRow(due.id)).status).toBe('cancelled');
+    expect(logs.at(-1)).toMatchObject({
+      level: 30,
+      msg: 'market close scan',
+      closed: 0,
+      cancelled: 1,
+    });
+  });
+
   it('market.close with a market id closes that market only', async () => {
     const target = await createMarket(t.db, { closeAt: new Date(Date.now() - MINUTE_MS) });
     const other = await createMarket(t.db, { closeAt: new Date(Date.now() - MINUTE_MS) });
 
     const result = await run({ name: JOB_NAMES.marketClose, data: { marketId: target.id } });
-    expect(result).toMatchObject({ outcome: 'closed', marketId: target.id });
+    // Nobody traded on it: the close cancels it (#20).
+    expect(result).toMatchObject({ outcome: 'cancelled', marketId: target.id });
     expect(() => JSON.stringify(result)).not.toThrow();
-    expect((await marketRow(target.id)).status).toBe('closed');
+    expect((await marketRow(target.id)).status).toBe('cancelled');
     expect((await marketRow(other.id)).status).toBe('open');
     expect(published.map((p) => p.channel)).toEqual([marketChannel(target.id)]);
 

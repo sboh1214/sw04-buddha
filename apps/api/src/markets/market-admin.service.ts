@@ -117,6 +117,7 @@ import {
 } from './market-sources.js';
 import { readAdminMarketDisputes } from './market-dispute.js';
 import { toAdminJudgementDelays } from './market-judgement-delay.js';
+import { readMarketCancel } from './market-cancel.js';
 import { readMarketJudgement } from './market-judgement.js';
 import { readMarketPause } from './market-pause.js';
 import { readAdminRuleVersions, readMarketSupplement } from './market-supplement.js';
@@ -1573,7 +1574,8 @@ export class MarketAdminService {
    * `readMarketReview`: its request, creator, editors, same-condition markets and 검수 기록), and
    * the rule versions with who asked for and made each and the supplement requests (#80,
    * `readAdminRuleVersions`, `readMarketSupplement`: one statement each), the pauses with the
-   * next-path requests (#114, `readMarketPause`: one statement each), the judgement — the current
+   * next-path requests (#114, `readMarketPause`: one statement each), the cancel requests of a
+   * SCHEDULED market (#20, `readMarketCancel`: one statement), the judgement — the current
    * one, the registrations and whether the dispute window is undecided (#152,
    * `readMarketJudgement`, `disputeWindowSetting`; its version and dispute deadline are the public
    * shape's since #175) — the current version's 판정 이의 with how many hold the confirmation
@@ -1582,8 +1584,9 @@ export class MarketAdminService {
    * `judgementDelay` reads too, at the same `nowMs` as the card's flags). Reads through `executor`
    * so a transition returns the state it just committed; `tags` are the market's names in order
    * (`marketTagNames`) and `sources` its sources (`readMarketSources`), which every caller holds
-   * already. MarketSupplementService's, MarketPauseService's, MarketJudgementService's,
-   * MarketDisputeService's and MarketJudgementDelayService's admin writes answer with it too.
+   * already. MarketSupplementService's, MarketPauseService's, MarketCancelService's,
+   * MarketJudgementService's, MarketDisputeService's and MarketJudgementDelayService's admin writes
+   * answer with it too.
    *
    * The category's selectability is read in the same statement as its name and WITHOUT the
    * FOR SHARE locks of `readCategorySelectability`: the detail is also read on the pool (`get`),
@@ -1694,6 +1697,7 @@ export class MarketAdminService {
       review: await readMarketReview(executor, row),
       supplement: await readMarketSupplement(executor, row.id, ruleVersions),
       pause: await readMarketPause(executor, row.id),
+      cancel: await readMarketCancel(executor, row.id),
       judgement: await readMarketJudgement(
         executor,
         row,

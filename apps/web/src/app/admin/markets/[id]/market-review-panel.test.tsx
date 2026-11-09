@@ -64,6 +64,7 @@ const base: AdminMarket = {
   ruleVersions: [],
   supplement: { pending: null, log: [] },
   pause: { history: [], pending: null, log: [] },
+  cancel: { pending: null, log: [] },
   // Not judged (#152): no judgement, none waiting, the dispute window decided.
   judgementVersion: null,
   disputeDeadline: null,

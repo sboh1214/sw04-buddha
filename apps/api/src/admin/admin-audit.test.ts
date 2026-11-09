@@ -76,6 +76,10 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'POST /admin/markets/:id/pause-decisions/:requestId/approve': 'market_pause_decision_approve',
   'POST /admin/markets/:id/pause-decisions/:requestId/reject': 'market_pause_decision_reject',
   'POST /admin/markets/:id/pause-decisions/:requestId/retract': 'market_pause_decision_retract',
+  'POST /admin/markets/:id/cancel-requests': 'market_cancel_request',
+  'POST /admin/markets/:id/cancel-requests/:requestId/approve': 'market_cancel_approve',
+  'POST /admin/markets/:id/cancel-requests/:requestId/reject': 'market_cancel_reject',
+  'POST /admin/markets/:id/cancel-requests/:requestId/retract': 'market_cancel_retract',
   // #152: a judgement is a registration, then another admin's decision or its registrant's
   // retraction; only the approval also writes the market's event (`provisional`).
   'POST /admin/markets/:id/judgements': 'market_judgement_request',

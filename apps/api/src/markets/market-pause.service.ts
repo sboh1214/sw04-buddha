@@ -133,8 +133,10 @@ const END_SKIPS: Readonly<Record<EndPauseSkipReason, () => AppError>> = {
  *   `market_pause_decision` approval request (#171, ApprovalService) on the market, payload
  *   `{pauseId, path, reviewResult}`, and changes nothing; an admin other than the
  *   requester approves it (`endMarketPause`: the `resumed` or `closed` event and the pause's end,
- *   in the approval's transaction), and after COMMIT `market:status` and, for an early close, the
- *   close job cancelled (hygiene: the worker would skip a closed market). A 반려 by another admin
+ *   in the approval's transaction — for an early close of a market with no fill a person's account
+ *   is on, the `cancelled` event instead, PAUSED → CANCELLED with the result type empty, #20,
+ *   ADR-0117), and after COMMIT `market:status` and, for an early close, the close job cancelled
+ *   (hygiene: the worker would skip a closed or cancelled market). A 반려 by another admin
  *   or the requester's 철회 ends it in any status, writing nothing but the record, as #80's
  *   supplements (ADR-0101). One request waits per market at a time; the admin who paused may ask
  *   or approve (only the requester decides nothing of theirs).
@@ -338,14 +340,18 @@ export class MarketPauseService {
    * the `resumed` event, payload `{pauseId, approvalId, requestedBy, reviewResult}`, the market
    * OPEN again with its `open_at` kept; 조기 마감 — the `closed` event, payload `{closedAt, source:
    * 'early_close', …}`, the market CLOSED with `close_at` kept as the scheduled close (#80's
-   * rule-version item), and the close's own processing after it: a live order left on a market not
+   * rule-version item) — or, with no fill a person's account is on, the `cancelled` event, payload
+   * `{cancelledAt, source: 'early_close', reason, …}` with the system sentence, the market
+   * CANCELLED with its result type empty and no judgement to follow (#20, ADR-0117; ADR-0107 결정
+   * 4 '#120·#20') — and the close's own processing after it: a live order left on a market not
    * held ends 만료 at that instant (#120, ADR-0107 결정 5 '#120 조기 마감과 CLOSED 뒤 재개' — the
    * pause cancelled every order, so only a row from before #178 reaches it); and the pause's end
    * with the review result. `market_pause_decision_approve` records the request, the approver's
-   * reason and the market before and after. After COMMIT `market:status` (open or closed, the
-   * event's key), `market:book` when the end cancelled or expired any order (#179) and, for an
-   * early close, the close job under `close_at` cancelled. No `user:` event: the end only moves
-   * locks (ADR-0113 12-11).
+   * reason and the market before and after (`after.status` closed or cancelled for an early
+   * close). After COMMIT `market:status` (open, closed or cancelled, the event's key),
+   * `market:book` when the end cancelled or expired any order (#179) and, for an early close, the
+   * close job under `close_at` cancelled. No `user:` event: the end only moves locks (ADR-0113
+   * 12-11).
    */
   async approve(
     adminId: string,

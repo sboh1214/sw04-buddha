@@ -269,6 +269,7 @@ describe('read DTOs', () => {
       ],
       supplement: { pending: null, log: [] },
       pause: { history: [], pending: null, log: [] },
+      cancel: { pending: null, log: [] },
       judgement: {
         current: null,
         history: [],
@@ -369,6 +370,10 @@ describe('read DTOs', () => {
     };
     expect(adminMarketSchema.parse(paused)).toEqual(paused);
     expect(marketSchema.parse(paused)).not.toHaveProperty('pause');
+    // So is a SCHEDULED market's cancel request (#20): the admin's, in every status.
+    expect(marketSchema.parse(admin)).not.toHaveProperty('cancel');
+    const { cancel: _cancel, ...withoutCancel } = admin;
+    expect(issuePaths(adminMarketSchema.safeParse(withoutCancel))).toEqual(['cancel']);
     // The review (#78) is the admin's, in every status, and never optional.
     expect(marketSchema.parse(admin)).not.toHaveProperty('review');
     const { review: _review, ...withoutReview } = admin;
@@ -710,6 +715,7 @@ describe('read DTOs', () => {
       ruleVersions: [],
       supplement: { pending: null, log: [] },
       pause: { history: [], pending: null, log: [] },
+      cancel: { pending: null, log: [] },
       judgement: {
         current: null,
         history: [],

@@ -32,6 +32,7 @@ import {
   marketTradingRejectReason,
   priceProtectionTicksSchema,
 } from './orders.js';
+import { adminMarketCancelStateSchema } from './market-cancel.js';
 import { adminMarketPauseStateSchema } from './market-pause.js';
 import { adminMarketReviewSchema } from './market-review.js';
 import { marketRuleItemsSchema } from './market-rules.js';
@@ -945,6 +946,13 @@ export const adminMarketSchema = marketSchema
      * reason and the times, #173 item 13).
      */
     pause: adminMarketPauseStateSchema,
+    /**
+     * 시장 취소 (#20, ADR-0117), in every status: the `market_cancel` request waiting on a
+     * SCHEDULED market and every request with how it ended — one still waiting once the market
+     * opened or went back to a draft is shown for its 반려 or 철회. The public `Market` carries none
+     * of it (#24 shows the cancel's reason).
+     */
+    cancel: adminMarketCancelStateSchema,
     /**
      * 판정 (#152, ADR-0103), in every status: the current judgement, the versions a 판정 정정
      * replaced (#176, ADR-0105), the registration waiting for another admin's approval — a first

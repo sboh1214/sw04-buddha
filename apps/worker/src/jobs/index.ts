@@ -80,8 +80,14 @@ const HANDLERS: Partial<Record<string, Handler>> = {
       logger.info(result, 'market close');
       return result;
     }
-    const { closed, skipped, failed, failures } = await closeDueMarkets(db, publish);
-    return reportScan({ closed, skipped, failed }, failures, 'market close', closed, logger);
+    const { closed, cancelled, skipped, failed, failures } = await closeDueMarkets(db, publish);
+    return reportScan(
+      { closed, cancelled, skipped, failed },
+      failures,
+      'market close',
+      closed + cancelled,
+      logger,
+    );
   },
   // #152 (ADR-0103): the delayed job the API registers at a provisional result's dispute
   // deadline — a corrected one's new deadline too (#176, ADR-0105) — and again, with no delay,

@@ -8,6 +8,7 @@ import {
   createOpenMarket,
   documentSurvived,
   expect,
+  helperTraders,
   kstLocalOf,
   markDocument,
   meOf,
@@ -171,6 +172,9 @@ test.describe('판정 지연 기록', () => {
       const firstPage = await firstContext.newPage();
       await signIn(firstPage, adminAccount.email, adminAccount.password);
 
+      // The helper's members (their sign-up, once per worker) before the clock: `closeMarket`
+      // trades one pair first, and a close that passed before it would be 취소, not 마감 (#20).
+      await helperTraders(admin);
       // Closes and is judged in seconds, in New York: a visitor in Seoul reads the next review time
       // in both zones. The 사건 기한 is at the judgement too (A1).
       const dueAt = new Date(Date.now() + DUE_IN_MS).toISOString();

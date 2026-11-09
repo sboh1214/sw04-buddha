@@ -12,6 +12,7 @@ import {
   type AdminDisputeQueueItem,
   type AdminMarket,
   type AdminMarketJudgementQueueItem,
+  type AdminMarketCancelItem,
   type AdminMarketPauseDecisionItem,
   type AdminMarketReviewItem,
   type AdminMarketSupplementItem,
@@ -67,6 +68,15 @@ export const ADMIN_MARKET_SUPPLEMENTS_KEY = ['admin', 'market-supplements'] as c
  * a row shows of its market.
  */
 export const ADMIN_MARKET_PAUSE_DECISIONS_KEY = ['admin', 'market-pause-decisions'] as const;
+
+/**
+ * 시장 취소 대기 (#20, ADR-0117): `GET /admin/market-cancel-requests`, the cancel requests of
+ * SCHEDULED markets waiting for another admin, under the private `['admin']` root and a segment of
+ * its own, as the other queues: every admin write to a market asks it again (`invalidateMarket`) —
+ * a request adds a row, an approval, a 반려 and a 철회 take one, and an edit or an open changes what a
+ * row shows of its market.
+ */
+export const ADMIN_MARKET_CANCEL_REQUESTS_KEY = ['admin', 'market-cancel-requests'] as const;
 
 /**
  * 판정 승인 대기 (#152, ADR-0103): `GET /admin/market-judgements`, the judgement registrations
@@ -317,6 +327,40 @@ export function useAdminMarketPauseDecisions() {
   return useInfiniteQuery(adminMarketPauseDecisionsQueryOptions());
 }
 
+/** One page of the 시장 취소 대기 queue. */
+export interface AdminMarketCancelRequestPage {
+  items: AdminMarketCancelItem[];
+  nextCursor: string | null;
+}
+
+/**
+ * The 시장 취소 대기 queue (#20): the oldest request first, 20 per page with 더 보기 (the API's
+ * default page), as the other queues page. No filter.
+ */
+export function adminMarketCancelRequestsQueryOptions() {
+  return {
+    queryKey: ADMIN_MARKET_CANCEL_REQUESTS_KEY,
+    queryFn: async ({
+      pageParam,
+    }: {
+      pageParam: string | undefined;
+    }): Promise<AdminMarketCancelRequestPage> => {
+      const { data, meta } = unwrap(
+        await api.GET('/api/v1/admin/market-cancel-requests', {
+          params: { query: pageParam === undefined ? {} : { cursor: pageParam } },
+        }),
+      );
+      return { items: data, nextCursor: meta.nextCursor };
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last: AdminMarketCancelRequestPage) => last.nextCursor ?? undefined,
+  };
+}
+
+export function useAdminMarketCancelRequests() {
+  return useInfiniteQuery(adminMarketCancelRequestsQueryOptions());
+}
+
 /** One page of the 판정 승인 대기 queue. */
 export interface AdminMarketJudgementPage {
   items: AdminMarketJudgementQueueItem[];
@@ -463,6 +507,7 @@ function invalidateMarket(queryClient: QueryClient, id: string) {
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_REVIEWS_KEY }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_SUPPLEMENTS_KEY }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_PAUSE_DECISIONS_KEY }),
+    queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_CANCEL_REQUESTS_KEY }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_JUDGEMENTS_KEY }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_DISPUTES_KEY }),
     queryClient.invalidateQueries({

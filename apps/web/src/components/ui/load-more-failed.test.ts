@@ -134,7 +134,8 @@ describe('the notice above a 더 보기 that failed', () => {
         'app/admin/markets/[id]/admin-market-detail.tsx',
         'app/admin/markets/admin-markets.tsx',
         // 검수 대기 (#78, ADR-0099), 규칙 보충 대기 (#80, ADR-0101), 일시 중단 결정 대기 (#114,
-        // ADR-0102) and 판정 승인 대기 (#152, ADR-0103)
+        // ADR-0102), 판정 승인 대기 (#152, ADR-0103) and 시장 취소 대기 (#20, ADR-0117)
+        'app/admin/markets/reviews/admin-market-cancel-requests.tsx',
         'app/admin/markets/reviews/admin-market-judgements.tsx',
         'app/admin/markets/reviews/admin-market-pause-decisions.tsx',
         'app/admin/markets/reviews/admin-market-reviews.tsx',
@@ -238,6 +239,7 @@ describe('the notice above a 더 보기 that failed', () => {
       [
         'useAdminAccountRequests',
         'useAdminGrantCandidates',
+        'useAdminMarketCancelRequests',
         'useAdminMarketDisputes',
         'useAdminMarketJudgements',
         'useAdminMarketPauseDecisions',

@@ -7,6 +7,10 @@ import { JobsModule } from '../jobs/jobs.module.js';
 import { RealtimeModule } from '../realtime/realtime.module.js';
 import { ReleaseSettingsModule } from '../release-settings/release-settings.module.js';
 import {
+  AdminMarketCancelQueueController,
+  AdminMarketCancelsController,
+} from './admin-market-cancels.controller.js';
+import {
   AdminMarketDisputeQueueController,
   AdminMarketDisputesController,
 } from './admin-market-disputes.controller.js';
@@ -26,6 +30,7 @@ import {
 } from './admin-market-supplements.controller.js';
 import { AdminMarketsController } from './admin-markets.controller.js';
 import { MarketAdminService } from './market-admin.service.js';
+import { MarketCancelService } from './market-cancel.service.js';
 import { MarketDisputeService } from './market-dispute.service.js';
 import { MarketDisputesController, MeDisputesController } from './market-disputes.controller.js';
 import { MarketJudgementDelayService } from './market-judgement-delay.service.js';
@@ -52,7 +57,9 @@ import { RelatedMarketsService } from './related-markets.service.js';
  * `market_pause_decision` requests — 재개 and 조기 마감 of a paused market (MarketPauseService) —
  * with its routes and its 일시 중단 결정 대기 queue, and the judgement (#152, ADR-0103) its
  * `market_judgement` registrations (MarketJudgementService) with its routes and its 판정 승인 대기
- * queue. 판정 이의 (#175, ADR-0104; MarketDisputeService) are no approval kind: a member's
+ * queue, and the cancel of a SCHEDULED market (#20, ADR-0117) its `market_cancel` requests
+ * (MarketCancelService) with its routes and its 시장 취소 대기 queue. 판정 이의 (#175, ADR-0104;
+ * MarketDisputeService) are no approval kind: a member's
  * submission (MarketDisputesController) and own reads and 철회 (MeDisputesController,
  * `/me/disputes`), one admin's 기각·수용 (AdminMarketDisputesController) and the 이의 접수 list.
  * Nor is 판정 지연 기록 (#142, ADR-0106; MarketJudgementDelayService): one admin records a delayed
@@ -77,6 +84,8 @@ import { RelatedMarketsService } from './related-markets.service.js';
     AdminMarketSupplementQueueController,
     AdminMarketPausesController,
     AdminMarketPauseDecisionQueueController,
+    AdminMarketCancelsController,
+    AdminMarketCancelQueueController,
     AdminMarketJudgementsController,
     AdminMarketJudgementQueueController,
     AdminMarketJudgementDelaysController,
@@ -90,6 +99,7 @@ import { RelatedMarketsService } from './related-markets.service.js';
     MarketAdminService,
     MarketSupplementService,
     MarketPauseService,
+    MarketCancelService,
     MarketJudgementService,
     MarketJudgementDelayService,
     MarketDisputeService,

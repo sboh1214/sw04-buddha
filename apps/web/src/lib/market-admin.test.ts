@@ -2,7 +2,9 @@ import { readFileSync } from 'node:fs';
 import {
   AUDIT_FAILURE_KINDS,
   CATEGORY_UNSELECTABLE_REASONS,
+  MARKET_CANCEL_SOURCES,
   MARKET_EVENT_TYPES,
+  MARKET_NO_FILL_CANCEL_REASON,
   MARKET_PAUSE_REASONS,
   MARKET_PAUSE_REVIEW_RESULTS,
   MARKET_RESULTS,
@@ -26,6 +28,7 @@ import { formatKst } from './datetime';
 import {
   AUDIT_FAILURE_KIND_LABEL,
   CLOSING_SOON_MS,
+  MARKET_CANCEL_SOURCE_LABEL,
   MARKET_EVENT_LABEL,
   MARKET_RESULT_LABEL,
   MARKET_STATUS_LABEL,
@@ -726,6 +729,67 @@ describe('marketEventRows', () => {
       '98틱',
       '미정',
     ]);
+  });
+
+  it('reads a 취소 by its path, instant and reason, never by an account id (#20)', () => {
+    // The `cancelled` event (ADR-0117): the worker's close, an approved early close (with its
+    // review result) or an approved cancel of a SCHEDULED market (the request's reason).
+    const cancelledAt = '2026-11-29T15:00:00.000Z';
+    const sentence = MARKET_NO_FILL_CANCEL_REASON;
+    expect(MARKET_EVENT_LABEL.cancelled).toBe('취소');
+    expect(MARKET_EVENT_LABEL.cancelled).toBe(MARKET_STATUS_LABEL.cancelled);
+    expect(marketEventLabel('cancelled', { cancelledAt, source: 'job', reason: sentence })).toBe(
+      '취소',
+    );
+    expect(marketEventRows('cancelled', { cancelledAt, source: 'job', reason: sentence })).toEqual([
+      { label: copy.eventCancelSource, value: '거래 마감' },
+      { label: copy.eventCancelledAt, value: formatKst(cancelledAt) },
+      { label: copy.eventCancelReason, value: sentence },
+    ]);
+    const ids = {
+      pauseId: 'a1b2c3d4-0000-4000-8000-000000000001',
+      approvalId: 'a1b2c3d4-0000-4000-8000-000000000002',
+      requestedBy: 'requester-account-id',
+    };
+    const early = marketEventRows('cancelled', {
+      ...ids,
+      cancelledAt,
+      source: 'early_close',
+      reason: sentence,
+      reviewResult: 'not_judgeable',
+    });
+    expect(early).toEqual([
+      { label: copy.eventCancelSource, value: '조기 마감' },
+      { label: copy.eventCancelledAt, value: formatKst(cancelledAt) },
+      { label: copy.eventCancelReason, value: sentence },
+      { label: '검토 결과', value: '판정 불가' },
+    ]);
+    const operator = marketEventRows('cancelled', {
+      approvalId: ids.approvalId,
+      requestedBy: ids.requestedBy,
+      cancelledAt,
+      source: 'operator',
+      reason: '출처가 사라졌습니다.',
+    });
+    expect(operator).toEqual([
+      { label: copy.eventCancelSource, value: '운영자 취소' },
+      { label: copy.eventCancelledAt, value: formatKst(cancelledAt) },
+      { label: copy.eventCancelReason, value: '출처가 사라졌습니다.' },
+    ]);
+    for (const row of [...(early ?? []), ...(operator ?? [])]) {
+      expect(row.value).not.toContain(ids.requestedBy);
+      expect(row.value).not.toContain(ids.approvalId);
+    }
+    expect(Object.keys(MARKET_CANCEL_SOURCE_LABEL)).toEqual([...MARKET_CANCEL_SOURCES]);
+    // Not its shape: the JSON line.
+    for (const bad of [
+      { cancelledAt, source: 'admin', reason: sentence },
+      { cancelledAt, source: 'job' },
+      { source: 'job', reason: sentence },
+      null,
+    ]) {
+      expect(marketEventRows('cancelled', bad)).toBeUndefined();
+    }
   });
 
   it('reads a 판정 지연 기록 as its reason, next review time and the status it was made on (#142)', () => {

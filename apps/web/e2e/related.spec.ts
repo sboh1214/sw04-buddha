@@ -25,10 +25,12 @@ import {
  *
  * Which statuses are shown (never a cancelled market or one whose result is 무효, never a draft
  * or one in review — ADR-0093 decision 3, the #174 row) and the 추천 order are the API's
- * integration tests' (related-markets.controller.test.ts): no product path cancels a market yet
- * (#20), a 무효 judgement (#152) is never approved here — a confirmed 무효 stays 지급 중 until #126
- * pays it (ADR-0103), on an e2e database kept between runs — and the order needs fills, which
- * no spec here makes (orders.spec.ts trades on its own markets, #119).
+ * integration tests' (related-markets.controller.test.ts): no spec here sets up a cancelled market
+ * (cancel.spec.ts and pause.spec.ts drive the paths to CANCELLED, #20), a 무효 judgement (#152) is
+ * never approved here — a confirmed 무효 stays 지급 중 until #126 pays it (ADR-0103), on an e2e
+ * database kept between runs — and the order needs fills on the markets it ranks, which no spec
+ * here makes (orders.spec.ts trades on its own markets, #119; `closeMarket` trades the helper
+ * members' one pair, but only on the market it closes, #20).
  */
 
 const related = (page: Page) => page.getByTestId('market-related');

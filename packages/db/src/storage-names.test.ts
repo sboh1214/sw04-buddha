@@ -9,6 +9,7 @@ import {
   LEDGER_ENTRY_TYPES,
   LEDGER_REF_TYPES,
   LINK_FLAG_REASONS,
+  MARKET_CANCEL_APPROVAL_KIND,
   MARKET_DISPUTE_STATUSES,
   MARKET_EVENT_TYPES,
   MARKET_JUDGEMENT_APPROVAL_KIND,
@@ -112,13 +113,14 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   // #171's two-person rule: each consumer's kinds — the account restriction's four (#139) the
   // first, the market review (#78), the rule supplement (#80), a paused market's next path (#114),
   // a market's judgement — a CLOSED one's (#152) and a PROVISIONAL one's correction (#176), one
-  // kind; #130's bot control and the rest add theirs here.
+  // kind — and a SCHEDULED market's cancel (#20); #130's bot control and the rest add theirs here.
   'approval_requests.kind': [
     ...Object.values(ACCOUNT_RESTRICTION_APPROVAL_KINDS),
     MARKET_REVIEW_APPROVAL_KIND,
     MARKET_SUPPLEMENT_APPROVAL_KIND,
     MARKET_PAUSE_DECISION_APPROVAL_KIND,
     MARKET_JUDGEMENT_APPROVAL_KIND,
+    MARKET_CANCEL_APPROVAL_KIND,
   ],
   // #80: the items a rule version changed (a text[] of the version items' keys, held by a CHECK).
   'market_rule_versions.changed_items': RULE_VERSION_ITEMS,
@@ -635,6 +637,26 @@ describe('excluded features in stored data (#113)', () => {
     ).toEqual([]);
     // The personal table it is (a recorder's), holding no personal probability (the test below).
     expect(personalTables().map((table) => table.name)).toContain('market_judgement_delays');
+  });
+
+  it('names the market cancel’s stored values, each read above (#20)', () => {
+    // ADR-0117, no migration: the SCHEDULED cancel's approval kind, the one market event type of
+    // every path to CANCELLED and the cancel's admin action types — varchar values the test above
+    // reads for an excluded feature ('cancel', 'cancelled' name none). A cancelling pause ends
+    // with the kinds it had (`early_closed`, `closed_at_close`): no new one.
+    expect(storageNames()).toEqual(
+      expect.arrayContaining([
+        { where: 'approval_requests.kind value', name: 'market_cancel' },
+        { where: 'market_events.type value', name: 'cancelled' },
+        ...[
+          'market_cancel_request',
+          'market_cancel_approve',
+          'market_cancel_reject',
+          'market_cancel_retract',
+        ].map((name) => ({ where: 'admin_actions.type value', name })),
+      ]),
+    );
+    expect(MARKET_PAUSE_END_KINDS).toEqual(['resumed', 'early_closed', 'closed_at_close']);
   });
 
   it('names the account type, its values and its index, each read above (#115)', () => {

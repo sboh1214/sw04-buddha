@@ -23,10 +23,11 @@ import {
  * itself is a manual run recorded in ADR-0032).
  *
  * There is no way to trade on screen until the order panel lands (#66; D13 — the API takes
- * orders since #119, orders.spec.ts, on its own markets): a market here has no fill, so
+ * orders since #119, orders.spec.ts, on its own markets): an open market here has no fill, so
  * its price reads 체결 없음, its chart is empty (N02 §5) and its order area says 거래 준비 중 — the
  * desktop column, and below md the sheet its YES 매수 · NO 매수 bar opens for a member, a sign-in
- * prompt in that sheet for a signed-out visitor (#122, ADR-0067).
+ * prompt in that sheet for a signed-out visitor (#122, ADR-0067). A market `closeMarket` closes
+ * has the helper members' one pair, traded just before the close so it stays CLOSED (#20).
  * What a real fill moves — the live price, the chart's line and its keyboard readout — comes back
  * with the order panel and its screen tests (#189); the priced header alone (YES, its move's
  * badge, the NO complement) is drawn here from the API's answers with a price put in.

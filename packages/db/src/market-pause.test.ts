@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import {
+  MARKET_NO_FILL_CANCEL_REASON,
   MARKET_PAUSE_DECISION_APPROVAL_KIND,
   MARKET_STATUSES,
   type MarketPausePath,
   type MarketPauseReviewResult,
 } from '@buddha/shared';
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   currentMarketPause,
@@ -16,11 +17,13 @@ import {
   type EndMarketPauseInput,
   type PauseMarketInput,
 } from './market-pause.js';
+import { ledgerHeldMarketIds } from './ledger-held-markets.js';
 import { lockMarketOrders } from './order-cancel.js';
 import { approvalRequests, marketEvents, marketPauses, markets, orders } from './schema/index.js';
 import {
   closeMarketEarly,
   createApprovalRequest,
+  createFill,
   createMarket,
   createMarketPause,
   createOpenedMarket,
@@ -359,6 +362,8 @@ describe.skipIf(!hasTestDb())('market pauses (#114, docker test profile)', () =>
     it('closes early: the closed event with source early_close, the close time kept, the pause ended', async () => {
       // 판정 불가 (#173 item 4): the early close only; the judgement applies the VOID rule (#152).
       const { market: paused, pause: lasting } = await createPausedMarket(t.db);
+      // A fill a person's account is on, from before the pause: CLOSED, not CANCELLED (#20).
+      await createFill(t.db, { marketId: paused.id, amountCoin: 50n, qty: 1 });
       const { request, requestedBy, approverId, ending } = await approvedDecision(
         paused.id,
         'early_close',
@@ -401,6 +406,54 @@ describe.skipIf(!hasTestDb())('market pauses (#114, docker test profile)', () =>
       });
     });
 
+    it('cancels early with no fill a person’s account is on, whatever the review result (#20)', async () => {
+      // ADR-0107 결정 4 '#120·#20': PAUSED → CANCELLED, the result type empty, no judgement — the
+      // system sentence as the reason, the approver the actor, the pause ended `early_closed`.
+      for (const reviewResult of ['not_judgeable', 'judgeable'] as const) {
+        const { market: paused, pause: lasting } = await createPausedMarket(t.db);
+        const { request, requestedBy, approverId, ending } = await approvedDecision(
+          paused.id,
+          'early_close',
+          reviewResult,
+        );
+        const { now, result } = await end(paused.id, ending);
+        if (!result.ended) throw new Error('ended');
+        expect((await eventsOf(paused.id)).at(-1)).toEqual({
+          id: result.eventId,
+          marketId: paused.id,
+          type: 'cancelled',
+          actorId: approverId,
+          fromStatus: 'paused',
+          toStatus: 'cancelled',
+          payload: {
+            cancelledAt: now.toISOString(),
+            source: 'early_close',
+            reason: MARKET_NO_FILL_CANCEL_REASON,
+            pauseId: lasting.id,
+            approvalId: request.id,
+            requestedBy,
+            reviewResult,
+          },
+          createdAt: now,
+        });
+        expect(await rowOf(paused.id)).toEqual({
+          ...paused,
+          status: 'cancelled',
+          statusEventId: result.eventId,
+          updatedAt: now,
+        });
+        expect(result.market).toMatchObject({ status: 'cancelled', resolvedResult: null });
+        expect(result.pause).toMatchObject({
+          endKind: 'early_closed',
+          reviewResult,
+          endedAt: now,
+          endedBy: approverId,
+          endEventId: result.eventId,
+          endApprovalId: request.id,
+        });
+      }
+    });
+
     it.each([
       ['early_result', 'resume'],
       ['ledger_failure', 'early_close'],
@@ -410,7 +463,8 @@ describe.skipIf(!hasTestDb())('market pauses (#114, docker test profile)', () =>
       const { result } = await end(paused.id, ending);
       expect(result).toMatchObject({
         ended: true,
-        market: { status: path === 'resume' ? 'open' : 'closed' },
+        // No fill: the early close cancels (#20), the held market's too, after its recovery.
+        market: { status: path === 'resume' ? 'open' : 'cancelled' },
         pause: {
           reason,
           reviewResult: null,
@@ -456,9 +510,10 @@ describe.skipIf(!hasTestDb())('market pauses (#114, docker test profile)', () =>
       expect(await rowOf(paused.id)).toEqual(paused);
       expect(await currentMarketPause(t.db, paused.id)).toEqual(lasting);
       const before = new Date(closeAt.getTime() - 1);
+      // No fill a person's account is on: the early close cancels (#20).
       expect((await end(paused.id, ending, before)).result).toMatchObject({
         ended: true,
-        market: { status: 'closed', closeAt },
+        market: { status: 'cancelled', closeAt },
         pause: { endedAt: before },
       });
     });
@@ -682,8 +737,11 @@ describe.skipIf(!hasTestDb())('market pauses (#114, docker test profile)', () =>
         expect(result.cancelled.cancelled).toEqual([
           { ...row, status: 'cancelled', cancelReason: 'paused', endedAt: now, updatedAt: now },
         ]);
-        // The held market's 조기 마감 is its recovery: 취소 완료(일시 중단) first, no 만료 (#120).
+        // The held market's 조기 마감 is its recovery: 취소 완료(일시 중단) first, no 만료 (#120),
+        // then CANCELLED with no fill (#20) — held no longer, as after a resume.
         expect(result.expired).toEqual({ expired: [], held: [], touched: { positions: [] } });
+        expect(result.market.status).toBe(path === 'resume' ? 'open' : 'cancelled');
+        expect(await ledgerHeldMarketIds(t.db, [market.id])).toEqual(new Set());
         expect((await eventsOf(market.id)).at(-1)).toMatchObject({
           id: result.eventId,
           createdAt: now,
@@ -738,7 +796,8 @@ describe.skipIf(!hasTestDb())('market pauses (#114, docker test profile)', () =>
       expect(result.expired.expired).toEqual([
         { ...row, status: 'expired', endedAt: now, updatedAt: now },
       ]);
-      expect(result.market.status).toBe('closed');
+      // The order never filled: CANCELLED (#20), with the same 만료.
+      expect(result.market.status).toBe('cancelled');
       expect(await lockedOf(a)).toBe(0n);
       expect(await checkOrderInvariants(t.db)).toEqual([]);
     });
@@ -929,6 +988,36 @@ describe.skipIf(!hasTestDb())('market pauses (#114, docker test profile)', () =>
       expect(
         await t.db.select().from(approvalRequests).where(eq(approvalRequests.targetId, market.id)),
       ).toHaveLength(1);
+    });
+
+    it('closeMarketEarly records a person’s fill first unless told not to, then it cancels (#20)', async () => {
+      const traded = await createMarket(t.db);
+      const before = await closeMarketEarly(t.db, traded.id);
+      expect(before.market.status).toBe('closed');
+      // One records-only fill, and only when the market had none.
+      const again = await createMarket(t.db);
+      await createFill(t.db, { marketId: again.id, amountCoin: 30n, qty: 1 });
+      expect((await closeMarketEarly(t.db, again.id)).market.status).toBe('closed');
+      const fillsOf = async (marketId: string) =>
+        (
+          await t.db.execute<{ n: number }>(
+            sql`SELECT count(*)::int AS n FROM fills WHERE market_id = ${marketId}`,
+          )
+        ).rows[0]!.n;
+      expect([await fillsOf(traded.id), await fillsOf(again.id)]).toEqual([1, 1]);
+      const empty = await createMarket(t.db);
+      const cancelled = await closeMarketEarly(t.db, empty.id, { humanFill: false });
+      expect(cancelled.market).toMatchObject({
+        status: 'cancelled',
+        statusEventId: cancelled.eventId,
+        resolvedResult: null,
+      });
+      expect(cancelled.pause.endKind).toBe('early_closed');
+      expect((await eventsOf(empty.id)).at(-1)).toMatchObject({
+        type: 'cancelled',
+        payload: { source: 'early_close', reason: MARKET_NO_FILL_CANCEL_REASON },
+      });
+      expect(await fillsOf(empty.id)).toBe(0);
     });
   });
 });

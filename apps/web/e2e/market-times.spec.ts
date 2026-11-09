@@ -16,6 +16,7 @@ import {
   fillRuleItemInputs,
   fillTimeInputs,
   freshTag,
+  helperTraders,
   kstLocalOf,
   leaveNoSupplement,
   openThroughReview,
@@ -802,6 +803,9 @@ test.describe('시장 시간', () => {
     page,
     request,
   }) => {
+    // The helper's members (their sign-up, once per worker) before the clock: `closeMarket`
+    // trades one pair first, and a close that passed before it would be 취소, not 마감 (#20).
+    await helperTraders(admin);
     // Closes and is judged in 25 seconds: room for making it and opening it through the review,
     // which needs the close ahead, and then a short wait. The 사건 기한 is at the judgement too (A1).
     const dueAt = new Date(Date.now() + 25_000).toISOString();

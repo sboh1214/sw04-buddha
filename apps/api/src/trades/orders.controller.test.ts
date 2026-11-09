@@ -32,6 +32,7 @@ import {
   resumeMarket,
   setReleaseSetting,
   TEST_PRICE_PROTECTION_TICKS,
+  tradeOnce,
 } from '@buddha/db/test';
 import {
   ORDER_ACCEPTING_SETTING,
@@ -1506,7 +1507,8 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
     const expectSound = async () => expect(await checkOrderInvariants(t.db)).toEqual([]);
     /**
      * The worker's close at `close_at` (`closeMarketAtClose`, #120): the close moved a minute
-     * back, then OPEN or PAUSED → CLOSED with every live order ended 만료 (a held market's kept).
+     * back, then OPEN or PAUSED → CLOSED with every live order ended 만료 (a held market's kept) —
+     * CANCELLED instead when no fill a person's account is on happened (#20; `tradeOnce` first).
      */
     async function workerClose(marketId: string) {
       await passMarketClose(t.db, marketId);
@@ -1679,6 +1681,8 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
       await open();
       const held = placed(await send(a, { qty: 2 })).order;
       const ended = placed(await send(a, { timeInForce: 'ioc', limitPriceCoin: 99 })).order;
+      // Two other members' pair, so the close below is CLOSED, not CANCELLED (#20).
+      await tradeOnce(t.db, market.id);
       await createMarketPause(t.db, { marketId: market.id, reason: 'ledger_failure' });
       const before = await orderRow(held.id);
       const refuse = async () => {
@@ -1693,14 +1697,16 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
       // An ended order there answers its final state.
       expect(await cancelled(a, ended.id)).toEqual(ended);
       // Closed at its close before the recovery: still held.
-      await workerClose(market.id);
+      expect((await workerClose(market.id)).status).toBe('closed');
       await refuse();
 
       // A CLOSED market not held: the close ended the order 만료 at its instant (#120), and the
       // owner's cancel answers it in that final state — 200, nothing released, nothing published.
       const other = await createMarket(t.db);
       const resting = placed(await send(a, { qty: 3 }, { marketId: other.id })).order;
+      await tradeOnce(t.db, other.id);
       const done = await workerClose(other.id);
+      expect(done.status).toBe('closed');
       const expired = await orderRow(resting.id);
       expect(expired).toMatchObject({ status: 'expired', cancelReason: null });
       const coin = await balanceOf(t.db, a.id);

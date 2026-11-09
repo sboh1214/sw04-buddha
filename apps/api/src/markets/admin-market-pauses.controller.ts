@@ -35,14 +35,14 @@ import { MarketPauseService } from './market-pause.service.js';
  * 거래 일시 중단·재개·조기 마감 (#114, ADR-0102; ADR-0093 decision 1 #173 items 1–4): one admin
  * pauses an OPEN market with a reason (the three of #173 item 3), a note and — for an early result
  * — when it was published; then one admin asks for the next path, 재개 (PAUSED → OPEN) or 조기 마감
- * (PAUSED → CLOSED), and another approves it. An early end of trading is this, never a one-admin
- * close (the interim `POST …/close` is gone). The decisions name the request in the path
- * (`:requestId`), as #80's do: a market has many over its life, one waiting at a time. Each write
- * answers the admin detail (`AdminMarket`, its `pause` among it). Guards run in order: SessionGuard
- * (401 without a session, 403 for a foreign Origin on a mutation), AdminGuard (403 for a member),
- * OnboardedGuard (409 ONBOARDING_REQUIRED, ADR-0072). Every write names the admin on screen
- * (`expectedAccountId`, ADR-0092), refused before anything is read when it is not the cookie's, and
- * writes its `admin_actions` row (admin-audit.test).
+ * (PAUSED → CLOSED, or → CANCELLED when no person filled, #20), and another approves it. An early
+ * end of trading is this, never a one-admin close (the interim `POST …/close` is gone). The
+ * decisions name the request in the path (`:requestId`), as #80's do: a market has many over its
+ * life, one waiting at a time. Each write answers the admin detail (`AdminMarket`, its `pause`
+ * among it). Guards run in order: SessionGuard (401 without a session, 403 for a foreign Origin on
+ * a mutation), AdminGuard (403 for a member), OnboardedGuard (409 ONBOARDING_REQUIRED, ADR-0072).
+ * Every write names the admin on screen (`expectedAccountId`, ADR-0092), refused before anything is
+ * read when it is not the cookie's, and writes its `admin_actions` row (admin-audit.test).
  */
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -121,7 +121,8 @@ export class AdminMarketPausesController {
     summary:
       'Approve a waiting next path (승인) by an admin other than its requester, with a reason: ' +
       'the market resumes trading (open) or closes early (closed; the scheduled close is kept ' +
-      'and the judgement follows), the pause ends, and the status is published',
+      'and the judgement follows — or cancelled, with no result and no judgement, when no ' +
+      'person filled), the pause ends, and the status is published',
   })
   @ApiData(adminMarketSchema)
   // VALIDATION_ERROR names `reason` from the body, then `requestId` 'unknown' (no next-path request
