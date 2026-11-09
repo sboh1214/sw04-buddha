@@ -1,14 +1,11 @@
 import {
   clockTimestamp,
-  holderLedgerAccount,
-  ledgerKeys,
-  lockLedgerAccounts,
   lockMarket,
-  recordLedgerEntry,
+  reconcileMarketSettlement,
+  settleMarketPositions,
   schema,
   transitionMarket,
   type Db,
-  type LedgerAccountRef,
 } from '@buddha/db';
 import {
   MARKET_SCAN_BATCH_MAX,
@@ -16,21 +13,18 @@ import {
   SETTLEMENT_STEPS,
   marketChannel,
   serializeCoinAmount,
-  settle,
   userChannel,
   type MarketStatusEvent,
-  type Outcome,
   type SettlementStep,
   type UserRealtimeEvent,
 } from '@buddha/shared';
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { asc, eq, inArray, sql } from 'drizzle-orm';
 import { type Logger } from 'pino';
 import { type Publish } from '../realtime.js';
 import { messageOf, runScan, type ScanFailure } from './scan.js';
 
 /** The handle `db.transaction` hands its callback; @buddha/db exports no alias for it. */
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
-type MarketRow = typeof schema.markets.$inferSelect;
 type PositionRow = typeof schema.positions.$inferSelect;
 type BalanceRow = typeof schema.balances.$inferSelect;
 
@@ -46,11 +40,11 @@ export type FinalizeResult =
       marketId: string;
       statusEventId: number;
       settledAt: Date;
-      /** Unsettled position rows closed out. */
+      /** All reconciled position rows, including previously retired zero rows. */
       positions: number;
       /** Distinct accounts among them. */
       settledAccounts: number;
-      /** Accounts that received a SETTLEMENT_PAYOUT (held the winning outcome with qty > 0). */
+      /** Accounts that received a SETTLEMENT_PAYOUT, including either outcome for VOID. */
       paidAccounts: number;
       paidCoin: bigint;
     }
@@ -83,164 +77,13 @@ interface Settlement {
   ledgerEntryId?: number;
 }
 
-/** What the `coin` step closed out: the `finalized` payload's counts and the publishes. */
+/** The coin step result; only fresh settlements are published after commit. */
 interface CoinStep {
   positions: number;
   settledAccounts: number;
   paidAccounts: number;
   paidCoin: bigint;
   settlements: Settlement[];
-}
-
-/**
- * The `coin` settlement step (PLAN 5.5 정산): every unsettled position of the market is closed
- * out with the shared `settle()` accounting (PLAN 5.4 — the winning outcome is paid qty × 100 Coin,
- * both outcomes end at qty 0, cost 0, `settled`), and each payout is one SETTLEMENT_PAYOUT event
- * from the market's collateral to the holder's ledger account (#116, ADR-0109: a person's own, or
- * the market's 마켓메이커 자금 for the 운영 마켓메이커's rows — `holderLedgerAccount`), written by
- * `recordLedgerEntry` with its balance changes. The interim payout until #126 reworks it (VOID's
- * 50/50, the settlement records); with no pair minted before order intake opens it pays nothing in
- * production (#119 registers `order.accepting` closed, and the owner opens it once #126 and #93 are
- * deployed, ADR-0107 결정 3). A row a live sell order still locks (`locked_qty`, #118) is not closed
- * out: the qty-0 UPDATE fails `positions_locked_qty_check`, the step fails whole, and the market
- * stays SETTLING until the lock is released (ADR-0107 결정 4 #178 row). The close expires every
- * live order and releases its lock (#120, ADR-0115), so a market reaches settlement with a resting
- * sell only when held for a ledger failure, until #93's recovery ends it, or closed before #120
- * with a leftover sell (ADR-0115 10-14, none in production), until its owner's cancel (ADR-0113
- * 12-9) releases it; the next attempt then finishes. #126 replaces this with its own check.
- *
- *  - positions FOR UPDATE in (user_id, outcome) order, then every ledger account the step pays
- *    from or into locked at once, ascending (`lockLedgerAccounts`, the write API's lock order),
- *    then the clock once after the last lock — so every payout sorts after any other write of
- *    its account that committed while this transaction waited (A-M3-14), and the step, its
- *    payouts and the `settled` transition share one instant;
- *  - the collateral must hold every payout before the first is made: a short collateral (a
- *    position the ledger never collateralised, or Coin taken out of it) fails the step whole,
- *    rather than paying some holders and leaving the rest — a partial settlement nothing else
- *    understands. The step is recorded `failed` with the reason (`finalizeMarket`) and #93's
- *    대사 정정 is what closes the gap;
- *  - each payout keyed by the settlement key (market, judgement version, holder, outcome —
- *    `ledgerKeys.settlement`), so a payout recorded once is never made twice even if the
- *    `settled = false` filter, the step's own guard, were ever bypassed.
- *
- * Returns the step's instant, which the step row's `completed_at` and the `settled` transition
- * carry.
- */
-async function runCoinStep(
-  tx: Tx,
-  market: MarketRow,
-  result: Outcome,
-): Promise<CoinStep & { at: Date }> {
-  const marketId = market.id;
-  // Held FOR UPDATE for the rest of the transaction; only ever written under this market's
-  // lock, so the SELECT never waits.
-  const holders = await tx
-    .select()
-    .from(schema.positions)
-    .where(and(eq(schema.positions.marketId, marketId), eq(schema.positions.settled, false)))
-    .orderBy(asc(schema.positions.userId), asc(schema.positions.outcome))
-    .for('update');
-  const closing = holders.map((position) => ({
-    position,
-    after: settle(position, position.outcome === result),
-  }));
-  const winners = closing.filter(({ after }) => after.payoutCoin > 0n);
-
-  const collateral: LedgerAccountRef = { kind: 'market_collateral', marketId };
-  // Each holder's ledger account: a person's own, or the market's 마켓메이커 자금.
-  const holderAccounts = new Map<string, LedgerAccountRef>();
-  for (const { position } of closing) {
-    if (!holderAccounts.has(position.userId)) {
-      holderAccounts.set(position.userId, await holderLedgerAccount(tx, position.userId, marketId));
-    }
-  }
-  const payTo = new Map(
-    winners.map(({ position }) => [position.userId, holderAccounts.get(position.userId)!]),
-  );
-  const owedCoin = winners.reduce((sum, { after }) => sum + after.payoutCoin, 0n);
-  // A market judged by ADR-0046's interim route before #152 has no judgement version (D4); none
-  // is left after #116's wipe, and the key needs one.
-  const judgementVersion = market.judgementVersion;
-  if (winners.length > 0) {
-    if (judgementVersion === null) {
-      throw new Error(`Market ${marketId} has no judgement version to key its payouts by`);
-    }
-    const [held] = await lockLedgerAccounts(tx, [collateral, ...payTo.values()]);
-    if (held!.balance.availableCoin < owedCoin) {
-      throw new Error(
-        `Market ${marketId}'s collateral holds ${String(held!.balance.availableCoin)} Coin, short of its ${String(owedCoin)} Coin payout`,
-      );
-    }
-  }
-  const now = await clockTimestamp(tx);
-
-  const settlements: Settlement[] = [];
-  const settledAccounts = new Set<string>();
-  const paidAccounts = new Set<string>();
-  let paidCoin = 0n;
-  for (const { position, after } of closing) {
-    settledAccounts.add(position.userId);
-    let balance: BalanceRow | undefined;
-    let ledgerEntryId: number | undefined;
-    if (after.payoutCoin > 0n) {
-      const paid = await recordLedgerEntry(tx, {
-        type: 'SETTLEMENT_PAYOUT',
-        amountCoin: after.payoutCoin,
-        from: collateral,
-        to: payTo.get(position.userId)!,
-        refType: 'market',
-        refId: marketId,
-        idempotencyKey: ledgerKeys.settlement(
-          marketId,
-          judgementVersion!,
-          position.userId,
-          position.outcome,
-        ),
-        memo: `정산 지급: ${market.title}`,
-        at: now,
-      });
-      // `duplicate`: this key was paid before (a row put back to unsettled by hand) — nothing
-      // moves again, and the row is closed out below all the same.
-      if (paid.outcome === 'recorded') {
-        balance = paid.to!;
-        ledgerEntryId = paid.entry.id;
-        paidAccounts.add(position.userId);
-        paidCoin += after.payoutCoin;
-      }
-    }
-    // `version` bumps by itself (`$onUpdate` on the column): this UPDATE goes through the
-    // ORM, and the returned row carries the new value the `user:position` event needs.
-    const [updated] = await tx
-      .update(schema.positions)
-      .set({
-        qty: after.qty,
-        costBasisCoin: after.costBasisCoin,
-        realizedPnlCoin: after.realizedPnlCoin,
-        settled: true,
-        updatedAt: now,
-      })
-      .where(
-        and(
-          eq(schema.positions.userId, position.userId),
-          eq(schema.positions.marketId, marketId),
-          eq(schema.positions.outcome, position.outcome),
-        ),
-      )
-      .returning();
-    if (!updated) throw new Error('Position update failed');
-    if (holderAccounts.get(position.userId)!.kind === 'user') {
-      settlements.push({ position: updated, balance, ledgerEntryId });
-    }
-  }
-
-  return {
-    at: now,
-    positions: holders.length,
-    settledAccounts: settledAccounts.size,
-    paidAccounts: paidAccounts.size,
-    paidCoin,
-    settlements,
-  };
 }
 
 /**
@@ -280,17 +123,16 @@ async function completeStep(
  * written in a transaction of its own — `failed`, `attempts` + 1, `messageOf(err)` cut to
  * SETTLEMENT_STEP_ERROR_MAX (a database error's SQLSTATE and driver message first, so the cut
  * keeps the reason, not just the failed SQL) — on the step that was running, or, when the throw
- * came before any step started (the "no result" and VOID invariants, a lock or connection
- * error), on the first step that is not `done`. That is what lets an operator see why a market
+ * came before any step started (a missing result, lock or connection error), on the first
+ * unfinished step. A failed final reconciliation is recorded on `coin` even when it is done. That is what lets an operator see why a market
  * stays `settling` (ADR-0093 decision 1 item 14) without the worker's logs; the per-minute scan
  * retries it with no cap.
  *
  * Under the market lock like every writer of market state, and only for a market that is
  * `settling`: an unknown id has nowhere to record; a market still `resolved` started no payout
  * (its resolved → settling is what failed, and the next run tries it again); and a market
- * another run settled since the rollback (the lock was released with it) is done — so is the
- * `status <> 'done'` guard, which also keeps a finished step finished if a row ever disagrees
- * with the market. Best effort: a failure here is logged and swallowed, and the caller rethrows
+ * another run settled since the rollback (the lock was released with it) is done. A completed step keeps its status and completion instant when reconciliation
+ * fails: its payout must never be repeated; only the error and attempt count change. Best effort: a failure here is logged and swallowed, and the caller rethrows
  * the ORIGINAL error, which is the one the BullMQ job and the scan must report.
  */
 async function recordStepFailure(
@@ -319,8 +161,7 @@ async function recordStepFailure(
           .where(eq(steps.marketId, marketId))
           .for('update');
         const done = new Set(rows.filter((row) => row.status === 'done').map((row) => row.step));
-        step = SETTLEMENT_STEPS.find((candidate) => !done.has(candidate));
-        if (step === undefined) return;
+        step = SETTLEMENT_STEPS.find((candidate) => !done.has(candidate)) ?? 'coin';
       }
       const at = await clockTimestamp(tx);
       const lastError = messageOf(err).slice(0, SETTLEMENT_STEP_ERROR_MAX);
@@ -337,8 +178,12 @@ async function recordStepFailure(
         })
         .onConflictDoUpdate({
           target: [steps.marketId, steps.step],
-          set: { status: 'failed', attempts: sql`${steps.attempts} + 1`, lastError, updatedAt: at },
-          setWhere: sql`${steps.status} <> 'done'`,
+          set: {
+            status: sql`CASE WHEN ${steps.status} = 'done' THEN 'done' ELSE 'failed' END`,
+            attempts: sql`${steps.attempts} + 1`,
+            lastError,
+            updatedAt: at,
+          },
         });
     });
   } catch (recordErr) {
@@ -356,8 +201,7 @@ async function recordStepFailure(
  * status back with it. Under the market lock with the status read FOR UPDATE after it, like
  * every status writer (`transitionMarket`); `actorId` is null (the worker acted) and the payload
  * says `source: 'job'`, as the close does. The result is not checked here: a `resolved` market
- * with no result or a VOID one still starts its payout, and the step transaction's invariants
- * fail it loudly in `settling`, recorded on the step like any other failure.
+ * with no result still starts its payout, and the step transaction's invariant fails it loudly in `settling`, recorded on the step like any other failure.
  *
  * Returns the `market:status` to publish after COMMIT, or undefined when the market was not
  * `resolved` (already `settling`, or any status the step transaction skips). An unknown id
@@ -420,12 +264,10 @@ async function startSettling(db: Db, marketId: string): Promise<MarketStatusEven
  * regardless. A throw in the step transaction rolls it back — the market stays `settling`
  * (item 14) — and the attempt is then recorded on the step (`recordStepFailure`) and the error
  * rethrown, so the job fails and the next run (the job's retry, or the per-minute scan) does the
- * steps again from the start. Two results throw before any step runs, so the job fails loudly
- * instead of settling every holder as a loser: none (the approval writes the result with the
- * PROVISIONAL status, and the confirmation keeps it), and VOID — its 50/50 payout (ADR-0093
- * decision 1 item 9) is not `settle(won)`'s and belongs to #126. #152's judgement may be VOID,
- * which reaches here after its dispute window and stays `settling` with its step failed until #126
- * pays it (ADR-0095 8-5, ADR-0103).
+ * steps again from the start. The DB settlement operation pays YES/NO at 100/0 and VOID at
+ * 50/50, preserves each positive holding's settlement record and checks the collateral and locks.
+ * Reconciliation runs before SETTLED even when every step was already done, so a completed coin
+ * step never bypasses the accounting checks and never pays again on a reconciliation retry.
  *
  * Every transition goes through `transitionMarket`, whose event row carries its id to the
  * market row as `statusEventId` (A-M3-19); `actorId` is null: the worker acted. Everything is
@@ -464,12 +306,6 @@ export async function finalizeMarket(
       if (result === null) {
         throw new Error(`Market ${marketId} is settling without a result`);
       }
-      // VOID pays every contract 50/50 (ADR-0093 decision 1 item 9): `settle(won)` pays winners
-      // only and would close every holder out as a loser. #126 adds that payout; until then a
-      // VOID result must stop here, before anything is paid.
-      if (result === 'VOID') {
-        throw new Error(`Market ${marketId} is settling a VOID result, which only #126 can pay`);
-      }
 
       const stepRows = await tx
         .select({
@@ -480,8 +316,7 @@ export async function finalizeMarket(
         .where(eq(schema.marketSettlementSteps.marketId, marketId))
         .for('update');
       const done = new Set(stepRows.filter((row) => row.status === 'done').map((row) => row.step));
-      // This run's coin step; all zero when the step was done before this run (only possible
-      // once a step added later finishes in a run of its own — the payload then counts this run).
+      // Publishes only this run's changes; the final counts come from reconciliation below.
       let coin: CoinStep = {
         positions: 0,
         settledAccounts: 0,
@@ -499,7 +334,7 @@ export async function finalizeMarket(
         // One case per SETTLEMENT_STEPS entry.
         switch (step) {
           case 'coin': {
-            const ran = await runCoinStep(tx, current, result);
+            const ran = await settleMarketPositions(tx, marketId);
             coin = ran;
             stepAt = ran.at;
             break;
@@ -516,9 +351,11 @@ export async function finalizeMarket(
         // What a run that leaves the market `settling` publishes is that later step's call.
         return { outcome: 'settling', marketId, pendingSteps } as const;
       }
-      // Every step was done before this run (a row written by hand): nothing locked after the
-      // step rows, so the clock is read now.
-      const now = at ?? (await clockTimestamp(tx));
+      // A done coin step still has to reconcile, without repeating any payout.
+      progress.running = 'coin';
+      const reconciled = await reconcileMarketSettlement(tx, marketId);
+      const now = at ?? reconciled.at;
+      progress.running = undefined;
 
       const statusEventId = await transitionMarket(tx, {
         marketId,
@@ -528,10 +365,10 @@ export async function finalizeMarket(
         actorId: null,
         payload: {
           result,
-          settledAccounts: coin.settledAccounts,
-          paidAccounts: coin.paidAccounts,
-          paidCoin: serializeCoinAmount(coin.paidCoin),
-          positions: coin.positions,
+          settledAccounts: reconciled.settledAccounts,
+          paidAccounts: reconciled.paidAccounts,
+          paidCoin: serializeCoinAmount(reconciled.paidCoin),
+          positions: reconciled.positions,
         },
         at: now,
         set: { settledAt: now },
@@ -542,10 +379,10 @@ export async function finalizeMarket(
         marketId,
         statusEventId,
         settledAt: now,
-        positions: coin.positions,
-        settledAccounts: coin.settledAccounts,
-        paidAccounts: coin.paidAccounts,
-        paidCoin: coin.paidCoin,
+        positions: reconciled.positions,
+        settledAccounts: reconciled.settledAccounts,
+        paidAccounts: reconciled.paidAccounts,
+        paidCoin: reconciled.paidCoin,
         result,
         settlements: coin.settlements,
       } as const;
@@ -626,7 +463,7 @@ export async function finalizeMarket(
  * `resolved` (its resolved → settling never committed) as well as one left `settling` by a failed
  * step (ADR-0093 decision 1 item 14).
  * One market at a time and each rejection caught (`runScan`), so a settlement that fails — the
- * short-collateral, "no result" and VOID throws above, a transient DB error — rolls back that
+ * collateral, lock and missing-result checks above, a transient DB error — rolls back that
  * market's steps alone (its step recorded `failed`) and the markets after it are still settled
  * this run. Without the catch the failing market, first by judgement time, would stop every
  * later scan at itself. See `closeDueMarkets` for the batch bound and the re-check.

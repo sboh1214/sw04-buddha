@@ -1,22 +1,30 @@
-import type { APIRequestContext, Page, Request } from '@playwright/test';
-import type { AdminMarket } from '@buddha/shared';
+import type { APIRequestContext, APIResponse, Page, Request } from '@playwright/test';
+import type { AdminMarket, LedgerEntry, PlaceOrderResult, Position } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { formatKst } from '../src/lib/datetime';
 import {
   SETTLEMENT_WAIT_MS,
   adminAccount,
+  accountIdOf,
+  approvePauseDecisionAsReviewer,
   closeMarket,
   createOpenMarket,
   detailCopyTestId,
   documentSurvived,
   expect,
   judgementEvidenceLink,
+  freshEmail,
+  judgeMarket,
   kstLocalOf,
   leaveNoJudgement,
   markDocument,
+  meOf,
+  pauseMarket,
+  requestPauseDecision,
   resolveWaitMs,
   secondAdminAccount,
   signIn,
+  signUp,
   skipUnlessResolvable,
   subscribed,
   test,
@@ -29,11 +37,8 @@ import {
  * 결과가 공개되고, 이의 기한이 지나면 워커가 결과를 확정하고 정산한다 — 시장을 보던 탭이 소켓으로
  * 잠정 결과를, 그다음 지급 완료를 받는다(#174의 라벨).
  *
- * The only holders are the helper's two members, whose one pair `closeMarket` trades before the
- * close (#20, ADR-0117: a market with no fill of a person's account is cancelled, not closed);
- * nothing here reads their payout, so the holder's half of AC 7 — 포트폴리오 정산 이력, 원장 정산 지급 —
- * comes back with the order panel and its screen tests (#66, #189). What stays is the lifecycle
- * every market goes through, holders or not.
+ * The lifecycle case uses the helper's pair. Separate payout cases mint a pair at YES 30 / NO 70
+ * and check each member's balance, retired position and own ledger for YES, NO and VOID.
  *
  * The dispute window is the release setting `market.dispute_window`, which the suite's global
  * setup enters as 1분 while it is 미정 (global-setup.ts): the approval fixes the deadline a minute
@@ -87,6 +92,12 @@ async function adminMarketOf(context: APIRequestContext, id: string): Promise<Ad
   const body = await response.text();
   expect(response.ok(), `${response.url()} -> ${String(response.status())} ${body}`).toBe(true);
   return (JSON.parse(body) as { data: AdminMarket }).data;
+}
+
+async function dataOf<T>(response: APIResponse): Promise<T> {
+  const body = await response.text();
+  expect(response.ok(), `${response.url()} -> ${String(response.status())} ${body}`).toBe(true);
+  return (JSON.parse(body) as { data: T }).data;
 }
 
 test.describe('정산', () => {
@@ -244,4 +255,103 @@ test.describe('정산', () => {
       '정산 예정',
     );
   });
+
+  for (const result of ['YES', 'NO', 'VOID'] as const) {
+    test(`${result}: 실제 체결 계약을 정산하고 잔액·손익·지급 원장을 보존한다`, async ({
+      admin,
+      browser,
+      baseURL,
+      page,
+    }) => {
+      test.slow();
+      await skipUnlessResolvable(admin);
+      // Fresh accounts keep payouts from other tests out of the exact wallet delta below.
+      const noContext = await browser.newContext({ baseURL });
+      const yesContext = await browser.newContext({ baseURL });
+      try {
+        const noPage = await noContext.newPage();
+        const yesPage = await yesContext.newPage();
+        await signUp(noPage, freshEmail());
+        await signUp(yesPage, freshEmail());
+        const noHolder = noPage.request;
+        const yesHolder = yesPage.request;
+        const market = await createOpenMarket(admin);
+        const order = async (
+          context: APIRequestContext,
+          outcome: 'YES' | 'NO',
+          price: number,
+          timeInForce: 'gtc' | 'ioc',
+        ) =>
+          dataOf<PlaceOrderResult>(
+            await context.post(`/api/v1/markets/${market.id}/orders`, {
+              headers: { 'Idempotency-Key': crypto.randomUUID() },
+              data: {
+                expectedAccountId: await accountIdOf(context),
+                side: 'buy',
+                outcome,
+                qty: 2,
+                limitPriceCoin: price,
+                timeInForce,
+              },
+            }),
+          );
+        const rested = await order(noHolder, 'NO', 70, 'gtc');
+        expect(rested.order.status).toBe('open');
+        const filled = await order(yesHolder, 'YES', 99, 'ioc');
+        expect(filled.order.status).toBe('filled');
+        const beforeYes = await meOf(yesHolder);
+        const beforeNo = await meOf(noHolder);
+        await pauseMarket(admin, market.id);
+        await requestPauseDecision(admin, market.id, 'early_close', { reviewResult: 'judgeable' });
+        expect((await approvePauseDecisionAsReviewer(admin, market.id)).status).toBe('closed');
+        await judgeMarket(admin, market.id, result);
+        const settled = await waitForSettled(admin, market.id);
+        expect(settled.resolvedResult).toBe(result);
+        expect(settled.settlementSteps).toEqual([
+          expect.objectContaining({ step: 'coin', status: 'done', lastError: null }),
+        ]);
+
+        for (const [context, outcome, before, cost] of [
+          [yesHolder, 'YES', beforeYes, 60n],
+          [noHolder, 'NO', beforeNo, 140n],
+        ] as const) {
+          const payout = result === 'VOID' ? 100n : result === outcome ? 200n : 0n;
+          const after = await meOf(context);
+          expect(after.balance.availableCoin).toBe(
+            (BigInt(before.balance.availableCoin) + payout).toString(),
+          );
+          expect(after.balance.lockedCoin).toBe('0');
+          const positions = await dataOf<Position[]>(
+            await context.get('/api/v1/me/positions?status=settled'),
+          );
+          const position = positions.find(
+            (row) => row.marketId === market.id && row.outcome === outcome,
+          );
+          expect(position).toMatchObject({
+            qty: 0,
+            costBasisCoin: '0',
+            settled: true,
+            realizedPnlCoin: (payout - cost).toString(),
+          });
+          const ledger = await dataOf<LedgerEntry[]>(
+            await context.get('/api/v1/me/ledger?limit=100'),
+          );
+          const payouts = ledger.filter(
+            (entry) => entry.type === 'SETTLEMENT_PAYOUT' && entry.refId === market.id,
+          );
+          expect(payouts).toHaveLength(payout > 0n ? 1 : 0);
+          if (payout > 0n)
+            expect(payouts[0]).toMatchObject({ amountCoin: payout.toString(), refType: 'market' });
+        }
+        await page.goto(`/markets/${market.slug}`);
+        await expect(page.getByTestId('market-status-badge')).toHaveText(copy.marketStatusSettled);
+        await expect(page.getByTestId('market-detail-result')).toHaveText(
+          result === 'VOID' ? copy.marketResultVoid : result === 'YES' ? copy.yes : copy.no,
+        );
+      } finally {
+        await noContext.close();
+        await yesContext.close();
+      }
+    });
+  }
 });

@@ -8271,6 +8271,12 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           'orders_budget_coin_check',
           'payments.amount_coin',
           'payments_amount_coin_check',
+          // #126 (migration 0064): facts retained after the live position is retired.
+          'position_settlements.cost_basis_coin',
+          'position_settlements.payout_coin',
+          'position_settlements.payout_per_contract_coin',
+          'position_settlements.realized_pnl_before_coin',
+          'position_settlements.settlement_pnl_coin',
           'positions.cost_basis_coin',
           'positions.realized_pnl_coin',
           'positions_cost_basis_coin_check',
