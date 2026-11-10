@@ -4,6 +4,7 @@ import {
   lockLedgerAccounts,
   mintTreasury,
   MintTreasuryError,
+  readAdminTreasurySnapshot,
   schema,
   type Db,
 } from '@buddha/db';
@@ -20,7 +21,7 @@ import {
   type TreasuryIssueRequestsQuery,
   type TreasuryIssueWrite,
 } from '@buddha/shared';
-import { and, desc, eq, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import {
   ApprovalService,
@@ -52,7 +53,7 @@ export class TreasuryService {
   ) {}
 
   getTreasury(): Promise<AdminTreasury> {
-    return this.db.transaction((tx) => this.snapshot(tx), {
+    return this.db.transaction((tx) => readAdminTreasurySnapshot(tx), {
       isolationLevel: 'repeatable read',
       accessMode: 'read only',
     });
@@ -217,44 +218,6 @@ export class TreasuryService {
     return parsed.data;
   }
 
-  private async snapshot(executor: Executor): Promise<AdminTreasury> {
-    // One statement snapshot even during a cleanup write: another market may allocate Coin,
-    // but must not make two separately-read snapshots appear to be a bookkeeping mismatch.
-    const { rows } = await executor.execute<{
-      accountId: string | null;
-      available: string | null;
-      locked: string | null;
-      ledger: string | null;
-      latest: string | null;
-      total: string | null;
-      issued: string;
-    }>(sql`SELECT a.id::text AS "accountId", b.available_coin::text AS available,
-      b.locked_coin::text AS locked, b.ledger_coin::text AS ledger,
-      CASE WHEN a.id IS NULL THEN NULL ELSE public.ledger_account_last_after(a.id)::text END AS latest,
-      CASE WHEN a.id IS NULL THEN NULL ELSE
-        (SELECT COALESCE(SUM(CASE WHEN e.to_account_id=a.id THEN e.amount_coin ELSE 0 END),0)
-         - COALESCE(SUM(CASE WHEN e.from_account_id=a.id THEN e.amount_coin ELSE 0 END),0)
-         FROM ledger_entries e WHERE e.to_account_id=a.id OR e.from_account_id=a.id)::text END AS total,
-      (SELECT COALESCE(SUM(amount_coin),0)::text FROM ledger_entries WHERE type='TREASURY_MINT') AS issued
-      FROM (SELECT 1) seed LEFT JOIN ledger_accounts a ON a.kind='treasury'
-      LEFT JOIN balances b ON b.account_id=a.id`);
-    const row = rows[0]!;
-    const consistent =
-      row.available !== null &&
-      row.locked === '0' &&
-      row.available === row.ledger &&
-      row.ledger === row.latest &&
-      row.latest === row.total;
-    return {
-      accountId: row.accountId,
-      status: row.accountId === null ? 'uninitialized' : consistent ? 'ready' : 'inconsistent',
-      availableCoin: row.available,
-      lockedCoin: row.locked,
-      ledgerCoin: row.ledger,
-      issuedCoin: row.issued,
-    };
-  }
-
   private async readRequests(
     executor: Executor,
     where?: SQL,
@@ -297,7 +260,10 @@ export class TreasuryService {
   }
 
   private async writeSnapshot(tx: Tx, id: string): Promise<TreasuryIssueWrite> {
-    return { request: await this.requestDto(tx, id), treasury: await this.snapshot(tx) };
+    return {
+      request: await this.requestDto(tx, id),
+      treasury: await readAdminTreasurySnapshot(tx),
+    };
   }
 
   private async audit(

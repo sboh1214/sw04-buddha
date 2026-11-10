@@ -19,6 +19,7 @@ import {
   MARKET_MAKER_REDUCE_AT_BP_SETTING,
   MARKET_MAKER_HALT_AT_BP_SETTING,
   MARKET_MAKER_REDUCE_RATIO_BP_SETTING,
+  MARKET_MAKER_CONCENTRATION_TOP_N_SETTING,
   ORDER_ACCEPTING_SETTING,
   ORDER_RATE_LIMIT_SETTING,
   PRICE_PROTECTION_TICKS_SETTING,
@@ -646,6 +647,7 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
       MARKET_MAKER_REDUCE_AT_BP_SETTING.key,
       MARKET_MAKER_HALT_AT_BP_SETTING.key,
       MARKET_MAKER_REDUCE_RATIO_BP_SETTING.key,
+      MARKET_MAKER_CONCENTRATION_TOP_N_SETTING.key,
       ...retention.map((definition) => definition.key),
     ]);
     const res = await t.app.inject({
@@ -781,6 +783,21 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
         updatedAt: null,
         updatedBy: null,
       })),
+      {
+        key: MARKET_MAKER_CONCENTRATION_TOP_N_SETTING.key,
+        label: MARKET_MAKER_CONCENTRATION_TOP_N_SETTING.label,
+        unit: '명',
+        description: MARKET_MAKER_CONCENTRATION_TOP_N_SETTING.description,
+        valueSchema: expect.objectContaining({
+          type: 'integer',
+          minimum: 1,
+          maximum: Number.MAX_SAFE_INTEGER,
+        }) as unknown,
+        status: 'undecided',
+        value: null,
+        updatedAt: null,
+        updatedBy: null,
+      },
       ...retention.map((definition) => ({
         key: definition.key,
         label: definition.label,

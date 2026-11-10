@@ -541,6 +541,11 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       ['liquidity', 'settings'],
       ['liquidity', 'config'],
       ['max', 'loss'],
+      ['worst', 'loss'],
+      ['capital'],
+      ['invested', 'coin'],
+      ['recovered', 'coin'],
+      ['funds', 'coin'],
       ['safety', 'ticks'],
       ['safety', 'spread'],
       ['inventory'],
@@ -552,9 +557,10 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       ['treasury'],
       ['concentration'],
     ],
-    // The 운영 마켓메이커 account exists from #115 (ADR-0108); what it does per market does not yet.
+    // Current settings/runtime/assets/risk are admin-only. Pending historical metrics add no
+    // permission to expose those facts or the future retained aggregates publicly.
     pending:
-      '시장별 설정 버전은 관리자만 조회한다(#72); 참여·재고·위험 운영 화면은 후속이다(#129·#182)',
+      '현재 설정·운영 상태·재고·위험 지표는 관리자만 조회한다(#72·#129·#182); 누적 체결률·공급 중단 이력과 그 보존 정책은 미정이다(#182)',
   },
   {
     id: 'account-type',
