@@ -1,6 +1,7 @@
 import {
   lockMarket,
   openScheduledMarket,
+  recallMarketMakerFunds,
   recordMarketMakerOpenAttempt,
   recordMarketMakerRun,
   requestMarketMakerRefresh,
@@ -10,8 +11,11 @@ import {
   completeOnboarding,
   createMarket,
   createMarketMakerAccount,
+  createOpenedMarket,
   createScheduledMarket,
   setReleaseSetting,
+  closeTestMarket,
+  passMarketClose,
 } from '@buddha/db/test';
 import { adminMarketMakerSchema, treasuryIssueWriteSchema } from '@buddha/shared';
 import { eq } from 'drizzle-orm';
@@ -96,6 +100,7 @@ describe.skipIf(!hasTestInfra)('private market maker observations (integration)'
       openedVersion: null,
       runtime: null,
       lastOpenAttempt: null,
+      recall: { status: 'not_due' },
       stageSettings: { status: 'undecided' },
     });
     expect(detail(response).readiness.blockers).toEqual([
@@ -106,6 +111,55 @@ describe.skipIf(!hasTestInfra)('private market maker observations (integration)'
     ]);
     expect(await t.db.select().from(schema.ledgerAccounts)).toEqual(accounts);
     expect(await t.db.select().from(schema.marketMakerRuntime)).toEqual([]);
+    expect(await t.db.select().from(schema.ledgerEntries)).toEqual([]);
+  });
+
+  it('reads a terminal pending recall without performing it, then reports the immutable transfer', async () => {
+    const { market } = await createOpenedMarket(t.db);
+    await passMarketClose(t.db, market.id);
+    await closeTestMarket(t.db, market.id);
+    const entries = await t.db.select().from(schema.ledgerEntries);
+    expect(detail(await get(market.id)).recall).toEqual({ status: 'pending' });
+    expect(await t.db.select().from(schema.marketMakerRecalls)).toEqual([]);
+    expect(await t.db.select().from(schema.ledgerEntries)).toEqual(entries);
+
+    const result = await t.db.transaction((tx) =>
+      recallMarketMakerFunds(tx, { marketId: market.id }),
+    );
+    if (result.outcome !== 'recalled') throw new Error('Expected a real terminal transfer');
+    const beforeRead = await t.db.select().from(schema.ledgerEntries);
+    const observed = detail(await get(market.id));
+    expect(observed.recall).toEqual({
+      status: 'completed',
+      outcome: 'transferred',
+      terminalStatus: 'cancelled',
+      amountCoin: result.recall.amountCoin.toString(),
+      ledgerEntryId: String(result.recall.ledgerEntryId),
+      completedAt: result.recall.completedAt.toISOString(),
+    });
+    expect(observed.recall).not.toHaveProperty('appliedTxid');
+    expect(observed.recall).not.toHaveProperty('fundsAccountId');
+    expect(await t.db.select().from(schema.ledgerEntries)).toEqual(beforeRead);
+    const publicMarket = await t.app.inject({ method: 'GET', url: `/api/v1/markets/${market.id}` });
+    expect(publicMarket.statusCode, publicMarket.body).toBe(200);
+    expect(publicMarket.json<{ data: Record<string, unknown> }>().data).not.toHaveProperty(
+      'recall',
+    );
+  });
+
+  it('reports a never-allocated completion without inventing a zero-valued ledger entry', async () => {
+    const market = await createMarket(t.db, { status: 'cancelled' });
+    const result = await t.db.transaction((tx) =>
+      recallMarketMakerFunds(tx, { marketId: market.id }),
+    );
+    expect(result.outcome).toBe('recalled');
+    expect(detail(await get(market.id)).recall).toMatchObject({
+      status: 'completed',
+      outcome: 'not_allocated',
+      terminalStatus: 'cancelled',
+      amountCoin: '0',
+      ledgerEntryId: null,
+    });
     expect(await t.db.select().from(schema.ledgerEntries)).toEqual([]);
   });
 

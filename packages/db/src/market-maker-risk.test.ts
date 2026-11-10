@@ -3,7 +3,7 @@ import type { BookOrder } from '@buddha/shared';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { lockForOrder } from './contracts.js';
-import { ensureLedgerAccount, findLedgerAccount, recordLedgerEntry } from './ledger.js';
+import { ensureLedgerAccount, findLedgerAccount } from './ledger.js';
 import { readMarketMakerRiskSnapshot } from './market-maker-risk.js';
 import { setMarketLiquidity } from './market-liquidity.js';
 import { readLiveBook } from './orders.js';
@@ -28,6 +28,7 @@ import {
   fundTestTreasury,
   mintTestPairs,
   recordLegacyCorrectionForTest,
+  recordLegacyMarketMakerCapitalForTest,
   withLedgerGuardsOff,
 } from './test/ledger.js';
 import { createOrder, openOrderIntake, placeTestOrder } from './test/orders.js';
@@ -80,17 +81,16 @@ describe.skipIf(!hasTestDb())('read-only market maker risk snapshot (#128)', () 
     return value;
   }
   async function recall(marketId: string, amountCoin: bigint) {
-    await t.db.transaction((tx) =>
-      recordLedgerEntry(tx, {
-        type: 'BOT_RECALL',
-        amountCoin,
-        from: fundsRef(marketId),
-        to: { kind: 'treasury' },
-        refType: 'approval_request',
-        refId: randomUUID(),
-        idempotencyKey: randomUUID(),
-      }),
-    );
+    // Historical partial returns are reader fixtures, never a new terminal recall.
+    await recordLegacyMarketMakerCapitalForTest({
+      type: 'BOT_RECALL',
+      amountCoin,
+      from: fundsRef(marketId),
+      to: { kind: 'treasury' },
+      refType: 'approval_request',
+      refId: randomUUID(),
+      idempotencyKey: randomUUID(),
+    });
   }
   const legacyCorrection = async (
     from: Parameters<typeof recordLegacyCorrectionForTest>[0]['from'],

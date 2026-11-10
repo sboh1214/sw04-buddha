@@ -38,6 +38,7 @@ export const marketMaker: AdminMarketMaker = {
     reduceRatioBp: { key: 'market_maker.reduce_ratio_bp', status: 'test', value: 5000 },
   },
   readiness: { blockers: [] },
+  recall: { status: 'not_due' },
   lastOpenAttempt: {
     lastAttemptAt: '2026-11-10T01:05:00.000Z',
     reason: null,

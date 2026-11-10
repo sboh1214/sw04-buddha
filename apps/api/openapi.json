@@ -27980,6 +27980,7 @@
                     "negative_coin",
                     "contract_lock",
                     "market_maker_account_missing",
+                    "market_maker_recall",
                     "retired_position",
                     "closed_position_holder",
                     "empty_position_cost",
@@ -29127,6 +29128,88 @@
             ],
             "additionalProperties": false
           },
+          "recall": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "not_due"
+                    ]
+                  }
+                },
+                "required": [
+                  "status"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "pending"
+                    ]
+                  }
+                },
+                "required": [
+                  "status"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "completed"
+                    ]
+                  },
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "not_allocated",
+                      "empty",
+                      "transferred"
+                    ]
+                  },
+                  "terminalStatus": {
+                    "type": "string",
+                    "enum": [
+                      "settled",
+                      "cancelled"
+                    ]
+                  },
+                  "amountCoin": {
+                    "$ref": "#/components/schemas/CoinAmount"
+                  },
+                  "ledgerEntryId": {
+                    "nullable": true,
+                    "type": "string",
+                    "pattern": "^[1-9]\\d*$"
+                  },
+                  "completedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                  }
+                },
+                "required": [
+                  "status",
+                  "outcome",
+                  "terminalStatus",
+                  "amountCoin",
+                  "ledgerEntryId",
+                  "completedAt"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
           "lastOpenAttempt": {
             "nullable": true,
             "type": "object",
@@ -29188,6 +29271,7 @@
           "runtime",
           "stageSettings",
           "readiness",
+          "recall",
           "lastOpenAttempt"
         ],
         "additionalProperties": false

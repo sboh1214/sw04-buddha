@@ -40,6 +40,16 @@ export class AdminMarketMakerService {
         const liquidity = await readAdminMarketLiquidity(tx, market);
         const runtime = await readMarketMakerRuntime(tx, marketId);
         const openAttempt = await readMarketMakerOpenAttempt(tx, marketId);
+        const [recall] = await tx
+          .select({
+            terminalStatus: schema.marketMakerRecalls.terminalStatus,
+            fundsAccountId: schema.marketMakerRecalls.fundsAccountId,
+            amountCoin: schema.marketMakerRecalls.amountCoin,
+            ledgerEntryId: schema.marketMakerRecalls.ledgerEntryId,
+            completedAt: schema.marketMakerRecalls.completedAt,
+          })
+          .from(schema.marketMakerRecalls)
+          .where(eq(schema.marketMakerRecalls.marketId, marketId));
         const readings = {
           reduceAtBp: await this.settings.get(MARKET_MAKER_REDUCE_AT_BP_SETTING, tx),
           haltAtBp: await this.settings.get(MARKET_MAKER_HALT_AT_BP_SETTING, tx),
@@ -82,6 +92,26 @@ export class AdminMarketMakerService {
                 },
           stageSettings: { status: stage.kind === 'ready' ? 'ready' : stage.reason, ...readings },
           readiness: { blockers },
+          recall: recall
+            ? {
+                status: 'completed',
+                outcome:
+                  recall.fundsAccountId === null
+                    ? 'not_allocated'
+                    : recall.amountCoin === 0n
+                      ? 'empty'
+                      : 'transferred',
+                terminalStatus: recall.terminalStatus,
+                amountCoin: recall.amountCoin.toString(),
+                ledgerEntryId: recall.ledgerEntryId?.toString() ?? null,
+                completedAt: recall.completedAt.toISOString(),
+              }
+            : {
+                status:
+                  market.status === 'settled' || market.status === 'cancelled'
+                    ? 'pending'
+                    : 'not_due',
+              },
           lastOpenAttempt:
             openAttempt === null
               ? null

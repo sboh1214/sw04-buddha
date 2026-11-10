@@ -27,6 +27,56 @@ import {
   marketMakerReason,
 } from '@/lib/market-maker';
 
+function MarketMakerRecall({ recall }: { recall: AdminMarketMaker['recall'] }) {
+  return (
+    <Stack gap="2" p="3" borderWidth="1px" borderRadius="l2" data-testid="market-maker-recall">
+      <Text fontWeight="medium">{copy.marketMakerRecallTitle}</Text>
+      {recall.status === 'not_due' ? (
+        <Text fontSize="sm">{copy.marketMakerRecallNotDue}</Text>
+      ) : recall.status === 'pending' ? (
+        <>
+          <Text>{copy.marketMakerRecallPending}</Text>
+          <Text fontSize="sm">{copy.marketMakerRecallPendingHint}</Text>
+        </>
+      ) : (
+        <>
+          <Text>{copy.marketMakerRecallCompleted}</Text>
+          <Text data-testid="market-maker-recall-outcome">
+            {
+              {
+                not_allocated: copy.marketMakerRecallNotAllocated,
+                empty: copy.marketMakerRecallEmpty,
+                transferred: copy.marketMakerRecallTransferred,
+              }[recall.outcome]
+            }
+          </Text>
+          <DataList.Root orientation={{ base: 'vertical', md: 'horizontal' }} size="sm">
+            <DataList.Item flexDirection={{ base: 'column', md: 'row' }}>
+              <DataList.ItemLabel>{copy.marketMakerRecallAmount}</DataList.ItemLabel>
+              <DataList.ItemValue>{formatCoin(BigInt(recall.amountCoin))}</DataList.ItemValue>
+            </DataList.Item>
+            <DataList.Item flexDirection={{ base: 'column', md: 'row' }}>
+              <DataList.ItemLabel>{copy.marketMakerRecallCompletedAt}</DataList.ItemLabel>
+              <DataList.ItemValue>{formatKst(recall.completedAt)}</DataList.ItemValue>
+            </DataList.Item>
+            <DataList.Item flexDirection={{ base: 'column', md: 'row' }}>
+              <DataList.ItemLabel>{copy.marketMakerRecallBasis}</DataList.ItemLabel>
+              <DataList.ItemValue>
+                {recall.terminalStatus === 'settled'
+                  ? copy.marketMakerRecallSettled
+                  : copy.marketMakerRecallCancelled}
+              </DataList.ItemValue>
+            </DataList.Item>
+          </DataList.Root>
+          <Text fontSize="sm" color="fg.muted">
+            {copy.marketMakerRecallHistoryHint}
+          </Text>
+        </>
+      )}
+    </Stack>
+  );
+}
+
 export function MarketMakerFacts({ data }: { data: AdminMarketMaker }) {
   const { runtime, lastOpenAttempt: opening } = data;
   const versions = [
@@ -146,6 +196,7 @@ export function MarketMakerFacts({ data }: { data: AdminMarketMaker }) {
           )}
         </Stack>
       )}
+      <MarketMakerRecall recall={data.recall} />
       <HStack gap="4" flexWrap="wrap">
         <Link asChild>
           <NextLink href="/admin/treasury">{copy.adminTreasury}</NextLink>

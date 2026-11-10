@@ -255,6 +255,7 @@ export * from './market-maker-risk.js';
 export * from './treasury.js';
 export * from './market-maker-allocation.js';
 export * from './market-maker-runtime.js';
+export * from './market-maker-recall.js';
 
 export * from './market-maker-cycle.js';
 export * from './market-maker-burn.js';

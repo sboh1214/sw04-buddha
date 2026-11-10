@@ -4214,6 +4214,24 @@ export type components = {
             readiness: {
                 blockers: ("market_not_open" | "ledger_hold" | "liquidity_missing" | "risk_settings_missing" | "risk_settings_invalid" | "intake_closed" | "not_allocated" | "disabled")[];
             };
+            recall: {
+                /** @enum {string} */
+                status: "not_due";
+            } | {
+                /** @enum {string} */
+                status: "pending";
+            } | {
+                amountCoin: components["schemas"]["CoinAmount"];
+                /** Format: date-time */
+                completedAt: string;
+                ledgerEntryId: string | null;
+                /** @enum {string} */
+                outcome: "not_allocated" | "empty" | "transferred";
+                /** @enum {string} */
+                status: "completed";
+                /** @enum {string} */
+                terminalStatus: "settled" | "cancelled";
+            };
             runtime: {
                 completedGeneration: string;
                 consecutiveFailures: number;
@@ -6503,7 +6521,7 @@ export type components = {
             findings: {
                 actual: string;
                 /** @enum {string} */
-                code: "balance_missing" | "account_balance" | "account_ledger_copy" | "coin_lock" | "negative_coin" | "contract_lock" | "market_maker_account_missing" | "retired_position" | "closed_position_holder" | "empty_position_cost" | "settlement_books" | "pair_supply" | "pair_collateral" | "unexpected_settlement_records" | "pair_ledger" | "settled_live_orders" | "ledger_account_missing" | "supply_balance" | "supply_ledger_copy";
+                code: "balance_missing" | "account_balance" | "account_ledger_copy" | "coin_lock" | "negative_coin" | "contract_lock" | "market_maker_account_missing" | "market_maker_recall" | "retired_position" | "closed_position_holder" | "empty_position_cost" | "settlement_books" | "pair_supply" | "pair_collateral" | "unexpected_settlement_records" | "pair_ledger" | "settled_live_orders" | "ledger_account_missing" | "supply_balance" | "supply_ledger_copy";
                 detail?: string;
                 expected: string;
             }[];

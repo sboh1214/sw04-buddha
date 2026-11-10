@@ -13,6 +13,7 @@ import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { isHumanAccountSql, isHumanAccountTypeSql } from './account-types.js';
 import type { Db } from './client.js';
 import { checkMarketSettlementBooks } from './market-settlement.js';
+import { checkMarketMakerRecallBooks } from './market-maker-recall.js';
 import { transitionMarket } from './market-transitions.js';
 import { lockReconciliationUserKey } from './reconciliation-holds.js';
 import {
@@ -379,6 +380,10 @@ export async function runMarketReconciliation(
     );
     compare(findings, 'settled_live_orders', 0, rows[0]!.count);
   }
+  // Terminal recall is separate from settlement. Absence is normal pending; only broken
+  // completion/ledger bindings or assets left after a completed recall become a failure.
+  for (const issue of await checkMarketMakerRecallBooks(tx, marketId))
+    findings.push({ code: 'market_maker_recall', expected: 'reconciled', actual: issue });
   const { rows: cursorRows } = await tx.execute<{ cursor: string }>(
     sql`SELECT coalesce(max(id),0)::text AS cursor FROM ledger_entries WHERE market_id=${marketId}`,
   );
