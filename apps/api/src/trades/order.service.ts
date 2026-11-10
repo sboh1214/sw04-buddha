@@ -220,6 +220,9 @@ export class OrderService {
         { registry: this.registry },
       );
       switch (result.kind) {
+        case 'bot_risk_rejected':
+          // This endpoint admits members only. MM refusal details must never become public.
+          throw new Error('A member intake received an internal market maker refusal');
         case 'not_found':
           throw notFound('Market');
         case 'conflict':

@@ -28,7 +28,9 @@ import {
 import { contractBook, positionOf } from './test/contracts.js';
 import {
   closeMarketEarly,
+  createConfiguredOpenMarket,
   createMarket,
+  TEST_MM_TRADING_LIQUIDITY,
   createMarketPause,
   createModerationAction,
   createUser,
@@ -113,6 +115,13 @@ describe.skipIf(!hasTestDb())('order cancel (#178, docker test profile)', () => 
 
   const member = async (coin = 1_000n) => (await createUser(t.db, { balanceCoin: coin })).user.id;
   const market = async () => (await createMarket(t.db, { createdBy: adminId })).id;
+  const riskMarket = async () =>
+    (
+      await createConfiguredOpenMarket(t.db, {
+        createdBy: adminId,
+        liquiditySettings: TEST_MM_TRADING_LIQUIDITY,
+      })
+    ).id;
 
   async function placed(input: PlaceTestOrderInput) {
     const result = await placeTestOrder(t.db, input);
@@ -293,7 +302,7 @@ describe.skipIf(!hasTestDb())('order cancel (#178, docker test profile)', () => 
     });
 
     it('releases the 운영 마켓메이커’s lock into its market’s funds, no person’s account touched', async () => {
-      const m = await market();
+      const m = await riskMarket();
       const mm = await fundMarketMakerFunds(t.db, m, 1_000n);
       const funds = { kind: 'market_maker_funds', marketId: m } as const;
       const row = await resting(mm, m, 'NO', 'buy', 40, 3);
@@ -318,7 +327,7 @@ describe.skipIf(!hasTestDb())('order cancel (#178, docker test profile)', () => 
     });
 
     it('gives the 운영 마켓메이커’s sell its contracts back and names no position (no person’s)', async () => {
-      const m = await market();
+      const m = await riskMarket();
       const mm = await fundMarketMakerFunds(t.db, m, 1_000n);
       await mintTestPairs(t.db, {
         marketId: m,
@@ -380,7 +389,7 @@ describe.skipIf(!hasTestDb())('order cancel (#178, docker test profile)', () => 
     });
 
     it('finds no order of another account, an unknown id, or the bot’s asked by a person', async () => {
-      const m = await market();
+      const m = await riskMarket();
       const a = await member();
       const b = await member();
       const mine = await resting(a, m, 'YES', 'buy', 40, 1);
@@ -595,7 +604,7 @@ describe.skipIf(!hasTestDb())('order cancel (#178, docker test profile)', () => 
 
   describe('a market’s batch', () => {
     it('ends people’s and the 운영 마켓메이커’s orders at the pause, other markets untouched', async () => {
-      const m = await market();
+      const m = await riskMarket();
       const other = await market();
       const a = await member();
       const b = await yesHolder(m, 2);
@@ -695,7 +704,7 @@ describe.skipIf(!hasTestDb())('order cancel (#178, docker test profile)', () => 
 
   describe('an account’s batch', () => {
     it('ends the person’s orders in every market at one instant, a held market’s skipped', async () => {
-      const ms = [await market(), await market(), await market()];
+      const ms = [await riskMarket(), await market(), await market()];
       const heldMarket = await market();
       const a = await yesHolder(ms[2]!, 1);
       const b = await member();
@@ -828,7 +837,7 @@ describe.skipIf(!hasTestDb())('order cancel (#178, docker test profile)', () => 
       });
 
     it('ends every live order of every account type as 만료, each lock back once, nothing else', async () => {
-      const m = await market();
+      const m = await riskMarket();
       const other = await market();
       const a = await member();
       const b = await member();

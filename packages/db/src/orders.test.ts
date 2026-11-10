@@ -31,7 +31,9 @@ import {
 import { balances, fills, ledgerEntries, markets, orders, positions } from './schema/index.js';
 import { contractBook, positionOf } from './test/contracts.js';
 import {
+  createConfiguredOpenMarket,
   createMarket,
+  TEST_MM_TRADING_LIQUIDITY,
   createMarketPause,
   createUser,
   setReleaseSetting,
@@ -83,6 +85,16 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
   const member = async (coin = 1_000n) => (await createUser(t.db, { balanceCoin: coin })).user.id;
   const market = async (input: Parameters<typeof createMarket>[1] = {}) =>
     (await createMarket(t.db, { createdBy: adminId, ...input })).id;
+  const riskMarket = async (
+    input: Omit<Parameters<typeof createConfiguredOpenMarket>[1], 'liquiditySettings'> = {},
+  ) =>
+    (
+      await createConfiguredOpenMarket(t.db, {
+        createdBy: adminId,
+        liquiditySettings: TEST_MM_TRADING_LIQUIDITY,
+        ...input,
+      })
+    ).id;
 
   async function placed(input: PlaceTestOrderInput) {
     const result = await placeTestOrder(t.db, input);
@@ -149,7 +161,7 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
 
   describe('refusals that write nothing', () => {
     it('answers closed while order.accepting is not true — the 운영 마켓메이커 too', async () => {
-      const m = await market();
+      const m = await riskMarket();
       const a = await member();
       const mm = await fundMarketMakerFunds(t.db, m, 1_000n);
       const tries = [a, mm].map((ownerId) => ({ ownerId, marketId: m, requestId: randomUUID() }));
@@ -1223,7 +1235,7 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
 
   describe('the 운영 마켓메이커 as an owner', () => {
     it('rests from its funds, fills people, never meets itself, and is left out of `touched`', async () => {
-      const m = await market();
+      const m = await riskMarket();
       const mm = await fundMarketMakerFunds(t.db, m, 1_000n);
       const funds = { kind: 'market_maker_funds', marketId: m } as const;
       const bid = await order(mm, m, 'NO', 'buy', 'gtc', 40, 3);
@@ -1258,7 +1270,7 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
       });
 
       // A market with no funds yet: 잔액 부족, and no funds account made by the refusal.
-      const bare = await market();
+      const bare = await riskMarket();
       const none = await order(mm, bare, 'NO', 'buy', 'gtc', 40, 1);
       expect(none.order).toMatchObject({ rejectReason: 'insufficient_coin' });
       expect(
@@ -1344,7 +1356,7 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
         adminId = (await createUser(t.db, { role: 'admin' })).user.id;
         await openOrderIntake(t.db, { adminId });
         const pick = generator(seed);
-        const marketIds = [await market(), await market({ priceProtectionTicks: 15 })];
+        const marketIds = [await riskMarket(), await riskMarket({ priceProtectionTicks: 15 })];
         const people = [await member(2_000n), await member(2_000n), await member(2_000n)];
         const mms = [];
         for (const m of marketIds) {

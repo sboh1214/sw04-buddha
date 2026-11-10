@@ -19,7 +19,9 @@ import { readHoldings, readMarketTradingFacts, readPublicBook } from './order-bo
 import { ownerOf, placeOrderChangedBook, type PlaceOrderResult } from './orders.js';
 import { balances, fills, ledgerEntries, markets, orders, positions } from './schema/index.js';
 import {
+  createConfiguredOpenMarket,
   createMarket,
+  TEST_MM_TRADING_LIQUIDITY,
   createMarketPause,
   createUser,
   setReleaseSetting,
@@ -61,6 +63,14 @@ describe.skipIf(!hasTestDb())('the public book and quotes (#179, docker test pro
   const member = async (coin = 10_000n) => (await createUser(t.db, { balanceCoin: coin })).user.id;
   const market = async (priceProtectionTicks = 10) =>
     (await createMarket(t.db, { createdBy: adminId, priceProtectionTicks })).id;
+  const riskMarket = async (priceProtectionTicks = 10) =>
+    (
+      await createConfiguredOpenMarket(t.db, {
+        createdBy: adminId,
+        priceProtectionTicks,
+        liquiditySettings: TEST_MM_TRADING_LIQUIDITY,
+      })
+    ).id;
   /** A person holding `qty` of `outcome` in `marketId` (a pair mint at 50 with a fresh member). */
   const holder = async (marketId: string, outcome: Outcome, qty: number) => {
     const id = await member(10_000n + 50n * BigInt(qty));
@@ -137,7 +147,7 @@ describe.skipIf(!hasTestDb())('the public book and quotes (#179, docker test pro
    * YES bids 45×4 (A), 44×3 (the bot).
    */
   async function seededBook() {
-    const m = await market();
+    const m = await riskMarket();
     const a = await member();
     const b = await holder(m, 'YES', 10);
     const mm = await fundMarketMakerFunds(t.db, m, 5_000n);
@@ -384,7 +394,7 @@ describe.skipIf(!hasTestDb())('the public book and quotes (#179, docker test pro
         state = (Math.imul(state, 1_103_515_245) + 12_345) >>> 0;
         return (state >>> 8) % n;
       };
-      const m = await market(15);
+      const m = await riskMarket(15);
       const people = [await holder(m, 'YES', 30), await holder(m, 'NO', 30), await member()];
       const mm = await fundMarketMakerFunds(t.db, m, 20_000n);
       const owners = [...people, mm];

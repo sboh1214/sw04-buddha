@@ -26,8 +26,8 @@ import { assertWhole } from './market-maker/validate.js';
  * cross-sell). A fill is at the resting order's price, never past the incoming limit, and the
  * walk stops — keeping what it filled — at the first entry it cannot take: none left, beyond the
  * limit, beyond the budget, or of the incoming owner's self-trade group. Users and the 운영
- * 마켓메이커 match by the same rules; the self-trade group is the only place an account's kind
- * enters (`sameSelfTradeGroup`).
+ * 마켓메이커 match by the same rules; the optional #128 policy can additionally lower a bot's
+ * executable quantity without changing price/time priority or `sameSelfTradeGroup`.
  */
 
 /**
@@ -154,6 +154,51 @@ export interface MatchResult {
   readonly unspentCoin: bigint | null;
   /** The distinct resting owners of the fills in walk order, for `lockOrderHolders`. */
   readonly counterpartyOwnerIds: readonly string[];
+}
+
+/**
+ * Internal #128 policy. It may only lower a bot order's executable quantity; the walk still
+ * owns price/time priority, the limit, the budget and self-trade. Each invocation owns its own
+ * projected state. A reference probe must never share this state with the actual walk.
+ */
+export interface BotMatchRiskPolicy {
+  /** The full remaining quantity that is safe, before restricting it to the incoming amount. */
+  maxRestingQty(order: BookOrder): number;
+  /** Observe an actual planned fill before the next entry is evaluated. */
+  onFill(incoming: IncomingOrder, order: BookOrder, fill: MatchFill): void;
+  /** Observe a bot remainder removed by this walk; no human order is cancelled by the policy. */
+  onCancel(order: BookOrder, qty: number): void;
+}
+
+function botAllowance(policy: BotMatchRiskPolicy, order: BookOrder): number {
+  const qty = policy.maxRestingQty(order);
+  assertWhole('bot executable quantity', qty, 0);
+  if (qty > order.remainingQty) throw new RangeError('Bot risk cannot increase an order quantity');
+  return qty;
+}
+
+/**
+ * Reference-price-only projection, on a separate policy clone. A zero executable bot quote
+ * frees its reservation in that clone before the next is considered. An own order stays the
+ * reference/self-trade boundary. None of these virtual cancels is an actual cancellation plan.
+ */
+export function referencePriceWithBotRisk(
+  book: readonly BookOrder[],
+  outcome: Outcome,
+  side: OrderSide,
+  owner: OrderOwner | null,
+  policy: BotMatchRiskPolicy,
+): number | null {
+  for (const entry of matchLine(book, outcome, side)) {
+    if (
+      entry.order.owner.human ||
+      (owner !== null && sameSelfTradeGroup(owner, entry.order.owner)) ||
+      botAllowance(policy, entry.order) > 0
+    )
+      return entry.priceCoin;
+    policy.onCancel(entry.order, entry.order.remainingQty);
+  }
+  return null;
 }
 
 /** One buyer of a fill: structurally @buddha/db `BuyLeg`. */
@@ -364,6 +409,23 @@ function fillOf(incoming: IncomingOrder, entry: MatchLineEntry, qty: number): Ma
  * the limit or skips a check. RangeError on a malformed book or order.
  */
 export function matchOrder(book: readonly BookOrder[], incoming: IncomingOrder): MatchResult {
+  return walkMatch(book, incoming);
+}
+
+/** The same matcher, with #128's internal quantity policy and separate cancellation observer. */
+export function matchOrderWithBotRisk(
+  book: readonly BookOrder[],
+  incoming: IncomingOrder,
+  policy: BotMatchRiskPolicy,
+): MatchResult {
+  return walkMatch(book, incoming, policy);
+}
+
+function walkMatch(
+  book: readonly BookOrder[],
+  incoming: IncomingOrder,
+  policy?: BotMatchRiskPolicy,
+): MatchResult {
   const humanById = new Map<string, boolean>();
   assertBook(book, humanById);
   assertIncoming(incoming, humanById);
@@ -404,19 +466,30 @@ export function matchOrder(book: readonly BookOrder[], incoming: IncomingOrder):
     // A budget's count may pass 2^53 and round, but then it is above the remaining (a safe
     // integer) and the min takes the remaining; below it the count is exact.
     const affordable = budget === null ? qtyLeft : Number(budgetLeft / BigInt(entry.priceCoin));
-    const take = Math.min(entry.order.remainingQty, affordable);
+    // The risk policy runs only after all ordinary stop checks, so a reference probe never
+    // causes an out-of-limit, unaffordable or self-trade order to be cancelled in the real plan.
+    const safeFull =
+      policy && !entry.order.owner.human
+        ? botAllowance(policy, entry.order)
+        : entry.order.remainingQty;
+    const take = Math.min(safeFull, affordable);
+    const cancelRemainder = safeFull < entry.order.remainingQty;
     // A quantity order's total is at most its own qty; a budget's sums resting quantities, which
     // are each safe but may not be together. Refuse rather than report a rounded total that
     // disagrees with the fills and the book after them.
     if (!Number.isSafeInteger(filledQty + take)) {
       throw new RangeError('The filled quantity passes the safe-integer range');
     }
-    const fill = fillOf(incoming, entry, take);
-    fills.push(fill);
-    filledQty += take;
-    qtyLeft -= take;
-    budgetLeft -= fill.amountCoin;
-    if (take === entry.order.remainingQty) index += 1;
+    if (take > 0) {
+      const fill = fillOf(incoming, entry, take);
+      fills.push(fill);
+      filledQty += take;
+      qtyLeft -= take;
+      budgetLeft -= fill.amountCoin;
+      policy?.onFill(incoming, entry.order, fill);
+    }
+    if (cancelRemainder) policy!.onCancel(entry.order, entry.order.remainingQty - take);
+    if (cancelRemainder || take === entry.order.remainingQty) index += 1;
   }
 
   const amountCoin = fills.reduce((sum, fill) => sum + fill.amountCoin, 0n);

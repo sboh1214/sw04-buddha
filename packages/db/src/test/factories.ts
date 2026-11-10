@@ -44,6 +44,7 @@ import {
   type JudgementSource,
   type MarketCancelRequestPayload,
   type MarketJudgementRequestPayload,
+  type MarketLiquiditySettingsInput,
   type MarketPauseDecisionRequestPayload,
   type MarketPausePath,
   type MarketPauseReason,
@@ -164,6 +165,20 @@ import { createFillRecord, priceAndQtyOf, type FillRow } from './orders.js';
  * `createMarketInReview`'s submission fills.
  */
 export const TEST_PRICE_PROTECTION_TICKS = 5;
+
+/**
+ * Explicit, permissive settings for matching/cancel/statistics fixtures that include the MM.
+ * These are test values, not launch defaults or the market's actual invested capital. Risk
+ * boundary tests provide their own settings instead.
+ */
+export const TEST_MM_TRADING_LIQUIDITY = {
+  budgetCoin: 1_000_000n,
+  maxLossCoin: 1_000_000n,
+  b: 100,
+  levels: 3,
+  quantity: 10,
+  safetyTicks: 1,
+} satisfies MarketLiquiditySettingsInput;
 
 /** Short unique tag for generated emails/slugs/nicknames. */
 const tag = () => randomUUID().replaceAll('-', '').slice(0, 8);
@@ -618,6 +633,52 @@ export async function createMarket(db: Db, input: CreateMarketInput = {}) {
     }
   }
   return market;
+}
+
+export type CreateConfiguredOpenMarketInput = Omit<CreateMarketInput, 'status' | 'openAt'> & {
+  liquiditySettings: MarketLiquiditySettingsInput;
+};
+
+/**
+ * A fresh OPEN market with explicitly supplied MM settings and its opening version pinned.
+ * Funds are created separately by the caller. Unlike the raw createMarket factory, this goes
+ * through the draft-only configuration writer before advancing the newly created fixture;
+ * it never edits an existing OPEN market or rewrites an immutable configuration version.
+ * Review/approval and opening events remain the responsibility of createOpenedMarket.
+ */
+export async function createConfiguredOpenMarket(db: Db, input: CreateConfiguredOpenMarketInput) {
+  const { liquiditySettings, ...fields } = input;
+  const createdBy = fields.createdBy ?? (await createUser(db, { role: 'admin' })).user.id;
+  const draft = await createMarket(db, {
+    ...fields,
+    createdBy,
+    status: 'draft',
+    priceProtectionTicks:
+      fields.priceProtectionTicks !== undefined
+        ? fields.priceProtectionTicks
+        : TEST_PRICE_PROTECTION_TICKS,
+  });
+  return db.transaction(async (tx) => {
+    const config = await setMarketLiquidity(tx, {
+      marketId: draft.id,
+      actorId: createdBy,
+      baseVersion: null,
+      settings: liquiditySettings,
+      reason: '명시적 MM 거래 회귀 시험 설정',
+    });
+    // Both fixture transitions retain the configuration writer's market lock.
+    await tx.update(markets).set({ status: 'scheduled' }).where(eq(markets.id, draft.id));
+    const [opened] = await tx
+      .update(markets)
+      .set({
+        status: 'open',
+        openAt: await clockTimestamp(tx),
+        openedLiquidityVersion: config.version,
+      })
+      .where(eq(markets.id, draft.id))
+      .returning();
+    return opened!;
+  });
 }
 
 export interface CreateSettlementStepInput {

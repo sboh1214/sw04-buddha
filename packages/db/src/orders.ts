@@ -13,6 +13,7 @@ import {
   ORDER_BUDGET_MAX_COIN,
   ORDER_QTY_MAX,
   planIntakeMatch,
+  planRiskIntakeMatch,
   RELEASE_SETTINGS,
   requestTermsEqual,
   restingStateAfterFill,
@@ -44,6 +45,8 @@ import {
 import type { BalanceRow, LedgerEntryRow } from './ledger.js';
 import { ledgerHeldMarketSql } from './ledger-held-markets.js';
 import { latestAdminRevocation } from './role-boundary.js';
+import { readMarketMakerRiskSnapshot } from './market-maker-risk.js';
+import { cancelOrder } from './order-cancel.js';
 import { newHumanParticipants, recordFillStats } from './market-stats.js';
 import { getReleaseSetting } from './release-settings.js';
 import { balances, fills, markets, orders, positions, user } from './schema/index.js';
@@ -132,11 +135,15 @@ export type PlaceOrderResult =
       fills: FillRow[];
       stats: MarketFillStats | null;
       touched: PlaceOrderTouched;
+      /** Internal MM remainder cancellations; a zero-fill cancellation still changes the book. */
+      cancelledBotOrderIds: string[];
     }
   /** The request id named an order before, with the same terms: that order as it stands now. */
   | { kind: 'replayed'; order: OrderRow }
   /** The request id named an order before with other terms (DUPLICATE_REQUEST). */
   | { kind: 'conflict' }
+  /** Internal bot admission only: no public reason, order row, asset write or spent request id. */
+  | { kind: 'bot_risk_rejected'; reason: 'loss_limit' | 'unavailable' }
   /**
    * Nothing written: intake is closed (`order.accepting` not `true`, ORDER_INTAKE_CLOSED), or an
    * immediate order meets a market with no 가격 보호 폭 (a market submitted before #119's deploy,
@@ -223,7 +230,10 @@ export async function findOrderByRequest(
  * it without and get a snapshot — the public reads (#179, order-book.ts `readPublicBook`) read it
  * in a REPEATABLE READ READ ONLY snapshot without `lockMarket`.
  */
-export async function readLiveBook(executor: Reader, marketId: string): Promise<LiveBookOrder[]> {
+export async function readLiveBook(
+  executor: Pick<Db, 'select'>,
+  marketId: string,
+): Promise<LiveBookOrder[]> {
   const rows = await executor
     .select({
       id: orders.id,
@@ -320,8 +330,8 @@ function humanOwnersOf(
  *    and 4 are `intakeMarketGate`;
  * 5. the live book; an immediate order's limit narrowed to the best opposite entry ± the market's
  *    width (`protectedLimit`, #177 2항 — the own resting order counts as the reference too), the
- *    match (#117 `matchOrder`, two arguments) and its end state — `planIntakeMatch`. The quote
- *    (#179, order-book.ts) runs the same gate and plan on a snapshot, with no owner;
+ *    match and its end state. #128 supplies the evolving market-specific MM risk snapshot to
+ *    the same walker and records exact remainder cancellations separately from its fills;
  * 6. every owner the match meets locked at once (`lockOrderHolders`), the market's close again
  *    at the fill instant read after it (a rejected order '마감', nothing locked — no fill carries
  *    an instant at or past `close_at`, #120), then the order's intake lock (`orderIntakeLock` at
@@ -330,12 +340,14 @@ function humanOwnersOf(
  * 7. the order in its end state (`orderEndState`: ADR-0111 결정 6), then each fill in walk order —
  *    its row first (its id keys the ledger events, migration 0062 binds them), #118's process, the
  *    resting order's fill — and the lock left over released (`intakeRemainderRelease`: an IOC
- *    remainder, a budget's unspent Coin, a self-trade stop; a resting GTC order keeps it);
+ *    remainder, a budget's unspent Coin, a self-trade stop; a resting GTC order keeps it), then
+ *    each planned risk-limited MM remainder cancelled through the existing cancel processing;
  * 8. when it filled, the market's statistics once for the intake (#121, `recordFillStats`), with
  *    the people new to the market read before step 7's first write (`newHumanParticipants`).
  *
  * A rejected order is a row with its request id and reason (#177 7항); `replayed`, `conflict`,
- * `closed` and `not_found` write nothing, so the request id stays free. A contract process that
+ * `closed`, `not_found` and internal `bot_risk_rejected` write nothing, so the request id stays
+ * free. A contract process that
  * does not apply exactly as planned throws, and the caller's transaction rolls the whole intake
  * back. RangeError for terms the body schema refuses; the database refuses an admin's order
  * (`orders_refuse_admin_owner`), which the API answers FORBIDDEN first.
@@ -442,6 +454,7 @@ export async function placeOrder(
       fills: [],
       stats: null,
       touched: { balances: [], positions: [] },
+      cancelledBotOrderIds: [],
     };
   };
 
@@ -471,23 +484,57 @@ export async function placeOrder(
     if (await reconciliationUserHeld(tx, ownerId))
       return rejected('ledger_hold', market.now, gateProtection);
   }
-  // #128 trims the 운영 마켓메이커's quantities on this book before matching, and the quote's
-  // book (apps/api OrderBookService) the same way: a trim here alone parts the quote from the fill.
-  const book = await readLiveBook(tx, marketId);
-  // The reference, the protected limit, the match and the end state: the quote's plan too.
-  const plan = planIntakeMatch(book, input, market.widthTicks, {
-    id: owner.id,
-    human: owner.human,
-  });
-  const { incoming, result, end } = plan;
-  const protectedLimitPrice = plan.protectedLimitPriceCoin;
-  const referencePrice = plan.referencePriceCoin;
-  const widthTicks = plan.widthTicks;
+  const liveBook = await readLiveBook(tx, marketId);
+  // Every writer of these market-specific funds, positions and orders holds this market lock.
+  // Human-only legacy markets need no MM configuration or funds to keep trading.
+  const snapshot =
+    !owner.human || liveBook.some((order) => !order.owner.human)
+      ? await readMarketMakerRiskSnapshot(tx, marketId, liveBook)
+      : null;
+  if (snapshot?.kind === 'inconsistent') {
+    // Do not normalize damaged assets into zero funds, or release their locks. The existing
+    // reconciliation audit records/holds the mismatch; this intake makes no asset change.
+    throw new Error(`Market maker risk snapshot is inconsistent: ${snapshot.reason}`);
+  }
+  if (
+    !owner.human &&
+    snapshot?.kind !== 'ready' &&
+    !(snapshot?.kind === 'unavailable' && snapshot.reason === 'missing_funds')
+  )
+    return { kind: 'bot_risk_rejected', reason: 'unavailable' };
+  // A configured bot with no allocated funds keeps #119's asset-refusal row. The ordinary
+  // lockForOrder path below reads zero available assets without creating a ledger account;
+  // missing funds are not reclassified as a loss-limit/configuration refusal.
+  // Missing legacy settings disable MM participation. Its old locks remain for an explicit
+  // cancellation/recovery; human-to-human matching retains its ordinary price/time ordering.
+  const book =
+    snapshot?.kind === 'unavailable' ? liveBook.filter((order) => order.owner.human) : liveBook;
+  const incomingOwner = { id: owner.id, human: owner.human };
+  const risk =
+    snapshot?.kind === 'ready'
+      ? planRiskIntakeMatch(book, input, market.widthTicks, incomingOwner, snapshot)
+      : null;
+  if (risk?.kind === 'bot_risk_rejected') return { kind: 'bot_risk_rejected', reason: risk.reason };
+  const plan =
+    risk === null
+      ? planIntakeMatch(book, input, market.widthTicks, incomingOwner)
+      : risk.kind === 'planned'
+        ? risk.plan
+        : null;
+  const prepared = risk?.kind === 'bot_asset_rejected' ? risk : plan!;
+  const protectedLimitPrice = prepared.protectedLimitPriceCoin;
+  const referencePrice = prepared.referencePriceCoin;
+  const widthTicks = prepared.widthTicks;
   const protection = { protectedLimitPrice, referencePrice, ticks: widthTicks };
+  const botCancellations = risk?.kind === 'planned' ? risk.botCancellations : [];
 
   // Every owner's Coin account before the first lock, release or fill (ADR-0110 결정 4): the
   // last lock that can wait, so the clock is read after it.
-  await lockOrderHolders(tx, marketId, [ownerId, ...result.counterpartyOwnerIds]);
+  await lockOrderHolders(tx, marketId, [
+    ownerId,
+    ...(plan?.result.counterpartyOwnerIds ?? []),
+    ...botCancellations.map((order) => order.ownerId),
+  ]);
   const at = await clockTimestamp(tx);
   if (owner.human && (await reconciliationUserHeld(tx, ownerId)))
     return rejected('ledger_hold', at, gateProtection);
@@ -497,6 +544,9 @@ export async function placeOrder(
   // the market lock), and nothing is locked yet.
   const late = marketTradingRejectReason({ ...market, now: at });
   if (late !== null) return rejected(late, at, gateProtection);
+  if (risk?.kind === 'bot_asset_rejected') return rejected(risk.reason, at, protection);
+  if (plan === null) throw new Error('An executable intake plan is missing');
+  const { incoming, result, end } = plan;
   const facts: OrderLockFacts = {
     side: input.side,
     outcome: input.outcome,
@@ -604,6 +654,26 @@ export async function placeOrder(
     await releaseForOrder(tx, { marketId, ownerId, lock: release, at });
   }
 
+  // All cancellation owners were prelocked above, including zero-fill entries. cancelOrder
+  // reuses those locks and the established whole-remainder release; no new balance lock can
+  // be acquired after the fills. A mismatch rolls the whole intake back.
+  const cancelledBotOrderIds: string[] = [];
+  for (const cancellation of botCancellations) {
+    const done = await cancelOrder(tx, {
+      ownerId: cancellation.ownerId,
+      orderId: cancellation.orderId,
+      reason: 'by_owner',
+    });
+    if (
+      done.kind !== 'cancelled' ||
+      done.order.marketId !== marketId ||
+      done.order.qty! - done.order.filledQty !== cancellation.qty
+    ) {
+      throw new Error('A bot remainder did not cancel exactly as planned');
+    }
+    cancelledBotOrderIds.push(done.order.id);
+  }
+
   const stats =
     made.length === 0
       ? null
@@ -615,19 +685,24 @@ export async function placeOrder(
     fills: made,
     stats,
     touched: await touchedOf(tx, marketId, lastEntry, touchedPositions),
+    cancelledBotOrderIds,
   };
 }
 
 /**
  * Whether an intake changed the market's live book, so its public book changed (#179: the caller
  * publishes `market:book` after COMMIT): a new order that rests, or any fill (a resting order
- * filled or partly filled). A rejected order, an immediate one that filled nothing, and the
- * answers that write nothing (`replayed`, `conflict`, `closed`, `not_found`) change nothing.
+ * filled or partly filled), or an MM remainder cancelled by #128. Even an immediate order that
+ * filled nothing may cancel an unsafe MM remainder. Every answer that writes nothing leaves
+ * the book unchanged.
  * `market:trade` and `market:tick` follow the result's `fills` and `stats` (#121).
  */
 export function placeOrderChangedBook(result: PlaceOrderResult): boolean {
   return (
-    result.kind === 'placed' && (result.fills.length > 0 || isLiveOrderStatus(result.order.status))
+    result.kind === 'placed' &&
+    (result.fills.length > 0 ||
+      isLiveOrderStatus(result.order.status) ||
+      result.cancelledBotOrderIds.length > 0)
   );
 }
 

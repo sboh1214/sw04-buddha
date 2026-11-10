@@ -68,10 +68,14 @@ export interface LiveBotOrder extends PlanBotOrder {
   readonly id: string;
 }
 
-/** L and the stage policy. The thresholds and the ratio are release settings (결정 1의 12). */
-export interface RiskLimits {
+/** The admission/fill bound. It needs no utilization-stage release settings. */
+export interface LossLimits {
   /** 최대 손실 L, in Coin. */
   readonly maxLoss: bigint;
+}
+
+/** L and the stage policy. The thresholds and the ratio are release settings (결정 1의 12). */
+export interface RiskLimits extends LossLimits {
   /** The utilization (basis points of L) from which the stage is `reduce`: 7000 proposed. */
   readonly reduceAtBp: number;
   /** The utilization from which the stage is `halt`: 9000 proposed. */
@@ -98,8 +102,12 @@ export function assertBotBook(book: BotBook): void {
   assertCoin('recovered', book.recovered, 0n);
 }
 
-export function assertRiskLimits(limits: RiskLimits): void {
+export function assertLossLimits(limits: LossLimits): void {
   assertCoin('maxLoss', limits.maxLoss, 1n);
+}
+
+export function assertRiskLimits(limits: RiskLimits): void {
+  assertLossLimits(limits);
   assertWhole('reduceAtBp', limits.reduceAtBp, 0);
   assertWhole('haltAtBp', limits.haltAtBp, limits.reduceAtBp);
   if (limits.haltAtBp > Number(BP)) {
@@ -258,10 +266,10 @@ export function checkBotOrder(
   book: BotBook,
   liveOrders: readonly BotOrder[],
   order: BotOrder,
-  limits: RiskLimits,
+  limits: LossLimits,
   terms: ContractTerms,
 ): BotOrderCheck {
-  assertRiskLimits(limits);
+  assertLossLimits(limits);
   const reserved = reservedPnl(book, liveOrders, terms);
   const delta = orderPnlDelta(order, terms);
   const lockedCoin = liveOrders
@@ -295,13 +303,33 @@ export function maxBotFillQty(
   otherLiveOrders: readonly BotOrder[],
   order: BotOrder,
   requestedQty: number,
-  limits: RiskLimits,
+  limits: LossLimits,
   terms: ContractTerms,
 ): number {
-  assertRiskLimits(limits);
+  return maxBotFillQtyFromReservedPnl(
+    reservedPnl(book, otherLiveOrders, terms),
+    order,
+    requestedQty,
+    limits,
+    terms,
+  );
+}
+
+/** The same fill bound with an already aggregated reservation, excluding this resting order. */
+export function maxBotFillQtyFromReservedPnl(
+  base: ByResult<bigint>,
+  order: BotOrder,
+  requestedQty: number,
+  limits: LossLimits,
+  terms: ContractTerms,
+): number {
+  assertContractTerms(terms);
+  assertLossLimits(limits);
   assertBotOrder(order, terms);
   assertWhole('requestedQty', requestedQty, 0);
-  const base = reservedPnl(book, otherLiveOrders, terms);
+  for (const result of RESULT_SCENARIOS) {
+    if (typeof base[result] !== 'bigint') throw new RangeError('Reserved PnL must be bigint');
+  }
   const perContract = orderPnlDelta({ ...order, qty: 1 }, terms);
   let fill = Math.min(requestedQty, order.qty);
   for (const result of RESULT_SCENARIOS) {

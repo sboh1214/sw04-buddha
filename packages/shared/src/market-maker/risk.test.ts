@@ -7,14 +7,17 @@ import {
   type BotOrder,
   type ByResult,
   type LiveBotOrder,
+  type LossLimits,
   type PlanBotOrder,
   RESULT_SCENARIOS,
   type RiskLimits,
   assertBotBook,
+  assertLossLimits,
   assertRiskLimits,
   botRisk,
   checkBotOrder,
   maxBotFillQty,
+  maxBotFillQtyFromReservedPnl,
   orderPnlDelta,
   planBotQuotes,
   reconcileBotQuotes,
@@ -900,7 +903,77 @@ describe('reconcileBotQuotes (#128 줄이거나 취소할 봇 대기 주문)', (
   });
 });
 
+describe('loss-only admission and fill limits (#128)', () => {
+  it('enforces L without inventing utilization-stage settings', () => {
+    const loss: LossLimits = { maxLoss: 100n };
+    const held = book({ coin: 1_000n, invested: 1_000n });
+    expect(() => assertLossLimits(loss)).not.toThrow();
+    expect(checkBotOrder(held, [], buy('YES', 50, 2), loss, T)).toBe('ok');
+    expect(checkBotOrder(held, [], buy('YES', 50, 3), loss, T)).toBe('loss_limit');
+    expect(maxBotFillQty(held, [], buy('YES', 50, 10), 10, loss, T)).toBe(2);
+  });
+
+  it('keeps the full-policy callers equivalent for every book, order and valid policy', () => {
+    fc.assert(
+      fc.property(
+        bookArb,
+        fc.array(orderArb, { maxLength: 12 }),
+        orderArb,
+        limitsArb,
+        (held, live, order, limits) => {
+          const loss: LossLimits = { maxLoss: limits.maxLoss };
+          expect(checkBotOrder(held, live, order, loss, T)).toBe(
+            checkBotOrder(held, live, order, limits, T),
+          );
+          expect(maxBotFillQty(held, live, order, order.qty, loss, T)).toBe(
+            maxBotFillQty(held, live, order, order.qty, limits, T),
+          );
+        },
+      ),
+      RUNS,
+    );
+  });
+
+  it.each([0n, -1n, 100 as unknown as bigint, undefined as unknown as bigint])(
+    'still refuses an invalid L: %s',
+    (maxLoss) => {
+      const loss: LossLimits = { maxLoss };
+      expect(() => assertLossLimits(loss)).toThrow(RangeError);
+      expect(() => checkBotOrder(book(), [], buy('YES', 50, 1), loss, T)).toThrow(RangeError);
+      expect(() => maxBotFillQty(book(), [], buy('YES', 50, 1), 1, loss, T)).toThrow(RangeError);
+    },
+  );
+
+  it('continues requiring explicit stage settings for figures and quote planning', () => {
+    // A runtime caller cannot turn absent stage settings into experimental defaults.
+    const missingStages = { maxLoss: 100n } as RiskLimits;
+    expect(() => assertRiskLimits(missingStages)).toThrow(RangeError);
+    expect(() => riskStage(0n, missingStages)).toThrow(RangeError);
+    expect(() => botRisk(book(), [], missingStages, T)).toThrow(RangeError);
+    expect(() =>
+      planBotQuotes({ yesBids: [], noBids: [] }, book(), [], 1, missingStages, T),
+    ).toThrow(RangeError);
+  });
+});
+
 describe('input validation', () => {
+  it('keeps the aggregated fill bound identical to full reservation recomputation', () => {
+    fc.assert(
+      fc.property(
+        bookArb,
+        fc.array(orderArb, { maxLength: 12 }),
+        orderArb,
+        limitsArb,
+        (held, live, order, limits) => {
+          expect(
+            maxBotFillQtyFromReservedPnl(reservedPnl(held, live, T), order, order.qty, limits, T),
+          ).toBe(maxBotFillQty(held, live, order, order.qty, limits, T));
+        },
+      ),
+      RUNS,
+    );
+  });
+
   it('rejects a bad book, limits or order', () => {
     for (const over of [
       { coin: -1n },
