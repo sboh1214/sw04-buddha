@@ -62,7 +62,11 @@ export function TreasuryBalance({ treasury }: { treasury: AdminTreasury }) {
       )}
       <DataList.Root orientation={{ base: 'vertical', md: 'horizontal' }}>
         {fields.map(([key, label]) => (
-          <DataList.Item key={key} data-testid={`treasury-${key}`}>
+          <DataList.Item
+            key={key}
+            flexDirection={{ base: 'column', md: 'row' }}
+            data-testid={`treasury-${key}`}
+          >
             <DataList.ItemLabel>{label}</DataList.ItemLabel>
             <DataList.ItemValue overflowWrap="anywhere">
               {treasury[key] === null ? '—' : formatCoin(BigInt(treasury[key]))}

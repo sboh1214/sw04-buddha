@@ -73,12 +73,12 @@ export function MarketMakerFacts({ data }: { data: AdminMarketMaker }) {
       </Stack>
       <DataList.Root orientation={{ base: 'vertical', md: 'horizontal' }} size="sm">
         {versions.map(([label, version]) => (
-          <DataList.Item key={label}>
+          <DataList.Item key={label} flexDirection={{ base: 'column', md: 'row' }}>
             <DataList.ItemLabel>{label}</DataList.ItemLabel>
             <DataList.ItemValue>{version ?? '—'}</DataList.ItemValue>
           </DataList.Item>
         ))}
-        <DataList.Item>
+        <DataList.Item flexDirection={{ base: 'column', md: 'row' }}>
           <DataList.ItemLabel>{copy.marketMakerStageSettings}</DataList.ItemLabel>
           <DataList.ItemValue>
             {MARKET_MAKER_STAGE_LABEL[data.stageSettings.status]}
@@ -91,7 +91,7 @@ export function MarketMakerFacts({ data }: { data: AdminMarketMaker }) {
             [copy.marketMakerReduceRatio, data.stageSettings.reduceRatioBp],
           ] as const
         ).map(([label, reading]) => (
-          <DataList.Item key={label}>
+          <DataList.Item key={label} flexDirection={{ base: 'column', md: 'row' }}>
             <DataList.ItemLabel>{label}</DataList.ItemLabel>
             <DataList.ItemValue>{formatReleaseSettingState(reading)}</DataList.ItemValue>
           </DataList.Item>
@@ -104,7 +104,7 @@ export function MarketMakerFacts({ data }: { data: AdminMarketMaker }) {
               [copy.marketMakerLastFailure, runtime.lastFailureAt],
             ] as const
           ).map(([label, time]) => (
-            <DataList.Item key={label}>
+            <DataList.Item key={label} flexDirection={{ base: 'column', md: 'row' }}>
               <DataList.ItemLabel>{label}</DataList.ItemLabel>
               <DataList.ItemValue>{time === null ? '—' : formatKst(time)}</DataList.ItemValue>
             </DataList.Item>
