@@ -180,9 +180,9 @@ describe.skipIf(!hasTestDb())('ledger.audit (integration)', () => {
     await tamper(funds, 7n);
 
     const result = await runLedgerAudit(t.db);
-    // The person, the market's creator and the three system accounts; the 운영 마켓메이커 has no
-    // ledger account.
-    expect(result.checked).toBe(5);
+    // The person, market creator, two treasury-issuance admins, and three system accounts;
+    // the 운영 마켓메이커 has no user ledger account.
+    expect(result.checked).toBe(7);
     const expected = [
       {
         ledgerAccountId: await accountId(treasury),
@@ -508,8 +508,8 @@ describe.skipIf(!hasTestDb())('ledger.audit (integration)', () => {
     });
 
     const result = await runLedgerAudit(t.db);
-    // alice, bob, the market's creator, the treasury, the collateral, the 마켓메이커 자금.
-    expect(result).toMatchObject({ checked: 6, mismatches: [], recorded: 0 });
+    // Alice, Bob, market creator, two treasury-issuance admins, treasury, collateral and MM funds.
+    expect(result).toMatchObject({ checked: 8, mismatches: [], recorded: 0 });
     const supply = await ledgerSupply(t.db);
     expect(supply.heldCoin).toBe(supply.mintedCoin - supply.burnedCoin);
   });

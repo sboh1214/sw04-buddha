@@ -24,9 +24,11 @@ import {
   type LedgerAccountRef,
   type LedgerEntryInput,
 } from './ledger.js';
+import { mintTreasury } from './treasury.js';
 import { balances, ledgerAccounts, ledgerEntries } from './schema/index.js';
 import {
   closeAccount,
+  createApprovalRequest,
   createMarket,
   createMarketMakerAccount,
   createUser,
@@ -35,6 +37,8 @@ import { connectTestDb, hasTestDb, testDbUrls, type TestDb } from './test/harnes
 import { createFillRecord, priceAndQtyOf } from './test/orders.js';
 import {
   fundMarketMakerFunds,
+  fundTestTreasury,
+  recordLegacyMarketMakerCapitalForTest,
   ledgerAccountBalance,
   ledgerOf,
   ledgerSupply,
@@ -153,15 +157,18 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
       input.refId === undefined && input.idempotencyKey === undefined
         ? await fillRefOf(input)
         : null;
-    return t.db.transaction((tx) =>
-      recordLedgerEntry(tx, {
-        refType: 'fill',
-        refId: randomUUID(),
-        idempotencyKey: randomUUID(),
-        ...bound,
-        ...input,
-      }),
-    );
+    const entry: LedgerEntryInput = {
+      refType: 'fill',
+      refId: randomUUID(),
+      idempotencyKey: randomUUID(),
+      ...bound,
+      ...input,
+    };
+    // These are historic low-level ledger-shape/key tests, not new production issuance or
+    // initial opening. Only their explicit TEST-owner fixture bypasses the new capital binding.
+    if (entry.type === 'TREASURY_MINT' || entry.type === 'BOT_ALLOCATION')
+      return recordLegacyMarketMakerCapitalForTest({ ...entry, type: entry.type });
+    return t.db.transaction((tx) => recordLedgerEntry(tx, entry));
   };
 
   /** A ledger account's balance row, made if new. */
@@ -184,7 +191,7 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
         });
         return;
       case 'treasury':
-        await record({ type: 'TREASURY_MINT', amountCoin, from: null, to: ref });
+        await fundTestTreasury(t.db, amountCoin);
         return;
       case 'market_maker_funds':
         await fundMarketMakerFunds(t.db, ref.marketId, amountCoin);
@@ -672,17 +679,18 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
 
     it('records one event when the same key is recorded by two transactions at once', async () => {
       await fund({ kind: 'treasury' }, 1n);
-      const requestId = randomUUID();
+      const requestedBy = (await createUser(t.db, { role: 'admin' })).user.id;
+      const by = (await createUser(t.db, { role: 'admin' })).user.id;
+      const approved = await createApprovalRequest(t.db, {
+        kind: 'treasury_issue',
+        targetType: 'treasury',
+        targetId: 'treasury',
+        requestedBy,
+        payload: { amountCoin: '700' },
+        decision: { status: 'approved', by },
+      });
       const mint = (tx: Parameters<Parameters<typeof t.db.transaction>[0]>[0]) =>
-        recordLedgerEntry(tx, {
-          type: 'TREASURY_MINT',
-          amountCoin: 700n,
-          from: null,
-          to: { kind: 'treasury' },
-          refType: 'approval_request',
-          refId: requestId,
-          idempotencyKey: ledgerKeys.approvalRequest(requestId),
-        });
+        mintTreasury(tx, { approvalId: approved.id });
       let release!: () => void;
       const released = new Promise<void>((resolve) => (release = resolve));
       let written!: () => void;

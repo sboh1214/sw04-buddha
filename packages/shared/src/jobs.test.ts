@@ -5,6 +5,8 @@ import {
   marketCloseJobId,
   marketFinalizeJobId,
   marketJobDataSchema,
+  marketMakerJobDataSchema,
+  marketMakerJobId,
   marketOpenJobId,
   marketResolveJobId,
 } from './jobs.js';
@@ -15,6 +17,7 @@ describe('jobs (PLAN 9)', () => {
   it('declares the queues and job names, the market jobs in lifecycle order', () => {
     expect(QUEUE_NAMES).toEqual([
       'markets',
+      'maker',
       'audit',
       'stats',
       'wallet',
@@ -23,6 +26,8 @@ describe('jobs (PLAN 9)', () => {
       'retention',
     ]);
     expect(Object.values(JOB_NAMES)).toEqual([
+      'market_maker.refresh',
+      'market_maker.scan',
       // The open first (#21), the confirmation of a provisional result before the payout (#152).
       'market.open',
       'market.close',
@@ -85,5 +90,30 @@ describe('jobs (PLAN 9)', () => {
     for (const other of [marketOpenJobId, marketCloseJobId, marketFinalizeJobId]) {
       expect(other(marketId, disputeDeadline)).not.toBe(id);
     }
+  });
+});
+
+// No JS number conversion: the durable generation can exceed the safe-integer boundary.
+describe('maker generation delivery', () => {
+  it('requires a positive signed bigint decimal and a canonical market id', () => {
+    expect(
+      marketMakerJobDataSchema.parse({
+        marketId: marketId.toUpperCase(),
+        generation: '9223372036854775807',
+      }),
+    ).toEqual({ marketId, generation: '9223372036854775807' });
+    for (const generation of ['0', '-1', '01', '1.5', '9223372036854775808', 1, null]) {
+      expect(marketMakerJobDataSchema.safeParse({ marketId, generation }).success).toBe(false);
+    }
+    expect(marketMakerJobDataSchema.safeParse({ marketId }).success).toBe(false);
+    expect(
+      marketMakerJobDataSchema.safeParse({ marketId, generation: '1', bypass: true }).success,
+    ).toBe(false);
+  });
+  it('separates registration identity from generation and never uses a Redis colon', () => {
+    const first = marketMakerJobId(marketId, 1n, 'first');
+    expect(first).toBe(`market_maker.refresh.${marketId}.1.first`);
+    expect(first).not.toContain(':');
+    expect(marketMakerJobId(marketId, 1n, 'next')).not.toBe(first);
   });
 });

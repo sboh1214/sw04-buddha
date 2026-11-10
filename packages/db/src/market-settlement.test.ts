@@ -6,7 +6,6 @@ import {
   findLedgerAccount,
   ledgerKeys,
   lockCoin,
-  lockLedgerAccounts,
   recordLedgerEntry,
   releaseCoin,
 } from './ledger.js';
@@ -29,6 +28,7 @@ import { closeTestMarket, createOrder, passMarketClose } from './test/orders.js'
 import {
   balanceOf,
   fundMarketMakerFunds,
+  fundTestTreasury,
   ledgerAccountBalance,
   ledgerSupply,
   mintTestPairs,
@@ -415,18 +415,7 @@ describe.skipIf(!hasTestDb())('atomic market settlement (#126, integration)', ()
     const collateral = { kind: 'market_collateral', marketId: market.id } as const;
     const account = await findLedgerAccount(t.db, collateral);
     const requestId = randomUUID();
-    await t.db.transaction(async (tx) => {
-      await lockLedgerAccounts(tx, [{ kind: 'treasury' }, collateral]);
-      await recordLedgerEntry(tx, {
-        type: 'TREASURY_MINT',
-        amountCoin: 1n,
-        from: null,
-        to: { kind: 'treasury' },
-        refType: 'approval_request',
-        refId: requestId,
-        idempotencyKey: ledgerKeys.approvalRequest(requestId),
-      });
-    });
+    await fundTestTreasury(t.db, 1n);
     await recordLegacyCorrectionForTest({
       amountCoin: 1n,
       from: { kind: 'treasury' },

@@ -45,6 +45,8 @@ import {
 import type { BalanceRow, LedgerEntryRow } from './ledger.js';
 import { ledgerHeldMarketSql } from './ledger-held-markets.js';
 import { latestAdminRevocation } from './role-boundary.js';
+import { burnAvailableMarketMakerPairs } from './market-maker-burn.js';
+import { readMarketMakerRuntime, requestMarketMakerRefresh } from './market-maker-runtime.js';
 import { readMarketMakerRiskSnapshot } from './market-maker-risk.js';
 import { cancelOrder } from './order-cancel.js';
 import { newHumanParticipants, recordFillStats } from './market-stats.js';
@@ -137,6 +139,8 @@ export type PlaceOrderResult =
       touched: PlaceOrderTouched;
       /** Internal MM remainder cancellations; a zero-fill cancellation still changes the book. */
       cancelledBotOrderIds: string[];
+      /** Internal durable refresh trigger, only when this intake changed the MM's fills/reservations. */
+      marketMakerGeneration?: bigint;
     }
   /** The request id named an order before, with the same terms: that order as it stands now. */
   | { kind: 'replayed'; order: OrderRow }
@@ -496,6 +500,9 @@ export async function placeOrder(
     // reconciliation audit records/holds the mismatch; this intake makes no asset change.
     throw new Error(`Market maker risk snapshot is inconsistent: ${snapshot.reason}`);
   }
+  const runtime = snapshot === null ? null : await readMarketMakerRuntime(tx, marketId);
+  const stopped = runtime?.desiredEnabled === false;
+  if (!owner.human && stopped) return { kind: 'bot_risk_rejected', reason: 'unavailable' };
   if (
     !owner.human &&
     snapshot?.kind !== 'ready' &&
@@ -508,10 +515,12 @@ export async function placeOrder(
   // Missing legacy settings disable MM participation. Its old locks remain for an explicit
   // cancellation/recovery; human-to-human matching retains its ordinary price/time ordering.
   const book =
-    snapshot?.kind === 'unavailable' ? liveBook.filter((order) => order.owner.human) : liveBook;
+    snapshot?.kind === 'unavailable' || stopped
+      ? liveBook.filter((order) => order.owner.human)
+      : liveBook;
   const incomingOwner = { id: owner.id, human: owner.human };
   const risk =
-    snapshot?.kind === 'ready'
+    snapshot?.kind === 'ready' && !stopped
       ? planRiskIntakeMatch(book, input, market.widthTicks, incomingOwner, snapshot)
       : null;
   if (risk?.kind === 'bot_risk_rejected') return { kind: 'bot_risk_rejected', reason: risk.reason };
@@ -674,6 +683,19 @@ export async function placeOrder(
     cancelledBotOrderIds.push(done.order.id);
   }
 
+  // Actual MM fills change the curve inventory. Burn only unlocked pairs immediately while
+  // this intake still holds all assets, before another order can reuse the collateral/funds.
+  // A posting/cancellation by the quote cycle itself never creates an endless refresh loop.
+  const makerFilled = made.some(
+    (fill) =>
+      fill.incomingAccountType === 'market_maker' || fill.restingAccountType === 'market_maker',
+  );
+  if (makerFilled) await burnAvailableMarketMakerPairs(tx, marketId, `fill:${order.id}`);
+  const refresh =
+    makerFilled || cancelledBotOrderIds.length > 0
+      ? await requestMarketMakerRefresh(tx, marketId)
+      : null;
+
   const stats =
     made.length === 0
       ? null
@@ -686,6 +708,7 @@ export async function placeOrder(
     stats,
     touched: await touchedOf(tx, marketId, lastEntry, touchedPositions),
     cancelledBotOrderIds,
+    ...(refresh === null ? {} : { marketMakerGeneration: refresh.generation }),
   };
 }
 

@@ -1,16 +1,19 @@
 import { eq } from 'drizzle-orm';
-import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import { RELEASE_SETTINGS, type ReleaseSettingsRegistry } from '@buddha/shared';
+import type { Db } from './client.js';
+import { allocateMarketMakerInitial } from './market-maker-allocation.js';
+import { readMarketMakerStageSettings } from './market-maker-settings.js';
+import { recordMarketMakerOpenAttempt } from './market-maker-runtime.js';
 import { ledgerHeldMarketIds } from './ledger-held-markets.js';
 import { readMarketMakerConfig } from './market-liquidity.js';
 import { insertRuleVersion } from './market-rules-content.js';
 import { transitionMarket } from './market-transitions.js';
-import type * as schema from './schema/index.js';
 import { markets } from './schema/index.js';
 
 type MarketRow = typeof markets.$inferSelect;
 
 /** A transaction handle of either app, as `transitionMarket` takes it, that also reads back. */
-type Executor = Pick<NodePgDatabase<typeof schema>, 'insert' | 'update' | 'select'>;
+type Executor = Parameters<Parameters<Db['transaction']>[0]>[0];
 
 /**
  * Why `openScheduledMarket` left a market as it was:
@@ -24,7 +27,19 @@ type Executor = Pick<NodePgDatabase<typeof schema>, 'insert' | 'update' | 'selec
  *   configure it and review it again. No budget is inferred and nothing is backfilled.
  */
 export type OpenSkipReason =
-  'not_scheduled' | 'not_due' | 'close_passed' | 'ledger_hold' | 'liquidity_missing';
+  | 'not_scheduled'
+  | 'not_due'
+  | 'close_passed'
+  | 'ledger_hold'
+  | 'liquidity_missing'
+  | 'risk_settings_missing'
+  | 'risk_settings_invalid'
+  | 'treasury_missing'
+  | 'treasury_insufficient'
+  | 'treasury_inconsistent'
+  | 'market_maker_approval_missing'
+  | 'market_maker_funds_inconsistent'
+  | 'missing_market_maker';
 
 /**
  * Who opened it, the `opened` event's payload `source` (#21, ADR-0100): the worker's `market.open`
@@ -42,6 +57,7 @@ export interface OpenScheduledMarketInput {
   /** The approving or rescheduling admin, or null for the worker (`source: 'job'`). */
   actorId: string | null;
   source: OpenSource;
+  registry?: ReleaseSettingsRegistry;
 }
 
 export type OpenScheduledMarketResult =
@@ -67,12 +83,15 @@ export type OpenScheduledMarketResult =
  * Call it under `lockMarket`, with `market` read `FOR UPDATE` after the lock and `now` the DB
  * clock read after that, in the caller's transaction. It opens a market that is SCHEDULED, whose
  * scheduled open is set and at or before `now`, and whose close is after `now`, checked in that
- * order; otherwise it writes nothing and says why. A null scheduled open never comes: every path
+ * order; otherwise it says why. A due attempt that reaches MM readiness also records its observed blocker. A null scheduled open never comes: every path
  * to SCHEDULED leaves one (the submission's open-items check, the reschedule), so a row without it
  * was written outside them and waits rather than opening with no time. A close that has come is
  * never opened (ADR-0099 결과 5 left that to #21): trading would end as it began.
  *
- * The explicit liquidity version must exist and is pinned by this open. Other opening content
+ * The explicit liquidity version and all three stage settings must exist. The existing approved
+ * review authorizes one allocation of A from treasury, atomically with OPEN, the runtime row and
+ * the pinned configuration. Missing funding/settings leaves SCHEDULED with an observed reason;
+ * no implicit mint or old-OPEN backfill is allowed. Other opening content
  * is not checked again, since the approval was the last gate: not the open items — a
  * category hidden since keeps its markets (ADR-0093 #172 item 1 '기존 시장은 그 분류를 그대로
  * 가진다') — and not the lead close (ADR-0098 7-6). `lead_close_gap_minutes` stays as the
@@ -97,7 +116,7 @@ export type OpenScheduledMarketResult =
  */
 export async function openScheduledMarket(
   tx: Executor,
-  { market, now, actorId, source }: OpenScheduledMarketInput,
+  { market, now, actorId, source, registry = RELEASE_SETTINGS }: OpenScheduledMarketInput,
 ): Promise<OpenScheduledMarketResult> {
   if ((source === 'job') !== (actorId === null)) {
     throw new Error(
@@ -113,7 +132,48 @@ export async function openScheduledMarket(
     return { opened: false, reason: 'ledger_hold' };
 
   const liquidity = await readMarketMakerConfig(tx, market.id);
-  if (!liquidity) return { opened: false, reason: 'liquidity_missing' };
+  const skip = async (
+    reason: OpenSkipReason,
+    requiredCoin: bigint | null = liquidity?.budgetCoin ?? null,
+    availableCoin: bigint | null = null,
+  ): Promise<OpenScheduledMarketResult> => {
+    await recordMarketMakerOpenAttempt(tx, {
+      marketId: market.id,
+      reason,
+      requiredCoin,
+      availableCoin,
+      liquidityVersion: liquidity?.version ?? null,
+    });
+    return { opened: false, reason };
+  };
+  if (!liquidity) return skip('liquidity_missing');
+  const stages = await readMarketMakerStageSettings(tx, registry);
+  if (stages.kind !== 'ready')
+    return skip(stages.reason === 'undecided' ? 'risk_settings_missing' : 'risk_settings_invalid');
+  const allocation = await allocateMarketMakerInitial(tx, {
+    marketId: market.id,
+    liquidityVersion: liquidity.version,
+  });
+  if (allocation.outcome === 'unavailable') {
+    const reason: OpenSkipReason =
+      allocation.reason === 'approval_missing'
+        ? 'market_maker_approval_missing'
+        : allocation.reason === 'funds_inconsistent'
+          ? 'market_maker_funds_inconsistent'
+          : allocation.reason;
+    return skip(reason, allocation.requiredCoin, allocation.availableCoin);
+  }
+  // Allocation has acquired the final asset locks and rechecked the close. Its instant is
+  // the actual open, including when this transaction waited for another market's treasury use.
+  now = allocation.at;
+  await recordMarketMakerOpenAttempt(tx, {
+    marketId: market.id,
+    reason: null,
+    requiredCoin: allocation.requiredCoin,
+    availableCoin: allocation.availableCoin,
+    liquidityVersion: liquidity.version,
+    at: now,
+  });
 
   const statusEventId = await transitionMarket(tx, {
     marketId: market.id,

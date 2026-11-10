@@ -23,6 +23,8 @@ import { type MarketPage, type MarketPages } from '@/lib/market-live';
 import { relatedSearchSection } from '@/lib/related-markets';
 import { relatedMarketsInfiniteQueryOptions } from './use-markets';
 import { ADMIN_RECONCILIATION_KEY } from './use-reconciliation';
+import { adminMarketMakerKey } from './use-admin-market-maker';
+import { treasuryBalanceKey } from './use-treasury';
 import {
   ADMIN_MARKETS_KEY,
   ADMIN_MARKET_DISPUTES_KEY,
@@ -161,6 +163,20 @@ async function loadedDetail(
 }
 
 describe('applyMarket', () => {
+  it('invalidates the private worker observations after a market transition without putting them in public cache', async () => {
+    const queryClient = new QueryClient();
+    try {
+      const key = adminMarketMakerKey(ID);
+      queryClient.setQueryData(key, { observed: 'before transition' });
+      queryClient.setQueryData(treasuryBalanceKey, { observed: 'before allocation' });
+      await applyMarket(queryClient, ID, opened);
+      expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(treasuryBalanceKey)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryData(key)).toEqual({ observed: 'before transition' });
+    } finally {
+      queryClient.clear();
+    }
+  });
   it.each(['holds', 'results', 'hold'])(
     'refreshes cached reconciliation %s on returning after a pause recovery inside staleTime',
     async (part) => {

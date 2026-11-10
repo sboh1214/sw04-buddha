@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { ledgerKeys, lockAdminRoles, recordLedgerEntry, schema } from '@buddha/db';
+import { lockAdminRoles, schema } from '@buddha/db';
 import {
   completeOnboarding,
   createMarket,
   createStartGrant,
   createUser,
+  fundTestTreasury,
   ledgerSupply,
   mintTestPairs,
   recordLegacyCorrectionForTest,
@@ -130,18 +131,7 @@ describe.skipIf(!hasTestInfra)('Coin correction approval and member privacy (int
     return row!;
   }
   async function fundTreasury(amountCoin: bigint) {
-    const id = randomUUID();
-    await t.db.transaction((tx) =>
-      recordLedgerEntry(tx, {
-        type: 'TREASURY_MINT',
-        amountCoin,
-        from: null,
-        to: { kind: 'treasury' },
-        refType: 'approval_request',
-        refId: id,
-        idempotencyKey: ledgerKeys.approvalRequest(id),
-      }),
-    );
+    await fundTestTreasury(t.db, amountCoin);
   }
 
   it('restores only the missing 10, preserves the old ledger and supply, and publishes once after commit', async () => {

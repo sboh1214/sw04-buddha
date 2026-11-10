@@ -9,6 +9,7 @@ import {
 import { MARKET_SCAN_BATCH_MAX, marketChannel, type MarketStatusEvent } from '@buddha/shared';
 import { and, asc, eq, gt, lte, sql } from 'drizzle-orm';
 import { type Publish } from '../realtime.js';
+import { type EnqueueMarketMaker } from '../market-maker-jobs.js';
 import { runScan, type ScanFailure } from './scan.js';
 
 export type OpenResult =
@@ -46,14 +47,19 @@ export interface OpenScanResult {
  * does for the close (market-close.ts): a job left over from a whole-database wipe or a broken
  * producer fails loudly rather than being retried into silence.
  *
- * The open registers nothing: the API registered the market's `market.close` at the approval (the
+ * The open enqueues its allocated maker after commit. The API registered `market.close` at the approval (the
  * close is locked while SCHEDULED, and the close job acts on `open` only, so a job registered
  * before the open is harmless). Published after COMMIT, as the close is: the lock is released at
  * COMMIT, so an event published from inside the transaction could reach a client before the row
  * it describes is visible. `statusEventId` is the `opened` event's, the ordering key of
  * `market:status` (A-M3-19).
  */
-export async function openMarket(db: Db, marketId: string, publish: Publish): Promise<OpenResult> {
+export async function openMarket(
+  db: Db,
+  marketId: string,
+  publish: Publish,
+  enqueueMarketMaker?: EnqueueMarketMaker,
+): Promise<OpenResult> {
   const result = await db.transaction(async (tx): Promise<OpenResult> => {
     await lockMarket(tx, marketId);
     const [current] = await tx
@@ -74,7 +80,12 @@ export async function openMarket(db: Db, marketId: string, publish: Publish): Pr
       source: 'job',
     });
     if (!opened.opened) return { outcome: 'skipped', marketId, reason: opened.reason };
-    return { outcome: 'opened', marketId, statusEventId: opened.statusEventId, openedAt: now };
+    return {
+      outcome: 'opened',
+      marketId,
+      statusEventId: opened.statusEventId,
+      openedAt: opened.row.openAt!,
+    };
   });
 
   if (result.outcome === 'opened') {
@@ -87,6 +98,9 @@ export async function openMarket(db: Db, marketId: string, publish: Publish): Pr
       ts: result.openedAt.toISOString(),
     };
     await publish(marketChannel(marketId), event);
+    // Allocation creates generation 1 atomically with OPEN. A later fill may already advance it;
+    // the consumer always reads the current generation under its market lock.
+    await enqueueMarketMaker?.(marketId, 1n);
   }
   return result;
 }
@@ -112,7 +126,11 @@ export async function openMarket(db: Db, marketId: string, publish: Publish): Pr
  * close prefix. The candidate list is a plain read; `openMarket` re-checks everything under the
  * lock, so a market that opened or moved between the read and its turn counts as skipped.
  */
-export async function openDueMarkets(db: Db, publish: Publish): Promise<OpenScanResult> {
+export async function openDueMarkets(
+  db: Db,
+  publish: Publish,
+  enqueueMarketMaker?: EnqueueMarketMaker,
+): Promise<OpenScanResult> {
   const due = await db
     .select({ id: schema.markets.id })
     .from(schema.markets)
@@ -135,7 +153,7 @@ export async function openDueMarkets(db: Db, publish: Publish): Promise<OpenScan
 
   const { results, failed, failures } = await runScan(
     due.map(({ id }) => id),
-    (id) => openMarket(db, id, publish),
+    (id) => openMarket(db, id, publish, enqueueMarketMaker),
   );
   const opened = results.filter((result) => result.outcome === 'opened').length;
   return { opened, skipped: results.length - opened, failed, failures };

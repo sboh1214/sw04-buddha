@@ -249,6 +249,8 @@ describe.skipIf(!hasTestDb())('the time passing creates nothing (#142, integrati
     // under any name: a new one fails here until it is reviewed against AC 6 and, if it touches
     // a market, added to `runEveryScan` or to the per-market job checks above.
     expect(Object.values(JOB_NAMES)).toEqual([
+      'market_maker.refresh',
+      'market_maker.scan',
       'market.open',
       'market.close',
       'market.resolve',

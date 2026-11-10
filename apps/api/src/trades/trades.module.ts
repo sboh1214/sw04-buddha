@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { JobsModule } from '../jobs/jobs.module.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { DbModule } from '../infra/db/db.module.js';
 import { RealtimeModule } from '../realtime/realtime.module.js';
@@ -23,7 +24,7 @@ import { MeTradesController } from './trades.controller.js';
  * `POST /trades` is gone (#125).
  */
 @Module({
-  imports: [DbModule, AuthModule, ReleaseSettingsModule, RealtimeModule],
+  imports: [DbModule, AuthModule, ReleaseSettingsModule, RealtimeModule, JobsModule],
   controllers: [
     MeTradesController,
     MarketOrdersController,

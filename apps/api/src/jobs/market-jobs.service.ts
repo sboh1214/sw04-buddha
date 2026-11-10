@@ -1,7 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
 import {
   JOB_NAMES,
   marketCloseJobId,
+  marketMakerJobId,
+  type MarketMakerJobData,
   marketOpenJobId,
   marketResolveJobId,
   type JobName,
@@ -108,8 +111,17 @@ function bounded<T>(promise: Promise<T>, what: string): Promise<T> {
 export class MarketJobs implements OnApplicationShutdown {
   private readonly logger = new Logger(MarketJobs.name);
   private readonly queue: Queue<MarketJobData, unknown, JobName>;
+  private readonly makerQueue: Queue<MarketMakerJobData, unknown, JobName>;
 
   constructor(@Inject(REDIS_QUEUE) redis: Redis) {
+    this.makerQueue = new Queue<MarketMakerJobData, unknown, JobName>('maker', {
+      connection: redis,
+      defaultJobOptions: MARKET_JOB_OPTIONS,
+      skipVersionCheck: true,
+    });
+    this.makerQueue.on('error', (error: Error) => {
+      this.logger.warn(`maker queue error: ${describeError(error)}`);
+    });
     this.queue = new Queue<MarketJobData, unknown, JobName>(MARKETS_QUEUE, {
       connection: redis,
       defaultJobOptions: MARKET_JOB_OPTIONS,
@@ -190,6 +202,23 @@ export class MarketJobs implements OnApplicationShutdown {
     );
   }
 
+  /** The DB generation is already committed. Redis is a fast path, never the source of work. */
+  async refreshMarketMaker(marketId: string, generation: bigint): Promise<void> {
+    const jobId = marketMakerJobId(marketId, generation, randomUUID());
+    try {
+      await bounded(
+        this.makerQueue.add(
+          JOB_NAMES.marketMakerRefresh,
+          { marketId, generation: generation.toString() },
+          { jobId, deduplication: { id: marketId }, removeOnComplete: true },
+        ),
+        `add ${jobId}`,
+      );
+    } catch (error) {
+      this.logger.warn(`could not schedule ${jobId}: ${describeError(error)}`);
+    }
+  }
+
   private async schedule(
     name: JobName,
     jobId: string,
@@ -227,6 +256,6 @@ export class MarketJobs implements OnApplicationShutdown {
   // open) and RedisModule closes it afterwards — this module imports that one, so Nest runs
   // this hook first.
   async onApplicationShutdown(): Promise<void> {
-    await this.queue.close();
+    await Promise.all([this.queue.close(), this.makerQueue.close()]);
   }
 }

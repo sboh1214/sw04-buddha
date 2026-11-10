@@ -13,6 +13,8 @@ import {
   connectTestDb,
   createMarket,
   createScheduledMarket,
+  prepareMarketMakerOpening,
+  fundTestTreasury,
   hasTestDb,
   marketStatsOf,
   type TestDb,
@@ -60,6 +62,8 @@ describe.skipIf(!hasTestInfra)('market.open (integration)', () => {
   });
   beforeEach(async () => {
     await t.reset();
+    // Several approved markets can open in one scan; give the test an explicit shared budget.
+    await fundTestTreasury(t.db, 1_000_000n);
   });
 
   async function marketRow(id: string) {
@@ -95,7 +99,9 @@ describe.skipIf(!hasTestInfra)('market.open (integration)', () => {
 
   /** An approved market (#78) whose scheduled open is `scheduledOpenAt` — due by default. */
   async function scheduled(scheduledOpenAt?: Date) {
-    return (await createScheduledMarket(t.db, { scheduledOpenAt })).market;
+    const { market } = await createScheduledMarket(t.db, { scheduledOpenAt });
+    await prepareMarketMakerOpening(t.db, market.id);
+    return market;
   }
 
   it('opens a due scheduled market: open status, worker event, open_at, statusEventId and a published status', async () => {

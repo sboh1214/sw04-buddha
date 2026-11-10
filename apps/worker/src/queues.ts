@@ -47,6 +47,7 @@ export const QUEUE_JOBS: Record<QueueName, readonly JobName[]> = {
     JOB_NAMES.marketResolve,
     JOB_NAMES.marketFinalize,
   ],
+  maker: [JOB_NAMES.marketMakerRefresh, JOB_NAMES.marketMakerScan],
   audit: [JOB_NAMES.ledgerAudit, JOB_NAMES.marketAudit],
   // Reserved: nothing schedules it — the intake keeps `markets.trader_count` (#121, ADR-0116).
   stats: [JOB_NAMES.marketTraderCount],
@@ -84,6 +85,12 @@ const EVERY_MINUTE = { pattern: '* * * * *', tz: 'Asia/Seoul' } as const;
  * id, so restarting the worker updates the schedule instead of piling up duplicates.
  */
 export const JOB_SCHEDULES = [
+  {
+    id: 'market-maker-scan',
+    queue: 'maker',
+    name: JOB_NAMES.marketMakerScan,
+    repeat: EVERY_MINUTE,
+  },
   {
     id: 'ledger-audit-daily',
     queue: 'audit',

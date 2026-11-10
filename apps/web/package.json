@@ -9,7 +9,9 @@
     "typecheck": "next typegen && tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:market-maker": "playwright test --config playwright.market-maker.config.ts",
+    "test:e2e:treasury": "playwright test --config playwright.treasury.config.ts"
   },
   "dependencies": {
     "@buddha/api-client": "workspace:*",

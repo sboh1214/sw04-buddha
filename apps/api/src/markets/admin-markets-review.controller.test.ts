@@ -20,6 +20,7 @@ import {
   createMarket,
   createMarketInReview,
   createScheduledMarket,
+  prepareMarketMakerOpening,
   setReleaseSetting,
   TEST_PRICE_PROTECTION_TICKS,
 } from '@buddha/db/test';
@@ -1133,6 +1134,7 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
     );
     // The open checks neither the lead close again nor stores another gap (ADR-0098 7-6).
     await setGap(120);
+    await prepareMarketMakerOpening(t.db, review.id);
     await listening(review.id, async (received) => {
       const res = await approve(review.id, third);
       expect(res.statusCode).toBe(200);
@@ -1148,20 +1150,21 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
         ['approved', third.id, 'review', 'scheduled'],
         ['opened', third.id, 'scheduled', 'open'],
       ]);
-      // ADR-0093 decision 2 #172 item 6 '승인하는 즉시 연다': at the decision instant, by its admin.
+      // The approving admin still opens it atomically; the final asset wait can advance time.
       const opened = events.at(-1)!;
+      const openedAt = opened.createdAt;
+      expect(openedAt.getTime()).toBeGreaterThanOrEqual(decidedAt.getTime());
       expect(opened.payload).toEqual({
-        openAt: decidedAt.toISOString(),
+        openAt: openedAt.toISOString(),
         closeAt: iso(close),
         source: 'approval',
       });
-      expect(opened.createdAt).toEqual(decidedAt);
       expect(events.at(-2)!.createdAt).toEqual(decidedAt);
       expect(shown).toMatchObject({
         status: 'open',
-        openAt: decidedAt.toISOString(),
+        openAt: openedAt.toISOString(),
         scheduledOpenAt: passed,
-        updatedAt: decidedAt.toISOString(),
+        updatedAt: openedAt.toISOString(),
         statusEventId: String(opened.id),
         leadCloseGapMinutes: 30,
         missingOpenItems: [],
@@ -1175,8 +1178,8 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
       });
       expect(await marketRow(review.id)).toMatchObject({
         status: 'open',
-        openAt: decidedAt,
-        updatedAt: decidedAt,
+        openAt: openedAt,
+        updatedAt: openedAt,
         statusEventId: opened.id,
         leadCloseGapMinutes: 30,
       });
@@ -1197,7 +1200,7 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
         marketId: review.id,
         status: 'open',
         statusEventId: String(opened.id),
-        ts: decidedAt.toISOString(),
+        ts: openedAt.toISOString(),
       });
       // The close job at the close, delayed from the decision; no open job — it opened.
       const closeJob = await jobQueue.getJob(marketCloseJobId(review.id, new Date(close)));
@@ -1277,6 +1280,7 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
 
   it('opens a scheduled market at once when its open moves to an instant already passed: its mover opens it, the old open job is cancelled', async () => {
     const market = await scheduled();
+    await prepareMarketMakerOpening(t.db, market.id);
     const before = market.scheduledOpenAt!;
     const closeId = marketCloseJobId(market.id, new Date(market.closeAt));
     expect(await jobIds()).toEqual([closeId, marketOpenJobId(market.id, new Date(before))].sort());
@@ -1294,7 +1298,8 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
         toStatus: null,
         payload: { before, after: past, reason: '발표 일정이 당겨졌다' },
       });
-      const at = rescheduled!.createdAt;
+      const at = opened!.createdAt;
+      expect(at.getTime()).toBeGreaterThanOrEqual(rescheduled!.createdAt.getTime());
       expect(opened).toMatchObject({
         type: 'opened',
         actorId: second.id,
@@ -1302,7 +1307,6 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
         toStatus: 'open',
         payload: { openAt: at.toISOString(), closeAt: market.closeAt, source: 'reschedule' },
       });
-      expect(opened!.createdAt).toEqual(at);
       expect(shown).toMatchObject({
         status: 'open',
         scheduledOpenAt: past,

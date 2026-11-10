@@ -1,11 +1,13 @@
 import { type Db } from '@buddha/db';
 import { type ObjectStorage } from '@buddha/storage';
-import { marketJobDataSchema, type MarketJobData } from '@buddha/shared';
+import { marketJobDataSchema, marketMakerJobDataSchema, type MarketJobData } from '@buddha/shared';
 import { UnrecoverableError, type Job, type Processor } from 'bullmq';
 import { type Logger } from 'pino';
 import * as z from 'zod';
 import { JOB_NAMES } from '../queues.js';
 import { type EnqueueFinalize } from '../market-jobs.js';
+import { type EnqueueMarketMaker } from '../market-maker-jobs.js';
+import { refreshMarketMaker, scanMarketMakers } from './market-maker.js';
 import { type Publish } from '../realtime.js';
 import {
   reconcileDueMarkets,
@@ -35,6 +37,8 @@ export interface JobContext {
    * throws — the finalize scan is the safety net.
    */
   enqueueFinalize: EnqueueFinalize;
+  /** Best effort after a committed open or MM fill; durable generations survive Redis loss. */
+  enqueueMarketMaker: EnqueueMarketMaker;
   /** The media store (#46): the orphan clean-up and the retention purge remove objects from it. */
   storage: ObjectStorage;
   logger: Logger;
@@ -68,15 +72,38 @@ function parseMarketJob(job: Job): MarketJobData {
  * `markets.trader_count` is kept with each fill in the order intake's transaction (#121, ADR-0116).
  */
 const HANDLERS: Partial<Record<string, Handler>> = {
+  [JOB_NAMES.marketMakerRefresh]: async (job, { db, publish, enqueueMarketMaker, logger }) => {
+    const parsed = marketMakerJobDataSchema.safeParse(job.data);
+    if (!parsed.success) throw new UnrecoverableError(`Invalid ${job.name} payload`);
+    // The queued generation identifies the trigger only. The market-locked DB cycle reads the
+    // current generation and current stop/hold/status gates; an already completed one is a no-op.
+    return refreshMarketMaker(db, parsed.data.marketId, publish, enqueueMarketMaker, logger);
+  },
+  [JOB_NAMES.marketMakerScan]: async (job, { db, enqueueMarketMaker, logger }) => {
+    if (
+      !z
+        .object({})
+        .strict()
+        .safeParse(job.data ?? {}).success
+    ) {
+      throw new UnrecoverableError(`Invalid ${job.name} payload`);
+    }
+    const { queued, skipped, failed, failures } = await scanMarketMakers(db, enqueueMarketMaker);
+    return reportScan({ queued, skipped, failed }, failures, 'market maker', queued, logger);
+  },
   // #21 (ADR-0100): the delayed job the API registers at a market's scheduled open, or the scan.
-  [JOB_NAMES.marketOpen]: async (job, { db, publish, logger }) => {
+  [JOB_NAMES.marketOpen]: async (job, { db, publish, enqueueMarketMaker, logger }) => {
     const { marketId } = parseMarketJob(job);
     if (marketId) {
-      const result = await openMarket(db, marketId, publish);
+      const result = await openMarket(db, marketId, publish, enqueueMarketMaker);
       logger.info(result, 'market open');
       return result;
     }
-    const { opened, skipped, failed, failures } = await openDueMarkets(db, publish);
+    const { opened, skipped, failed, failures } = await openDueMarkets(
+      db,
+      publish,
+      enqueueMarketMaker,
+    );
     return reportScan({ opened, skipped, failed }, failures, 'market open', opened, logger);
   },
   [JOB_NAMES.marketClose]: async (job, { db, publish, logger }) => {

@@ -484,6 +484,13 @@
       "when": 1794296058436,
       "tag": "0068_market_maker_capital_index",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1794298117682,
+      "tag": "0069_market_maker_runtime",
+      "breakpoints": true
     }
   ]
 }

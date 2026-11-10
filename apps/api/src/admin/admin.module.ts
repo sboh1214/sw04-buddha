@@ -1,3 +1,8 @@
+import { ReleaseSettingsModule } from '../release-settings/release-settings.module.js';
+import { AdminMarketMakerController } from './market-maker.controller.js';
+import { AdminMarketMakerService } from './market-maker.service.js';
+import { TreasuryController } from './treasury.controller.js';
+import { TreasuryService } from './treasury.service.js';
 import { Module } from '@nestjs/common';
 import { ApprovalsModule } from '../approvals/approvals.module.js';
 import { AuthModule } from '../auth/auth.module.js';
@@ -28,13 +33,22 @@ import { ReconciliationCorrectionService } from './reconciliation-corrections.se
     PaymentsModule,
     RealtimeModule,
     ApprovalsModule,
+    ReleaseSettingsModule,
   ],
-  controllers: [AdminController, ReconciliationController, ReconciliationCorrectionsController],
+  controllers: [
+    AdminController,
+    ReconciliationController,
+    ReconciliationCorrectionsController,
+    TreasuryController,
+    AdminMarketMakerController,
+  ],
   providers: [
     AdminService,
     PaymentRefundService,
     ReconciliationService,
     ReconciliationCorrectionService,
+    TreasuryService,
+    AdminMarketMakerService,
   ],
 })
 export class AdminModule {}

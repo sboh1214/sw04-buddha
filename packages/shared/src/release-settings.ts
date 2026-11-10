@@ -367,6 +367,31 @@ export const MARKET_LIQUIDITY_DEFAULT_SETTINGS = {
     schema: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   }),
 } as const;
+/** Global risk stages (#129). No initial value or economic default is inferred. */
+export const MARKET_MAKER_REDUCE_AT_BP_SETTING = defineReleaseSetting({
+  key: 'market_maker.reduce_at_bp',
+  label: '마켓메이커 축소 시작 비율',
+  unit: 'bp',
+  description:
+    '최대 손실 한도에 대한 위험 비율이 이 값에 이르면 호가 수량을 축소한다. 10,000bp는 100%다. 값이 있으면 설계 제안·시험값을 포함해 상태와 상관없이 적용한다. 세 단계 설정 중 하나라도 미정이거나 축소 시작 비율이 중단 시작 비율보다 크면 봇 호가를 실행하지 않는다. 기존 주문 접수와 시장 보류 조건을 우회하지 않는다.',
+  schema: z.number().int().min(0).max(10_000),
+});
+export const MARKET_MAKER_HALT_AT_BP_SETTING = defineReleaseSetting({
+  key: 'market_maker.halt_at_bp',
+  label: '마켓메이커 중단 시작 비율',
+  unit: 'bp',
+  description:
+    '최대 손실 한도에 대한 위험 비율이 이 값에 이르면 위험을 늘리는 봇 호가를 중단한다. 10,000bp는 100%다. 축소 시작 비율 이상이어야 한다. 값이 있으면 상태와 상관없이 적용하고, 세 단계 설정 중 하나라도 미정이거나 조합이 잘못되면 봇 호가를 실행하지 않는다. 이 위험 단계는 관리자가 정지한 봇을 재개시키지 않는다.',
+  schema: z.number().int().min(0).max(10_000),
+});
+export const MARKET_MAKER_REDUCE_RATIO_BP_SETTING = defineReleaseSetting({
+  key: 'market_maker.reduce_ratio_bp',
+  label: '마켓메이커 축소 수량 비율',
+  unit: 'bp',
+  description:
+    '축소 단계에서 기존 호가 수량에 곱할 비율이다. 0~5,000bp(최대 50%)이며 0이면 수량을 내지 않는다. 값이 있으면 상태와 상관없이 적용하고, 세 단계 설정 중 하나라도 미정이거나 조합이 잘못되면 봇 호가를 실행하지 않는다. 정해지지 않은 비율을 임의의 기본값으로 채우지 않는다.',
+  schema: z.number().int().min(0).max(5_000),
+});
 
 /**
  * A retention period (#184, retention.ts): whole days, 1 to RETENTION_PERIOD_MAX_DAYS. Days, the
@@ -522,6 +547,9 @@ export const RELEASE_SETTINGS: ReleaseSettingsRegistry = defineReleaseSettings([
   ORDER_RATE_LIMIT_SETTING,
   PRICE_PROTECTION_TICKS_SETTING,
   ...Object.values(MARKET_LIQUIDITY_DEFAULT_SETTINGS),
+  MARKET_MAKER_REDUCE_AT_BP_SETTING,
+  MARKET_MAKER_HALT_AT_BP_SETTING,
+  MARKET_MAKER_REDUCE_RATIO_BP_SETTING,
   CONSENT_RECORDS_RETENTION_SETTING,
   PHONE_VERIFICATION_RECORDS_RETENTION_SETTING,
   DELETED_POSTS_RETENTION_SETTING,

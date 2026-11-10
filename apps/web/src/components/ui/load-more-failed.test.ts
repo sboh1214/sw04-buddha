@@ -130,6 +130,7 @@ describe('the notice above a 더 보기 that failed', () => {
         'app/admin/audit-failures/admin-audit-failures.tsx',
         'app/admin/audit-failures/admin-reconciliation.tsx',
         'app/admin/audit-failures/admin-reconciliation-corrections.tsx',
+        'app/admin/treasury/admin-treasury.tsx',
         'app/admin/coupons/admin-coupons.tsx',
         // 이의 접수 (#175, ADR-0104), each half
         'app/admin/disputes/admin-disputes.tsx',
@@ -280,6 +281,8 @@ describe('the notice above a 더 보기 that failed', () => {
         'useThemeList',
         'useThemeMarkets',
         'useThemeResults',
+        'useTreasuryHistory',
+        'useTreasuryRequests',
         'useWatchlist',
       ].sort(),
     );

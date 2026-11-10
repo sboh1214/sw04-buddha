@@ -39,7 +39,12 @@ import {
   createUser,
 } from './test/factories.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
-import { balanceOf, fundMarketMakerFunds, mintTestPairs } from './test/ledger.js';
+import {
+  balanceOf,
+  fundMarketMakerFunds,
+  mintTestPairs,
+  prepareMarketMakerOpening,
+} from './test/ledger.js';
 import {
   CANCELLED_MARKET_HUMAN_FILLS_CHECK_SQL,
   CANCELLED_MARKET_LIVE_ORDERS_CHECK_SQL,
@@ -429,6 +434,7 @@ describe.skipIf(!hasTestDb())('market cancel (#20, docker test profile)', () => 
     it('opens or cancels, never both: whichever comes second skips not_scheduled', async () => {
       for (const first of ['open', 'cancel'] as const) {
         const { market: scheduled } = await createScheduledMarket(t.db);
+        await prepareMarketMakerOpening(t.db, scheduled.id);
         const approving = await requested(scheduled.id);
         const held = await holdMarket(scheduled.id);
         const one = first === 'open' ? openNow(scheduled.id) : approve(scheduled.id, approving);

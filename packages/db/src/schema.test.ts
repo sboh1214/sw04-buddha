@@ -123,6 +123,7 @@ import { isHumanAccountSql, isHumanAccountTypeSql } from './account-types.js';
 import { closeDb, createDb } from './client.js';
 import { dueProvisionalMarkets, setCorrectionPending } from './market-judgement.js';
 import { openScheduledMarket } from './market-open.js';
+import { prepareMarketMakerOpening } from './test/ledger.js';
 import { allowRuleSupplement } from './market-rules-content.js';
 import { storedReleaseSettingValue } from './release-settings.js';
 import { createOrder } from './test/orders.js';
@@ -2308,6 +2309,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       // waits for the open's COMMIT and reads the version the open wrote — not the null before,
       // which would let a source in after v1 recorded the set.
       const { market } = await createScheduledMarket(t.db);
+      await prepareMarketMakerOpening(t.db, market.id);
       let opened!: () => void;
       const opening = new Promise<void>((resolve) => (opened = resolve));
       let commit!: () => void;
@@ -8238,6 +8240,11 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       const coinNamed = (await names()).filter((name) => /_coin(_|$)/.test(name)).sort();
       expect(coinNamed).toEqual(
         [
+          'treasury_issuances.amount_coin',
+          'market_maker_allocations.amount_coin',
+          'market_maker_open_attempts.required_coin',
+          'market_maker_open_attempts.available_coin',
+          'market_maker_open_attempts_coin_check',
           'market_liquidity_versions.budget_coin',
           'market_liquidity_versions.max_loss_coin',
           'market_liquidity_versions_coin_check',

@@ -20,6 +20,7 @@ import {
   createCategory,
   createMarket,
   createProposal,
+  prepareMarketMakerOpening,
   setReleaseSetting,
   TEST_PRICE_PROTECTION_TICKS,
 } from '@buddha/db/test';
@@ -173,7 +174,8 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
       .orderBy(asc(schema.adminActions.createdAt));
   /**
    * Makes a market public as the market's own routes do (#72, #78, #21): its creator `admin`
-   * saves explicit test liquidity and submits the draft for review. `second` approves it, which
+   * saves explicit test liquidity and submits the draft for review. Explicit TEST stage settings
+   * and approved treasury funds satisfy #129's opening prerequisites. `second` approves it, which
    * opens it at once — the factory's scheduled open has passed.
    */
   const publish = async (marketId: string) => {
@@ -197,6 +199,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
       },
     });
     expect(configured.statusCode, configured.body).toBe(200);
+    await prepareMarketMakerOpening(t.db, marketId);
     const submitted = await marketPost('submit', admin);
     expect(submitted.statusCode, submitted.body).toBe(200);
     const pending = submitted.json<{ data: AdminMarket }>().data.review.pending;

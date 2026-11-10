@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { MarketJobs } from '../jobs/market-jobs.service.js';
 import {
   cancelOrder,
   findOrderByRequest,
@@ -182,6 +183,7 @@ export class OrderService {
     @Inject(DB) private readonly db: Db,
     @Inject(RELEASE_SETTINGS_REGISTRY) private readonly registry: ReleaseSettingsRegistry,
     private readonly publisher: MarketPublisher,
+    private readonly jobs: MarketJobs,
   ) {}
 
   /** `POST /markets/:id/orders`: the class doc's 제출. */
@@ -191,75 +193,80 @@ export class OrderService {
     requestId: string,
     body: WithoutExpectedAccount<PlaceOrderBody>,
   ): Promise<PlaceOrderResult> {
-    const { answer, touched, book, trades } = await this.db.transaction(async (tx) => {
-      await assertCanTrade(tx, userId);
-      await lockMarket(tx, marketId);
-      const [profile] = await tx
-        .select({ role: profiles.role })
-        .from(profiles)
-        .where(eq(profiles.userId, userId))
-        .limit(1)
-        .for('share');
-      if (profile?.role === 'admin') {
-        throw new AppError('FORBIDDEN', { message: 'An admin does not trade' });
-      }
-      await assertOnboarded(tx, userId);
-      const result = await placeOrder(
-        tx,
-        {
-          ownerId: userId,
-          marketId,
-          requestId,
-          outcome: body.outcome,
-          side: body.side,
-          timeInForce: body.timeInForce,
-          limitPriceCoin: body.limitPriceCoin,
-          qty: body.qty ?? null,
-          budgetCoin: body.budgetCoin ?? null,
-        },
-        { registry: this.registry },
-      );
-      switch (result.kind) {
-        case 'bot_risk_rejected':
-          // This endpoint admits members only. MM refusal details must never become public.
-          throw new Error('A member intake received an internal market maker refusal');
-        case 'not_found':
-          throw notFound('Market');
-        case 'conflict':
-          // No details: the request id is spent on the order it named (the charge's rule).
-          throw new AppError('DUPLICATE_REQUEST', {
-            message: 'This Idempotency-Key was already used for a different order',
-          });
-        case 'closed':
-          throw result.why === 'intake'
-            ? new AppError('ORDER_INTAKE_CLOSED', { message: 'Orders are not taken now' })
-            : priceProtectionClosed();
-        case 'replayed':
-        case 'placed': {
-          const market = await this.marketRef(tx, result.order.marketId);
-          const answer: PlaceOrderResult = {
-            order: toOrder(result.order, market),
-            replayed: result.kind === 'replayed',
-          };
-          const placed = result.kind === 'placed' ? result : null;
-          return {
-            answer,
-            touched: placed?.touched ?? null,
-            // At the order's own instant (the database clock's), the signal's display time.
-            book:
-              placed && placeOrderChangedBook(placed)
-                ? { marketId: placed.order.marketId, at: placed.order.createdAt }
-                : null,
-            // `stats` is set exactly when the intake recorded a fill (`recordFillStats`).
-            trades:
-              placed?.stats != null
-                ? { marketId: placed.order.marketId, fills: placed.fills, stats: placed.stats }
-                : null,
-          };
+    const { answer, touched, book, trades, marketMakerGeneration } = await this.db.transaction(
+      async (tx) => {
+        await assertCanTrade(tx, userId);
+        await lockMarket(tx, marketId);
+        const [profile] = await tx
+          .select({ role: profiles.role })
+          .from(profiles)
+          .where(eq(profiles.userId, userId))
+          .limit(1)
+          .for('share');
+        if (profile?.role === 'admin') {
+          throw new AppError('FORBIDDEN', { message: 'An admin does not trade' });
         }
-      }
-    });
+        await assertOnboarded(tx, userId);
+        const result = await placeOrder(
+          tx,
+          {
+            ownerId: userId,
+            marketId,
+            requestId,
+            outcome: body.outcome,
+            side: body.side,
+            timeInForce: body.timeInForce,
+            limitPriceCoin: body.limitPriceCoin,
+            qty: body.qty ?? null,
+            budgetCoin: body.budgetCoin ?? null,
+          },
+          { registry: this.registry },
+        );
+        switch (result.kind) {
+          case 'bot_risk_rejected':
+            // This endpoint admits members only. MM refusal details must never become public.
+            throw new Error('A member intake received an internal market maker refusal');
+          case 'not_found':
+            throw notFound('Market');
+          case 'conflict':
+            // No details: the request id is spent on the order it named (the charge's rule).
+            throw new AppError('DUPLICATE_REQUEST', {
+              message: 'This Idempotency-Key was already used for a different order',
+            });
+          case 'closed':
+            throw result.why === 'intake'
+              ? new AppError('ORDER_INTAKE_CLOSED', { message: 'Orders are not taken now' })
+              : priceProtectionClosed();
+          case 'replayed':
+          case 'placed': {
+            const market = await this.marketRef(tx, result.order.marketId);
+            const answer: PlaceOrderResult = {
+              order: toOrder(result.order, market),
+              replayed: result.kind === 'replayed',
+            };
+            const placed = result.kind === 'placed' ? result : null;
+            return {
+              answer,
+              touched: placed?.touched ?? null,
+              marketMakerGeneration: placed?.marketMakerGeneration ?? null,
+              // At the order's own instant (the database clock's), the signal's display time.
+              book:
+                placed && placeOrderChangedBook(placed)
+                  ? { marketId: placed.order.marketId, at: placed.order.createdAt }
+                  : null,
+              // `stats` is set exactly when the intake recorded a fill (`recordFillStats`).
+              trades:
+                placed?.stats != null
+                  ? { marketId: placed.order.marketId, fills: placed.fills, stats: placed.stats }
+                  : null,
+            };
+          }
+        }
+      },
+    );
     if (touched) await this.publish(touched, book, trades);
+    if (marketMakerGeneration !== null)
+      await this.jobs.refreshMarketMaker(marketId, marketMakerGeneration);
     return answer;
   }
 
