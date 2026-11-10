@@ -20,6 +20,8 @@ import {
   checkOrderInvariants,
   closeTestMarket,
   completeOnboarding,
+  createConfiguredOpenMarket,
+  TEST_MM_TRADING_LIQUIDITY,
   createMarket,
   createMarketPause,
   createModerationAction,
@@ -1296,6 +1298,9 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
   });
 
   it('never names the 운영 마켓메이커 on a member’s fill, and pages the fills newest first', async () => {
+    market = await createConfiguredOpenMarket(t.db, {
+      liquiditySettings: TEST_MM_TRADING_LIQUIDITY,
+    });
     await open();
     const marketMaker = await fundMarketMakerFunds(t.db, market.id, 10_000n);
     for (let i = 0; i < 3; i += 1) {

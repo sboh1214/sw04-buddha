@@ -11,6 +11,8 @@ import {
   createFill,
   createFillRecord,
   createFillSeries,
+  createConfiguredOpenMarket,
+  TEST_MM_TRADING_LIQUIDITY,
   createMarket,
   createOpenedMarket,
   createSupplementedMarket,
@@ -1308,7 +1310,12 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
 
   it('carries the 시장가격, its fill time and the statistics the intake wrote, and 체결 없음 before (#121)', async () => {
     await openOrderIntake(t.db, { adminId: creatorId });
-    const m = await market({ title: '체결되는 시장' });
+    const m = await createConfiguredOpenMarket(t.db, {
+      createdBy: creatorId,
+      categoryId: category.id,
+      title: '체결되는 시장',
+      liquiditySettings: TEST_MM_TRADING_LIQUIDITY,
+    });
     const quiet = await market({ title: '조용한 시장' });
     const member = async () => (await createUser(t.db, { balanceCoin: 1_000n })).user.id;
     const order = async (input: PlaceTestOrderInput) => {

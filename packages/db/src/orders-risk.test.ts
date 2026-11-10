@@ -219,9 +219,9 @@ describe.skipIf(!hasTestDb())('market maker risk at order intake (#128)', () => 
       release();
       // Drain both operations even if the bounded waiter assertion fails; do not leave a
       // transaction running into the next reset or the harness shutdown.
-      await Promise.allSettled(second ? [first, second] : [first]);
+      await Promise.allSettled(second !== undefined ? [first, second] : [first]);
     }
-    if (!second) throw new Error('second intake did not start');
+    if (second === undefined) throw new Error('second intake did not start');
     return Promise.all([first, second]);
   }
 

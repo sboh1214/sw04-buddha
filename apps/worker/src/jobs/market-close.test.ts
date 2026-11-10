@@ -16,6 +16,8 @@ import {
   checkOrderInvariants,
   connectTestDb,
   contractBook,
+  createConfiguredOpenMarket,
+  TEST_MM_TRADING_LIQUIDITY,
   createMarket,
   createMarketPause,
   createPauseDecision,
@@ -539,7 +541,13 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
 
     const member = async (coin = 1_000n) => (await createUser(t.db, { balanceCoin: coin })).user.id;
     // Opens a day ahead (the factory's default); the orders rest before `passMarketClose`.
-    const openMarket = async () => (await createMarket(t.db, { createdBy: adminId })).id;
+    const openMarket = async () =>
+      (
+        await createConfiguredOpenMarket(t.db, {
+          createdBy: adminId,
+          liquiditySettings: TEST_MM_TRADING_LIQUIDITY,
+        })
+      ).id;
     async function placed(input: PlaceTestOrderInput) {
       const result = await placeTestOrder(t.db, input);
       if (result.kind !== 'placed') throw new Error(`expected a placed order, got ${result.kind}`);

@@ -25,6 +25,8 @@ import {
   closeMarketEarly,
   createApprovalRequest,
   createFill,
+  createConfiguredOpenMarket,
+  TEST_MM_TRADING_LIQUIDITY,
   createMarket,
   createMarketPause,
   createOpenedMarket,
@@ -662,7 +664,9 @@ describe.skipIf(!hasTestDb())('market pauses (#114, docker test profile)', () =>
     it.each(['early_result', 'basis_change'] as const)(
       'cancels people’s and the 운영 마켓메이커’s orders at a %s pause, at its instant',
       async (reason) => {
-        const market = await createMarket(t.db);
+        const market = await createConfiguredOpenMarket(t.db, {
+          liquiditySettings: TEST_MM_TRADING_LIQUIDITY,
+        });
         const a = await member();
         const mm = await fundMarketMakerFunds(t.db, market.id, 1_000n);
         const rows = [await rest(a, market.id, 'YES', 40), await rest(mm, market.id, 'NO', 30)];
@@ -695,7 +699,10 @@ describe.skipIf(!hasTestDb())('market pauses (#114, docker test profile)', () =>
     it('cancels nothing at a pause skipped as close_passed or published_after_pause: the judgments come first', async () => {
       // An OPEN market held by nothing, so a cancel before the skip would show (R25).
       const closeAt = new Date((await clockTimestamp(t.db)).getTime() + HOUR_MS);
-      const market = await createMarket(t.db, { closeAt });
+      const market = await createConfiguredOpenMarket(t.db, {
+        closeAt,
+        liquiditySettings: TEST_MM_TRADING_LIQUIDITY,
+      });
       const a = await member();
       const mm = await fundMarketMakerFunds(t.db, market.id, 1_000n);
       const rows = [await rest(a, market.id, 'YES', 40), await rest(mm, market.id, 'NO', 30)];
