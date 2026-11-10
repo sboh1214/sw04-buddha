@@ -70,6 +70,7 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'POST /admin/markets': 'market_create',
   'POST /admin/markets/:id/conflicts': 'market_conflict_declare',
   'PATCH /admin/markets/:id': 'market_update',
+  'POST /admin/markets/:id/liquidity-settings': 'market_update',
   // #78: the review's writes, each with the market's own review event.
   'POST /admin/markets/:id/submit': 'market_submit',
   'POST /admin/markets/:id/approve': 'market_approve',
@@ -219,14 +220,22 @@ describe('admin audit log completeness', () => {
     expect(audited).toEqual([]);
   });
 
-  it('uses every ADMIN_ACTION_TYPES value exactly once, but the retired ones', () => {
+  it('uses every active audit type, sharing market_update only for the two draft editing routes', () => {
     const used = Object.values(AUDITED);
     const retired = Object.keys(RETIRED) as AdminActionType[];
     // Every type is produced by some route: a value nothing writes is a value a reader of the
     // enum would look for in the audit log and never find — unless it is retired, which only
     // history carries.
-    expect([...used, ...retired].sort()).toEqual([...ADMIN_ACTION_TYPES].sort());
-    expect(new Set(used).size).toBe(used.length);
+    expect([...new Set(used), ...retired].sort()).toEqual([...ADMIN_ACTION_TYPES].sort());
+    // Both edits participate in the review's editor exclusion. Keep their shared type explicit,
+    // so another accidentally duplicated audit mapping still fails this inventory.
+    const shared = Object.entries(AUDITED).filter(([, type]) => type === 'market_update');
+    expect(shared.map(([route]) => route).sort()).toEqual([
+      'PATCH /admin/markets/:id',
+      'POST /admin/markets/:id/liquidity-settings',
+    ]);
+    const others = used.filter((type) => type !== 'market_update');
+    expect(new Set(others).size).toBe(others.length);
     expect(used.filter((type) => retired.includes(type))).toEqual([]);
   });
 

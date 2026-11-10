@@ -106,6 +106,7 @@ import { timeZoneLabel } from '@/lib/time-zone';
 import { MarketFormFields } from '../market-form-fields';
 import { MarketConflictPanel } from './market-conflict-panel';
 import { MarketCancelPanel } from './market-cancel-panel';
+import { MarketLiquidityPanel } from './market-liquidity-panel';
 import { MarketJudgementPanel } from './market-judgement-panel';
 import { MarketPausePanel } from './market-pause-panel';
 import { PriceProtectionItem } from './market-price-protection';
@@ -202,6 +203,7 @@ export function AdminMarketDetail({ id }: { id: string }) {
 
       <TransitionButtons market={data} />
       <OpenItemsNotice market={data} />
+      <MarketLiquidityPanel key={`liquidity-${data.id}`} market={data} />
       {/* 판정 (#152, ADR-0103): keyed and prefixed as the review panel is — its form and dialogs name
           the market and the registration they were opened on. First of the panels: from the close
           on, the judgement is what the market waits for. `readAt` judges 'before the scheduled

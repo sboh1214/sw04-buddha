@@ -992,7 +992,10 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     async (status) => {
       // A PROVISIONAL market has its published result (migration 0055, #152), a settled one too.
       const market = await createMarket(t.db, {
-        status,
+        // A scheduled market cannot acquire positions through the real open gate (#72).
+        // Build that deliberately stray holding while open, then put it in the status whose
+        // settlement refusal this test exercises. No opening event or guessed settings.
+        status: status === 'scheduled' ? 'open' : status,
         resolvedResult: status === 'settled' || status === 'provisional' ? 'YES' : null,
       });
       const alice = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
@@ -1003,6 +1006,9 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
         qty: 10,
         costBasisCoin: 500n,
       });
+      if (status === 'scheduled') {
+        await t.db.update(schema.markets).set({ status }).where(eq(schema.markets.id, market.id));
+      }
       const stepsBefore = await stepsOf(market.id);
 
       await expect(finalizeMarket(t.db, market.id, publish, logger)).resolves.toEqual({

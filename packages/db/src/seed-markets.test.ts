@@ -148,11 +148,12 @@ function openItemsOf(market: SeedMarket, now: Date, leadCloseGapMinutes: number 
     leadCloseGapMinutes,
     // The seed writes no width; the submission fills the default (#119), its test value here.
     priceProtectionTicks: 5,
+    liquidityVersion: null, // Seed examples never infer an operator budget or loss limit.
   };
 }
 
 describe('seed market rule items (#23, ADR-0097)', () => {
-  it('gives every market every item the open-items check asks for', () => {
+  it('gives seed examples content without inventing liquidity settings', () => {
     // The times too (#22): with the scheduled open a run writes, whenever it runs, and the gap
     // the design proposes.
     for (const now of RUN_CLOCKS) {
@@ -160,7 +161,7 @@ describe('seed market rule items (#23, ADR-0097)', () => {
         expect(
           missingOpenItems(openItemsOf(market, now, PROPOSED_GAP_MINUTES)),
           `${market.slug} at ${now.toISOString()}`,
-        ).toEqual([]);
+        ).toEqual(['liquidity']);
       }
     }
   });
@@ -331,7 +332,7 @@ describe('seed market times (#22, ADR-0098)', () => {
           : [],
       );
       expect(missingOpenItems(openItemsOf(market, now, null)), market.slug).toEqual(
-        held ? ['leadClose'] : [],
+        held ? ['leadClose', 'liquidity'] : ['liquidity'],
       );
     }
   });

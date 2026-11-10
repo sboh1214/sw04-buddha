@@ -52,6 +52,7 @@ export const REVIEW_CHECK_HINT: Record<MarketReviewChecklistItem, string> = {
   timeOrder: copy.reviewCheckTimeOrderHint,
   leadClose: copy.reviewCheckLeadCloseHint,
   independence: copy.reviewCheckIndependenceHint,
+  liquidity: copy.reviewCheckLiquidityHint,
 };
 
 /**

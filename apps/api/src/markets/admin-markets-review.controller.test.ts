@@ -207,6 +207,24 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
   const detail = (res: Res) => data<AdminMarket>(res);
   const errorOf = (res: Res) => res.json<ErrorBody>().error;
 
+  /** Explicit test settings, saved by the creator before review (#72). */
+  async function configureLiquidity(id: string, who: TestUser = creator): Promise<AdminMarket> {
+    const res = await post(`${marketUrl(id)}/liquidity-settings`, who, {
+      baseVersion: null,
+      reason: '검수 시험용 유동성 설정',
+      settings: {
+        budgetCoin: '10000',
+        maxLossCoin: '5000',
+        b: 100,
+        levels: 3,
+        quantity: 10,
+        safetyTicks: 1,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    return detail(res);
+  }
+
   /** A draft closing at `closeMs`, made through the route by `who` (the creator by default). */
   async function createDraft(
     overrides: Record<string, unknown> = {},
@@ -215,7 +233,7 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
   ): Promise<AdminMarket> {
     const res = await post('/api/v1/admin/markets', who, draftBody(closeMs, overrides));
     expect(res.statusCode).toBe(201);
-    return detail(res);
+    return configureLiquidity(detail(res).id, who);
   }
   /** A draft made and submitted through the routes. */
   async function submitted(
@@ -390,7 +408,7 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
           requestedAt: request!.requestedAt.toISOString(),
         },
         createdBy: await actorOf(creator),
-        editors: [],
+        editors: [await actorOf(creator)],
         sameCondition: [],
         log: [
           {
@@ -439,6 +457,7 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
       status: 'draft',
       closeAt: new Date(floorToMinute(Date.now()) - MINUTE_MS),
     });
+    await configureLiquidity(passed.id);
     const late = await submit(passed.id);
     expect(late.statusCode).toBe(400);
     expect(errorOf(late)).toEqual({
@@ -566,7 +585,7 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
     expect(shown.review).toMatchObject({
       pending: { requestedBy: await actorOf(third) },
       createdBy: await actorOf(creator),
-      editors: [await actorOf(second)],
+      editors: [await actorOf(creator), await actorOf(second)],
     });
     const requests = await requestsFor(draft.id);
     expect(requests.map((request) => [request.status, request.decidedBy])).toEqual([
@@ -644,7 +663,7 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
         ['checklist'],
         REVIEW_CHECKLIST_INCOMPLETE,
       ],
-      [{ checklist: [...missingOne, 'botBudget'] }, ['checklist', 6], undefined],
+      [{ checklist: [...missingOne, 'botBudget'] }, ['checklist', missingOne.length], undefined],
       [{ reason: '   ' }, ['reason'], undefined],
       [{ reason: 'x'.repeat(501) }, ['reason'], undefined],
     ] as const) {
@@ -994,7 +1013,7 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
       });
       expect(event.createdAt.toISOString()).toBe(shown.updatedAt);
       // The scheduled open is content (#172 item 7): its mover is an editor from here on.
-      expect(shown.review.editors).toEqual([await actorOf(second)]);
+      expect(shown.review.editors).toEqual([await actorOf(creator), await actorOf(second)]);
       expect(shown.review.log[0]).toEqual({
         type: 'open_rescheduled',
         actor: await actorOf(second),
@@ -1439,7 +1458,7 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
     expect(shown.review).toEqual({
       pending: null,
       createdBy: await actorOf(creator),
-      editors: [await actorOf(second), await actorOf(creator)],
+      editors: [await actorOf(creator), await actorOf(second)],
       sameCondition: listed,
       log: [],
     });

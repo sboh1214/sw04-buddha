@@ -24,6 +24,7 @@ import {
   marketSummarySchema,
   rejectMarketReviewBodySchema,
   rescheduleMarketOpenBodySchema,
+  setMarketLiquidityBodySchema,
   revertMarketBodySchema,
   updateMarketBodySchema,
   uuidParamSchema,
@@ -39,6 +40,7 @@ import {
   type MarketSummary,
   type RejectMarketReviewBody,
   type RescheduleMarketOpenBody,
+  type SetMarketLiquidityBody,
   type RevertMarketBody,
   type UpdateMarketBody,
 } from '@buddha/shared';
@@ -93,6 +95,23 @@ export class AdminMarketsController {
     private readonly markets: MarketAdminService,
     private readonly related: RelatedMarketsService,
   ) {}
+
+  @Post(':id/liquidity-settings')
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'adminSetMarketLiquidity',
+    summary: 'Record a draft liquidity version with a reason; review and opening lock it',
+  })
+  @ApiData(adminMarketSchema)
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
+  adminSetMarketLiquidity(
+    @CurrentUser() admin: SessionUser,
+    @Param('id', { schema: uuidParamSchema }) id: string,
+    @Body({ schema: setMarketLiquidityBodySchema }) body: SetMarketLiquidityBody,
+  ): Promise<AdminMarket> {
+    assertExpectedAccount(admin.id, body.expectedAccountId);
+    return this.markets.setLiquidity(admin.id, id, body);
+  }
 
   @Get()
   @ApiOperation({

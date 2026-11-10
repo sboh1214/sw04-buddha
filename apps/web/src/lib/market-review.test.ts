@@ -78,6 +78,7 @@ describe('the review checklist and its 반려 사유 (#78, #172 item 4)', () => 
       '시각 순서',
       '선행 마감',
       '독립 판정',
+      '봇 예산·유동성 설정',
     ]);
     for (const item of MARKET_REVIEW_CHECKLIST) {
       expect(REVIEW_CHECK_HINT[item], item).toMatch(/[가-힣]/);
@@ -179,7 +180,7 @@ describe('the 검수 기록 (#78)', () => {
       }),
     ).toEqual([
       { label: '상태', value: '검수 중 → 개장 예정' },
-      { label: '체크리스트', value: '7/7개 항목 확인' },
+      { label: '체크리스트', value: '8개 항목 확인' },
       { label: '사유', value: '기준이 분명합니다' },
     ]);
     // A 반려: the reason from the list, then its 설명.

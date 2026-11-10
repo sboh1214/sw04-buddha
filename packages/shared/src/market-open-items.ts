@@ -52,6 +52,9 @@ export type TimeRelationItem = (typeof TIME_RELATION_ITEMS)[number];
  *   are null, so a market cannot be submitted for review while the default is undecided (as
  *   `leadClose`, ADR-0098 7-5). Not a form field: it comes last.
  *
+ * - `liquidity`: an explicit complete market liquidity version (#72), including budget and
+ *   maximum loss. Defaults and a legacy market's missing version never satisfy this item.
+ *
  * The order is the form's, which is the order a refusal names them in; each relation item comes
  * after the time items it relates.
  */
@@ -63,6 +66,7 @@ export const OPEN_ITEMS = [
   'category',
   'tags',
   'priceProtection',
+  'liquidity',
 ] as const;
 export type OpenItem = (typeof OPEN_ITEMS)[number];
 export const openItemSchema = z.enum(OPEN_ITEMS).meta({ id: 'OpenItem' });
@@ -70,6 +74,8 @@ export const openItemSchema = z.enum(OPEN_ITEMS).meta({ id: 'OpenItem' });
 export type OpenItemsInput = MarketRuleItems &
   MarketTimes & {
     title: string;
+    /** Current explicit liquidity configuration, absent for legacy markets. */
+    liquidityVersion: number | null;
     /** 거래 마감 시각, an ISO instant. */
     closeAt: string;
     /** Whether the market's category is one a new market may be filed under (above). */
@@ -102,6 +108,7 @@ export function missingOpenItems(input: OpenItemsInput): OpenItem[] {
   if (!input.categorySelectable) missing.push('category');
   if (input.tagCount < MARKET_TAGS_MIN || input.tagCount > MARKET_TAGS_MAX) missing.push('tags');
   if (input.priceProtectionTicks === null) missing.push('priceProtection');
+  if (input.liquidityVersion == null) missing.push('liquidity');
   return missing;
 }
 

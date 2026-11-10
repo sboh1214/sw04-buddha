@@ -381,7 +381,16 @@ describe.skipIf(!hasTestDb())('market cancel (#20, docker test profile)', () => 
         order: { status: 'rejected', rejectReason: 'not_open_yet' },
       });
       const setStatus = (status: 'open' | 'scheduled') =>
-        t.db.update(markets).set({ status }).where(eq(markets.id, scheduled.id));
+        t.db
+          .update(markets)
+          .set({
+            status,
+            // This deliberately leaves a stray live order; still respect #72's opening pin.
+            ...(status === 'open'
+              ? { openedLiquidityVersion: scheduled.currentLiquidityVersion }
+              : {}),
+          })
+          .where(eq(markets.id, scheduled.id));
       await setStatus('open');
       const stray = await placeTestOrder(t.db, {
         ownerId: a,

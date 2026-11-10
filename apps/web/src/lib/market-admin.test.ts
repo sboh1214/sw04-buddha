@@ -970,7 +970,7 @@ describe('marketEventRows', () => {
         reason: '모두 확인',
       }),
     ).toEqual([
-      { label: '체크리스트', value: '7/7개 항목 확인' },
+      { label: '체크리스트', value: '7개 항목 확인' },
       { label: '사유', value: '모두 확인' },
     ]);
     expect(
@@ -1091,6 +1091,7 @@ describe('openItemsNotice', () => {
       '카테고리',
       '태그 1~5개',
       '가격 보호 폭',
+      '봇 예산·유동성 설정 버전',
     ]);
     // '정산' is Coin's payout (ADR-0052): no item is named with it any more.
     for (const item of OPEN_ITEMS) expect(OPEN_ITEM_LABEL[item], item).not.toContain('정산');
@@ -1108,8 +1109,9 @@ describe('openItemsNotice', () => {
       '검수 제출 전에 채우거나 고칠 항목: 질문 · 배경 · YES 조건 · NO 조건 · 사건 기한 · 1차 출처 · ' +
         '대체 출처 · 전환 조건 · 장기 지연 기한 · 지연·취소·무효 처리 · 예정 개장 시각 · ' +
         '거래 마감 시각 · 예정 판정 시각 · 판정 기준 시간대 · 시각 순서 · 선행 마감 · 카테고리 · 태그 1~5개 · ' +
-        '가격 보호 폭\n' +
-        '가격 보호 폭: 표준값(출시 설정)이 미정이라 검수 제출할 수 없습니다',
+        '가격 보호 폭 · 봇 예산·유동성 설정 버전\n' +
+        '가격 보호 폭: 표준값(출시 설정)이 미정이라 검수 제출할 수 없습니다\n' +
+        '봇 예산·유동성 설정 버전: 운영 유동성 설정을 등록한 뒤 검수 제출해 주세요',
     );
     // The width is no field of the form: the line says it waits for the release setting (#119).
     expect(draft(['priceProtection'])).toBe(

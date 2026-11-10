@@ -1,3 +1,4 @@
+import { adminMarketLiquiditySchema } from './market-liquidity.js';
 import * as z from 'zod';
 import { marketJudgingRecordSchema } from './market-judging-record.js';
 import { cursorQuerySchema } from './api/pagination.js';
@@ -888,6 +889,7 @@ export type AdminSettlementStep = z.infer<typeof adminSettlementStepSchema>;
 /** Detail for `/admin/markets/:id`: the public shape plus author, exposure and settlement. */
 export const adminMarketSchema = marketSchema
   .extend({
+    liquidity: adminMarketLiquiditySchema,
     createdBy: z.string(),
     updatedAt: z.iso.datetime(),
     /** Σ positions.qty per outcome where settled = false. */

@@ -100,7 +100,7 @@ describe.skipIf(!hasTestDb())('openScheduledMarket (#21, docker test profile)', 
         createdAt: now,
       }),
     );
-    // The row read back, and nothing in it changed but the open's five columns.
+    // The row read back, including the private liquidity version pinned by the open.
     const row = await rowOf(scheduled.id);
     expect(result.row).toEqual(row);
     expect(row).toEqual({
@@ -110,6 +110,7 @@ describe.skipIf(!hasTestDb())('openScheduledMarket (#21, docker test profile)', 
       openAt: now,
       updatedAt: now,
       ruleVersion: 1,
+      openedLiquidityVersion: 1,
     });
     expect(row.leadCloseGapMinutes).toBe(30);
   });

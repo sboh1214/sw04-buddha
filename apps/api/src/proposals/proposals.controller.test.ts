@@ -11,7 +11,7 @@
  * proposal reachable; an operator's change of the number takes the person's waiting and recent
  * proposals to the new one (owner decision 2026-10-25). Skips when TEST_* are unset.
  */
-import { schema } from '@buddha/db';
+import { schema, setMarketLiquidity } from '@buddha/db';
 import {
   changePhoneAsOperator,
   completeOnboarding,
@@ -672,6 +672,24 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/proposals (integration)', () => {
   it('shows the proposer the reason and the market once public — never an operator or the internal memo', async () => {
     const admin = (await createUser(t.db, { role: 'admin' })).user;
     const draft = await createMarket(t.db, { createdBy: admin.id, status: 'draft' });
+    // Explicit fixture settings, not launch defaults: the later scheduled → open move pins this
+    // version while the assertions continue to exercise the proposal's publication boundary.
+    const liquidity = await t.db.transaction((tx) =>
+      setMarketLiquidity(tx, {
+        marketId: draft.id,
+        actorId: admin.id,
+        baseVersion: null,
+        reason: '제안 공개 시험용 유동성 설정',
+        settings: {
+          budgetCoin: 10_000n,
+          maxLossCoin: 5_000n,
+          b: 100,
+          levels: 3,
+          quantity: 10,
+          safetyTicks: 1,
+        },
+      }),
+    );
     const open = await createMarket(t.db, { createdBy: admin.id });
     // A 중복 of a market not yet public: its link waits for the opening, as an adoption's does.
     const duplicateOfDraft = await createProposal(t.db, {
@@ -724,7 +742,11 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/proposals (integration)', () => {
     const moveTo = (status: 'review' | 'scheduled' | 'open') =>
       t.db
         .update(schema.markets)
-        .set({ status, openAt: status === 'open' ? new Date() : null })
+        .set({
+          status,
+          openAt: status === 'open' ? new Date() : null,
+          ...(status === 'open' ? { openedLiquidityVersion: liquidity.version } : {}),
+        })
         .where(eq(schema.markets.id, draft.id));
     // In review it is the admin's alone still, as a draft is (ADR-0093 decision 1 item 12).
     await moveTo('review');

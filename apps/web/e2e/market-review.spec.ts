@@ -70,6 +70,7 @@ const CHECK_LABEL: Readonly<Record<MarketReviewChecklistItem, string>> = {
   timeOrder: copy.reviewCheckTimeOrder,
   leadClose: copy.reviewCheckLeadClose,
   independence: copy.reviewCheckIndependence,
+  liquidity: copy.reviewCheckLiquidity,
 };
 
 /** The ISO instant of the whole minute `ms` falls in: what a `datetime-local` input holds. */
@@ -469,8 +470,7 @@ test.describe('개설 검수', () => {
         actor: secondName,
         rows: [
           statusRow(copy.marketStatusReview, copy.marketStatusScheduled),
-          `${copy.reviewLogChecklist} ${String(REVIEW_CHECKLIST.length)}/` +
-            `${String(REVIEW_CHECKLIST.length)}${copy.reviewLogChecklistTail}`,
+          `${copy.reviewLogChecklist} ${String(REVIEW_CHECKLIST.length)}${copy.reviewLogChecklistTail}`,
           `${copy.reviewLogReason} ${reason}`,
         ],
       });

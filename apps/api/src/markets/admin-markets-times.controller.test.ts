@@ -101,8 +101,8 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
   /**
    * A complete draft closing at `closeMs` (a whole minute): every rule item, the scheduled open
    * passed, 사건 기한 a day after the close and the judgement a day after that, the zone the form
-   * pre-fills, no announcement ('없음') and a tag — it can be submitted for review at once unless
-   * the overrides say not.
+   * pre-fills, no announcement ('없음') and a tag. Tests intending to submit additionally save
+   * an explicit liquidity version (#72); the raw creation has none.
    */
   const draftBody = (closeMs: number, overrides: Record<string, unknown> = {}) => ({
     title: '기준금리 3% 이하로 인하?',
@@ -123,6 +123,23 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
   });
   const create = (closeMs: number, overrides: Record<string, unknown> = {}) =>
     post('/api/v1/admin/markets', draftBody(closeMs, overrides));
+  /** Save explicit test liquidity as this draft's creator (#72), returning its current DTO. */
+  async function configureLiquidity(id: string): Promise<AdminMarket> {
+    const res = await post(`${marketUrl(id)}/liquidity-settings`, {
+      baseVersion: null,
+      reason: '시각 검수 시험용 유동성 설정',
+      settings: {
+        budgetCoin: '10000',
+        maxLossCoin: '5000',
+        b: 100,
+        levels: 3,
+        quantity: 10,
+        safetyTicks: 1,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    return detail(res);
+  }
   /** 검수 제출 (#78): the open-items check at the gap in force, which the market then keeps. */
   const submit = (id: string) => post(`/api/v1/admin/markets/${id}/submit`);
 
@@ -204,13 +221,13 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
     expect(res.statusCode).toBe(201);
     const created = detail(res);
     // Trimmed, and checked as an IANA name (#172 item 11); the gap is undecided, so a market with
-    // an announcement time is named by the lead close and nothing else.
+    // an announcement time is named by the lead close, alongside its unset liquidity (#72).
     expect(created).toMatchObject({
       ...sent,
       judgementTimeZone: 'America/New_York',
       judgementDelayed: false,
       leadCloseGapMinutes: null,
-      missingOpenItems: ['leadClose'],
+      missingOpenItems: ['leadClose', 'liquidity'],
     });
     const row = await marketRow(created.id);
     expect({
@@ -241,7 +258,12 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
       scheduledAnnouncementAt: null,
       scheduledJudgementAt: null,
       judgementTimeZone: null,
-      missingOpenItems: ['scheduledOpenAt', 'scheduledJudgementAt', 'judgementTimeZone'],
+      missingOpenItems: [
+        'scheduledOpenAt',
+        'scheduledJudgementAt',
+        'judgementTimeZone',
+        'liquidity',
+      ],
     });
 
     // A close edit leaves the scheduled judgement as it was, and the reverse (#22 AC 2).
@@ -403,20 +425,22 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
       scheduledJudgementAt: iso(c + 4 * DAY_MS),
     });
     expect(moved.statusCode).toBe(200);
-    expect(detail(moved).missingOpenItems).toEqual([]);
+    expect(detail(moved).missingOpenItems).toEqual(['liquidity']);
   });
 
   it('never refuses the lead close on a draft: the open-items check names it at the gap in force, and the submission stores that gap', async () => {
     const c = week();
     // Undecided: a market with an announcement time fails `leadClose` ('gap undecided') and
     // cannot be submitted; one with '없음' is not concerned (ADR-0098).
-    const missing = detail(
-      await create(c, {
-        scheduledJudgementAt: null,
-        judgementTimeZone: null,
-        scheduledAnnouncementAt: iso(c + 2 * HOUR_MS),
-        tags: [],
-      }),
+    const missing = await configureLiquidity(
+      detail(
+        await create(c, {
+          scheduledJudgementAt: null,
+          judgementTimeZone: null,
+          scheduledAnnouncementAt: iso(c + 2 * HOUR_MS),
+          tags: [],
+        }),
+      ).id,
     );
     expect(missing).toMatchObject({
       leadCloseGapMinutes: null,
@@ -436,9 +460,11 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
         { path: ['tags'], message: 'required' },
       ],
     });
-    const announced = detail(await create(c, { scheduledAnnouncementAt: iso(c + 2 * HOUR_MS) }));
+    const announced = await configureLiquidity(
+      detail(await create(c, { scheduledAnnouncementAt: iso(c + 2 * HOUR_MS) })).id,
+    );
     expect(announced.missingOpenItems).toEqual(['leadClose']);
-    const none = detail(await create(c));
+    const none = await configureLiquidity(detail(await create(c)).id);
     expect(none).toMatchObject({ missingOpenItems: [], leadCloseGapMinutes: null });
     const submittedNone = await submit(none.id);
     expect(submittedNone.statusCode).toBe(200);
@@ -455,7 +481,8 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
     // Entry is still never refused for it (C8): the check names it.
     const tight = await create(c, { scheduledAnnouncementAt: iso(c + 59 * MINUTE_MS + 59_999) });
     expect(tight.statusCode).toBe(201);
-    expect(detail(tight).missingOpenItems).toEqual(['leadClose']);
+    const tightMarket = await configureLiquidity(detail(tight).id);
+    expect(tightMarket.missingOpenItems).toEqual(['leadClose']);
     expect(errorOf(await submit(detail(tight).id))).toEqual({
       code: 'OPEN_ITEMS_MISSING',
       message: 'The market misses what it needs to open: leadClose',
@@ -570,7 +597,7 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
     // sent again is no change.
     const legacy = await openMarket(c, { blankTimes: true, scheduledJudgementAt: null });
     const legacyUrl = marketUrl(legacy.id);
-    const blank = ['scheduledOpenAt', 'scheduledJudgementAt', 'judgementTimeZone'];
+    const blank = ['scheduledOpenAt', 'scheduledJudgementAt', 'judgementTimeZone', 'liquidity'];
     expect(detail(await get(legacyUrl)).missingOpenItems).toEqual(blank);
     for (const item of ['scheduledOpenAt', 'scheduledJudgementAt', 'judgementTimeZone'] as const) {
       const value =

@@ -1351,8 +1351,10 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     // history naming who asked or carrying the review would carry A's id or that sentinel.
     const supplementImpact = `leak-supplement-impact-${tag}`;
     const supplementApproval = `leak-supplement-approval-${tag}`;
+    const liquidityReason = `leak-liquidity-reason-${tag}`;
     const { market } = await createSupplementedMarket(t.db, {
       createdBy: admin.id,
+      liquidityReason,
       lastPrice: 61,
       volumeCoin: PUBLIC_FILL.amountCoin,
       tradeCount: 1,
@@ -2254,6 +2256,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('counterparty order id', counterpartyOrder.id),
         text('counterparty order key', counterpartyOrder.idempotencyKey),
         text('market maker account id', marketMaker),
+        text('market liquidity reason', liquidityReason),
         text('market maker order id', makerBid.id),
         text('market maker order key', makerBidKey),
         // An account's type is recorded on a fill and never answered (결정 5 '#179·#119').

@@ -1277,6 +1277,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         tagCount: 1,
         leadCloseGapMinutes,
         priceProtectionTicks: row!.priceProtectionTicks ?? 5,
+        liquidityVersion: 1, // This group isolates the time rules; other opening terms are supplied.
       });
     }
 
@@ -1764,6 +1765,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           tagCount: tagged.length,
           leadCloseGapMinutes: null,
           priceProtectionTicks: market.priceProtectionTicks ?? 5,
+          liquidityVersion: market.currentLiquidityVersion,
         }),
       ).toEqual([]);
 
@@ -8236,6 +8238,9 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       const coinNamed = (await names()).filter((name) => /_coin(_|$)/.test(name)).sort();
       expect(coinNamed).toEqual(
         [
+          'market_liquidity_versions.budget_coin',
+          'market_liquidity_versions.max_loss_coin',
+          'market_liquidity_versions_coin_check',
           'balances.available_coin',
           'balances.locked_coin',
           'balances_available_coin_check',

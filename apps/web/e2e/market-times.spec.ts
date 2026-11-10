@@ -26,6 +26,7 @@ import {
   submitRefusedItems,
   test,
   timesFor,
+  setMarketLiquidity,
 } from './helpers';
 
 /**
@@ -324,6 +325,8 @@ test.describe('시장 시간', () => {
       });
       await expect(adminPage).toHaveURL(/\/admin\/markets\/[0-9a-f-]{36}$/);
       const marketId = adminPage.url().split('/').at(-1) ?? '';
+      await setMarketLiquidity(admin, marketId);
+      await adminPage.reload();
       const stored = await dataOf<AdminMarket>(
         await admin.get(`/api/v1/admin/markets/${marketId}`),
       );
