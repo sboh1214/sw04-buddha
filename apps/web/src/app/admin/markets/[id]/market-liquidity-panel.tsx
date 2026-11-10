@@ -60,7 +60,11 @@ export function LiquidityValues({
   return (
     <DataList.Root orientation={{ base: 'vertical', md: 'horizontal' }} size="sm">
       {LIQUIDITY_FIELDS.map((field) => (
-        <DataList.Item key={field} data-testid={`${prefix}-${field}`}>
+        <DataList.Item
+          key={field}
+          flexDirection={{ base: 'column', md: 'row' }}
+          data-testid={`${prefix}-${field}`}
+        >
           <DataList.ItemLabel>{LIQUIDITY_LABEL[field]}</DataList.ItemLabel>
           <DataList.ItemValue overflowWrap="anywhere">
             {field === 'budgetCoin' || field === 'maxLossCoin'
