@@ -1,11 +1,16 @@
 import { eq, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, createDb, type Db } from './client.js';
 import { runMarketMakerCycle } from './market-maker-cycle.js';
 import { requestMarketMakerRefresh } from './market-maker-runtime.js';
 import { cancelOrder } from './order-cancel.js';
 import { readLiveBook } from './orders.js';
-import { marketMakerSupplyIntervals, marketMakerSupplyStates, markets } from './schema/index.js';
+import {
+  marketMakerSupplyIntervals,
+  marketMakerSupplyPending,
+  marketMakerSupplyStates,
+  markets,
+} from './schema/index.js';
 import {
   createMarket,
   createOpenedMarket,
@@ -28,6 +33,9 @@ describe.skipIf(!hasTestDb())('deferred posted-book supply observations (#182)',
     await t.reset();
     adminId = (await createUser(t.db, { role: 'admin' })).user.id;
     await openOrderIntake(t.db, { adminId });
+  });
+  afterEach(async () => {
+    expect(await t.db.select().from(marketMakerSupplyPending)).toEqual([]);
   });
   const state = async (id: string) =>
     (
@@ -57,6 +65,57 @@ describe.skipIf(!hasTestDb())('deferred posted-book supply observations (#182)',
     ).market;
   const cycle = (id: string) => t.db.transaction((tx) => runMarketMakerCycle(tx, { marketId: id }));
 
+  it('scans a market book once per deferred flush and again after later writes', async () => {
+    const market = await opened();
+    const owner = createDb(testDbUrls()!.migrateUrl, { max: 1 });
+    let definition: string | undefined;
+    try {
+      const { rows } = await owner.execute<{ definition: string }>(sql`
+        SELECT pg_get_functiondef('market_maker_supply_observe()'::regprocedure) AS definition
+      `);
+      definition = rows[0]!.definition;
+      const observation = 'observed_at := greatest(clock_timestamp(), previous.last_observed_at);';
+      expect(definition.split(observation)).toHaveLength(2);
+      // Count actual visits to the full-book observation, without a latency threshold or
+      // changing its result. The isolated test DB owner restores the function in finally.
+      await owner.execute(sql`CREATE SEQUENCE public.test_supply_scan_count`);
+      await owner.execute(
+        sql.raw(
+          definition.replace(
+            observation,
+            `PERFORM nextval('public.test_supply_scan_count');\n  ${observation}`,
+          ),
+        ),
+      );
+      const scans = async () => {
+        const { rows: counts } = await owner.execute<{ count: string }>(sql`
+          SELECT CASE WHEN is_called THEN last_value ELSE 0 END::text AS count
+          FROM public.test_supply_scan_count
+        `);
+        return Number(counts[0]!.count);
+      };
+      await t.db.transaction(async (tx) => {
+        expect((await runMarketMakerCycle(tx, { marketId: market.id })).outcome).toBe('ready');
+        await tx.execute(sql`SET CONSTRAINTS ALL IMMEDIATE`);
+        expect(await scans()).toBe(1);
+        const book = await readLiveBook(tx, market.id);
+        expect(book.length).toBeGreaterThan(1);
+        await tx.execute(sql`SET CONSTRAINTS ALL DEFERRED`);
+        for (const row of book) {
+          await cancelOrder(tx, { ownerId: row.owner.id, orderId: row.id, reason: 'by_owner' });
+        }
+        await tx.execute(sql`SET CONSTRAINTS ALL IMMEDIATE`);
+        expect(await scans()).toBe(2);
+      });
+      expect(await scans()).toBe(2);
+      expect(await state(market.id)).toMatchObject({ botYesBuy: false, botNoBuy: false });
+    } finally {
+      if (definition) await owner.execute(sql.raw(definition));
+      await owner.execute(sql`DROP SEQUENCE IF EXISTS public.test_supply_scan_count`);
+      await closeDb(owner);
+    }
+  });
+
   it('observes a new draft without inventing open time, and app reads cannot change the facts', async () => {
     const market = await createMarket(t.db, { createdBy: adminId, status: 'draft' });
     const before = await state(market.id);
@@ -80,6 +139,12 @@ describe.skipIf(!hasTestDb())('deferred posted-book supply observations (#182)',
       t.db.update(marketMakerSupplyStates).set({ botYesBuy: true }),
     ).rejects.toMatchObject({ cause: { code: '42501' } });
     await expect(t.db.delete(marketMakerSupplyStates)).rejects.toMatchObject({
+      cause: { code: '42501' },
+    });
+    await expect(
+      t.db.insert(marketMakerSupplyPending).values({ marketId: market.id }),
+    ).rejects.toMatchObject({ cause: { code: '42501' } });
+    await expect(t.db.delete(marketMakerSupplyPending)).rejects.toMatchObject({
       cause: { code: '42501' },
     });
   });
@@ -297,6 +362,22 @@ describe.skipIf(!hasTestDb())('deferred posted-book supply observations (#182)',
     } finally {
       await closeDb(owner);
     }
+  });
+
+  it('restores pending work when a flush rolls back to its savepoint', async () => {
+    const market = await opened();
+    await cycle(market.id);
+    const bid = (await readLiveBook(t.db, market.id)).find((row) => row.outcome === 'YES')!;
+    const before = await intervals(market.id);
+    await t.db.transaction(async (tx) => {
+      await cancelOrder(tx, { ownerId: bid.owner.id, orderId: bid.id, reason: 'by_owner' });
+      await tx.execute(sql`SAVEPOINT pending_observation`);
+      await tx.execute(sql`SET CONSTRAINTS ALL IMMEDIATE`);
+      await tx.execute(sql`ROLLBACK TO SAVEPOINT pending_observation`);
+      expect(await tx.select().from(marketMakerSupplyPending)).toEqual([{ marketId: market.id }]);
+    });
+    expect(await state(market.id)).toMatchObject({ botYesBuy: false, botNoBuy: true });
+    expect(await intervals(market.id)).toHaveLength(before.length + 1);
   });
 
   it('serializes the first observation of an existing market across canonical concurrent writers', async () => {

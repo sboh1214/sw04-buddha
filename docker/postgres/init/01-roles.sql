@@ -14,6 +14,8 @@
 --                   reconciliation_recoveries, market_conflict_declarations, market_liquidity_versions, treasury_issuances,
 --                   market_maker_allocations, market_maker_runs, market_maker_recalls): INSERT/SELECT only;
 --                   reconciliation_corrections: no INSERT, UPDATE, DELETE (only its guarded function writes);
+--                   market_maker_supply_pending, market_maker_supply_states,
+--                   market_maker_supply_intervals: SELECT only, written by their observer triggers;
 --                   balances: SELECT and UPDATE of available_coin,
 --                   locked_coin, ledger_coin and updated_at only, its rows opened by a trigger;
 --                   release_settings, approval_requests, start_grants, start_grant_numbers,
@@ -29,7 +31,7 @@
 --                   applied later by migrations with REVOKE
 --                   (0001, 0015, 0020, 0021, 0023, 0026, 0030, 0031, 0032, 0033, 0034, 0035,
 --                   0036, 0039, 0040, 0041, 0044, 0045, 0049, 0053, 0054, 0055, 0056, 0058,
---                   0060, 0062, 0064, 0065, 0066, 0067, 0069, 0070),
+--                   0060, 0062, 0064, 0065, 0066, 0067, 0069, 0070, 0072),
 --                   see bottom.
 
 CREATE ROLE buddha_migrate LOGIN PASSWORD 'buddha';
@@ -103,4 +105,7 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO buddha_app;
 -- execution observations are retained. Initial runtime is bound to the approved allocation.
 -- 0070 (market_maker_recalls: UPDATE, DELETE): each terminal full return or zero completion
 -- is permanent and bound to its exact same-transaction BOT_RECALL, if any.
+-- 0072 (market_maker_supply_pending, market_maker_supply_states,
+-- market_maker_supply_intervals: INSERT, UPDATE, DELETE): only SECURITY DEFINER
+-- observation triggers coalesce pending book changes and write final observations.
 -- Default privileges are applied at CREATE time, so a REVOKE afterwards sticks.

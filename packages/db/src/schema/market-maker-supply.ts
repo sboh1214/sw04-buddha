@@ -12,6 +12,13 @@ import {
 import { timestampTz } from './columns.js';
 import { markets } from './markets.js';
 
+/** Private observer work, consumed within the writing transaction at each deferred flush. */
+export const marketMakerSupplyPending = pgTable('market_maker_supply_pending', {
+  marketId: uuid()
+    .primaryKey()
+    .references(() => markets.id, { onDelete: 'restrict' }),
+});
+
 /** Non-personal posted-book observations, not executable quotes or worker uptime. */
 const stateColumns = () => ({
   isOpen: boolean().notNull(),

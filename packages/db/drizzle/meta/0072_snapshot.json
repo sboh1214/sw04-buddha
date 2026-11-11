@@ -1,5 +1,5 @@
 {
-  "id": "3d1e7ddb-5780-42b7-ac8b-d9a5cc3132f9",
+  "id": "f30c6914-3fd5-47a5-b3f1-b8ee0c1019b2",
   "prevId": "50c482e1-f616-4522-9074-ca2ff2c328e0",
   "version": "7",
   "dialect": "postgresql",
@@ -13073,6 +13073,39 @@
           "value": "\"market_maker_supply_intervals\".\"started_at\" <= \"market_maker_supply_intervals\".\"ended_at\""
         }
       },
+      "isRLSEnabled": false
+    },
+    "public.market_maker_supply_pending": {
+      "name": "market_maker_supply_pending",
+      "schema": "",
+      "columns": {
+        "market_id": {
+          "name": "market_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "market_maker_supply_pending_market_id_markets_id_fk": {
+          "name": "market_maker_supply_pending_market_id_markets_id_fk",
+          "tableFrom": "market_maker_supply_pending",
+          "tableTo": "markets",
+          "columnsFrom": [
+            "market_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.market_maker_supply_states": {

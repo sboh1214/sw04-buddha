@@ -1,7 +1,9 @@
 import type { MarketMakerPeriodMetrics } from '@buddha/shared';
 import { and, asc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
+import { isHumanAccountTypeSql } from './account-types.js';
 import type { Db } from './client.js';
-import { marketEvents, marketMakerSupplyStates, type markets } from './schema/index.js';
+import { marketEvents, marketMakerSupplyStates, user, type markets } from './schema/index.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 type Market = typeof markets.$inferSelect;
@@ -47,6 +49,7 @@ export async function readMarketMakerPeriodMetrics(
   // A posting's initial resting quantity excludes immediate incoming fills. A GTC self-trade
   // cancellation never posted its remainder. Subsequent resting fills are the same cohort's
   // numerator, so a repost is new quantity and an immediate fill is not invented posted supply.
+  const participant = alias(user, 'u');
   const {
     rows: [activity],
   } = await tx.execute<{
@@ -55,7 +58,7 @@ export async function readMarketMakerPeriodMetrics(
     ioc: string;
     full: string;
   }>(sql`WITH cohort AS (
-    SELECT o.*,is_human_account_type(u.account_type) AS human,
+    SELECT o.*,${isHumanAccountTypeSql(participant.accountType)} AS human,
       coalesce((SELECT sum(f.qty::bigint) FROM fills f WHERE f.incoming_order_id=o.id),0) AS incoming,
       coalesce((SELECT sum(f.qty::bigint) FROM fills f WHERE f.resting_order_id=o.id),0) AS resting
     FROM orders o JOIN "user" u ON u.id=o.user_id

@@ -13,6 +13,10 @@ CREATE TABLE "market_maker_supply_intervals" (
 	CONSTRAINT "market_maker_supply_intervals_time_check" CHECK ("market_maker_supply_intervals"."started_at" <= "market_maker_supply_intervals"."ended_at")
 );
 --> statement-breakpoint
+CREATE TABLE "market_maker_supply_pending" (
+	"market_id" uuid PRIMARY KEY NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "market_maker_supply_states" (
 	"market_id" uuid PRIMARY KEY NOT NULL,
 	"first_observed_at" timestamp (3) with time zone NOT NULL,
@@ -30,13 +34,37 @@ CREATE TABLE "market_maker_supply_states" (
 );
 --> statement-breakpoint
 ALTER TABLE "market_maker_supply_intervals" ADD CONSTRAINT "market_maker_supply_intervals_market_id_markets_id_fk" FOREIGN KEY ("market_id") REFERENCES "public"."markets"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "market_maker_supply_pending" ADD CONSTRAINT "market_maker_supply_pending_market_id_markets_id_fk" FOREIGN KEY ("market_id") REFERENCES "public"."markets"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "market_maker_supply_states" ADD CONSTRAINT "market_maker_supply_states_market_id_markets_id_fk" FOREIGN KEY ("market_id") REFERENCES "public"."markets"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "market_maker_supply_intervals_market_started_idx" ON "market_maker_supply_intervals" USING btree ("market_id","started_at","id");--> statement-breakpoint
 CREATE UNIQUE INDEX "market_maker_supply_intervals_market_txid_idx" ON "market_maker_supply_intervals" USING btree ("market_id","applied_txid");
 --> statement-breakpoint
 -- #182: the app reads observations; only this deferred observer owns their writes.
 -- No historical backfill, account identity or order identity is copied.
-REVOKE INSERT, UPDATE, DELETE ON TABLE market_maker_supply_states, market_maker_supply_intervals FROM buddha_app;
+REVOKE INSERT, UPDATE, DELETE ON TABLE market_maker_supply_pending, market_maker_supply_states, market_maker_supply_intervals FROM buddha_app;
+--> statement-breakpoint
+-- A private pending marker is transactional: one per market until the next deferred flush.
+-- It is inserted after each actual write (before the observer by trigger name), so even
+-- SET CONSTRAINTS IMMEDIATE sees later writes. Rollback/savepoints also restore the marker.
+CREATE FUNCTION market_maker_supply_mark_pending() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,pg_temp AS $$
+DECLARE mid uuid;
+BEGIN
+  IF TG_TABLE_NAME='orders' THEN mid := NEW.market_id; ELSE mid := NEW.id; END IF;
+  INSERT INTO market_maker_supply_pending(market_id) VALUES (mid) ON CONFLICT DO NOTHING;
+  RETURN NULL;
+END;
+$$;
+--> statement-breakpoint
+REVOKE EXECUTE ON FUNCTION market_maker_supply_mark_pending() FROM PUBLIC,buddha_app;
+--> statement-breakpoint
+CREATE TRIGGER orders_mark_market_maker_supply_pending
+AFTER INSERT OR UPDATE ON orders
+FOR EACH ROW EXECUTE FUNCTION market_maker_supply_mark_pending();
+--> statement-breakpoint
+CREATE TRIGGER markets_mark_market_maker_supply_pending
+AFTER INSERT OR UPDATE ON markets
+FOR EACH ROW EXECUTE FUNCTION market_maker_supply_mark_pending();
 --> statement-breakpoint
 CREATE FUNCTION market_maker_supply_keep_committed_interval() RETURNS trigger
 LANGUAGE plpgsql SET search_path=pg_catalog,public,pg_temp AS $$
@@ -76,6 +104,8 @@ DECLARE
   n_ask boolean;
 BEGIN
   IF TG_TABLE_NAME='orders' THEN mid := NEW.market_id; ELSE mid := NEW.id; END IF;
+  DELETE FROM market_maker_supply_pending WHERE market_id=mid;
+  IF NOT FOUND THEN RETURN NULL; END IF;
   SELECT * INTO previous FROM market_maker_supply_states WHERE market_id=mid FOR UPDATE;
   -- Domain writers acquire the market lock before orders/assets. Do not return just
   -- because this transaction was observed: SET CONSTRAINTS may flush before its last write.
