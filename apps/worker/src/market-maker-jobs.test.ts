@@ -21,7 +21,10 @@ describe('maker producer', () => {
     expect(add).toHaveBeenCalledWith(
       JOB_NAMES.marketMakerRefresh,
       { marketId, generation: '9007199254740993' },
-      expect.objectContaining({ deduplication: { id: marketId }, removeOnComplete: true }),
+      expect.objectContaining({
+        deduplication: { id: marketId, keepLastIfActive: true },
+        removeOnComplete: true,
+      }),
     );
     expect(add.mock.calls[0]![2]?.jobId).not.toBe(add.mock.calls[1]![2]?.jobId);
     await expect(
@@ -40,7 +43,7 @@ describe('maker producer', () => {
   });
 
   it.skipIf(!hasRedis)(
-    'absorbs active registrations, releases on completion/final failure, and re-registers the same generation',
+    'keeps one latest active follow-up, releases on completion/final failure, and re-registers the same generation',
     async () => {
       const connection = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: null });
       const prefix = `test-maker-${randomUUID()}`;
@@ -60,9 +63,11 @@ describe('maker producer', () => {
       });
       let mode: 'block' | 'fail' | 'success' = 'block';
       let failures = 0;
-      const worker = new Worker(
+      const handled: string[] = [];
+      const worker = new Worker<MarketMakerJobData>(
         'maker',
-        async () => {
+        async (job) => {
+          handled.push(job.data.generation);
           if (mode === 'block') {
             active();
             await blocked;
@@ -81,11 +86,16 @@ describe('maker producer', () => {
         const [first] = await queue.getJobs(['active']);
         expect(first).toBeDefined();
         await enqueue(marketId, 2n);
+        await enqueue(marketId, 2n);
         expect(await queue.getJobCountByTypes('waiting', 'active', 'delayed')).toBe(1);
         expect((await queue.getJobs(['active']))[0]!.data.generation).toBe('1');
         const completed = first!.waitUntilFinished(events, 5_000);
         release();
         await completed;
+        await vi.waitFor(() => expect(handled).toEqual(['1', '2']));
+        await vi.waitFor(async () =>
+          expect(await queue.getJobCountByTypes('waiting', 'active', 'delayed')).toBe(0),
+        );
         expect(await queue.getDeduplicationJobId(marketId)).toBeNull();
 
         mode = 'fail';

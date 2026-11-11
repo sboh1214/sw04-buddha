@@ -24,7 +24,10 @@ export function createEnqueueMarketMaker(
         { marketId, generation: generation.toString() },
         {
           jobId,
-          deduplication: { id: marketId },
+          // An immediate fill can dirty the market and enqueue from inside this active job.
+          // Keep one latest follow-up instead of discarding it until the minute scan; its
+          // queued generation is only a hint and the locked cycle reads current durable work.
+          deduplication: { id: marketId, keepLastIfActive: true },
           removeOnComplete: true,
         },
       );
