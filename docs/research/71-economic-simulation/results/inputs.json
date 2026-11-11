@@ -1,0 +1,273 @@
+{
+  "candidates": [
+    {
+      "id": "C1",
+      "startCoin": "1000",
+      "budgetCoin": "10000",
+      "maxLossCoin": "2000",
+      "b": 40,
+      "levels": 3,
+      "quantity": 10,
+      "safetyTicks": 1,
+      "protectionTicks": 3,
+      "reduceAtBp": 6000,
+      "haltAtBp": 8000,
+      "reduceRatioBp": 2500
+    },
+    {
+      "id": "C2",
+      "startCoin": "1000",
+      "budgetCoin": "10000",
+      "maxLossCoin": "2000",
+      "b": 100,
+      "levels": 3,
+      "quantity": 10,
+      "safetyTicks": 1,
+      "protectionTicks": 3,
+      "reduceAtBp": 6000,
+      "haltAtBp": 8000,
+      "reduceRatioBp": 2500
+    },
+    {
+      "id": "C3",
+      "startCoin": "1000",
+      "budgetCoin": "10000",
+      "maxLossCoin": "2000",
+      "b": 100,
+      "levels": 5,
+      "quantity": 20,
+      "safetyTicks": 1,
+      "protectionTicks": 3,
+      "reduceAtBp": 6000,
+      "haltAtBp": 8000,
+      "reduceRatioBp": 2500
+    },
+    {
+      "id": "C4",
+      "startCoin": "1000",
+      "budgetCoin": "10000",
+      "maxLossCoin": "2000",
+      "b": 100,
+      "levels": 5,
+      "quantity": 20,
+      "safetyTicks": 2,
+      "protectionTicks": 2,
+      "reduceAtBp": 6000,
+      "haltAtBp": 8000,
+      "reduceRatioBp": 2500
+    },
+    {
+      "id": "C5",
+      "startCoin": "1000",
+      "budgetCoin": "10000",
+      "maxLossCoin": "4000",
+      "b": 100,
+      "levels": 5,
+      "quantity": 20,
+      "safetyTicks": 1,
+      "protectionTicks": 5,
+      "reduceAtBp": 7000,
+      "haltAtBp": 9000,
+      "reduceRatioBp": 5000
+    },
+    {
+      "id": "C6",
+      "startCoin": "2000",
+      "budgetCoin": "20000",
+      "maxLossCoin": "8000",
+      "b": 200,
+      "levels": 5,
+      "quantity": 40,
+      "safetyTicks": 1,
+      "protectionTicks": 5,
+      "reduceAtBp": 7000,
+      "haltAtBp": 9000,
+      "reduceRatioBp": 5000
+    },
+    {
+      "id": "C7",
+      "startCoin": "5000",
+      "budgetCoin": "10000",
+      "maxLossCoin": "2000",
+      "b": 100,
+      "levels": 5,
+      "quantity": 20,
+      "safetyTicks": 1,
+      "protectionTicks": 3,
+      "reduceAtBp": 6000,
+      "haltAtBp": 8000,
+      "reduceRatioBp": 2500
+    },
+    {
+      "id": "C8",
+      "startCoin": "500",
+      "budgetCoin": "2000",
+      "maxLossCoin": "500",
+      "b": 20,
+      "levels": 3,
+      "quantity": 5,
+      "safetyTicks": 1,
+      "protectionTicks": 3,
+      "reduceAtBp": 5000,
+      "haltAtBp": 7500,
+      "reduceRatioBp": 5000
+    }
+  ],
+  "profiles": [
+    {
+      "id": "p20-m1",
+      "people": 20,
+      "markets": 1,
+      "label": "internal"
+    },
+    {
+      "id": "p20-m5",
+      "people": 20,
+      "markets": 5,
+      "label": "scale-sensitivity"
+    },
+    {
+      "id": "p20-m20",
+      "people": 20,
+      "markets": 20,
+      "label": "scale-sensitivity"
+    },
+    {
+      "id": "p100-m1",
+      "people": 100,
+      "markets": 1,
+      "label": "scale-sensitivity"
+    },
+    {
+      "id": "p100-m5",
+      "people": 100,
+      "markets": 5,
+      "label": "initial-public"
+    },
+    {
+      "id": "p100-m20",
+      "people": 100,
+      "markets": 20,
+      "label": "scale-sensitivity"
+    },
+    {
+      "id": "p500-m1",
+      "people": 500,
+      "markets": 1,
+      "label": "scale-sensitivity"
+    },
+    {
+      "id": "p500-m5",
+      "people": 500,
+      "markets": 5,
+      "label": "scale-sensitivity"
+    },
+    {
+      "id": "p500-m20",
+      "people": 500,
+      "markets": 20,
+      "label": "public-pressure"
+    }
+  ],
+  "cases": [
+    {
+      "id": "balanced",
+      "scenario": "balanced",
+      "refreshDelayMs": 250,
+      "split": 1,
+      "operatorPauseMs": null
+    },
+    {
+      "id": "one-way",
+      "scenario": "one-way",
+      "refreshDelayMs": 250,
+      "split": 1,
+      "operatorPauseMs": null
+    },
+    {
+      "id": "whale-1",
+      "scenario": "whale",
+      "refreshDelayMs": 250,
+      "split": 1,
+      "operatorPauseMs": null
+    },
+    {
+      "id": "whale-20",
+      "scenario": "whale",
+      "refreshDelayMs": 250,
+      "split": 20,
+      "operatorPauseMs": null
+    },
+    {
+      "id": "news-stop-0",
+      "scenario": "news",
+      "refreshDelayMs": 250,
+      "split": 1,
+      "operatorPauseMs": 0
+    },
+    {
+      "id": "news-stop-30000",
+      "scenario": "news",
+      "refreshDelayMs": 250,
+      "split": 1,
+      "operatorPauseMs": 30000
+    },
+    {
+      "id": "news-stop-300000",
+      "scenario": "news",
+      "refreshDelayMs": 250,
+      "split": 1,
+      "operatorPauseMs": 300000
+    },
+    {
+      "id": "stale-0",
+      "scenario": "stale",
+      "refreshDelayMs": 0,
+      "split": 1,
+      "operatorPauseMs": null
+    },
+    {
+      "id": "stale-250",
+      "scenario": "stale",
+      "refreshDelayMs": 250,
+      "split": 1,
+      "operatorPauseMs": null
+    },
+    {
+      "id": "stale-1000",
+      "scenario": "stale",
+      "refreshDelayMs": 1000,
+      "split": 1,
+      "operatorPauseMs": null
+    },
+    {
+      "id": "stale-5000",
+      "scenario": "stale",
+      "refreshDelayMs": 5000,
+      "split": 1,
+      "operatorPauseMs": null
+    },
+    {
+      "id": "human-trade",
+      "scenario": "human-trade",
+      "refreshDelayMs": 250,
+      "split": 1,
+      "operatorPauseMs": null
+    },
+    {
+      "id": "self-trade",
+      "scenario": "self-trade",
+      "refreshDelayMs": 250,
+      "split": 1,
+      "operatorPauseMs": null
+    },
+    {
+      "id": "settlement",
+      "scenario": "settlement",
+      "refreshDelayMs": 250,
+      "split": 1,
+      "operatorPauseMs": null
+    }
+  ],
+  "seeds": [71, 20261112]
+}
