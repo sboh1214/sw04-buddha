@@ -754,11 +754,11 @@ ORDER BY o.market_id, o.arrival_seq;
 
 ## 시장 통계 (#121, ADR-0116)
 
-시장의 시장가격(마지막 체결의 YES 기준 값, `markets.last_price`)과 그 갱신시각(`last_fill_at`), 누적 거래량(`volume_coin`), 체결 수(`trade_count`), 참여자 수(`trader_count`)는 체결이 있었던 주문 접수가 그 체결과 같은 트랜잭션에서 시장 잠금 아래 한 번 쓴다(`@buddha/db` market-stats.ts). 개장·거래 일시 중단·마감과 주문 만료·취소·판정·정산·시드는 이 값을 쓰지 않는다. 운영자가 고칠 값은 없다.
+시장의 시장가격(마지막 체결의 YES 기준 값, `markets.last_price`)과 그 갱신시각(`last_fill_at`), 누적 거래량(`volume_coin`), 체결 수(`trade_count`), 참여자 수(`trader_count`)는 체결이 있었던 주문 접수가 그 체결과 같은 트랜잭션에서 시장 잠금 아래 쓴다(`@buddha/db` market-stats.ts). #132의 분류·해제는 두 관리자의 승인이 완료되는 트랜잭션에서 참여자 수를 다시 세고 `stats_revision`을 갱신한다. 원체결·시장가격·갱신시각·누적 거래량·체결 수는 바꾸지 않는다. 개장·거래 일시 중단·마감과 주문 만료·취소·판정·정산·시드는 이 값을 쓰지 않는다. 운영자가 직접 고칠 값은 없다.
 
-- **값의 뜻.** 시장가격은 마지막 체결(서버 시각, 같은 시각이면 체결 번호가 큰 것)의 YES 기준 값이다 — NO 37의 체결은 63, 쌍 발행은 체결 하나이고 100 − NO 가격이다. 첫 체결 전에는 둘 다 비어 있다('체결 없음', 개장의 50%는 가격이 아니다). 거래량은 체결마다 들어온 주문의 계약 가격 × 수량을 한 번 더한 것이라 공개 최근 체결의 금액을 모두 더한 값과 같다. 참여자는 그 시장에서 체결이 한 건이라도 있는 사람 계정(계정 유형 규칙, 운영 마켓메이커는 빠지고 관리자는 든다)의 수로, 전량 매도나 탈퇴로 줄지 않는다 — 판정 이의 자격(`hasMarketFill`)과 같은 기준이다.
-- **가격 기록.** 차트와 최근 체결은 체결 행(`fills`)을 그대로 읽는다. 체결 행은 바뀌거나 지워지지 않으므로 위의 값은 언제든 체결에서 다시 셀 수 있다. 옛 AMM의 `price_ticks`는 그대로 두고 아무것도 읽거나 쓰지 않는다.
-- **확인.** 아래 SQL은 읽기만 하며, 행이 없으면 모든 시장의 통계가 그 체결과 같다. 행이 나오면 고치지 말고 오너에게 알린다(이번 #93 구현분은 통계 재계산·정정을 하지 않으며, 이상 체결을 빼는 다시 세기는 #132).
+- **값의 뜻.** 시장가격은 마지막 체결(서버 시각, 같은 시각이면 체결 번호가 큰 것)의 YES 기준 값이다 — NO 37의 체결은 63, 쌍 발행은 체결 하나이고 100 − NO 가격이다. 첫 체결 전에는 둘 다 비어 있다('체결 없음', 개장의 50%는 가격이 아니다). 거래량은 체결마다 들어온 주문의 계약 가격 × 수량을 한 번 더한 것이라 공개 최근 체결의 금액을 모두 더한 값과 같다. 참여자는 현재 통계에서 제외되지 않은 체결의 양쪽 사람 계정(체결 당시 계정 유형 규칙, 운영 마켓메이커는 빠지고 관리자는 든다)을 중복 없이 센다. 전량 매도나 탈퇴로 줄지 않지만 마지막 정상 체결이 승인된 분류로 제외되면 줄어들 수 있다. 새 정상 체결이나 분류 해제로 정상 체결이 다시 생기면 참여자로 다시 센다. 판정 이의 자격(`hasMarketFill`)은 분류와 관계없이 원체결을 그대로 보므로 이 집계와 별개다.
+- **가격 기록.** 차트와 최근 체결은 체결 행(`fills`)을 그대로 읽는다. 체결 행은 바뀌거나 지워지지 않는다. 가격·거래량·체결 수는 원체결에서, 참여자 수는 원체결과 최신 승인된 분류·해제 기록에서 다시 셀 수 있다. 옛 AMM의 `price_ticks`는 그대로 두고 아무것도 읽거나 쓰지 않는다.
+- **확인.** 아래 SQL은 읽기만 하며, 행이 없으면 모든 시장의 가격·거래량·체결 수가 원체결과 같고 참여자 수가 최신 승인된 분류를 반영한 정상 체결과 같다. 이 SQL은 통합 시험의 `MARKET_STATS_CHECK_SQL`과 정확히 같다. 행이 나오면 직접 고치지 말고 오너에게 알린다. #93 대사는 통계를 재계산·정정하지 않으며, #132의 참여자 재계산은 분류·해제 승인에만 결합되어 있다.
 - **배포 때.** 마이그레이션 0063은 체결이 하나라도 있거나 통계가 기본값이 아닌 시장이 있는 DB에서 아무것도 하지 않고 멈춘다(다시 세기는 UPDATE라 오너의 결정이다). 운영 DB는 0060이 비웠고 주문 접수가 닫혀 있어 지나간다. 로컬 개발 DB가 멈추면 [RESET.md](RESET.md)대로 비운다.
 
 ```sql
@@ -771,10 +771,10 @@ WITH totals AS (
 ), people AS (
   SELECT market_id, count(DISTINCT owner_id)::int AS traders
   FROM (SELECT market_id, incoming_owner_id AS owner_id FROM fills
-        WHERE is_human_account_type(incoming_account_type)
+        WHERE is_human_account_type(incoming_account_type) AND NOT coalesce((SELECT action='mark' FROM fill_classifications fc WHERE fc.fill_id=fills.id ORDER BY fc.revision DESC LIMIT 1),false)
         UNION ALL
         SELECT market_id, resting_owner_id FROM fills
-        WHERE is_human_account_type(resting_account_type)) AS sides
+        WHERE is_human_account_type(resting_account_type) AND NOT coalesce((SELECT action='mark' FROM fill_classifications fc WHERE fc.fill_id=fills.id ORDER BY fc.revision DESC LIMIT 1),false)) AS sides
   GROUP BY market_id
 )
 SELECT m.id AS market_id,

@@ -145,3 +145,7 @@ CREATE CONSTRAINT TRIGGER fill_classification_market_stats_complete
  AFTER UPDATE OF trader_count,stats_revision ON markets DEFERRABLE INITIALLY DEFERRED
  FOR EACH ROW WHEN(OLD.trader_count IS DISTINCT FROM NEW.trader_count OR OLD.stats_revision IS DISTINCT FROM NEW.stats_revision)
  EXECUTE FUNCTION fill_classification_market_stats_complete();
+--> statement-breakpoint
+-- #132 locked intake: probe one market/owner on each side, rather than unrelated fill history.
+CREATE INDEX "fills_market_id_incoming_owner_id_idx" ON "fills" USING btree ("market_id","incoming_owner_id");--> statement-breakpoint
+CREATE INDEX "fills_market_id_resting_owner_id_idx" ON "fills" USING btree ("market_id","resting_owner_id");

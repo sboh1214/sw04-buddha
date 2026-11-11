@@ -13,7 +13,12 @@ import {
   Stack,
   Text,
 } from '@chakra-ui/react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import {
+  useMutation,
+  useQueryClient,
+  type MutationOptions,
+  type QueryClient,
+} from '@tanstack/react-query';
 import { classificationFillIdSchema, approvalReasonSchema, formatCoin } from '@buddha/shared';
 import { useState } from 'react';
 import NextLink from 'next/link';
@@ -116,11 +121,15 @@ function RequestFacts({ request }: { request: FillClassificationRequest }) {
     </Stack>
   );
 }
-function useWrite(send: (operator: string) => Promise<FillClassificationWrite>, close: () => void) {
-  const client = useQueryClient(),
-    sessionChanged = useSessionChanged();
-  const [refusal, setRefusal] = useState<string | null>(null);
-  const mutation = useMutation({
+/** Shared by both dialogs; exported so the actual callbacks run under MutationObserver tests. */
+export function classificationWriteOptions(
+  client: QueryClient,
+  send: (operator: string) => Promise<FillClassificationWrite>,
+  close: () => void,
+  sessionChanged: (error: unknown) => boolean,
+  setRefusal: (message: string | null) => void,
+): MutationOptions<FillClassificationWrite, unknown, string> {
+  return {
     mutationFn: send,
     onMutate: () => setRefusal(null),
     onSuccess: async (fresh, operator) => {
@@ -130,7 +139,8 @@ function useWrite(send: (operator: string) => Promise<FillClassificationWrite>, 
       close();
       void client.invalidateQueries({ queryKey: [...CLASSIFICATIONS_KEY, operator] });
     },
-    onError: (error) => {
+    onError: (error, operator) => {
+      if (client.getQueryData<{ id: string }>(['me'])?.id !== operator) return;
       if (sessionChanged(error)) {
         close();
         return;
@@ -142,7 +152,15 @@ function useWrite(send: (operator: string) => Promise<FillClassificationWrite>, 
       setRefusal(copy.classificationsFailure);
       void client.invalidateQueries({ queryKey: CLASSIFICATIONS_KEY });
     },
-  });
+  };
+}
+function useWrite(send: (operator: string) => Promise<FillClassificationWrite>, close: () => void) {
+  const client = useQueryClient(),
+    sessionChanged = useSessionChanged();
+  const [refusal, setRefusal] = useState<string | null>(null);
+  const mutation = useMutation(
+    classificationWriteOptions(client, send, close, sessionChanged, setRefusal),
+  );
   return { mutation, refusal };
 }
 export function RequestDialog({
