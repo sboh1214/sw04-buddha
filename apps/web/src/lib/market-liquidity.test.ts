@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
-import { ApiError } from './api';
+import { MARKET_LIQUIDITY_DEFAULT_SETTINGS } from '@buddha/shared';
+import { ApiError, type ReleaseSetting } from './api';
 import {
   canEditLiquidity,
   liquidityDraft,
   liquidityFailure,
   liquidityTexts,
+  liquidityInitialForm,
   liquidityVersionChanged,
 } from './market-liquidity';
 
@@ -26,6 +28,50 @@ const refusal = (path: string[], message: string) =>
   });
 
 describe('관리자 유동성 설정', () => {
+  it('prefills only explicit valid values, keeps gaps blank and saved market values first', () => {
+    const rows: ReleaseSetting[] = Object.values(MARKET_LIQUIDITY_DEFAULT_SETTINGS).map(
+      (definition) => ({
+        key: definition.key,
+        label: definition.label,
+        unit: definition.unit,
+        description: definition.description,
+        valueSchema: {},
+        status: 'undecided',
+        value: null,
+        updatedAt: null,
+        updatedBy: null,
+      }),
+    );
+    const defaults = rows.map((row) =>
+      row.key === MARKET_LIQUIDITY_DEFAULT_SETTINGS.budgetCoin.key
+        ? { ...row, status: 'test' as const, value: '999999999999999' }
+        : row.key === MARKET_LIQUIDITY_DEFAULT_SETTINGS.b.key
+          ? { ...row, status: 'proposal' as const, value: 1e-100 }
+          : row,
+    );
+    expect(liquidityInitialForm(null, defaults)).toEqual({
+      text: { ...liquidityTexts(null), budgetCoin: '999999999999999', b: '1e-100' },
+      sources: { budgetCoin: 'test', b: 'proposal' },
+    });
+    expect(liquidityDraft(liquidityInitialForm(null, defaults).text, reason, null).ready).toBe(
+      false,
+    );
+    expect(liquidityInitialForm(settings, defaults)).toEqual({
+      text: liquidityTexts(settings),
+      sources: {},
+    });
+    expect(
+      liquidityInitialForm(
+        null,
+        defaults.map((row) => ({ ...row, value: 0 })),
+      ),
+    ).toEqual({ text: liquidityTexts(null), sources: {} });
+    const contradictory = { ...liquidityTexts(settings), maxLossCoin: '10001' };
+    expect(liquidityDraft(contradictory, reason, null).errors.maxLossCoin).toBe(
+      copy.errMarketLiquidityMaxLoss,
+    );
+  });
+
   it('only edits drafts, and never retargets an open form to a new version or status', () => {
     expect(canEditLiquidity('draft')).toBe(true);
     for (const status of [

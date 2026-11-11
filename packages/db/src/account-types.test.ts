@@ -58,6 +58,11 @@ function sourceFiles(): string[] {
 const HANDED_TO_THE_RULE = /isHumanAccountTypeSql\(\s*[\w.]+\.accountType\s*\)/g;
 /** The type named as itself: its values, its column, its field. */
 const NAMES_THE_TYPE = /\bmarket_maker\b|\baccount_type\b|\baccountType\b/;
+/** Exact #72 setting literals do not inspect an account type. No prefix exemption. */
+const LIQUIDITY_SETTING_LITERAL =
+  /(['"])market_maker\.default_(?:budget_coin|max_loss_coin|b|levels|quantity|safety_ticks)\1/g;
+const namesAccountType = (text: string) =>
+  NAMES_THE_TYPE.test(text.replace(HANDED_TO_THE_RULE, '').replace(LIQUIDITY_SETTING_LITERAL, ''));
 
 describe('the one rule of a person’s account (#115, static)', () => {
   it('reads the source tree (the scan is not empty)', () => {
@@ -77,11 +82,7 @@ describe('the one rule of a person’s account (#115, static)', () => {
     // to `isHumanAccountTypeSql`, so a type added later (#95) is judged in one place.
     const offenders = sourceFiles()
       .filter((file) => !MAY_NAME_THE_TYPE.includes(file))
-      .filter((file) =>
-        NAMES_THE_TYPE.test(
-          readFileSync(new URL(file, ROOT), 'utf8').replace(HANDED_TO_THE_RULE, ''),
-        ),
-      );
+      .filter((file) => namesAccountType(readFileSync(new URL(file, ROOT), 'utf8')));
     expect(offenders).toEqual([]);
   });
 
@@ -102,6 +103,18 @@ describe('the one rule of a person’s account (#115, static)', () => {
     expect(strip("eq(schema.user.accountType, 'member')")).toBe(true);
     expect(strip("sql`u.account_type = 'member'`")).toBe(true);
     expect(strip("type === 'market_maker'")).toBe(true);
+  });
+
+  it('allows only the six exact liquidity setting literals, not adjacent type uses', () => {
+    for (const key of ['budget_coin', 'max_loss_coin', 'b', 'levels', 'quantity', 'safety_ticks']) {
+      expect(namesAccountType(`'market_maker.default_${key}'`)).toBe(false);
+      expect(namesAccountType(`'market_maker.default_${key}_other'`)).toBe(true);
+      expect(namesAccountType(`'market_maker.default_${key}' || type === 'market_maker'`)).toBe(
+        true,
+      );
+    }
+    expect(namesAccountType("'market_maker.other'")).toBe(true);
+    expect(namesAccountType('market_maker.default_b')).toBe(true);
   });
 });
 

@@ -67,7 +67,9 @@ export function formatReleaseSettingValue(value: unknown): string {
   if (value === null || value === undefined) return NO_VALUE;
   if (typeof value === 'string') return value === '' ? '""' : value;
   if (typeof value === 'number') {
-    return value.toLocaleString('ko-KR', { maximumFractionDigits: 20 });
+    const shown = value.toLocaleString('ko-KR', { maximumFractionDigits: 20 });
+    // A valid small curve coefficient must not be displayed as zero.
+    return value !== 0 && Number(shown.replaceAll(',', '')) === 0 ? String(value) : shown;
   }
   return compactJson(value);
 }

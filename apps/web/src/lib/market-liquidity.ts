@@ -2,9 +2,11 @@ import {
   type MarketLiquiditySettings,
   type MarketStatus,
   marketLiquiditySettingsInputSchema,
+  MARKET_LIQUIDITY_DEFAULT_SETTINGS,
+  type ReleaseSettingStatus,
 } from '@buddha/shared';
 import { copy } from '@/copy';
-import { isApiError, validationMessage, validationPath } from './api';
+import { type ReleaseSetting, isApiError, validationMessage, validationPath } from './api';
 import { type ReviewFailure, reviewFailure, reviewReasonDraft } from './market-review';
 
 export const LIQUIDITY_FIELDS = [
@@ -17,6 +19,29 @@ export const LIQUIDITY_FIELDS = [
 ] as const satisfies readonly (keyof MarketLiquiditySettings)[];
 export type LiquidityField = (typeof LIQUIDITY_FIELDS)[number];
 export type LiquidityText = Record<LiquidityField, string>;
+export interface LiquidityInitialForm {
+  text: LiquidityText;
+  sources: Partial<Record<LiquidityField, Exclude<ReleaseSettingStatus, 'undecided'>>>;
+}
+
+/** Valid explicit suggestions only. This never creates a version or fills a missing value. */
+export function liquidityInitialForm(
+  current: MarketLiquiditySettings | null,
+  defaults: readonly ReleaseSetting[],
+): LiquidityInitialForm {
+  const form: LiquidityInitialForm = { text: liquidityTexts(current), sources: {} };
+  if (current !== null) return form;
+  for (const field of LIQUIDITY_FIELDS) {
+    const definition = MARKET_LIQUIDITY_DEFAULT_SETTINGS[field];
+    const row = defaults.find(({ key }) => key === definition.key);
+    if (row === undefined || row.status === 'undecided') continue;
+    const parsed = definition.schema.safeParse(row.value);
+    if (!parsed.success) continue;
+    form.text[field] = String(parsed.data);
+    form.sources[field] = row.status;
+  }
+  return form;
+}
 
 export const LIQUIDITY_LABEL: Record<LiquidityField, string> = {
   budgetCoin: copy.marketLiquidityBudget,

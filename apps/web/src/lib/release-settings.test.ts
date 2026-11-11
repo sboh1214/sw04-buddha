@@ -105,6 +105,7 @@ describe('formatReleaseSettingValue', () => {
     expect(formatReleaseSettingValue(null)).toBe(NO_VALUE);
     expect(formatReleaseSettingValue(10000)).toBe('10,000');
     expect(formatReleaseSettingValue(0.25)).toBe('0.25');
+    expect(formatReleaseSettingValue(1e-100)).toBe('1e-100');
     expect(formatReleaseSettingValue('24h')).toBe('24h');
     expect(formatReleaseSettingValue('')).toBe('""');
     expect(formatReleaseSettingValue(true)).toBe('true');

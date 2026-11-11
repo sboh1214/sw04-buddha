@@ -1,5 +1,5 @@
 import type { APIRequestContext, APIResponse, Page } from '@playwright/test';
-import type { AdminMarket, Market, MarketLiquiditySettings } from '@buddha/shared';
+import type { AdminMarket, Market, MarketLiquiditySettings, ReleaseSetting } from '@buddha/shared';
 import { copy } from '../src/copy';
 import {
   REVIEW_CHECKLIST,
@@ -39,6 +39,91 @@ function saveResponse(page: Page, id: string) {
 }
 
 test.describe('시장별 운영 유동성 설정 (#72)', () => {
+  test('최초 표준값은 상태를 함께 제안하고 늦은 조회가 직접 입력이나 저장값을 덮지 않는다', async ({
+    page,
+    admin,
+  }) => {
+    const market = await createDraftMarket(admin, { liquidity: false });
+    await signIn(page, adminAccount.email, adminAccount.password);
+    const settingsPath = '/api/v1/admin/release-settings';
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let reads = 0;
+    const writes: string[] = [];
+    page.on('request', (request) => {
+      if (
+        request.method() !== 'GET' &&
+        new URL(request.url()).pathname === `${pathOf(market.id)}/liquidity-settings`
+      )
+        writes.push(request.method());
+    });
+    await page.route(
+      (url) => url.pathname === settingsPath,
+      async (route) => {
+        if (route.request().method() !== 'GET') return route.continue();
+        reads += 1;
+        const response = await route.fetch();
+        expect(response.status()).toBe(200);
+        const body = (await response.json()) as { data: ReleaseSetting[] };
+        // A response fixture only: no global setting changes or economic defaults in the DB.
+        body.data = body.data.map((row) =>
+          row.key === 'market_maker.default_budget_coin'
+            ? { ...row, status: 'test', value: '12000' }
+            : row.key === 'market_maker.default_b'
+              ? { ...row, status: 'proposal', value: 1e-100 }
+              : row,
+        );
+        await gate;
+        await route.fulfill({ response, json: body });
+      },
+    );
+    try {
+      await page.goto(`/admin/markets/${market.id}`);
+      await page.getByTestId('market-liquidity-edit').click();
+      await expect(page.getByTestId('market-liquidity-defaults-loading')).toBeVisible();
+      await page
+        .getByRole('button', { name: copy.marketLiquidityDefaultsManual, exact: true })
+        .click();
+      await fillSettings(page, TEST_MARKET_LIQUIDITY, '직접 입력한 시험 설정');
+      const response = page.waitForResponse((r) => new URL(r.url()).pathname === settingsPath);
+      release();
+      await response;
+      await expect(page.getByTestId('market-liquidity-input-budgetCoin')).toHaveValue(
+        TEST_MARKET_LIQUIDITY.budgetCoin,
+      );
+      await expect(page.getByTestId('market-liquidity-input-b')).toHaveValue(
+        String(TEST_MARKET_LIQUIDITY.b),
+      );
+      await page.getByTestId('market-liquidity-dialog-cancel').click();
+      expect(writes).toEqual([]);
+      expect((await read(admin, market.id)).liquidity.current).toBeNull();
+      await page.getByTestId('market-liquidity-edit').click();
+      await expect(page.getByTestId('market-liquidity-input-budgetCoin')).toHaveValue('12000');
+      await expect(page.getByTestId('market-liquidity-input-b')).toHaveValue('1e-100');
+      await expect(page.getByTestId('market-liquidity-default-budgetCoin')).toContainText('시험값');
+      await expect(page.getByTestId('market-liquidity-default-b')).toContainText('설계 제안');
+      await expect(page.getByTestId('market-liquidity-input-maxLossCoin')).toHaveValue('');
+      await expect(page.getByTestId('market-liquidity-dialog-confirm')).toBeDisabled();
+      await fillSettings(page, TEST_MARKET_LIQUIDITY, '표준값과 구분해 저장하는 시험 설정');
+      const saved = saveResponse(page, market.id);
+      await page.getByTestId('market-liquidity-dialog-confirm').click();
+      expect((await saved).status()).toBe(200);
+      await expect(page.getByTestId('market-liquidity-dialog')).toHaveCount(0);
+      const readCount = reads;
+      await page.getByTestId('market-liquidity-edit').click();
+      await expect(page.getByTestId('market-liquidity-input-budgetCoin')).toHaveValue(
+        TEST_MARKET_LIQUIDITY.budgetCoin,
+      );
+      await expect(page.getByTestId('market-liquidity-defaults')).toHaveCount(0);
+      expect(reads).toBe(readCount);
+      expect(writes).toEqual(['POST']);
+    } finally {
+      release();
+    }
+  });
+
   test('명시적 두 버전과 검수 잠금, 승인 뒤 개장 버전을 보존하고 공개 API·SSR에는 싣지 않는다', async ({
     page,
     admin,

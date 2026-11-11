@@ -11,6 +11,7 @@ import {
   JSONB_LONE_SURROGATE_MESSAGE,
   JSONB_NUL_MESSAGE,
   LEAD_CLOSE_GAP_SETTING,
+  MARKET_LIQUIDITY_DEFAULT_SETTINGS,
   MARKET_PROPOSALS_RETENTION_SETTING,
   ORDER_ACCEPTING_SETTING,
   ORDER_RATE_LIMIT_SETTING,
@@ -67,6 +68,12 @@ describe('release settings registry', () => {
       'order.accepting',
       'order.rate_limit',
       'order.price_protection_ticks',
+      'market_maker.default_budget_coin',
+      'market_maker.default_max_loss_coin',
+      'market_maker.default_b',
+      'market_maker.default_levels',
+      'market_maker.default_quantity',
+      'market_maker.default_safety_ticks',
       'retention.consent_records',
       'retention.phone_verification_records',
       'retention.deleted_posts',
@@ -86,6 +93,37 @@ describe('release settings registry', () => {
     // The worker reads each period through the very object the registry holds.
     for (const definition of Object.values(RETENTION_PERIOD_SETTINGS)) {
       expect(RELEASE_SETTINGS.get(definition.key)).toBe(definition);
+    }
+  });
+
+  it('starts all six liquidity suggestions undecided and validates explicit values without numeric Coin rounding', () => {
+    const defs = MARKET_LIQUIDITY_DEFAULT_SETTINGS;
+    for (const definition of Object.values(defs)) {
+      expect(
+        readReleaseSetting<ReleaseSettingValue>(RELEASE_SETTINGS, definition, undefined),
+      ).toEqual({ key: definition.key, status: 'undecided', value: null });
+    }
+    for (const definition of [defs.budgetCoin, defs.maxLossCoin]) {
+      expect(definition.schema.parse('999999999999999')).toBe('999999999999999');
+      for (const value of [0, 100, '0', '-1', '1.5', '1e3', '9223372036854775808']) {
+        expect(definition.schema.safeParse(value).success).toBe(false);
+      }
+      for (const status of ['proposal', 'test', 'approved'] as const) {
+        expect(
+          readReleaseSetting(RELEASE_SETTINGS, definition, { status, value: '100' }),
+        ).toMatchObject({ status, value: '100' });
+      }
+    }
+    for (const value of [1e-100, 0.5, 1e100]) expect(defs.b.schema.parse(value)).toBe(value);
+    for (const value of [0, -1, Number.MIN_VALUE, Number.MAX_VALUE, Infinity])
+      expect(defs.b.schema.safeParse(value).success).toBe(false);
+    expect(defs.safetyTicks.schema.parse(0)).toBe(0);
+    expect(defs.levels.schema.safeParse(0).success).toBe(false);
+    expect(defs.quantity.schema.parse(1_000_000)).toBe(1_000_000);
+    expect(defs.quantity.schema.safeParse(1_000_001).success).toBe(false);
+    for (const definition of [defs.levels, defs.quantity, defs.safetyTicks]) {
+      for (const value of [-1, 1.5, '2', Number.MAX_SAFE_INTEGER + 1])
+        expect(definition.schema.safeParse(value).success).toBe(false);
     }
   });
 

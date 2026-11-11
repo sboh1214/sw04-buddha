@@ -502,6 +502,12 @@ export const copy = {
   marketLiquidityMissing: '등록된 유동성 설정이 없습니다.',
   marketLiquidityEdit: '설정 등록·변경',
   marketLiquidityDialogTitle: '유동성 설정을 저장합니다',
+  marketLiquidityDefaultsHint:
+    '처음 불러온 표준값의 상태입니다. 시험값·설계 제안은 운영 승인값이 아닙니다. 비어 있는 값은 직접 입력하고, 여섯 값과 사유를 확인해 저장해 주세요. 저장 전에는 시장에 반영되지 않습니다.',
+  marketLiquidityDefaultsLoading: '표준값을 불러오고 있습니다.',
+  marketLiquidityDefaultsFailed:
+    '표준값을 불러오지 못했습니다. 다시 조회하거나 여섯 값을 직접 입력할 수 있습니다.',
+  marketLiquidityDefaultsManual: '표준값 없이 직접 입력',
   marketLiquidityDialogBody:
     '여섯 값을 모두 확인해 주세요. 저장할 때마다 새 버전과 작업자·시각·사유가 남습니다.',
   marketLiquiditySaved: '유동성 설정을 저장했습니다.',

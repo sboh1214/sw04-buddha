@@ -11,12 +11,17 @@ import {
   Stack,
   Text,
 } from '@chakra-ui/react';
-import { type MarketLiquiditySettings, formatCoin } from '@buddha/shared';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import {
+  type MarketLiquiditySettings,
+  RELEASE_SETTING_STATUS_LABELS,
+  formatCoin,
+} from '@buddha/shared';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { adminMarketKey, useApplyMarket } from '@/hooks/use-admin-markets';
+import { ADMIN_RELEASE_SETTINGS_KEY } from '@/hooks/use-admin-release-settings';
 import { useHeldForOperator, useOperatorId } from '@/hooks/use-operator';
 import { useSessionChanged } from '@/hooks/use-session-changed';
 import { nicknameShown } from '@/lib/account-closure';
@@ -28,10 +33,12 @@ import {
   LIQUIDITY_LABEL,
   type LiquidityField,
   type LiquidityText,
+  type LiquidityInitialForm,
   canEditLiquidity,
   liquidityDraft,
   liquidityFailure,
   liquidityTexts,
+  liquidityInitialForm,
   liquidityVersionChanged,
 } from '@/lib/market-liquidity';
 import { ReasonField, ReviewDialogShell } from './market-review-dialogs';
@@ -184,11 +191,48 @@ interface LiquidityWrite {
   by: string;
 }
 
+export const liquidityDefaultsKey = (operatorId: string | undefined) =>
+  [...ADMIN_RELEASE_SETTINGS_KEY, 'liquidity-defaults', operatorId] as const;
+
+export function LiquidityDefaultNotice({ sources }: Pick<LiquidityInitialForm, 'sources'>) {
+  return (
+    <Stack gap="1" data-testid="market-liquidity-defaults">
+      <Text fontSize="sm">{copy.marketLiquidityDefaultsHint}</Text>
+      {LIQUIDITY_FIELDS.map((field) => {
+        const status = sources[field];
+        return status === undefined ? null : (
+          <Text key={field} fontSize="sm" data-testid={`market-liquidity-default-${field}`}>
+            {LIQUIDITY_LABEL[field]} · {RELEASE_SETTING_STATUS_LABELS[status]}
+          </Text>
+        );
+      })}
+    </Stack>
+  );
+}
+
 /** The request names the original version; a later refetch never retargets the draft. */
-export function LiquidityDialog({ market, onClose }: { market: AdminMarket; onClose: () => void }) {
+export function LiquidityDialog({
+  market,
+  onClose,
+}: {
+  market: LiquidityMarket & { id: string };
+  onClose: () => void;
+}) {
   const operatorId = useOperatorId();
   const [base] = useState(() => market.liquidity.current);
-  const [text, setText] = useState(() => liquidityTexts(base));
+  const defaults = useQuery({
+    queryKey: liquidityDefaultsKey(operatorId),
+    enabled: base === null && operatorId !== undefined,
+    queryFn: async ({ signal }) =>
+      unwrap(await api.GET('/api/v1/admin/release-settings', { signal })).data,
+  });
+  const [form, setForm] = useState<LiquidityInitialForm | null>(() =>
+    base === null ? null : liquidityInitialForm(base, []),
+  );
+  // Pin the first successful snapshot before drawing inputs. Later GETs never replace edits.
+  // Keep this Shell mounted throughout loading, manual entry and save (focus restoration).
+  if (form === null && defaults.isSuccess) setForm(liquidityInitialForm(null, defaults.data));
+  const text = form?.text ?? liquidityTexts(null);
   const [reason, setReason] = useState('');
   const [sent, setSent] = useState<LiquidityText | null>(null);
   const [fieldError, setFieldError] = useState<{
@@ -244,7 +288,7 @@ export function LiquidityDialog({ market, onClose }: { market: AdminMarket; onCl
       body={copy.marketLiquidityDialogBody}
       confirmLabel={copy.save}
       pending={mutation.isPending}
-      confirmDisabled={!draft.ready || changed || operatorId === undefined}
+      confirmDisabled={form === null || !draft.ready || changed || operatorId === undefined}
       refusal={
         changed
           ? copy.marketLiquidityStale
@@ -254,7 +298,14 @@ export function LiquidityDialog({ market, onClose }: { market: AdminMarket; onCl
       }
       onClose={onClose}
       onConfirm={() => {
-        if (!draft.ready || draft.settings === null || changed || operatorId === undefined) return;
+        if (
+          form === null ||
+          !draft.ready ||
+          draft.settings === null ||
+          changed ||
+          operatorId === undefined
+        )
+          return;
         setSent({ ...text });
         mutation.mutate({
           settings: draft.settings,
@@ -266,10 +317,36 @@ export function LiquidityDialog({ market, onClose }: { market: AdminMarket; onCl
     >
       <Stack gap="4">
         <Text fontSize="sm">{copy.marketLiquidityReference}</Text>
+        {base === null && form !== null && <LiquidityDefaultNotice sources={form.sources} />}
+        {form === null && (
+          <Stack gap="2" data-testid="market-liquidity-defaults-loading">
+            <Text role={defaults.isError ? 'alert' : undefined}>
+              {defaults.isError
+                ? copy.marketLiquidityDefaultsFailed
+                : copy.marketLiquidityDefaultsLoading}
+            </Text>
+            {defaults.isError && (
+              <Button
+                variant="outline"
+                onClick={() => void defaults.refetch()}
+                disabled={defaults.isFetching}
+              >
+                {copy.retry}
+              </Button>
+            )}
+            <Button variant="outline" onClick={() => setForm(liquidityInitialForm(null, []))}>
+              {copy.marketLiquidityDefaultsManual}
+            </Button>
+          </Stack>
+        )}
         <LiquidityFields
           text={text}
-          onChange={(field, value) => setText((old) => ({ ...old, [field]: value }))}
-          disabled={mutation.isPending || changed || operatorId === undefined}
+          onChange={(field, value) =>
+            setForm((old) =>
+              old === null ? old : { ...old, text: { ...old.text, [field]: value } },
+            )
+          }
+          disabled={form === null || mutation.isPending || changed || operatorId === undefined}
           errorOf={(field) =>
             draft.errors[field] ??
             (sent?.[field] === text[field] && fieldError?.field === field
