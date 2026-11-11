@@ -3977,7 +3977,7 @@
         },
         "market_pauses_system_actor_check": {
           "name": "market_pauses_system_actor_check",
-          "value": "\"market_pauses\".\"paused_by\" IS NOT NULL OR (\"market_pauses\".\"reason\"='ledger_failure' AND \"market_pauses\".\"note\"='담보·원장 대사에서 불일치가 확인되어 거래를 일시 중단했습니다.')"
+          "value": "\"market_pauses\".\"paused_by\" IS NOT NULL OR (\"market_pauses\".\"reason\"='ledger_failure' AND \"market_pauses\".\"note\"='\ub2f4\ubcf4\u00b7\uc6d0\uc7a5 \ub300\uc0ac\uc5d0\uc11c \ubd88\uc77c\uce58\uac00 \ud655\uc778\ub418\uc5b4 \uac70\ub798\ub97c \uc77c\uc2dc \uc911\ub2e8\ud588\uc2b5\ub2c8\ub2e4.')"
         },
         "market_pauses_note_check": {
           "name": "market_pauses_note_check",
@@ -12295,6 +12295,20 @@
           "type": "timestamp (3) with time zone",
           "primaryKey": false,
           "notNull": true
+        },
+        "control_generation": {
+          "name": "control_generation",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "1"
+        },
+        "applied_txid": {
+          "name": "applied_txid",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "pg_current_xact_id()::text"
         }
       },
       "indexes": {
@@ -12444,6 +12458,13 @@
           "type": "timestamp (3) with time zone",
           "primaryKey": false,
           "notNull": true
+        },
+        "control_generation": {
+          "name": "control_generation",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "1"
         }
       },
       "indexes": {
@@ -12505,7 +12526,7 @@
       "checkConstraints": {
         "market_maker_runtime_generation_check": {
           "name": "market_maker_runtime_generation_check",
-          "value": "\"market_maker_runtime\".\"generation\" >= 1 AND \"market_maker_runtime\".\"completed_generation\" BETWEEN 0 AND \"market_maker_runtime\".\"generation\""
+          "value": "\"market_maker_runtime\".\"control_generation\" >= 1 AND \"market_maker_runtime\".\"generation\" >= 1 AND \"market_maker_runtime\".\"completed_generation\" BETWEEN 0 AND \"market_maker_runtime\".\"generation\""
         },
         "market_maker_runtime_state_check": {
           "name": "market_maker_runtime_state_check",
