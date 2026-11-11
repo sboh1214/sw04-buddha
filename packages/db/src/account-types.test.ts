@@ -66,7 +66,10 @@ const LIQUIDITY_SETTING_LITERAL =
   /(['"])market_maker\.default_(?:budget_coin|max_loss_coin|b|levels|quantity|safety_ticks)\1/g;
 function namesAccountType(text: string): boolean {
   return NAMES_THE_TYPE.test(
-    text.replace(HANDED_TO_THE_RULE, '').replace(MARKET_MAKER_NAMESPACED_KEY, '').replace(LIQUIDITY_SETTING_LITERAL, ''),
+    text
+      .replace(HANDED_TO_THE_RULE, '')
+      .replace(MARKET_MAKER_NAMESPACED_KEY, '')
+      .replace(LIQUIDITY_SETTING_LITERAL, ''),
   );
 }
 

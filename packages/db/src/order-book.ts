@@ -9,6 +9,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
 import { ledgerHeldMarketSql } from './ledger-held-markets.js';
 import { readMarketMakerRiskSnapshot } from './market-maker-risk.js';
+import { readMarketMakerRuntime } from './market-maker-runtime.js';
 import { readLiveBook } from './orders.js';
 import { markets, positions } from './schema/index.js';
 import { clockTimestamp } from './tx-helpers.js';
@@ -88,7 +89,10 @@ export async function readPublicBookSnapshot(
   const snapshot = await readMarketMakerRiskSnapshot(executor, marketId, book);
   if (snapshot.kind === 'inconsistent')
     throw new Error('Market maker risk snapshot is inconsistent');
-  return snapshot.kind === 'ready'
+  // An exhausted bot stops participating before its separate cancellation can finish. Keep
+  // the same ordering as intake: damaged assets still fail closed, then omit stopped liquidity.
+  const runtime = await readMarketMakerRuntime(executor, marketId);
+  return snapshot.kind === 'ready' && runtime?.desiredEnabled !== false
     ? { book, risk: { book: snapshot.book, limits: snapshot.limits } }
     : { book: book.filter((order) => order.owner.human), risk: null };
 }
