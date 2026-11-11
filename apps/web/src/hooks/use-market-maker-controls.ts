@@ -4,6 +4,7 @@ import {
   useQuery,
   type InfiniteData,
   type QueryClient,
+  type QueryKey,
 } from '@tanstack/react-query';
 import {
   api,
@@ -13,6 +14,9 @@ import {
   type MarketMakerControlWrite,
 } from '@/lib/api';
 import { adminMarketMakerKey } from './use-admin-market-maker';
+import { adminMarketKey } from './use-admin-markets';
+import { makerMetricsKey, makerMetricsListKey, makerOverviewKey } from './use-market-maker-metrics';
+import { treasuryBalanceKey } from './use-treasury';
 export const CONTROL_KEY = ['admin', 'market-maker-controls'] as const;
 export const controlDetailKey = (operator: string | undefined, marketId: string, id: string) =>
   [...CONTROL_KEY, operator, marketId, 'detail', id] as const;
@@ -37,9 +41,24 @@ export async function applyControlWrite(
   operator: string,
   fresh: MarketMakerControlWrite,
 ) {
+  if (client.getQueryData<{ id: string }>(['me'])?.id !== operator) return false;
+  // Only the committed execution changes assets/configuration. Pending/cleanup responses
+  // must not refresh economic reads, even when a cached request is already approved.
+  const action = fresh.request.status === 'approved' ? fresh.request.execution?.action : undefined;
+  const changedReads: QueryKey[] = action
+    ? [
+        makerMetricsKey(operator, fresh.request.marketId),
+        makerOverviewKey(operator),
+        makerMetricsListKey(operator),
+      ]
+    : [];
+  if (action === 'settings' || action === 'increase')
+    changedReads.push(adminMarketKey(fresh.request.marketId));
+  if (action === 'increase') changedReads.push(treasuryBalanceKey);
   await Promise.all([
     client.cancelQueries({ queryKey: [...CONTROL_KEY, operator] }),
     client.cancelQueries({ queryKey: adminMarketMakerKey(fresh.marketMaker.marketId) }),
+    ...changedReads.map((queryKey) => client.cancelQueries({ queryKey, exact: true })),
   ]);
   if (client.getQueryData<{ id: string }>(['me'])?.id !== operator) return false;
   const key = controlDetailKey(operator, fresh.request.marketId, fresh.request.id);
@@ -84,6 +103,9 @@ export async function applyControlWrite(
       return { ...oldPages, pages };
     });
   }
+  // Cancel the old GETs first; active views refresh, while unmounted views become stale.
+  // Keep the authoritative control/maker response if any dependent refresh fails.
+  for (const queryKey of changedReads) void client.invalidateQueries({ queryKey, exact: true });
   return true;
 }
 export function useMarketMakerControlRequests(

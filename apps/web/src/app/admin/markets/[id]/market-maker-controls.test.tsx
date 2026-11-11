@@ -1,17 +1,23 @@
 import { ChakraProvider } from '@chakra-ui/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { InfiniteQueryObserver, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ComponentProps } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { copy } from '@/copy';
-import { controlDetailKey } from '@/hooks/use-market-maker-controls';
-import { ApiError } from '@/lib/api';
+import { CONTROL_KEY, controlDetailKey } from '@/hooks/use-market-maker-controls';
+import { adminMarketMakerKey } from '@/hooks/use-admin-market-maker';
+import { ApiError, type AdminMarket } from '@/lib/api';
+import { getQueryClient } from '@/lib/query-client';
 import { marketMaker } from '@/test/market-maker';
-import { makerControlRequest } from '@/test/market-maker-control';
+import { makerControlApproved, makerControlRequest } from '@/test/market-maker-control';
 import { byTestId } from '@/test/render';
 import { system } from '@/theme/system';
 import type * as Dialogs from './market-review-dialogs';
-import { ControlDecisionDialog } from './market-maker-controls';
+import {
+  ControlDecisionDialog,
+  MarketMakerControlInbox,
+  MarketMakerControlsPanel,
+} from './market-maker-controls';
 vi.mock('./market-review-dialogs', async (importOriginal) => {
   const original = await importOriginal<typeof Dialogs>();
   return {
@@ -42,6 +48,77 @@ function draw(client: QueryClient, action: 'approve' | 'reject' | 'retract' = 'a
   );
 }
 describe('control dialog read and stale boundaries', () => {
+  it.each(['market', 'history', 'inbox'] as const)(
+    'keeps the %s rows and a retryable notice at the failed next-page button',
+    async (location) => {
+      const client = getQueryClient();
+      client.setDefaultOptions({
+        // Render the already mounted list after its failed more, without starting a new mount refetch.
+        queries: { retry: false, retryOnMount: false, refetchOnMount: false, staleTime: Infinity },
+      });
+      client.setQueryData(['me'], { id: 'admin-b' });
+      client.setQueryData(adminMarketMakerKey(marketMaker.marketId), marketMaker);
+      const key =
+        location === 'history'
+          ? [...CONTROL_KEY, 'admin-b', marketMaker.marketId, 'history']
+          : [
+              ...CONTROL_KEY,
+              'admin-b',
+              location === 'inbox' ? undefined : marketMaker.marketId,
+              'list',
+              false,
+            ];
+      const item = location === 'history' ? makerControlApproved.execution! : makerControlRequest;
+      const page = { items: [item], nextCursor: 'next' as string | null };
+      let fails = true;
+      const observer = new InfiniteQueryObserver(client, {
+        queryKey: key,
+        initialPageParam: undefined as string | undefined,
+        queryFn: ({ pageParam }) =>
+          pageParam && fails
+            ? Promise.reject(new Error('next page 503'))
+            : Promise.resolve(pageParam ? { items: [], nextCursor: null } : page),
+        getNextPageParam: (last) => last.nextCursor ?? undefined,
+        initialData: { pages: [page], pageParams: [undefined] },
+      });
+      const unsubscribe = observer.subscribe(() => undefined);
+      const drawList = () =>
+        renderToStaticMarkup(
+          <ChakraProvider value={system}>
+            <QueryClientProvider client={client}>
+              {location === 'inbox' ? (
+                <MarketMakerControlInbox />
+              ) : (
+                <MarketMakerControlsPanel
+                  market={{ id: marketMaker.marketId, status: 'open' } as AdminMarket}
+                />
+              )}
+            </QueryClientProvider>
+          </ChakraProvider>,
+        ).replace(/<style\b[^>]*>[\s\S]*?<\/style>/g, '');
+      const notice = `maker-controls-${location === 'market' ? 'requests' : location}-more-failed`;
+      try {
+        await observer.fetchNextPage();
+        expect(observer.getCurrentResult().isFetchNextPageError).toBe(true);
+        let html = drawList();
+        expect(html).toContain(location === 'history' ? '1 → 2' : makerControlRequest.reason);
+        expect(byTestId(html, notice)?.text).toBe(copy.makerControlsReadFailed);
+        expect(byTestId(html, notice)?.attributes.role).toBe('alert');
+        expect(html.split(copy.makerControlsReadFailed)).toHaveLength(2);
+        // A committed response updating a cached row must not hide the failed-more notice.
+        client.setQueryData(key, { pages: [page], pageParams: [undefined] });
+        expect(byTestId(drawList(), notice)?.text).toBe(copy.makerControlsReadFailed);
+        fails = false;
+        await observer.fetchNextPage();
+        html = drawList();
+        expect(byTestId(html, notice)).toBeUndefined();
+        expect(html).toContain(location === 'history' ? '1 → 2' : makerControlRequest.reason);
+      } finally {
+        unsubscribe();
+        client.clear();
+      }
+    },
+  );
   it('keeps first503 retryable with disabled decisions and no false missing claim', async () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false, retryOnMount: false } },

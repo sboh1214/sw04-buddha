@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import type { AdminMarketMakerMetrics } from '@/lib/api';
 import { makerMetrics, makerMetricsRow, makerOverview } from '@/test/market-maker-metrics';
-import { byTestId, renderWithQueries } from '@/test/render';
+import { byTagName, byTestId, renderWithQueries } from '@/test/render';
 import { MakerMetricsRow, MakerOverview } from './admin-market-makers';
 import { MarketMakerMetricsFacts } from '../markets/[id]/market-maker-metrics-panel';
 import { MakerConcentration, MakerRiskFacts } from './metrics-facts';
@@ -125,7 +125,12 @@ describe('current private MM observations', () => {
     expect(html).toContain('1,000 Coin');
     expect(byTestId(html, 'treasury-availableCoin')?.text).toContain('1,000 Coin');
     expect(html).not.toContain(copy.makerMetricsComplete);
-    expect(html).not.toContain('<button');
+    // The separate #130 inbox may filter its requests; the overview itself never acts on money.
+    expect(byTagName(html, 'button').map((button) => button.text)).toEqual([
+      copy.makerControlsPending,
+      copy.makerControlsAll,
+    ]);
+    expect(byTestId(html, 'maker-controls-inbox')?.text).toContain(copy.makerControlsHelp);
   });
   it('preserves missing treasury readings and runtime failure independently from ready risk', () => {
     const overview = renderWithQueries(

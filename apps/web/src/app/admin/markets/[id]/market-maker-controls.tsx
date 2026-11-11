@@ -6,6 +6,7 @@ import NextLink from 'next/link';
 import { type MarketMakerControlChange } from '@buddha/shared';
 import { copy } from '@/copy';
 import { toaster } from '@/components/ui/toaster';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { useAdminMarketMaker } from '@/hooks/use-admin-market-maker';
 import { useHeldForOperator, useOperatorId } from '@/hooks/use-operator';
 import { useSessionChanged } from '@/hooks/use-session-changed';
@@ -27,6 +28,7 @@ import {
 } from '@/lib/api';
 import { nicknameShown } from '@/lib/account-closure';
 import { formatKst } from '@/lib/datetime';
+import { readFailed } from '@/lib/query-client';
 import {
   CONTROL_LABEL,
   CONTROL_EFFECT,
@@ -53,7 +55,7 @@ const decisionLabel = (action: Decision) =>
 function ReadFailure({ retry, busy }: { retry: () => void; busy: boolean }) {
   return (
     <Stack>
-      <Alert.Root status="warning">
+      <Alert.Root status="error">
         <Alert.Indicator />
         <Alert.Description>{copy.makerControlsReadFailed}</Alert.Description>
       </Alert.Root>
@@ -422,7 +424,9 @@ export function MarketMakerControlsPanel({ market }: { market: AdminMarket }) {
               {copy.makerControlsAll}
             </Button>
           </HStack>
-          {list.isError && <ReadFailure retry={() => void list.refetch()} busy={list.isFetching} />}
+          {readFailed(list) && (
+            <ReadFailure retry={() => void list.refetch()} busy={list.isFetching} />
+          )}
           {list.data?.pages
             .flatMap((p) => p.items)
             .map((request) => (
@@ -461,16 +465,24 @@ export function MarketMakerControlsPanel({ market }: { market: AdminMarket }) {
             <Text>{copy.makerControlsEmpty}</Text>
           )}
           {list.hasNextPage && (
-            <Button
-              type="button"
-              loading={list.isFetchingNextPage}
-              onClick={() => void list.fetchNextPage()}
-            >
-              {copy.loadMore}
-            </Button>
+            <>
+              <LoadMoreFailed
+                list={list}
+                message={copy.makerControlsReadFailed}
+                data-testid="maker-controls-requests-more-failed"
+              />
+              <Button
+                type="button"
+                loading={list.isFetchingNextPage}
+                disabled={list.isFetching}
+                onClick={() => void list.fetchNextPage()}
+              >
+                {copy.loadMore}
+              </Button>
+            </>
           )}
           <Text fontWeight="semibold">{copy.makerControlsHistory}</Text>
-          {history.isError && (
+          {readFailed(history) && (
             <ReadFailure retry={() => void history.refetch()} busy={history.isFetching} />
           )}
           {history.data?.pages
@@ -487,13 +499,21 @@ export function MarketMakerControlsPanel({ market }: { market: AdminMarket }) {
             <Text>{copy.makerControlsHistoryEmpty}</Text>
           )}
           {history.hasNextPage && (
-            <Button
-              type="button"
-              loading={history.isFetchingNextPage}
-              onClick={() => void history.fetchNextPage()}
-            >
-              {copy.loadMore}
-            </Button>
+            <>
+              <LoadMoreFailed
+                list={history}
+                message={copy.makerControlsReadFailed}
+                data-testid="maker-controls-history-more-failed"
+              />
+              <Button
+                type="button"
+                loading={history.isFetchingNextPage}
+                disabled={history.isFetching}
+                onClick={() => void history.fetchNextPage()}
+              >
+                {copy.loadMore}
+              </Button>
+            </>
           )}
           {target?.kind === 'request' && (
             <RequestDialog target={target} onClose={() => hold(null)} />
@@ -529,7 +549,9 @@ export function MarketMakerControlInbox() {
               {copy.makerControlsAll}
             </Button>
           </HStack>
-          {list.isError && <ReadFailure retry={() => void list.refetch()} busy={list.isFetching} />}
+          {readFailed(list) && (
+            <ReadFailure retry={() => void list.refetch()} busy={list.isFetching} />
+          )}
           {list.data?.pages
             .flatMap((p) => p.items)
             .map((request) => (
@@ -572,13 +594,21 @@ export function MarketMakerControlInbox() {
             <Text>{copy.makerControlsEmpty}</Text>
           )}
           {list.hasNextPage && (
-            <Button
-              type="button"
-              loading={list.isFetchingNextPage}
-              onClick={() => void list.fetchNextPage()}
-            >
-              {copy.loadMore}
-            </Button>
+            <>
+              <LoadMoreFailed
+                list={list}
+                message={copy.makerControlsReadFailed}
+                data-testid="maker-controls-inbox-more-failed"
+              />
+              <Button
+                type="button"
+                loading={list.isFetchingNextPage}
+                disabled={list.isFetching}
+                onClick={() => void list.fetchNextPage()}
+              >
+                {copy.loadMore}
+              </Button>
+            </>
           )}
           {target && <ControlDecisionDialog {...target} onClose={() => hold(null)} />}
         </Stack>
