@@ -1,6 +1,11 @@
 'use client';
 import { Alert, Button, Card, Field, HStack, Input, Skeleton, Stack, Text } from '@chakra-ui/react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import {
+  type MutationOptions,
+  type QueryClient,
+  useMutation,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { useState } from 'react';
 import NextLink from 'next/link';
 import { type MarketMakerControlChange } from '@buddha/shared';
@@ -148,22 +153,27 @@ export function ControlRequestFacts({ request }: { request: MarketMakerControlRe
     </Stack>
   );
 }
-function useWrite(send: (by: string) => Promise<MarketMakerControlWrite>, close: () => void) {
-  const client = useQueryClient();
-  const sessionChanged = useSessionChanged();
-  const [refusal, setRefusal] = useState<string | null>(null);
-  const mutation = useMutation({
+export function controlWriteOptions(
+  client: QueryClient,
+  send: (by: string) => Promise<MarketMakerControlWrite>,
+  close: () => void,
+  sessionChanged: (error: unknown) => boolean,
+  setRefusal: (message: string | null) => void,
+): MutationOptions<MarketMakerControlWrite, unknown, string> {
+  return {
     mutationFn: send,
     onMutate: () => setRefusal(null),
     onSuccess: async (fresh, by) => {
       // A late response belonging to the old screen never enters the next operator's cache.
       if (client.getQueryData<{ id: string }>(ME_QUERY_KEY)?.id !== by) return;
       if (!(await applyControlWrite(client, by, fresh))) return;
+      if (client.getQueryData<{ id: string }>(ME_QUERY_KEY)?.id !== by) return;
       toaster.create({ type: 'success', title: copy.makerControlsSaved });
       close();
       void client.invalidateQueries({ queryKey: CONTROL_KEY });
     },
-    onError: (error) => {
+    onError: (error, by) => {
+      if (client.getQueryData<{ id: string }>(ME_QUERY_KEY)?.id !== by) return;
       sessionChanged(error);
       const failure = controlFailure(error);
       if (failure.close) {
@@ -172,7 +182,16 @@ function useWrite(send: (by: string) => Promise<MarketMakerControlWrite>, close:
       } else setRefusal(failure.message);
       void client.invalidateQueries({ queryKey: CONTROL_KEY });
     },
-  });
+  };
+}
+
+function useWrite(send: (by: string) => Promise<MarketMakerControlWrite>, close: () => void) {
+  const client = useQueryClient();
+  const sessionChanged = useSessionChanged();
+  const [refusal, setRefusal] = useState<string | null>(null);
+  const mutation = useMutation(
+    controlWriteOptions(client, send, close, sessionChanged, setRefusal),
+  );
   return { mutation, refusal };
 }
 function RequestDialog({
