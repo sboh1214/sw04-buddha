@@ -136,7 +136,8 @@ describe('fixed fill classification dialog boundaries', () => {
     const c = fresh();
     try {
       const html = draw(c, <ClassifiableFillFacts fill={classificationFill} />);
-      expect(html).toContain('120');
+      expect(html).toContain('120 Coin');
+      expect(html).not.toContain('Coin Coin');
       expect(html).toContain(copy.classificationsNormal);
       expect(html).not.toContain('<input');
       expect(html).not.toContain('requester');

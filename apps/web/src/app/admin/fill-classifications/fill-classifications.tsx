@@ -87,8 +87,7 @@ export function ClassifiableFillFacts({ fill }: { fill: AdminClassifiableFill })
         {copy.classificationsFillId}: {fill.id}
       </Text>
       <Text>
-        {fill.outcome} · {fill.priceCoin} Coin · {fill.qty} · {formatCoin(BigInt(fill.amountCoin))}{' '}
-        Coin
+        {fill.outcome} · {fill.priceCoin} Coin · {fill.qty} · {formatCoin(BigInt(fill.amountCoin))}
       </Text>
       <Text>{formatKst(fill.createdAt)}</Text>
       <Text fontWeight="medium">
