@@ -219,6 +219,7 @@ test.describe('시장 검색', () => {
     await expect(page.getByTestId('search-sort')).toHaveValue('recommended');
     await expect(page.getByTestId('search-sort').locator('option')).toHaveText([
       copy.sortRecommended,
+      copy.sortVolume,
       copy.sortNewest,
       copy.sortClosing,
     ]);
@@ -382,6 +383,25 @@ test.describe('시장 검색', () => {
     await page.getByTestId('search-category').selectOption(second.categorySlug);
     await expect(page).toHaveURL(`/search?q=${group}&category=${second.categorySlug}`);
     await expect.poll(() => cardIds(page)).toEqual([`market-card-${second.id}`]);
+
+    // #132 restores volume alongside the other public orders. Picking it preserves this
+    // search's term, category and explicitly selected status, rather than starting a new search.
+    await page.getByTestId('search-status').selectOption('open');
+    await expect(page).toHaveURL(`/search?q=${group}&status=open&category=${second.categorySlug}`);
+    await page.getByTestId('search-sort').selectOption('volume');
+    await expect(page).toHaveURL(
+      `/search?q=${group}&status=open&category=${second.categorySlug}&sort=volume`,
+    );
+    await expect(page.getByTestId('search-input')).toHaveValue(group);
+    await expect(page.getByTestId('search-category')).toHaveValue(second.categorySlug);
+    await expect(page.getByTestId('search-status')).toHaveValue('open');
+    await expect(page.getByTestId('search-sort')).toHaveValue('volume');
+    await expect.poll(() => cardIds(page)).toEqual([`market-card-${second.id}`]);
+    await page.getByTestId('search-sort').selectOption('recommended');
+    await expect(page).toHaveURL(`/search?q=${group}&status=open&category=${second.categorySlug}`);
+    await page.getByTestId('search-status').selectOption('all');
+    await expect(page).toHaveURL(`/search?q=${group}&category=${second.categorySlug}`);
+
     await page.getByTestId('search-category').selectOption('');
     await expect(page).toHaveURL(`/search?q=${group}`);
     await expect.poll(() => cardIds(page)).toEqual(byOpening);
