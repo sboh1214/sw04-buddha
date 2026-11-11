@@ -763,10 +763,12 @@ describe.skipIf(!hasTestDb())('eight operating MM service scenarios (#131)', () 
       await s.buy('YES', 3);
       await s.cycle();
       await s.buy('NO', 1, 1);
+      // Compare every stored field by its key; PostgreSQL does not promise physical row order.
       const claims = await t.db
         .select()
         .from(schema.positions)
-        .where(eq(schema.positions.marketId, s.market.id));
+        .where(eq(schema.positions.marketId, s.market.id))
+        .orderBy(asc(schema.positions.userId), asc(schema.positions.outcome));
       const fills = await t.db.select().from(schema.fills).orderBy(asc(schema.fills.id));
       await passMarketClose(t.db, s.market.id);
       await Promise.all([
@@ -819,7 +821,8 @@ describe.skipIf(!hasTestDb())('eight operating MM service scenarios (#131)', () 
         await t.db
           .select()
           .from(schema.positions)
-          .where(eq(schema.positions.marketId, s.market.id)),
+          .where(eq(schema.positions.marketId, s.market.id))
+          .orderBy(asc(schema.positions.userId), asc(schema.positions.outcome)),
       ).toEqual(claims);
       expect(
         await t.db
@@ -835,7 +838,8 @@ describe.skipIf(!hasTestDb())('eight operating MM service scenarios (#131)', () 
       const settled = await t.db
         .select()
         .from(schema.positionSettlements)
-        .where(eq(schema.positionSettlements.marketId, s.market.id));
+        .where(eq(schema.positionSettlements.marketId, s.market.id))
+        .orderBy(asc(schema.positionSettlements.userId), asc(schema.positionSettlements.outcome));
       const [finalMarket] = await t.db
         .select()
         .from(schema.markets)
@@ -876,7 +880,8 @@ describe.skipIf(!hasTestDb())('eight operating MM service scenarios (#131)', () 
         await t.db
           .select()
           .from(schema.positionSettlements)
-          .where(eq(schema.positionSettlements.marketId, s.market.id)),
+          .where(eq(schema.positionSettlements.marketId, s.market.id))
+          .orderBy(asc(schema.positionSettlements.userId), asc(schema.positionSettlements.outcome)),
       ).toEqual(settled);
       await s.finishAudit();
     },
