@@ -78,6 +78,8 @@ export const fills = pgTable(
     // (`marketPriceAt`) and 추천's `(asOf − 24h, asOf]` volume. The key shape of
     // `price_ticks_market_id_ts_id_idx` (migration 0010), which the chart read before.
     index('fills_market_id_created_at_id_idx').on(t.marketId, t.createdAt, t.id),
+    // #98 bounded global time-range report; does not change any execution or price record.
+    index('fills_created_at_id_idx').on(t.createdAt, t.id),
     index('fills_incoming_order_id_idx').on(t.incomingOrderId),
     index('fills_resting_order_id_idx').on(t.restingOrderId),
     // An owner's own fills, newest first, from either side (`GET /me/fills`).

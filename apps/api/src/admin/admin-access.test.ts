@@ -52,6 +52,7 @@ const adminRoutes = routes.filter((route) => isAdminPath(route.path));
  * a notice that is not there, so they are asked here with the walk's placeholder id too.
  */
 const OPERATION_RECORDS = [
+  'GET /admin/trading-anomalies',
   'GET /admin/treasury/history',
   'GET /admin/treasury/issue-requests',
   'GET /admin/audit-failures',

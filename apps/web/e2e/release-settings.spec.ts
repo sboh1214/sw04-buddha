@@ -4,11 +4,11 @@ import { copy } from '../src/copy';
 import { accountIdOf, adminAccount, expect, freshEmail, signIn, signUp, test } from './helpers';
 
 /**
- * 출시 설정 (#170, ADR-0055) as the shipped build has it: twenty-two registered items — 시작 지급액
+ * 출시 설정 (#170, ADR-0055) as the shipped build has it: twenty-eight registered items — 시작 지급액
  * (`grant.start_coin`, #70, ADR-0071), 선행 마감 최소 간격 (`market.lead_close_gap`, #22,
  * ADR-0098), 이의 기간 (`market.dispute_window`, #152, ADR-0103), 주문 접수, 주문 속도 제한 and 가격
  * 보호 폭 표준값 (`order.*`, #119, ADR-0112 — the first a flag), three MM risk-stage items
- * (`#129` risk stages), the MM human concentration N (#182), and the six retention periods
+ * (`#129` risk stages), the MM human concentration N (#182), six anomaly inputs (#98), and the six retention periods
  * (`retention.*` — #184's five, ADR-0087, and #77's market proposals, ADR-0089) — which the screen
  * and the API list alike, in the registry's order. Changing and recording an item are fixed by
  * the API suite with injected test items (`createTestApp({ releaseSettings })`), paying the start
@@ -87,6 +87,15 @@ const CONCENTRATION_ITEM = [
   '명',
 ] as const;
 
+const TRADING_ANOMALY_KEYS = [
+  'trading_anomaly.pair_min_fills',
+  'trading_anomaly.pair_window_seconds',
+  'trading_anomaly.pair_lookback_seconds',
+  'trading_anomaly.round_trip_min_pairs',
+  'trading_anomaly.round_trip_window_seconds',
+  'trading_anomaly.round_trip_lookback_seconds',
+] as const;
+
 const RETENTION_ITEMS = [
   ['retention.consent_records', '동의 기록 보존기간'],
   ['retention.phone_verification_records', '본인확인 기록 보존기간'],
@@ -110,6 +119,7 @@ const SHIPPED_KEYS = [
   ...LIQUIDITY_ITEMS.map(([key]) => key),
   ...MARKET_MAKER_ITEMS.map(([key]) => key),
   CONCENTRATION_ITEM[0],
+  ...TRADING_ANOMALY_KEYS,
   ...RETENTION_ITEMS.map(([key]) => key),
 ];
 
@@ -139,7 +149,7 @@ async function expectForbidden(response: APIResponse): Promise<void> {
 }
 
 test.describe('출시 설정 (#170)', () => {
-  test('관리자 메뉴에서 열면 시작 지급액·선행 마감 최소 간격·이의 기간, 주문·MM 각 세 항목·유동성 표준값 여섯·집중도 인원·여섯 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
+  test('관리자 메뉴에서 열면 시작 지급액·선행 마감 최소 간격·이의 기간, 주문·MM 각 세 항목·유동성 표준값 여섯·집중도 인원·거래 패턴 여섯 항목·여섯 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
     page,
     admin,
   }) => {
