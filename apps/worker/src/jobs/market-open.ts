@@ -93,9 +93,10 @@ export async function openMarket(db: Db, marketId: string, publish: Publish): Pr
 
 /**
  * The per-minute safety net (#21, ADR-0100), the close scan's pattern (market-close.ts): opens
- * every SCHEDULED market whose scheduled open has come and whose close is still ahead, each in its
- * own transaction and each failure caught (`runScan`), so one market's rejection rolls back that
- * market alone and the rest of the batch still runs. It opens a market whose delayed job was lost —
+ * every SCHEDULED market with a current liquidity version whose scheduled open has come and whose
+ * close is still ahead, each in its own transaction and each failure caught (`runScan`), so one
+ * market's rejection rolls back that market alone and the rest of the batch still runs. It opens
+ * a market whose delayed job was lost —
  * Redis restarted, the API's best-effort add failed after COMMIT, or a job that reached a worker
  * without this handler and failed — within a minute.
  *
@@ -103,8 +104,11 @@ export async function openMarket(db: Db, marketId: string, publish: Publish): Pr
  * later drains what is left. The close is in the WHERE, not only in the re-check: a SCHEDULED
  * market whose close has passed waits for an admin indefinitely (`close_passed`), and read here it
  * would be locked and skipped every minute while holding a slot at the head of the batch ahead of
- * the markets actually due. No index of its own (no migration, ADR-0100): the SCHEDULED set is the
- * approved markets waiting to open, small, and `markets_status_close_at_idx` serves the status and
+ * the markets actually due. The current liquidity version is also joined before the limit:
+ * unconfigured legacy markets must wait for an admin without starving configured markets behind
+ * them. The exact market/version join uses the version table's primary key, not any historical
+ * setting. No index of its own (no migration, ADR-0100): the SCHEDULED set is the approved markets
+ * waiting to open, small, and `markets_status_close_at_idx` serves the status and
  * close prefix. The candidate list is a plain read; `openMarket` re-checks everything under the
  * lock, so a market that opened or moved between the read and its turn counts as skipped.
  */
@@ -112,6 +116,13 @@ export async function openDueMarkets(db: Db, publish: Publish): Promise<OpenScan
   const due = await db
     .select({ id: schema.markets.id })
     .from(schema.markets)
+    .innerJoin(
+      schema.marketLiquidityVersions,
+      and(
+        eq(schema.marketLiquidityVersions.marketId, schema.markets.id),
+        eq(schema.marketLiquidityVersions.version, schema.markets.currentLiquidityVersion),
+      ),
+    )
     .where(
       and(
         eq(schema.markets.status, 'scheduled'),

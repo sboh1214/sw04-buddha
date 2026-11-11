@@ -541,9 +541,14 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
   });
 
   it('community.records_purge reports JSON-safe counts, quiet when it deleted nothing (#187)', async () => {
+    // This checks dispatch/counts, not the 25-hour boundary. Use the purge's DB clock and a full
+    // hour of slack so a host/DB clock difference cannot leave this expired fixture inside it.
+    const { rows } = await t.db.execute<{ expiredAt: Date }>(
+      sql`SELECT clock_timestamp() - interval '26 hours' AS "expiredAt"`,
+    );
     await createWriteLimitEvent(t.db, {
       action: 'comment',
-      createdAt: new Date(Date.now() - 25 * 60 * MINUTE_MS),
+      createdAt: new Date(rows[0]!.expiredAt),
     });
     await createWriteLimitEvent(t.db, { action: 'comment' });
     const result = await run({ name: JOB_NAMES.communityRecordsPurge });

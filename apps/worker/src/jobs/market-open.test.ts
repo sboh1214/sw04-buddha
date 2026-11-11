@@ -17,8 +17,8 @@ import {
   marketStatsOf,
   type TestDb,
 } from '@buddha/db/test';
-import { MARKET_STATUSES, marketChannel } from '@buddha/shared';
-import { asc, eq } from 'drizzle-orm';
+import { MARKET_SCAN_BATCH_MAX, MARKET_STATUSES, marketChannel } from '@buddha/shared';
+import { asc, eq, inArray, sql } from 'drizzle-orm';
 import { Redis } from 'ioredis';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -349,6 +349,75 @@ describe.skipIf(!hasTestInfra)('market.open (integration)', () => {
     } finally {
       await Promise.all(subscribers.map((s) => s.quit()));
     }
+  });
+
+  it('scan reaches a configured market behind more than one batch of legacy unconfigured markets', async () => {
+    const { rows } = await t.db.execute<{ now: Date }>(sql`SELECT clock_timestamp() AS now`);
+    const now = new Date(rows[0]!.now).getTime();
+    const first = await createMarket(t.db, {
+      status: 'scheduled',
+      scheduledOpenAt: new Date(now - 2 * MINUTE_MS),
+      closeAt: new Date(now + HOUR_MS),
+    });
+    // Legacy rows have no liquidity version. Their earlier opening time must not consume the
+    // bounded recovery scan forever, preventing a later approved market's lost job from opening.
+    const rest = await t.db
+      .insert(schema.markets)
+      .values(
+        Array.from({ length: MARKET_SCAN_BATCH_MAX }, () => ({
+          ...first,
+          id: randomUUID(),
+          slug: `legacy-unconfigured-${randomUUID()}`,
+        })),
+      )
+      .returning();
+    const legacy = [first, ...rest].sort((a, b) => a.id.localeCompare(b.id));
+    expect(legacy).toHaveLength(MARKET_SCAN_BATCH_MAX + 1);
+    const ready = await scheduled(new Date(now - MINUTE_MS));
+    const published: unknown[] = [];
+    const capture: Publish = (channel, event) => {
+      published.push({ channel, event });
+      return Promise.resolve();
+    };
+
+    await expect(openDueMarkets(t.db, capture)).resolves.toEqual({
+      opened: 1,
+      skipped: 0,
+      failed: 0,
+      failures: [],
+    });
+    expect(await marketRow(ready.id)).toMatchObject({
+      status: 'open',
+      openedLiquidityVersion: ready.currentLiquidityVersion,
+    });
+    expect((await eventsOf(ready.id)).map((event) => event.type)).toEqual([
+      'submitted',
+      'approved',
+      'opened',
+    ]);
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({
+      channel: marketChannel(ready.id),
+      event: { type: 'market:status', marketId: ready.id, status: 'open' },
+    });
+    const ids = legacy.map(({ id }) => id);
+    expect(
+      (await t.db.select().from(schema.markets).where(inArray(schema.markets.id, ids))).sort(
+        (a, b) => a.id.localeCompare(b.id),
+      ),
+    ).toEqual(legacy);
+    expect(
+      await t.db
+        .select()
+        .from(schema.marketEvents)
+        .where(inArray(schema.marketEvents.marketId, ids)),
+    ).toEqual([]);
+    expect(
+      await t.db
+        .select()
+        .from(schema.marketRuleVersions)
+        .where(inArray(schema.marketRuleVersions.marketId, ids)),
+    ).toEqual([]);
   });
 
   it('does not fail the open when the publish fails (the transaction has committed)', async () => {
