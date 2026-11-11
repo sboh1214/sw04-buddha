@@ -48,6 +48,8 @@ export class MarketMakerCycleError extends Error {
 export type MarketMakerCycleResult =
   | { outcome: 'skipped'; marketId: string; reason: 'no_runtime' | 'already_completed' }
   | (MarketMakerCycleContext & {
+      /** Permanent identity of this successful attempt, including normal waiting. */
+      runId: string;
       outcome: 'ready' | 'waiting';
       reason: string | null;
       finishedAt: Date;
@@ -104,6 +106,7 @@ export async function runMarketMakerCycle(
       if (!recorded) throw new Error('Allocated runtime disappeared');
       return {
         ...context,
+        runId: recorded.run.id,
         outcome,
         reason,
         finishedAt: recorded.run.finishedAt,

@@ -45,7 +45,7 @@ export async function refreshMarketMaker(
   )
     throw new RangeError('Invalid market maker retry context');
   let result: MarketMakerCycleResult;
-  let commitContext: MarketMakerCycleContext | undefined;
+  let commitContext: (MarketMakerCycleContext & { returnedRunId: string }) | undefined;
   try {
     result = await db.transaction(async (tx) => {
       const cycle = await runMarketMakerCycle(tx, { marketId });
@@ -55,16 +55,18 @@ export async function refreshMarketMaker(
           generation: cycle.generation,
           controlGeneration: cycle.controlGeneration,
           startedAt: cycle.startedAt,
+          returnedRunId: cycle.runId,
         };
       }
       return cycle;
     });
   } catch (error) {
-    // The economic transaction has rolled back. Preserve the failure independently and let
-    // BullMQ use its bounded attempts. Only the final attempt disables this bot. Normal waiting
-    // is a successful job and never reaches this path or consumes the retry budget.
+    // Economic work rolled back, or its COMMIT acknowledgement was lost. Preserve the transport
+    // error independently and let BullMQ use its bounded attempts. Only an uncommitted final
+    // failure disables this bot; a committed normal waiting result must keep its runtime state.
     // A deferred constraint can fail after the callback returned. Preserve that attempt too;
-    // a lost COMMIT reply is safe because recordMarketMakerRun protects completed generations.
+    // a lost COMMIT reply is distinguished by the exact permanent run UUID. Normal waiting
+    // commits too, even though it intentionally leaves completedGeneration unchanged.
     const context = error instanceof MarketMakerCycleError ? error.context : commitContext;
     if (context) {
       try {

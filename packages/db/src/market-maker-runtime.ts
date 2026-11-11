@@ -161,6 +161,8 @@ export interface RecordMarketMakerRunInput {
   controlGeneration?: bigint;
   /** Only the worker's final bounded attempt can request a system stop. */
   retryExhausted?: boolean;
+  /** A successful cycle callback returned this UUID before COMMIT acknowledgement failed. */
+  returnedRunId?: string;
   outcome: 'ready' | 'waiting' | 'error';
   reason?: string | null;
   error?: string | null;
@@ -169,7 +171,7 @@ export interface RecordMarketMakerRunInput {
   detail?: Record<string, unknown>;
 }
 
-/** Append the attempt and observation together. Failed economic work has already rolled back.
+/** Append the attempt and observation together. Errors may follow rollback or a lost COMMIT reply.
  * Final retry exhaustion disables only this bot; cancellation is a separate safe cleanup, so
  * a damaged balance or active hold cannot roll back the stop. Restart belongs to #130 approval.
  */
@@ -185,6 +187,21 @@ export async function recordMarketMakerRun(tx: Tx, input: RecordMarketMakerRunIn
   if (input.retryExhausted && (input.outcome !== 'error' || input.controlGeneration === undefined))
     throw new RangeError('Retry exhaustion requires an error and its captured control generation');
   const controlGeneration = input.controlGeneration ?? current.controlGeneration;
+  let returnedRunCommitted = false;
+  if (input.outcome === 'error' && input.returnedRunId) {
+    const [returned] = await tx
+      .select()
+      .from(marketMakerRuns)
+      .where(eq(marketMakerRuns.id, input.returnedRunId));
+    returnedRunCommitted = Boolean(
+      returned &&
+      returned.marketId === input.marketId &&
+      returned.generation === input.generation &&
+      returned.controlGeneration === controlGeneration &&
+      returned.startedAt.getTime() === input.startedAt.getTime() &&
+      (returned.outcome === 'ready' || returned.outcome === 'waiting'),
+    );
+  }
   const reason = input.retryExhausted ? 'retry_exhausted' : (input.reason ?? null);
   const now = await clockTimestamp(tx);
   const finishedAt = new Date(Math.max(now.getTime(), input.startedAt.getTime()));
@@ -202,9 +219,10 @@ export async function recordMarketMakerRun(tx: Tx, input: RecordMarketMakerRunIn
       finishedAt,
     })
     .returning();
-  // A failed attempt may report after a newer worker already committed success. Retain the
-  // attempt as evidence, but never overwrite the newer successful observation with that error.
+  // An ambiguous reply may belong to this exact committed ready/waiting run, or an older
+  // attempt may report after newer success. Keep error evidence without changing that runtime.
   if (
+    returnedRunCommitted ||
     input.generation <= current.completedGeneration ||
     controlGeneration !== current.controlGeneration
   )
