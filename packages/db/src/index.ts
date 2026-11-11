@@ -176,7 +176,11 @@ export {
   type PlaceOrderResult,
   type PlaceOrderTouched,
 } from './orders.js';
-export { getReleaseSetting, storedReleaseSettingValue } from './release-settings.js';
+export {
+  getReleaseSetting,
+  getReleaseSettings,
+  storedReleaseSettingValue,
+} from './release-settings.js';
 export * as schema from './schema/index.js';
 export {
   cancelStartGrant,

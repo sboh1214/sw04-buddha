@@ -5,7 +5,7 @@ import {
   type ReleaseSettingsRegistry,
   type ReleaseSettingValue,
 } from '@buddha/shared';
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
 import { releaseSettings } from './schema/release-settings.js';
 
@@ -45,4 +45,32 @@ export async function getReleaseSetting<T extends ReleaseSettingValue>(
     .where(eq(releaseSettings.key, definition.key))
     .limit(1);
   return readReleaseSetting(registry, definition, row);
+}
+
+/** Coupled values must share a statement snapshot even when the caller uses READ COMMITTED.
+ * Preserve the same registered-definition and value validation as the individual reader.
+ */
+export async function getReleaseSettings<T extends ReleaseSettingValue>(
+  executor: Db | Tx,
+  registry: ReleaseSettingsRegistry,
+  definitions: readonly ReleaseSettingDefinition<T>[],
+): Promise<ReleaseSettingReading<T>[]> {
+  if (definitions.length === 0) return [];
+  const rows = await executor
+    .select({
+      key: releaseSettings.key,
+      status: releaseSettings.status,
+      value: storedReleaseSettingValue,
+    })
+    .from(releaseSettings)
+    .where(
+      inArray(
+        releaseSettings.key,
+        definitions.map((definition) => definition.key),
+      ),
+    );
+  const byKey = new Map(rows.map((row) => [row.key, row]));
+  return definitions.map((definition) =>
+    readReleaseSetting(registry, definition, byKey.get(definition.key)),
+  );
 }
