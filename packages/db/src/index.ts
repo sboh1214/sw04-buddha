@@ -155,7 +155,12 @@ export {
   type MarketStatsColumn,
   type RecordFillStatsInput,
 } from './market-stats.js';
-export { readHoldings, readMarketTradingFacts, readPublicBook } from './order-book.js';
+export {
+  readHoldings,
+  readMarketTradingFacts,
+  readPublicBook,
+  readPublicBookSnapshot,
+} from './order-book.js';
 export {
   findOrderByRequest,
   orderLockFactsOf,

@@ -69,7 +69,7 @@
  * fails the run until a case is written here.
  */
 import { randomInt, randomUUID } from 'node:crypto';
-import { ledgerKeys, recordLedgerEntry, schema } from '@buddha/db';
+import { ledgerKeys, lockForOrder, lockMarket, recordLedgerEntry, schema } from '@buddha/db';
 import {
   completeOnboarding,
   createApprovalRequest,
@@ -108,6 +108,7 @@ import {
   createThemeNotice,
   createUser,
   createWatch,
+  fundMarketMakerFunds,
   openOrderIntake,
   resolveMarketNow,
   resumeMarket,
@@ -1522,8 +1523,19 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     const filledKey = filled.idempotencyKey;
     const counterpartyOrder = record.resting;
     // A resting bid of the 운영 마켓메이커 on A's market (ADR-0107 결정 5 '#179·#119': '#113 감시 값에
-    // 봇 주문을 넣는다'): NO at 37 for 9, YES supply at 63 in the public book and the quote. A row
-    // with no lock (`createOrder`), like A's, so nothing here may cancel it.
+    // 봇 주문을 넣는다'): NO at 37 for 9, YES supply at 63 in the public book and the quote.
+    // Unlike the historical human sentinels, its live funds/lock must be real: #128's public
+    // preview reads the same asset-backed risk snapshot as intake and refuses damaged MM rows.
+    await fundMarketMakerFunds(t.db, market.id, 1000n);
+    await t.db.transaction(async (tx) => {
+      await lockMarket(tx, market.id);
+      const locked = await lockForOrder(tx, {
+        marketId: market.id,
+        ownerId: marketMaker,
+        lock: { kind: 'coin', amountCoin: 37n * 9n },
+      });
+      if (!locked.locked) throw new Error(`privacy MM fixture lock refused: ${locked.reason}`);
+    });
     const makerBidKey = `leak-market-maker-${tag}`;
     const makerBid = await createOrder(t.db, {
       userId: marketMaker,

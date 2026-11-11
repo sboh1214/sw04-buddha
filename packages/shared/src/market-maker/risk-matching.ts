@@ -1,5 +1,13 @@
 import { CONTRACT_TERMS } from '../contract.js';
-import type { BotMatchRiskPolicy, BookOrder, OrderOwner } from '../matching.js';
+import {
+  matchLine,
+  matchOrderWithBotRisk,
+  type BotMatchRiskPolicy,
+  type BookOrder,
+  type MatchLineEntry,
+  type OrderOwner,
+} from '../matching.js';
+import type { OrderSide, Outcome } from '../enums.js';
 import {
   planIntakeMatch,
   type IntakeMatchPlan,
@@ -187,6 +195,44 @@ class BotProjection implements BotMatchRiskPolicy {
     this.orders.delete(order.id);
     this.cancellations.push({ orderId: order.id, ownerId: order.owner.id, qty });
   }
+}
+
+/**
+ * One public depth direction: consume its entire price/time line using the actual intake's
+ * risk policy. A zero allowance virtually releases that reservation before later orders, and
+ * fills update holdings at the resting leg's real price. No cancellation is persisted. Each
+ * invocation starts fresh: the four book directions are alternative walks, not four concurrent
+ * promises of the same funds. No personal assets, price protection or self-trade apply to depth.
+ */
+export function executableRiskLine(
+  book: readonly BookOrder[],
+  outcome: Outcome,
+  side: OrderSide,
+  snapshot: BotMatchSnapshot,
+): MatchLineEntry[] {
+  const line = matchLine(book, outcome, side);
+  if (line.length === 0) return [];
+  const quantity = line.reduce((sum, entry) => sum + BigInt(entry.order.remainingQty), 0n);
+  if (quantity > BigInt(Number.MAX_SAFE_INTEGER))
+    throw new RangeError('The book direction quantity passes the safe-integer range');
+  const result = matchOrderWithBotRisk(
+    book,
+    {
+      owner: null,
+      outcome,
+      side,
+      timeInForce: 'ioc',
+      limitPriceCoin: side === 'buy' ? CONTRACT_TERMS.priceMaxCoin : CONTRACT_TERMS.priceMinCoin,
+      qty: Number(quantity),
+      budgetCoin: null,
+    },
+    new BotProjection(book, snapshot),
+  );
+  const entries = new Map(line.map((entry) => [entry.order.id, entry]));
+  return result.fills.map((fill) => {
+    const entry = entries.get(fill.restingOrderId)!;
+    return { ...entry, order: { ...entry.order, remainingQty: fill.qty } };
+  });
 }
 
 /**

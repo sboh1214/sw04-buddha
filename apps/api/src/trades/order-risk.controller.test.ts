@@ -1,7 +1,7 @@
 /**
  * #128 through the member HTTP intake: a risk cancellation changes the book even without a
  * fill; every market/user event follows COMMIT; no internal bot/configuration detail is public.
- * Uses inject() without a listening port. Public depth quantities remain a separate policy.
+ * Uses inject() without a listening port. Public depth and quotes use the same sequential risk.
  */
 import { randomUUID } from 'node:crypto';
 import {
@@ -30,7 +30,10 @@ import {
   marketTickEventSchema,
   marketTradeEventSchema,
   orderBookSchema,
+  orderQuoteSchema,
   placeOrderResultSchema,
+  type OrderBook,
+  type OrderQuote,
   type Fill,
   type Market,
   type MarketRealtimeEvent,
@@ -177,6 +180,17 @@ describe.skipIf(!hasTestInfra)('order risk publication and privacy (integration,
   const funds = (marketId: string) =>
     ledgerAccountBalance(t.db, { kind: 'market_maker_funds', marketId });
 
+  const preview = (
+    marketId: string,
+    terms: { limitPriceCoin?: number; qty?: number; budgetCoin?: string },
+  ) =>
+    t.app.inject({
+      method: 'POST',
+      url: `/api/v1/markets/${marketId}/quote`,
+      headers: { origin: ORIGIN, 'content-type': 'application/json' },
+      payload: JSON.stringify({ outcome: 'YES', side: 'buy', timeInForce: 'ioc', ...terms }),
+    });
+
   /** Durable state only; a rolled-back sequence allocation is intentionally not an asset. */
   const written = async () => ({
     orders: await t.db.select().from(schema.orders).orderBy(schema.orders.arrivalSeq),
@@ -205,7 +219,7 @@ describe.skipIf(!hasTestInfra)('order risk publication and privacy (integration,
     return { events, observed, toMarket, toUser };
   }
 
-  /** No promise about depth quantity: only its established public schema and privacy. */
+  /** The public wire shape excludes every internal order/configuration/risk identifier. */
   async function assertPrivacy(
     market: RiskMarket,
     botOrderIds: readonly string[],
@@ -248,6 +262,102 @@ describe.skipIf(!hasTestInfra)('order risk publication and privacy (integration,
     }
     return { detail, fills };
   }
+
+  it('reads executable depth and anonymous quotes without changing any durable row or publishing', async () => {
+    const { market, zero, capped } = await overreserved();
+    const before = await written();
+    const sent = observePublication();
+    const depth = dataOf<OrderBook>(await read(`/markets/${market.id}/book`));
+    expect(depth).toEqual(orderBookSchema.parse(depth));
+    expect(depth.contracts).toEqual([
+      {
+        outcome: 'YES',
+        asks: [{ priceCoin: 60, qty: 2 }],
+        bids: [],
+        bestAskCoin: 60,
+        bestBidCoin: null,
+      },
+      {
+        outcome: 'NO',
+        asks: [],
+        bids: [{ priceCoin: 40, qty: 2 }],
+        bestAskCoin: null,
+        bestBidCoin: 40,
+      },
+    ]);
+    const response = await preview(market.id, { limitPriceCoin: 60, qty: 3 });
+    const quote = dataOf<OrderQuote>(response);
+    expect(quote).toEqual(orderQuoteSchema.parse(quote));
+    expect(quote).toMatchObject({
+      filledQty: 2,
+      filledAmountCoin: '120',
+      protectedLimitPriceCoin: 60,
+    });
+    await assertPrivacy(market, [zero.id, capped.id], response, sent.events);
+    expect(await written()).toEqual(before);
+    expect(sent.toMarket).not.toHaveBeenCalled();
+    expect(sent.toUser).not.toHaveBeenCalled();
+    const result = placed(await send(market.id, quote.protectedLimitPriceCoin, 3));
+    expect(result.order).toMatchObject({
+      filledQty: quote.filledQty,
+      filledAmountCoin: quote.filledAmountCoin,
+      status: quote.status,
+      cancelReason: quote.cancelReason,
+    });
+  });
+
+  it.each([40, 50, 60])('matches public quantity quote and intake at limit %s', async (limit) => {
+    const { market } = await overreserved();
+    const before = await written();
+    const quote = dataOf<OrderQuote>(await preview(market.id, { limitPriceCoin: limit, qty: 3 }));
+    expect(await written()).toEqual(before);
+    const result = placed(await send(market.id, limit, 3));
+    expect(result.order).toMatchObject({
+      filledQty: quote.filledQty,
+      filledAmountCoin: quote.filledAmountCoin,
+      status: quote.status,
+      rejectReason: quote.rejectReason,
+      cancelReason: quote.cancelReason,
+    });
+  });
+
+  it.each(['59', '119', '121'])(
+    'matches public budget quote and intake for %s Coin',
+    async (budgetCoin) => {
+      const { market } = await overreserved();
+      const before = await written();
+      const quote = dataOf<OrderQuote>(await preview(market.id, { budgetCoin }));
+      expect(await written()).toEqual(before);
+      const result = placed(
+        await t.app.inject({
+          method: 'POST',
+          url: `/api/v1/markets/${market.id}/orders`,
+          headers: {
+            origin: ORIGIN,
+            'content-type': 'application/json',
+            cookie: buyer.cookie,
+            'idempotency-key': randomUUID(),
+          },
+          payload: JSON.stringify({
+            expectedAccountId: buyer.id,
+            outcome: 'YES',
+            side: 'buy',
+            timeInForce: 'ioc',
+            budgetCoin,
+            limitPriceCoin: quote.protectedLimitPriceCoin,
+          }),
+        }),
+      );
+      expect(result.order).toMatchObject({
+        filledQty: quote.filledQty,
+        filledAmountCoin: quote.filledAmountCoin,
+        unspentCoin: quote.unspentCoin,
+        status: quote.status,
+        rejectReason: quote.rejectReason,
+        cancelReason: quote.cancelReason,
+      });
+    },
+  );
 
   it('publishes exactly one book signal after a zero-fill cancellation commits, and none on replay', async () => {
     const { market, zero, capped } = await overreserved();

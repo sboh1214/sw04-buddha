@@ -15,7 +15,12 @@ import { count, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ledgerHeldMarketIds } from './ledger-held-markets.js';
 import { cancelledMarketIds } from './order-cancel.js';
-import { readHoldings, readMarketTradingFacts, readPublicBook } from './order-book.js';
+import {
+  readHoldings,
+  readMarketTradingFacts,
+  readPublicBook,
+  readPublicBookSnapshot,
+} from './order-book.js';
 import { ownerOf, placeOrderChangedBook, type PlaceOrderResult } from './orders.js';
 import { balances, fills, ledgerEntries, markets, orders, positions } from './schema/index.js';
 import {
@@ -109,9 +114,11 @@ describe.skipIf(!hasTestDb())('the public book and quotes (#179, docker test pro
   const quoteNow = (marketId: string, terms: QuoteTerms) =>
     snapshot(async (tx) => {
       const facts = (await readMarketTradingFacts(tx, marketId))!;
-      const book =
-        marketTradingRejectReason(facts) === null ? await readPublicBook(tx, marketId) : [];
-      return quoteOrder(book, facts, terms, null);
+      const { book, risk } =
+        marketTradingRejectReason(facts) === null
+          ? await readPublicBookSnapshot(tx, marketId)
+          : { book: [], risk: null };
+      return quoteOrder(book, facts, terms, null, risk);
     });
   const figuresOf = async (marketId: string, terms: QuoteTerms): Promise<OrderQuoteFigures> => {
     const answer = await quoteNow(marketId, terms);
@@ -121,7 +128,8 @@ describe.skipIf(!hasTestDb())('the public book and quotes (#179, docker test pro
   const bookNow = (marketId: string) =>
     snapshot(async (tx) => {
       const facts = (await readMarketTradingFacts(tx, marketId))!;
-      return orderBookOf(marketId, facts, await readPublicBook(tx, marketId));
+      const { book, risk } = await readPublicBookSnapshot(tx, marketId);
+      return orderBookOf(marketId, facts, book, risk);
     });
   /** What a read must leave as is: every row an intake or a cancel writes, and every balance. */
   const written = async () => ({

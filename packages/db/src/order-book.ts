@@ -1,12 +1,14 @@
 import {
   OUTCOMES,
   type BookOrder,
+  type BotMatchSnapshot,
   type HoldingFacts,
   type MarketTradingFacts,
 } from '@buddha/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
 import { ledgerHeldMarketSql } from './ledger-held-markets.js';
+import { readMarketMakerRiskSnapshot } from './market-maker-risk.js';
 import { readLiveBook } from './orders.js';
 import { markets, positions } from './schema/index.js';
 import { clockTimestamp } from './tx-helpers.js';
@@ -69,6 +71,26 @@ export async function readPublicBook(executor: Reader, marketId: string): Promis
     remainingQty: order.remainingQty,
     arrival: order.arrival,
   }));
+}
+
+/**
+ * Internal input for public depth/quotes: the whole raw book and its risk share one snapshot.
+ * Call in REPEATABLE READ READ ONLY after the market gate. Normal legacy absence removes only
+ * MM participation; damaged MM assets cannot be silently treated as zero. This reader never
+ * writes a hold/cancellation or takes a market/balance lock. Only aggregate mappers may expose it.
+ */
+export async function readPublicBookSnapshot(
+  executor: Reader,
+  marketId: string,
+): Promise<{ book: BookOrder[]; risk: BotMatchSnapshot | null }> {
+  const book = await readPublicBook(executor, marketId);
+  if (!book.some((order) => !order.owner.human)) return { book, risk: null };
+  const snapshot = await readMarketMakerRiskSnapshot(executor, marketId, book);
+  if (snapshot.kind === 'inconsistent')
+    throw new Error('Market maker risk snapshot is inconsistent');
+  return snapshot.kind === 'ready'
+    ? { book, risk: { book: snapshot.book, limits: snapshot.limits } }
+    : { book: book.filter((order) => order.owner.human), risk: null };
 }
 
 /**
