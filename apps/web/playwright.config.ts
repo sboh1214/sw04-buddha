@@ -67,6 +67,9 @@ export default defineConfig({
   // admin's own grant, which waits on a fresh database. `--list` runs no setup.
   globalSetup: './e2e/global-setup.ts',
   fullyParallel: true,
+  // Scenarios such as trading anomalies temporarily change release settings shared by
+  // this profile's database. Keep its viewports serial; CI shards use separate databases.
+  workers: 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   timeout: TEST_TIMEOUT_MS,
