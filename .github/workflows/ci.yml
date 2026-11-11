@@ -207,10 +207,11 @@ jobs:
   e2e:
     name: E2E Tests (${{ matrix.label }})
     runs-on: ubuntu-latest
-    # Includes the build, Chromium, seed and both projects. A 27.5-minute Playwright run
-    # reached the former 30-minute job limit after setup, so reserve 45 minutes for the job.
+    # Includes the build, Chromium, seed and both projects. Shared-setting scenarios now
+    # use one worker per DB. A prior two-worker shard took 27.5 minutes excluding setup;
+    # reserve 60 minutes for serial execution plus setup, with the same three CI shards.
     # Per-test timeouts, retries and failure handling remain unchanged.
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     # The specs are split across the shards by test (fullyParallel), mobile-375 and
     # desktop-1280 alike. Add a shard here to split them further.
