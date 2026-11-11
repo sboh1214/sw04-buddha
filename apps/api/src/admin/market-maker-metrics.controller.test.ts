@@ -1,4 +1,4 @@
-import { findLedgerAccount, schema } from '@buddha/db';
+import { findLedgerAccount, runMarketMakerCycle, schema } from '@buddha/db';
 import {
   completeOnboarding,
   createMarket,
@@ -6,6 +6,8 @@ import {
   createUser,
   damageActualCoinForTest,
   mintTestPairs,
+  openOrderIntake,
+  placeTestOrder,
   setReleaseSetting,
 } from '@buddha/db/test';
 import {
@@ -53,6 +55,14 @@ describe.skipIf(!hasTestInfra)('private current MM metrics (integration)', () =>
       holds: await t.db.select().from(schema.reconciliationHolds),
       results: await t.db.select().from(schema.reconciliationResults),
       audit: await t.db.select().from(schema.adminActions),
+      supplyStates: await t.db
+        .select()
+        .from(schema.marketMakerSupplyStates)
+        .orderBy(schema.marketMakerSupplyStates.marketId),
+      supplyIntervals: await t.db
+        .select()
+        .from(schema.marketMakerSupplyIntervals)
+        .orderBy(schema.marketMakerSupplyIntervals.id),
     };
   }
 
@@ -189,6 +199,62 @@ describe.skipIf(!hasTestInfra)('private current MM metrics (integration)', () =>
       expect.objectContaining({ marketId: market.id, kind: 'inconsistent' }),
     ]);
     expect(await facts()).toEqual(before);
+  });
+
+  it('returns cumulative posted facts only to admins and leaves the supply history unchanged on GET', async () => {
+    await openOrderIntake(t.db, { adminId: admin.id });
+    const { market } = await createOpenedMarket(t.db, {
+      liquiditySettings: {
+        budgetCoin: 10_000n,
+        maxLossCoin: 5_000n,
+        b: 100_000,
+        levels: 3,
+        quantity: 10,
+        safetyTicks: 1,
+      },
+    });
+    await t.db.transaction((tx) => runMarketMakerCycle(tx, { marketId: market.id }));
+    const person = (await createUser(t.db, { balanceCoin: 1_000n })).user;
+    await placeTestOrder(t.db, {
+      ownerId: person.id,
+      marketId: market.id,
+      outcome: 'YES',
+      side: 'buy',
+      timeInForce: 'ioc',
+      limitPriceCoin: 99,
+      qty: 4,
+    });
+    const before = await facts();
+    const response = await get(detailPath(market.id));
+    expect(response.statusCode, response.body).toBe(200);
+    const detail = adminMarketMakerMetricsSchema.parse(response.json<{ data: unknown }>().data);
+    expect(detail.period.activity).toEqual({
+      basis: 'recorded_orders',
+      coverage: 'complete',
+      bot: { postedQty: '20', filledQty: '4', fillBp: '2000' },
+      humanIoc: { orders: '1', filledOrders: '1', fillBp: '10000' },
+    });
+    expect(detail.period.supply.coverage).toBe('complete');
+    expect(detail.period.supply.openMs).not.toBeNull();
+    expect(await facts()).toEqual(before);
+    for (const hidden of [person.id, person.email, 'lastObservedTxid', 'supplyIntervals'])
+      expect(response.body).not.toContain(hidden);
+    const publicResponse = await t.app.inject({
+      method: 'GET',
+      url: `/api/v1/markets/${market.id}`,
+    });
+    expect(publicResponse.statusCode).toBe(200);
+    const publicData = publicResponse.json<{ data: Record<string, unknown> }>().data;
+    for (const key of [
+      'period',
+      'activity',
+      'supply',
+      'postedQty',
+      'fillBp',
+      'botGapMs',
+      'combinedGapMs',
+    ])
+      expect(publicData).not.toHaveProperty(key);
   });
 
   it('guards all three routes before reading private state and validates ids and page size', async () => {

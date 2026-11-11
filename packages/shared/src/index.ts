@@ -92,3 +92,4 @@ export * from './treasury.js';
 export * from './market-maker-stage-settings.js';
 export * from './admin-market-maker.js';
 export * from './admin-market-maker-metrics.js';
+export * from './market-maker-period-metrics.js';

@@ -24,6 +24,7 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { isHumanAccountSql } from './account-types.js';
 import type { Db } from './client.js';
 import { readMarketMakerRiskSnapshot } from './market-maker-risk.js';
+import { readMarketMakerPeriodMetrics } from './market-maker-period-metrics.js';
 import { readMarketMakerRuntime } from './market-maker-runtime.js';
 import { readMarketMakerStageSettings } from './market-maker-settings.js';
 import { checkMarketSettlementBooks } from './market-settlement.js';
@@ -237,6 +238,7 @@ export async function readMarketMakerMetrics(
     title: market.title,
     status: market.status,
     asOf,
+    period: await readMarketMakerPeriodMetrics(tx, market, new Date(asOf)),
     configVersion: market.currentLiquidityVersion,
     openedVersion: market.openedLiquidityVersion,
     risk: await riskOf(tx, market, await readMarketMakerStageSettings(tx, registry), book),

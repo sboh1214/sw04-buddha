@@ -4417,6 +4417,7 @@ export type components = {
             /** Format: uuid */
             marketId: string;
             openedVersion: number | null;
+            period: components["schemas"]["MarketMakerPeriodMetrics"];
             risk: {
                 assets: {
                     availableCoin: string;
@@ -5739,6 +5740,43 @@ export type components = {
             reason: string;
             safetyTicks: number;
             version: number;
+        };
+        MarketMakerPeriodMetrics: {
+            activity: {
+                /** @enum {string} */
+                basis: "recorded_orders";
+                bot: {
+                    fillBp: string | null;
+                    filledQty: string;
+                    postedQty: string;
+                } | null;
+                /** @enum {string} */
+                coverage: "complete" | "partial" | "unavailable";
+                humanIoc: {
+                    fillBp: string | null;
+                    filledOrders: string;
+                    orders: string;
+                } | null;
+            };
+            supply: {
+                /** @enum {string} */
+                basis: "posted_book";
+                botGapMs: string | null;
+                combinedGapMs: string | null;
+                /** @enum {string} */
+                coverage: "complete" | "partial" | "unavailable";
+                /** Format: date-time */
+                observedFrom: string | null;
+                /** Format: date-time */
+                observedTo: string | null;
+                openMs: string | null;
+            };
+            window: {
+                /** Format: date-time */
+                from: string | null;
+                /** Format: date-time */
+                to: string;
+            };
         };
         MarketPauseDecisionLogEntry: {
             /** Format: date-time */

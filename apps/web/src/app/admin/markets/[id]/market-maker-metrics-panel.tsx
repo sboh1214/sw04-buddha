@@ -22,6 +22,7 @@ import {
   MakerRiskFacts,
   MetricsFields,
 } from '../../market-makers/metrics-facts';
+import { MakerPeriodFacts } from '../../market-makers/period-facts';
 
 export function MarketMakerMetricsFacts({ data }: { data: AdminMarketMakerMetrics }) {
   return (
@@ -37,6 +38,7 @@ export function MarketMakerMetricsFacts({ data }: { data: AdminMarketMakerMetric
       />
       <MakerRiskFacts risk={data.risk} />
       <MakerDepth depth={data.depth} />
+      <MakerPeriodFacts period={data.period} />
       <MakerConcentration concentration={data.concentration} />
     </Stack>
   );

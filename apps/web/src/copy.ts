@@ -367,7 +367,31 @@ export const copy = {
   adminMarketMakers: '마켓메이커 지표',
   makerMetricsIntro:
     '실제 자금이 배정된 시장의 현재 관측값입니다. 전체 합계와 시장별 목록은 각각 표시된 조회 시각을 기준으로 합니다.',
-  makerMetricsTitle: '현재 마켓메이커 지표',
+  makerMetricsTitle: '마켓메이커 운영 지표',
+  makerPeriodTitle: '개장 이후 누적 체결',
+  makerPeriodNotOpened: '아직 개장하지 않아 누적 기간이 없습니다.',
+  makerPeriodUnobserved: '관측 자료가 없습니다.',
+  makerPeriodPartialOrders:
+    '과거 시장의 기록된 주문만 집계했습니다. 기록 전 범위의 완전성을 확인할 수 없습니다.',
+  makerPeriodOrdersGuide:
+    '실제로 게시한 봇 계약 수와 그 게시분의 체결 수를 셉니다. 재게시 물량은 새 게시로 세며 즉시 체결분은 제외합니다. 사람 즉시 주문은 기록된 주문 중 전량 체결 비율이며, 다음 1계약을 살 수 없는 예산 잔여도 전량 체결입니다.',
+  makerPeriodPosted: '봇 게시 계약 수',
+  makerPeriodFilled: '게시분 체결 계약 수',
+  makerPeriodFillRate: '게시 수량 체결률',
+  makerPeriodIocOrders: '사람 즉시 주문 수',
+  makerPeriodIocFilled: '사람 즉시 주문 전량 체결 수',
+  makerPeriodIocRate: '사람 즉시 주문 전량 체결률',
+  makerPeriodSupply: '게시 호가 공백',
+  makerPeriodSupplyGuide:
+    '개장 중이고 마감 시각 전인 관측 구간만 셉니다. 봇의 YES·NO 매수 중 한 방향이 없던 시간과 전체 직접·환산 매도 측 중 한 방향이 없던 시간을 따로 표시합니다.',
+  makerPeriodSupplyLimits:
+    '봇 정지·원장 보류로 취소가 끝나지 않은 주문도 게시 예약으로 셉니다. 현재 거래·봇 실행 상태는 위 운영 상태에서 함께 확인해 주세요.',
+  makerPeriodPartialSupply:
+    '관측 시작 전 구간은 자료가 없습니다. 아래 시간은 확인된 구간의 합계입니다.',
+  makerPeriodObserved: '공급 관측 범위',
+  makerPeriodOpenSeconds: '관측된 개장 시간 (초)',
+  makerPeriodBotGap: '봇 양방향 게시 공백 (초)',
+  makerPeriodCombinedGap: '전체 직접·환산 게시 공백 (초)',
   makerMetricsOutcome: '결과',
   makerMetricsMarket: '시장 상세',
   makerMetricsMarkets: '시장별 현재 지표',

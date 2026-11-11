@@ -556,11 +556,12 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       ['vault'],
       ['treasury'],
       ['concentration'],
+      ['posted', 'qty'],
+      ['fill', 'bp'],
+      ['combined', 'gap'],
+      ['open', 'ms'],
     ],
-    // Current settings/runtime/assets/risk are admin-only. Pending historical metrics add no
-    // permission to expose those facts or the future retained aggregates publicly.
-    pending:
-      '현재 설정·운영 상태·재고·위험 지표는 관리자만 조회한다(#72·#129·#182); 누적 체결률·공급 중단 이력과 그 보존 정책은 미정이다(#182)',
+    // Current facts and retained non-personal cumulative observations are admin-only (#182).
   },
   {
     id: 'account-type',

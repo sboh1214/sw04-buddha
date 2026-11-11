@@ -75,6 +75,16 @@ test.describe('현재 관리자 MM 지표 @market-maker-quotes', () => {
       .toBeGreaterThan(0);
     const metrics = await dataOf<AdminMarketMakerMetrics>(await admin.get(path));
     expect(metrics.risk.kind).toBe('ready');
+    expect(metrics.period.activity.coverage).toBe('complete');
+    expect(BigInt(metrics.period.activity.bot!.postedQty)).toBeGreaterThan(0n);
+    expect(metrics.period.activity.bot!.filledQty).toBe('0');
+    expect(metrics.period.activity.humanIoc).toEqual({
+      orders: '0',
+      filledOrders: '0',
+      fillBp: null,
+    });
+    expect(metrics.period.supply.coverage).toBe('complete');
+    expect(metrics.period.supply.openMs).not.toBeNull();
     expect(metrics.concentration.setting).toMatchObject({ status: 'undecided', value: null });
     for (const side of [metrics.concentration.YES, metrics.concentration.NO])
       expect(side).toEqual({ totalQty: '0', topQty: null, topShareBp: null, holders: null });
@@ -115,6 +125,11 @@ test.describe('현재 관리자 MM 지표 @market-maker-quotes', () => {
     const panel = page.getByTestId('market-maker-metrics-panel');
     await expect(panel.getByTestId('maker-metrics-risk')).toBeVisible();
     await expect(panel.getByTestId('maker-metrics-scenario-pnl')).toContainText('VOID');
+    const period = panel.getByTestId('maker-period-metrics');
+    await expect(period).toContainText(copy.makerPeriodFillRate);
+    await expect(period).toContainText(copy.makerPeriodIocRate);
+    await expect(period).toContainText(copy.makerPeriodSupplyLimits);
+    await expect(period).not.toContainText(copy.makerPeriodUnobserved);
     await expect(panel.getByTestId('maker-metrics-concentration')).toContainText(
       copy.makerMetricsTopNUndecided,
     );
@@ -135,6 +150,7 @@ test.describe('현재 관리자 MM 지표 @market-maker-quotes', () => {
     await panel.getByRole('button', { name: copy.retry, exact: true }).click();
     await expect(panel).toContainText(copy.adminMarketRefreshFailed);
     await expect(panel.getByTestId('maker-metrics-scenario-pnl')).toContainText('VOID');
+    await expect(period).toContainText(copy.makerPeriodFillRate);
     await page.unroute(match);
 
     // An explicit, reversible test-only setting exercises denominator-zero presentation.

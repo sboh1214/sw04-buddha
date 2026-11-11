@@ -12,6 +12,24 @@ export const makerMetrics: AdminMarketMakerMetrics = {
   asOf: '2026-11-11T01:00:00.000Z',
   configVersion: 2,
   openedVersion: 1,
+  period: {
+    window: { from: '2026-11-10T01:00:00.000Z', to: '2026-11-11T01:00:00.000Z' },
+    activity: {
+      basis: 'recorded_orders',
+      coverage: 'complete',
+      bot: { postedQty: '100', filledQty: '25', fillBp: '2500' },
+      humanIoc: { orders: '10', filledOrders: '8', fillBp: '8000' },
+    },
+    supply: {
+      basis: 'posted_book',
+      coverage: 'partial',
+      observedFrom: '2026-11-10T12:00:00.000Z',
+      observedTo: '2026-11-11T01:00:00.000Z',
+      openMs: '46800000',
+      botGapMs: '1200',
+      combinedGapMs: '0',
+    },
+  },
   risk: {
     kind: 'ready',
     assets: {

@@ -54,7 +54,7 @@ describe('PRIVATE_DATA (#113)', () => {
     );
     expect(
       PRIVATE_DATA.filter((item) => item.pending !== undefined).map((item) => item.id),
-    ).toEqual(['market-maker']);
+    ).toEqual([]);
   });
 });
 
@@ -370,6 +370,10 @@ describe('findPrivateField', () => {
     ['vaultBalance', 'vault'],
     ['treasuryCoin', 'treasury'],
     ['holderConcentration', 'concentration'],
+    ['postedQty', 'posted qty'],
+    ['fillBp', 'fill bp'],
+    ['combinedGapMs', 'combined gap'],
+    ['openMs', 'open ms'],
   ])('keeps %s private as a market-maker field (%s)', (name, words) => {
     expect(
       findPrivateField(name)

@@ -3,6 +3,7 @@ import { coinAmountSchema } from './api/coin-amount.js';
 import { marketStatusSchema, releaseSettingStatusSchema, marketResultSchema } from './enums.js';
 import { cursorQuerySchema } from './api/pagination.js';
 import { adminTreasurySchema } from './treasury.js';
+import { marketMakerPeriodMetricsSchema } from './market-maker-period-metrics.js';
 
 /** Counts, quantities and ratios can outgrow the JSON safe-integer range, just like capital. */
 const count = z.string().regex(/^(0|[1-9]\d*)$/);
@@ -64,7 +65,7 @@ const concentrationSide = z.object({
     .nullable(),
 });
 
-/** Admin-only current observations. No historical rates, outage intervals or alert policy. */
+/** Admin-only current and cumulative observations; never automatic control or alerts. */
 export const adminMarketMakerMetricsSchema = z
   .object({
     marketId: z.uuid(),
@@ -75,6 +76,7 @@ export const adminMarketMakerMetricsSchema = z
     openedVersion: z.number().int().positive().nullable(),
     risk: z.union([readyRisk, unavailable]),
     depth: z.object({ bot: depth, human: depth }),
+    period: marketMakerPeriodMetricsSchema,
     concentration: z.object({
       setting: z.object({
         key: z.string(),
@@ -89,7 +91,7 @@ export const adminMarketMakerMetricsSchema = z
 export type AdminMarketMakerMetrics = z.infer<typeof adminMarketMakerMetricsSchema>;
 
 export const adminMarketMakerMetricsListItemSchema = adminMarketMakerMetricsSchema
-  .omit({ depth: true, concentration: true })
+  .omit({ depth: true, concentration: true, period: true })
   .extend({
     runtime: z
       .object({

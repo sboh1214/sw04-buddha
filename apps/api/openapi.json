@@ -30719,6 +30719,9 @@
             ],
             "additionalProperties": false
           },
+          "period": {
+            "$ref": "#/components/schemas/MarketMakerPeriodMetrics"
+          },
           "concentration": {
             "type": "object",
             "properties": {
@@ -30878,7 +30881,172 @@
           "openedVersion",
           "risk",
           "depth",
+          "period",
           "concentration"
+        ],
+        "additionalProperties": false
+      },
+      "MarketMakerPeriodMetrics": {
+        "type": "object",
+        "properties": {
+          "window": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "nullable": true,
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ],
+            "additionalProperties": false
+          },
+          "activity": {
+            "type": "object",
+            "properties": {
+              "basis": {
+                "type": "string",
+                "enum": [
+                  "recorded_orders"
+                ]
+              },
+              "coverage": {
+                "type": "string",
+                "enum": [
+                  "complete",
+                  "partial",
+                  "unavailable"
+                ]
+              },
+              "bot": {
+                "nullable": true,
+                "type": "object",
+                "properties": {
+                  "postedQty": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "filledQty": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "fillBp": {
+                    "nullable": true,
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  }
+                },
+                "required": [
+                  "postedQty",
+                  "filledQty",
+                  "fillBp"
+                ],
+                "additionalProperties": false
+              },
+              "humanIoc": {
+                "nullable": true,
+                "type": "object",
+                "properties": {
+                  "orders": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "filledOrders": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "fillBp": {
+                    "nullable": true,
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  }
+                },
+                "required": [
+                  "orders",
+                  "filledOrders",
+                  "fillBp"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "basis",
+              "coverage",
+              "bot",
+              "humanIoc"
+            ],
+            "additionalProperties": false
+          },
+          "supply": {
+            "type": "object",
+            "properties": {
+              "basis": {
+                "type": "string",
+                "enum": [
+                  "posted_book"
+                ]
+              },
+              "coverage": {
+                "type": "string",
+                "enum": [
+                  "complete",
+                  "partial",
+                  "unavailable"
+                ]
+              },
+              "observedFrom": {
+                "nullable": true,
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              "observedTo": {
+                "nullable": true,
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              "openMs": {
+                "nullable": true,
+                "type": "string",
+                "pattern": "^(0|[1-9]\\d*)$"
+              },
+              "botGapMs": {
+                "nullable": true,
+                "type": "string",
+                "pattern": "^(0|[1-9]\\d*)$"
+              },
+              "combinedGapMs": {
+                "nullable": true,
+                "type": "string",
+                "pattern": "^(0|[1-9]\\d*)$"
+              }
+            },
+            "required": [
+              "basis",
+              "coverage",
+              "observedFrom",
+              "observedTo",
+              "openMs",
+              "botGapMs",
+              "combinedGapMs"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "window",
+          "activity",
+          "supply"
         ],
         "additionalProperties": false
       },
