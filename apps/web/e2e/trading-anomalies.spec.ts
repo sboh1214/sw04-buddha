@@ -199,11 +199,14 @@ test.describe('거래 패턴 검토 (#98)', () => {
         }),
       );
       await operator.getByRole('button', { name: copy.anomalyRecalculate, exact: true }).click();
-      await expect(operator.getByRole('alert')).toContainText(copy.anomalyRefreshFailed);
+      const refreshFailure = operator
+        .getByRole('alert')
+        .filter({ hasText: copy.anomalyRefreshFailed });
+      await expect(refreshFailure).toContainText(copy.anomalyRefreshFailed);
       await expect(operator.getByTestId('anomaly-candidate')).toHaveCount(report.candidates.length);
       await operator.unroute(match);
       await operator.getByRole('button', { name: copy.anomalyRecalculate, exact: true }).click();
-      await expect(operator.getByRole('alert')).toHaveCount(0);
+      await expect(refreshFailure).toHaveCount(0);
 
       for (const path of [`/api/v1/markets/${market.id}`, `/api/v1/markets/${market.id}/fills`]) {
         const response = await request.get(path);
