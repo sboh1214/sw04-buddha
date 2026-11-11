@@ -6519,6 +6519,16 @@
               }
             }
           },
+          "422": {
+            "description": "OPEN_ITEMS_MISSING",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "RATE_LIMITED",
             "content": {

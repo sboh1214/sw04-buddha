@@ -947,6 +947,43 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
   });
 
   // --- the scheduled open ---------------------------------------------------------------------
+  it.each(['now', 'past'] as const)(
+    'refuses moving an unconfigured legacy market to %s with an actionable open-item error and no writes',
+    async (when) => {
+      const market = await createMarket(t.db, {
+        createdBy: creator.id,
+        categoryId: category.id,
+        status: 'scheduled',
+        scheduledOpenAt: new Date(floorToMinute(Date.now()) + HOUR_MS),
+        closeAt: new Date(floorToMinute(Date.now()) + DAY_MS),
+      });
+      expect(market.currentLiquidityVersion).toBeNull();
+      const before = {
+        row: await marketRow(market.id),
+        events: await eventsFor(market.id),
+        actions: await reviewActionsFor(market.id),
+        jobs: await jobIds(),
+      };
+      await listening(market.id, async (received) => {
+        const res = await reschedule(market.id, second, {
+          scheduledOpenAt: iso(floorToMinute(Date.now()) - (when === 'past' ? HOUR_MS : 0)),
+        });
+        expect(res.statusCode).toBe(422);
+        expect(errorOf(res)).toEqual({
+          code: 'OPEN_ITEMS_MISSING',
+          message: 'The market misses what it needs to open: liquidity',
+          details: [{ path: ['liquidity'], message: 'required' }],
+        });
+        expect(await marketRow(market.id)).toEqual(before.row);
+        expect(await eventsFor(market.id)).toEqual(before.events);
+        expect(await reviewActionsFor(market.id)).toEqual(before.actions);
+        expect(await jobIds()).toEqual(before.jobs);
+        await sleep(100);
+        expect(received).toEqual([]);
+      });
+    },
+  );
+
   it('moves a scheduled market’s open with a reason, checks the order again and moves its open job', async () => {
     const market = await scheduled();
     const close = Date.parse(market.closeAt);

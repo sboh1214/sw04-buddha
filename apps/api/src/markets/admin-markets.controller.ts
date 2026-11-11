@@ -415,8 +415,16 @@ export class AdminMarketsController {
   // body, then `status` (not scheduled), then `closeAt` 'must be in the future' (the close has
   // passed), then `scheduledOpenAt` 'unchanged' (the stored instant), then the order:
   // `scheduledOpenAt` 'must be before closeAt' and `closeAt` 'must be after scheduledOpenAt', as
-  // the PATCH names a broken rule (TIME_RULE_MESSAGES).
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
+  // the PATCH names a broken rule (TIME_RULE_MESSAGES). A legacy market with no current liquidity
+  // version cannot open now: OPEN_ITEMS_MISSING names liquidity; revert and review its settings.
+  @ApiErrors(
+    'UNAUTHENTICATED',
+    'FORBIDDEN',
+    'ONBOARDING_REQUIRED',
+    'NOT_FOUND',
+    'VALIDATION_ERROR',
+    'OPEN_ITEMS_MISSING',
+  )
   adminRescheduleMarketOpen(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,

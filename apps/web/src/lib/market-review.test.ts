@@ -415,6 +415,15 @@ describe('reviewFailure', () => {
   it('names what the approval found missing, and the close already passed', () => {
     expect(
       reviewFailure(
+        refused(422, 'OPEN_ITEMS_MISSING', [{ path: ['liquidity'], message: 'required' }]),
+      ),
+    ).toEqual({
+      kind: 'alert',
+      message: `${copy.errMarketReviewOpenItems}: ${copy.openItemLiquidity}`,
+      refresh: true,
+    });
+    expect(
+      reviewFailure(
         refused(422, 'OPEN_ITEMS_MISSING', [{ path: ['category'], message: 'inactive' }]),
       ),
     ).toEqual({
