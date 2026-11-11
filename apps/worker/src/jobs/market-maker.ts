@@ -35,7 +35,15 @@ export async function refreshMarketMaker(
   publish: Publish,
   enqueue: EnqueueMarketMaker,
   logger: Logger,
+  retry: { attempt: number; maxAttempts: number } = { attempt: 1, maxAttempts: 3 },
 ): Promise<Record<string, unknown>> {
+  if (
+    !Number.isSafeInteger(retry.attempt) ||
+    !Number.isSafeInteger(retry.maxAttempts) ||
+    retry.attempt < 1 ||
+    retry.maxAttempts < 1
+  )
+    throw new RangeError('Invalid market maker retry context');
   let result: MarketMakerCycleResult;
   let commitContext: MarketMakerCycleContext | undefined;
   try {
@@ -45,6 +53,7 @@ export async function refreshMarketMaker(
         commitContext = {
           marketId: cycle.marketId,
           generation: cycle.generation,
+          controlGeneration: cycle.controlGeneration,
           startedAt: cycle.startedAt,
         };
       }
@@ -52,23 +61,38 @@ export async function refreshMarketMaker(
     });
   } catch (error) {
     // The economic transaction has rolled back. Preserve the failure independently and let
-    // BullMQ use its bounded attempts. No failure count changes desiredEnabled here.
+    // BullMQ use its bounded attempts. Only the final attempt disables this bot. Normal waiting
+    // is a successful job and never reaches this path or consumes the retry budget.
     // A deferred constraint can fail after the callback returned. Preserve that attempt too;
     // a lost COMMIT reply is safe because recordMarketMakerRun protects completed generations.
     const context = error instanceof MarketMakerCycleError ? error.context : commitContext;
     if (context) {
       try {
-        await db.transaction((tx) =>
+        const recorded = await db.transaction((tx) =>
           recordMarketMakerRun(tx, {
             ...context,
             outcome: 'error',
             reason: 'runtime_error',
+            retryExhausted: retry.attempt >= retry.maxAttempts,
             error: messageOf(error instanceof MarketMakerCycleError ? error.cause : error).slice(
               0,
               2_000,
             ),
           }),
         );
+        if (recorded && !recorded.stale && !recorded.runtime.desiredEnabled) {
+          // Stop is durable even if this cleanup finds held/damaged assets. Intake omits this
+          // bot immediately, while the scan retries only its unfinished cleanup work.
+          try {
+            const cleaned = await db.transaction((tx) => runMarketMakerCycle(tx, { marketId }));
+            if (cleaned.outcome !== 'skipped') await publishCycle(cleaned, publish);
+          } catch (cleanupError) {
+            logger.error(
+              { marketId, err: cleanupError },
+              'stopped market maker cleanup is pending',
+            );
+          }
+        }
       } catch (recordError) {
         logger.error(
           { marketId, err: recordError },
@@ -106,7 +130,12 @@ export async function scanMarketMakers(db: Db, enqueue: EnqueueMarketMaker) {
     .select({ id: runtime.marketId })
     .from(runtime)
     .innerJoin(markets, eq(markets.id, runtime.marketId))
-    .where(and(eq(runtime.desiredEnabled, true), inArray(markets.status, ['open', 'paused'])))
+    .where(
+      and(
+        sql`(${runtime.desiredEnabled} OR ${runtime.generation} > ${runtime.completedGeneration})`,
+        inArray(markets.status, ['open', 'paused']),
+      ),
+    )
     .orderBy(sql`${runtime.lastAttemptAt} ASC NULLS FIRST`, asc(runtime.marketId))
     .limit(MARKET_SCAN_BATCH_MAX);
   const scanned = await runScan(
@@ -119,8 +148,9 @@ export async function scanMarketMakers(db: Db, enqueue: EnqueueMarketMaker) {
           .select({ status: markets.status })
           .from(markets)
           .where(eq(markets.id, marketId));
-        if (!current?.desiredEnabled || !market || !['open', 'paused'].includes(market.status))
-          return null;
+        if (!current || !market || !['open', 'paused'].includes(market.status)) return null;
+        if (!current.desiredEnabled)
+          return current.generation > current.completedGeneration ? current.generation : null;
         return current.generation > current.completedGeneration
           ? current.generation
           : (await requestMarketMakerRefresh(tx, marketId))!.generation;

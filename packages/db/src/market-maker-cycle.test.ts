@@ -419,17 +419,29 @@ describe.skipIf(!hasTestDb())('operating market maker cycle (#129)', () => {
     await run(market.id);
     await refresh(market.id);
     const current = (await runtime.readMarketMakerRuntime(t.db, market.id))!;
-    // The #130 stop writer is not implemented yet and 0069 deliberately disallows a raw policy
-    // change. Feed its future read state to this consumer without pretending a DB stop occurred.
-    vi.spyOn(runtime, 'readMarketMakerRuntime').mockResolvedValue({
-      ...current,
-      desiredEnabled: false,
-    });
+    await t.db.transaction(async (tx) =>
+      runtime.recordMarketMakerRun(tx, {
+        marketId: market.id,
+        generation: current.generation,
+        controlGeneration: current.controlGeneration,
+        outcome: 'error',
+        retryExhausted: true,
+        error: 'bounded retries exhausted',
+        startedAt: new Date(),
+      }),
+    );
     expect(await run(market.id)).toMatchObject({
       outcome: 'waiting',
       reason: 'stopped',
       bookChanged: true,
     });
     expect(await live(market.id)).toEqual([]);
+    expect(await runtime.readMarketMakerRuntime(t.db, market.id)).toMatchObject({
+      desiredEnabled: false,
+      controlGeneration: 2n,
+      state: 'stopped',
+      reason: 'retry_exhausted',
+      completedGeneration: current.generation + 1n,
+    });
   });
 });

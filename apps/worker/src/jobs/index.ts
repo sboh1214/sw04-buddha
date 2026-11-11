@@ -4,7 +4,7 @@ import { marketJobDataSchema, marketMakerJobDataSchema, type MarketJobData } fro
 import { UnrecoverableError, type Job, type Processor } from 'bullmq';
 import { type Logger } from 'pino';
 import * as z from 'zod';
-import { JOB_NAMES } from '../queues.js';
+import { DEFAULT_JOB_OPTIONS, JOB_NAMES } from '../queues.js';
 import { type EnqueueFinalize } from '../market-jobs.js';
 import { type EnqueueMarketMaker } from '../market-maker-jobs.js';
 import { refreshMarketMaker, scanMarketMakers } from './market-maker.js';
@@ -77,7 +77,10 @@ const HANDLERS: Partial<Record<string, Handler>> = {
     if (!parsed.success) throw new UnrecoverableError(`Invalid ${job.name} payload`);
     // The queued generation identifies the trigger only. The market-locked DB cycle reads the
     // current generation and current stop/hold/status gates; an already completed one is a no-op.
-    return refreshMarketMaker(db, parsed.data.marketId, publish, enqueueMarketMaker, logger);
+    return refreshMarketMaker(db, parsed.data.marketId, publish, enqueueMarketMaker, logger, {
+      attempt: (job.attemptsMade ?? 0) + 1,
+      maxAttempts: job.opts?.attempts ?? DEFAULT_JOB_OPTIONS.attempts,
+    });
   },
   [JOB_NAMES.marketMakerScan]: async (job, { db, enqueueMarketMaker, logger }) => {
     if (

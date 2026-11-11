@@ -25,6 +25,8 @@ CREATE TABLE "market_maker_runs" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"market_id" uuid NOT NULL,
 	"generation" bigint NOT NULL,
+	"control_generation" bigint DEFAULT 1 NOT NULL,
+	"applied_txid" text DEFAULT pg_current_xact_id()::text NOT NULL,
 	"outcome" varchar(16) NOT NULL,
 	"reason" text,
 	"error" text,
@@ -38,6 +40,7 @@ CREATE TABLE "market_maker_runs" (
 CREATE TABLE "market_maker_runtime" (
 	"market_id" uuid PRIMARY KEY NOT NULL,
 	"desired_enabled" boolean NOT NULL,
+	"control_generation" bigint DEFAULT 1 NOT NULL,
 	"generation" bigint NOT NULL,
 	"completed_generation" bigint NOT NULL,
 	"state" varchar(16) NOT NULL,
@@ -50,7 +53,7 @@ CREATE TABLE "market_maker_runtime" (
 	"consecutive_failures" integer DEFAULT 0 NOT NULL,
 	"created_at" timestamp (3) with time zone NOT NULL,
 	"updated_at" timestamp (3) with time zone NOT NULL,
-	CONSTRAINT "market_maker_runtime_generation_check" CHECK ("market_maker_runtime"."generation" >= 1 AND "market_maker_runtime"."completed_generation" BETWEEN 0 AND "market_maker_runtime"."generation"),
+	CONSTRAINT "market_maker_runtime_generation_check" CHECK ("market_maker_runtime"."control_generation" >= 1 AND "market_maker_runtime"."generation" >= 1 AND "market_maker_runtime"."completed_generation" BETWEEN 0 AND "market_maker_runtime"."generation"),
 	CONSTRAINT "market_maker_runtime_state_check" CHECK ("market_maker_runtime"."state" IN ('ready','waiting','stopped','error')),
 	CONSTRAINT "market_maker_runtime_failures_check" CHECK ("market_maker_runtime"."consecutive_failures" >= 0)
 );
@@ -250,7 +253,7 @@ BEGIN
   IF TG_OP='DELETE' THEN RAISE EXCEPTION 'market maker runtime is retained' USING ERRCODE='check_violation'; END IF;
   PERFORM pg_advisory_xact_lock(hashtext(NEW.market_id::text));
   IF TG_OP='INSERT' THEN
-    IF NOT NEW.desired_enabled OR NEW.generation<>1 OR NEW.completed_generation<>0 OR NEW.state<>'waiting'
+    IF NOT NEW.desired_enabled OR NEW.control_generation<>1 OR NEW.generation<>1 OR NEW.completed_generation<>0 OR NEW.state<>'waiting'
       OR NEW.reason IS NOT NULL OR NEW.consecutive_failures<>0 OR NEW.last_attempt_at IS NOT NULL
       OR NEW.last_success_at IS NOT NULL OR NEW.last_failure_at IS NOT NULL OR NEW.last_error IS NOT NULL
       OR NOT EXISTS(SELECT 1 FROM market_maker_allocations a WHERE a.market_id=NEW.market_id
@@ -260,10 +263,26 @@ BEGIN
     END IF;
   ELSE
     IF NEW.market_id<>OLD.market_id OR NEW.created_at<>OLD.created_at
-      OR NEW.desired_enabled IS DISTINCT FROM OLD.desired_enabled
       OR NEW.generation<OLD.generation OR NEW.generation>OLD.generation+1
       OR NEW.completed_generation<OLD.completed_generation THEN
-      RAISE EXCEPTION 'runtime identity and desired policy are fixed; generations only advance' USING ERRCODE='check_violation';
+      RAISE EXCEPTION 'runtime identity is fixed; generations only advance' USING ERRCODE='check_violation';
+    END IF;
+    IF NEW.desired_enabled IS DISTINCT FROM OLD.desired_enabled
+      OR NEW.control_generation IS DISTINCT FROM OLD.control_generation THEN
+      -- Only a fresh exhausted failure may disable this bot. No raw resume path: #130 binds
+      -- that operation to another administrator's current, versioned approval.
+      IF NOT OLD.desired_enabled OR NEW.desired_enabled
+        OR NEW.control_generation<>OLD.control_generation+1 OR NEW.generation<>OLD.generation+1
+        OR NEW.completed_generation<>OLD.completed_generation
+        OR NEW.state<>'stopped' OR NEW.reason IS DISTINCT FROM 'retry_exhausted'
+        OR NOT EXISTS(SELECT 1 FROM market_maker_runs r WHERE r.market_id=NEW.market_id
+          AND r.control_generation=OLD.control_generation
+          AND r.generation>OLD.completed_generation AND r.generation<=OLD.generation
+          AND r.outcome='error' AND r.reason='retry_exhausted'
+          AND r.applied_txid=pg_current_xact_id()::text
+          AND r.finished_at=NEW.updated_at AND r.error=NEW.last_error) THEN
+        RAISE EXCEPTION 'runtime control needs a fresh exhausted failure or an approved control' USING ERRCODE='check_violation';
+      END IF;
     END IF;
   END IF;
   RETURN NEW;

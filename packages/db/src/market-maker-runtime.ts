@@ -80,6 +80,10 @@ export interface RecordMarketMakerRunInput {
   marketId: string;
   /** Captured under the market lock before this run; never complete a later dirty generation. */
   generation: bigint;
+  /** Captured independently of inventory refreshes; a late failure cannot undo a restart. */
+  controlGeneration?: bigint;
+  /** Only the worker's final bounded attempt can request a system stop. */
+  retryExhausted?: boolean;
   outcome: 'ready' | 'waiting' | 'error';
   reason?: string | null;
   error?: string | null;
@@ -88,9 +92,9 @@ export interface RecordMarketMakerRunInput {
   detail?: Record<string, unknown>;
 }
 
-/** Append the completed attempt and update observation in one transaction. A failed execution
- * calls this from a NEW transaction after its economic writes rolled back. Failure-stop policy
- * is pending: recording an error never flips desiredEnabled or presumes an automatic restart.
+/** Append the attempt and observation together. Failed economic work has already rolled back.
+ * Final retry exhaustion disables only this bot; cancellation is a separate safe cleanup, so
+ * a damaged balance or active hold cannot roll back the stop. Restart belongs to #130 approval.
  */
 export async function recordMarketMakerRun(tx: Tx, input: RecordMarketMakerRunInput) {
   await lockMarket(tx, input.marketId);
@@ -101,6 +105,10 @@ export async function recordMarketMakerRun(tx: Tx, input: RecordMarketMakerRunIn
   if (!Number.isFinite(input.startedAt.getTime())) throw new RangeError('Invalid run start');
   if ((input.outcome === 'error') !== (typeof input.error === 'string' && input.error.length > 0))
     throw new RangeError('Only an error observation carries an error');
+  if (input.retryExhausted && (input.outcome !== 'error' || input.controlGeneration === undefined))
+    throw new RangeError('Retry exhaustion requires an error and its captured control generation');
+  const controlGeneration = input.controlGeneration ?? current.controlGeneration;
+  const reason = input.retryExhausted ? 'retry_exhausted' : (input.reason ?? null);
   const now = await clockTimestamp(tx);
   const finishedAt = new Date(Math.max(now.getTime(), input.startedAt.getTime()));
   const [run] = await tx
@@ -108,8 +116,9 @@ export async function recordMarketMakerRun(tx: Tx, input: RecordMarketMakerRunIn
     .values({
       marketId: input.marketId,
       generation: input.generation,
+      controlGeneration,
       outcome: input.outcome,
-      reason: input.reason ?? null,
+      reason,
       error: input.error ?? null,
       detail: input.detail ?? {},
       startedAt: input.startedAt,
@@ -118,16 +127,30 @@ export async function recordMarketMakerRun(tx: Tx, input: RecordMarketMakerRunIn
     .returning();
   // A failed attempt may report after a newer worker already committed success. Retain the
   // attempt as evidence, but never overwrite the newer successful observation with that error.
-  if (input.generation <= current.completedGeneration)
+  if (
+    input.generation <= current.completedGeneration ||
+    controlGeneration !== current.controlGeneration
+  )
     return { runtime: current, run: run!, stale: true };
+  const stopping = input.retryExhausted === true && current.desiredEnabled;
+  const cleanedStop =
+    !current.desiredEnabled && input.outcome === 'waiting' && input.reason === 'stopped';
   const [runtime] = await tx
     .update(marketMakerRuntime)
     .set({
-      state: input.outcome,
-      reason: input.reason ?? null,
+      state: stopping || !current.desiredEnabled ? 'stopped' : input.outcome,
+      reason: !current.desiredEnabled ? current.reason : reason,
       lastAttemptAt: finishedAt,
       updatedAt: finishedAt,
       lastConfigVersion: input.configVersion ?? current.lastConfigVersion,
+      ...(stopping
+        ? {
+            desiredEnabled: false,
+            generation: current.generation + 1n,
+            controlGeneration: current.controlGeneration + 1n,
+          }
+        : {}),
+      ...(cleanedStop ? { completedGeneration: input.generation } : {}),
       ...(input.outcome === 'ready'
         ? {
             completedGeneration:

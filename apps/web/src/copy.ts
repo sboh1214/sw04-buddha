@@ -440,6 +440,8 @@ export const copy = {
   marketMakerClosePassed: '거래 마감 시각이 지났습니다.',
   marketMakerPaused: '시장이 일시 중단되어 있습니다.',
   marketMakerExecutionStopped: '운영 마켓메이커가 중단된 상태입니다.',
+  marketMakerRetryExhausted:
+    '반복 실행 실패로 이 시장의 봇이 정지됐습니다. 원인을 해결한 뒤 다른 관리자의 승인을 받아 재개하세요.',
   marketMakerNoQuotes: '현재 조건에서 게시할 호가가 없습니다.',
   marketMakerAdmissionRefused: '주문 접수가 거절되어 호가 게시를 마치지 못했습니다.',
   marketMakerAccountMissing: '운영 마켓메이커 계정이 준비되지 않았습니다.',

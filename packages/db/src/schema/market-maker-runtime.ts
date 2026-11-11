@@ -120,6 +120,9 @@ export const marketMakerRuntime = pgTable(
       .primaryKey()
       .references(() => marketMakerAllocations.marketId, { onDelete: 'restrict' }),
     desiredEnabled: boolean().notNull(),
+    controlGeneration: bigint({ mode: 'bigint' })
+      .notNull()
+      .default(sql`1`),
     generation: bigint({ mode: 'bigint' }).notNull(),
     completedGeneration: bigint({ mode: 'bigint' }).notNull(),
     state: varchar({ length: 16 }).$type<MarketMakerOperationalState>().notNull(),
@@ -136,7 +139,7 @@ export const marketMakerRuntime = pgTable(
   (t) => [
     check(
       'market_maker_runtime_generation_check',
-      sql`${t.generation} >= 1 AND ${t.completedGeneration} BETWEEN 0 AND ${t.generation}`,
+      sql`${t.controlGeneration} >= 1 AND ${t.generation} >= 1 AND ${t.completedGeneration} BETWEEN 0 AND ${t.generation}`,
     ),
     check(
       'market_maker_runtime_state_check',
@@ -159,6 +162,12 @@ export const marketMakerRuns = pgTable(
       .notNull()
       .references(() => marketMakerRuntime.marketId, { onDelete: 'restrict' }),
     generation: bigint({ mode: 'bigint' }).notNull(),
+    controlGeneration: bigint({ mode: 'bigint' })
+      .notNull()
+      .default(sql`1`),
+    appliedTxid: text()
+      .notNull()
+      .default(sql`pg_current_xact_id()::text`),
     outcome: varchar({ length: 16 }).$type<'ready' | 'waiting' | 'error'>().notNull(),
     reason: text(),
     error: text(),

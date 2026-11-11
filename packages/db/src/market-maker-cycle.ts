@@ -34,6 +34,7 @@ type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 export interface MarketMakerCycleContext {
   marketId: string;
   generation: bigint;
+  controlGeneration: bigint;
   startedAt: Date;
 }
 export class MarketMakerCycleError extends Error {
@@ -74,7 +75,12 @@ export async function runMarketMakerCycle(
   if (!runtime) return { outcome: 'skipped', marketId, reason: 'no_runtime' };
   if (runtime.generation <= runtime.completedGeneration)
     return { outcome: 'skipped', marketId, reason: 'already_completed' };
-  const context = { marketId, generation: runtime.generation, startedAt: await clockTimestamp(tx) };
+  const context = {
+    marketId,
+    generation: runtime.generation,
+    controlGeneration: runtime.controlGeneration,
+    startedAt: await clockTimestamp(tx),
+  };
   try {
     const placed: Extract<PlaceOrderResult, { kind: 'placed' }>[] = [];
     const cancelledOrderIds: string[] = [];

@@ -1,4 +1,10 @@
-import { readMarketMakerRuntime, requestMarketMakerRefresh, schema, type Db } from '@buddha/db';
+import {
+  readMarketMakerRuntime,
+  recordMarketMakerRun,
+  requestMarketMakerRefresh,
+  schema,
+  type Db,
+} from '@buddha/db';
 import {
   connectTestDb,
   createMarket,
@@ -17,6 +23,7 @@ import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { refreshMarketMaker, scanMarketMakers } from './market-maker.js';
 import type { Publish } from '../realtime.js';
+import type { EnqueueMarketMaker } from '../market-maker-jobs.js';
 
 const logger = pino({ level: 'silent' });
 const settings = {
@@ -179,6 +186,183 @@ describe.skipIf(!hasTestDb())('maker worker transactions and delivery (#129)', (
     const publish = vi.fn<Publish>().mockResolvedValue(undefined);
     await refreshMarketMaker(t.db, market.id, publish, enqueue, logger);
     expect(publish.mock.calls.map(([, event]) => event.type)).toEqual(['market:book']);
+  });
+
+  function failOneTransaction(afterCommit = false) {
+    let first = true;
+    return new Proxy(t.db, {
+      get(target, prop, receiver) {
+        if (prop !== 'transaction') return Reflect.get(target, prop, receiver) as unknown;
+        return async (callback: Parameters<Db['transaction']>[0]) => {
+          if (!first) return target.transaction(callback);
+          first = false;
+          if (afterCommit) {
+            await target.transaction(callback);
+            throw new Error('lost commit reply');
+          }
+          return target.transaction(async (tx) => {
+            await callback(tx);
+            throw new Error('rolled-back fixture failure');
+          });
+        };
+      },
+    });
+  }
+
+  it('exhaustion stops only this bot, safely clears its quotes, and never auto-restarts', async () => {
+    const market = await opened();
+    const other = await opened();
+    const publish = vi.fn<Publish>().mockResolvedValue(undefined);
+    const enqueue = vi.fn<EnqueueMarketMaker>().mockResolvedValue(undefined);
+    await refreshMarketMaker(t.db, market.id, publish, enqueue, logger);
+    const person = (await createUser(t.db, { balanceCoin: 1_000n })).user.id;
+    const humanOrder = await placeTestOrder(t.db, {
+      marketId: market.id,
+      ownerId: person,
+      outcome: 'YES',
+      side: 'buy',
+      limitPriceCoin: 1,
+      qty: 1,
+    });
+    if (humanOrder.kind !== 'placed') throw new Error('Human order fixture was not placed');
+    await t.db.transaction((tx) => requestMarketMakerRefresh(tx, market.id));
+    const before = (await readMarketMakerRuntime(t.db, market.id))!;
+    publish.mockClear();
+    for (const attempt of [1, 2, 3]) {
+      await expect(
+        refreshMarketMaker(failOneTransaction(), market.id, publish, enqueue, logger, {
+          attempt,
+          maxAttempts: 3,
+        }),
+      ).rejects.toThrow('rolled-back fixture failure');
+      expect((await readMarketMakerRuntime(t.db, market.id))?.desiredEnabled).toBe(attempt < 3);
+    }
+    expect(await readMarketMakerRuntime(t.db, market.id)).toMatchObject({
+      desiredEnabled: false,
+      state: 'stopped',
+      reason: 'retry_exhausted',
+      controlGeneration: 2n,
+      generation: before.generation + 1n,
+      completedGeneration: before.generation + 1n,
+      consecutiveFailures: 3,
+    });
+    const rows = await t.db
+      .select()
+      .from(schema.orders)
+      .where(eq(schema.orders.marketId, market.id));
+    expect(rows.filter((row) => row.status === 'open').map((row) => row.id)).toEqual([
+      humanOrder.order.id,
+    ]);
+    expect(publish.mock.calls.map(([, event]) => event.type)).toEqual(['market:book']);
+    expect(await readMarketMakerRuntime(t.db, other.id)).toMatchObject({
+      desiredEnabled: true,
+      controlGeneration: 1n,
+    });
+    enqueue.mockClear();
+    await scanMarketMakers(t.db, enqueue);
+    expect(enqueue.mock.calls.map(([id]) => id)).toEqual([other.id]);
+    const counterparty = (await createUser(t.db, { balanceCoin: 1_000n })).user.id;
+    const humanTrade = await placeTestOrder(t.db, {
+      marketId: market.id,
+      ownerId: counterparty,
+      outcome: 'NO',
+      side: 'buy',
+      limitPriceCoin: 99,
+      qty: 1,
+    });
+    if (humanTrade.kind !== 'placed') throw new Error('Human trade fixture was not placed');
+    expect(humanTrade.fills).toHaveLength(1);
+    expect(humanTrade.fills[0]!.restingOrderId).toBe(humanOrder.order.id);
+    expect(
+      (await t.db.select().from(schema.markets).where(eq(schema.markets.id, market.id)))[0]!.status,
+    ).toBe('open');
+    expect(await refreshMarketMaker(t.db, market.id, publish, enqueue, logger)).toMatchObject({
+      outcome: 'skipped',
+    });
+    await expect(
+      t.db
+        .update(schema.marketMakerRuntime)
+        .set({ desiredEnabled: true })
+        .where(eq(schema.marketMakerRuntime.marketId, market.id)),
+    ).rejects.toThrow();
+  });
+
+  it('a lost success reply on the final attempt records evidence without stopping the committed generation', async () => {
+    const market = await opened();
+    await expect(
+      refreshMarketMaker(failOneTransaction(true), market.id, vi.fn(), vi.fn(), logger, {
+        attempt: 3,
+        maxAttempts: 3,
+      }),
+    ).rejects.toThrow('lost commit reply');
+    expect(await readMarketMakerRuntime(t.db, market.id)).toMatchObject({
+      desiredEnabled: true,
+      state: 'ready',
+      controlGeneration: 1n,
+      completedGeneration: 1n,
+    });
+    expect(await t.db.select().from(schema.marketMakerRuns)).toHaveLength(2);
+  });
+
+  it('keeps held locks after stopping, ignores old control failures, and leaves cleanup pending', async () => {
+    const market = await opened();
+    const publish = vi.fn<Publish>().mockResolvedValue(undefined);
+    const enqueue = vi.fn().mockResolvedValue(undefined);
+    await refreshMarketMaker(t.db, market.id, publish, enqueue, logger);
+    await t.db.transaction((tx) => requestMarketMakerRefresh(tx, market.id));
+    const current = (await readMarketMakerRuntime(t.db, market.id))!;
+    await createMarketPause(t.db, { marketId: market.id, reason: 'ledger_failure', by: adminId });
+    const ordersBefore = await t.db.select().from(schema.orders);
+    const balancesBefore = await t.db.select().from(schema.balances);
+    publish.mockClear();
+    await expect(
+      refreshMarketMaker(failOneTransaction(), market.id, publish, enqueue, logger, {
+        attempt: 3,
+        maxAttempts: 3,
+      }),
+    ).rejects.toThrow('rolled-back fixture failure');
+    expect(await t.db.select().from(schema.orders)).toEqual(ordersBefore);
+    expect(await t.db.select().from(schema.balances)).toEqual(balancesBefore);
+    expect(publish).not.toHaveBeenCalled();
+    const stopped = (await readMarketMakerRuntime(t.db, market.id))!;
+    expect(stopped).toMatchObject({
+      desiredEnabled: false,
+      state: 'stopped',
+      reason: 'retry_exhausted',
+      controlGeneration: 2n,
+    });
+    expect(stopped.generation).toBeGreaterThan(stopped.completedGeneration);
+    const late = await t.db.transaction((tx) =>
+      recordMarketMakerRun(tx, {
+        marketId: market.id,
+        generation: current.generation,
+        controlGeneration: current.controlGeneration,
+        outcome: 'error',
+        retryExhausted: true,
+        error: 'late old-control failure',
+        startedAt: new Date(),
+      }),
+    );
+    expect(late?.stale).toBe(true);
+    expect(await readMarketMakerRuntime(t.db, market.id)).toEqual(stopped);
+    await scanMarketMakers(t.db, enqueue);
+    expect(enqueue).toHaveBeenLastCalledWith(market.id, stopped.generation);
+  });
+
+  it('normal final-attempt waiting never stops the bot or increments failures', async () => {
+    const market = await opened();
+    await createMarketPause(t.db, { marketId: market.id, reason: 'ledger_failure', by: adminId });
+    expect(
+      await refreshMarketMaker(t.db, market.id, vi.fn(), vi.fn(), logger, {
+        attempt: 3,
+        maxAttempts: 3,
+      }),
+    ).toMatchObject({ outcome: 'waiting', reason: 'ledger_hold' });
+    expect(await readMarketMakerRuntime(t.db, market.id)).toMatchObject({
+      desiredEnabled: true,
+      consecutiveFailures: 0,
+      controlGeneration: 1n,
+    });
   });
 
   it('checks the current hold before stale queued work and preserves its locks and public silence', async () => {
