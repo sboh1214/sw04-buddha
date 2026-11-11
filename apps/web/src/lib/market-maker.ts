@@ -42,6 +42,7 @@ export function marketMakerReason(
     paused: copy.marketMakerPaused,
     stopped: copy.marketMakerExecutionStopped,
     retry_exhausted: copy.marketMakerRetryExhausted,
+    execution_failed: copy.marketMakerError,
     no_quotes: copy.marketMakerNoQuotes,
     admission_refused: copy.marketMakerAdmissionRefused,
     missing_config: copy.marketMakerLiquidityMissing,

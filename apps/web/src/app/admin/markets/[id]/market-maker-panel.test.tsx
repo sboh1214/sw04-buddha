@@ -84,6 +84,7 @@ describe('private market maker execution observations', () => {
     ['paused', copy.marketMakerPaused],
     ['stopped', copy.marketMakerExecutionStopped],
     ['retry_exhausted', copy.marketMakerRetryExhausted],
+    ['execution_failed', copy.marketMakerError],
     ['risk_settings_missing', copy.marketMakerRiskSettingsMissing],
     ['risk_settings_invalid', copy.marketMakerRiskSettingsInvalid],
     ['intake_closed', copy.marketMakerIntakeClosed],

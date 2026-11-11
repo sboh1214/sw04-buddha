@@ -1,6 +1,12 @@
 import { eq, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
-import { marketMakerRuntime, marketMakerRuns, marketMakerOpenAttempts } from './schema/index.js';
+import {
+  marketMakerRuntime,
+  marketMakerRuns,
+  marketMakerOpenAttempts,
+  markets,
+} from './schema/index.js';
+import { readMarketMakerConfig } from './market-liquidity.js';
 import { clockTimestamp, lockMarket } from './tx-helpers.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -33,13 +39,17 @@ export async function recordMarketMakerOpenAttempt(
 ): Promise<MarketMakerOpenAttemptRow> {
   await lockMarket(tx, input.marketId);
   const at = input.at ?? (await clockTimestamp(tx));
+  const prior = await readMarketMakerOpenAttempt(tx, input.marketId);
+  // JS timestamps retain milliseconds. A later observation must also be later when two
+  // attempts run in the same millisecond; this clock is never used to decide whether to open.
+  const lastAttemptAt = new Date(Math.max(at.getTime(), (prior?.lastAttemptAt.getTime() ?? 0) + 1));
   const values = {
     marketId: input.marketId,
     reason: input.reason,
     requiredCoin: input.requiredCoin,
     availableCoin: input.availableCoin,
     liquidityVersion: input.liquidityVersion,
-    lastAttemptAt: at,
+    lastAttemptAt,
     ...(input.reason === null ? { succeededAt: at } : {}),
   };
   const [row] = await tx
@@ -48,6 +58,73 @@ export async function recordMarketMakerOpenAttempt(
     .onConflictDoUpdate({ target: marketMakerOpenAttempts.marketId, set: values })
     .returning();
   return row!;
+}
+
+export interface MarketMakerOpenAttemptContext {
+  marketId: string;
+  statusEventId: number | null;
+  liquidityVersion: number | null;
+  scheduledOpenAt: Date;
+  closeAt: Date;
+  startedAt: Date;
+}
+
+/** Capture under the market lock; the token survives an economic rollback, not its writes. */
+export async function beginMarketMakerOpenAttempt(
+  tx: Tx,
+  market: typeof markets.$inferSelect,
+  now: Date,
+): Promise<MarketMakerOpenAttemptContext | null> {
+  if (
+    market.status !== 'scheduled' ||
+    market.scheduledOpenAt === null ||
+    market.scheduledOpenAt > now ||
+    market.closeAt <= now
+  )
+    return null;
+  await lockMarket(tx, market.id);
+  const prior = await readMarketMakerOpenAttempt(tx, market.id);
+  return {
+    marketId: market.id,
+    statusEventId: market.statusEventId,
+    liquidityVersion: market.currentLiquidityVersion,
+    scheduledOpenAt: market.scheduledOpenAt,
+    closeAt: market.closeAt,
+    startedAt: new Date(Math.max(now.getTime(), (prior?.lastAttemptAt.getTime() ?? 0) + 1)),
+  };
+}
+
+/** A separate post-rollback observation only. Never replace a newer attempt or changed schedule. */
+export async function recordMarketMakerOpenFailure(
+  tx: Tx,
+  input: MarketMakerOpenAttemptContext,
+): Promise<void> {
+  await lockMarket(tx, input.marketId);
+  const [market] = await tx.select().from(markets).where(eq(markets.id, input.marketId));
+  const now = await clockTimestamp(tx);
+  if (
+    !market ||
+    market.status !== 'scheduled' ||
+    market.statusEventId !== input.statusEventId ||
+    market.currentLiquidityVersion !== input.liquidityVersion ||
+    market.scheduledOpenAt?.getTime() !== input.scheduledOpenAt.getTime() ||
+    market.closeAt.getTime() !== input.closeAt.getTime() ||
+    market.scheduledOpenAt > now ||
+    market.closeAt <= now
+  )
+    return;
+  const prior = await readMarketMakerOpenAttempt(tx, input.marketId);
+  // Equality is stale too: a successful/newer skip may have the same millisecond token.
+  if (prior && (prior.lastAttemptAt >= input.startedAt || prior.succeededAt !== null)) return;
+  const config = await readMarketMakerConfig(tx, input.marketId);
+  await recordMarketMakerOpenAttempt(tx, {
+    marketId: input.marketId,
+    reason: 'execution_failed',
+    requiredCoin: config?.budgetCoin ?? null,
+    availableCoin: null,
+    liquidityVersion: config?.version ?? null,
+    at: input.startedAt,
+  });
 }
 
 export async function readMarketMakerRuntime(

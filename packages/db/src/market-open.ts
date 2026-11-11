@@ -83,7 +83,8 @@ export type OpenScheduledMarketResult =
  * Call it under `lockMarket`, with `market` read `FOR UPDATE` after the lock and `now` the DB
  * clock read after that, in the caller's transaction. It opens a market that is SCHEDULED, whose
  * scheduled open is set and at or before `now`, and whose close is after `now`, checked in that
- * order; otherwise it says why. A due attempt that reaches MM readiness also records its observed blocker. A null scheduled open never comes: every path
+ * order; otherwise it says why. A due attempt records its observed hold or MM readiness blocker.
+ * A null scheduled open never comes: every path
  * to SCHEDULED leaves one (the submission's open-items check, the reschedule), so a row without it
  * was written outside them and waits rather than opening with no time. A close that has come is
  * never opened (ADR-0099 결과 5 left that to #21): trading would end as it began.
@@ -128,9 +129,6 @@ export async function openScheduledMarket(
     return { opened: false, reason: 'not_due' };
   }
   if (market.closeAt.getTime() <= now.getTime()) return { opened: false, reason: 'close_passed' };
-  if ((await ledgerHeldMarketIds(tx, [market.id])).has(market.id))
-    return { opened: false, reason: 'ledger_hold' };
-
   const liquidity = await readMarketMakerConfig(tx, market.id);
   const skip = async (
     reason: OpenSkipReason,
@@ -146,6 +144,7 @@ export async function openScheduledMarket(
     });
     return { opened: false, reason };
   };
+  if ((await ledgerHeldMarketIds(tx, [market.id])).has(market.id)) return skip('ledger_hold');
   if (!liquidity) return skip('liquidity_missing');
   const stages = await readMarketMakerStageSettings(tx, registry);
   if (stages.kind !== 'ready')
