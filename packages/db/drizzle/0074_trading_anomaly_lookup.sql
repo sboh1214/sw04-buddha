@@ -1,0 +1,1 @@
+CREATE INDEX "fills_created_at_id_idx" ON "fills" USING btree ("created_at","id");
