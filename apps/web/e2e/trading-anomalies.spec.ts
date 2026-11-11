@@ -1,5 +1,6 @@
 import type { APIRequestContext, APIResponse } from '@playwright/test';
 import type { PlaceOrderResult, ReleaseSetting, TradingAnomalyReport } from '@buddha/shared';
+import { isReleaseSettingUnchanged } from '@buddha/shared';
 import { copy } from '../src/copy';
 import {
   accountIdOf,
@@ -60,7 +61,16 @@ test.describe('거래 패턴 검토 (#98)', () => {
     );
     expect(originals).toHaveLength(6);
     const expectedAccountId = await accountIdOf(admin);
-    const change = async (key: string, status: ReleaseSetting['status'], value: unknown) => {
+    const change = async (
+      key: string,
+      status: ReleaseSetting['status'],
+      value: ReleaseSetting['value'],
+    ) => {
+      const current = (await dataOf<ReleaseSetting[]>(await admin.get(SETTINGS))).find(
+        (row) => row.key === key,
+      );
+      expect(current, `Expected registered setting ${key}`).toBeDefined();
+      if (current && isReleaseSettingUnchanged(current, { status, value })) return;
       await dataOf(
         await admin.patch(`${SETTINGS}/${key}`, {
           data: {
@@ -206,9 +216,11 @@ test.describe('거래 패턴 검토 (#98)', () => {
       await expect(page).toHaveURL('/');
       expect(writes).toEqual([]);
     } finally {
-      for (const row of originals) await change(row.key, row.status, row.value);
-      await otherContext.close();
-      await operatorContext.close();
+      try {
+        for (const row of originals) await change(row.key, row.status, row.value);
+      } finally {
+        await Promise.all([otherContext.close(), operatorContext.close()]);
+      }
     }
   });
 });
