@@ -137,7 +137,20 @@ test.describe('금고 발행의 2인 승인 (#129)', () => {
       const other = await otherContext.newPage();
       await signIn(other, secondAdminAccount.email, secondAdminAccount.password);
       await other.goto('/admin/treasury');
+      // This fresh context has not loaded the all-status list; wait for hydrated controls and
+      // its first real response before testing that an approved row survives failed reads.
+      await expect(other.getByTestId('treasury-request-open')).toBeEnabled();
+      const allRequests = other.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return (
+          response.request().method() === 'GET' &&
+          url.pathname === `${ROOT}/issue-requests` &&
+          url.searchParams.get('status') === 'all'
+        );
+      });
       await other.getByTestId('treasury-request-filter').selectOption('all');
+      await expect(other.getByTestId('treasury-request-filter')).toHaveValue('all');
+      expect((await allRequests).ok()).toBe(true);
       const detailPath = `${ROOT}/issue-requests/${pending.id}`;
       const isDetail = (url: URL) => url.pathname === detailPath;
       await other.route(isDetail, (route) =>

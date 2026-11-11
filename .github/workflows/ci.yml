@@ -207,8 +207,10 @@ jobs:
   e2e:
     name: E2E Tests (${{ matrix.label }})
     runs-on: ubuntu-latest
-    # Covers the build, the chromium download, the seed and this shard's specs of both projects.
-    timeout-minutes: 30
+    # Includes the build, Chromium, seed and both projects. A 27.5-minute Playwright run
+    # reached the former 30-minute job limit after setup, so reserve 45 minutes for the job.
+    # Per-test timeouts, retries and failure handling remain unchanged.
+    timeout-minutes: 45
 
     # The specs are split across the shards by test (fullyParallel), mobile-375 and
     # desktop-1280 alike. Add a shard here to split them further.
