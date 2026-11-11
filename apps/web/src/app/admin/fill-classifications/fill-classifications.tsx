@@ -135,6 +135,7 @@ export function classificationWriteOptions(
     onSuccess: async (fresh, operator) => {
       if (client.getQueryData<{ id: string }>(['me'])?.id !== operator) return;
       if (!(await applyClassificationWrite(client, operator, fresh))) return;
+      if (client.getQueryData<{ id: string }>(['me'])?.id !== operator) return;
       toaster.create({ type: 'success', title: copy.classificationsSaved });
       close();
       void client.invalidateQueries({ queryKey: [...CLASSIFICATIONS_KEY, operator] });

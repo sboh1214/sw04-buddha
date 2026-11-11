@@ -1,10 +1,17 @@
 import { MutationObserver, QueryClient } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
+import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { CLASSIFICATIONS_KEY, classifiableFillKey } from '@/hooks/use-fill-classifications';
+import {
+  CLASSIFICATIONS_KEY,
+  classifiableFillKey,
+  classificationRequestKey,
+} from '@/hooks/use-fill-classifications';
 import { ApiError, isForAnotherAccount, type FillClassificationWrite } from '@/lib/api';
-import { classificationFill } from '@/test/fill-classifications';
+import { classificationFill, classifiedWrite } from '@/test/fill-classifications';
 import { classificationWriteOptions } from './fill-classifications';
+
+vi.mock('@/components/ui/toaster', () => ({ toaster: { create: vi.fn() } }));
 
 const errors = [
   ['FORBIDDEN', () => new ApiError(403, { code: 'FORBIDDEN', message: 'No current role' })],
@@ -29,9 +36,12 @@ function setup() {
   const by = 'old-admin';
   client.setQueryData(['me'], { id: by });
   let reject!: (reason: unknown) => void;
+  let resolve!: (value: FillClassificationWrite) => void;
+  vi.mocked(toaster.create).mockClear();
   const send = vi.fn(
     () =>
-      new Promise<FillClassificationWrite>((_resolve, fail) => {
+      new Promise<FillClassificationWrite>((done, fail) => {
+        resolve = done;
         reject = fail;
       }),
   );
@@ -72,6 +82,7 @@ function setup() {
     invalidate,
     start,
     fail: (error: unknown) => reject(error),
+    done: () => resolve(classifiedWrite),
     openFor: (operator: string) => {
       dialog = { operator, reason: '새 계정에서 입력 중인 사유' };
     },
@@ -152,6 +163,90 @@ describe('classification write failures belong to the submitting operator', () =
         expect(h.setRefusal).not.toHaveBeenCalled();
         expect(h.invalidate).not.toHaveBeenCalled();
       }
+    } finally {
+      h.client.clear();
+    }
+  });
+});
+
+describe('classification success callback belongs to the current operator after its helper returns', () => {
+  it.each(['new-admin', undefined])(
+    'preserves the new dialog when operator becomes %s between helper completion and callback resumption',
+    async (operator) => {
+      const h = setup();
+      const requestKey = classificationRequestKey(
+        h.by,
+        classifiedWrite.fill.id,
+        classifiedWrite.request.id,
+      );
+      const newFillKey = classifiableFillKey('new-admin', classifiedWrite.fill.id);
+      h.client.setQueryData(newFillKey, classificationFill);
+      let changed = false;
+      const unsubscribe = h.client.getQueryCache().subscribe((event) => {
+        if (
+          event.type !== 'updated' ||
+          event.action.type !== 'success' ||
+          JSON.stringify(event.query.queryKey) !== JSON.stringify(requestKey)
+        )
+          return;
+        // The helper writes the committed response for its still-current operator. A queued
+        // session completion then runs before the caller resumes after awaiting the helper.
+        queueMicrotask(() => {
+          changed = true;
+          if (operator) {
+            h.client.setQueryData(['me'], { id: operator });
+            h.openFor(operator);
+          } else h.client.removeQueries({ queryKey: ['me'], exact: true });
+        });
+      });
+      try {
+        const { settled } = await h.start();
+        h.done();
+        await settled;
+        expect(changed).toBe(true);
+        expect(h.client.getQueryData<{ id: string }>(['me'])?.id).toBe(operator);
+        expect(h.client.getQueryData(requestKey)).toEqual(classifiedWrite);
+        expect(h.client.getQueryData(newFillKey)).toEqual(classificationFill);
+        expect(h.dialog()).toEqual(
+          operator
+            ? { operator, reason: '새 계정에서 입력 중인 사유' }
+            : { operator: h.by, reason: 'Original request' },
+        );
+        expect(h.close).not.toHaveBeenCalled();
+        expect(toaster.create).not.toHaveBeenCalled();
+        expect(h.invalidate).not.toHaveBeenCalled();
+      } finally {
+        unsubscribe();
+        h.client.clear();
+      }
+    },
+  );
+
+  it('keeps the committed write and closes the current operator draft even when the later GET fails', async () => {
+    const h = setup();
+    const requestKey = classificationRequestKey(
+      h.by,
+      classifiedWrite.fill.id,
+      classifiedWrite.request.id,
+    );
+    try {
+      const { settled } = await h.start();
+      h.done();
+      await settled;
+      expect(h.client.getQueryData(requestKey)).toEqual(classifiedWrite);
+      expect(h.close).toHaveBeenCalledTimes(1);
+      expect(toaster.create).toHaveBeenCalledTimes(1);
+      expect(h.invalidate).toHaveBeenCalledExactlyOnceWith({
+        queryKey: [...CLASSIFICATIONS_KEY, h.by],
+      });
+      await expect(
+        h.client.fetchQuery({
+          queryKey: requestKey,
+          retry: false,
+          queryFn: () => Promise.reject(new Error('503')),
+        }),
+      ).rejects.toThrow('503');
+      expect(h.client.getQueryData(requestKey)).toEqual(classifiedWrite);
     } finally {
       h.client.clear();
     }
