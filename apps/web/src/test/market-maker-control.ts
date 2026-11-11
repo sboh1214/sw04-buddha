@@ -1,0 +1,51 @@
+import type { MarketMakerControlRequest } from '@/lib/api';
+import { marketMaker } from './market-maker';
+export const makerControlRequest: MarketMakerControlRequest = {
+  id: '00000000-0000-4000-8000-000000000010',
+  marketId: marketMaker.marketId,
+  payload: {
+    baseVersion: 1,
+    baseControlGeneration: '1',
+    beforeDesiredEnabled: true,
+    beforeConfig: {
+      budgetCoin: '1000',
+      maxLossCoin: '500',
+      b: 100,
+      levels: 3,
+      quantity: 10,
+      safetyTicks: 1,
+    },
+    change: { action: 'stop' },
+    demandSnapshot: null,
+  },
+  requestedBy: { id: 'admin-a', nickname: '요청 관리자' },
+  reason: '비공개 운영 사유',
+  requestedAt: '2026-11-11T00:00:00.000Z',
+  status: 'pending',
+  decidedBy: null,
+  decisionReason: null,
+  decidedAt: null,
+  retractedAt: null,
+  execution: null,
+};
+export const makerControlApproved: MarketMakerControlRequest = {
+  ...makerControlRequest,
+  status: 'approved',
+  decidedBy: { id: 'admin-b', nickname: '승인 관리자' },
+  decisionReason: '독립 검토 완료',
+  decidedAt: '2026-11-11T00:01:00.000Z',
+  execution: {
+    approvalId: makerControlRequest.id,
+    marketId: marketMaker.marketId,
+    action: 'stop',
+    beforeVersion: 1,
+    afterVersion: 1,
+    beforeControlGeneration: '1',
+    afterControlGeneration: '2',
+    beforeDesiredEnabled: true,
+    afterDesiredEnabled: false,
+    additionalCoin: null,
+    ledgerEntryId: null,
+    performedAt: '2026-11-11T00:01:00.000Z',
+  },
+};

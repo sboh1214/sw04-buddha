@@ -12,6 +12,75 @@
 const WATCHLIST_HOW_TO_ADD = '시장 상세에서 관심 등록을 누르면 여기에 모입니다.';
 
 export const copy = {
+  makerControlsBefore: '요청 당시 설정',
+  makerControlsBudget: '예산 A (Coin)',
+  makerControlsCurve: '곡선 b',
+  makerControlsTitle: '마켓메이커 운영 요청',
+  makerControlsHelp:
+    '다른 현직 관리자의 승인이 있어야 실행됩니다. 시장 거래는 그대로 유지되며 마켓메이커만 제어합니다.',
+  makerControlsStop: '봇 정지',
+  makerControlsResume: '봇 재개',
+  makerControlsSettings: '설정 변경',
+  makerControlsIncrease: '예산 증액',
+  makerControlsRequest: '요청 등록',
+  makerControlsApprove: '승인·실행',
+  makerControlsReject: '반려',
+  makerControlsRetract: '철회',
+  makerControlsPending: '대기 중',
+  makerControlsAll: '전체 요청',
+  makerControlsHistory: '실행 이력',
+  makerControlsEmpty: '해당 운영 요청이 없습니다.',
+  makerControlsHistoryEmpty: '실행된 운영 요청이 없습니다.',
+  makerControlsReason: '요청 사유',
+  makerControlsDecisionReason: '결정 사유',
+  makerControlsReadFailed: '운영 요청을 불러오지 못했습니다. 다시 조회한 뒤 진행해 주세요.',
+  makerControlsUnavailable: '개장 배정과 현재 설정이 있어야 운영 요청을 등록할 수 있습니다.',
+  makerControlsChanged:
+    '설정 또는 운영 상태가 바뀌었습니다. 새 상태를 확인하고 요청을 다시 등록해 주세요.',
+  makerControlsNotFound: '운영 요청을 찾을 수 없습니다.',
+  makerControlsSaved: '운영 요청을 저장했습니다.',
+  makerControlsFixed:
+    '요청할 때의 설정과 운영 상태가 고정됩니다. 승인할 때 현재 상태와 다시 대조합니다.',
+  makerControlsEffectStop:
+    '봇의 미체결 주문을 취소하고 자동 게시를 정지합니다. 회원 주문·보유·지급은 바꾸지 않습니다.',
+  makerControlsEffectResume:
+    '자동 게시를 다시 요청합니다. 실제 게시 여부와 실패 관측은 실행 상태에서 확인하세요.',
+  makerControlsEffectSettings:
+    '손실 한도와 호가 설정만 새 버전으로 저장합니다. 최초 곡선과 기준 가격은 바꾸지 않습니다.',
+  makerControlsEffectIncrease:
+    '입력한 추가 Coin만 금고에서 시장 봇 자금으로 옮깁니다. 금고가 부족하면 승인되지 않고 요청은 대기합니다.',
+  makerControlsMaxLoss: '최대 손실 한도 L (Coin)',
+  makerControlsLevels: '호가 단계 수',
+  makerControlsQuantity: '단계별 수량',
+  makerControlsSafety: '안전 틱',
+  makerControlsAdditional: '추가 예산 (Coin)',
+  makerControlsFrom: '근거 기간 시작 (KST)',
+  makerControlsTo: '근거 기간 종료 (KST, 미포함)',
+  makerControlsIndependent: '독립적인 사람 참여 근거',
+  makerControlsBidirectional: '양방향 거래 근거',
+  makerControlsDemand: '실제 수요 근거',
+  makerControlsEvidence: '요청 당시 서버 집계',
+  makerControlsEvidenceHelp:
+    '고정한 기간의 집계입니다. 숫자만으로 승인 여부를 자동 결정하지 않습니다.',
+  makerControlsHumanAccounts: '참여 계정 수',
+  makerControlsHumanFills: '사람 참여 체결 수',
+  makerControlsBuy: '사람 매수 수량 / Coin',
+  makerControlsSell: '사람 매도 수량 / Coin',
+  makerControlsVersion: '설정 버전',
+  makerControlsGeneration: '운영 세대',
+  makerControlsRequester: '요청한 관리자',
+  makerControlsCompleted: '실행 완료',
+  makerControlsTreasuryWait:
+    '금고 잔액이 부족합니다. 요청은 대기하며 실제 금고 충당 뒤 같은 요청을 승인할 수 있습니다.',
+  makerControlsHeld: '원장이 보류 중입니다. 대사·복구를 마친 뒤 다시 진행해 주세요.',
+  makerControlsInvalid:
+    '요청 상태나 자산·설정이 현재 실행 조건에 맞지 않습니다. 최신 내용을 확인해 주세요.',
+  makerControlsRequesterGone:
+    '요청한 계정이 현재 관리자가 아닙니다. 이 요청은 반려한 뒤 새로 등록해 주세요.',
+  makerControlsApproved: '승인됨',
+  makerControlsRejected: '반려됨',
+  makerControlsRetracted: '철회됨',
+
   appName: 'buddha',
   appDescription: '가상 Coin으로 YES/NO 계약을 호가창에서 거래하는 예측시장',
   tradeCta: '거래하기',

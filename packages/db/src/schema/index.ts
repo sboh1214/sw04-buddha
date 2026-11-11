@@ -68,4 +68,6 @@ export * from './market-liquidity-versions.js';
 export * from './market-maker-runtime.js';
 export * from './market-maker-recalls.js';
 export * from './market-maker-recall-attempts.js';
+
+export * from './market-maker-controls.js';
 export * from './market-maker-supply.js';

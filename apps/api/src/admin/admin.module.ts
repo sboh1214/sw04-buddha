@@ -1,3 +1,9 @@
+import { JobsModule } from '../jobs/jobs.module.js';
+import {
+  MarketMakerControlController,
+  AllMarketMakerControlsController,
+} from './market-maker-control.controller.js';
+import { MarketMakerControlService } from './market-maker-control.service.js';
 import { ReleaseSettingsModule } from '../release-settings/release-settings.module.js';
 import { AdminMarketMakerController } from './market-maker.controller.js';
 import { AdminMarketMakerService } from './market-maker.service.js';
@@ -28,6 +34,7 @@ import { ReconciliationCorrectionService } from './reconciliation-corrections.se
  */
 @Module({
   imports: [
+    JobsModule,
     DbModule,
     RedisModule,
     AuthModule,
@@ -38,6 +45,8 @@ import { ReconciliationCorrectionService } from './reconciliation-corrections.se
     ReleaseSettingsModule,
   ],
   controllers: [
+    MarketMakerControlController,
+    AllMarketMakerControlsController,
     AdminController,
     ReconciliationController,
     ReconciliationCorrectionsController,
@@ -46,6 +55,7 @@ import { ReconciliationCorrectionService } from './reconciliation-corrections.se
     AdminMarketMakerMetricsController,
   ],
   providers: [
+    MarketMakerControlService,
     AdminService,
     PaymentRefundService,
     ReconciliationService,

@@ -46,6 +46,13 @@ import { discoverRoutes, isAdminPath } from '../test/routes.js';
  * call site.
  */
 const AUDITED: Readonly<Record<string, AdminActionType>> = {
+  'POST /admin/markets/:marketId/market-maker/control-requests': 'market_maker_control_request',
+  'POST /admin/markets/:marketId/market-maker/control-requests/:requestId/approve':
+    'market_maker_control_approve',
+  'POST /admin/markets/:marketId/market-maker/control-requests/:requestId/reject':
+    'market_maker_control_reject',
+  'POST /admin/markets/:marketId/market-maker/control-requests/:requestId/retract':
+    'market_maker_control_retract',
   'POST /admin/treasury/issue-requests': 'treasury_issue_request',
   'POST /admin/treasury/issue-requests/:id/approve': 'treasury_issue_approve',
   'POST /admin/treasury/issue-requests/:id/reject': 'treasury_issue_reject',

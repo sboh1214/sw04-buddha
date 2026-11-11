@@ -263,3 +263,5 @@ export * from './market-maker-burn.js';
 export * from './market-maker-settings.js';
 export * from './market-maker-recall-attempts.js';
 export * from './market-maker-metrics.js';
+
+export * from './market-maker-control.js';

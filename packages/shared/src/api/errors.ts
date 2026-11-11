@@ -237,6 +237,7 @@ export const ERROR_CODES = [
    * market or asset or quote reason, is no error: it is answered with its order row.
    */
   'ORDER_INTAKE_CLOSED',
+  'MARKET_MAKER_CONTROL_NOT_ALLOWED',
   'INTERNAL',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

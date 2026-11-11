@@ -537,6 +537,10 @@ export const settlementStepStatusSchema = z
 
 // ---- admin / audit (varchar columns, PLAN 6.2) --------------------------------------
 export const ADMIN_ACTION_TYPES = [
+  'market_maker_control_request',
+  'market_maker_control_approve',
+  'market_maker_control_reject',
+  'market_maker_control_retract',
   'treasury_issue_request',
   'treasury_issue_approve',
   'treasury_issue_reject',

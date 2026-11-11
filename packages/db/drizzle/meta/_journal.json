@@ -512,6 +512,14 @@
       "when": 1794391861843,
       "tag": "0072_market_maker_supply_observations",
       "breakpoints": true
+
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1794392225459,
+      "tag": "0073_market_maker_controls",
+      "breakpoints": true
     }
   ]
 }
