@@ -16,7 +16,13 @@ import {
   RELEASE_SETTING_STATUS_LABELS,
   formatCoin,
 } from '@buddha/shared';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  type MutationOptions,
+  type QueryClient,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { useState } from 'react';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
@@ -184,7 +190,7 @@ export function LiquidityPanelBody({
   );
 }
 
-interface LiquidityWrite {
+export interface LiquidityWrite {
   settings: MarketLiquiditySettings;
   baseVersion: number | null;
   reason: string;
@@ -208,6 +214,58 @@ export function LiquidityDefaultNotice({ sources }: Pick<LiquidityInitialForm, '
       })}
     </Stack>
   );
+}
+
+type LiquidityFieldError = { field: LiquidityField | 'reason'; message: string };
+
+/** The dialog's actual callbacks, also exercised through a real MutationObserver. */
+export function liquidityWriteOptions({
+  client,
+  marketId,
+  send,
+  apply,
+  close,
+  sessionChanged,
+  setFieldError,
+  setRefusal,
+}: {
+  client: QueryClient;
+  marketId: string;
+  send: (input: LiquidityWrite) => Promise<AdminMarket>;
+  apply: (fresh: AdminMarket) => Promise<unknown>;
+  close: () => void;
+  sessionChanged: (error: unknown) => boolean;
+  setFieldError: (error: LiquidityFieldError | null) => void;
+  setRefusal: (message: string | null) => void;
+}): MutationOptions<AdminMarket, unknown, LiquidityWrite> {
+  return {
+    mutationFn: send,
+    onMutate: () => {
+      setFieldError(null);
+      setRefusal(null);
+    },
+    onSuccess: async (fresh, { by }) => {
+      if (client.getQueryData<{ id: string }>(['me'])?.id !== by) return;
+      await apply(fresh);
+      // Refetches can outlive this operator's dialog; they must not close a newer one.
+      if (client.getQueryData<{ id: string }>(['me'])?.id !== by) return;
+      toaster.create({ type: 'success', title: copy.marketLiquiditySaved });
+      close();
+    },
+    onError: (error, { by }) => {
+      if (client.getQueryData<{ id: string }>(['me'])?.id !== by) return;
+      sessionChanged(error);
+      const failure = liquidityFailure(error);
+      if (failure.kind === 'toast') {
+        toaster.create({ type: 'error', title: failure.message });
+        close();
+        return;
+      }
+      if (failure.kind === 'field') setFieldError(failure);
+      else setRefusal(failure.message);
+      if (failure.refresh) void client.invalidateQueries({ queryKey: adminMarketKey(marketId) });
+    },
+  };
 }
 
 /** The request names the original version; a later refetch never retargets the draft. */
@@ -250,37 +308,24 @@ export function LiquidityDialog({
     baseVersion,
   );
   const draft = liquidityDraft(text, reason, base);
-  const mutation = useMutation({
-    mutationFn: async ({ settings, baseVersion, reason, by }: LiquidityWrite) =>
-      unwrap(
-        await api.POST('/api/v1/admin/markets/{id}/liquidity-settings', {
-          params: { path: { id: market.id } },
-          body: { settings, baseVersion, reason, expectedAccountId: by },
-        }),
-      ).data,
-    onMutate: () => {
-      setFieldError(null);
-      setRefusal(null);
-    },
-    onSuccess: async (fresh) => {
-      toaster.create({ type: 'success', title: copy.marketLiquiditySaved });
-      onClose();
-      await apply(fresh);
-    },
-    onError: (error) => {
-      sessionChanged(error);
-      const failure = liquidityFailure(error);
-      if (failure.kind === 'toast') {
-        toaster.create({ type: 'error', title: failure.message });
-        onClose();
-        return;
-      }
-      if (failure.kind === 'field') setFieldError(failure);
-      else setRefusal(failure.message);
-      if (failure.refresh)
-        void queryClient.invalidateQueries({ queryKey: adminMarketKey(market.id) });
-    },
-  });
+  const mutation = useMutation(
+    liquidityWriteOptions({
+      client: queryClient,
+      marketId: market.id,
+      send: async ({ settings, baseVersion, reason, by }) =>
+        unwrap(
+          await api.POST('/api/v1/admin/markets/{id}/liquidity-settings', {
+            params: { path: { id: market.id } },
+            body: { settings, baseVersion, reason, expectedAccountId: by },
+          }),
+        ).data,
+      apply,
+      close: onClose,
+      sessionChanged,
+      setFieldError,
+      setRefusal,
+    }),
+  );
   return (
     <ReviewDialogShell
       testId="market-liquidity-dialog"
