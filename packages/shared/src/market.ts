@@ -324,7 +324,8 @@ export const marketListStatusSchema = z.enum(MARKET_LIST_STATUSES);
  *
  * - `recommended` (추천, the default): the volume of the last `RECOMMENDED_VOLUME_HOURS` hours,
  *   largest first, ties by the actual open time, latest first. Counted by a rule, never picked by
- *   an operator; every fill counts until #132 excludes abnormal ones.
+ *   an operator; approved abnormal fills are excluded (#132, ADR-0131).
+ * - `volume` (거래량 순): cumulative normal-fill volume, largest first (#132, ADR-0131).
  * - `newest` (신규): the actual open time (`open_at`), latest first.
  * - `closing` (마감 임박): the close time, soonest first, with no window. On a list that can hold
  *   ended markets (`status=all` or an ended status; MY's 관심 시장), the markets not closed yet
@@ -336,8 +337,8 @@ export const marketListStatusSchema = z.enum(MARKET_LIST_STATUSES);
  * there is, so where it lands depends on the order: in `newest` after every market that has one;
  * in `recommended`, where the open time only breaks ties, after the opened markets of its own
  * 24-hour volume and nowhere else (a traded one stays ahead of an untraded one); `closing` does
- * not read the open time. The volume order is gone until #132 brings it back with its exclusions,
- * so no query names it.
+ * not read the open time. The volume order is restored by #132 and excludes approved abnormal
+ * fills without changing the raw volume shown on a market.
  */
 export const MARKET_SORTS = ['recommended', 'volume', 'newest', 'closing'] as const;
 export type MarketSort = (typeof MARKET_SORTS)[number];

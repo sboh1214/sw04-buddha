@@ -123,15 +123,15 @@ const { category: categoryParam } = marketListQuerySchema.shape;
  *
  * Nothing here throws and nothing redirects (the way D23 treats an old address): a value the
  * screen cannot show is dropped and the default stands. A bookmarked `?status=` is ignored — there
- * is no status filter on the home any more — and so is `?sort=volume`, which no list orders by
- * until #132 (ADR-0061 decision 1, item 11): both land on the open markets by 추천. So is `?q=`:
+ * is no status filter on the home any more. `?sort=volume` is supported again (#132, ADR-0131);
+ * an unknown sort falls back to 추천. `?q=` is ignored too:
  * the search is its own screen (`/search`, ADR-0066), and an old `/?q=rain` link is the home, not
  * a redirect to the search. A blank or over-long `category` is dropped instead of being sent — the
  * API's schema refuses it, and an omitted field hashes identically to one set to `undefined`
  * (`hashKey` stringifies, and `JSON.stringify` drops undefined values).
  *
  * `?watchlist=1` is the 관심 시장 view (`WatchlistViewFilters`, ADR-0065); any other value is
- * not. Its sorts are the watchlist's — 최근 관심 등록 순 by default, or one of the public three.
+ * not. Its sorts are the watchlist's — 최근 관심 등록 순 by default, or one of the public four.
  * `?sort=watched` outside the view is unknown and falls back to 추천.
  */
 export function filtersFromSearchParams(searchParams: MarketSearchParams): HomeFilters {

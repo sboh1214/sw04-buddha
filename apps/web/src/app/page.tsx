@@ -65,7 +65,8 @@ export const metadata: Metadata = { title: `${copy.homeTitle} | ${copy.appName}`
  * and read by the browser after the session is known.
  *
  * The home has no status filter (ADR-0061 decision 1, item 13): every list here is of open
- * markets, and a bookmarked `?status=` or `?sort=volume` is normalised away, not redirected.
+ * markets, and a bookmarked `?status=` is normalised away, not redirected. `?sort=volume`
+ * remains a supported order (#132, ADR-0131); unknown sorts fall back to 추천.
  *
  * The theme row (#81, ADR-0069 decision 4, '탐색 홈 노출'; ADR-0088) heads the main column on 전체
  * (`showsHomeThemes`): the ongoing themes, else the upcoming ones, with 모든 테마 whenever a theme

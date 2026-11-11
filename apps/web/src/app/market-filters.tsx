@@ -54,7 +54,7 @@ import { SubcategoryChips } from './subcategory-sidebar';
 
 /**
  * The orders' names (ADR-0061 decision 1, items 9–11; decision 3, the #63 row). The search
- * screen's select names its three the same way (item 14: the home's orders).
+ * screen's select names its four the same way (item 14: the home's orders; #132, ADR-0131).
  */
 export const SORT_LABEL: Record<WatchlistSort, string> = {
   recommended: copy.sortRecommended,

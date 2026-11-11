@@ -55,10 +55,10 @@ export function homePath(filters: HomeFilters): string {
 }
 
 /**
- * The sort select's options, in order: 추천 · 신규 · 마감 임박 on the public list (ADR-0061
- * decision 1, items 9–11), and in the 관심 시장 view, the one view that has it, 최근 관심 등록 순
- * after them — last (owner decision 2026-10-16, ADR-0065: "맨 뒤"), although it is the order the
- * view starts on (decision 3, the #63 row). The three public orders keep their places in both.
+ * The sort select's options, in order: 추천 · 거래량 순 · 신규 · 마감 임박 on the public list
+ * (ADR-0061 decision 1, items 9–11; #132, ADR-0131 restores volume). In the 관심 시장 view,
+ * 최근 관심 등록 순 comes last (owner decision 2026-10-16, ADR-0065: "맨 뒤"), although it is
+ * the view's initial order (decision 3, the #63 row). The four public orders keep their places.
  */
 export function sortOptions(filters: HomeFilters): readonly WatchlistSort[] {
   return isWatchlistView(filters) ? [...MARKET_SORTS, DEFAULT_WATCHLIST_VIEW_SORT] : MARKET_SORTS;
