@@ -23,6 +23,8 @@ const page = (items: TreasuryIssueRequest[]): Pages => ({
 describe('committed treasury cache', () => {
   it('keeps a committed issuance after a late pending write response and a failed follow-up read', async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    client.setQueryData(['me'], { id: 'admin-a' });
     try {
       client.setQueryData(treasuryBalanceKey, {
         ...treasury,
@@ -32,8 +34,8 @@ describe('committed treasury cache', () => {
       });
       client.setQueryData(pendingKey, page([treasuryRequest]));
       client.setQueryData(allKey, page([treasuryRequest]));
-      await applyTreasuryWrite(client, { treasury, request: treasuryApproved });
-      await applyTreasuryWrite(client, {
+      await applyTreasuryWrite(client, 'admin-a', { treasury, request: treasuryApproved });
+      await applyTreasuryWrite(client, 'admin-a', {
         treasury: { ...treasury, availableCoin: '0', ledgerCoin: '0', issuedCoin: '200' },
         request: treasuryRequest,
       });
@@ -76,6 +78,8 @@ describe('committed treasury cache', () => {
     'keeps the completed GET after $name when an older same-issuance POST arrives',
     async ({ before, after }) => {
       const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+      client.setQueryData(['me'], { id: 'admin-a' });
       try {
         // The POST took its snapshot before this independent operation. Its network response
         // arrives only after the GET has already stored the later balance in this client.
@@ -83,7 +87,10 @@ describe('committed treasury cache', () => {
           queryKey: treasuryBalanceKey,
           queryFn: () => Promise.resolve(after),
         });
-        await applyTreasuryWrite(client, { treasury: before, request: treasuryApproved });
+        await applyTreasuryWrite(client, 'admin-a', {
+          treasury: before,
+          request: treasuryApproved,
+        });
         expect(client.getQueryData(treasuryBalanceKey)).toEqual(after);
         expect(client.getQueryData(treasuryRequestKey(treasuryRequest.id))).toEqual(
           treasuryApproved,
@@ -105,6 +112,8 @@ describe('committed treasury cache', () => {
   );
   it('preserves terminal facts known by a loaded later page without inserting an unloaded older request ahead of the cursor', async () => {
     const client = new QueryClient();
+
+    client.setQueryData(['me'], { id: 'admin-a' });
     try {
       const newer = { ...treasuryApproved, id: 'newer', requestedAt: '2026-11-10T02:00:00.000Z' };
       const pages: Pages = {
@@ -115,9 +124,9 @@ describe('committed treasury cache', () => {
         pageParams: [undefined, 'next'],
       };
       client.setQueryData(allKey, pages);
-      await applyTreasuryWrite(client, { treasury, request: treasuryRequest });
+      await applyTreasuryWrite(client, 'admin-a', { treasury, request: treasuryRequest });
       expect(client.getQueryData(treasuryRequestKey(treasuryRequest.id))).toEqual(treasuryApproved);
-      await applyTreasuryWrite(client, {
+      await applyTreasuryWrite(client, 'admin-a', {
         treasury,
         request: { ...treasuryRequest, id: 'older', requestedAt: '2026-11-09T01:00:00.000Z' },
       });
@@ -128,6 +137,8 @@ describe('committed treasury cache', () => {
   });
   it('cancels an in-flight stale balance response before applying the approval snapshot', async () => {
     const client = new QueryClient();
+
+    client.setQueryData(['me'], { id: 'admin-a' });
     let resolve: ((value: AdminTreasury) => void) | undefined;
     try {
       const pending = client
@@ -139,7 +150,7 @@ describe('committed treasury cache', () => {
             }),
         })
         .catch(() => undefined);
-      await applyTreasuryWrite(client, { treasury, request: treasuryApproved });
+      await applyTreasuryWrite(client, 'admin-a', { treasury, request: treasuryApproved });
       resolve?.({ ...treasury, issuedCoin: '0', availableCoin: '0', ledgerCoin: '0' });
       await pending;
       expect(client.getQueryData(treasuryBalanceKey)).toEqual(treasury);

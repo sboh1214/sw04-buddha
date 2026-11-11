@@ -2,7 +2,12 @@
 
 import { Alert, Button, Field, Input, Skeleton, Stack, Text } from '@chakra-ui/react';
 import { COIN_AMOUNT_INPUT_MAX_LENGTH, formatCoin } from '@buddha/shared';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import {
+  type MutationOptions,
+  type QueryClient,
+  useMutation,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { useState } from 'react';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
@@ -44,24 +49,27 @@ export function TreasuryRequestFacts({ request }: { request: TreasuryIssueReques
   );
 }
 
-function useTreasuryWrite(
+export function treasuryWriteOptions(
+  client: QueryClient,
   send: (by: string) => Promise<TreasuryIssueWrite>,
   onClose: () => void,
   success: string,
-) {
-  const client = useQueryClient();
-  const sessionChanged = useSessionChanged();
-  const [refusal, setRefusal] = useState<string | null>(null);
-  const mutation = useMutation({
+  sessionChanged: (error: unknown) => boolean,
+  setRefusal: (message: string | null) => void,
+): MutationOptions<TreasuryIssueWrite, unknown, string> {
+  return {
     mutationFn: send,
     onMutate: () => setRefusal(null),
-    onSuccess: async (fresh) => {
-      await applyTreasuryWrite(client, fresh);
+    onSuccess: async (fresh, by) => {
+      if (client.getQueryData<{ id: string }>(['me'])?.id !== by) return;
+      if (!(await applyTreasuryWrite(client, by, fresh))) return;
+      if (client.getQueryData<{ id: string }>(['me'])?.id !== by) return;
       toaster.create({ type: 'success', title: success });
       onClose();
       void client.invalidateQueries({ queryKey: ADMIN_TREASURY_KEY });
     },
-    onError: (error) => {
+    onError: (error, by) => {
+      if (client.getQueryData<{ id: string }>(['me'])?.id !== by) return;
       sessionChanged(error);
       const failure = treasuryFailure(error);
       if (failure.close) {
@@ -70,7 +78,20 @@ function useTreasuryWrite(
       } else setRefusal(failure.message);
       void client.invalidateQueries({ queryKey: ADMIN_TREASURY_KEY });
     },
-  });
+  };
+}
+
+function useTreasuryWrite(
+  send: (by: string) => Promise<TreasuryIssueWrite>,
+  onClose: () => void,
+  success: string,
+) {
+  const client = useQueryClient();
+  const sessionChanged = useSessionChanged();
+  const [refusal, setRefusal] = useState<string | null>(null);
+  const mutation = useMutation(
+    treasuryWriteOptions(client, send, onClose, success, sessionChanged, setRefusal),
+  );
   return { mutation, refusal };
 }
 

@@ -27,8 +27,14 @@ function latestRequest(old: TreasuryIssueRequest | undefined, fresh: TreasuryIss
   return old && old.status !== 'pending' && fresh.status === 'pending' ? old : fresh;
 }
 
-export async function applyTreasuryWrite(client: QueryClient, fresh: TreasuryIssueWrite) {
+export async function applyTreasuryWrite(
+  client: QueryClient,
+  operator: string,
+  fresh: TreasuryIssueWrite,
+) {
+  if (client.getQueryData<{ id: string }>(['me'])?.id !== operator) return false;
   await client.cancelQueries({ queryKey: ADMIN_TREASURY_KEY });
+  if (client.getQueryData<{ id: string }>(['me'])?.id !== operator) return false;
   const oldBalance = client.getQueryData<AdminTreasury>(treasuryBalanceKey);
   // Only a larger cumulative issuance proves that this snapshot is newer. Allocation,
   // recall and actual-balance restoration can change balances without changing issuance;
@@ -72,6 +78,7 @@ export async function applyTreasuryWrite(client: QueryClient, fresh: TreasuryIss
       return { ...old, pages };
     });
   }
+  return true;
 }
 
 export function useTreasury() {

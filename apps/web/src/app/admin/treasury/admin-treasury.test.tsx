@@ -22,7 +22,7 @@ describe('treasury facts and request controls', () => {
         queryKey: treasuryBalanceKey,
         queryFn: () => Promise.resolve(allocated),
       });
-      await applyTreasuryWrite(client, { treasury, request: treasuryApproved });
+      await applyTreasuryWrite(client, 'admin-b', { treasury, request: treasuryApproved });
       const failure = new ApiError(503, { code: 'INTERNAL', message: 'unavailable' });
       await expect(
         client.fetchQuery({
