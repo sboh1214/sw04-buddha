@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { readMarketMakerRuntime, runMarketMakerCycle, schema } from '@buddha/db';
+import {
+  readMarketMakerRuntime,
+  requestMarketMakerRefresh,
+  runMarketMakerCycle,
+  runMarketReconciliation,
+  schema,
+  type MarketMakerCycleResult,
+} from '@buddha/db';
 import {
   completeOnboarding,
   createOpenedMarket,
@@ -7,7 +14,9 @@ import {
   createUser,
   openOrderIntake,
 } from '@buddha/db/test';
-import { placeOrderResultSchema } from '@buddha/shared';
+import { placeOrderResultSchema, type MarketMakerJobData } from '@buddha/shared';
+import { Queue, Worker } from 'bullmq';
+import { Redis } from 'ioredis';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MarketJobs } from '../jobs/market-jobs.service.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
@@ -114,5 +123,104 @@ describe.skipIf(!hasTestInfra)('member fill maker trigger (#129)', () => {
     expect(enqueue).not.toHaveBeenCalled();
     expect(publishMarket).not.toHaveBeenCalled();
     expect(publishUser).not.toHaveBeenCalled();
+  });
+
+  it('keeps an actual HTTP fill refresh when an active queue job already captured no next generation', async () => {
+    const connection = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: null });
+    const queue = new Queue<MarketMakerJobData>('maker', { connection });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const cycles: Array<{ hint: string; result: MarketMakerCycleResult }> = [];
+    // Use the real DB cycle in a real BullMQ worker without importing another app's source.
+    // The barrier is after COMMIT/captured nextGeneration, before BullMQ marks it completed.
+    // No scan or scheduler is installed. The production worker's retry/stop path has its own
+    // processor-level regression; this boundary exercises the actual HTTP/API producer.
+    let worker: Worker<MarketMakerJobData> | undefined;
+    try {
+      await queue.obliterate({ force: true });
+      const jobs = t.app.get(MarketJobs);
+      const initial = await t.db.transaction((tx) => requestMarketMakerRefresh(tx, marketId));
+      expect(initial?.generation).toBe(2n);
+      worker = new Worker<MarketMakerJobData>(
+        'maker',
+        async (job) => {
+          const result = await t.db.transaction((tx) =>
+            runMarketMakerCycle(tx, { marketId: job.data.marketId }),
+          );
+          cycles.push({ hint: job.data.generation, result });
+          if (cycles.length === 1) await held;
+        },
+        { connection, concurrency: 1 },
+      );
+      await worker.waitUntilReady();
+      await jobs.refreshMarketMaker(marketId, 2n);
+      await vi.waitFor(() => expect(cycles).toHaveLength(1));
+      expect(cycles[0]!.result).toMatchObject({
+        outcome: 'ready',
+        generation: 2n,
+        nextGeneration: null,
+      });
+      expect(await queue.getActiveCount()).toBe(1);
+      const requestId = randomUUID();
+      const filled = await send(requestId);
+      expect(filled.statusCode, filled.body).toBe(200);
+      expect(filled.json<{ data: unknown }>().data).toMatchObject({
+        replayed: false,
+        order: { filledQty: 1 },
+      });
+      expect(await readMarketMakerRuntime(t.db, marketId)).toMatchObject({
+        generation: 3n,
+        completedGeneration: 2n,
+      });
+      expect((await send(requestId)).json<{ data: { replayed: boolean } }>().data.replayed).toBe(
+        true,
+      );
+      await jobs.refreshMarketMaker(marketId, 3n);
+      await jobs.refreshMarketMaker(marketId, 3n);
+      expect(await queue.getJobCountByTypes('active', 'waiting', 'delayed')).toBe(1);
+      release();
+      await vi.waitFor(
+        async () =>
+          expect(await readMarketMakerRuntime(t.db, marketId)).toMatchObject({
+            generation: 3n,
+            completedGeneration: 3n,
+          }),
+        { timeout: 5_000 },
+      );
+      await vi.waitFor(async () =>
+        expect(await queue.getJobCountByTypes('active', 'waiting', 'delayed')).toBe(0),
+      );
+      expect(cycles.map((cycle) => cycle.hint)).toEqual(['2', '3']);
+      expect(cycles[1]!.result).toMatchObject({ outcome: 'ready', nextGeneration: null });
+      expect(await t.db.select().from(schema.fills)).toHaveLength(1);
+      expect(
+        (
+          await t.db.transaction((tx) =>
+            runMarketReconciliation(tx, marketId, { source: 'manual' }),
+          )
+        ).result.passed,
+      ).toBe(true);
+      await jobs.refreshMarketMaker(marketId, 3n);
+      await vi.waitFor(() => expect(cycles).toHaveLength(3));
+      expect(cycles[2]!.result).toMatchObject({
+        outcome: 'skipped',
+        reason: 'already_completed',
+      });
+      expect(await t.db.select().from(schema.fills)).toHaveLength(1);
+    } finally {
+      release();
+      try {
+        await worker?.close();
+        await queue.obliterate({ force: true });
+      } finally {
+        try {
+          await queue.close();
+        } finally {
+          await connection.quit();
+        }
+      }
+    }
   });
 });

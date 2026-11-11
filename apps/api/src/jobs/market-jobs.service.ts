@@ -210,7 +210,13 @@ export class MarketJobs implements OnApplicationShutdown {
         this.makerQueue.add(
           JOB_NAMES.marketMakerRefresh,
           { marketId, generation: generation.toString() },
-          { jobId, deduplication: { id: marketId }, removeOnComplete: true },
+          {
+            jobId,
+            // A member fill can commit after an active cycle captured no next generation.
+            // Retain one follow-up, matching the worker producer's deduplication lifecycle.
+            deduplication: { id: marketId, keepLastIfActive: true },
+            removeOnComplete: true,
+          },
         ),
         `add ${jobId}`,
       );
