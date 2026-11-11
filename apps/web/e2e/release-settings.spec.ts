@@ -126,7 +126,7 @@ test.describe('출시 설정 (#170)', () => {
     page,
     admin,
   }) => {
-    // The API: the twelve items, as #70, #22, #152, #119, #184 and #77 registered them — whole
+    // The API: every registered item, including #72 liquidity defaults — whole
     // numbers of Coin, of minutes, of submissions, of ticks and of days, and one flag.
     const items = await dataOf<ReleaseSetting[]>(await admin.get(LIST));
     expect(items.map((item) => item.key)).toEqual(SHIPPED_KEYS);
@@ -149,8 +149,11 @@ test.describe('출시 설정 (#170)', () => {
       const item = items.find((entry) => entry.key === key);
       expect(item, key).toMatchObject({ key, label, unit });
       expect(item?.valueSchema.type, key).toBe(type);
-      // Entered by the global setup while 미정, like the two above (`ensureOrderSettings`).
-      expect(item?.status, key).not.toBe('undecided');
+    }
+    // Only the three order settings are entered by ensureOrderSettings. Liquidity defaults
+    // stay unseeded: their actual state/value is checked against the screen below.
+    for (const [key] of ORDER_ITEMS) {
+      expect(items.find((item) => item.key === key)?.status, key).not.toBe('undecided');
     }
     for (const [key, label] of RETENTION_ITEMS) {
       const item = items.find((entry) => entry.key === key);
