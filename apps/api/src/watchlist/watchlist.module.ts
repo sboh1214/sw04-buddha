@@ -1,3 +1,4 @@
+import { MarketRankingCursors } from '../markets/market-ranking-cursor.js';
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module.js';
 import { DbModule } from '../infra/db/db.module.js';
@@ -14,6 +15,6 @@ import { WatchlistService } from './watchlist.service.js';
 @Module({
   imports: [DbModule, AuthModule],
   controllers: [MeWatchlistController],
-  providers: [WatchlistService],
+  providers: [MarketRankingCursors, WatchlistService],
 })
 export class WatchlistModule {}

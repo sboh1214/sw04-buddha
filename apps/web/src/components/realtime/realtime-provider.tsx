@@ -59,6 +59,7 @@ import {
   wroteAnOrder,
 } from '@/lib/market-live';
 import { restartQueries } from '@/lib/query-client';
+import { handleMarketStats } from '@/lib/market-stats-event';
 import { refreshThemeResultsOnStatus } from '@/lib/themes';
 import { type CachedSeries, appendTick } from '@/lib/ticks';
 
@@ -523,6 +524,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
      * was and restarts no `staleTime`.
      */
     const handlers = {
+      'market:stats': (raw: unknown) => handleMarketStats(queryClient, marketRestart, raw),
       'market:tick': (raw: unknown) => {
         const parsed = marketTickEventSchema.safeParse(raw);
         if (!parsed.success) return;

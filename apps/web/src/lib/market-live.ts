@@ -3,6 +3,7 @@ import {
   type MarketStatus,
   type MarketStatusEvent,
   type MarketTickEvent,
+  type MarketStatsEvent,
   type PositionStatus,
   type UserBalanceEvent,
   type UserPositionEvent,
@@ -56,6 +57,7 @@ export interface LiveMarket {
   volumeCoin: string;
   tradeCount: number;
   traderCount: number;
+  statsRevision: string;
   /** The result type (YES·NO·VOID, #174), or `null` before a judgement and on a cancelled market. */
   resolvedResult: MarketResult | null;
   /**
@@ -121,7 +123,7 @@ export type MarketPages = InfiniteData<MarketPage, string | undefined>;
  */
 export type MarketTickPatch = Pick<
   MarketTickEvent,
-  'marketId' | 'lastPrice' | 'volumeCoin' | 'tradeCount' | 'traderCount' | 'ts'
+  'marketId' | 'lastPrice' | 'volumeCoin' | 'tradeCount' | 'traderCount' | 'statsRevision' | 'ts'
 >;
 
 /**
@@ -156,14 +158,20 @@ export function applyTick<T extends LiveMarket>(
   event: MarketTickPatch,
 ): T | undefined {
   if (held === undefined || held.id !== event.marketId) return undefined;
-  if (!supersedes(event.tradeCount, held.tradeCount)) return undefined;
+  const priceNewer = supersedes(event.tradeCount, held.tradeCount);
+  const statsNewer = supersedes(event.statsRevision, held.statsRevision);
+  if (!priceNewer && !statsNewer) return undefined;
   return {
     ...held,
-    lastPrice: event.lastPrice,
-    lastFillAt: event.ts,
-    volumeCoin: event.volumeCoin,
-    tradeCount: event.tradeCount,
-    traderCount: event.traderCount,
+    ...(priceNewer
+      ? {
+          lastPrice: event.lastPrice,
+          lastFillAt: event.ts,
+          volumeCoin: event.volumeCoin,
+          tradeCount: event.tradeCount,
+        }
+      : {}),
+    ...(statsNewer ? { traderCount: event.traderCount, statsRevision: event.statsRevision } : {}),
   };
 }
 
@@ -313,10 +321,10 @@ export function joinMarket<T extends LiveMarket>(held: T | undefined, incoming: 
       lastFillAt: held.lastFillAt,
       volumeCoin: held.volumeCoin,
       tradeCount: held.tradeCount,
-      // In the ORDERED group, not the descriptive one: it moves with the same trade, so a
-      // snapshot older than what is held must not drag it back with the price.
-      traderCount: held.traderCount,
     };
+  }
+  if (supersedes(held.statsRevision, incoming.statsRevision)) {
+    next = { ...next, traderCount: held.traderCount, statsRevision: held.statsRevision };
   }
   // The status GROUP moves together: the result was written by the same transition as the
   // status and its key, so a snapshot older than what is held must not drag either back alone —
@@ -669,4 +677,14 @@ export function chunkIds(ids: readonly string[], size: number): string[][] {
     chunks.push(ids.slice(start, start + step));
   }
   return chunks;
+}
+
+/** Participant freshness changes independently of price and trade count. Never fabricates a row. */
+export function applyStats<T extends LiveMarket>(
+  held: T | undefined,
+  event: MarketStatsEvent,
+): T | undefined {
+  if (!held || held.id !== event.marketId || !supersedes(event.statsRevision, held.statsRevision))
+    return undefined;
+  return { ...held, traderCount: event.traderCount, statsRevision: event.statsRevision };
 }

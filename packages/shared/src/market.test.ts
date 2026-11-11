@@ -64,6 +64,7 @@ const summary = {
   volumeCoin: '12345',
   tradeCount: 3,
   traderCount: 2,
+  statsRevision: '3',
   closeAt: at,
   openAt: at,
   resolvedResult: null,
@@ -219,6 +220,7 @@ describe('read DTOs', () => {
       volumeCoin: '0',
       tradeCount: 0,
       traderCount: 0,
+      statsRevision: '0',
     };
     expect(marketSummarySchema.parse(untraded).lastPrice).toBeNull();
     expect(marketSummarySchema.parse(untraded).lastFillAt).toBeNull();
@@ -981,7 +983,7 @@ describe('marketListQuerySchema', () => {
     expect(findExcludedIdentifier(ALL_MARKET_STATUSES, 'api')).toEqual([]);
   });
 
-  it('never lists a DRAFT or REVIEW market and only knows the three sorts', () => {
+  it('never lists a DRAFT or REVIEW market and only knows the four public sorts', () => {
     // ADR-0093 decision 1 item 12: the two are the admin's alone; every other status is public,
     // a SCHEDULED market's before it opens and a CANCELLED one's included.
     expect(PUBLIC_MARKET_STATUSES).toEqual([
@@ -1002,16 +1004,15 @@ describe('marketListQuerySchema', () => {
     for (const status of PUBLIC_MARKET_STATUSES) expect(isPublicMarketStatus(status)).toBe(true);
     expect(marketListQuerySchema.safeParse({ status: 'voided' }).success).toBe(false);
     expect(marketListQuerySchema.safeParse({ sort: 'price' }).success).toBe(false);
-    // The volume order is gone until #132 brings it back with its exclusions (ADR-0061 decision
-    // 1, item 11): no URL can ask for it.
-    expect(marketListQuerySchema.safeParse({ sort: 'volume' }).success).toBe(false);
+    // #132 restores volume ordering with approved exclusions; raw volume remains public.
+    expect(marketListQuerySchema.safeParse({ sort: 'volume' }).success).toBe(true);
     expect(marketListQuerySchema.safeParse({ q: '' }).success).toBe(false);
     expect(marketListQuerySchema.safeParse({ q: 'x'.repeat(101) }).success).toBe(false);
     for (const sort of MARKET_SORTS) expect(marketListQuerySchema.parse({ sort }).sort).toBe(sort);
   });
 
-  it('lists 추천 · 신규 · 마감 임박 in that order, 추천 first and the default (ADR-0065)', () => {
-    expect(MARKET_SORTS).toEqual(['recommended', 'newest', 'closing']);
+  it('lists 추천 · 거래량 · 신규 · 마감 임박 in that order, 추천 first and the default (ADR-0065)', () => {
+    expect(MARKET_SORTS).toEqual(['recommended', 'volume', 'newest', 'closing']);
     expect(DEFAULT_MARKET_SORT).toBe('recommended');
     expect(RECOMMENDED_VOLUME_HOURS).toBe(24);
     // The names are API identifiers: none may name an excluded feature (no rank or score).

@@ -53,6 +53,7 @@ const adminRoutes = routes.filter((route) => isAdminPath(route.path));
  */
 const OPERATION_RECORDS = [
   'GET /admin/trading-anomalies',
+  'GET /admin/fill-classifications/requests',
   'GET /admin/treasury/history',
   'GET /admin/treasury/issue-requests',
   'GET /admin/audit-failures',

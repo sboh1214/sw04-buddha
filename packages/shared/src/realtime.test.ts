@@ -39,6 +39,7 @@ const tick = {
   volumeCoin: '520',
   tradeCount: 1,
   traderCount: 1,
+  statsRevision: '1',
   ts,
 };
 const trade = {
@@ -207,6 +208,7 @@ describe('ordering keys', () => {
       volumeCoin: 520n,
       tradeCount: 1,
       traderCount: 1,
+      statsRevision: 1n,
     };
     expect(marketTickEvent(marketId, stats)).toEqual(tick);
     expect(marketTickEventSchema.parse(marketTickEvent(marketId, stats))).toEqual(tick);
@@ -344,7 +346,13 @@ describe('subscribe payload', () => {
 });
 
 describe('per-family event unions', () => {
-  const marketEvents = [tick, trade, status, book];
+  const marketEvents = [
+    tick,
+    trade,
+    status,
+    book,
+    { type: 'market:stats', marketId, traderCount: 0, statsRevision: '2' },
+  ];
   const userEvents = [balance, position];
 
   it('parses its own family and refuses the other, which is the authorization check', () => {

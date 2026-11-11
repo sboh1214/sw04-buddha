@@ -30,6 +30,7 @@ const traded: MarketSummary = {
   volumeCoin: '1250000',
   tradeCount: 42,
   traderCount: 11,
+  statsRevision: '42',
   closeAt: '2026-12-01T00:00:00.000Z',
   openAt: '2026-09-01T00:00:00.000Z',
   createdAt: '2026-08-31T00:00:00.000Z',

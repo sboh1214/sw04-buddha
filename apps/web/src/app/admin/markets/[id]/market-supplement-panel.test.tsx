@@ -78,6 +78,7 @@ const open: AdminMarket = {
   volumeCoin: '0',
   tradeCount: 0,
   traderCount: 0,
+  statsRevision: '0',
   openAt: '2026-11-01T00:00:00.000Z',
   resolvedResult: null,
   resolvedAt: null,

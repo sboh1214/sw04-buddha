@@ -1,3 +1,4 @@
+import { MarketRankingCursors } from './market-ranking-cursor.js';
 import { Inject, Injectable } from '@nestjs/common';
 import { schema, type Db } from '@buddha/db';
 import {
@@ -74,6 +75,7 @@ function linkedTo(db: Executor, marketId: string) {
 @Injectable()
 export class RelatedMarketsService {
   constructor(
+    private readonly rankingCursors: MarketRankingCursors,
     @Inject(DB) private readonly db: Db,
     private readonly markets: MarketService,
   ) {}
@@ -99,7 +101,7 @@ export class RelatedMarketsService {
   ): Promise<Page<MarketSummary>> {
     await this.markets.requirePublic(marketId);
     const { markets, categories } = schema;
-    const order = marketOrder(this.db, 'recommended', cursor, undefined);
+    const order = marketOrder(this.db, 'recommended', cursor, undefined, this.rankingCursors.codec);
     let select = this.db
       .select({ ...marketWithCategory, order: order.fields })
       .from(markets)

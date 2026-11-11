@@ -22,6 +22,7 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   // every other 5xx by ApiExceptionFilter.
   PAYMENT_GATEWAY_ERROR: HttpStatus.BAD_GATEWAY,
   ROLE_CHANGE_NOT_ALLOWED: HttpStatus.CONFLICT,
+  FILL_CLASSIFICATION_NOT_ALLOWED: HttpStatus.CONFLICT,
   APPROVAL_NOT_ALLOWED: HttpStatus.CONFLICT,
   PHONE_VERIFICATION_NOT_ALLOWED: HttpStatus.CONFLICT,
   // A limit of the code sends (ADR-0070), refused like a rate limit: the same request passes later.

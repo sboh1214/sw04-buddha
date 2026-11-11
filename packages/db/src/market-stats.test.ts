@@ -107,7 +107,7 @@ describe.skipIf(!hasTestDb())('market statistics (#121, docker test profile)', (
   /** The statistics an intake returned are the row's, and every market's are its fills'. */
   const expectSound = async (done?: Extract<PlaceOrderResult, { kind: 'placed' }>) => {
     if (done !== undefined && done.stats !== null) {
-      expect(done.stats).toEqual(await stats(done.order.marketId));
+      expect(done.stats).toMatchObject(await stats(done.order.marketId));
     }
     expect(await checkMarketStats(t.db)).toEqual([]);
     expect(await checkOrderInvariants(t.db)).toEqual([]);
@@ -510,7 +510,7 @@ describe.skipIf(!hasTestDb())('market statistics (#121, docker test profile)', (
       const two = await second;
       expect(one.kind === 'placed' && one.stats).toMatchObject({ tradeCount: 1, traderCount: 2 });
       expect(two.stats).toMatchObject({ tradeCount: 2, traderCount: 3, volumeCoin: 180n });
-      expect(await stats(m)).toEqual(two.stats);
+      expect(two.stats).toMatchObject(await stats(m));
       await expectSound();
     });
 

@@ -1749,7 +1749,12 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
     /** The market events published from here on (`market:book`, #179), as [market, type, ts]. */
     const marketEvents = () => {
       const spy = vi.spyOn(t.app.get(MarketPublisher), 'publishMarket');
-      return () => spy.mock.calls.map(([marketId, event]) => [marketId, event.type, event.ts]);
+      return () =>
+        spy.mock.calls.map(([marketId, event]) => [
+          marketId,
+          event.type,
+          'ts' in event ? event.ts : null,
+        ]);
     };
 
     beforeEach(async () => {

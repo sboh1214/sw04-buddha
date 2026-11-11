@@ -1,3 +1,4 @@
+import { MarketRankingCursors } from './market-ranking-cursor.js';
 import { Inject, Injectable } from '@nestjs/common';
 import { DAY_AGO, marketPriceAt, readPublicJudgementDelay, schema, type Db } from '@buddha/db';
 import {
@@ -148,6 +149,7 @@ export function toMarketSummary(
     volumeCoin: serializeCoinAmount(row.volumeCoin),
     tradeCount: row.tradeCount,
     traderCount: row.traderCount,
+    statsRevision: row.statsRevision.toString(),
     closeAt: row.closeAt.toISOString(),
     openAt: row.openAt?.toISOString() ?? null,
     resolvedResult: row.resolvedResult,
@@ -327,7 +329,10 @@ export function inCategory(db: Db, slug: string) {
  */
 @Injectable()
 export class MarketService {
-  constructor(@Inject(DB) private readonly db: Db) {}
+  constructor(
+    @Inject(DB) private readonly db: Db,
+    private readonly rankingCursors: MarketRankingCursors,
+  ) {}
 
   /**
    * Keyset-paginated per order (`marketOrder`, market-order.ts — the one place the market orders
@@ -345,7 +350,13 @@ export class MarketService {
   async list(query: MarketListQuery): Promise<Page<MarketSummary>> {
     const { markets, categories } = schema;
     const { limit } = query;
-    const order = marketOrder(this.db, query.sort, query.cursor, query.status);
+    const order = marketOrder(
+      this.db,
+      query.sort,
+      query.cursor,
+      query.status,
+      this.rankingCursors.codec,
+    );
     const filters = [
       query.status === ALL_MARKET_STATUSES ? isPublicMarket() : eq(markets.status, query.status),
       query.category ? inCategory(this.db, query.category) : undefined,

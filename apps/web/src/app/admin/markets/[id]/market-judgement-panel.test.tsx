@@ -68,6 +68,7 @@ const closed: AdminMarket = {
   volumeCoin: '123456',
   tradeCount: 789,
   traderCount: 321,
+  statsRevision: '789',
   openAt: '2026-11-01T00:00:00.000Z',
   resolvedResult: null,
   resolvedAt: null,

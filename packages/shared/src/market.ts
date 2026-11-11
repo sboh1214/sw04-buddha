@@ -1,3 +1,4 @@
+import { statsRevisionSchema } from './market-stats.js';
 import { adminMarketLiquiditySchema } from './market-liquidity.js';
 import type { BotMatchSnapshot } from './market-maker/risk-matching.js';
 import * as z from 'zod';
@@ -158,6 +159,7 @@ const marketSummaryFields = {
    * (#177 14항, ADR-0107 결정 5), never this count.
    */
   traderCount: countSchema,
+  statsRevision: statsRevisionSchema,
   closeAt: z.iso.datetime(),
   openAt: z.iso.datetime().nullable(),
   /**
@@ -337,7 +339,7 @@ export const marketListStatusSchema = z.enum(MARKET_LIST_STATUSES);
  * not read the open time. The volume order is gone until #132 brings it back with its exclusions,
  * so no query names it.
  */
-export const MARKET_SORTS = ['recommended', 'newest', 'closing'] as const;
+export const MARKET_SORTS = ['recommended', 'volume', 'newest', 'closing'] as const;
 export type MarketSort = (typeof MARKET_SORTS)[number];
 export const marketSortSchema = z.enum(MARKET_SORTS);
 export const DEFAULT_MARKET_SORT = 'recommended' satisfies MarketSort;

@@ -20,6 +20,7 @@ import {
   applyBalanceEvent,
   applyPositionEvent,
   applyStatus,
+  applyStats,
   applyTick,
   applyToPages,
   chunkIds,
@@ -47,6 +48,7 @@ const summary: MarketSummary = {
   volumeCoin: '120000',
   tradeCount: 10,
   traderCount: 4,
+  statsRevision: '10',
   closeAt: '2026-10-01T00:00:00.000Z',
   openAt: '2026-09-01T00:00:00.000Z',
   resolvedResult: null,
@@ -104,6 +106,7 @@ const tick = (patch: Partial<MarketTickEvent> = {}): MarketTickEvent => ({
   volumeCoin: '130000',
   tradeCount: 11,
   traderCount: 5,
+  statsRevision: String(patch.tradeCount ?? 11),
   ts: '2026-09-07T00:00:00.000Z',
   ...patch,
 });
@@ -210,6 +213,7 @@ describe('applyTick', () => {
       // Moves with the same trade, so the patch carries it: a first-time buyer raises it, and
       // leaving it behind kept the header's 참여자 stale for as long as the market stayed busy.
       traderCount: 5,
+      statsRevision: '11',
     });
   });
 
@@ -233,6 +237,7 @@ describe('applyTick', () => {
       volumeCoin: '130000',
       tradeCount: 11,
       traderCount: 5,
+      statsRevision: '11',
     });
   });
 
@@ -693,6 +698,7 @@ describe('joinMarket', () => {
     volumeCoin: '130000',
     tradeCount: 11,
     traderCount: 7,
+    statsRevision: '11',
   };
   const stale: Market = {
     ...detail,
@@ -1236,5 +1242,74 @@ describe('chunkIds', () => {
 
   it('never spins on a non-positive size', () => {
     expect(chunkIds([ID, OTHER_ID], 0)).toEqual([[ID], [OTHER_ID]]);
+  });
+});
+
+describe('independent participant freshness (#132)', () => {
+  const classified = { ...detail, traderCount: 0, statsRevision: '12' };
+  const stats = {
+    type: 'market:stats' as const,
+    marketId: ID,
+    traderCount: 0,
+    statsRevision: '12',
+  };
+  it('updates only participants while leaving price, volume, chart ordering and status intact', () => {
+    expect(applyStats(detail, stats)).toEqual(classified);
+    expect(applyStats(undefined, stats)).toBeUndefined();
+    expect(applyStats(detail, { ...stats, marketId: OTHER_ID })).toBeUndefined();
+    expect(applyStats(classified, stats)).toBeUndefined();
+  });
+  it('accepts a newer participant count even on an equal or older trade counter', () => {
+    for (const tradeCount of [9, 10]) {
+      const next = applyTick(detail, tick({ tradeCount, statsRevision: '12', traderCount: 0 }));
+      expect(next).toEqual(classified);
+    }
+  });
+  it('accepts new price/raw trade facts without resurrecting excluded participants', () => {
+    const next = applyTick(
+      classified,
+      tick({ tradeCount: 11, statsRevision: '11', traderCount: 5 }),
+    );
+    expect(next).toMatchObject({
+      lastPrice: 63,
+      volumeCoin: '130000',
+      tradeCount: 11,
+      traderCount: 0,
+      statsRevision: '12',
+    });
+    expect(next?.lastFillAt).toBe(tick().ts);
+  });
+  it('holds newer participants against old REST independently of trade and status groups', () => {
+    const fetched = {
+      ...detail,
+      tradeCount: 11,
+      volumeCoin: '130000',
+      lastPrice: 63,
+      traderCount: 5,
+      statsRevision: '11',
+    };
+    expect(joinMarket(classified, fetched)).toMatchObject({
+      tradeCount: 11,
+      lastPrice: 63,
+      traderCount: 0,
+      statsRevision: '12',
+    });
+    expect(joinMarket(fetched, classified)).toMatchObject({
+      tradeCount: 11,
+      lastPrice: 63,
+      traderCount: 0,
+      statsRevision: '12',
+    });
+    expect(
+      joinMarketPages(pagesOf([classified]), pagesOf([fetched])).pages[0]?.items[0],
+    ).toMatchObject({ tradeCount: 11, traderCount: 0, statsRevision: '12' });
+  });
+  it('takes a subsequent normal-fill participant count after exclusion without conflating counters', () => {
+    const next = applyTick(
+      classified,
+      tick({ tradeCount: 11, statsRevision: '13', traderCount: 2 }),
+    );
+    expect(next).toMatchObject({ tradeCount: 11, traderCount: 2, statsRevision: '13' });
+    expect(applyStats(next, stats)).toBeUndefined();
   });
 });

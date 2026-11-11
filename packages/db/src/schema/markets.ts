@@ -111,6 +111,10 @@ export const markets = pgTable(
      * a full sell or a closure keeps the fills.
      */
     traderCount: integer().notNull().default(0),
+    /** General participant freshness, increased by fills and approved recounts. */
+    statsRevision: bigint({ mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
     // schedule / resolution
     /**
      * The ACTUAL open: the instant of the SCHEDULED → OPEN transition (`openScheduledMarket`, #21,
@@ -386,6 +390,7 @@ export const markets = pgTable(
      * The dispute mirror (#175): never below 0, and 0 on a market that is not PROVISIONAL — a
      * confirmation of a market a dispute still holds fails here too, after `confirmationHold`.
      */
+    check('markets_stats_revision_check', sql`${t.statsRevision} >= 0`),
     check('markets_dispute_hold_count_check', sql`${t.disputeHoldCount} >= 0`),
     check(
       'markets_dispute_hold_status_check',

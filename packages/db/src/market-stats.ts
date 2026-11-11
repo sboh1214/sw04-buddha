@@ -1,19 +1,20 @@
 import { RECOMMENDED_VOLUME_HOURS, type MarketFillStats } from '@buddha/shared';
-import { and, desc, eq, gt, inArray, lte, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, lte, sql, type SQL } from 'drizzle-orm';
+import { isFillExcludedSql } from './fill-classification-read.js';
+import { isHumanAccountTypeSql } from './account-types.js';
 import type { Db } from './client.js';
-import { fills, markets, orders } from './schema/index.js';
+import { fills, markets } from './schema/index.js';
 
 /*
  * 시장 통계 (#121, ADR-0116; ADR-0107 결정 1 #177 11–15항, 결정 4 #121 rows). The statistics on
  * `markets` — `last_price` (시장가격, the last fill's YES value), `last_fill_at` (its 갱신시각),
  * `volume_coin` (누적 거래량), `trade_count` and `trader_count` (사용자 참여자) — are written here
- * only, by `placeOrder` (orders.ts) in its transaction under the market's lock, once per intake
- * that filled. Nothing else writes them: the open, the transitions, the close and its expiry
+ * only, under the market lock. `placeOrder` records a filled intake; an approved #132
+ * classification recounts only participants and advances `statsRevision`. Nothing else writes them: the open, the transitions, the close and its expiry
  * (#120), a cancel (#178), the quote (#179), a judgement, a settlement, the seed
  * (market-stats-writes.test.ts). The price history is the `fills` rows themselves, so the chart,
  * the recent fills and these values read one record, and each value can be recounted from it —
- * fills never change (`fills_keep_record`; `MARKET_STATS_CHECK_SQL`, test/orders.ts) — for #132's
- * exclusions and #93's reconciliation. A person is judged by the account-type rule (#115) only,
+ * fills never change (`fills_keep_record`; `MARKET_STATS_CHECK_SQL`, test/orders.ts) — while #132 exclusions affect only participant/ranking views and #93 reads the raw financial facts. A person is judged by the account-type rule (#115) only,
  * as the book read already answered it (`OrderOwner.human`); this file never names the type.
  */
 
@@ -24,9 +25,9 @@ type Reader = Db | Tx;
 
 type FillRow = typeof fills.$inferSelect;
 
-/** The statistics' columns (drizzle's field names): `recordFillStats` is their one writer. */
+/** The statistics columns: this module owns both fill increments and approved participant recounts. */
 export type MarketStatsColumn =
-  'lastPrice' | 'lastFillAt' | 'volumeCoin' | 'tradeCount' | 'traderCount';
+  'lastPrice' | 'lastFillAt' | 'volumeCoin' | 'tradeCount' | 'traderCount' | 'statsRevision';
 
 /**
  * What any other writer may set on a market row: every column but the statistics, which are
@@ -43,17 +44,11 @@ export type MarketRowWrite = Partial<Omit<typeof markets.$inferInsert, MarketSta
 };
 
 /**
- * How many of `humanOwnerIds` fill in `marketId` for the first time: those with no order there
- * with anything filled (`orders.filled_qty > 0`, either side of a fill — the basis of
- * `hasMarketFill`, #173 6항; #177 13항). Until #132 leaves abnormal fills out of the count it also
- * says #20's '사용자 체결 0건', which keeps counting every person's fill (#177 14항). The ids are
- * this intake's distinct people, already told apart by the rule (the incoming owner and each
- * resting owner its fills meet, `OrderOwner.human`).
- *
- * Call it under the market's lock, BEFORE the intake writes its order (which carries its filled
- * quantity) or fills any resting order: the lock serialises every fill of the market, so no other
- * transaction can make someone a participant in between, and the read sees exactly the fills
- * before this intake. Reads `orders_market_id_user_id_idx`.
+ * How many of this intake's distinct human owners have no remaining normal fill in the market.
+ * Both immutable incoming/resting owner snapshots count. A person whose every earlier fill was
+ * excluded participates again on this new normal fill; hasMarketFill remains a separate raw fact.
+ * Call under the market lock before writing the intake. Each wanted owner uses the corresponding
+ * fills owner/market index and stops at its first normal fill.
  */
 export async function newHumanParticipants(
   tx: Tx,
@@ -62,13 +57,20 @@ export async function newHumanParticipants(
 ): Promise<number> {
   const ids = [...new Set(humanOwnerIds)];
   if (ids.length === 0) return 0;
-  const before = await tx
-    .selectDistinct({ userId: orders.userId })
-    .from(orders)
-    .where(
-      and(eq(orders.marketId, marketId), inArray(orders.userId, ids), gt(orders.filledQty, 0)),
-    );
-  return ids.length - before.length;
+  const wanted = sql.join(
+    ids.map((id) => sql`(${id}::text)`),
+    sql`, `,
+  );
+  const result = await tx.execute<{ count: number }>(sql`
+    SELECT count(*)::int AS count FROM (VALUES ${wanted}) wanted(id)
+    WHERE EXISTS(SELECT 1 FROM ${fills} WHERE ${fills.marketId}=${marketId}::uuid
+      AND ${fills.incomingOwnerId}=wanted.id AND ${isHumanAccountTypeSql(fills.incomingAccountType)}
+      AND NOT ${isFillExcludedSql(fills.id)})
+    OR EXISTS(SELECT 1 FROM ${fills} WHERE ${fills.marketId}=${marketId}::uuid
+      AND ${fills.restingOwnerId}=wanted.id AND ${isHumanAccountTypeSql(fills.restingAccountType)}
+      AND NOT ${isFillExcludedSql(fills.id)})`);
+  const before = result.rows[0]?.count ?? 0;
+  return ids.length - before;
 }
 
 export interface RecordFillStatsInput {
@@ -88,7 +90,7 @@ export interface RecordFillStatsInput {
  *   11항: a NO fill at 37 is 63, a pair mint one fill at 100 − its NO price);
  * - `volume_coin` += Σ `amount_coin` (#177 12항: each match once, at the incoming contract's price
  *   × qty — the sum of the public recent fills' amounts), `trade_count` += the fills;
- * - `trader_count` += `newParticipants` (#177 13항; never fewer).
+ * - `trader_count` += `newParticipants` (#177 13항); an independent approval may later recount it.
  *
  * Relative increments under the market's lock, after the intake's fills (a duplicate fill key
  * throws before, and the whole intake rolls back). `updated_at` is left as it is: a fill is no
@@ -123,6 +125,7 @@ export async function recordFillStats(
       volumeCoin: sql`${markets.volumeCoin} + ${volume}`,
       tradeCount: sql`${markets.tradeCount} + ${input.fills.length}`,
       traderCount: sql`${markets.traderCount} + ${newParticipants}`,
+      statsRevision: sql`${markets.statsRevision} + 1`,
       // A fill is not an edit: drizzle's `$onUpdate` would stamp the host clock here.
       updatedAt: sql`${markets.updatedAt}`,
     })
@@ -133,6 +136,7 @@ export async function recordFillStats(
       volumeCoin: markets.volumeCoin,
       tradeCount: markets.tradeCount,
       traderCount: markets.traderCount,
+      statsRevision: markets.statsRevision,
     });
   if (row === undefined) throw new RangeError(`market ${marketId} does not exist`);
   return {
@@ -141,6 +145,7 @@ export async function recordFillStats(
     volumeCoin: row.volumeCoin,
     tradeCount: row.tradeCount,
     traderCount: row.traderCount,
+    statsRevision: row.statsRevision,
   };
 }
 
@@ -172,4 +177,29 @@ export async function marketPriceAt(
     .orderBy(desc(fills.createdAt), desc(fills.id))
     .limit(1);
   return row?.yesPriceCoin ?? null;
+}
+
+/** Approved classifications change participants alone, under the same market lock as intake. */
+export async function recountClassifiedParticipants(tx: Tx, marketId: string) {
+  const participants = sql`(SELECT count(DISTINCT participant.id)::int FROM fills f
+    CROSS JOIN LATERAL (VALUES
+      (f.incoming_owner_id, is_human_account_type(f.incoming_account_type)),
+      (f.resting_owner_id, is_human_account_type(f.resting_account_type))
+    ) participant(id,human)
+    WHERE f.market_id=${marketId}::uuid AND participant.human
+      AND NOT ${isFillExcludedSql(sql`f.id`)})`;
+  const [row] = await tx
+    .update(markets)
+    .set({
+      traderCount: participants,
+      statsRevision: sql`${markets.statsRevision} + 1`,
+      updatedAt: sql`${markets.updatedAt}`,
+    })
+    .where(eq(markets.id, marketId))
+    .returning({
+      traderCount: markets.traderCount,
+      statsRevision: markets.statsRevision,
+    });
+  if (!row) throw new RangeError(`market ${marketId} does not exist`);
+  return { marketId, traderCount: row.traderCount, statsRevision: row.statsRevision.toString() };
 }

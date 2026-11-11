@@ -264,9 +264,9 @@ describe('categoryLinkQuery', () => {
   });
 
   it('reads the view the way the list does: an order it does not know, and the term it drops', () => {
-    // `volume` is no order (ADR-0061 decision 1, item 11): the list is on 최근 관심 등록 순, and
+    // `price` is not a supported order: the list is on 최근 관심 등록 순, and
     // so is the link. The view has no search, so a hand-edited `q` goes nowhere.
-    expect(categoryLinkQuery('/', url('watchlist=1&sort=volume&q=rain'), 'economy')).toEqual({
+    expect(categoryLinkQuery('/', url('watchlist=1&sort=price&q=rain'), 'economy')).toEqual({
       category: 'economy',
       watchlist: '1',
     });

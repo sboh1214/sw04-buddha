@@ -31,6 +31,7 @@ import {
 } from '@/lib/market-live';
 import { prefetchRelatedMarkets } from '@/lib/market-ssr';
 import { getQueryClient, restartQueries } from '@/lib/query-client';
+import { handleMarketStats } from '@/lib/market-stats-event';
 import {
   marketQueryOptions,
   marketSearchInfiniteQueryOptions,
@@ -67,6 +68,7 @@ const summary: MarketSummary = {
   volumeCoin: '120000',
   tradeCount: 10,
   traderCount: 4,
+  statsRevision: '10',
   closeAt: '2026-10-01T00:00:00.000Z',
   openAt: '2026-09-01T00:00:00.000Z',
   resolvedResult: null,
@@ -123,6 +125,7 @@ const tick = (patch: Partial<MarketTickEvent> = {}): MarketTickEvent => ({
   volumeCoin: '130000',
   tradeCount: 11,
   traderCount: 5,
+  statsRevision: String(patch.tradeCount ?? 11),
   ts: '2026-09-07T00:00:00.000Z',
   ...patch,
 });
@@ -548,7 +551,11 @@ describe('a tick that arrives during an unseeded first fetch', () => {
     // not supersede — and only the first may become a request. Restarting on the second would
     // buy one per duplicate or late tick, which is the 남발 PLAN 11.5 refuses.
     const queryClient = getQueryClient();
-    queryClient.setQueryData<Market>(marketKey(ID), { ...detail, tradeCount: 99 });
+    queryClient.setQueryData<Market>(marketKey(ID), {
+      ...detail,
+      tradeCount: 99,
+      statsRevision: '99',
+    });
     const updatedAt = queryClient.getQueryState(marketKey(ID))?.dataUpdatedAt;
     try {
       for (let i = 0; i < 10; i += 1) onTick(queryClient, tick());
@@ -803,5 +810,35 @@ describe('marketQueryOptions', () => {
     const shown = queryClient.getQueryData<Market>(marketQueryOptions(routeId).queryKey);
     expect(shown?.lastPrice).toBe(63);
     queryClient.clear();
+  });
+});
+
+describe('participant-only event during an unseeded first GET (#132)', () => {
+  it('restarts the stale request and obtains the committed participant revision without inventing a market', async () => {
+    const client = getQueryClient();
+    let fetches = 0;
+    const latest = { ...detail, traderCount: 0, statsRevision: '12' };
+    const observer = new QueryObserver<Market>(client, {
+      queryKey: marketKey(ID),
+      queryFn: () => Promise.resolve(++fetches === 1 ? detail : latest),
+      retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      const event = {
+        type: 'market:stats' as const,
+        marketId: ID,
+        traderCount: 0,
+        statsRevision: '12',
+      };
+      handleMarketStats(client, new Throttle(1000), event);
+      expect(client.getQueryData(marketKey(ID))).toBeUndefined();
+      await vi.waitFor(() => expect(observer.getCurrentResult().data?.statsRevision).toBe('12'));
+      expect(fetches).toBe(2);
+      expect(observer.getCurrentResult().data).toEqual(latest);
+    } finally {
+      unsubscribe();
+      client.clear();
+    }
   });
 });

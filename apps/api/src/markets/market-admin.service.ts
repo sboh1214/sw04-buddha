@@ -484,6 +484,7 @@ export function snapshot(
     volumeCoin: serializeCoinAmount(row.volumeCoin),
     tradeCount: row.tradeCount,
     traderCount: row.traderCount,
+    statsRevision: row.statsRevision.toString(),
     openAt: row.openAt?.toISOString() ?? null,
     ...timesOf(row),
     closeAt: row.closeAt.toISOString(),

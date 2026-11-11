@@ -18,6 +18,10 @@ export interface RealtimeEventEntry {
 }
 
 export const REALTIME_EVENT_REGISTRY = {
+  'market:stats': {
+    channel: 'market',
+    reason: '공개 참가자 수와 일반 통계 최신성 키만. 내부 분류·사유·신원은 포함하지 않는다.',
+  },
   'market:tick': {
     channel: 'market',
     reason:

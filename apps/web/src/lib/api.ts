@@ -586,3 +586,8 @@ export function validationMessage(error: ApiError): string | undefined {
 export function isForAnotherAccount(error: unknown): boolean {
   return isApiError(error, 'FORBIDDEN') && validationField(error) === 'expectedAccountId';
 }
+
+export type AdminClassifiableFill = components['schemas']['AdminClassifiableFill'];
+export type FillClassification = components['schemas']['FillClassification'];
+export type FillClassificationRequest = components['schemas']['FillClassificationRequest'];
+export type FillClassificationWrite = components['schemas']['FillClassificationWrite'];

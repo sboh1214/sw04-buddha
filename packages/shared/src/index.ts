@@ -97,3 +97,6 @@ export * from './market-maker-period-metrics.js';
 export * from './market-maker-controls.js';
 
 export * from './trading-anomalies.js';
+
+export * from './fill-classification.js';
+export * from './market-stats.js';

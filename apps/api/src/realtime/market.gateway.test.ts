@@ -57,6 +57,7 @@ function tickEvent(marketId: string, tradeCount = 1): MarketTickEvent {
     traderCount: 3,
     volumeCoin: '5125',
     tradeCount,
+    statsRevision: String(tradeCount),
     ts: new Date().toISOString(),
   };
 }

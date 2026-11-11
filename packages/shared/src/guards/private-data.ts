@@ -444,6 +444,13 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       ['flags'],
       ['flagged'],
       ['fraud'],
+      ['classification'],
+      ['classifications'],
+      ['classification', 'revision'],
+      ['classification', 'cutoff'],
+      ['fill', 'classification'],
+      ['fill', 'classifications'],
+      ['excluded'],
       ['suspicious'],
       // #98 is an operator-only candidate report, never an automatic public judgement.
       ['trading', 'anomaly'],

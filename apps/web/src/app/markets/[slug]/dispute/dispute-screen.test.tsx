@@ -30,6 +30,7 @@ const provisional: Market = {
   volumeCoin: '123456',
   tradeCount: 789,
   traderCount: 321,
+  statsRevision: '789',
   closeAt: '2026-11-29T15:00:00.000Z',
   openAt: '2026-11-01T00:00:00.000Z',
   resolvedResult: 'NO',

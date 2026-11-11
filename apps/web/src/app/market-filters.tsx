@@ -58,6 +58,7 @@ import { SubcategoryChips } from './subcategory-sidebar';
  */
 export const SORT_LABEL: Record<WatchlistSort, string> = {
   recommended: copy.sortRecommended,
+  volume: copy.sortVolume,
   newest: copy.sortNewest,
   closing: copy.sortClosing,
   watched: copy.sortWatched,

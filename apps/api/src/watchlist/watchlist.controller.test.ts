@@ -463,7 +463,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/watchlist (integration)', () => {
         expect({ sort, malformed, rows: page.data.length }).toEqual({ sort, malformed, rows: 5 });
       }
     }
-    for (const query of ['sort=volume', 'sort=']) {
+    for (const query of ['sort=price', 'sort=']) {
       const res = await t.app.inject({
         method: 'GET',
         url: `/api/v1/me/watchlist?${query}`,

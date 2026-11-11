@@ -46,6 +46,10 @@ describe('anomaly report presentation', () => {
     expect(html).toContain('/admin/markets/');
     expect(html).toContain('/admin/moderation/users/person-a');
     expect(html).toContain('/admin/moderation/users/person-b');
+    for (const evidence of anomalyCandidate.evidence) {
+      expect(html).toContain(`/admin/fills/${evidence.first.fillId}`);
+      expect(html).toContain(`/admin/fills/${evidence.second.fillId}`);
+    }
     expect(byTagName(html, 'button')).toHaveLength(0);
     expect(byTagName(html, 'details')).toHaveLength(1);
   });

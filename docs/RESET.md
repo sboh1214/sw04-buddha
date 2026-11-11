@@ -178,3 +178,7 @@ pnpm db:migrate && pnpm db:seed
 ## 거래 패턴 검토 (#98)
 
 후보 표·저장 보고서·주기 작업은 없다. 조회는 기존 체결과 현재 별명/출시 설정에서만 계산하므로 초기화 대상 경제 표를 추가하지 않는다. 여섯 `trading_anomaly.*` 설정의 값과 변경 이력은 기존 `release_settings`/`release_setting_changes` 초기화 범위에 포함되며 재생성 뒤 미정이다. 새 `fills_created_at_id_idx`는 스키마의 조회 index라 마이그레이션 재적용으로 돌아온다. 후보를 지우려고 원 체결을 삭제하거나 경제 기록을 수정하지 않는다.
+
+### #132 체결 분류 기록
+
+`fill_classifications`는 고정 체결에 대한 불변 관리자 결정이며 일반 앱 역할로 수정·삭제하지 않는다. 전체 시험 reset/wipe의 기존 소유자 절차만 사용한다. 별도 초기 clock 행이나 과거 분류 추정 backfill은 없다. `markets.stats_revision`은 일반 참여자 최신성 키로 새 시장은 0부터 시작한다. 원 체결·주문·원장·정산의 보존/삭제 정책은 이 분류로 바꾸지 않는다.

@@ -102,14 +102,25 @@ describe('filterQuery', () => {
 });
 
 describe('sortOptions and withSort', () => {
-  it('offers 추천 · 신규 · 마감 임박 on the public list, nothing else (ADR-0061 decision 1)', () => {
-    expect(sortOptions(DEFAULT_MARKET_FILTERS)).toEqual(['recommended', 'newest', 'closing']);
+  it('offers 추천 · 거래량 · 신규 · 마감 임박 on the public list, nothing else (ADR-0061 decision 1)', () => {
+    expect(sortOptions(DEFAULT_MARKET_FILTERS)).toEqual([
+      'recommended',
+      'volume',
+      'newest',
+      'closing',
+    ]);
   });
 
   it('puts 최근 관심 등록 순 last in the 관심 시장 view (owner decision 2026-10-16)', () => {
-    // Last although the view starts on it (decision 3, the #63 row): the three public orders
+    // Last although the view starts on it (decision 3, the #63 row): the four public orders
     // keep their places, whichever order is picked.
-    expect(sortOptions(WATCHING)).toEqual(['recommended', 'newest', 'closing', 'watched']);
+    expect(sortOptions(WATCHING)).toEqual([
+      'recommended',
+      'volume',
+      'newest',
+      'closing',
+      'watched',
+    ]);
     expect(sortOptions({ ...WATCHING, sort: 'closing' })).toEqual(sortOptions(WATCHING));
     expect(WATCHING.sort).toBe('watched');
     expect(filtersFromSearchParams({ watchlist: '1' }).sort).toBe('watched');

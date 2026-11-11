@@ -77,9 +77,9 @@ describe('searchFiltersFromSearchParams', () => {
   });
 
   it('drops what the screen cannot show rather than redirecting', () => {
-    // A draft is no public status, the volume order is gone (item 11) and 최근 관심 등록 순 is the
+    // A draft is no public status, price ordering is unsupported and 최근 관심 등록 순 is the
     // watchlist's: each falls back to its default.
-    expect(searchFiltersFromSearchParams({ q: 'x', status: 'draft', sort: 'volume' })).toEqual({
+    expect(searchFiltersFromSearchParams({ q: 'x', status: 'draft', sort: 'price' })).toEqual({
       ...DEFAULT_SEARCH_FILTERS,
       q: 'x',
     });

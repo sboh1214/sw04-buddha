@@ -1,3 +1,8 @@
+import {
+  marketStatsEventSchema,
+  statsRevisionSchema,
+  type MarketStatsEvent,
+} from './market-stats.js';
 import * as z from 'zod';
 import { coinAmountSchema, serializeCoinAmount } from './api/coin-amount.js';
 import { uuidSchema } from './api/uuid.js';
@@ -56,6 +61,7 @@ import { publicFill, type PublicFillFacts } from './market.js';
  */
 export const REALTIME_EVENT_TYPES = [
   'market:tick',
+  'market:stats',
   'market:trade',
   'market:status',
   'market:book',
@@ -142,6 +148,7 @@ export const marketTickEventSchema = z
      * fill-derived field kept the old participant count for as long as the market stayed busy.
      */
     traderCount: z.number().int().min(0),
+    statsRevision: statsRevisionSchema,
     /** The last fill's server time: `MarketSummary.lastFillAt`, the 시장가격's 갱신시각. */
     ts: tsSchema,
   })
@@ -179,6 +186,7 @@ export interface MarketFillStats {
   readonly volumeCoin: bigint;
   readonly tradeCount: number;
   readonly traderCount: number;
+  readonly statsRevision: bigint;
 }
 
 /** The `market:tick` of `marketId` after an intake that filled: one builder for API and worker. */
@@ -190,6 +198,7 @@ export function marketTickEvent(marketId: string, stats: MarketFillStats): Marke
     volumeCoin: serializeCoinAmount(stats.volumeCoin),
     tradeCount: stats.tradeCount,
     traderCount: stats.traderCount,
+    statsRevision: stats.statsRevision.toString(),
     ts: stats.lastFillAt.toISOString(),
   };
 }
@@ -297,6 +306,7 @@ export type UserPositionEvent = z.infer<typeof userPositionEventSchema>;
 export const realtimeEventSchema = z
   .discriminatedUnion('type', [
     marketTickEventSchema,
+    marketStatsEventSchema,
     marketTradeEventSchema,
     marketStatusEventSchema,
     marketBookEventSchema,
@@ -307,7 +317,7 @@ export const realtimeEventSchema = z
 export type RealtimeEvent = z.infer<typeof realtimeEventSchema>;
 
 export type MarketRealtimeEvent =
-  MarketTickEvent | MarketTradeEvent | MarketStatusEvent | MarketBookEvent;
+  MarketTickEvent | MarketStatsEvent | MarketTradeEvent | MarketStatusEvent | MarketBookEvent;
 export type UserRealtimeEvent = UserBalanceEvent | UserPositionEvent;
 
 /** Redis channel and Socket.IO room for one market (public). */
@@ -405,6 +415,7 @@ export type SubscribeBody = z.infer<typeof subscribeBodySchema>;
  */
 export const marketRealtimeEventSchema = z.discriminatedUnion('type', [
   marketTickEventSchema,
+  marketStatsEventSchema,
   marketTradeEventSchema,
   marketStatusEventSchema,
   marketBookEventSchema,

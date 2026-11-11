@@ -1,3 +1,4 @@
+import { MarketRankingCursors } from '../markets/market-ranking-cursor.js';
 import { Inject, Injectable } from '@nestjs/common';
 import { schema, type Db } from '@buddha/db';
 import {
@@ -66,7 +67,10 @@ function watchedOrder(cursor: string | undefined): MarketOrder<WatchRow> {
  */
 @Injectable()
 export class WatchlistService {
-  constructor(@Inject(DB) private readonly db: Db) {}
+  constructor(
+    @Inject(DB) private readonly db: Db,
+    private readonly rankingCursors: MarketRankingCursors,
+  ) {}
 
   /**
    * The caller's watched markets in the order asked for (ADR-0061 decision 3; ADR-0065):
@@ -85,7 +89,7 @@ export class WatchlistService {
     const order: MarketOrder<WatchRow> =
       query.sort === 'watched'
         ? watchedOrder(query.cursor)
-        : marketOrder(this.db, query.sort, query.cursor, query.status);
+        : marketOrder(this.db, query.sort, query.cursor, query.status, this.rankingCursors.codec);
     let select = this.db
       .select({ ...marketWithCategory, watchedAt: marketWatches.watchedAt, order: order.fields })
       .from(marketWatches)

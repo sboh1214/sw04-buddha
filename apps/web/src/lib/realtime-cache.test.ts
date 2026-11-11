@@ -61,6 +61,7 @@ const summary: MarketSummary = {
   volumeCoin: '120000',
   tradeCount: 10,
   traderCount: 4,
+  statsRevision: '10',
   closeAt: '2026-10-01T00:00:00.000Z',
   openAt: '2026-09-01T00:00:00.000Z',
   resolvedResult: null,
@@ -117,6 +118,7 @@ const tick = (patch: Partial<MarketTickEvent> = {}): MarketTickEvent => ({
   volumeCoin: '130000',
   tradeCount: 11,
   traderCount: 5,
+  statsRevision: String(patch.tradeCount ?? 11),
   ts: '2026-09-07T00:00:00.000Z',
   ...patch,
 });

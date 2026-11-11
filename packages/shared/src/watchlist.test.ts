@@ -54,7 +54,7 @@ describe('watchlistQuerySchema', () => {
     for (const sort of WATCHLIST_SORTS) {
       expect(watchlistQuerySchema.parse({ sort }).sort).toBe(sort);
     }
-    expect(watchlistQuerySchema.safeParse({ sort: 'volume' }).success).toBe(false);
+    expect(watchlistQuerySchema.safeParse({ sort: 'price' }).success).toBe(false);
     // `watched` is the watchlist's own: the public list does not know it.
     expect(marketListQuerySchema.safeParse({ sort: 'watched' }).success).toBe(false);
     expect(Object.keys(watchlistQuerySchema.shape).sort()).toEqual(
