@@ -26,6 +26,7 @@ describe('jobs (PLAN 9)', () => {
       'retention',
     ]);
     expect(Object.values(JOB_NAMES)).toEqual([
+      'market_maker.recall',
       'market_maker.refresh',
       'market_maker.scan',
       // The open first (#21), the confirmation of a provisional result before the payout (#152).

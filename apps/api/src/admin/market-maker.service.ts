@@ -50,6 +50,10 @@ export class AdminMarketMakerService {
           })
           .from(schema.marketMakerRecalls)
           .where(eq(schema.marketMakerRecalls.marketId, marketId));
+        const [recallAttempt] = await tx
+          .select()
+          .from(schema.marketMakerRecallAttempts)
+          .where(eq(schema.marketMakerRecallAttempts.marketId, marketId));
         const readings = {
           reduceAtBp: await this.settings.get(MARKET_MAKER_REDUCE_AT_BP_SETTING, tx),
           haltAtBp: await this.settings.get(MARKET_MAKER_HALT_AT_BP_SETTING, tx),
@@ -92,6 +96,20 @@ export class AdminMarketMakerService {
                 },
           stageSettings: { status: stage.kind === 'ready' ? 'ready' : stage.reason, ...readings },
           readiness: { blockers },
+          recallAttempt: recallAttempt
+            ? {
+                attempts: recallAttempt.attempts,
+                state: recallAttempt.state,
+                reason: recallAttempt.reason as NonNullable<
+                  AdminMarketMaker['recallAttempt']
+                >['reason'],
+                lastAttemptAt: recallAttempt.lastAttemptAt.toISOString(),
+                lastFailureAt: recallAttempt.lastFailureAt?.toISOString() ?? null,
+                lastFailureReason: recallAttempt.lastFailureReason as NonNullable<
+                  AdminMarketMaker['recallAttempt']
+                >['lastFailureReason'],
+              }
+            : null,
           recall: recall
             ? {
                 status: 'completed',

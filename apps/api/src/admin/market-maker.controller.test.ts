@@ -2,6 +2,7 @@ import {
   lockMarket,
   openScheduledMarket,
   recallMarketMakerFunds,
+  recordMarketMakerRecallAttempt,
   recordMarketMakerOpenAttempt,
   recordMarketMakerRun,
   requestMarketMakerRefresh,
@@ -114,6 +115,44 @@ describe.skipIf(!hasTestInfra)('private market maker observations (integration)'
     expect(await t.db.select().from(schema.ledgerEntries)).toEqual([]);
   });
 
+  it('reads recall waiting and failure observations without executing recall or exposing raw errors', async () => {
+    const market = await createMarket(t.db, { status: 'cancelled' });
+    expect(detail(await get(market.id)).recallAttempt).toBeNull();
+    const at = new Date();
+    await t.db.transaction((tx) =>
+      recordMarketMakerRecallAttempt(tx, {
+        marketId: market.id,
+        state: 'waiting',
+        reason: 'ledger_hold',
+        lastAttemptAt: at,
+      }),
+    );
+    expect(detail(await get(market.id)).recallAttempt).toEqual({
+      attempts: 1,
+      state: 'waiting',
+      reason: 'ledger_hold',
+      lastAttemptAt: at.toISOString(),
+      lastFailureAt: null,
+      lastFailureReason: null,
+    });
+    await t.db.transaction((tx) =>
+      recordMarketMakerRecallAttempt(tx, {
+        marketId: market.id,
+        state: 'failed',
+        reason: 'execution_failed',
+        lastAttemptAt: new Date(at.getTime() + 1),
+      }),
+    );
+    const observed = detail(await get(market.id));
+    expect(observed.recallAttempt).toMatchObject({
+      attempts: 2,
+      state: 'failed',
+      reason: 'execution_failed',
+    });
+    expect(observed.recall).toEqual({ status: 'pending' });
+    expect(await t.db.select().from(schema.marketMakerRecalls)).toEqual([]);
+  });
+
   it('reads a terminal pending recall without performing it, then reports the immutable transfer', async () => {
     const { market } = await createOpenedMarket(t.db);
     await passMarketClose(t.db, market.id);
@@ -144,6 +183,7 @@ describe.skipIf(!hasTestInfra)('private market maker observations (integration)'
     expect(publicMarket.statusCode, publicMarket.body).toBe(200);
     expect(publicMarket.json<{ data: Record<string, unknown> }>().data).not.toHaveProperty(
       'recall',
+      'recallAttempt',
     );
   });
 

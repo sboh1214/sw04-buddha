@@ -39,6 +39,7 @@ export const marketMaker: AdminMarketMaker = {
   },
   readiness: { blockers: [] },
   recall: { status: 'not_due' },
+  recallAttempt: null,
   lastOpenAttempt: {
     lastAttemptAt: '2026-11-10T01:05:00.000Z',
     reason: null,

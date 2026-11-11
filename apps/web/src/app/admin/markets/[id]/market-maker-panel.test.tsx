@@ -81,6 +81,40 @@ describe('private market maker execution observations', () => {
       );
     },
   );
+  it.each([
+    ['waiting', 'ledger_hold', copy.marketMakerRecallAttemptWaiting, copy.marketMakerRecallHeld],
+    [
+      'failed',
+      'execution_failed',
+      copy.marketMakerRecallAttemptFailed,
+      copy.marketMakerRecallExecution,
+    ],
+  ] as const)(
+    'shows observed %s separately from pending completion',
+    (state, reason, label, detail) => {
+      const html = renderWithQueries(
+        <MarketMakerFacts
+          data={{
+            ...marketMaker,
+            recall: { status: 'pending' },
+            recallAttempt: {
+              attempts: 2,
+              state,
+              reason,
+              lastAttemptAt: '2026-11-11T01:30:00.000Z',
+              lastFailureAt: state === 'failed' ? '2026-11-11T01:30:00.000Z' : null,
+              lastFailureReason: state === 'failed' ? 'execution_failed' : null,
+            },
+          }}
+        />,
+      );
+      const text = byTestId(html, 'market-maker-recall-attempt')!.text;
+      expect(text).toContain(label);
+      expect(text).toContain(detail);
+      expect(text).toContain('2회');
+      expect(html).not.toContain('<button');
+    },
+  );
   it('separates historical successful opening from current blockers and pending execution', () => {
     const html = renderWithQueries(
       <MarketMakerFacts

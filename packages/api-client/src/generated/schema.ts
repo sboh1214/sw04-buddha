@@ -4232,6 +4232,19 @@ export type components = {
                 /** @enum {string} */
                 terminalStatus: "settled" | "cancelled";
             };
+            recallAttempt: {
+                attempts: number;
+                /** Format: date-time */
+                lastAttemptAt: string;
+                /** Format: date-time */
+                lastFailureAt: string | null;
+                /** @enum {string|null} */
+                lastFailureReason: "books_inconsistent" | "recall_inconsistent" | "execution_failed" | null;
+                /** @enum {string|null} */
+                reason: "ledger_hold" | "treasury_capacity" | "books_inconsistent" | "recall_inconsistent" | "execution_failed" | null;
+                /** @enum {string} */
+                state: "waiting" | "failed" | "completed";
+            } | null;
             runtime: {
                 completedGeneration: string;
                 consecutiveFailures: number;

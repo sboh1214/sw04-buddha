@@ -20,6 +20,7 @@ export const QUEUE_NAMES = [
 export type QueueName = (typeof QUEUE_NAMES)[number];
 
 export const JOB_NAMES = {
+  marketMakerRecall: 'market_maker.recall',
   marketMakerRefresh: 'market_maker.refresh',
   marketMakerScan: 'market_maker.scan',
   /**

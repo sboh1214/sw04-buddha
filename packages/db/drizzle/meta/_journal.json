@@ -498,6 +498,13 @@
       "when": 1794303202562,
       "tag": "0070_market_maker_recalls",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1794387324477,
+      "tag": "0071_market_maker_recall_attempts",
+      "breakpoints": true
     }
   ]
 }

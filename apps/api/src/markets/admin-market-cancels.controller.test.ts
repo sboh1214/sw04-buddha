@@ -32,6 +32,7 @@ import {
   prepareMarketMakerOpening,
 } from '@buddha/db/test';
 import {
+  JOB_NAMES,
   MARKET_CANCEL_APPROVAL_KIND,
   MARKET_STATUSES,
   floorToMinute,
@@ -42,6 +43,7 @@ import {
   type AdminMarketCancelItem,
   type Market,
   type MarketStatus,
+  type MarketJobData,
 } from '@buddha/shared';
 import { Queue } from 'bullmq';
 import { and, asc, eq, ne } from 'drizzle-orm';
@@ -81,7 +83,7 @@ describe.skipIf(!hasTestInfra)('admin market cancels (integration)', () => {
   let t: TestApp;
   /** The worker's view of the `markets` queue: a plain Queue on its own client. */
   let inspector: Redis;
-  let jobQueue: Queue;
+  let jobQueue: Queue<MarketJobData>;
   /** Asks for the cancels unless a test says otherwise. */
   let asker: TestUser;
   /** Decides them. */
@@ -473,6 +475,12 @@ describe.skipIf(!hasTestInfra)('admin market cancels (integration)', () => {
       await jobQueue.getJob(marketOpenJobId(market.id, market.scheduledOpenAt!)),
     ).toBeUndefined();
     expect(await jobQueue.getJob(marketCloseJobId(market.id, market.closeAt))).toBeUndefined();
+    const recalls = (await jobQueue.getJobs(['waiting', 'delayed'])).filter(
+      (job) => job.name === JOB_NAMES.marketMakerRecall && job.data.marketId === market.id,
+    );
+    expect(recalls).toHaveLength(1);
+    expect((await marketRow(market.id)).status).toBe('cancelled');
+    expect(await t.db.select().from(schema.marketMakerRecalls)).toEqual([]);
     // Terminal: nothing more to ask, decide or open.
     expectRefused(await requestCancel(market.id, third), 'status', 'not scheduled');
     expectNotAllowed(await approve(market.id, requestId, third), 'decided');

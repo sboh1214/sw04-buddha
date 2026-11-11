@@ -27,7 +27,13 @@ import {
   marketMakerReason,
 } from '@/lib/market-maker';
 
-function MarketMakerRecall({ recall }: { recall: AdminMarketMaker['recall'] }) {
+function MarketMakerRecall({
+  recall,
+  attempt,
+}: {
+  recall: AdminMarketMaker['recall'];
+  attempt: AdminMarketMaker['recallAttempt'];
+}) {
   return (
     <Stack gap="2" p="3" borderWidth="1px" borderRadius="l2" data-testid="market-maker-recall">
       <Text fontWeight="medium">{copy.marketMakerRecallTitle}</Text>
@@ -72,6 +78,39 @@ function MarketMakerRecall({ recall }: { recall: AdminMarketMaker['recall'] }) {
             {copy.marketMakerRecallHistoryHint}
           </Text>
         </>
+      )}
+      {attempt && (
+        <Stack gap="1" data-testid="market-maker-recall-attempt">
+          <Text fontSize="sm">
+            {copy.marketMakerRecallAttempt}: {formatKst(attempt.lastAttemptAt)} · {attempt.attempts}
+            {copy.marketMakerRecallAttemptCount}
+          </Text>
+          <Text>
+            {attempt.state === 'completed'
+              ? copy.marketMakerRecallAttemptCompleted
+              : attempt.state === 'waiting'
+                ? copy.marketMakerRecallAttemptWaiting
+                : copy.marketMakerRecallAttemptFailed}
+          </Text>
+          {attempt.reason && (
+            <Text>
+              {
+                {
+                  ledger_hold: copy.marketMakerRecallHeld,
+                  treasury_capacity: copy.marketMakerRecallCapacity,
+                  books_inconsistent: copy.marketMakerRecallBooks,
+                  recall_inconsistent: copy.marketMakerRecallBooks,
+                  execution_failed: copy.marketMakerRecallExecution,
+                }[attempt.reason]
+              }
+            </Text>
+          )}
+          {attempt.lastFailureAt && (
+            <Text fontSize="sm">
+              {copy.marketMakerRecallLastFailure}: {formatKst(attempt.lastFailureAt)}
+            </Text>
+          )}
+        </Stack>
       )}
     </Stack>
   );
@@ -196,7 +235,7 @@ export function MarketMakerFacts({ data }: { data: AdminMarketMaker }) {
           )}
         </Stack>
       )}
-      <MarketMakerRecall recall={data.recall} />
+      <MarketMakerRecall recall={data.recall} attempt={data.recallAttempt} />
       <HStack gap="4" flexWrap="wrap">
         <Link asChild>
           <NextLink href="/admin/treasury">{copy.adminTreasury}</NextLink>

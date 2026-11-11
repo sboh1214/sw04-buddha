@@ -10,6 +10,11 @@ import { type EnqueueMarketMaker } from '../market-maker-jobs.js';
 import { refreshMarketMaker, scanMarketMakers } from './market-maker.js';
 import { type Publish } from '../realtime.js';
 import {
+  withMarketMakerRecall,
+  type EnqueueMarketMakerRecall,
+} from '../market-maker-recall-jobs.js';
+import { recallMarketMaker, recallPendingMarketMakers } from './market-maker-recall.js';
+import {
   reconcileDueMarkets,
   reconcileLedger,
   reconcileTarget,
@@ -39,6 +44,7 @@ export interface JobContext {
   enqueueFinalize: EnqueueFinalize;
   /** Best effort after a committed open or MM fill; durable generations survive Redis loss. */
   enqueueMarketMaker: EnqueueMarketMaker;
+  enqueueMarketMakerRecall: EnqueueMarketMakerRecall;
   /** The media store (#46): the orphan clean-up and the retention purge remove objects from it. */
   storage: ObjectStorage;
   logger: Logger;
@@ -72,6 +78,21 @@ function parseMarketJob(job: Job): MarketJobData {
  * `markets.trader_count` is kept with each fill in the order intake's transaction (#121, ADR-0116).
  */
 const HANDLERS: Partial<Record<string, Handler>> = {
+  [JOB_NAMES.marketMakerRecall]: async (job, { db, logger }) => {
+    const { marketId } = parseMarketJob(job);
+    if (marketId) return recallMarketMaker(db, marketId, logger);
+    const { recalled, pending, skipped, failed, failures } = await recallPendingMarketMakers(
+      db,
+      logger,
+    );
+    return reportScan(
+      { recalled, pending, skipped, failed },
+      failures,
+      'market maker recall',
+      recalled,
+      logger,
+    );
+  },
   [JOB_NAMES.marketMakerRefresh]: async (job, { db, publish, enqueueMarketMaker, logger }) => {
     const parsed = marketMakerJobDataSchema.safeParse(job.data);
     if (!parsed.success) throw new UnrecoverableError(`Invalid ${job.name} payload`);
@@ -322,6 +343,10 @@ function reportScan(
 }
 
 export function createProcessor(context: JobContext): Processor {
+  const committedContext = {
+    ...context,
+    publish: withMarketMakerRecall(context.publish, context.enqueueMarketMakerRecall),
+  };
   return async (job) => {
     const handler = HANDLERS[job.name];
     if (!handler) {
@@ -329,6 +354,6 @@ export function createProcessor(context: JobContext): Processor {
         `No handler registered for job "${job.name}" on queue "${job.queueName}"`,
       );
     }
-    return handler(job, context);
+    return handler(job, committedContext);
   };
 }

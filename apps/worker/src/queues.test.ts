@@ -34,6 +34,7 @@ describe('queues', () => {
     // The market jobs in their lifecycle order: #152's confirmation between the close and the
     // payout.
     expect(QUEUE_JOBS.markets).toEqual([
+      JOB_NAMES.marketMakerRecall,
       JOB_NAMES.marketOpen,
       JOB_NAMES.marketClose,
       JOB_NAMES.marketResolve,
@@ -68,6 +69,7 @@ describe('queues', () => {
 
   it('schedules the daily audit, the per-minute scans and payment, the hourly clean-ups and the daily retention purge', () => {
     expect(JOB_SCHEDULES.map((schedule) => schedule.id)).toEqual([
+      'market-maker-recall-scan',
       'market-maker-scan',
       'ledger-audit-daily',
       'market-audit-scan',

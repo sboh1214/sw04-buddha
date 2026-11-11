@@ -66,6 +66,26 @@ export const adminMarketMakerSchema = z
     }),
     readiness: z.object({ blockers: z.array(z.enum(MARKET_MAKER_READINESS_BLOCKERS)) }),
     recall: recallObservation,
+    recallAttempt: z
+      .object({
+        attempts: z.number().int().positive(),
+        state: z.enum(['waiting', 'failed', 'completed']),
+        reason: z
+          .enum([
+            'ledger_hold',
+            'treasury_capacity',
+            'books_inconsistent',
+            'recall_inconsistent',
+            'execution_failed',
+          ])
+          .nullable(),
+        lastAttemptAt: z.iso.datetime(),
+        lastFailureAt: z.iso.datetime().nullable(),
+        lastFailureReason: z
+          .enum(['books_inconsistent', 'recall_inconsistent', 'execution_failed'])
+          .nullable(),
+      })
+      .nullable(),
     lastOpenAttempt: z
       .object({
         lastAttemptAt: z.iso.datetime(),

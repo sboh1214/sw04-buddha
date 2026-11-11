@@ -42,6 +42,7 @@ export const BULLMQ_REDIS_OPTIONS = {
 /** Which jobs belong to which queue. */
 export const QUEUE_JOBS: Record<QueueName, readonly JobName[]> = {
   markets: [
+    JOB_NAMES.marketMakerRecall,
     JOB_NAMES.marketOpen,
     JOB_NAMES.marketClose,
     JOB_NAMES.marketResolve,
@@ -85,6 +86,12 @@ const EVERY_MINUTE = { pattern: '* * * * *', tz: 'Asia/Seoul' } as const;
  * id, so restarting the worker updates the schedule instead of piling up duplicates.
  */
 export const JOB_SCHEDULES = [
+  {
+    id: 'market-maker-recall-scan',
+    queue: 'markets',
+    name: JOB_NAMES.marketMakerRecall,
+    repeat: EVERY_MINUTE,
+  },
   {
     id: 'market-maker-scan',
     queue: 'maker',

@@ -110,6 +110,7 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
       publish,
       enqueueFinalize,
       enqueueMarketMaker: () => Promise.resolve(),
+      enqueueMarketMakerRecall: () => Promise.resolve(),
       storage,
       logger,
     };

@@ -9,6 +9,7 @@ import { startHealthServer, type HealthServer } from './health.js';
 import { createProcessor } from './jobs/index.js';
 import { LEDGER_AUDIT_QUERY_TIMEOUT_MS } from './jobs/ledger-audit.js';
 import { logger } from './logger.js';
+import { createEnqueueMarketMakerRecall } from './market-maker-recall-jobs.js';
 import { createEnqueueFinalize } from './market-jobs.js';
 import { createEnqueueMarketMaker } from './market-maker-jobs.js';
 import {
@@ -103,6 +104,7 @@ async function main(): Promise<void> {
     // #152: a confirmation's `market.finalize`, on the queue the workers below consume.
     enqueueFinalize: createEnqueueFinalize(queueByName.markets, logger),
     enqueueMarketMaker: createEnqueueMarketMaker(queueByName.maker, logger),
+    enqueueMarketMakerRecall: createEnqueueMarketMakerRecall(queueByName.markets, logger),
     storage,
     logger,
   });
