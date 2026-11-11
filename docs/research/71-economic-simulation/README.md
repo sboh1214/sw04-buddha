@@ -77,10 +77,18 @@ C1↔C2는 b, C3↔C7은 S만 다르다. C2↔C3은 물량과 단계 수, C3↔C
 pnpm install --offline --frozen-lockfile
 pnpm --filter @buddha/shared build
 pnpm exec tsc -p scripts/economic-simulation/tsconfig.json
-node --test scripts/economic-simulation/model.test.ts
+node --test scripts/economic-simulation/model.test.ts scripts/economic-simulation/report.test.ts
 (cd scripts/economic-simulation && ../../packages/shared/node_modules/.bin/eslint .)
 node scripts/economic-simulation/run.ts --out /tmp/buddha-economy-71-new
 node scripts/economic-simulation/report.mjs /tmp/buddha-economy-71-new
+```
+
+보고서는 기본적으로 선택한 결과 디렉터리 안의 `RESULTS.md`에 저장한다. 위 명령의 출력은 `/tmp/buddha-economy-71-new/RESULTS.md`이며 다른 실행의 보고서를 덮어쓰지 않는다. 두 번째 인자로 보고서 경로를 지정할 수 있고, 자료 링크는 그 보고서 위치를 기준으로 계산한다. 저장소에 보존된 기존 보고서 위치로 표시 자료만 재생성하려면 경로를 명시한다. 이 명령은 경제 모형을 재실행하지 않는다.
+
+```sh
+node scripts/economic-simulation/report.mjs \
+  docs/research/71-economic-simulation/results \
+  docs/research/71-economic-simulation/RESULTS.md
 ```
 
 단일 사례는 같은 네 좌표를 지정한다. `--trace`는 입력 tape와 모든 주문·체결·취소·소각을 gzip으로 남긴다. 원행의 `inputDigest`·`traceDigest`와 일치하면 같은 경제 경로다. 입력 생성 소스·seed·후보·전체 결과는 저장하되 2016개 전체의 거대한 trace는 중복 저장하지 않는다. 불변식 오류가 있으면 그 경로의 입력과 전체 trace를 `counterexamples/`에 자동 저장하고 나머지 경로도 실행한 뒤 종료 코드 1을 돌려준다. 모든 정상 결과도 계속 남긴다.

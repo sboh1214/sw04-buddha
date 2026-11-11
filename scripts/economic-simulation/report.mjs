@@ -2,10 +2,21 @@ import assert from 'node:assert/strict';
 import { format, resolveConfig } from 'prettier';
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, relative, resolve, sep } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 
 const directory = resolve(process.argv[2] ?? 'docs/research/71-economic-simulation/results');
+const reportPath = resolve(process.argv[3] ?? resolve(directory, 'RESULTS.md'));
+const artifactUrl = (file) =>
+  relative(dirname(reportPath), resolve(directory, file))
+    .split(sep)
+    .map((part) =>
+      encodeURIComponent(part).replace(
+        /[!'()*]/g,
+        (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+      ),
+    )
+    .join('/');
 const bytes = readFileSync(resolve(directory, 'results.jsonl.gz'));
 const manifest = JSON.parse(readFileSync(resolve(directory, 'manifest.json'), 'utf8'));
 assert.equal(createHash('sha256').update(bytes).digest('hex'), manifest.resultsSha256);
@@ -152,13 +163,12 @@ body.push(
   '',
   '## 전체 자료와 해석 제한',
   '',
-  '- [모든 실행의 수치](results/comparison.csv)·[모든 원결과 JSONL](results/results.jsonl.gz)·[1008개 후보/규모/경로별 seed 집계](results/scenario-summary.csv)를 함께 보존한다. 위 표에 없는 결과를 버리지 않았다.',
-  '- [9개 독립 참가자×시장 축 민감도](results/population-market-sensitivity.csv)는 balanced 경로의 72개 조합이다. 대표 세 조건만으로 참가자 수 효과와 시장 수 효과를 분리했다고 주장하지 않는다.',
+  `- [모든 실행의 수치](${artifactUrl('comparison.csv')})·[모든 원결과 JSONL](${artifactUrl('results.jsonl.gz')})·[1008개 후보/규모/경로별 seed 집계](${artifactUrl('scenario-summary.csv')})를 함께 보존한다. 위 표에 없는 결과를 버리지 않았다.`,
+  `- [9개 독립 참가자×시장 축 민감도](${artifactUrl('population-market-sensitivity.csv')})는 balanced 경로의 72개 조합이다. 대표 세 조건만으로 참가자 수 효과와 시장 수 효과를 분리했다고 주장하지 않는다.`,
   '- 각 시장의 YES·NO·VOID와 공동 결과별 실제 지급을 검사한다. 여러 시장의 모든 3^M 결합을 열거하지 않는다. 손실 한도는 각 시장·각 결과에서 독립 검사하고, 전체 위험은 시장별 최악 손실을 합쳐 이익으로 상쇄하지 않는다.',
   '- 전체 2016회는 하나의 직렬 순수 모형이다. 승인·원장 DB·장애·작업 재시도·동시성의 실제 서비스 검증은 #131이다. 숫자 품질 문턱, 경보 문턱과 최종 출시 값은 #133이 정한다.',
   '',
 );
-const reportPath = resolve(directory, '..', 'RESULTS.md');
 writeFileSync(
   reportPath,
   await format(body.join('\n'), {
