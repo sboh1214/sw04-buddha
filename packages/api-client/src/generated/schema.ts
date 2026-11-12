@@ -2364,6 +2364,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/trading-anomalies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read bounded human-pair and round-trip candidates without classifying or taking action */
+        get: operations["adminGetTradingAnomalies"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/treasury": {
         parameters: {
             query?: never;
@@ -7596,6 +7613,111 @@ export type components = {
             startDate: string;
             /** @enum {string} */
             status: "upcoming" | "ongoing" | "ended";
+        };
+        TradingAnomalyCandidate: {
+            actors: {
+                nickname: string | null;
+                userId: string;
+            }[];
+            count: string;
+            evidence: {
+                first: {
+                    /** Format: date-time */
+                    at: string;
+                    fillId: string;
+                    /** Format: uuid */
+                    orderId: string;
+                    /** @enum {string} */
+                    outcome: "YES" | "NO";
+                    priceCoin: number;
+                    qty: string;
+                    /** @enum {string} */
+                    side: "buy" | "sell";
+                    userId: string;
+                };
+                matchedQty: string;
+                second: {
+                    /** Format: date-time */
+                    at: string;
+                    fillId: string;
+                    /** Format: uuid */
+                    orderId: string;
+                    /** @enum {string} */
+                    outcome: "YES" | "NO";
+                    priceCoin: number;
+                    qty: string;
+                    /** @enum {string} */
+                    side: "buy" | "sell";
+                    userId: string;
+                };
+            }[];
+            evidenceTotal: string;
+            evidenceTruncated: boolean;
+            id: string;
+            /** @enum {string} */
+            kind: "human_pair" | "round_trip";
+            market: {
+                /** Format: uuid */
+                id: string;
+                /** @enum {string} */
+                status: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
+                title: string;
+            };
+            /** @enum {string|null} */
+            outcome: "YES" | "NO" | null;
+            quantity: string;
+            /** Format: date-time */
+            windowEndedAt: string;
+            /** Format: date-time */
+            windowStartedAt: string;
+        };
+        TradingAnomalyQuery: {
+            /** Format: uuid */
+            marketId?: string;
+        };
+        TradingAnomalyReport: {
+            /** Format: date-time */
+            asOf: string;
+            candidates: components["schemas"]["TradingAnomalyCandidate"][];
+            /** Format: uuid */
+            marketId: string | null;
+            /** Format: date-time */
+            rangeStartedAt: string | null;
+            signals: {
+                candidatesTruncated: boolean;
+                /** @enum {string} */
+                kind: "human_pair" | "round_trip";
+                observedCandidates: string;
+                /** Format: date-time */
+                rangeStartedAt: string | null;
+                settings: {
+                    count: {
+                        key: string;
+                        status: components["schemas"]["ReleaseSettingStatus"];
+                        value: number | null;
+                    };
+                    lookbackSeconds: {
+                        key: string;
+                        status: components["schemas"]["ReleaseSettingStatus"];
+                        value: number | null;
+                    };
+                    windowSeconds: {
+                        key: string;
+                        status: components["schemas"]["ReleaseSettingStatus"];
+                        value: number | null;
+                    };
+                };
+                /** @enum {string} */
+                status: "ready" | "undecided" | "invalid";
+            }[];
+            source: {
+                complete: boolean;
+                limit: number;
+                /** Format: date-time */
+                oldestScannedAt: string | null;
+                scannedFills: number;
+                truncated: boolean;
+            };
         };
         TreasuryIssuance: {
             amountCoin: components["schemas"]["CoinAmount"];
@@ -19710,6 +19832,74 @@ export interface operations {
             };
             /** @description NOT_FOUND */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminGetTradingAnomalies: {
+        parameters: {
+            query?: {
+                marketId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["TradingAnomalyReport"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

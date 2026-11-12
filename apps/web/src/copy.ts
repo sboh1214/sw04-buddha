@@ -4472,6 +4472,55 @@ export const copy = {
   judgingCurrentDelay: '최신 지연 기록',
   judgingPreviousDelay: '이전 지연 기록',
   judgingNextReviewAt: '다음 검토 시각',
+  adminTradingAnomalies: '거래 패턴 검토',
+  anomalyPurpose:
+    '반복 체결과 짧은 시간의 매수·매도 왕복을 검토할 근거입니다. 이 목록만으로 비정상 거래를 확정하지 않으며, 거래 제외나 계정 조치는 별도 검토와 승인이 필요합니다.',
+  anomalyMarketFilter: '시장 ID로 좁히기',
+  anomalyMarketFilterHint: '비워 두면 모든 시장을 조회합니다.',
+  anomalyInvalidMarket: '올바른 시장 ID를 입력해 주세요.',
+  anomalyApplyFilter: '조회 범위 적용',
+  anomalyRecalculate: '다시 계산',
+  anomalyAsOf: '조회 기준 시각',
+  anomalyRange: '체결 조회 범위',
+  anomalySnapshotHint:
+    '이 결과의 기준 시각과 설정은 고정되어 있습니다. 새 체결이나 설정 변경을 반영하려면 다시 계산하세요.',
+  anomalyPair: '두 사람 사이의 반복 체결',
+  anomalyRoundTrip: '같은 계약의 매수·매도 왕복',
+  anomalyPairHint:
+    '한 시장에서 같은 두 사람 사이의 체결을 방향과 관계없이 셉니다. 운영 마켓메이커와의 반복 체결만으로는 이 항목에 오르지 않습니다.',
+  anomalyRoundTripHint:
+    '같은 사람·시장·계약에서 먼저 체결한 수량부터 반대 방향 체결과 연결합니다. 서로 다른 원 체결 ID의 쌍을 한 번씩 세므로 주문 분할에 따라 횟수가 달라질 수 있습니다. 운영 마켓메이커와 체결한 사람의 왕복도 포함됩니다.',
+  anomalyReady: '계산 가능',
+  anomalyUndecided: '설정 미정으로 계산하지 않음',
+  anomalyInvalid: '설정 조합을 확인해야 계산 가능',
+  anomalyInvalidHint:
+    '시간 구간은 조회 기간보다 길 수 없으며, 조회 가능한 시각 범위 안이어야 합니다.',
+  anomalyCountSetting: '최소 횟수',
+  anomalyWindowSetting: '시간 구간(초)',
+  anomalyLookbackSetting: '조회 기간(초)',
+  anomalyUnset: '미정',
+  anomalyScanned: '확인한 원 체결 수',
+  anomalyPartial: '일부 근거만 확인한 결과',
+  anomalyPartialHint:
+    '조회 상한에 닿아 앞선 체결이나 일부 후보가 빠졌습니다. 이 결과에 없다는 이유로 해당 거래가 없다고 판단하지 마세요. 시장 ID로 범위를 좁혀 다시 확인할 수 있습니다.',
+  anomalyEmpty: '설정된 범위에서 해당 패턴이 발견되지 않았습니다.',
+  anomalyPartialEmpty:
+    '확인한 일부 근거에서는 표시할 후보가 없습니다. 전체 범위를 확인한 결과가 아닙니다.',
+  anomalyUnavailableEmpty: '계산 가능한 항목이 없습니다. 출시 설정을 확인해 주세요.',
+  anomalyObserved: '확인된 후보 수',
+  anomalyCandidateCount: '구간 내 횟수',
+  anomalyMatchedQuantity: '연결된 계약 수량',
+  anomalyCandidateRange: '해당 구간의 첫·마지막 체결',
+  anomalyEvidence: '체결 근거 보기',
+  anomalyEvidencePartial: '이 후보의 근거도 일부만 표시합니다.',
+  anomalyFirstLeg: '첫 체결 측',
+  anomalySecondLeg: '상대 체결 측',
+  anomalyFillId: '체결 ID',
+  anomalyOrderId: '주문 ID',
+  anomalyPrice: '체결 가격(Coin)',
+  anomalyQuantity: '원 체결 수량',
+  anomalyMore: '같은 결과에서 더 보기',
+  anomalyRefreshFailed: '다시 계산하지 못했습니다. 아래에는 이전 기준 시각의 결과를 유지합니다.',
 } as const;
 
 export type CopyKey = keyof typeof copy;

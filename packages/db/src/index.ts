@@ -265,3 +265,4 @@ export * from './market-maker-recall-attempts.js';
 export * from './market-maker-metrics.js';
 
 export * from './market-maker-control.js';
+export * from './trading-anomalies.js';

@@ -403,6 +403,60 @@ export const MARKET_MAKER_CONCENTRATION_TOP_N_SETTING = defineReleaseSetting({
   schema: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
 });
 
+/** #98: no values/defaults; duration bound is the JavaScript Date range in whole seconds. */
+const anomalyCountSchema = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
+const anomalySecondsSchema = z.number().int().min(1).max(8_640_000_000_000);
+export const TRADING_ANOMALY_SETTINGS = {
+  pairCount: defineReleaseSetting({
+    key: 'trading_anomaly.pair_min_fills',
+    label: '사람 쌍 반복 최소 체결 수',
+    unit: '건',
+    description:
+      '같은 시장의 같은 두 사람 체결이 시간창 안에서 이 수 이상이면 검토 후보로 표시한다. 방향은 합치고 MM 상대 반복만으로 후보를 만들지 않는다. 값이 있으면 상태와 관계없이 적용하며 미정이면 계산하지 않는다. 자동 판정이나 조치는 없다.',
+    schema: anomalyCountSchema,
+  }),
+  pairWindow: defineReleaseSetting({
+    key: 'trading_anomaly.pair_window_seconds',
+    label: '사람 쌍 반복 시간창',
+    unit: '초',
+    description:
+      '같은 사람 쌍 반복을 묶는 최대 시간이다. 조회기간보다 길면 잘못된 설정으로 표시한다. 양의 정수이며 명시한 값만 사용하고 기본값은 없다.',
+    schema: anomalySecondsSchema,
+  }),
+  pairLookback: defineReleaseSetting({
+    key: 'trading_anomaly.pair_lookback_seconds',
+    label: '사람 쌍 반복 조회기간',
+    unit: '초',
+    description:
+      '조회 기준시각부터 과거 이 기간의 원체결을 계산한다. 양의 정수이며 미정이면 계산하지 않는다. 기술적 조회 상한으로 잘린 결과는 일부 자료라고 표시한다.',
+    schema: anomalySecondsSchema,
+  }),
+  roundTripCount: defineReleaseSetting({
+    key: 'trading_anomaly.round_trip_min_pairs',
+    label: '단기 왕복 최소 체결쌍 수',
+    unit: '쌍',
+    description:
+      '같은 사람·시장·계약의 반대 방향 체결을 시간순 FIFO로 수량 대응한 서로 다른 원체결ID쌍을 센다. 동일 쌍은 한 번만 세고 분할 체결은 쌍 수에 영향을 준다. MM 상대 사람 왕복도 포함한다. 값이 있을 때만 후보를 계산하며 자동 판정이나 조치는 없다.',
+    schema: anomalyCountSchema,
+  }),
+  roundTripWindow: defineReleaseSetting({
+    key: 'trading_anomaly.round_trip_window_seconds',
+    label: '단기 왕복 시간창',
+    unit: '초',
+    description:
+      '한 후보에 포함된 왕복 체결쌍의 시작부터 끝까지 최대 시간이다. 조회기간보다 길면 잘못된 설정으로 표시한다. 양의 정수이며 명시한 값만 사용한다.',
+    schema: anomalySecondsSchema,
+  }),
+  roundTripLookback: defineReleaseSetting({
+    key: 'trading_anomaly.round_trip_lookback_seconds',
+    label: '단기 왕복 조회기간',
+    unit: '초',
+    description:
+      '조회 기준시각부터 과거 이 기간의 사람 매수·매도 원체결을 계산한다. 양의 정수이며 미정이면 계산하지 않는다. 기술적 조회 상한으로 잘린 결과는 일부 자료라고 표시한다.',
+    schema: anomalySecondsSchema,
+  }),
+} as const;
+
 /**
  * A retention period (#184, retention.ts): whole days, 1 to RETENTION_PERIOD_MAX_DAYS. Days, the
  * unit every count of this project's periods uses (a day is 24 hours of the database clock), so
@@ -561,6 +615,7 @@ export const RELEASE_SETTINGS: ReleaseSettingsRegistry = defineReleaseSettings([
   MARKET_MAKER_HALT_AT_BP_SETTING,
   MARKET_MAKER_REDUCE_RATIO_BP_SETTING,
   MARKET_MAKER_CONCENTRATION_TOP_N_SETTING,
+  ...Object.values(TRADING_ANOMALY_SETTINGS),
   CONSENT_RECORDS_RETENTION_SETTING,
   PHONE_VERIFICATION_RECORDS_RETENTION_SETTING,
   DELETED_POSTS_RETENTION_SETTING,
