@@ -35,6 +35,7 @@ const market: Market = {
   volumeCoin: '1250000',
   tradeCount: 12,
   traderCount: 5,
+  statsRevision: '12',
   closeAt: '2026-12-01T00:00:00.000Z',
   openAt: '2026-09-01T00:00:00.000Z',
   resolvedResult: null,
@@ -226,11 +227,10 @@ describe('filtersFromSearchParams', () => {
     }
   });
 
-  it('ignores a bookmarked ?status= and ?sort=volume rather than redirecting (as D23 does)', () => {
+  it('ignores a bookmarked ?status= and unknown ?sort=price rather than redirecting (as D23 does)', () => {
     // The home has no status filter and lists open markets only (ADR-0061 decision 1, item 13),
-    // and the volume order is gone until #132 (item 11). Links saved before still open the home,
-    // on its default list — this PR changed both, the old expectations kept a status.
-    expect(filtersFromSearchParams({ status: 'settled', sort: 'volume' })).toEqual(
+    // and unknown orders use the default; valid volume is covered by the public-order loop.
+    expect(filtersFromSearchParams({ status: 'settled', sort: 'price' })).toEqual(
       DEFAULT_MARKET_FILTERS,
     );
     expect(filtersFromSearchParams({ status: 'resolving', sort: 'newest' })).toEqual({
@@ -311,7 +311,7 @@ describe('filtersFromSearchParams', () => {
           sort,
         });
       }
-      for (const sort of ['volume', 'price', '']) {
+      for (const sort of ['unknown', 'price', '']) {
         expect(filtersFromSearchParams({ watchlist: '1', sort })).toEqual({
           watchlist: true,
           sort: 'watched',

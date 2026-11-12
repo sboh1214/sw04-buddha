@@ -66,6 +66,7 @@ const held = {
   volumeCoin: '123456',
   tradeCount: 789,
   traderCount: 321,
+  statsRevision: '789',
   openInterest: { yes: 4321, no: 8765 },
   judgementVersion: 1,
   disputeDeadline: current.disputeDeadline,

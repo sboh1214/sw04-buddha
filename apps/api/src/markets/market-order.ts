@@ -1,4 +1,5 @@
-import { schema, type Db } from '@buddha/db';
+import type { RankingCursorCodec } from './market-ranking-cursor.js';
+import { schema, classificationCutoffSql, isFillExcludedSql, type Db } from '@buddha/db';
 import {
   ALL_MARKET_STATUSES,
   CURSOR_NULL,
@@ -27,9 +28,9 @@ type SelectSource = Pick<Db, 'select'>;
  * place relative to another on every screen that lists both.
  *
  * - 추천 (`recommended`): the volume of the fills of the last 24 hours (`recentVolume`), largest
- *   first; ties by the actual open time, latest first; then the id. Every fill counts until #132
- *   excludes abnormal ones; the volume is Σ `fills.amount_coin`, #177 12항's (ADR-0107 결정 1,
+ *   first; ties by the actual open time, latest first; then the id. #132 excludes approved abnormal fills; the volume is Σ `fills.amount_coin`, #177 12항's (ADR-0107 결정 1,
  *   #121): each match once, at the incoming contract's price × qty.
+ * - 거래량 (`volume`): the same normal-fill amount over the complete market history.
  * - 신규 (`newest`): the actual open time, latest first, then the id.
  * - 마감 임박 (`closing`): the close time, soonest first, then the id; no window. On a list that
  *   can hold a closed market — anything but one status that has not closed yet: the search's 모든
@@ -139,7 +140,12 @@ export const recentVolumeCoin: SQL = sql`${sql.identifier(RECENT_VOLUME)}.${sql.
  * what makes the second form hold still: a fill made after the first page was read is not
  * counted on the pages that follow it.
  */
-export function recentVolume(db: SelectSource, asOf: SQL) {
+export function recentVolume(
+  db: SelectSource,
+  asOf: SQL,
+  cutoff: SQL = classificationCutoffSql(),
+  allTime = false,
+) {
   const { fills, markets } = schema;
   return db
     .select({
@@ -149,7 +155,10 @@ export function recentVolume(db: SelectSource, asOf: SQL) {
     .where(
       and(
         eq(fills.marketId, markets.id),
-        sql`${fills.createdAt} > ${asOf} - make_interval(hours => ${RECOMMENDED_VOLUME_HOURS})`,
+        allTime
+          ? undefined
+          : sql`${fills.createdAt} > ${asOf} - make_interval(hours => ${RECOMMENDED_VOLUME_HOURS})`,
+        sql`NOT ${isFillExcludedSql(fills.id, cutoff)}`,
         sql`${fills.createdAt} <= ${asOf}`,
       ),
     )
@@ -167,12 +176,17 @@ export type MarketOrderFields = {
   recentVolume: SQL<string | null>;
   /** 추천: the window end the page was counted at, epoch milliseconds as text. */
   asOfMs: SQL<string | null>;
+  classificationCutoff: SQL<string | null>;
 };
 
 /** A row as an ordered list query selects it: the market, and what `MarketOrderFields` read. */
 export interface MarketOrderRow {
   market: MarketRow;
-  order: { recentVolume: string | null; asOfMs: string | null };
+  order: {
+    recentVolume: string | null;
+    asOfMs: string | null;
+    classificationCutoff: string | null;
+  };
 }
 
 /**
@@ -193,12 +207,16 @@ export interface MarketOrder<Row extends MarketOrderRow = MarketOrderRow> {
 export const NO_ORDER_FIELDS: MarketOrderFields = {
   recentVolume: sql<null>`NULL`,
   asOfMs: sql<null>`NULL`,
+  classificationCutoff: sql<null>`NULL`,
 };
 
 /**
  * The order for `sort`, paging after `cursor`.
  *
- * 추천's cursor is `<asOf>_<volume>_<openAt>_<id>` (`encodeTupleCursor`). The 24-hour volume moves
+ * Ranked cursors seal `<sort>_<asOf>_<classificationCutoff>_<volume>_<openAt>_<id>`. The
+ * internal cutoff is authenticated/encrypted and never a public classification identifier. All
+ * pages use the same committed classification prefix; later mark/clear decisions cannot reorder
+ * a traversal already in progress. The 24-hour volume moves
  * with the clock — a fill ages out of the window, a new one comes in — so a list paged minutes
  * apart over a moving window could repeat a market on page two that page one already showed, or
  * skip one. The first page therefore fixes the window: its end is the database clock at that
@@ -226,33 +244,53 @@ export function marketOrder(
   sort: MarketSort,
   cursor: string | undefined,
   status: MarketListStatus | undefined,
+  rankingCursors?: RankingCursorCodec,
 ): MarketOrder {
   const { markets } = schema;
   switch (sort) {
-    case 'recommended': {
-      const keyset = decodeTupleCursor(cursor, ['millis', 'int', 'nullableMillis'], 'uuid');
+    case 'recommended':
+    case 'volume': {
+      if (!rankingCursors) throw new Error('Ranked market lists require private cursors');
+      const decoded = decodeTupleCursor(
+        rankingCursors.open(sort, cursor),
+        ['group', 'millis', 'int', 'int', 'nullableMillis'],
+        'uuid',
+      );
+      const sortKey = sort === 'volume' ? '1' : '0';
+      const keyset = decoded?.values[0] === sortKey ? decoded : null;
       const asOf = keyset
-        ? sql`${new Date(Number(keyset.values[0])).toISOString()}::timestamptz`
+        ? sql`${new Date(Number(keyset.values[1])).toISOString()}::timestamptz`
         : sql`date_trunc('milliseconds', now())`;
-      const lateral = recentVolume(db, asOf);
+      const cutoff = keyset ? sql`${keyset.values[2]}::bigint` : classificationCutoffSql();
+      const lateral = recentVolume(db, asOf, cutoff, sort === 'volume');
       return {
         lateral,
         fields: {
           recentVolume: sql<string>`${recentVolumeCoin}::text`,
           asOfMs: sql<string>`(extract(epoch FROM ${asOf}) * 1000)::bigint::text`,
+          classificationCutoff: sql<string>`${cutoff}::text`,
         },
         after: keyset
           ? tupleKeysetPredicate([
-              { key: recentVolumeCoin, value: keyset.values[1]!, cast: 'bigint' },
-              { key: openedAt, value: openedAtValue(keyset.values[2]!), cast: 'timestamptz' },
+              { key: recentVolumeCoin, value: keyset.values[3]!, cast: 'bigint' },
+              { key: openedAt, value: openedAtValue(keyset.values[4]!), cast: 'timestamptz' },
               { key: markets.id, value: keyset.id, cast: 'uuid' },
             ])
           : undefined,
         orderBy: [desc(recentVolumeCoin), desc(openedAt), desc(markets.id)],
         cursorOf: ({ market, order }) =>
-          encodeTupleCursor(
-            [order.asOfMs ?? '0', order.recentVolume ?? '0', openedAtPart(market)],
-            market.id,
+          rankingCursors.seal(
+            sort,
+            encodeTupleCursor(
+              [
+                sortKey,
+                order.asOfMs ?? '0',
+                order.classificationCutoff ?? '0',
+                order.recentVolume ?? '0',
+                openedAtPart(market),
+              ],
+              market.id,
+            ),
           ),
       };
     }

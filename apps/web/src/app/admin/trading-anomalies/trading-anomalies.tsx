@@ -51,9 +51,11 @@ function Leg({
       <Text>
         {copy.anomalyPrice}: {leg.priceCoin} · {copy.anomalyQuantity}: {count(leg.qty)}
       </Text>
-      <Text>
-        {copy.anomalyFillId}: {leg.fillId}
-      </Text>
+      <Link asChild>
+        <NextLink href={`/admin/fills/${leg.fillId}` as Route}>
+          {copy.anomalyFillId}: {leg.fillId}
+        </NextLink>
+      </Link>
       <Text>
         {copy.anomalyOrderId}: {leg.orderId}
       </Text>

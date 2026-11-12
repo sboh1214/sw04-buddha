@@ -53,6 +53,13 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
     'market_maker_control_reject',
   'POST /admin/markets/:marketId/market-maker/control-requests/:requestId/retract':
     'market_maker_control_retract',
+  'POST /admin/fills/:fillId/classification-requests': 'fill_classification_request',
+  'POST /admin/fills/:fillId/classification-requests/:requestId/approve':
+    'fill_classification_approve',
+  'POST /admin/fills/:fillId/classification-requests/:requestId/reject':
+    'fill_classification_reject',
+  'POST /admin/fills/:fillId/classification-requests/:requestId/retract':
+    'fill_classification_retract',
   'POST /admin/treasury/issue-requests': 'treasury_issue_request',
   'POST /admin/treasury/issue-requests/:id/approve': 'treasury_issue_approve',
   'POST /admin/treasury/issue-requests/:id/reject': 'treasury_issue_reject',

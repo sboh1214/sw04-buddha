@@ -3485,6 +3485,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
           volumeCoin: '59',
           tradeCount: 1,
           traderCount: 2,
+          statsRevision: '1',
           ts: expect.any(String) as string,
         },
       });

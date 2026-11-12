@@ -97,7 +97,7 @@ describe('participantsText', () => {
   it('writes the participants, not the fills: traderCount and never tradeCount', () => {
     // Two different numbers on one row. On every e2e market both are 0 (nothing writes them
     // before the order path, #119), so this is the one place the field the card reads is pinned.
-    const row = { traderCount: 3, tradeCount: 11 };
+    const row = { traderCount: 3, statsRevision: '11', tradeCount: 11 };
     expect(participantsText(row)).toBe(`${copy.marketTraders} 3`);
   });
 

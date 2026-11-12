@@ -26,6 +26,7 @@ const delayed: Market = {
   volumeCoin: '123456',
   tradeCount: 789,
   traderCount: 321,
+  statsRevision: '789',
   closeAt: '2026-11-29T15:00:00.000Z',
   openAt: '2026-11-01T00:00:00.000Z',
   resolvedResult: null,
@@ -94,6 +95,7 @@ describe('MarketRefreshAlert: stale public history (#24)', () => {
         lastPrice: 64,
         volumeCoin: '123520',
         traderCount: delayed.traderCount,
+        statsRevision: String(delayed.tradeCount + 1),
         ts: '2026-11-09T06:00:00.000Z',
       }),
     );

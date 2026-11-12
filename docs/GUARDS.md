@@ -375,3 +375,11 @@ SMS는 모두 `apps/api/src/sms/templates.ts`에서 만들고 `SMS_TEMPLATES`에
 ## 관리자 거래 패턴 검토 (#98, ADR-0130)
 
 `GET /admin/trading-anomalies`와 `/admin/trading-anomalies`는 관리자 전용이다. `risk-flag`에 `tradingAnomaly`/`tradingAnomalies`/`anomalyCandidates`/`humanPair`/`roundTrip` 이름을 등록한다. 보고서는 원 체결에서 실제 사람 측의 행동만 투영하고 현재 별명과 관리자 계정 링크를 연결한다. 이메일·실명·전화번호·IP·기기·잔고·지급 정보는 reader가 선택하지도 DTO가 내보내지도 않는다. 조회의 RR READ ONLY와 경제/감사 행 무변경을 실제 DB/API 회귀로 확인한다. 공개 체결 가격·수량을 금지하는 규칙을 늘리거나 공개 허용 목록을 넓히지 않는다. MM 상대 반복과 사람 왕복의 구분, 잘린 빈 결과, 다른 트랜잭션의 체결·설정 변경을 회귀로 지킨다. 이 검사는 공모 여부나 운영 설정값의 적절성을 판정하지 않는다.
+
+### #132 고정 체결 분류
+
+분류는 `/admin/fills/:fillId` 아래 고정 요청과 별도 관리자 결정이며 모든 읽기/쓰기에 세션·현직 관리자·온보딩을 적용한다. 네 쓰기는 `expectedAccountId`와 같은 트랜잭션의 감사 기록을 요구한다. 일반 사용자의 체결이나 원장 조회에 운영 분류를 표시하지 않는다. 공개/본인 데이터 가드는 `classification`, `classificationRevision`, `classificationCutoff`, `excluded` 등 내부 표식을 거절하며 일반 `statsRevision`만 허용한다.
+
+0075의 `fill_classifications`는 UPDATE/DELETE 불가이고 실제 같은 트랜잭션의 승인·고정 payload·두 현직 관리자·참여자 projection과 연결한다. SQL helper/guard의 명시된 검색 경로는 임시 테이블의 승인/시장 행으로 이 연결을 우회하지 못하게 한다. 시장 잠금과 전역 분류 advisory 잠금의 순서를 유지한다. 가격·원장·보유·정산·hasMarketFill을 분류 기준으로 필터하지 않는다.
+
+같은 트랜잭션의 분류 뒤 강제 지연 제약 flush가 있어도 후속 시장 통계 UPDATE가 최종 검사를 다시 예약한다. 최신 분류가 현재 트랜잭션에 속할 때만 정상 참여자를 다시 세므로 일반 체결마다 전체 체결을 재집계하지 않는다. 후속 정상 체결의 더 큰 통계 버전과 올바른 참여자는 허용한다.

@@ -61,6 +61,7 @@ function tick(ts: string, bp = 5000, tradeCount = 42): MarketTickEvent {
     volumeCoin: '12000',
     tradeCount,
     traderCount: 5,
+    statsRevision: String(tradeCount),
     ts,
   };
 }

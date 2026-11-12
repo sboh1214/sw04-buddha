@@ -294,10 +294,15 @@ const REALTIME_NOTES = `연결은 Socket.IO 네임스페이스 하나다. 핸드
 
 /** 실시간 이벤트별 한국어 설명. Keys must cover REALTIME_EVENT_TYPES, or the generator fails. */
 const REALTIME_EVENTS = {
+  'market:stats': {
+    room: '`market:<id>`',
+    note: '공개 참가자 수와 일반 통계 최신성 키만 보낸다. 가격·누적 거래량·체결 수는 바꾸지 않으며 내부 분류·사유·관리자 신원은 포함하지 않는다.',
+    key: '`statsRevision`',
+  },
   'market:tick': {
     room: '`market:<id>`',
-    note: '체결이 있었던 주문 접수 하나마다 커밋 뒤 한 번(#121) — 그 접수가 끝난 뒤의 시장가격(마지막 체결의 YES 기준 값)·마지막 체결의 서버 시각(`ts`)·누적 거래량·체결 수·사용자 참여자 수(사람 계정만). 한 접수의 체결이 여럿이면 `tradeCount` 가 1보다 크게 오른다. 다른 이벤트처럼 반드시 도착하도록 보낸다(휘발이 아니다). 값이 절대값이라 늦거나 겹친 틱은 아무것도 바꾸지 않는다. `market:trade`·`market:book` 과의 도착 순서에 기대지 말고 `tradeCount` 로 고른다',
-    key: '`tradeCount`',
+    note: '체결이 있었던 주문 접수 하나마다 커밋 뒤 한 번(#121) — 그 접수가 끝난 뒤의 시장가격(마지막 체결의 YES 기준 값)·마지막 체결의 서버 시각(`ts`)·누적 거래량·체결 수·사용자 참여자 수(사람 계정만). 한 접수의 체결이 여럿이면 `tradeCount` 가 1보다 크게 오른다. 다른 이벤트처럼 반드시 도착하도록 보낸다(휘발이 아니다). 값이 절대값이라 늦거나 겹친 틱은 아무것도 바꾸지 않는다. `market:trade`·`market:book` 과의 도착 순서에 기대지 말고 가격·체결 통계는 `tradeCount`, 참가자 수는 `statsRevision`으로 독립 병합한다',
+    key: '`tradeCount` + `statsRevision`',
   },
   'market:trade': {
     room: '`market:<id>`',
@@ -392,6 +397,8 @@ const ERROR_NOTES = {
     '다른 작업이 필요한 자원을 사용 중이다. 변경은 적용되지 않았으며 전체 요청을 다시 시도할 수 있다.',
   ROLE_CHANGE_NOT_ALLOWED:
     '관리자 권한 부여·회수의 규칙에 맞지 않는다. `details[0].message` 가 까닭을 말한다 — 부여는 `already_admin`(이미 관리자다), `email_not_verified`(이메일 인증을 마치지 않았다), `phone_not_verified`(휴대전화 본인확인을 마치지 않았다), 회수는 `not_admin`(관리자가 아니다), `min_admins`(회수하면 관리자가 2명 미만이 된다. 자기 회수도 같다).',
+  FILL_CLASSIFICATION_NOT_ALLOWED:
+    '고정 체결의 분류 상태 또는 승인 요건이 바뀌어 요청을 적용할 수 없음',
   APPROVAL_NOT_ALLOWED:
     '2인 통제 요청의 결정(승인·거절)이나 철회를 받지 않는다. `details[0].message` 가 까닭을 말한다 — `requester`(요청한 계정은 자기 요청을 결정할 수 없다. 어느 환경에서도 예외가 없다), `decided`(이미 결정된 요청이다), `retracted`(요청한 운영자가 철회한 요청이다 — 아무도 결정하지 않는다), `not_requester`(요청한 운영자만 철회한다), 시장 검수(#78)에서만 `creator`(그 시장을 만든 운영자 — 제안을 채택해 만든 시장은 채택한 운영자)·`editor`(그 시장의 내용을 수정한 적이 있는 운영자), 규칙 보충(#80)·일시 중단의 다음 경로(#114)의 요청과 판정 등록(#152 — 판정 정정의 등록도, #176)·개장 예정 시장의 취소(#20)의 요청에서 `no_decider`(요청한 운영자 말고는 결정할 관리자가 없다 — 요청을 받지 않는다). 시장 검수의 승인·반려는 `creator`·`editor`·`requester` 가운데 먼저 걸리는 것 하나를 이 순서로 답하고, 본문의 `requestId` 가 더는 기다리는 요청이 아니면(그 사이 초안으로 되돌려 다시 제출한 시장) 그 요청이 끝난 대로 `retracted`·`decided` 를 먼저 답한다. `editor` 는 `market_update` 나 `market_reschedule` 기록이 있는 운영자다. 규칙 보충과 일시 중단의 다음 경로, 판정, 시장 취소(#20)의 승인·반려는 경로의 요청이 더는 기다리지 않으면 `retracted`·`decided` 를, 그다음 `requester` 를 답한다 — 판정(정정 포함)을 등록한 관리자는 그 판정을 승인·반려할 수 없다(#152, #176). 이 규칙을 쓰는 라우트가 이 코드를 문서화한다 — 계정 제한(#139)의 요청 승인·거절·철회, 시장 검수(#78)의 승인·반려, 규칙 보충(#80)의 요청·승인·반려·철회, 일시 중단의 다음 경로(재개·조기 마감, #114)의 요청·승인·반려·철회, 판정(#152 — 판정 정정 #176 도 같은 라우트다)의 등록·승인·반려·철회, 개장 예정 시장의 취소(#20)의 요청·승인·반려·철회.',
   PHONE_VERIFICATION_NOT_ALLOWED:

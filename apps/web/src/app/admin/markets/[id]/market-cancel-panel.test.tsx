@@ -43,6 +43,7 @@ const scheduled: AdminMarket = {
   volumeCoin: '0',
   tradeCount: 0,
   traderCount: 0,
+  statsRevision: '0',
   openAt: null,
   resolvedResult: null,
   resolvedAt: null,

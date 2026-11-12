@@ -16,11 +16,12 @@ import {
 /**
  * 탐색 홈 (#63, ADR-0065; owner decisions in ADR-0061 decision 1, items 9–13, and decision 3, the
  * #63 row, and ADR-0065's of 2026-10-16): one list of open markets with no status control, sorted
- * 추천 · 신규 · 마감 임박 (추천 first), and a 관심 시장 toggle over the category. Signed out, the
- * toggle is there and picking it goes to the login page and back to the home with it on; signed
+ * 추천 · 거래량 순 · 신규 · 마감 임박 (추천 first; #132, ADR-0131 restores volume), with a 관심 시장
+ * toggle over the category. Signed out, the toggle is there and picking it goes to the login page
+ * and back to the home with it on; signed
  * in, it lists the member's watched open markets only — of the category too, when one is picked,
  * in the sidebar or in the header, which keeps the view on — starting on 최근 관심 등록 순, the
- * last of its four orders. Turning it off is the public list on 추천. The watchlist is the
+ * last of its five orders. Turning it off is the public list on 추천. The watchlist is the
  * member's alone, so the server's HTML of that view carries none of it, and its header is the
  * same for every visitor.
  */
@@ -57,10 +58,13 @@ async function sessionKnown(page: Page, signedIn: boolean): Promise<void> {
 }
 
 test.describe('탐색 홈', () => {
-  test('정렬은 추천·신규·마감 임박뿐이고 처음은 추천이며, 상태 선택은 없다', async ({ page }) => {
+  test('정렬은 추천·거래량 순·신규·마감 임박이고 처음은 추천이며, 상태 선택은 없다', async ({
+    page,
+  }) => {
     await page.goto('/');
     await expect(sortSelect(page).locator('option')).toHaveText([
       copy.sortRecommended,
+      copy.sortVolume,
       copy.sortNewest,
       copy.sortClosing,
     ]);
@@ -68,15 +72,22 @@ test.describe('탐색 홈', () => {
     await expect(page.getByTestId('market-status-select')).toHaveCount(0);
     await expect(page.getByTestId('market-filters')).not.toContainText(copy.sortWatched);
 
-    // A bookmarked status or volume order is ignored rather than redirected: the same home, on
-    // 추천, at the address it was opened with.
+    // The bookmarked status is still ignored, but #132 restores volume as a supported order.
+    // Neither it nor an unknown order redirects the address the reader opened.
     await page.goto('/?status=closed&sort=volume');
     await expect(page).toHaveURL('/?status=closed&sort=volume');
+    await expect(sortSelect(page)).toHaveValue('volume');
+    await expect(sortSelect(page).locator('option')).toHaveCount(4);
+    await page.goto('/?status=closed&sort=unknown');
+    await expect(page).toHaveURL('/?status=closed&sort=unknown');
     await expect(sortSelect(page)).toHaveValue('recommended');
-    await expect(sortSelect(page).locator('option')).toHaveCount(3);
+    await expect(sortSelect(page).locator('option')).toHaveCount(4);
 
     await page.goto('/');
     await sessionKnown(page, false);
+    await sortSelect(page).selectOption('volume');
+    await expect(page).toHaveURL('/?sort=volume');
+    await expect(sortSelect(page)).toHaveValue('volume');
     await sortSelect(page).selectOption('newest');
     await expect(page).toHaveURL('/?sort=newest');
     await expect(sortSelect(page)).toHaveValue('newest');
@@ -195,6 +206,7 @@ test.describe('탐색 홈', () => {
     // (owner decision 2026-10-16).
     await expect(sortSelect(page).locator('option')).toHaveText([
       copy.sortRecommended,
+      copy.sortVolume,
       copy.sortNewest,
       copy.sortClosing,
       copy.sortWatched,

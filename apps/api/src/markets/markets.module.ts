@@ -1,3 +1,4 @@
+import { MarketRankingCursors } from './market-ranking-cursor.js';
 import { AdminMarketConflictsController } from './admin-market-conflicts.controller.js';
 import { MarketConflictsService } from './market-conflicts.service.js';
 import { Module } from '@nestjs/common';
@@ -98,6 +99,7 @@ import { RelatedMarketsService } from './related-markets.service.js';
     AdminMarketDisputeQueueController,
   ],
   providers: [
+    MarketRankingCursors,
     MarketService,
     MarketAdminService,
     MarketConflictsService,

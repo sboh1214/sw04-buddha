@@ -130,6 +130,7 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
       volumeCoin: '5125',
       tradeCount: 1,
       traderCount: 3,
+      statsRevision: '1',
       ts,
     });
     await publisher.publishUser('user-1', {
@@ -286,6 +287,7 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
           volumeCoin: '5125',
           tradeCount: 1,
           traderCount: 3,
+          statsRevision: '1',
           ts,
         }),
         publisher.publishUser('user-3', balance),
@@ -331,6 +333,7 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
           volumeCoin: '5125',
           tradeCount: 1,
           traderCount: 3,
+          statsRevision: '1',
           ts,
         }),
         publisher.publishMarket(MARKET_ID, {

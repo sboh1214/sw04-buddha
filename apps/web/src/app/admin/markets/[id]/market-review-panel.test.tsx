@@ -42,6 +42,7 @@ const base: AdminMarket = {
   volumeCoin: '0',
   tradeCount: 0,
   traderCount: 0,
+  statsRevision: '0',
   scheduledOpenAt: '2026-11-10T00:00:00.000Z',
   closeAt: '2026-11-20T00:00:00.000Z',
   scheduledAnnouncementAt: null,

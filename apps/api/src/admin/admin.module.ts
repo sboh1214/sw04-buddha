@@ -6,6 +6,11 @@ import {
 import { MarketMakerControlService } from './market-maker-control.service.js';
 import { TradingAnomaliesController } from './trading-anomalies.controller.js';
 import { TradingAnomaliesService } from './trading-anomalies.service.js';
+import {
+  FillClassificationController,
+  AllFillClassificationsController,
+} from './fill-classification.controller.js';
+import { FillClassificationService } from './fill-classification.service.js';
 import { ReleaseSettingsModule } from '../release-settings/release-settings.module.js';
 import { AdminMarketMakerController } from './market-maker.controller.js';
 import { AdminMarketMakerService } from './market-maker.service.js';
@@ -50,6 +55,8 @@ import { ReconciliationCorrectionService } from './reconciliation-corrections.se
     MarketMakerControlController,
     AllMarketMakerControlsController,
     TradingAnomaliesController,
+    FillClassificationController,
+    AllFillClassificationsController,
     AdminController,
     ReconciliationController,
     ReconciliationCorrectionsController,
@@ -60,6 +67,7 @@ import { ReconciliationCorrectionService } from './reconciliation-corrections.se
   providers: [
     MarketMakerControlService,
     TradingAnomaliesService,
+    FillClassificationService,
     AdminService,
     PaymentRefundService,
     ReconciliationService,

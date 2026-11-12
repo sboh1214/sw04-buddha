@@ -196,6 +196,7 @@ describe('the watchlist queries', () => {
       volumeCoin: '130000',
       tradeCount: 11,
       traderCount: 5,
+      statsRevision: '11',
       closeAt: '2026-10-01T00:00:00.000Z',
       openAt: '2026-09-01T00:00:00.000Z',
       resolvedResult: null,

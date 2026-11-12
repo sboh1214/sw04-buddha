@@ -1,6 +1,6 @@
 /**
  * Public market reads (PLAN 7.1, M3 design 3.2) against the docker `test` profile: list
- * filters and the three sort-specific keysets, id/slug lookup, fills, ticks, categories, the
+ * filters and the four sort-specific keysets, id/slug lookup, fills, ticks, categories, the
  * market times and '판정 지연' (#22), the rule versions (#80), and the statistics the intake writes
  * with its fills (#121: 시장가격 and its time, the price a day ago, volume, participants; the
  * recent fills and the chart read the fills themselves). Skips when TEST_* are unset.
@@ -45,6 +45,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { MAX_PARAM_LENGTH } from '../infra/http/fastify-options.js';
 import { createTestApp, type TestApp } from '../test/app.js';
 import { marketOrder } from './market-order.js';
+import { MarketRankingCursors } from './market-ranking-cursor.js';
 import { hasTestInfra } from '../test/setup-env.js';
 
 type ListPage = { data: MarketSummary[]; meta: { nextCursor: string | null } };
@@ -573,6 +574,13 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
           return va === vb ? latestOpening(a, b) : va > vb ? -1 : 1;
         })
         .map((row) => row.id),
+      volume: [...open]
+        .sort((a, b) => {
+          const va = volume.get(a.id)!;
+          const vb = volume.get(b.id)!;
+          return va === vb ? latestOpening(a, b) : va > vb ? -1 : 1;
+        })
+        .map((row) => row.id),
       newest: [...open].sort(latestOpening).map((row) => row.id),
       closing: [...open]
         .sort((a, b) => a.closeAt.getTime() - b.closeAt.getTime() || byId(a, b))
@@ -645,9 +653,11 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     const paged = await walkPages('/api/v1/markets?sort=recommended&limit=1');
     expect(paged.ids).toEqual(expected);
     const unopenedCursors = paged.cursors
-      .map((cursor) => cursor.split('_'))
-      .filter((parts) => parts[2] === CURSOR_NULL)
-      .map((parts) => ({ volume: parts[1], id: parts[3] }));
+      .map((cursor) =>
+        t.app.get(MarketRankingCursors).codec.open('recommended', cursor)!.split('_'),
+      )
+      .filter((parts) => parts[4] === CURSOR_NULL)
+      .map((parts) => ({ volume: parts[3], id: parts[5] }));
     expect(unopenedCursors).toEqual([
       { volume: '300', id: unopenedTraded.id },
       { volume: '0', id: unopened[0] },
@@ -661,7 +671,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
   });
 
   it('counts 추천 over (asOf − 24h, asOf]: a fill exactly a day before the window end is out, one at it is in', async () => {
-    // A hand-made cursor names the window end (ADR-0065: any cursor that decodes is legal), so
+    // A test cursor sealed by the production codec fixes the window end, so
     // fills can sit on its two edges to the millisecond. The rest of it sorts after every market
     // — the largest int8 volume, the last open time a cursor may name, the largest uuid — so its
     // page is the whole list counted at `windowEnd`.
@@ -693,12 +703,19 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       createdAt: new Date(windowEnd + 1),
     });
 
-    const cursor = [
-      String(windowEnd),
-      '9223372036854775807',
-      '253402300799999',
-      'ffffffff-ffff-4fff-bfff-ffffffffffff',
-    ].join('_');
+    const cursor = t.app
+      .get(MarketRankingCursors)
+      .codec.seal(
+        'recommended',
+        [
+          '0',
+          String(windowEnd),
+          '0',
+          '9223372036854775807',
+          '253402300799999',
+          'ffffffff-ffff-4fff-bfff-ffffffffffff',
+        ].join('_'),
+      );
     const res = await get(`/api/v1/markets?sort=recommended&cursor=${encodeURIComponent(cursor)}`);
     expect(res.statusCode).toBe(200);
     // The fill at the window end counts and the one a millisecond inside the start does; the
@@ -729,7 +746,9 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     expect(first.data.map((row) => row.id)).toEqual([leaving.id]);
     const cursor = first.meta.nextCursor!;
     // The cursor carries the window end the first page was counted at (ADR-0065).
-    const asOf = Number(cursor.split('_')[0]);
+    const asOf = Number(
+      t.app.get(MarketRankingCursors).codec.open('recommended', cursor)!.split('_')[1],
+    );
     expect(asOf).toBeGreaterThan(now - 1_000);
 
     // The first fill ages out, and a new one lands on the idle market after the first page.
@@ -812,10 +831,26 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     expect(plan).not.toContain('Sort');
   });
 
-  it('refuses the volume order: it is gone until #132 (ADR-0061 decision 1, item 11)', async () => {
+  it('restores all-time volume ordering while recommendation retains its 24-hour window (#132)', async () => {
+    const now = (await clockTimestamp(t.db)).getTime();
+    const old = await market();
+    const recent = await market();
+    await createFill(t.db, {
+      marketId: old.id,
+      amountCoin: 1000n,
+      createdAt: new Date(now - 2 * DAY_MS),
+    });
+    await createFill(t.db, {
+      marketId: recent.id,
+      amountCoin: 100n,
+      createdAt: new Date(now - MINUTE_MS),
+    });
     const res = await get('/api/v1/markets?sort=volume');
-    expect(res.statusCode).toBe(400);
-    expect(res.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<ListPage>().data.map((row) => row.id)).toEqual([old.id, recent.id]);
+    expect(
+      (await get('/api/v1/markets?sort=recommended')).json<ListPage>().data.map((row) => row.id),
+    ).toEqual([recent.id, old.id]);
   });
 
   it('serves the first page for a malformed or foreign cursor instead of a 500', async () => {

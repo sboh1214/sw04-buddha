@@ -85,6 +85,12 @@ export const fills = pgTable(
     // An owner's own fills, newest first, from either side (`GET /me/fills`).
     index('fills_incoming_owner_id_id_idx').on(t.incomingOwnerId, desc(t.id)),
     index('fills_resting_owner_id_id_idx').on(t.restingOwnerId, desc(t.id)),
+    // #132 intake checks normal participation under the market lock. Bound BOTH owner-side
+    // probes to this market; an owner's other markets and this market's other owners must not
+    // turn a negative EXISTS into a history scan. The own-fill paging indexes above still serve
+    // their different, cross-market ordering.
+    index('fills_market_id_incoming_owner_id_idx').on(t.marketId, t.incomingOwnerId),
+    index('fills_market_id_resting_owner_id_idx').on(t.marketId, t.restingOwnerId),
     check('fills_qty_check', sql`${t.qty} BETWEEN 1 AND 1000000`),
     check('fills_price_coin_check', sql`${t.priceCoin} BETWEEN 1 AND 99`),
     check(

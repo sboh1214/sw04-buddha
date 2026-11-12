@@ -50,6 +50,7 @@ export const ERROR_CODES = [
    * first detail names which, one of APPROVAL_REFUSALS in approvals.ts.
    */
   'APPROVAL_NOT_ALLOWED',
+  'FILL_CLASSIFICATION_NOT_ALLOWED',
   /**
    * A verification the rules refuse: the account verified already, or the number is the verified
    * number of another account. Details carry the reason, phoneVerificationNotAllowedDetailsSchema.

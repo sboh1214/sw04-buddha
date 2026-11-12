@@ -266,3 +266,6 @@ export * from './market-maker-metrics.js';
 
 export * from './market-maker-control.js';
 export * from './trading-anomalies.js';
+
+export * from './fill-classification.js';
+export * from './fill-classification-read.js';

@@ -135,6 +135,7 @@ describe('the notice above a 더 보기 that failed', () => {
         'app/admin/coupons/admin-coupons.tsx',
         // 이의 접수 (#175, ADR-0104), each half
         'app/admin/disputes/admin-disputes.tsx',
+        'app/admin/fill-classifications/fill-classifications.tsx',
         'app/admin/markets/[id]/admin-market-detail.tsx',
         'app/admin/markets/[id]/market-maker-controls.tsx',
         'app/admin/markets/admin-markets.tsx',
@@ -261,6 +262,8 @@ describe('the notice above a 더 보기 that failed', () => {
         'useAdminReportQueue',
         'useAdminRoleChanges',
         'useAdminThemes',
+        'useClassificationHistory',
+        'useClassificationRequests',
         'useComments',
         'useCommunityPosts',
         'useCorrectionRequests',

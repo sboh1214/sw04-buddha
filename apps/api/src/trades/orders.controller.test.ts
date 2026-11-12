@@ -702,6 +702,7 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
       // A fill's `market:trade` and `market:tick` (#121) are the next test's.
       if (event.type === 'market:trade' || event.type === 'market:tick') return;
       expect(event.type).toBe('market:book');
+      if (event.type !== 'market:book') throw new Error('unexpected non-book signal');
       const book = orderBookSchema.parse(dataOf(await read(`/markets/${marketId}/book`, null)));
       signals.push({ marketId, ts: event.ts, book: book.contracts[0] });
     });
@@ -869,6 +870,7 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
       volumeCoin: '60',
       tradeCount: 1,
       traderCount: 2,
+      statsRevision: '1',
       ts: bFill!.createdAt,
     });
     expect(detailAtTick.at(-1)).toMatchObject({
@@ -899,6 +901,7 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
       volumeCoin: '175',
       tradeCount: 3,
       traderCount: 2,
+      statsRevision: '2',
       ts: t2!.ts,
     });
 
@@ -919,6 +922,7 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
       volumeCoin: '220',
       tradeCount: 4,
       traderCount: 3,
+      statsRevision: '3',
     });
     expect(detailAtTick.at(-1)).toMatchObject({ lastPrice: 55, volumeCoin: '220', traderCount: 3 });
 

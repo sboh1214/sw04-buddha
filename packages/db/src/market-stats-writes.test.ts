@@ -62,8 +62,8 @@ function sourceFiles(): string[] {
   );
 }
 
-const FIELDS = '(?:lastPrice|lastFillAt|volumeCoin|tradeCount|traderCount)';
-const COLUMNS = '(?:last_price|last_fill_at|volume_coin|trade_count|trader_count)';
+const FIELDS = '(?:lastPrice|lastFillAt|volumeCoin|tradeCount|traderCount|statsRevision)';
+const COLUMNS = '(?:last_price|last_fill_at|volume_coin|trade_count|trader_count|stats_revision)';
 /** A key of an object literal: `lastPrice: …` or the shorthand `{ lastPrice, … }`. */
 const NAMES_A_FIELD = new RegExp(`\\b${FIELDS}\\s*:|[{,]\\s*${FIELDS}\\s*[,}]`);
 /** drizzle's `update(markets)` / `insert(markets)`, bare or through `schema.`. */

@@ -650,10 +650,10 @@ export const MARKET_STATS_CHECK_SQL = `WITH totals AS (
 ), people AS (
   SELECT market_id, count(DISTINCT owner_id)::int AS traders
   FROM (SELECT market_id, incoming_owner_id AS owner_id FROM fills
-        WHERE is_human_account_type(incoming_account_type)
+        WHERE is_human_account_type(incoming_account_type) AND NOT coalesce((SELECT action='mark' FROM fill_classifications fc WHERE fc.fill_id=fills.id ORDER BY fc.revision DESC LIMIT 1),false)
         UNION ALL
         SELECT market_id, resting_owner_id FROM fills
-        WHERE is_human_account_type(resting_account_type)) AS sides
+        WHERE is_human_account_type(resting_account_type) AND NOT coalesce((SELECT action='mark' FROM fill_classifications fc WHERE fc.fill_id=fills.id ORDER BY fc.revision DESC LIMIT 1),false)) AS sides
   GROUP BY market_id
 )
 SELECT m.id AS market_id,
