@@ -1,4 +1,7 @@
 import {
+  closeDb,
+  createDb,
+  MarketMakerCycleError,
   readMarketMakerRuntime,
   recordMarketMakerRun,
   requestMarketMakerRefresh,
@@ -16,9 +19,10 @@ import {
   openOrderIntake,
   placeTestOrder,
   setReleaseSetting,
+  testDbUrls,
   type TestDb,
 } from '@buddha/db/test';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { refreshMarketMaker, scanMarketMakers } from './market-maker.js';
@@ -208,6 +212,128 @@ describe.skipIf(!hasTestDb())('maker worker transactions and delivery (#129)', (
       },
     });
   }
+
+  it.each([
+    { outcome: 'ready', attempt: 1 },
+    { outcome: 'ready', attempt: 3 },
+    { outcome: 'waiting', attempt: 1 },
+    { outcome: 'waiting', attempt: 3 },
+  ] as const)(
+    'preserves the captured context when $outcome finalization fails in PostgreSQL on attempt $attempt',
+    async ({ outcome, attempt }) => {
+      const market = await opened();
+      if (outcome === 'waiting') {
+        await createMarketPause(t.db, {
+          marketId: market.id,
+          reason: 'ledger_failure',
+          by: adminId,
+        });
+      }
+      const before = (await readMarketMakerRuntime(t.db, market.id))!;
+      const economicState = async () => ({
+        balances: await t.db.select().from(schema.balances).orderBy(schema.balances.accountId),
+        orders: await t.db.select().from(schema.orders).orderBy(schema.orders.id),
+        fills: await t.db.select().from(schema.fills).orderBy(schema.fills.id),
+        ledger: await t.db.select().from(schema.ledgerEntries).orderBy(schema.ledgerEntries.id),
+        positions: await t.db
+          .select()
+          .from(schema.positions)
+          .orderBy(schema.positions.marketId, schema.positions.userId, schema.positions.outcome),
+      });
+      const economicBefore = await economicState();
+      const owner = createDb(testDbUrls()!.migrateUrl, {
+        max: 1,
+        applicationName: 'buddha-test-finish-boundary',
+      });
+      const publish = vi.fn<Publish>().mockResolvedValue(undefined);
+      const enqueue = vi.fn<EnqueueMarketMaker>().mockResolvedValue(undefined);
+      try {
+        // Fail the real INSERT in finish(), after any quote/lock writes. Only this first
+        // transaction carries the test flag; rollback and the independent error record use
+        // the real application path. The owner fixture never weakens a production guard.
+        await owner.execute(
+          sql.raw(`CREATE FUNCTION maker_test_finish_failure() RETURNS trigger
+          LANGUAGE plpgsql AS $$ BEGIN
+            IF current_setting('buddha.test_finish_failure', true) = 'on' THEN
+              RAISE EXCEPTION 'cycle finish fixture rejection' USING ERRCODE = 'check_violation';
+            END IF;
+            RETURN NEW;
+          END $$`),
+        );
+        await owner.execute(
+          sql.raw(`CREATE TRIGGER maker_test_finish_failure
+          BEFORE INSERT ON market_maker_runs
+          FOR EACH ROW EXECUTE FUNCTION maker_test_finish_failure()`),
+        );
+        let first = true;
+        const failing = new Proxy(t.db, {
+          get(target, prop, receiver) {
+            if (prop !== 'transaction') return Reflect.get(target, prop, receiver) as unknown;
+            return (callback: Parameters<Db['transaction']>[0]) =>
+              target.transaction(async (tx) => {
+                if (first) {
+                  first = false;
+                  await tx.execute(sql`SET LOCAL buddha.test_finish_failure = 'on'`);
+                }
+                return callback(tx);
+              });
+          },
+        });
+        const error: unknown = await refreshMarketMaker(
+          failing,
+          market.id,
+          publish,
+          enqueue,
+          logger,
+          { attempt, maxAttempts: 3 },
+        ).catch((cause: unknown) => cause);
+        expect(await economicState()).toEqual(economicBefore);
+        const stopped = attempt === 3;
+        expect(await readMarketMakerRuntime(t.db, market.id)).toMatchObject({
+          desiredEnabled: !stopped,
+          state: stopped ? 'stopped' : 'error',
+          reason: stopped ? 'retry_exhausted' : 'runtime_error',
+          consecutiveFailures: before.consecutiveFailures + 1,
+          generation: before.generation + (stopped ? 1n : 0n),
+          controlGeneration: before.controlGeneration + (stopped ? 1n : 0n),
+        });
+        expect(error).toBeInstanceOf(MarketMakerCycleError);
+        const captured = error as MarketMakerCycleError;
+        expect(captured.context).toMatchObject({
+          marketId: market.id,
+          generation: before.generation,
+          controlGeneration: before.controlGeneration,
+        });
+        expect(captured.cause).toMatchObject({
+          cause: { code: '23514', message: 'cycle finish fixture rejection' },
+        });
+        const runs = await t.db.select().from(schema.marketMakerRuns);
+        expect(runs.filter((run) => run.outcome === 'ready')).toHaveLength(0);
+        expect(runs.filter((run) => run.outcome === 'error')).toEqual([
+          expect.objectContaining({
+            marketId: market.id,
+            generation: before.generation,
+            controlGeneration: before.controlGeneration,
+            startedAt: captured.context.startedAt,
+            reason: stopped ? 'retry_exhausted' : 'runtime_error',
+          }),
+        ]);
+        // The held case keeps cleanup pending; a normal stopped market finishes its empty
+        // cleanup. Neither branch publishes the rolled-back quotes or requeues failed work.
+        expect((await readMarketMakerRuntime(t.db, market.id))?.completedGeneration).toBe(
+          stopped && outcome === 'ready' ? before.generation + 1n : before.completedGeneration,
+        );
+        expect(publish).not.toHaveBeenCalled();
+        expect(enqueue).not.toHaveBeenCalled();
+      } finally {
+        await owner.execute(
+          sql.raw('DROP TRIGGER IF EXISTS maker_test_finish_failure ON market_maker_runs'),
+        );
+        await owner.execute(sql.raw('DROP FUNCTION IF EXISTS maker_test_finish_failure()'));
+        await closeDb(owner);
+      }
+    },
+  );
 
   it('exhaustion stops only this bot, safely clears its quotes, and never auto-restarts', async () => {
     const market = await opened();

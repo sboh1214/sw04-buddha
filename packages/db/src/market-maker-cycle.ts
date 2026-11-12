@@ -88,6 +88,8 @@ export async function runMarketMakerCycle(
     const cancelledOrderIds: string[] = [];
     let burnedQty = 0;
     let configVersion = runtime.lastConfigVersion;
+    // Every exit awaits this promise inside the try: a failed run-record INSERT must retain
+    // the captured context for rollback/error recording and the worker's final-attempt stop.
     const finish = async (
       outcome: 'ready' | 'waiting',
       reason: string | null,
@@ -121,25 +123,25 @@ export async function runMarketMakerCycle(
     const [market] = await tx.select().from(markets).where(eq(markets.id, marketId)).for('update');
     if (!market) throw new Error('Allocated market disappeared');
     if (market.status !== 'open' && market.status !== 'paused')
-      return finish('waiting', 'not_trading');
+      return await finish('waiting', 'not_trading');
     if ((await ledgerHeldMarketIds(tx, [marketId])).has(marketId))
-      return finish('waiting', 'ledger_hold');
+      return await finish('waiting', 'ledger_hold');
     if (market.closeAt.getTime() <= context.startedAt.getTime())
-      return finish('waiting', 'close_passed');
+      return await finish('waiting', 'close_passed');
     let book = await readLiveBook(tx, marketId);
     let snapshot = await readMarketMakerRiskSnapshot(tx, marketId, book);
     if (snapshot.kind === 'inconsistent')
       throw new Error(`MM assets inconsistent: ${snapshot.reason}`);
-    if (snapshot.kind !== 'ready') return finish('waiting', snapshot.reason);
+    if (snapshot.kind !== 'ready') return await finish('waiting', snapshot.reason);
     const ownerId = snapshot.ownerId;
     const config = await readMarketMakerConfig(tx, marketId);
-    if (!config) return finish('waiting', 'missing_config');
+    if (!config) return await finish('waiting', 'missing_config');
     configVersion = config.version;
     const stages = await readMarketMakerStageSettings(tx, registry);
     const accepting = await getReleaseSetting(tx, registry, ORDER_ACCEPTING_SETTING);
     await lockOrderHolders(tx, marketId, [ownerId, ...book.map((o) => o.owner.id)]);
     const at = await clockTimestamp(tx);
-    if (market.closeAt.getTime() <= at.getTime()) return finish('waiting', 'close_passed');
+    if (market.closeAt.getTime() <= at.getTime()) return await finish('waiting', 'close_passed');
     burnedQty = await burnAvailableMarketMakerPairs(tx, marketId, `cycle:${randomUUID()}`);
     const cancel = async (ids: readonly string[]) => {
       for (const orderId of ids) {
@@ -150,7 +152,7 @@ export async function runMarketMakerCycle(
     };
     if (!runtime.desiredEnabled || market.status === 'paused' || stages.kind !== 'ready') {
       await cancel(snapshot.liveOrders.map((o) => o.id));
-      return finish(
+      return await finish(
         'waiting',
         !runtime.desiredEnabled
           ? 'stopped'
@@ -163,7 +165,7 @@ export async function runMarketMakerCycle(
     }
     // The intake switch preserves resting orders by its existing policy. It forbids new posts;
     // it is not an implicit bot-stop command or a reason to pull the old book.
-    if (!isOrderIntakeOpen(accepting)) return finish('waiting', 'intake_closed');
+    if (!isOrderIntakeOpen(accepting)) return await finish('waiting', 'intake_closed');
     snapshot = await readMarketMakerRiskSnapshot(tx, marketId);
     if (snapshot.kind !== 'ready') throw new Error('MM assets changed under its market lock');
     const limits = { ...snapshot.limits, ...stages.settings };
@@ -208,7 +210,10 @@ export async function runMarketMakerCycle(
         continue;
       }
       if (result.kind === 'closed')
-        return finish('waiting', result.why === 'intake' ? 'intake_closed' : 'price_protection');
+        return await finish(
+          'waiting',
+          result.why === 'intake' ? 'intake_closed' : 'price_protection',
+        );
       if (result.kind !== 'placed')
         throw new Error(`New MM order was not recorded: ${result.kind}`);
       placed.push(result);
@@ -218,10 +223,13 @@ export async function runMarketMakerCycle(
       }
       // One immediate fill changes d and can burn pairs. Never publish the old ladder's later
       // levels from the pre-fill inventory. The intake marked a newer durable generation.
-      if (result.fills.length > 0) return finish('ready', null);
+      if (result.fills.length > 0) return await finish('ready', null);
     }
-    if (refused.size > 0) return finish('waiting', 'admission_refused');
-    return finish('ready', target.yesBids.length + target.noBids.length === 0 ? 'no_quotes' : null);
+    if (refused.size > 0) return await finish('waiting', 'admission_refused');
+    return await finish(
+      'ready',
+      target.yesBids.length + target.noBids.length === 0 ? 'no_quotes' : null,
+    );
   } catch (cause) {
     throw new MarketMakerCycleError(context, cause);
   }
