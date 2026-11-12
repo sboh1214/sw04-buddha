@@ -16088,3 +16088,41 @@ root는 격리된 `f516` 기반 checkout의 `treasury.spec.ts`에 매 요청 dia
 게시 방식은 새 금고 fixture의 짧은 실행 근거를 새 PR275의 ADR-0124 끝에 추가해 후행에 상속하고, 이 공통 보충을 `997275924ead384a5aab18ecafb5d7bb228237e9` 기반의 **별도 docs-only PR**에서 `docs/DECISIONS.md` 끝에만 추가하는 것으로 정했다. 기존 ADR 전문은 byte 그대로 보존한다. 새 제품 CI와 문서 PR의 검증은 병렬로 진행할 수 있으며, 새 제품 CI 결과를 기다리며 이 문서의 head를 반복 갱신하지 않는다.
 
 해당 base의 [Deploy workflow](https://github.com/sboh1214/sw04-buddha/blob/997275924ead384a5aab18ecafb5d7bb228237e9/.github/workflows/deploy.yml)는 main push에서 `docs/**`, `**.md`, `terraform/**`를 제외하므로 **이 문서 한 파일만 바꾼 main merge는 운영 Deploy를 트리거하지 않는다**. PR의 arm64 build check와 [CI workflow](https://github.com/sboh1214/sw04-buddha/blob/997275924ead384a5aab18ecafb5d7bb228237e9/.github/workflows/ci.yml)의 검증은 별개이며 생략을 주장하지 않는다. 문서 PR 자체의 정확한 head와 CI/검토 결과는 그 PR에 기록한다. 원 실패·취소·flaky와 각 실행 SHA, 캐시 범위는 삭제하지 않는다.
+
+---
+
+## M10 순차 운영 반영 보충 — 2026-11-13, main CI 최초 실패와 1회 재실행
+
+> **확정 사실 기준: 2026-11-12 17:06:19 UTC / 2026-11-13 02:06:19 KST.** 기존 ADR와 위 공통 검증 보충은 당시 기록 그대로 보존하고 이 내용을 뒤에 추가한다. 아래 숫자는 각 merge SHA와 CI attempt의 결과이며, 후속 문서 PR284나 다른 제품 head에서 새로 실행한 결과로 바꾸지 않는다. 이 보충은 PR274의 허용된 1회 재실행 결과까지 기록하며, 이후 PR의 순차 운영 반영 완료를 포함하지 않는다.
+
+### ADR-0122: CI 시간 예산 보완의 main 반영
+
+[PR283](https://github.com/sboh1214/sw04-buddha/pull/283)의 소스 `07a91d646754aa95596b7de2b044bf5628f73098`을 merge `6ae26de945f7c7ee43263197b0c5cefd2ab47cae`로 반영했다. merge tree와 검토한 소스 tree가 같다. 앞선 PR273의 main CI timeout 실패 기록은 그대로 남기며, CI job 시간 예산 보완이 제품 동작이나 시험 assertion·개별 시험 timeout·재시도·샤드 수를 바꾼 것으로 쓰지 않는다.
+
+해당 merge의 [main CI43249579419, attempt1](https://github.com/sboh1214/sw04-buddha/actions/runs/43249579419/attempts/1)은 성공했다. core는 **7,397 보고 통과·0 실패·PERF1 제외**이며, **API1,642 새 실행 + 나머지 다섯 test task의 cache hit5,755**다. 캐시 보고값을 전부 새 실행으로 세지 않는다. 일반 브라우저3샤드는 **737 통과·제외3·실패/flaky/자동 재시도0**이다.
+
+별도 [운영 Deploy43249579533](https://github.com/sboh1214/sw04-buddha/actions/runs/43249579533)도 성공했다. 배포 workflow의 migration 완료·smoke 성공과 당시 공개 health200 관측을 보존한다. 이는 main CI의 시험 수에 합산하지 않는다.
+
+### ADR-0123: 위험 예약 반영 뒤 main CI의 최초 실패
+
+[PR274](https://github.com/sboh1214/sw04-buddha/pull/274)의 검토 소스 `559b29b62ffff23c8370b7a91b69eb864b5d9585`를 merge `69c13194c662d436e788f958384fb3ef373b98fd`로 반영했다. merge tree는 검토한 소스 tree와 같고 두 부모는 앞선 main `6ae26de945f7c7ee43263197b0c5cefd2ab47cae`와 해당 PR head다.
+
+이 merge의 **[main CI43255516159, attempt1](https://github.com/sboh1214/sw04-buddha/actions/runs/43255516159/attempts/1)은 실패**했다. 12개 job 중10개는 성공했고, API 통합 시험과 그 결과를 반영한 집계 job이 실패했다. core는 **7,505 보고 통과·1 실패·PERF1 제외**이며 **새 실행7,481 + storage cache hit24**다. API test task는 cache miss 뒤 실제 실행하여 **1,652 통과·1 실패**였다.
+
+실패 위치는 `apps/api/src/account-closure/account-closure.controller.test.ts:478`의 탈퇴 전후 consent 기록 배열 동등성 검사다. 원 로그를 메모리에서 비교한 결과 네 행은 ID별 모든 필드가 같고 **배열 순서만 달랐다**. 독립 소스 읽기에서도 전후 두 SELECT에 ORDER BY가 없는데 순서에 민감한 `toEqual`로 비교함을 확인했다. 해당 시험 blob은 선행 main·PR head·merge에서 같다. 이는 변경하지 않은 시험의 정렬 전제 결함을 보여주며, 이 실패로 운영 기록 손실이나 새 위험 예약 제품 회귀가 확인됐다고 하지 않는다.
+
+같은 attempt의 일반 브라우저3샤드는 **736 통과·flaky1·제외3·최종 실패0**, 자동 재시도는 정확히1회였다. mobile `comments.spec.ts:560` 시나리오의 `:619` 취소 버튼 focus assertion에서 focused 기대에 inactive가 관측된15초 실패가 재시도에서 통과했다. 원인은 미확정이며 API 정렬 실패와 별개다. 이 브라우저 결과가 main CI 전체 실패를 성공으로 바꾸지는 않는다.
+
+[운영 Deploy43255516134](https://github.com/sboh1214/sw04-buddha/actions/runs/43255516134)는 별도로 성공했고 migration 완료·smoke 성공·당시 공개 health200이 확인됐다. **배포 성공과 main CI 실패를 각각 보존**한다.
+
+### 허용된 1회 재실행의 결과와 실행 범위
+
+원 요청312–314행의 ‘PR 변경과 무관한 최초 CI 실패는 한 번 재실행하고, 반복 실패하면 수정하며 ADR에 기록’ 기준을 적용했다. 보존된 M9/M10 자료에서 같은 정렬 assertion의 선행 실패·재실행을 찾지 못했으며, 이 검색 범위가 저장소의 모든 원격 이력을 포괄한다는 뜻은 아니다. Root는 attempt1 전체 종료와 동일 merge SHA를 확인한 뒤 **2026-11-12 16:40 UTC / 2026-11-13 01:40 KST에 해당 CI의 failed jobs만 딱 한 번 재실행 요청**했다. 요청 수락 영수증은16:40:58 UTC에 보존했다. Deploy 재실행은0회다.
+
+같은 merge SHA의 **[attempt2](https://github.com/sboh1214/sw04-buddha/actions/runs/43255516159/attempts/2)는2026-11-12 17:04:43 UTC / 2026-11-13 02:04:43 KST에12/12 job 성공**으로 완료됐다. 새로 실행한 것은 API 통합 시험과 집계 job뿐이다. API는 cache miss 뒤 **1,653 통과·실패0**였고 해당 checkout SHA도 동일 merge임을 확인했다. 나머지 성공10개는 시작·종료 시각이 attempt1과 같아 기존 결과를 유지한 것이다.
+
+최종 결합 core는 **7,506 통과·실패0·PERF1 제외**이며 **attempt2 새 API1,653 + attempt1에서 유지한5,853**으로 구성된다. 유지한5,853은 원 실행 당시 새 실행5,829와 cache hit24다. 이를 attempt2에서7,506개를 모두 새로 실행했거나, 유지한 전체가 cache hit였다고 쓰지 않는다. 첫 attempt의 API1,652 통과·1 실패를 다시 더하지 않는다.
+
+브라우저 **736 통과·flaky1·제외3·자동 재시도1**도 attempt1의 결과를 그대로 유지했으며 attempt2에서 브라우저를 다시 실행하지 않았다. 원 API 실패·댓글 focus flaky와 그 원인 한계를 삭제하지 않는다. 배포는 기존 성공한 attempt1을 유지했고 재배포하지 않았다. 17:06:19 UTC의 후속 공개 health200도 확인했다. PR274의 main CI·배포 관문이 충족됐다는 사실과 다음 PR의 정확한 head·리뷰·CI를 별도로 확인하는 순차 머지 조건을 구분한다. 이번1회 재실행의 성공은 동일 실패가 반복될 때 추가 재실행으로 덮지 않고 수정한다는 기존 기준을 바꾸지 않는다.
+
+이 추가 기록은 기존 ADR 전문 뒤의 문서 변경만 포함한다. PR284의 새 서명 head에 대한 실제 base CLI·GitHub 검토·CI는 별도 관문이며, 앞선 제품 실행 결과를 이 문서 head에서 재실행한 것으로 옮기지 않는다. PR274 이후 운영 반영 완료나 별도 승인 대기인 사진 공개를 주장하지 않는다.
