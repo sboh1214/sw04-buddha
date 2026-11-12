@@ -5,7 +5,9 @@ import {
   ensureOrderSettings,
   ensureStartCoin,
   signInFirstSeedAdmin,
+  signInSecondSeedAdmin,
 } from './helpers';
+import { marketMakerE2eProfile, prepareMarketMakerTestProfile } from './market-maker-setup';
 
 /**
  * The suite's global setup (playwright.config.ts `globalSetup`): runs once per invocation — per
@@ -38,19 +40,32 @@ import {
  * `order.price_protection_ticks` 5 — the width before any spec submits a market for review, which
  * needs one and copies it (`ensureOrderSettings`). Values already there are left as they are.
  *
+ * #129 also needs actual treasury issuance and all three MM stage settings. The default profile
+ * uses 0/0/0 test thresholds so initially flat makers add no risk-raising quotes to pre-existing
+ * regression scenarios, while every market still receives its real approved allocation. A separate
+ * quotes profile verifies live posting; a separate treasury profile leaves the vault unfunded for
+ * the insufficient-funds scenario. All three invocations are required (e2e/README.md). Existing
+ * conflicting stage values fail setup instead of being overwritten. These are test fixtures only.
+ *
  * Before any test, so no spec writes a setting while another reads it:
  * release-settings.spec.ts reads the whole list once and holds the screen to it. The values stay
  * in the database for the runs after this one (README '테스트').
  */
 export default async function globalSetup(config: FullConfig): Promise<void> {
+  const profile = marketMakerE2eProfile(config.metadata.marketMakerProfile);
   const context = await request.newContext({ baseURL: config.projects[0]?.use.baseURL });
+  const approver = await request.newContext({ baseURL: config.projects[0]?.use.baseURL });
   try {
     await signInFirstSeedAdmin(context);
     await ensureDisputeWindow(context);
     await ensureStartCoin(context);
     await ensureOrderSettings(context);
     await awaitOwnStartGrant(context);
+    await signInSecondSeedAdmin(approver);
+    await awaitOwnStartGrant(approver);
+    await prepareMarketMakerTestProfile(context, approver, profile);
   } finally {
+    await approver.dispose();
     await context.dispose();
   }
 }

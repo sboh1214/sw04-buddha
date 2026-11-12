@@ -58,6 +58,7 @@ const NAV: { href: Route; label: string }[] = [
   { href: '/admin/retention', label: copy.adminRetention },
   { href: '/admin/sms', label: copy.adminSms },
   { href: '/admin/audit-failures', label: copy.adminAuditFailures },
+  { href: '/admin/treasury', label: copy.adminTreasury },
 ];
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {

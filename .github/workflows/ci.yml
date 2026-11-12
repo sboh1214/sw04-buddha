@@ -205,10 +205,11 @@ jobs:
 
   # ---- e2e (PLAN 14 AC 7, A-M1-10): its own build, database and servers per shard ----------------
   e2e:
-    name: E2E Tests (Playwright ${{ matrix.shard }}/${{ strategy.job-total }})
+    name: E2E Tests (${{ matrix.label }})
     runs-on: ubuntu-latest
-    # Covers setup, build, Chromium, seed, both projects and runner cleanup. At #273's first
-    # main run, all 247 shard-2 tests passed in 27.6m, but the 30m job budget expired afterward.
+    # Includes the build, Chromium, seed and both projects. A 27.5-minute Playwright run
+    # reached the former 30-minute job limit after setup, so reserve 45 minutes for the job.
+    # Per-test timeouts, retries and failure handling remain unchanged.
     timeout-minutes: 45
 
     # The specs are split across the shards by test (fullyParallel), mobile-375 and
@@ -219,7 +220,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        include:
+          - id: shard-1
+            label: Playwright 1/3
+            command: pnpm --filter web test:e2e --shard=1/3
+          - id: shard-2
+            label: Playwright 2/3
+            command: pnpm --filter web test:e2e --shard=2/3
+          - id: shard-3
+            label: Playwright 3/3
+            command: pnpm --filter web test:e2e --shard=3/3
+          # Both dedicated profiles have their own service DB/Redis and run both viewports.
+          # Their tests are excluded from the general profile, never skipped from CI.
+          - id: market-maker
+            label: Market maker quotes
+            command: pnpm --filter web test:e2e:market-maker
+          - id: treasury
+            label: Isolated treasury
+            command: pnpm --filter web test:e2e:treasury
 
     # Mailpit exists for the Playwright e2e alone: every spec signs up and reads the
     # verification link out of Mailpit's HTTP API. The vitest suites never reach it — they
@@ -340,7 +358,7 @@ jobs:
       # Invoked outside turbo (pnpm runs the package script directly), so CI / E2E_BASE_URL /
       # MAILPIT_URL reach Playwright from the workflow env and turbo.json stays untouched.
       - name: Playwright e2e (mobile-375 + desktop-1280)
-        run: pnpm --filter web test:e2e --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+        run: ${{ matrix.command }}
 
       # Traces (trace: 'on-first-retry' with retries: 2 in CI) plus whatever report the run
       # produced, and all three server logs. Ignored when a step before the e2e is what failed.
@@ -348,7 +366,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: playwright-report-${{ matrix.shard }}
+          name: playwright-report-${{ matrix.id }}
           path: |
             apps/web/playwright-report/
             apps/web/test-results/

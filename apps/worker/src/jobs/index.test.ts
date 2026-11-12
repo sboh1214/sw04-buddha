@@ -16,6 +16,7 @@ import {
   createPosition,
   createProvisionalMarket,
   createScheduledMarket,
+  prepareMarketMakerOpening,
   createStartGrant,
   createUser,
   createWriteLimitEvent,
@@ -103,7 +104,15 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
       enqueued.push({ marketId, resolvedAt });
       return Promise.resolve();
     };
-    deps = { db: t.db, auditDb: t.db, publish, enqueueFinalize, storage, logger };
+    deps = {
+      db: t.db,
+      auditDb: t.db,
+      publish,
+      enqueueFinalize,
+      enqueueMarketMaker: () => Promise.resolve(),
+      storage,
+      logger,
+    };
     const processor = createProcessor(deps);
     run = (input) => processor(job(input)) as Promise<unknown>;
   });
@@ -145,7 +154,9 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
 
   /** An approved market (#78) whose scheduled open is `scheduledOpenAt` — due by default. */
   async function scheduled(scheduledOpenAt?: Date) {
-    return (await createScheduledMarket(t.db, { scheduledOpenAt })).market;
+    const { market } = await createScheduledMarket(t.db, { scheduledOpenAt });
+    await prepareMarketMakerOpening(t.db, market.id);
+    return market;
   }
 
   it('market.open without a market id is the scan: opens what is due and returns the counts (#21)', async () => {

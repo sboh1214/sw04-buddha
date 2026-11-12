@@ -23,6 +23,7 @@ import {
   createUser,
 } from './test/factories.js';
 import { connectTestDb, hasTestDb, testDbUrls, type TestDb } from './test/harness.js';
+import { prepareMarketMakerOpening } from './test/ledger.js';
 import { clockTimestamp, lockMarket } from './tx-helpers.js';
 import { waitForLockWaiter } from './test/wait.js';
 
@@ -235,6 +236,7 @@ describe.skipIf(!hasTestDb())('market liquidity versions (#72)', () => {
 
   it('pins the current version at the open without publishing configuration or another event', async () => {
     const { market } = await createScheduledMarket(t.db);
+    await prepareMarketMakerOpening(t.db, market.id);
     const config = await readMarketMakerConfig(t.db, market.id);
     const result = await open(market.id);
     expect(result.opened).toBe(true);

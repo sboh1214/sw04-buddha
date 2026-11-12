@@ -4,7 +4,7 @@ import {
   marketRuleContentSchema,
 } from '@buddha/shared';
 import { asc, eq } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openScheduledMarket, type OpenScheduledMarketInput } from './market-open.js';
 import { marketEvents, marketRuleVersions, markets } from './schema/index.js';
 import {
@@ -15,6 +15,8 @@ import {
   createUser,
 } from './test/factories.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
+import * as txClock from './tx-helpers.js';
+import { prepareMarketMakerOpening } from './test/ledger.js';
 import { clockTimestamp, lockMarket } from './tx-helpers.js';
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -62,17 +64,30 @@ describe.skipIf(!hasTestDb())('openScheduledMarket (#21, docker test profile)', 
    * As every caller opens: the market lock, the row FOR UPDATE after it, then `now` — the database
    * clock after the lock, unless a boundary case gives the instant itself.
    */
-  function open(marketId: string, opener: Opener = WORKER, at?: Date) {
-    return t.db.transaction(async (tx) => {
-      await lockMarket(tx, marketId);
-      const [market] = await tx
-        .select()
-        .from(markets)
-        .where(eq(markets.id, marketId))
-        .for('update');
-      const now = at ?? (await clockTimestamp(tx));
-      return { now, result: await openScheduledMarket(tx, { market: market!, now, ...opener }) };
-    });
+  async function open(marketId: string, opener: Opener = WORKER, at?: Date) {
+    const initial = await rowOf(marketId);
+    if (initial.status === 'scheduled' && initial.currentLiquidityVersion !== null)
+      await prepareMarketMakerOpening(t.db, marketId);
+    // Boundary examples fix every application DB-clock read, including the new final asset wait;
+    // ordinary cases below use real Postgres time and assert the actual open is no earlier.
+    const clock = at ? vi.spyOn(txClock, 'clockTimestamp').mockResolvedValue(at) : null;
+    try {
+      return await t.db.transaction(async (tx) => {
+        await lockMarket(tx, marketId);
+        const [market] = await tx
+          .select()
+          .from(markets)
+          .where(eq(markets.id, marketId))
+          .for('update');
+        const now = at ?? (await clockTimestamp(tx));
+        const result = await openScheduledMarket(tx, { market: market!, now, ...opener });
+        if (result.opened)
+          expect(result.row.openAt!.getTime()).toBeGreaterThanOrEqual(now.getTime());
+        return { now: result.opened ? result.row.openAt! : now, result };
+      });
+    } finally {
+      clock?.mockRestore();
+    }
   }
 
   it('opens a due SCHEDULED market as the worker, keyed and stamped at its instant', async () => {

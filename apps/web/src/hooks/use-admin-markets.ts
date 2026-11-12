@@ -34,6 +34,8 @@ import { relatedSearchQuery } from '@/lib/related-markets';
 import { THEME_MARKETS_KEY, THEME_RESULTS_KEY } from '@/lib/themes';
 import { ADMIN_THEME_MARKETS_KEY } from './use-admin-themes';
 import { ADMIN_RECONCILIATION_KEY } from './use-reconciliation';
+import { adminMarketMakerKey } from './use-admin-market-maker';
+import { treasuryBalanceKey } from './use-treasury';
 
 /**
  * Query keys the admin market screens share (PLAN 11.5 rules, admin-prefixed like
@@ -503,6 +505,8 @@ export function invalidateMarket(queryClient: QueryClient, id: string) {
   const ownLinks = hashKey(adminRelatedMarketsKey(id));
   return Promise.all([
     queryClient.invalidateQueries({ queryKey: adminMarketKey(id) }),
+    queryClient.invalidateQueries({ queryKey: adminMarketMakerKey(id) }),
+    queryClient.invalidateQueries({ queryKey: treasuryBalanceKey }),
     queryClient.invalidateQueries({ queryKey: marketFillsKey(id) }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKETS_KEY }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_REVIEWS_KEY }),

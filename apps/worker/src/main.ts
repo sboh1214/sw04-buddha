@@ -10,6 +10,7 @@ import { createProcessor } from './jobs/index.js';
 import { LEDGER_AUDIT_QUERY_TIMEOUT_MS } from './jobs/ledger-audit.js';
 import { logger } from './logger.js';
 import { createEnqueueFinalize } from './market-jobs.js';
+import { createEnqueueMarketMaker } from './market-maker-jobs.js';
 import {
   BULLMQ_REDIS_OPTIONS,
   createQueues,
@@ -101,6 +102,7 @@ async function main(): Promise<void> {
     publish: createPublisher(publishRedis, logger),
     // #152: a confirmation's `market.finalize`, on the queue the workers below consume.
     enqueueFinalize: createEnqueueFinalize(queueByName.markets, logger),
+    enqueueMarketMaker: createEnqueueMarketMaker(queueByName.maker, logger),
     storage,
     logger,
   });

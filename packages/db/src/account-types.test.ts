@@ -56,13 +56,22 @@ function sourceFiles(): string[] {
 
 /** A type column handed to the rule, which is how a query reads it. */
 const HANDED_TO_THE_RULE = /isHumanAccountTypeSql\(\s*[\w.]+\.accountType\s*\)/g;
+/** #129's complete job/setting keys name neither an account type nor its column. */
+const MARKET_MAKER_NAMESPACED_KEY =
+  /(['"])market_maker\.(?:refresh|scan|reduce_at_bp|halt_at_bp|reduce_ratio_bp)\1/g;
 /** The type named as itself: its values, its column, its field. */
 const NAMES_THE_TYPE = /\bmarket_maker\b|\baccount_type\b|\baccountType\b/;
 /** Exact #72 setting literals do not inspect an account type. No prefix exemption. */
 const LIQUIDITY_SETTING_LITERAL =
   /(['"])market_maker\.default_(?:budget_coin|max_loss_coin|b|levels|quantity|safety_ticks)\1/g;
-const namesAccountType = (text: string) =>
-  NAMES_THE_TYPE.test(text.replace(HANDED_TO_THE_RULE, '').replace(LIQUIDITY_SETTING_LITERAL, ''));
+function namesAccountType(text: string): boolean {
+  return NAMES_THE_TYPE.test(
+    text
+      .replace(HANDED_TO_THE_RULE, '')
+      .replace(MARKET_MAKER_NAMESPACED_KEY, '')
+      .replace(LIQUIDITY_SETTING_LITERAL, ''),
+  );
+}
 
 describe('the one rule of a person’s account (#115, static)', () => {
   it('reads the source tree (the scan is not empty)', () => {
@@ -98,7 +107,7 @@ describe('the one rule of a person’s account (#115, static)', () => {
   });
 
   it('lets a type column through only as the rule’s argument', () => {
-    const strip = (text: string) => NAMES_THE_TYPE.test(text.replace(HANDED_TO_THE_RULE, ''));
+    const strip = namesAccountType;
     expect(strip('and(isHumanAccountTypeSql(schema.user.accountType), eq(a, b))')).toBe(false);
     expect(strip("eq(schema.user.accountType, 'member')")).toBe(true);
     expect(strip("sql`u.account_type = 'member'`")).toBe(true);
@@ -115,6 +124,17 @@ describe('the one rule of a person’s account (#115, static)', () => {
     }
     expect(namesAccountType("'market_maker.other'")).toBe(true);
     expect(namesAccountType('market_maker.default_b')).toBe(true);
+  });
+
+  it('allows only complete MM job/setting keys, still checking every account comparison beside them', () => {
+    for (const key of ['refresh', 'scan', 'reduce_at_bp', 'halt_at_bp', 'reduce_ratio_bp']) {
+      const named = `const key = 'market_maker.${key}';`;
+      expect(namesAccountType(named)).toBe(false);
+      expect(namesAccountType(`${named} type === 'market_maker'`)).toBe(true);
+      expect(namesAccountType(`${named} u.account_type === value`)).toBe(true);
+      expect(namesAccountType(`${named} u.accountType === value`)).toBe(true);
+      expect(namesAccountType(`'market_maker.${key}.other'`)).toBe(true);
+    }
   });
 });
 

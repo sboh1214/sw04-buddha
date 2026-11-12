@@ -19,15 +19,23 @@ import {
   findLedgerAccount,
   ledgerEntryForAccount,
   ledgerKeys,
-  lockLedgerAccounts,
   recordLedgerEntry,
   type LedgerAccountRef,
   type LedgerEntryInput,
+  type RecordLedgerEntryResult,
 } from '../ledger.js';
 import * as schema from '../schema/index.js';
 import { balances, ledgerEntries, markets } from '../schema/index.js';
-import { clockTimestamp, lockMarket } from '../tx-helpers.js';
-import { createMarket, createMarketMakerAccount } from './factories.js';
+import { mintTreasury } from '../treasury.js';
+import { readMarketMakerConfig } from '../market-liquidity.js';
+import { lockMarket } from '../tx-helpers.js';
+import {
+  createApprovalRequest,
+  createMarket,
+  createMarketMakerAccount,
+  createUser,
+  setReleaseSetting,
+} from './factories.js';
 import { createFillRecord, priceAndQtyOf } from './orders.js';
 import { testDbUrls } from './harness.js';
 
@@ -149,9 +157,11 @@ export async function spendCoin(
 }
 
 /**
- * Funds a market's 마켓메이커 자금 the way #129 will: a 금고 발행 into the treasury and a 봇 배정
- * from it, both referring to one approval request id (no `approval_requests` row: nothing reads
- * it back). Makes the 운영 마켓메이커 account first if the database has none. Returns its id.
+ * Legacy, already-open/arbitrary-capital fixture. Production initial funding goes through
+ * prepareMarketMakerOpening + the common opening. Old tests of fills, settlement and corruption
+ * need pre-0069 capital at a chosen amount (sometimes several allocations); only the TEST owner
+ * can bypass the new INSERT binding for that historical row. The treasury mint is still a real
+ * two-admin issuance and all Coin moves through recordLedgerEntry. Never imported by runtime.
  */
 export async function fundMarketMakerFunds(
   db: Db,
@@ -159,33 +169,61 @@ export async function fundMarketMakerFunds(
   amountCoin: bigint,
 ): Promise<string> {
   const owner = await createMarketMakerAccount(db);
+  await fundTestTreasury(db, amountCoin);
   const requestId = randomUUID();
-  await db.transaction(async (tx) => {
-    const funds: LedgerAccountRef = { kind: 'market_maker_funds', marketId };
-    await lockLedgerAccounts(tx, [{ kind: 'treasury' }, funds]);
-    const at = await clockTimestamp(tx);
-    const ref = {
-      refType: 'approval_request',
-      refId: requestId,
-      idempotencyKey: ledgerKeys.approvalRequest(requestId),
-      at,
-    } as const;
-    await recordLedgerEntry(tx, {
-      type: 'TREASURY_MINT',
-      amountCoin,
-      from: null,
-      to: { kind: 'treasury' },
-      ...ref,
-    });
-    await recordLedgerEntry(tx, {
-      type: 'BOT_ALLOCATION',
-      amountCoin,
-      from: { kind: 'treasury' },
-      to: funds,
-      ...ref,
-    });
+  await recordLegacyMarketMakerCapitalForTest({
+    type: 'BOT_ALLOCATION',
+    amountCoin,
+    from: { kind: 'treasury' },
+    to: { kind: 'market_maker_funds', marketId },
+    marketId,
+    refType: 'approval_request',
+    refId: requestId,
+    idempotencyKey: ledgerKeys.approvalRequest(requestId),
   });
   return owner;
+}
+
+/** Owner-only pre-0069 capital, preserving the chain and all existing ledger guards. */
+export async function recordLegacyMarketMakerCapitalForTest(
+  input: LedgerEntryInput & { type: 'TREASURY_MINT' | 'BOT_ALLOCATION' },
+): Promise<RecordLedgerEntryResult> {
+  return withLedgerGuardsOff(
+    async (client) => {
+      const owner = drizzle({ client, schema, casing: 'snake_case' });
+      return recordLedgerEntry(owner as unknown as Parameters<typeof recordLedgerEntry>[0], input);
+    },
+    { capital: true },
+  );
+}
+
+/** Explicit TEST-stage settings and real approved funds for a normal opening. Never fills
+ * existing/invalid setting rows or repairs damaged books. A test of an unmet prerequisite calls
+ * createScheduledMarket directly and prepares only the prerequisites that it actually wants.
+ */
+export async function prepareMarketMakerOpening(db: Db, marketId: string): Promise<void> {
+  const config = await readMarketMakerConfig(db, marketId);
+  if (!config) throw new Error('Opening fixture needs explicit liquidity settings');
+  await createMarketMakerAccount(db);
+  const adminId = (await createUser(db, { role: 'admin' })).user.id;
+  for (const [key, value] of [
+    ['market_maker.reduce_at_bp', 7000],
+    ['market_maker.halt_at_bp', 9000],
+    ['market_maker.reduce_ratio_bp', 5000],
+  ] as const) {
+    const [existing] = await db
+      .select({ key: schema.releaseSettings.key })
+      .from(schema.releaseSettings)
+      .where(eq(schema.releaseSettings.key, key));
+    if (!existing) await setReleaseSetting(db, { key, value, status: 'test', adminId });
+  }
+  const account = await findLedgerAccount(db, { kind: 'treasury' });
+  const [balance] = account
+    ? await db.select().from(balances).where(eq(balances.accountId, account.id))
+    : [];
+  if (account && !balance) throw new Error('Opening fixture treasury is missing its balance');
+  const missing = config.budgetCoin - (balance?.availableCoin ?? 0n);
+  if (missing > 0n) await fundTestTreasury(db, missing);
 }
 
 export interface MintTestPairsInput {
@@ -287,6 +325,8 @@ export interface LedgerGuardsOffOptions {
    * forges an event. Default: only a balance may be changed alone.
    */
   entries?: boolean;
+  /** Only the new #129 binding, for an explicitly historical capital fixture. */
+  capital?: boolean;
 }
 
 /**
@@ -308,10 +348,13 @@ export async function withLedgerGuardsOff<T>(
   if (!urls) throw new Error('withLedgerGuardsOff needs the test database');
   const client = new Client({ connectionString: urls.migrateUrl });
   await client.connect();
-  const triggers: [string, string][] = [
-    ['balances', 'balances_keep_ledger_gap'],
-    ['balances', 'balances_follow_ledger'],
-  ];
+  const triggers: [string, string][] =
+    options.capital && !options.entries
+      ? []
+      : [
+          ['balances', 'balances_keep_ledger_gap'],
+          ['balances', 'balances_follow_ledger'],
+        ];
   if (options.entries) {
     triggers.push(['ledger_entries', 'ledger_entries_check']);
     triggers.push(['ledger_entries', 'ledger_entries_fill_binding']);
@@ -319,6 +362,7 @@ export async function withLedgerGuardsOff<T>(
     triggers.push(['ledger_entries', 'ledger_entries_restore_cursor']);
     triggers.push(['ledger_entries', 'ledger_entries_follow_balances']);
   }
+  if (options.capital) triggers.push(['ledger_entries', 'ledger_entries_market_maker_binding']);
   try {
     await client.query('BEGIN');
     try {
@@ -356,19 +400,21 @@ export async function damageActualCoinForTest(accountId: number, deltaCoin: bigi
   });
 }
 
-/** Fund the test treasury using its existing real mint type; no issued supply is hidden. */
+/** A real two-admin approved treasury issuance, with its permanent #129 binding. */
 export async function fundTestTreasury(db: Db, amountCoin: bigint): Promise<void> {
-  await db.transaction((tx) =>
-    recordLedgerEntry(tx, {
-      type: 'TREASURY_MINT',
-      amountCoin,
-      from: null,
-      to: { kind: 'treasury' },
-      refType: 'approval_request',
-      refId: randomUUID(),
-      idempotencyKey: randomUUID(),
-    }),
-  );
+  const requestedBy = (await createUser(db, { role: 'admin' })).user.id;
+  const by = (await createUser(db, { role: 'admin' })).user.id;
+  await db.transaction(async (tx) => {
+    const request = await createApprovalRequest(tx as unknown as Db, {
+      kind: 'treasury_issue',
+      targetType: 'treasury',
+      targetId: 'treasury',
+      payload: { amountCoin: String(amountCoin) },
+      requestedBy,
+      decision: { status: 'approved', by },
+    });
+    await mintTreasury(tx, { approvalId: request.id });
+  });
 }
 
 /** A pre-0065 unbound correction entry, or an owner-created corruption incident. Only TEST

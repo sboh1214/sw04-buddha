@@ -4,6 +4,7 @@ import {
   completeOnboarding,
   createMarket,
   createMarketInReview,
+  prepareMarketMakerOpening,
   TEST_PRICE_PROTECTION_TICKS,
 } from '@buddha/db/test';
 import { MARKET_REVIEW_CHECKLIST, type AdminMarket } from '@buddha/shared';
@@ -223,6 +224,7 @@ describe.skipIf(!hasTestInfra)('admin market liquidity (integration)', () => {
     expect(
       (await save(market.id, { baseVersion: 1, settings: { ...settings, b: 200 } })).statusCode,
     ).toBe(400);
+    await prepareMarketMakerOpening(t.db, market.id);
     const opened = await approve(detail(submitted));
     expect(opened.statusCode).toBe(200);
     expect(detail(opened)).toMatchObject({

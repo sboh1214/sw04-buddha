@@ -89,6 +89,7 @@ import {
   type MarketJudgementRow,
 } from '../market-judgement.js';
 import { openScheduledMarket } from '../market-open.js';
+import { prepareMarketMakerOpening } from './ledger.js';
 import {
   currentMarketPause,
   endMarketPause,
@@ -1671,6 +1672,8 @@ export interface CreateMarketInReviewInput extends ReviewedMarketFields {
   withoutLiquidity?: boolean;
   /** Private immutable liquidity-version reason, for public privacy sentinels. */
   liquidityReason?: string;
+  /** Explicit draft settings for liquidity/runtime integration fixtures. */
+  liquiditySettings?: MarketLiquiditySettingsInput;
 }
 
 /** A market under review, scheduled or opened from it, with its `market_review` request (#78). */
@@ -1701,6 +1704,7 @@ export async function createMarketInReview(
     withoutPriceProtection,
     withoutLiquidity,
     liquidityReason,
+    liquiditySettings,
     ...fields
   } = input;
   const createdBy = fields.createdBy ?? (await createUser(db, { role: 'admin' })).user.id;
@@ -1717,7 +1721,7 @@ export async function createMarketInReview(
         actorId: createdBy,
         baseVersion: null,
         reason: liquidityReason ?? '시험용 유동성 설정',
-        settings: {
+        settings: liquiditySettings ?? {
           budgetCoin: 10_000n,
           maxLossCoin: 5_000n,
           b: 100,
@@ -1860,6 +1864,7 @@ export async function createOpenedMarket(
   input: CreateScheduledMarketInput = {},
 ): Promise<ReviewedMarket> {
   const { market: scheduled, request } = await createScheduledMarket(db, input);
+  await prepareMarketMakerOpening(db, scheduled.id);
   return db.transaction(async (tx) => {
     await lockMarket(tx, scheduled.id);
     const [current] = await tx

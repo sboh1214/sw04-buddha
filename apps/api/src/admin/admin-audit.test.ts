@@ -46,6 +46,10 @@ import { discoverRoutes, isAdminPath } from '../test/routes.js';
  * call site.
  */
 const AUDITED: Readonly<Record<string, AdminActionType>> = {
+  'POST /admin/treasury/issue-requests': 'treasury_issue_request',
+  'POST /admin/treasury/issue-requests/:id/approve': 'treasury_issue_approve',
+  'POST /admin/treasury/issue-requests/:id/reject': 'treasury_issue_reject',
+  'POST /admin/treasury/issue-requests/:id/retract': 'treasury_issue_retract',
   'POST /admin/reconciliation/results/:resultId/correction-requests':
     'reconciliation_correction_request',
   'POST /admin/reconciliation/results/:resultId/correction-requests/:requestId/approve':

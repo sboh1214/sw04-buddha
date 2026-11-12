@@ -214,6 +214,11 @@ export function signInFirstSeedAdmin(context: APIRequestContext): Promise<void> 
   return signInSeedAdmin(context, FIRST_ADMIN);
 }
 
+/** The independent approver for test treasury issuance during global setup (#129). */
+export function signInSecondSeedAdmin(context: APIRequestContext): Promise<void> {
+  return signInSeedAdmin(context, SECOND_ADMIN);
+}
+
 /**
  * Takes a seed admin through whatever is left of its onboarding (#58): the consent, the 본인확인 and
  * the nickname step (`chooseSeedAdminNickname`). Workers running in parallel share the two admins,

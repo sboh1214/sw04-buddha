@@ -4,10 +4,11 @@ import { copy } from '../src/copy';
 import { accountIdOf, adminAccount, expect, freshEmail, signIn, signUp, test } from './helpers';
 
 /**
- * 출시 설정 (#170, ADR-0055) as the shipped build has it: eighteen registered items — 시작 지급액
+ * 출시 설정 (#170, ADR-0055) as the shipped build has it: twenty-one registered items — 시작 지급액
  * (`grant.start_coin`, #70, ADR-0071), 선행 마감 최소 간격 (`market.lead_close_gap`, #22,
  * ADR-0098), 이의 기간 (`market.dispute_window`, #152, ADR-0103), 주문 접수, 주문 속도 제한 and 가격
- * 보호 폭 표준값 (`order.*`, #119, ADR-0112 — the first a flag) and the six retention periods
+ * 보호 폭 표준값 (`order.*`, #119, ADR-0112 — the first a flag), three MM risk-stage items
+ * (`market_maker.*`, #129, ADR-0124), and the six retention periods
  * (`retention.*` — #184's five, ADR-0087, and #77's market proposals, ADR-0089) — which the screen
  * and the API list alike, in the registry's order. Changing and recording an item are fixed by
  * the API suite with injected test items (`createTestApp({ releaseSettings })`), paying the start
@@ -22,11 +23,12 @@ import { accountIdOf, adminAccount, expect, freshEmail, signIn, signUp, test } f
  * worker's next daily run; for the lead-close gap, decide which markets with an announcement time
  * may open — and stay for the runs after it, so the spec reads the status the database holds —
  * 미정 on a fresh one, as no migration or seed writes a value (docs/SETTINGS.md) — and checks the
- * screen against it. The suite writes five values, by its global setup before any test
+ * screen against it. The suite writes eight values, by its global setup before any test
  * (global-setup.ts, 시험값 while each is 미정): the dispute window's 1분, the start Coin's 1,000,000
  * (since #116, the e2e accounts' only Coin) and the three order items — intake open, 20 orders a
- * minute and a width of 5 ticks (#119, `ensureOrderSettings`). So none of the five is 미정 here,
- * none changes while this spec reads the list, and the 미정 count comes from the other items
+ * minute and a width of 5 ticks (#119, `ensureOrderSettings`), plus the three explicit MM test
+ * stage settings (#129). None of the eight is 미정 here, none changes while this spec reads the
+ * list, and the 미정 count comes from the other items
  * alone. The change dialogs are opened and cancelled only.
  */
 
@@ -57,6 +59,13 @@ const ORDER_ITEMS = [
   ['order.accepting', '주문 접수', null, 'boolean'],
   ['order.rate_limit', '주문 속도 제한', '회/분', 'integer'],
   ['order.price_protection_ticks', '가격 보호 폭 표준값', '틱', 'integer'],
+] as const;
+
+/** Global risk stages have explicit test values, never migration/seed defaults (#129). */
+const MARKET_MAKER_ITEMS = [
+  ['market_maker.reduce_at_bp', '마켓메이커 축소 시작 비율'],
+  ['market_maker.halt_at_bp', '마켓메이커 중단 시작 비율'],
+  ['market_maker.reduce_ratio_bp', '마켓메이커 축소 수량 비율'],
 ] as const;
 
 /**
@@ -93,6 +102,7 @@ const SHIPPED_KEYS = [
   DISPUTE_WINDOW_KEY,
   ...ORDER_ITEMS.map(([key]) => key),
   ...LIQUIDITY_ITEMS.map(([key]) => key),
+  ...MARKET_MAKER_ITEMS.map(([key]) => key),
   ...RETENTION_ITEMS.map(([key]) => key),
 ];
 
@@ -122,12 +132,11 @@ async function expectForbidden(response: APIResponse): Promise<void> {
 }
 
 test.describe('출시 설정 (#170)', () => {
-  test('관리자 메뉴에서 열면 시작 지급액·선행 마감 최소 간격·이의 기간, 주문의 세 항목·유동성 표준값 여섯·여섯 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
+  test('관리자 메뉴에서 열면 시작 지급액·선행 마감 최소 간격·이의 기간, 주문·MM 각 세 항목·유동성 표준값 여섯·여섯 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
     page,
     admin,
   }) => {
-    // The API: every registered item, including #72 liquidity defaults — whole
-    // numbers of Coin, of minutes, of submissions, of ticks and of days, and one flag.
+    // The API: every registered item, including liquidity defaults and basis-point risk stages.
     const items = await dataOf<ReleaseSetting[]>(await admin.get(LIST));
     expect(items.map((item) => item.key)).toEqual(SHIPPED_KEYS);
     const startCoin = items.find((item) => item.key === START_COIN_KEY);
@@ -161,6 +170,12 @@ test.describe('출시 설정 (#170)', () => {
       expect(item?.valueSchema.type, key).toBe('integer');
       // ADR-0069 decision 7, in each item's own words: only an approved value deletes.
       expect(item?.description, key).toContain('승인됨일 때만 지우고');
+    }
+    for (const [key, label] of MARKET_MAKER_ITEMS) {
+      const item = items.find((entry) => entry.key === key);
+      expect(item, key).toMatchObject({ key, label, unit: 'bp' });
+      expect(item?.valueSchema.type, key).toBe('integer');
+      expect(item?.status, key).not.toBe('undecided');
     }
     for (const item of items)
       expect(item.status === 'undecided', item.key).toBe(item.value === null);
@@ -229,6 +244,7 @@ test.describe('출시 설정 (#170)', () => {
       [START_COIN_KEY, '시작 지급액', 'Coin'],
       [LEAD_CLOSE_GAP_KEY, '선행 마감 최소 간격', '분'],
       [RETENTION_ITEMS[0][0], RETENTION_ITEMS[0][1], '일'],
+      [MARKET_MAKER_ITEMS[0][0], MARKET_MAKER_ITEMS[0][1], 'bp'],
     ] as const) {
       await page.getByTestId(`release-setting-edit-${key}`).click();
       const dialog = page.getByTestId('release-setting-dialog');

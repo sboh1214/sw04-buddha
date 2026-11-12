@@ -72,6 +72,7 @@ import {
   type TimeRuleViolation,
   type UpdateMarketBody,
   type WithoutExpectedAccount,
+  type ReleaseSettingsRegistry,
 } from '@buddha/shared';
 import { and, count, desc, eq, ilike, inArray, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -91,6 +92,7 @@ import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
 import { MarketJobs } from '../jobs/market-jobs.service.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
+import { RELEASE_SETTINGS_REGISTRY } from '../release-settings/release-settings.registry.js';
 import { ReleaseSettingsService } from '../release-settings/release-settings.service.js';
 import { type Page } from '../wallet/wallet.service.js';
 import {
@@ -591,6 +593,7 @@ export class MarketAdminService {
     private readonly jobs: MarketJobs,
     private readonly settings: ReleaseSettingsService,
     private readonly approvals: ApprovalService,
+    @Inject(RELEASE_SETTINGS_REGISTRY) private readonly registry: ReleaseSettingsRegistry,
   ) {}
 
   /**
@@ -1119,6 +1122,7 @@ export class MarketAdminService {
       this.publishStatus(market),
       this.jobs.scheduleClose(id, closeAt, now),
       openJobAt ? this.jobs.scheduleOpen(id, openJobAt, now) : undefined,
+      market.status === 'open' ? this.jobs.refreshMarketMaker(id, 1n) : undefined,
     ]);
     return market;
   }
@@ -1341,6 +1345,7 @@ export class MarketAdminService {
       this.publishStatus(market),
       before ? this.jobs.cancelOpen(id, before) : undefined,
       openJobAt ? this.jobs.scheduleOpen(id, openJobAt, now) : undefined,
+      market.status === 'open' ? this.jobs.refreshMarketMaker(id, 1n) : undefined,
     ]);
     return market;
   }
@@ -1570,10 +1575,11 @@ export class MarketAdminService {
    * reschedule — when its scheduled open has come (#21, ADR-0100; ADR-0093 decision 2 #172 item 6,
    * decision 3 '#21 앞당긴 개장'): `openScheduledMarket` under the market lock the caller holds, at
    * the caller's instant `now`, the admin as its actor. Answers the OPEN row, or null while the
-   * scheduled open is still ahead (`not_due`) or a ledger hold awaits approved recovery
-   * (`ledger_hold`). A legacy scheduled market without liquidity must go back to a draft and be
-   * reviewed with explicit settings; return the existing actionable open-item refusal. The caller
-   * checked on the same clock that the close is ahead, so other skips are broken invariants.
+   * scheduled open is still ahead or the common open is waiting for MM settings/funding/recovery.
+   * Its last asset wait may also cross the close. All leave the approval intact and the market
+   * SCHEDULED; a row no longer SCHEDULED under this same lock is a broken invariant.
+   * A legacy market missing liquidity instead returns the actionable open-item refusal so an
+   * administrator can return it to a draft and review explicit settings.
    */
   private async openIfDue(
     tx: Tx,
@@ -1582,15 +1588,22 @@ export class MarketAdminService {
     adminId: string,
     source: Exclude<OpenSource, 'job'>,
   ): Promise<MarketRow | null> {
-    const result = await openScheduledMarket(tx, { market: row, now, actorId: adminId, source });
+    const result = await openScheduledMarket(tx, {
+      market: row,
+      now,
+      actorId: adminId,
+      source,
+      registry: this.registry,
+    });
     if (result.opened) return result.row;
-    if (result.reason === 'not_due' || result.reason === 'ledger_hold') return null;
     if (result.reason === 'liquidity_missing') {
       throw new AppError('OPEN_ITEMS_MISSING', {
         message: 'The market misses what it needs to open: liquidity',
         details: [{ path: ['liquidity'], message: 'required' }],
       });
     }
+    // Readiness/funding and a close reached while waiting keep the approved market scheduled.
+    if (result.reason !== 'not_scheduled') return null;
     throw new AppError('INTERNAL', {
       message: `Market ${row.id} was not opened by its ${source}: ${result.reason}`,
     });

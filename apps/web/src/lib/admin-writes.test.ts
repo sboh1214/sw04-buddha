@@ -18,6 +18,11 @@ const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'u
 
 /** Each screen, with the writes it must send as the admin on screen. */
 const SCREENS: Readonly<Record<string, readonly string[]>> = {
+  '../app/admin/treasury/treasury-dialogs.tsx': [
+    'body: { expectedAccountId: by, amountCoin: draft.amountCoin, reason: draft.reason },',
+    'body: { expectedAccountId: by, reason: draft.reason },',
+    'body: { expectedAccountId: by },',
+  ],
   '../app/admin/markets/[id]/market-liquidity-panel.tsx': [
     'body: { settings, baseVersion, reason, expectedAccountId: by },',
   ],
@@ -186,6 +191,8 @@ describe('the admin the admin writes name (ADR-0092)', () => {
     // Since owner decision 2026-10-26 17:21 answer 1 the buttons that open a dialog held for the
     // admin and the fields of a form drawn for it wait too (the describe below).
     const waits: Readonly<Record<string, number>> = {
+      '../app/admin/treasury/treasury-dialogs.tsx': 2,
+      '../app/admin/treasury/admin-treasury.tsx': 1,
       '../app/admin/markets/[id]/market-liquidity-panel.tsx': 3,
       '../app/admin/audit-failures/reconciliation-correction-dialogs.tsx': 3,
       // 확인함, and the button that opens its dialog
@@ -301,6 +308,9 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
    * each per area.
    */
   const HELD: Readonly<Record<string, readonly string[]>> = {
+    '../app/admin/treasury/admin-treasury.tsx': [
+      'const [dialog, setDialog] = useHeldForOperator<TreasuryDialogTarget>();',
+    ],
     '../app/admin/markets/[id]/market-liquidity-panel.tsx': [
       'const [editing, setEditing] = useHeldForOperator<true>();',
     ],

@@ -16,9 +16,7 @@ import {
   createDb,
   ledgerKeys,
   lockForOrder,
-  lockLedgerAccounts,
   marketMakerAccountId,
-  recordLedgerEntry,
   releaseForOrder,
   schema,
   settleMarketPositions,
@@ -34,6 +32,7 @@ import {
   createSettlementStep,
   createUser,
   fundMarketMakerFunds,
+  fundTestTreasury,
   hasTestDb,
   ledgerAccountBalance,
   marketStatsOf,
@@ -240,18 +239,7 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
    */
   async function correctCollateral(marketId: string, amountCoin: bigint) {
     const requestId = randomUUID();
-    await t.db.transaction(async (tx) => {
-      await lockLedgerAccounts(tx, [{ kind: 'treasury' }, collateralOf(marketId)]);
-      await recordLedgerEntry(tx, {
-        type: 'TREASURY_MINT',
-        amountCoin,
-        from: null,
-        to: { kind: 'treasury' },
-        refType: 'approval_request',
-        refId: requestId,
-        idempotencyKey: ledgerKeys.approvalRequest(requestId),
-      });
-    });
+    await fundTestTreasury(t.db, amountCoin);
     await recordLegacyCorrectionForTest({
       amountCoin,
       from: { kind: 'treasury' },
@@ -700,8 +688,8 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       // --- the books still balance (PLAN 5.6): every payout has its ledger row -----------
       const audit = await runLedgerAudit(t.db);
       // Four holders, the two markets' creators, the treasury, and each market's collateral and
-      // 마켓메이커 자금.
-      expect(audit.checked).toBe(13);
+      // 마켓메이커 자금, plus the six request/approval admins of the real treasury issuances.
+      expect(audit.checked).toBe(19);
       expect(audit.mismatches).toEqual([]);
       expect(audit.recorded).toBe(0);
     } finally {

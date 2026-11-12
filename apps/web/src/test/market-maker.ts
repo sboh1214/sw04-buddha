@@ -1,0 +1,49 @@
+import type { AdminMarketMaker } from '@/lib/api';
+
+/** Explicit test readings; no production value is chosen by this fixture. */
+export const marketMaker: AdminMarketMaker = {
+  marketId: '00000000-0000-4000-8000-000000000001',
+  config: {
+    marketId: '00000000-0000-4000-8000-000000000001',
+    version: 1,
+    budgetCoin: '1000',
+    maxLossCoin: '500',
+    b: 100,
+    levels: 3,
+    quantity: 10,
+    safetyTicks: 1,
+    reason: '비공개 설정 근거',
+    createdAt: '2026-11-10T01:00:00.000Z',
+    createdBy: { id: 'admin-a', nickname: '관리자' },
+  },
+  openedVersion: 1,
+  runtime: {
+    desiredEnabled: true,
+    generation: '3',
+    completedGeneration: '2',
+    state: 'waiting',
+    reason: null,
+    lastConfigVersion: 1,
+    lastAttemptAt: '2026-11-10T01:10:00.000Z',
+    lastSuccessAt: '2026-11-10T01:09:00.000Z',
+    lastFailureAt: null,
+    lastError: null,
+    consecutiveFailures: 0,
+    updatedAt: '2026-11-10T01:10:00.000Z',
+  },
+  stageSettings: {
+    status: 'ready',
+    reduceAtBp: { key: 'market_maker.reduce_at_bp', status: 'test', value: 7000 },
+    haltAtBp: { key: 'market_maker.halt_at_bp', status: 'test', value: 9000 },
+    reduceRatioBp: { key: 'market_maker.reduce_ratio_bp', status: 'test', value: 5000 },
+  },
+  readiness: { blockers: [] },
+  lastOpenAttempt: {
+    lastAttemptAt: '2026-11-10T01:05:00.000Z',
+    reason: null,
+    requiredCoin: '1000',
+    availableCoin: '2000',
+    liquidityVersion: 1,
+    succeededAt: '2026-11-10T01:05:00.000Z',
+  },
+};

@@ -56,6 +56,9 @@ const EXPECT_TIMEOUT_MS = 15_000;
 
 export default defineConfig({
   testDir: './e2e',
+  // These scenarios must run separately on fresh DB/Redis profiles; see e2e/README.md. This is
+  // partitioning, not a skip or optional coverage: both dedicated configs are required as well.
+  grepInvert: /@market-maker-quotes|@isolated-treasury/,
   // Once per invocation, after `webServer` answers and before any test (e2e/global-setup.ts): while
   // each is 미정, gives the release setting `market.dispute_window` 1분, so a judgement can be
   // approved and its dispute window waited out (#152, ADR-0103), and `grant.start_coin` 1,000,000

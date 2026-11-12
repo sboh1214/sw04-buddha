@@ -15,9 +15,9 @@ import {
   signUp,
   meOf,
   switchSessionTo,
-  test,
   expect,
 } from './helpers';
+import { test } from './treasury-fixture';
 import { correctionBooks } from './reconciliation-correction-fixture';
 
 const ROOT = '/api/v1/admin/reconciliation';
@@ -387,7 +387,7 @@ test.describe('감사 근거에 고정한 Coin 보정 (#93)', () => {
     }
   });
 
-  test('금고 부족은 pending을 유지하고 재원 마련 뒤 같은 요청이 원장만 보충한다', async ({
+  test('금고 부족은 pending을 유지하고 재원 마련 뒤 같은 요청이 원장만 보충한다 @isolated-treasury', async ({
     browser,
     baseURL,
     page,

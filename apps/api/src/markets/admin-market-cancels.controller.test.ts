@@ -29,6 +29,7 @@ import {
   createPauseDecision,
   createPausedMarket,
   createScheduledMarket,
+  prepareMarketMakerOpening,
 } from '@buddha/db/test';
 import {
   MARKET_CANCEL_APPROVAL_KIND,
@@ -634,6 +635,8 @@ describe.skipIf(!hasTestInfra)('admin market cancels (integration)', () => {
     // A waiting request does not hold the automatic open (구현의 선택 P1): once OPEN, the market
     // ends by its close or a pause's early close, never by an operator's cancel.
     const market = await scheduled({ scheduledOpenAt: new Date(Date.now() - MINUTE_MS) });
+    // This tests a cancel request across an actual open, with #129's normal opening funds/settings.
+    await prepareMarketMakerOpening(t.db, market.id);
     expect((await requestCancel(market.id)).statusCode).toBe(200);
     const requestId = await pendingId(market.id);
     await t.db.transaction(async (tx) => {

@@ -9,6 +9,7 @@ import { uuidSchema } from './api/uuid.js';
  */
 export const QUEUE_NAMES = [
   'markets',
+  'maker',
   'audit',
   'stats',
   'wallet',
@@ -19,6 +20,8 @@ export const QUEUE_NAMES = [
 export type QueueName = (typeof QUEUE_NAMES)[number];
 
 export const JOB_NAMES = {
+  marketMakerRefresh: 'market_maker.refresh',
+  marketMakerScan: 'market_maker.scan',
   /**
    * Opens a SCHEDULED market at its 예정 개장 시각 (#21, ADR-0100; ADR-0093 decision 1 #173 item
    * 1): SCHEDULED → OPEN, actor NULL (the worker). The delayed job the API registers per market
@@ -140,4 +143,29 @@ export function marketResolveJobId(marketId: string, disputeDeadline: Date): str
  */
 export function marketFinalizeJobId(marketId: string, resolvedAt: Date): string {
   return `${JOB_NAMES.marketFinalize}.${marketId}.${String(resolvedAt.getTime())}`;
+}
+
+/** Durable DB generation identifies the work, not Redis delivery or an execution attempt. */
+export const marketMakerJobDataSchema = z
+  .object({
+    marketId: uuidSchema,
+    generation: z
+      .string()
+      .regex(/^[1-9]\d{0,18}$/)
+      .refine(
+        (value) => /^[1-9]\d{0,18}$/.test(value) && BigInt(value) <= 9_223_372_036_854_775_807n,
+      ),
+  })
+  .strict();
+export type MarketMakerJobData = z.infer<typeof marketMakerJobDataSchema>;
+
+/** A new registration id permits a later scan after a kept failed job exhausted its attempts.
+ * BullMQ deduplicates active/waiting registrations by market; DB generation is the final guard.
+ */
+export function marketMakerJobId(
+  marketId: string,
+  generation: bigint,
+  registrationId: string,
+): string {
+  return `${JOB_NAMES.marketMakerRefresh}.${marketId}.${generation.toString()}.${registrationId}`;
 }

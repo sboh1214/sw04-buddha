@@ -13,6 +13,7 @@ describe('queues', () => {
   it('declares the queues from PLAN 9, the start grant’s wallet queue (#70), the media queue (#46), the community queue (#187) and the retention queue (#184)', () => {
     expect(QUEUE_NAMES).toEqual([
       'markets',
+      'maker',
       'audit',
       'stats',
       'wallet',
@@ -67,6 +68,7 @@ describe('queues', () => {
 
   it('schedules the daily audit, the per-minute scans and payment, the hourly clean-ups and the daily retention purge', () => {
     expect(JOB_SCHEDULES.map((schedule) => schedule.id)).toEqual([
+      'market-maker-scan',
       'ledger-audit-daily',
       'market-audit-scan',
       'market-open-scan',
@@ -79,6 +81,12 @@ describe('queues', () => {
       'retention-purge-daily',
     ]);
     const byId = Object.fromEntries(JOB_SCHEDULES.map((schedule) => [schedule.id, schedule]));
+    expect(byId['market-maker-scan']).toEqual({
+      id: 'market-maker-scan',
+      queue: 'maker',
+      name: JOB_NAMES.marketMakerScan,
+      repeat: { pattern: '* * * * *', tz: 'Asia/Seoul' },
+    });
     expect(byId['ledger-audit-daily']).toMatchObject({
       queue: 'audit',
       name: JOB_NAMES.ledgerAudit,

@@ -8,6 +8,7 @@ import { openScheduledMarket } from './market-open.js';
 import { lockForOrder } from './contracts.js';
 import { readMarketTradingFacts, readPublicBook } from './order-book.js';
 import { ledgerHeldMarketIds } from './ledger-held-markets.js';
+import { ensureLedgerAccount } from './ledger.js';
 import { expireLockedOrders, lockMarketOrders } from './order-cancel.js';
 import { settleMarketPositions } from './market-settlement.js';
 import {
@@ -52,6 +53,7 @@ import {
   balanceOf,
   fundMarketMakerFunds,
   mintTestPairs,
+  prepareMarketMakerOpening,
   withLedgerGuardsOff,
 } from './test/ledger.js';
 import {
@@ -542,7 +544,12 @@ describe.skipIf(!hasTestDb())('reconciliation and persistent recovery (#93)', ()
     await openOrderIntake(t.db, { adminId: actors.requester });
     const { market } = await createScheduledMarket(t.db);
     const person = (await createUser(t.db, { balanceCoin: 1000n })).user.id;
-    await fundMarketMakerFunds(t.db, market.id, 100n);
+    await prepareMarketMakerOpening(t.db, market.id);
+    // Damage an unused funds account: #129's initial capital belongs to the eventual opening,
+    // so a legacy allocation before SCHEDULED recovery would independently forbid that open.
+    await t.db.transaction((tx) =>
+      ensureLedgerAccount(tx, { kind: 'market_maker_funds', marketId: market.id }),
+    );
     const corrupt = (amount: number) =>
       withLedgerGuardsOff((c) =>
         c.query(

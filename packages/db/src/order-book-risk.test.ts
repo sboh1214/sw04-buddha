@@ -5,9 +5,16 @@ import type { Db } from './client.js';
 import { lockForOrder } from './contracts.js';
 import { findLedgerAccount, lockLedgerAccounts } from './ledger.js';
 import { lockMarket } from './tx-helpers.js';
+import { runMarketMakerCycle } from './market-maker-cycle.js';
+import { recordMarketMakerRun, requestMarketMakerRefresh } from './market-maker-runtime.js';
 import { readHoldings, readMarketTradingFacts, readPublicBookSnapshot } from './order-book.js';
 import { balances, ledgerEntries, orders } from './schema/index.js';
-import { createConfiguredOpenMarket, createMarket, createUser } from './test/factories.js';
+import {
+  createConfiguredOpenMarket,
+  createMarket,
+  createOpenedMarket,
+  createUser,
+} from './test/factories.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
 import { damageActualCoinForTest, fundMarketMakerFunds, mintTestPairs } from './test/ledger.js';
 import { createOrder, openOrderIntake, placeTestOrder } from './test/orders.js';
@@ -160,6 +167,70 @@ describe.skipIf(!hasTestDb())('public MM risk snapshot (#128)', () => {
       'Market maker risk snapshot is inconsistent',
     );
     expect(await written()).toEqual(before);
+  });
+
+  it('omits stopped bot orders before cleanup and quotes the same human fill as intake', async () => {
+    const { market } = await createOpenedMarket(t.db, {
+      priceProtectionTicks: 98,
+      liquiditySettings: { ...SETTINGS, budgetCoin: 10_000n, maxLossCoin: 5_000n, b: 100_000 },
+    });
+    await t.db.transaction((tx) => runMarketMakerCycle(tx, { marketId: market.id }));
+    const maker = (await createUser(t.db, { balanceCoin: 1000n })).user.id;
+    const taker = (await createUser(t.db, { balanceCoin: 1000n })).user.id;
+    expect(
+      await placeTestOrder(t.db, {
+        marketId: market.id,
+        ownerId: maker,
+        outcome: 'NO',
+        side: 'buy',
+        limitPriceCoin: 30,
+        qty: 2,
+      }),
+    ).toMatchObject({ kind: 'placed', order: { filledQty: 0 } });
+    await t.db.transaction(async (tx) => {
+      const pending = (await requestMarketMakerRefresh(tx, market.id))!;
+      await recordMarketMakerRun(tx, {
+        marketId: market.id,
+        generation: pending.generation,
+        controlGeneration: pending.controlGeneration,
+        outcome: 'error',
+        retryExhausted: true,
+        error: 'final bounded attempt failed',
+        startedAt: pending.updatedAt,
+      });
+    });
+    const before = await written();
+    expect(before.orders.some((row) => row.userId !== maker && row.status === 'open')).toBe(true);
+    const quote = await snapshot(async (tx) => {
+      const data = await readPublicBookSnapshot(tx, market.id);
+      expect(data.risk).toBeNull();
+      expect(data.book).toHaveLength(1);
+      expect(data.book[0]!.owner).toEqual({ id: maker, human: true });
+      expect(bookDepth(data.book, data.risk)[0]!.asks).toEqual([{ priceCoin: 70, qty: 2 }]);
+      return quoteOrder(
+        data.book,
+        (await readMarketTradingFacts(tx, market.id))!,
+        TERMS,
+        null,
+        data.risk,
+      );
+    });
+    expect(quote).toMatchObject({
+      kind: 'quoted',
+      figures: { filledQty: 2, filledAmountCoin: 140n },
+    });
+    expect(await written()).toEqual(before);
+    expect(
+      await placeTestOrder(t.db, {
+        marketId: market.id,
+        ownerId: taker,
+        outcome: 'YES',
+        side: 'buy',
+        timeInForce: 'ioc',
+        limitPriceCoin: 99,
+        qty: 10,
+      }),
+    ).toMatchObject({ kind: 'placed', order: { filledQty: 2, filledAmountCoin: 140n } });
   });
 
   it('quotes only unlocked holdings and uses the same capped sell as intake', async () => {

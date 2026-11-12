@@ -16,6 +16,9 @@ import {
   JSONB_NUL_MESSAGE,
   LEAD_CLOSE_GAP_SETTING,
   MARKET_LIQUIDITY_DEFAULT_SETTINGS,
+  MARKET_MAKER_REDUCE_AT_BP_SETTING,
+  MARKET_MAKER_HALT_AT_BP_SETTING,
+  MARKET_MAKER_REDUCE_RATIO_BP_SETTING,
   ORDER_ACCEPTING_SETTING,
   ORDER_RATE_LIMIT_SETTING,
   PRICE_PROTECTION_TICKS_SETTING,
@@ -640,6 +643,9 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
       ORDER_RATE_LIMIT_SETTING.key,
       PRICE_PROTECTION_TICKS_SETTING.key,
       ...Object.values(MARKET_LIQUIDITY_DEFAULT_SETTINGS).map(({ key }) => key),
+      MARKET_MAKER_REDUCE_AT_BP_SETTING.key,
+      MARKET_MAKER_HALT_AT_BP_SETTING.key,
+      MARKET_MAKER_REDUCE_RATIO_BP_SETTING.key,
       ...retention.map((definition) => definition.key),
     ]);
     const res = await t.app.inject({
@@ -750,6 +756,25 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
               : field === 'b'
                 ? 'number'
                 : 'integer',
+        }) as unknown,
+        status: 'undecided',
+        value: null,
+        updatedAt: null,
+        updatedBy: null,
+      })),
+      ...[
+        MARKET_MAKER_REDUCE_AT_BP_SETTING,
+        MARKET_MAKER_HALT_AT_BP_SETTING,
+        MARKET_MAKER_REDUCE_RATIO_BP_SETTING,
+      ].map((definition) => ({
+        key: definition.key,
+        label: definition.label,
+        unit: 'bp',
+        description: definition.description,
+        valueSchema: expect.objectContaining({
+          type: 'integer',
+          minimum: 0,
+          maximum: definition === MARKET_MAKER_REDUCE_RATIO_BP_SETTING ? 5_000 : 10_000,
         }) as unknown,
         status: 'undecided',
         value: null,
