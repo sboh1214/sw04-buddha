@@ -17,6 +17,7 @@ export const RECONCILIATION_FINDING_CODES = [
   'negative_coin',
   'contract_lock',
   'market_maker_account_missing',
+  'market_maker_recall',
   'retired_position',
   'closed_position_holder',
   'empty_position_cost',

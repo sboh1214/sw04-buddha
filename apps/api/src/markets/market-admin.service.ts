@@ -1848,13 +1848,18 @@ export class MarketAdminService {
    * rather than traders and only for a MOUNTED observer.
    */
   async publishStatus(market: PublishedStatus): Promise<void> {
-    await this.publisher.publishMarket(market.id, {
-      type: 'market:status',
-      marketId: market.id,
-      status: market.status,
-      resolvedResult: market.resolvedResult,
-      statusEventId: market.statusEventId,
-      ts: market.updatedAt,
-    });
+    await Promise.all([
+      this.publisher.publishMarket(market.id, {
+        type: 'market:status',
+        marketId: market.id,
+        status: market.status,
+        resolvedResult: market.resolvedResult,
+        statusEventId: market.statusEventId,
+        ts: market.updatedAt,
+      }),
+      market.status === 'settled' || market.status === 'cancelled'
+        ? this.jobs.recallMarketMaker(market.id)
+        : Promise.resolve(),
+    ]);
   }
 }

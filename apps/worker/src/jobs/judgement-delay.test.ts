@@ -33,6 +33,7 @@ import { type EnqueueFinalize } from '../market-jobs.js';
 import { type Publish } from '../realtime.js';
 import { closeDueMarkets, closeMarket } from './market-close.js';
 import { finalizeDueMarkets, finalizeMarket } from './market-finalize.js';
+import { recallMarketMaker, recallPendingMarketMakers } from './market-maker-recall.js';
 import { openDueMarkets, openMarket } from './market-open.js';
 import { resolveDueMarkets, resolveMarket } from './market-resolve.js';
 
@@ -108,6 +109,7 @@ describe.skipIf(!hasTestDb())('the time passing creates nothing (#142, integrati
       close: await closeDueMarkets(t.db, publish),
       resolve: await resolveDueMarkets(t.db, publish, enqueueFinalize),
       finalize: await finalizeDueMarkets(t.db, publish, logger),
+      recall: await recallPendingMarketMakers(t.db, logger),
     };
   }
 
@@ -155,6 +157,7 @@ describe.skipIf(!hasTestDb())('the time passing creates nothing (#142, integrati
       close: { closed: 0, cancelled: 0, skipped: 0, failed: 0, failures: [] },
       resolve: { resolved: 0, skipped: 0, failed: 0, failures: [] },
       finalize: { settled: 0, skipped: 0, failed: 0, failures: [] },
+      recall: { recalled: 0, pending: 0, skipped: 0, failed: 0, failures: [] },
     });
     // Each per-market job too, as a stale delayed job or a script would run it on this market.
     const marketId = market.id;
@@ -177,6 +180,11 @@ describe.skipIf(!hasTestDb())('the time passing creates nothing (#142, integrati
       outcome: 'skipped',
       marketId,
       reason: 'not_settling',
+    });
+    expect(await recallMarketMaker(t.db, marketId, logger)).toEqual({
+      marketId,
+      outcome: 'unavailable',
+      reason: 'not_terminal',
     });
 
     // Nothing moved: no status, no result, no judgement or request, no event, the records kept.
@@ -224,6 +232,7 @@ describe.skipIf(!hasTestDb())('the time passing creates nothing (#142, integrati
       close: { closed: 0, cancelled: 0, skipped: 0, failed: 0, failures: [] },
       resolve: { resolved: 0, skipped: 0, failed: 0, failures: [] },
       finalize: { settled: 0, skipped: 0, failed: 0, failures: [] },
+      recall: { recalled: 0, pending: 0, skipped: 0, failed: 0, failures: [] },
     });
     expect(await resolveMarket(t.db, market.id, publish, enqueueFinalize)).toEqual({
       outcome: 'skipped',
@@ -234,6 +243,11 @@ describe.skipIf(!hasTestDb())('the time passing creates nothing (#142, integrati
       outcome: 'skipped',
       marketId: market.id,
       reason: 'not_settling',
+    });
+    expect(await recallMarketMaker(t.db, market.id, logger)).toEqual({
+      marketId: market.id,
+      outcome: 'unavailable',
+      reason: 'not_terminal',
     });
     const after = await stateOf(market.id);
     expect(after).toEqual(before);
@@ -249,6 +263,7 @@ describe.skipIf(!hasTestDb())('the time passing creates nothing (#142, integrati
     // under any name: a new one fails here until it is reviewed against AC 6 and, if it touches
     // a market, added to `runEveryScan` or to the per-market job checks above.
     expect(Object.values(JOB_NAMES)).toEqual([
+      'market_maker.recall',
       'market_maker.refresh',
       'market_maker.scan',
       'market.open',

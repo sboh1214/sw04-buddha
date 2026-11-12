@@ -184,9 +184,9 @@ export async function fundMarketMakerFunds(
   return owner;
 }
 
-/** Owner-only pre-0069 capital, preserving the chain and all existing ledger guards. */
+/** Owner-only pre-0069/0070 capital, preserving the chain and existing financial guards. */
 export async function recordLegacyMarketMakerCapitalForTest(
-  input: LedgerEntryInput & { type: 'TREASURY_MINT' | 'BOT_ALLOCATION' },
+  input: LedgerEntryInput & { type: 'TREASURY_MINT' | 'BOT_ALLOCATION' | 'BOT_RECALL' },
 ): Promise<RecordLedgerEntryResult> {
   return withLedgerGuardsOff(
     async (client) => {
@@ -325,7 +325,7 @@ export interface LedgerGuardsOffOptions {
    * forges an event. Default: only a balance may be changed alone.
    */
   entries?: boolean;
-  /** Only the new #129 binding, for an explicitly historical capital fixture. */
+  /** Only #129/#181 bindings, for an explicitly historical capital fixture. */
   capital?: boolean;
 }
 
@@ -362,7 +362,10 @@ export async function withLedgerGuardsOff<T>(
     triggers.push(['ledger_entries', 'ledger_entries_restore_cursor']);
     triggers.push(['ledger_entries', 'ledger_entries_follow_balances']);
   }
-  if (options.capital) triggers.push(['ledger_entries', 'ledger_entries_market_maker_binding']);
+  if (options.capital) {
+    triggers.push(['ledger_entries', 'ledger_entries_market_maker_binding']);
+    triggers.push(['ledger_entries', 'ledger_entries_recall_binding']);
+  }
   try {
     await client.query('BEGIN');
     try {

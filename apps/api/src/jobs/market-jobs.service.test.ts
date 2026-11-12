@@ -46,6 +46,23 @@ describe.skipIf(!hasTestInfra)('MarketJobs (integration)', () => {
     vi.restoreAllMocks();
   });
 
+  it('registers a separate immediate recall and deduplicates pending terminal triggers', async () => {
+    await jobs.recallMarketMaker(MARKET_ID);
+    await jobs.recallMarketMaker(MARKET_ID);
+    const pending = await queue.getJobs(['waiting', 'delayed']);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      name: JOB_NAMES.marketMakerRecall,
+      data: { marketId: MARKET_ID },
+      delay: 0,
+    });
+    expect(pending[0]!.opts).toMatchObject({
+      attempts: 3,
+      removeOnComplete: true,
+      deduplication: { id: `${JOB_NAMES.marketMakerRecall}.${MARKET_ID}` },
+    });
+  });
+
   it('registers market.close for the market at closeAt, delayed from the DB instant given', async () => {
     const now = new Date('2026-09-09T00:00:00.000Z');
     const closeAt = new Date(now.getTime() + 3 * HOUR_MS);

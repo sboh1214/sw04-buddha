@@ -547,6 +547,7 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       ['utilization'],
       ['allocated'],
       ['allocation'],
+      ['recall'],
       ['vault'],
       ['treasury'],
       ['concentration'],

@@ -236,6 +236,8 @@ export const ledgerKeys = {
   pairBurn: (marketId: string, burnId: string) => `${marketId}:${burnId}`,
   /** TREASURY_MINT, BOT_ALLOCATION on 증액, RECONCILIATION_CORRECTION: the approved request. */
   approvalRequest: (approvalRequestId: string) => approvalRequestId,
+  /** BOT_RECALL: a market has one immutable terminal completion, including a zero completion. */
+  marketMakerRecall: (marketId: string) => marketId,
 } as const;
 
 export interface LedgerEntryInput {

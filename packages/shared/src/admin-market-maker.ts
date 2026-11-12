@@ -9,6 +9,22 @@ const stageReading = z.object({
   status: releaseSettingStatusSchema,
   value: z.number().nullable(),
 });
+/** A completion fact, not a command or an inferred failure of an unfinished recall. */
+const recallObservation = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('not_due') }),
+  z.object({ status: z.literal('pending') }),
+  z.object({
+    status: z.literal('completed'),
+    outcome: z.enum(['not_allocated', 'empty', 'transferred']),
+    terminalStatus: z.enum(['settled', 'cancelled']),
+    amountCoin: coinAmountSchema,
+    ledgerEntryId: z
+      .string()
+      .regex(/^[1-9]\d*$/)
+      .nullable(),
+    completedAt: z.iso.datetime(),
+  }),
+]);
 export const MARKET_MAKER_READINESS_BLOCKERS = [
   'market_not_open',
   'ledger_hold',
@@ -49,6 +65,27 @@ export const adminMarketMakerSchema = z
       reduceRatioBp: stageReading,
     }),
     readiness: z.object({ blockers: z.array(z.enum(MARKET_MAKER_READINESS_BLOCKERS)) }),
+    recall: recallObservation,
+    recallAttempt: z
+      .object({
+        attempts: z.number().int().positive(),
+        state: z.enum(['waiting', 'failed', 'completed']),
+        reason: z
+          .enum([
+            'ledger_hold',
+            'treasury_capacity',
+            'books_inconsistent',
+            'recall_inconsistent',
+            'execution_failed',
+          ])
+          .nullable(),
+        lastAttemptAt: z.iso.datetime(),
+        lastFailureAt: z.iso.datetime().nullable(),
+        lastFailureReason: z
+          .enum(['books_inconsistent', 'recall_inconsistent', 'execution_failed'])
+          .nullable(),
+      })
+      .nullable(),
     lastOpenAttempt: z
       .object({
         lastAttemptAt: z.iso.datetime(),

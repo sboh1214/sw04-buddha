@@ -355,6 +355,8 @@ describe('findPrivateField', () => {
     ['utilizationBp', 'utilization'],
     ['allocatedCoin', 'allocated'],
     ['allocation', 'allocation'],
+    ['recall', 'recall'],
+    ['recallAttempt', 'recall'],
     ['vaultBalance', 'vault'],
     ['treasuryCoin', 'treasury'],
     ['holderConcentration', 'concentration'],

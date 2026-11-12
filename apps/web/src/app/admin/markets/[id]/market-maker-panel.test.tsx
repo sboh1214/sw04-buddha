@@ -1,10 +1,120 @@
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
+import { formatKst } from '@/lib/datetime';
 import { marketMaker } from '@/test/market-maker';
 import { byTestId, renderWithQueries } from '@/test/render';
 import { MarketMakerFacts } from './market-maker-panel';
 
 describe('private market maker execution observations', () => {
+  it('shows a market before recall eligibility without inventing a completion or amount', () => {
+    const html = renderWithQueries(<MarketMakerFacts data={marketMaker} />);
+    const recall = byTestId(html, 'market-maker-recall')!;
+    expect(recall.text).toContain(copy.marketMakerRecallNotDue);
+    expect(recall.text).not.toContain(copy.marketMakerRecallCompleted);
+    expect(recall.text).not.toContain(copy.marketMakerRecallPending);
+    expect(recall.text).not.toContain(copy.marketMakerRecallAmount);
+    expect(html).not.toContain('<button');
+  });
+  it('shows an unfinished recall without inferring a failure or a pending payout', () => {
+    const html = renderWithQueries(
+      <MarketMakerFacts
+        data={{
+          ...marketMaker,
+          recall: { status: 'pending' },
+          readiness: { blockers: ['ledger_hold', 'market_not_open'] },
+        }}
+      />,
+    );
+    const recall = byTestId(html, 'market-maker-recall')!;
+    expect(recall.text).toContain(copy.marketMakerRecallPending);
+    expect(recall.text).toContain(copy.marketMakerRecallPendingHint);
+    expect(recall.text).not.toContain('실패');
+    expect(recall.text).not.toContain('지급');
+    expect(recall.text).not.toContain(copy.marketMakerRecallAmount);
+    expect(html).not.toContain('<button');
+    expect(byTestId(html, 'market-maker-readiness')?.text).toContain(copy.marketMakerLedgerHold);
+  });
+  it.each([
+    ['not_allocated', '0', 'cancelled', copy.marketMakerRecallNotAllocated],
+    ['empty', '0', 'settled', copy.marketMakerRecallEmpty],
+    ['transferred', '12345', 'settled', copy.marketMakerRecallTransferred],
+  ] as const)(
+    'shows the recorded %s outcome, amount, time and terminal basis',
+    (outcome, amountCoin, terminalStatus, label) => {
+      const completedAt = '2026-11-11T01:30:00.000Z';
+      const html = renderWithQueries(
+        <MarketMakerFacts
+          data={{
+            ...marketMaker,
+            recall: {
+              status: 'completed',
+              outcome,
+              terminalStatus,
+              amountCoin,
+              ledgerEntryId: outcome === 'transferred' ? '987654321' : null,
+              completedAt,
+            },
+            // A later hold must not be erased or treated as contradicted by old completion.
+            readiness: { blockers: ['ledger_hold'] },
+            runtime: { ...marketMaker.runtime!, state: 'error', lastError: 'funds_inconsistent' },
+          }}
+        />,
+      );
+      const recall = byTestId(html, 'market-maker-recall')!;
+      expect(recall.text).toContain(copy.marketMakerRecallCompleted);
+      expect(byTestId(html, 'market-maker-recall-outcome')?.text).toBe(label);
+      expect(recall.text).toContain(amountCoin === '0' ? '0 Coin' : '12,345 Coin');
+      expect(recall.text).toContain(formatKst(completedAt));
+      expect(recall.text).toContain(
+        terminalStatus === 'settled'
+          ? copy.marketMakerRecallSettled
+          : copy.marketMakerRecallCancelled,
+      );
+      expect(recall.text).toContain(copy.marketMakerRecallHistoryHint);
+      expect(recall.text).not.toContain(copy.marketMakerRecallPendingHint);
+      expect(recall.text).not.toContain('987654321');
+      expect(html).not.toContain('<button');
+      expect(byTestId(html, 'market-maker-readiness')?.text).toContain(copy.marketMakerLedgerHold);
+      expect(byTestId(html, 'market-maker-state')?.text).toBe(copy.marketMakerError);
+      expect(byTestId(html, 'market-maker-last-error')?.text).toContain(
+        copy.marketMakerUnknownError,
+      );
+    },
+  );
+  it.each([
+    ['waiting', 'ledger_hold', copy.marketMakerRecallAttemptWaiting, copy.marketMakerRecallHeld],
+    [
+      'failed',
+      'execution_failed',
+      copy.marketMakerRecallAttemptFailed,
+      copy.marketMakerRecallExecution,
+    ],
+  ] as const)(
+    'shows observed %s separately from pending completion',
+    (state, reason, label, detail) => {
+      const html = renderWithQueries(
+        <MarketMakerFacts
+          data={{
+            ...marketMaker,
+            recall: { status: 'pending' },
+            recallAttempt: {
+              attempts: 2,
+              state,
+              reason,
+              lastAttemptAt: '2026-11-11T01:30:00.000Z',
+              lastFailureAt: state === 'failed' ? '2026-11-11T01:30:00.000Z' : null,
+              lastFailureReason: state === 'failed' ? 'execution_failed' : null,
+            },
+          }}
+        />,
+      );
+      const text = byTestId(html, 'market-maker-recall-attempt')!.text;
+      expect(text).toContain(label);
+      expect(text).toContain(detail);
+      expect(text).toContain('2회');
+      expect(html).not.toContain('<button');
+    },
+  );
   it('separates historical successful opening from current blockers and pending execution', () => {
     const html = renderWithQueries(
       <MarketMakerFacts

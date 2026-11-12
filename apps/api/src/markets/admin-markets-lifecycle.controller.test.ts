@@ -353,7 +353,10 @@ describe.skipIf(!hasTestInfra)('admin markets lifecycle (integration)', () => {
       ).statusCode,
     ).toBe(200);
     expect(await queue.getJob(secondId)).toBeUndefined();
-    expect(await jobIds()).toEqual([]);
+    const remaining = await queue.getJobs(['waiting', 'delayed']);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]!.name).toBe(JOB_NAMES.marketMakerRecall);
+    expect(remaining[0]!.data).toEqual({ marketId: row.id });
   });
 
   // --- statusEventId ----------------------------------------------------------------------

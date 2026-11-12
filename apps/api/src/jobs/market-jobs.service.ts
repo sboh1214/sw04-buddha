@@ -225,6 +225,27 @@ export class MarketJobs implements OnApplicationShutdown {
     }
   }
 
+  /** Called only after a terminal market transaction commits. Missing registration is repaired by scan. */
+  async recallMarketMaker(marketId: string): Promise<void> {
+    const jobId = `${JOB_NAMES.marketMakerRecall}.${marketId}.${randomUUID()}`;
+    try {
+      await bounded(
+        this.queue.add(
+          JOB_NAMES.marketMakerRecall,
+          { marketId },
+          {
+            jobId,
+            deduplication: { id: `${JOB_NAMES.marketMakerRecall}.${marketId}` },
+            removeOnComplete: true,
+          },
+        ),
+        `add ${jobId}`,
+      );
+    } catch (error) {
+      this.logger.warn(`could not schedule ${jobId}: ${describeError(error)}`);
+    }
+  }
+
   private async schedule(
     name: JobName,
     jobId: string,

@@ -35,6 +35,7 @@ export const RECONCILIATION_FINDING_LABEL: Record<
   negative_coin: copy.reconciliationFindingNegativeCoin,
   contract_lock: copy.reconciliationFindingContractLock,
   market_maker_account_missing: copy.reconciliationFindingMakerMissing,
+  market_maker_recall: copy.reconciliationFindingMakerRecall,
   retired_position: copy.reconciliationFindingRetiredPosition,
   closed_position_holder: copy.reconciliationFindingClosedHolder,
   empty_position_cost: copy.reconciliationFindingEmptyCost,

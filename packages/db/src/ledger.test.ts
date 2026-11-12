@@ -166,7 +166,11 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
     };
     // These are historic low-level ledger-shape/key tests, not new production issuance or
     // initial opening. Only their explicit TEST-owner fixture bypasses the new capital binding.
-    if (entry.type === 'TREASURY_MINT' || entry.type === 'BOT_ALLOCATION')
+    if (
+      entry.type === 'TREASURY_MINT' ||
+      entry.type === 'BOT_ALLOCATION' ||
+      entry.type === 'BOT_RECALL'
+    )
       return recordLegacyMarketMakerCapitalForTest({ ...entry, type: entry.type });
     return t.db.transaction((tx) => recordLedgerEntry(tx, entry));
   };
