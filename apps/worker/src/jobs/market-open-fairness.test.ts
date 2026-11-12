@@ -12,6 +12,7 @@ import {
 } from '@buddha/db';
 import {
   connectTestDb,
+  createCategory,
   createMarketMakerAccount,
   createScheduledMarket,
   createUser,
@@ -33,6 +34,7 @@ describe.skipIf(!hasTestDb())('bounded opening scan fairness (integration)', () 
   let t: TestDb;
   let creator: string;
   let approver: string;
+  let categoryId: number;
   beforeAll(async () => {
     t = await connectTestDb();
   });
@@ -41,6 +43,8 @@ describe.skipIf(!hasTestDb())('bounded opening scan fairness (integration)', () 
   });
   beforeEach(async () => {
     await t.reset();
+    // Hundreds of markets share a category; category uniqueness is not this scan fixture.
+    categoryId = (await createCategory(t.db)).id;
     creator = (await createUser(t.db, { role: 'admin' })).user.id;
     approver = (await createUser(t.db, { role: 'admin' })).user.id;
     await createMarketMakerAccount(t.db);
@@ -57,6 +61,7 @@ describe.skipIf(!hasTestDb())('bounded opening scan fairness (integration)', () 
   async function scheduled(budgetCoin: bigint, scheduledOpenAt: Date) {
     return (
       await createScheduledMarket(t.db, {
+        categoryId,
         createdBy: creator,
         approvedBy: approver,
         scheduledOpenAt,
