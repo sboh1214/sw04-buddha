@@ -1,0 +1,35 @@
+[
+  {
+    "candidate": "C8",
+    "profile": "p100-m5",
+    "case": "balanced",
+    "seed": 71,
+    "inputDigest": "ae6f35cd83af2c9362cda2738bf66ab1481a16d1fd452b32460705b2a3d5b1c5",
+    "traceDigest": "c79e979f5f8992f031b51459e5d57c081dc7ed2be1a7a91fd352a639837b413e",
+    "traceFile": "C8-p100-m5-balanced-71-trace.json.gz",
+    "traceFileSha256": "d156e139448df0b751a687e544c42477c37549b687d56b666d0deedada482898",
+    "exactSummaryReplay": true
+  },
+  {
+    "candidate": "C7",
+    "profile": "p100-m5",
+    "case": "whale-20",
+    "seed": 71,
+    "inputDigest": "a67bf10fbbd048abda2bf4617e4777ba8e8ae3764a3f29c5efc53b30e11be75f",
+    "traceDigest": "75978263fba7b90eee686e1d0929b4db99942024157fcc327a5d575b5154ee51",
+    "traceFile": "C7-p100-m5-whale-20-71-trace.json.gz",
+    "traceFileSha256": "8c83e808ae247ba99317241a1257715f488bf690c85f6b46f720dbaa7f8f63ba",
+    "exactSummaryReplay": true
+  },
+  {
+    "candidate": "C3",
+    "profile": "p100-m5",
+    "case": "stale-0",
+    "seed": 71,
+    "inputDigest": "fa0de62c09c19c20651ba1e3ad7e220b499475c6f93649240d028608cf36c31f",
+    "traceDigest": "1604334913a22c6bd74c907ce18be1a940529b48107c1ee98a286a79ee67a59a",
+    "traceFile": "C3-p100-m5-stale-0-71-trace.json.gz",
+    "traceFileSha256": "557398d8f3781d4a8bcf8e637da71e061db7a64135e9acb5fa87bb7ca373d5af",
+    "exactSummaryReplay": true
+  }
+]
