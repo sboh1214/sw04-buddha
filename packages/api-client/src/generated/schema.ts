@@ -348,6 +348,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/market-maker/control-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read pending or completed control requests across markets */
+        get: operations["adminListAllMarketMakerControls"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/market-makers": {
         parameters: {
             query?: never;
@@ -1009,6 +1026,109 @@ export type paths = {
         put?: never;
         /** Retract a waiting supplement the acting admin requested (철회), in any status, before anyone decides it; nothing changes */
         post: operations["adminRetractMarketSupplement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{marketId}/market-maker/control-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read actual immutable controls */
+        get: operations["adminListMarketMakerControlHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{marketId}/market-maker/control-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read fixed market maker control requests */
+        get: operations["adminListMarketMakerControls"];
+        put?: never;
+        /** Request a fixed two-person market maker control */
+        post: operations["adminRequestMarketMakerControl"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{marketId}/market-maker/control-requests/{requestId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a request and current private market maker snapshot */
+        get: operations["adminGetMarketMakerControl"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{marketId}/market-maker/control-requests/{requestId}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve and atomically execute the fixed control */
+        post: operations["adminApproveMarketMakerControl"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{marketId}/market-maker/control-requests/{requestId}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject a pending control without touching assets */
+        post: operations["adminRejectMarketMakerControl"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{marketId}/market-maker/control-requests/{requestId}/retract": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retract the current administrator’s pending control */
+        post: operations["adminRetractMarketMakerControl"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4299,6 +4419,7 @@ export type components = {
             runtime: {
                 completedGeneration: string;
                 consecutiveFailures: number;
+                controlGeneration: string;
                 desiredEnabled: boolean;
                 generation: string;
                 /** Format: date-time */
@@ -5402,6 +5523,10 @@ export type components = {
             noConflictConfirmed: true;
             reason: string;
         };
+        DecideMarketMakerControlBody: {
+            expectedAccountId: string;
+            reason: string;
+        };
         DecideReconciliationRecoveryBody: {
             expectedAccountId: string;
             reason: string;
@@ -5457,7 +5582,7 @@ export type components = {
             title: string;
         };
         /** @enum {string} */
-        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "TRANSACTION_BUSY" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "REPORT_NOT_ALLOWED" | "REPORT_LIMITED" | "MODERATION_NOT_ALLOWED" | "RESTRICTED" | "WRITE_LIMITED" | "CLOSURE_NOT_ALLOWED" | "ACCOUNT_CLOSED" | "PROPOSAL_LIMITED" | "OPEN_ITEMS_MISSING" | "DISPUTE_NOT_ALLOWED" | "ORDER_INTAKE_CLOSED" | "INTERNAL";
+        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "TRANSACTION_BUSY" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "REPORT_NOT_ALLOWED" | "REPORT_LIMITED" | "MODERATION_NOT_ALLOWED" | "RESTRICTED" | "WRITE_LIMITED" | "CLOSURE_NOT_ALLOWED" | "ACCOUNT_CLOSED" | "PROPOSAL_LIMITED" | "OPEN_ITEMS_MISSING" | "DISPUTE_NOT_ALLOWED" | "ORDER_INTAKE_CLOSED" | "MARKET_MAKER_CONTROL_NOT_ALLOWED" | "INTERNAL";
         ErrorEnvelope: {
             error: {
                 code: components["schemas"]["ErrorCode"];
@@ -5726,6 +5851,14 @@ export type components = {
             payoutDelayed: boolean;
             versions: components["schemas"]["PublicMarketJudgement"][];
         };
+        MarketLiquiditySettings: {
+            b: number;
+            budgetCoin: components["schemas"]["CoinAmount"];
+            levels: number;
+            maxLossCoin: components["schemas"]["CoinAmount"];
+            quantity: number;
+            safetyTicks: number;
+        };
         MarketLiquidityVersion: {
             b: number;
             budgetCoin: components["schemas"]["CoinAmount"];
@@ -5740,6 +5873,103 @@ export type components = {
             reason: string;
             safetyTicks: number;
             version: number;
+        };
+        MarketMakerControlExecution: {
+            /** @enum {string} */
+            action: "stop" | "resume" | "settings" | "increase";
+            additionalCoin: components["schemas"]["CoinAmount"] | null;
+            afterControlGeneration: string;
+            afterDesiredEnabled: boolean;
+            afterVersion: number;
+            /** Format: uuid */
+            approvalId: string;
+            beforeControlGeneration: string;
+            beforeDesiredEnabled: boolean;
+            beforeVersion: number;
+            ledgerEntryId: string | null;
+            /** Format: uuid */
+            marketId: string;
+            /** Format: date-time */
+            performedAt: string;
+        };
+        MarketMakerControlRequest: {
+            /** Format: date-time */
+            decidedAt: string | null;
+            decidedBy: components["schemas"]["AdminAccountActor"] | null;
+            decisionReason: string | null;
+            execution: components["schemas"]["MarketMakerControlExecution"] | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            marketId: string;
+            payload: {
+                baseControlGeneration: string;
+                baseVersion: number;
+                beforeConfig: components["schemas"]["MarketLiquiditySettings"];
+                beforeDesiredEnabled: boolean;
+                change: {
+                    /** @enum {string} */
+                    action: "stop";
+                } | {
+                    /** @enum {string} */
+                    action: "resume";
+                } | {
+                    /** @enum {string} */
+                    action: "settings";
+                    settings: {
+                        levels: number;
+                        maxLossCoin: string;
+                        quantity: number;
+                        safetyTicks: number;
+                    };
+                } | {
+                    /** @enum {string} */
+                    action: "increase";
+                    additionalCoin: string;
+                    demand: {
+                        actualDemand: string;
+                        bidirectionalTrading: string;
+                        /** Format: date-time */
+                        from: string;
+                        independentParticipants: string;
+                        /** Format: date-time */
+                        to: string;
+                    };
+                };
+                demandSnapshot: {
+                    /** Format: date-time */
+                    capturedAt: string;
+                    distinctHumanAccounts: string;
+                    fillCount: string;
+                    /** Format: date-time */
+                    firstFillAt: string | null;
+                    /** Format: date-time */
+                    from: string;
+                    humanBuyCoin: string;
+                    humanBuyQty: string;
+                    humanHumanFillCount: string;
+                    humanInvolvedFillCount: string;
+                    humanMakerFillCount: string;
+                    humanSellCoin: string;
+                    humanSellQty: string;
+                    /** Format: date-time */
+                    lastFillAt: string | null;
+                    lastFillId: string;
+                    /** Format: date-time */
+                    to: string;
+                } | null;
+            };
+            reason: string;
+            /** Format: date-time */
+            requestedAt: string;
+            requestedBy: components["schemas"]["AdminAccountActor"];
+            /** Format: date-time */
+            retractedAt: string | null;
+            status: components["schemas"]["ApprovalStatus"];
+        };
+        MarketMakerControlWrite: {
+            marketMaker: components["schemas"]["AdminMarketMaker"];
+            request: components["schemas"]["MarketMakerControlRequest"];
         };
         MarketMakerPeriodMetrics: {
             activity: {
@@ -7103,6 +7333,41 @@ export type components = {
         ReportStatus: "pending" | "actioned" | "dismissed";
         ReportTarget: components["schemas"]["ReportedPostTarget"] | components["schemas"]["ReportedCommentTarget"] | components["schemas"]["ReportedProfileTarget"];
         RequestMarketCancelBody: {
+            expectedAccountId: string;
+            reason: string;
+        };
+        RequestMarketMakerControlBody: {
+            baseControlGeneration: string;
+            baseVersion: number;
+            change: {
+                /** @enum {string} */
+                action: "stop";
+            } | {
+                /** @enum {string} */
+                action: "resume";
+            } | {
+                /** @enum {string} */
+                action: "settings";
+                settings: {
+                    levels: number;
+                    maxLossCoin: string;
+                    quantity: number;
+                    safetyTicks: number;
+                };
+            } | {
+                /** @enum {string} */
+                action: "increase";
+                additionalCoin: string;
+                demand: {
+                    actualDemand: string;
+                    bidirectionalTrading: string;
+                    /** Format: date-time */
+                    from: string;
+                    independentParticipants: string;
+                    /** Format: date-time */
+                    to: string;
+                };
+            };
             expectedAccountId: string;
             reason: string;
         };
@@ -9307,6 +9572,77 @@ export interface operations {
                 content: {
                     "application/json": {
                         data: components["schemas"]["AdminMarketJudgementQueueItem"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListAllMarketMakerControls: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                status?: "pending" | "all";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["MarketMakerControlRequest"][];
                         meta: components["schemas"]["PageMeta"];
                     };
                 };
@@ -12785,6 +13121,548 @@ export interface operations {
                 };
             };
             /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListMarketMakerControlHistory: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                marketId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["MarketMakerControlExecution"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListMarketMakerControls: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                status?: "pending" | "all";
+            };
+            header?: never;
+            path: {
+                marketId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["MarketMakerControlRequest"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRequestMarketMakerControl: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                marketId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestMarketMakerControlBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["MarketMakerControlWrite"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED | MARKET_MAKER_CONTROL_NOT_ALLOWED | TRANSACTION_BUSY */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminGetMarketMakerControl: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                marketId: string;
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["MarketMakerControlWrite"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminApproveMarketMakerControl: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                marketId: string;
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecideMarketMakerControlBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["MarketMakerControlWrite"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED | MARKET_MAKER_CONTROL_NOT_ALLOWED | TRANSACTION_BUSY */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRejectMarketMakerControl: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                marketId: string;
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecideMarketMakerControlBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["MarketMakerControlWrite"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED | MARKET_MAKER_CONTROL_NOT_ALLOWED | TRANSACTION_BUSY */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRetractMarketMakerControl: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                marketId: string;
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedAccountBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["MarketMakerControlWrite"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED | MARKET_MAKER_CONTROL_NOT_ALLOWED | TRANSACTION_BUSY */
             409: {
                 headers: {
                     [name: string]: unknown;

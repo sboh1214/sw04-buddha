@@ -88,6 +88,7 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   // conflict with that state, no order row written; the same request passes once it opens.
   ORDER_INTAKE_CLOSED: HttpStatus.CONFLICT,
   TRANSACTION_BUSY: HttpStatus.CONFLICT,
+  MARKET_MAKER_CONTROL_NOT_ALLOWED: HttpStatus.CONFLICT,
   INTERNAL: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 

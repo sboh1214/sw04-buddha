@@ -1523,6 +1523,1001 @@
         ]
       }
     },
+    "/api/v1/admin/markets/{marketId}/market-maker/control-requests": {
+      "get": {
+        "operationId": "adminListMarketMakerControls",
+        "parameters": [
+          {
+            "name": "marketId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 20,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": "pending",
+              "type": "string",
+              "enum": [
+                "pending",
+                "all"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/MarketMakerControlRequest"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/PageMeta"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Read fixed market maker control requests",
+        "tags": [
+          "admin"
+        ]
+      },
+      "post": {
+        "operationId": "adminRequestMarketMakerControl",
+        "parameters": [
+          {
+            "name": "marketId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestMarketMakerControlBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/MarketMakerControlWrite"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED | MARKET_MAKER_CONTROL_NOT_ALLOWED | TRANSACTION_BUSY",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Request a fixed two-person market maker control",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/markets/{marketId}/market-maker/control-requests/{requestId}": {
+      "get": {
+        "operationId": "adminGetMarketMakerControl",
+        "parameters": [
+          {
+            "name": "marketId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/MarketMakerControlWrite"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Read a request and current private market maker snapshot",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/markets/{marketId}/market-maker/control-history": {
+      "get": {
+        "operationId": "adminListMarketMakerControlHistory",
+        "parameters": [
+          {
+            "name": "marketId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "Opaque; `meta.nextCursor` of the previous page.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/MarketMakerControlExecution"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/PageMeta"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Read actual immutable controls",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/markets/{marketId}/market-maker/control-requests/{requestId}/approve": {
+      "post": {
+        "operationId": "adminApproveMarketMakerControl",
+        "parameters": [
+          {
+            "name": "marketId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecideMarketMakerControlBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/MarketMakerControlWrite"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED | MARKET_MAKER_CONTROL_NOT_ALLOWED | TRANSACTION_BUSY",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Approve and atomically execute the fixed control",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/markets/{marketId}/market-maker/control-requests/{requestId}/reject": {
+      "post": {
+        "operationId": "adminRejectMarketMakerControl",
+        "parameters": [
+          {
+            "name": "marketId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecideMarketMakerControlBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/MarketMakerControlWrite"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED | MARKET_MAKER_CONTROL_NOT_ALLOWED | TRANSACTION_BUSY",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Reject a pending control without touching assets",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/markets/{marketId}/market-maker/control-requests/{requestId}/retract": {
+      "post": {
+        "operationId": "adminRetractMarketMakerControl",
+        "parameters": [
+          {
+            "name": "marketId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpectedAccountBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/MarketMakerControlWrite"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED | MARKET_MAKER_CONTROL_NOT_ALLOWED | TRANSACTION_BUSY",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Retract the current administrator’s pending control",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/market-maker/control-requests": {
+      "get": {
+        "operationId": "adminListAllMarketMakerControls",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 20,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": "pending",
+              "type": "string",
+              "enum": [
+                "pending",
+                "all"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/MarketMakerControlRequest"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/PageMeta"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Read pending or completed control requests across markets",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/v1/admin/charge-packages": {
       "get": {
         "operationId": "adminListChargePackages",
@@ -26851,6 +27846,7 @@
           "OPEN_ITEMS_MISSING",
           "DISPUTE_NOT_ALLOWED",
           "ORDER_INTAKE_CLOSED",
+          "MARKET_MAKER_CONTROL_NOT_ALLOWED",
           "INTERNAL"
         ]
       },
@@ -27791,6 +28787,1228 @@
         ],
         "additionalProperties": false
       },
+      "MarketMakerControlRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "marketId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "baseVersion": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483646
+              },
+              "baseControlGeneration": {
+                "type": "string",
+                "pattern": "^[1-9]\\d{0,18}$"
+              },
+              "change": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "stop"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "action"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "resume"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "action"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "settings"
+                        ]
+                      },
+                      "settings": {
+                        "type": "object",
+                        "properties": {
+                          "maxLossCoin": {
+                            "type": "string",
+                            "pattern": "^[1-9]\\d{0,15}$"
+                          },
+                          "levels": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "quantity": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 1000000
+                          },
+                          "safetyTicks": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "maxLossCoin",
+                          "levels",
+                          "quantity",
+                          "safetyTicks"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "settings"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "increase"
+                        ]
+                      },
+                      "additionalCoin": {
+                        "type": "string",
+                        "pattern": "^[1-9]\\d{0,15}$"
+                      },
+                      "demand": {
+                        "type": "object",
+                        "properties": {
+                          "from": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                          },
+                          "to": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                          },
+                          "independentParticipants": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 500
+                          },
+                          "bidirectionalTrading": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 500
+                          },
+                          "actualDemand": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 500
+                          }
+                        },
+                        "required": [
+                          "from",
+                          "to",
+                          "independentParticipants",
+                          "bidirectionalTrading",
+                          "actualDemand"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "additionalCoin",
+                      "demand"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "beforeConfig": {
+                "$ref": "#/components/schemas/MarketLiquiditySettings"
+              },
+              "beforeDesiredEnabled": {
+                "type": "boolean"
+              },
+              "demandSnapshot": {
+                "nullable": true,
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                  },
+                  "to": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                  },
+                  "capturedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                  },
+                  "lastFillId": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "fillCount": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "humanInvolvedFillCount": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "humanHumanFillCount": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "humanMakerFillCount": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "distinctHumanAccounts": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "humanBuyQty": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "humanBuyCoin": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "humanSellQty": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "humanSellCoin": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "firstFillAt": {
+                    "nullable": true,
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                  },
+                  "lastFillAt": {
+                    "nullable": true,
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                  }
+                },
+                "required": [
+                  "from",
+                  "to",
+                  "capturedAt",
+                  "lastFillId",
+                  "fillCount",
+                  "humanInvolvedFillCount",
+                  "humanHumanFillCount",
+                  "humanMakerFillCount",
+                  "distinctHumanAccounts",
+                  "humanBuyQty",
+                  "humanBuyCoin",
+                  "humanSellQty",
+                  "humanSellCoin",
+                  "firstFillAt",
+                  "lastFillAt"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "baseVersion",
+              "baseControlGeneration",
+              "change",
+              "beforeConfig",
+              "beforeDesiredEnabled",
+              "demandSnapshot"
+            ],
+            "additionalProperties": false
+          },
+          "requestedBy": {
+            "$ref": "#/components/schemas/AdminAccountActor"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "requestedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ApprovalStatus"
+          },
+          "decidedBy": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminAccountActor"
+              }
+            ]
+          },
+          "decisionReason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "decidedAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "retractedAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "execution": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketMakerControlExecution"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "marketId",
+          "payload",
+          "requestedBy",
+          "reason",
+          "requestedAt",
+          "status",
+          "decidedBy",
+          "decisionReason",
+          "decidedAt",
+          "retractedAt",
+          "execution"
+        ],
+        "additionalProperties": false
+      },
+      "MarketLiquiditySettings": {
+        "type": "object",
+        "properties": {
+          "budgetCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
+          "maxLossCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
+          "b": {
+            "type": "number",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "levels": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000
+          },
+          "safetyTicks": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "budgetCoin",
+          "maxLossCoin",
+          "b",
+          "levels",
+          "quantity",
+          "safetyTicks"
+        ],
+        "additionalProperties": false
+      },
+      "AdminAccountActor": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "nickname": {
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "nickname"
+        ],
+        "additionalProperties": false
+      },
+      "ApprovalStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "approved",
+          "rejected",
+          "retracted"
+        ]
+      },
+      "MarketMakerControlExecution": {
+        "type": "object",
+        "properties": {
+          "approvalId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "marketId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "stop",
+              "resume",
+              "settings",
+              "increase"
+            ]
+          },
+          "beforeVersion": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 9007199254740991
+          },
+          "afterVersion": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 9007199254740991
+          },
+          "beforeControlGeneration": {
+            "type": "string",
+            "pattern": "^[1-9]\\d{0,18}$"
+          },
+          "afterControlGeneration": {
+            "type": "string",
+            "maxLength": 20,
+            "pattern": "^(0|[1-9]\\d*)$"
+          },
+          "beforeDesiredEnabled": {
+            "type": "boolean"
+          },
+          "afterDesiredEnabled": {
+            "type": "boolean"
+          },
+          "additionalCoin": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CoinAmount"
+              }
+            ]
+          },
+          "ledgerEntryId": {
+            "nullable": true,
+            "type": "string",
+            "maxLength": 20,
+            "pattern": "^(0|[1-9]\\d*)$"
+          },
+          "performedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "approvalId",
+          "marketId",
+          "action",
+          "beforeVersion",
+          "afterVersion",
+          "beforeControlGeneration",
+          "afterControlGeneration",
+          "beforeDesiredEnabled",
+          "afterDesiredEnabled",
+          "additionalCoin",
+          "ledgerEntryId",
+          "performedAt"
+        ],
+        "additionalProperties": false
+      },
+      "MarketMakerControlWrite": {
+        "type": "object",
+        "properties": {
+          "request": {
+            "$ref": "#/components/schemas/MarketMakerControlRequest"
+          },
+          "marketMaker": {
+            "$ref": "#/components/schemas/AdminMarketMaker"
+          }
+        },
+        "required": [
+          "request",
+          "marketMaker"
+        ],
+        "additionalProperties": false
+      },
+      "AdminMarketMaker": {
+        "type": "object",
+        "properties": {
+          "marketId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "config": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketLiquidityVersion"
+              }
+            ]
+          },
+          "openedVersion": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 9007199254740991
+          },
+          "runtime": {
+            "nullable": true,
+            "type": "object",
+            "properties": {
+              "desiredEnabled": {
+                "type": "boolean"
+              },
+              "controlGeneration": {
+                "type": "string",
+                "pattern": "^(0|[1-9]\\d*)$"
+              },
+              "generation": {
+                "type": "string",
+                "pattern": "^(0|[1-9]\\d*)$"
+              },
+              "completedGeneration": {
+                "type": "string",
+                "pattern": "^(0|[1-9]\\d*)$"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "ready",
+                  "waiting",
+                  "stopped",
+                  "error"
+                ]
+              },
+              "reason": {
+                "nullable": true,
+                "type": "string"
+              },
+              "lastConfigVersion": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true,
+                "maximum": 9007199254740991
+              },
+              "lastAttemptAt": {
+                "nullable": true,
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              "lastSuccessAt": {
+                "nullable": true,
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              "lastFailureAt": {
+                "nullable": true,
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              "lastError": {
+                "nullable": true,
+                "type": "string"
+              },
+              "consecutiveFailures": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              }
+            },
+            "required": [
+              "desiredEnabled",
+              "controlGeneration",
+              "generation",
+              "completedGeneration",
+              "state",
+              "reason",
+              "lastConfigVersion",
+              "lastAttemptAt",
+              "lastSuccessAt",
+              "lastFailureAt",
+              "lastError",
+              "consecutiveFailures",
+              "updatedAt"
+            ],
+            "additionalProperties": false
+          },
+          "stageSettings": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "ready",
+                  "undecided",
+                  "invalid"
+                ]
+              },
+              "reduceAtBp": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "$ref": "#/components/schemas/ReleaseSettingStatus"
+                  },
+                  "value": {
+                    "nullable": true,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "key",
+                  "status",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              "haltAtBp": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "$ref": "#/components/schemas/ReleaseSettingStatus"
+                  },
+                  "value": {
+                    "nullable": true,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "key",
+                  "status",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              "reduceRatioBp": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "$ref": "#/components/schemas/ReleaseSettingStatus"
+                  },
+                  "value": {
+                    "nullable": true,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "key",
+                  "status",
+                  "value"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "status",
+              "reduceAtBp",
+              "haltAtBp",
+              "reduceRatioBp"
+            ],
+            "additionalProperties": false
+          },
+          "readiness": {
+            "type": "object",
+            "properties": {
+              "blockers": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "market_not_open",
+                    "ledger_hold",
+                    "liquidity_missing",
+                    "risk_settings_missing",
+                    "risk_settings_invalid",
+                    "intake_closed",
+                    "not_allocated",
+                    "disabled"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "blockers"
+            ],
+            "additionalProperties": false
+          },
+          "recall": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "not_due"
+                    ]
+                  }
+                },
+                "required": [
+                  "status"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "pending"
+                    ]
+                  }
+                },
+                "required": [
+                  "status"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "completed"
+                    ]
+                  },
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "not_allocated",
+                      "empty",
+                      "transferred"
+                    ]
+                  },
+                  "terminalStatus": {
+                    "type": "string",
+                    "enum": [
+                      "settled",
+                      "cancelled"
+                    ]
+                  },
+                  "amountCoin": {
+                    "$ref": "#/components/schemas/CoinAmount"
+                  },
+                  "ledgerEntryId": {
+                    "nullable": true,
+                    "type": "string",
+                    "pattern": "^[1-9]\\d*$"
+                  },
+                  "completedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                  }
+                },
+                "required": [
+                  "status",
+                  "outcome",
+                  "terminalStatus",
+                  "amountCoin",
+                  "ledgerEntryId",
+                  "completedAt"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "recallAttempt": {
+            "nullable": true,
+            "type": "object",
+            "properties": {
+              "attempts": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true,
+                "maximum": 9007199254740991
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "waiting",
+                  "failed",
+                  "completed"
+                ]
+              },
+              "reason": {
+                "nullable": true,
+                "type": "string",
+                "enum": [
+                  "ledger_hold",
+                  "treasury_capacity",
+                  "books_inconsistent",
+                  "recall_inconsistent",
+                  "execution_failed"
+                ]
+              },
+              "lastAttemptAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              "lastFailureAt": {
+                "nullable": true,
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              "lastFailureReason": {
+                "nullable": true,
+                "type": "string",
+                "enum": [
+                  "books_inconsistent",
+                  "recall_inconsistent",
+                  "execution_failed"
+                ]
+              }
+            },
+            "required": [
+              "attempts",
+              "state",
+              "reason",
+              "lastAttemptAt",
+              "lastFailureAt",
+              "lastFailureReason"
+            ],
+            "additionalProperties": false
+          },
+          "lastOpenAttempt": {
+            "nullable": true,
+            "type": "object",
+            "properties": {
+              "lastAttemptAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              "reason": {
+                "nullable": true,
+                "type": "string"
+              },
+              "requiredCoin": {
+                "nullable": true,
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/CoinAmount"
+                  }
+                ]
+              },
+              "availableCoin": {
+                "nullable": true,
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/CoinAmount"
+                  }
+                ]
+              },
+              "liquidityVersion": {
+                "nullable": true,
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true,
+                "maximum": 9007199254740991
+              },
+              "succeededAt": {
+                "nullable": true,
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              }
+            },
+            "required": [
+              "lastAttemptAt",
+              "reason",
+              "requiredCoin",
+              "availableCoin",
+              "liquidityVersion",
+              "succeededAt"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "marketId",
+          "config",
+          "openedVersion",
+          "runtime",
+          "stageSettings",
+          "readiness",
+          "recall",
+          "recallAttempt",
+          "lastOpenAttempt"
+        ],
+        "additionalProperties": false
+      },
+      "MarketLiquidityVersion": {
+        "type": "object",
+        "properties": {
+          "budgetCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
+          "maxLossCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
+          "b": {
+            "type": "number",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "levels": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000
+          },
+          "safetyTicks": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "marketId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 9007199254740991
+          },
+          "reason": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "createdBy": {
+            "$ref": "#/components/schemas/AdminAccountActor"
+          }
+        },
+        "required": [
+          "budgetCoin",
+          "maxLossCoin",
+          "b",
+          "levels",
+          "quantity",
+          "safetyTicks",
+          "marketId",
+          "version",
+          "reason",
+          "createdAt",
+          "createdBy"
+        ],
+        "additionalProperties": false
+      },
+      "ReleaseSettingStatus": {
+        "type": "string",
+        "enum": [
+          "undecided",
+          "proposal",
+          "test",
+          "approved"
+        ]
+      },
+      "RequestMarketMakerControlBody": {
+        "type": "object",
+        "properties": {
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "baseVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          },
+          "baseControlGeneration": {
+            "type": "string",
+            "pattern": "^[1-9]\\d{0,18}$"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "change": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "stop"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "resume"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "settings"
+                    ]
+                  },
+                  "settings": {
+                    "type": "object",
+                    "properties": {
+                      "maxLossCoin": {
+                        "type": "string",
+                        "pattern": "^[1-9]\\d{0,15}$"
+                      },
+                      "levels": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      "quantity": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 1000000
+                      },
+                      "safetyTicks": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "maxLossCoin",
+                      "levels",
+                      "quantity",
+                      "safetyTicks"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "action",
+                  "settings"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "increase"
+                    ]
+                  },
+                  "additionalCoin": {
+                    "type": "string",
+                    "pattern": "^[1-9]\\d{0,15}$"
+                  },
+                  "demand": {
+                    "type": "object",
+                    "properties": {
+                      "from": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                      },
+                      "to": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                      },
+                      "independentParticipants": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "bidirectionalTrading": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "actualDemand": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      }
+                    },
+                    "required": [
+                      "from",
+                      "to",
+                      "independentParticipants",
+                      "bidirectionalTrading",
+                      "actualDemand"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "action",
+                  "additionalCoin",
+                  "demand"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "expectedAccountId",
+          "baseVersion",
+          "baseControlGeneration",
+          "reason",
+          "change"
+        ],
+        "additionalProperties": false
+      },
+      "DecideMarketMakerControlBody": {
+        "type": "object",
+        "properties": {
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "expectedAccountId",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "ExpectedAccountBody": {
+        "type": "object",
+        "properties": {
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "expectedAccountId"
+        ]
+      },
       "CreateChargePackageBody": {
         "type": "object",
         "properties": {
@@ -28541,32 +30759,6 @@
         ],
         "additionalProperties": false
       },
-      "AdminAccountActor": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "nickname": {
-            "nullable": true,
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "nickname"
-        ],
-        "additionalProperties": false
-      },
-      "ApprovalStatus": {
-        "type": "string",
-        "enum": [
-          "pending",
-          "approved",
-          "rejected",
-          "retracted"
-        ]
-      },
       "RunReconciliationBody": {
         "type": "object",
         "properties": {
@@ -28720,19 +30912,6 @@
         "required": [
           "expectedAccountId",
           "reason"
-        ]
-      },
-      "ExpectedAccountBody": {
-        "type": "object",
-        "properties": {
-          "expectedAccountId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 255
-          }
-        },
-        "required": [
-          "expectedAccountId"
         ]
       },
       "ReconciliationCorrectionDetail": {
@@ -29212,505 +31391,6 @@
           "reason"
         ],
         "additionalProperties": false
-      },
-      "AdminMarketMaker": {
-        "type": "object",
-        "properties": {
-          "marketId": {
-            "type": "string",
-            "format": "uuid",
-            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-          },
-          "config": {
-            "nullable": true,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/MarketLiquidityVersion"
-              }
-            ]
-          },
-          "openedVersion": {
-            "nullable": true,
-            "type": "integer",
-            "minimum": 0,
-            "exclusiveMinimum": true,
-            "maximum": 9007199254740991
-          },
-          "runtime": {
-            "nullable": true,
-            "type": "object",
-            "properties": {
-              "desiredEnabled": {
-                "type": "boolean"
-              },
-              "generation": {
-                "type": "string",
-                "pattern": "^(0|[1-9]\\d*)$"
-              },
-              "completedGeneration": {
-                "type": "string",
-                "pattern": "^(0|[1-9]\\d*)$"
-              },
-              "state": {
-                "type": "string",
-                "enum": [
-                  "ready",
-                  "waiting",
-                  "stopped",
-                  "error"
-                ]
-              },
-              "reason": {
-                "nullable": true,
-                "type": "string"
-              },
-              "lastConfigVersion": {
-                "type": "integer",
-                "minimum": 0,
-                "exclusiveMinimum": true,
-                "maximum": 9007199254740991
-              },
-              "lastAttemptAt": {
-                "nullable": true,
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-              },
-              "lastSuccessAt": {
-                "nullable": true,
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-              },
-              "lastFailureAt": {
-                "nullable": true,
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-              },
-              "lastError": {
-                "nullable": true,
-                "type": "string"
-              },
-              "consecutiveFailures": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 9007199254740991
-              },
-              "updatedAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-              }
-            },
-            "required": [
-              "desiredEnabled",
-              "generation",
-              "completedGeneration",
-              "state",
-              "reason",
-              "lastConfigVersion",
-              "lastAttemptAt",
-              "lastSuccessAt",
-              "lastFailureAt",
-              "lastError",
-              "consecutiveFailures",
-              "updatedAt"
-            ],
-            "additionalProperties": false
-          },
-          "stageSettings": {
-            "type": "object",
-            "properties": {
-              "status": {
-                "type": "string",
-                "enum": [
-                  "ready",
-                  "undecided",
-                  "invalid"
-                ]
-              },
-              "reduceAtBp": {
-                "type": "object",
-                "properties": {
-                  "key": {
-                    "type": "string"
-                  },
-                  "status": {
-                    "$ref": "#/components/schemas/ReleaseSettingStatus"
-                  },
-                  "value": {
-                    "nullable": true,
-                    "type": "number"
-                  }
-                },
-                "required": [
-                  "key",
-                  "status",
-                  "value"
-                ],
-                "additionalProperties": false
-              },
-              "haltAtBp": {
-                "type": "object",
-                "properties": {
-                  "key": {
-                    "type": "string"
-                  },
-                  "status": {
-                    "$ref": "#/components/schemas/ReleaseSettingStatus"
-                  },
-                  "value": {
-                    "nullable": true,
-                    "type": "number"
-                  }
-                },
-                "required": [
-                  "key",
-                  "status",
-                  "value"
-                ],
-                "additionalProperties": false
-              },
-              "reduceRatioBp": {
-                "type": "object",
-                "properties": {
-                  "key": {
-                    "type": "string"
-                  },
-                  "status": {
-                    "$ref": "#/components/schemas/ReleaseSettingStatus"
-                  },
-                  "value": {
-                    "nullable": true,
-                    "type": "number"
-                  }
-                },
-                "required": [
-                  "key",
-                  "status",
-                  "value"
-                ],
-                "additionalProperties": false
-              }
-            },
-            "required": [
-              "status",
-              "reduceAtBp",
-              "haltAtBp",
-              "reduceRatioBp"
-            ],
-            "additionalProperties": false
-          },
-          "readiness": {
-            "type": "object",
-            "properties": {
-              "blockers": {
-                "type": "array",
-                "items": {
-                  "type": "string",
-                  "enum": [
-                    "market_not_open",
-                    "ledger_hold",
-                    "liquidity_missing",
-                    "risk_settings_missing",
-                    "risk_settings_invalid",
-                    "intake_closed",
-                    "not_allocated",
-                    "disabled"
-                  ]
-                }
-              }
-            },
-            "required": [
-              "blockers"
-            ],
-            "additionalProperties": false
-          },
-          "recall": {
-            "oneOf": [
-              {
-                "type": "object",
-                "properties": {
-                  "status": {
-                    "type": "string",
-                    "enum": [
-                      "not_due"
-                    ]
-                  }
-                },
-                "required": [
-                  "status"
-                ],
-                "additionalProperties": false
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "status": {
-                    "type": "string",
-                    "enum": [
-                      "pending"
-                    ]
-                  }
-                },
-                "required": [
-                  "status"
-                ],
-                "additionalProperties": false
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "status": {
-                    "type": "string",
-                    "enum": [
-                      "completed"
-                    ]
-                  },
-                  "outcome": {
-                    "type": "string",
-                    "enum": [
-                      "not_allocated",
-                      "empty",
-                      "transferred"
-                    ]
-                  },
-                  "terminalStatus": {
-                    "type": "string",
-                    "enum": [
-                      "settled",
-                      "cancelled"
-                    ]
-                  },
-                  "amountCoin": {
-                    "$ref": "#/components/schemas/CoinAmount"
-                  },
-                  "ledgerEntryId": {
-                    "nullable": true,
-                    "type": "string",
-                    "pattern": "^[1-9]\\d*$"
-                  },
-                  "completedAt": {
-                    "type": "string",
-                    "format": "date-time",
-                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-                  }
-                },
-                "required": [
-                  "status",
-                  "outcome",
-                  "terminalStatus",
-                  "amountCoin",
-                  "ledgerEntryId",
-                  "completedAt"
-                ],
-                "additionalProperties": false
-              }
-            ]
-          },
-          "recallAttempt": {
-            "nullable": true,
-            "type": "object",
-            "properties": {
-              "attempts": {
-                "type": "integer",
-                "minimum": 0,
-                "exclusiveMinimum": true,
-                "maximum": 9007199254740991
-              },
-              "state": {
-                "type": "string",
-                "enum": [
-                  "waiting",
-                  "failed",
-                  "completed"
-                ]
-              },
-              "reason": {
-                "nullable": true,
-                "type": "string",
-                "enum": [
-                  "ledger_hold",
-                  "treasury_capacity",
-                  "books_inconsistent",
-                  "recall_inconsistent",
-                  "execution_failed"
-                ]
-              },
-              "lastAttemptAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-              },
-              "lastFailureAt": {
-                "nullable": true,
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-              },
-              "lastFailureReason": {
-                "nullable": true,
-                "type": "string",
-                "enum": [
-                  "books_inconsistent",
-                  "recall_inconsistent",
-                  "execution_failed"
-                ]
-              }
-            },
-            "required": [
-              "attempts",
-              "state",
-              "reason",
-              "lastAttemptAt",
-              "lastFailureAt",
-              "lastFailureReason"
-            ],
-            "additionalProperties": false
-          },
-          "lastOpenAttempt": {
-            "nullable": true,
-            "type": "object",
-            "properties": {
-              "lastAttemptAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-              },
-              "reason": {
-                "nullable": true,
-                "type": "string"
-              },
-              "requiredCoin": {
-                "nullable": true,
-                "allOf": [
-                  {
-                    "$ref": "#/components/schemas/CoinAmount"
-                  }
-                ]
-              },
-              "availableCoin": {
-                "nullable": true,
-                "allOf": [
-                  {
-                    "$ref": "#/components/schemas/CoinAmount"
-                  }
-                ]
-              },
-              "liquidityVersion": {
-                "nullable": true,
-                "type": "integer",
-                "minimum": 0,
-                "exclusiveMinimum": true,
-                "maximum": 9007199254740991
-              },
-              "succeededAt": {
-                "nullable": true,
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-              }
-            },
-            "required": [
-              "lastAttemptAt",
-              "reason",
-              "requiredCoin",
-              "availableCoin",
-              "liquidityVersion",
-              "succeededAt"
-            ],
-            "additionalProperties": false
-          }
-        },
-        "required": [
-          "marketId",
-          "config",
-          "openedVersion",
-          "runtime",
-          "stageSettings",
-          "readiness",
-          "recall",
-          "recallAttempt",
-          "lastOpenAttempt"
-        ],
-        "additionalProperties": false
-      },
-      "MarketLiquidityVersion": {
-        "type": "object",
-        "properties": {
-          "budgetCoin": {
-            "$ref": "#/components/schemas/CoinAmount"
-          },
-          "maxLossCoin": {
-            "$ref": "#/components/schemas/CoinAmount"
-          },
-          "b": {
-            "type": "number",
-            "minimum": 0,
-            "exclusiveMinimum": true
-          },
-          "levels": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 9007199254740991
-          },
-          "quantity": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 1000000
-          },
-          "safetyTicks": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 9007199254740991
-          },
-          "marketId": {
-            "type": "string",
-            "format": "uuid",
-            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-          },
-          "version": {
-            "type": "integer",
-            "minimum": 0,
-            "exclusiveMinimum": true,
-            "maximum": 9007199254740991
-          },
-          "reason": {
-            "type": "string"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          },
-          "createdBy": {
-            "$ref": "#/components/schemas/AdminAccountActor"
-          }
-        },
-        "required": [
-          "budgetCoin",
-          "maxLossCoin",
-          "b",
-          "levels",
-          "quantity",
-          "safetyTicks",
-          "marketId",
-          "version",
-          "reason",
-          "createdAt",
-          "createdBy"
-        ],
-        "additionalProperties": false
-      },
-      "ReleaseSettingStatus": {
-        "type": "string",
-        "enum": [
-          "undecided",
-          "proposal",
-          "test",
-          "approved"
-        ]
       },
       "ListMarketMakerMetricsQuery": {
         "type": "object",

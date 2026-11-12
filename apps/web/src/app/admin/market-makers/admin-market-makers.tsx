@@ -26,6 +26,7 @@ import { MARKET_STATUS_LABEL } from '@/lib/market-admin';
 import { MARKET_MAKER_STATE_LABEL, marketMakerReason } from '@/lib/market-maker';
 import { metricsCount, metricsReason } from '@/lib/market-maker-metrics';
 import { TreasuryBalance } from '../treasury/admin-treasury';
+import { MarketMakerControlInbox } from '../markets/[id]/market-maker-controls';
 import { MakerRiskFacts, MetricsFields } from './metrics-facts';
 
 export function MakerOverview({ data }: { data: AdminMarketMakerMetricsOverview }) {
@@ -78,6 +79,7 @@ export function MakerOverview({ data }: { data: AdminMarketMakerMetricsOverview 
         {copy.adminTreasury}
       </Heading>
       <TreasuryBalance treasury={data.treasury} />
+      <MarketMakerControlInbox />
       <HStack gap="4" flexWrap="wrap">
         <Link asChild>
           <NextLink href="/admin/treasury">{copy.adminTreasury}</NextLink>

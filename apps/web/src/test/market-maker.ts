@@ -19,6 +19,7 @@ export const marketMaker: AdminMarketMaker = {
   openedVersion: 1,
   runtime: {
     desiredEnabled: true,
+    controlGeneration: '1',
     generation: '3',
     completedGeneration: '2',
     state: 'waiting',

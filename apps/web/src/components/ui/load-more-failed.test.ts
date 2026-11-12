@@ -136,6 +136,7 @@ describe('the notice above a 더 보기 that failed', () => {
         // 이의 접수 (#175, ADR-0104), each half
         'app/admin/disputes/admin-disputes.tsx',
         'app/admin/markets/[id]/admin-market-detail.tsx',
+        'app/admin/markets/[id]/market-maker-controls.tsx',
         'app/admin/markets/admin-markets.tsx',
         // 검수 대기 (#78, ADR-0099), 규칙 보충 대기 (#80, ADR-0101), 일시 중단 결정 대기 (#114,
         // ADR-0102), 판정 승인 대기 (#152, ADR-0103) and 시장 취소 대기 (#20, ADR-0117)
@@ -285,6 +286,8 @@ describe('the notice above a 더 보기 that failed', () => {
         'useTreasuryHistory',
         'useTreasuryRequests',
         'useMarketMakerMetricsList',
+        'useMarketMakerControlRequests',
+        'useMarketMakerControlHistory',
         'useWatchlist',
       ].sort(),
     );

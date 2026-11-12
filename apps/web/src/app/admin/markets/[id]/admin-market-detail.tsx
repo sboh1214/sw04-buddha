@@ -1,4 +1,5 @@
 'use client';
+import { MarketMakerControlsPanel } from './market-maker-controls';
 
 import {
   Alert,
@@ -207,6 +208,7 @@ export function AdminMarketDetail({ id }: { id: string }) {
       <OpenItemsNotice market={data} />
       <MarketLiquidityPanel key={`liquidity-${data.id}`} market={data} />
       <MarketMakerPanel key={`maker-${data.id}`} marketId={data.id} />
+      <MarketMakerControlsPanel key={`maker-controls-${data.id}`} market={data} />
       <MarketMakerMetricsPanel key={`maker-metrics-${data.id}`} marketId={data.id} />
       {/* 판정 (#152, ADR-0103): keyed and prefixed as the review panel is — its form and dialogs name
           the market and the registration they were opened on. First of the panels: from the close

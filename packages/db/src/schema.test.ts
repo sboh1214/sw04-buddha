@@ -8243,6 +8243,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           'treasury_issuances.amount_coin',
           'market_maker_allocations.amount_coin',
           'market_maker_recalls.amount_coin',
+          'market_maker_controls.additional_coin',
+          'market_maker_controls_coin_check',
           'market_maker_open_attempts.required_coin',
           'market_maker_open_attempts.available_coin',
           'market_maker_open_attempts_coin_check',

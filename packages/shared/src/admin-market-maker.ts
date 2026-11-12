@@ -45,6 +45,7 @@ export const adminMarketMakerSchema = z
     runtime: z
       .object({
         desiredEnabled: z.boolean(),
+        controlGeneration: generation,
         generation,
         completedGeneration: generation,
         state: z.enum(['ready', 'waiting', 'stopped', 'error']),

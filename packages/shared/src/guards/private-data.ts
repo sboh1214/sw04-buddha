@@ -560,6 +560,10 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       ['fill', 'bp'],
       ['combined', 'gap'],
       ['open', 'ms'],
+
+      ['control', 'generation'],
+      ['demand', 'snapshot'],
+      ['before', 'desired', 'enabled'],
     ],
     // Current facts and retained non-personal cumulative observations are admin-only (#182).
   },

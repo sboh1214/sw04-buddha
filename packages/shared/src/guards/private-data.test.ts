@@ -188,6 +188,9 @@ describe('findPrivateField', () => {
     ['reportingUsers', 'reports'],
     ['hasBot', 'market-maker'],
     ['bot_status', 'market-maker'],
+    ['controlGeneration', 'market-maker'],
+    ['demandSnapshot', 'market-maker'],
+    ['beforeDesiredEnabled', 'market-maker'],
     ['marketMakerInventory', 'market-maker'],
     ['liquidityB', 'market-maker'],
     ['liquiditySettings', 'market-maker'],
@@ -374,6 +377,10 @@ describe('findPrivateField', () => {
     ['fillBp', 'fill bp'],
     ['combinedGapMs', 'combined gap'],
     ['openMs', 'open ms'],
+
+    ['controlGeneration', 'control generation'],
+    ['demandSnapshot', 'demand snapshot'],
+    ['beforeDesiredEnabled', 'before desired enabled'],
   ])('keeps %s private as a market-maker field (%s)', (name, words) => {
     expect(
       findPrivateField(name)
