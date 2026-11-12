@@ -16,7 +16,9 @@ import { fills, markets, profiles } from './schema/index.js';
 import {
   closeAccount,
   createCorrectedMarket,
+  createConfiguredOpenMarket,
   createMarket,
+  TEST_MM_TRADING_LIQUIDITY,
   createProvisionalMarket,
   createUser,
   resolveMarketNow,
@@ -74,6 +76,16 @@ describe.skipIf(!hasTestDb())('market statistics (#121, docker test profile)', (
   const member = async (coin = 1_000n) => (await createUser(t.db, { balanceCoin: coin })).user.id;
   const market = async (input: Parameters<typeof createMarket>[1] = {}) =>
     (await createMarket(t.db, { createdBy: adminId, ...input })).id;
+  const riskMarket = async (
+    input: Omit<Parameters<typeof createConfiguredOpenMarket>[1], 'liquiditySettings'> = {},
+  ) =>
+    (
+      await createConfiguredOpenMarket(t.db, {
+        createdBy: adminId,
+        liquiditySettings: TEST_MM_TRADING_LIQUIDITY,
+        ...input,
+      })
+    ).id;
 
   async function placed(input: PlaceTestOrderInput) {
     const result = await placeTestOrder(t.db, input);
@@ -266,7 +278,7 @@ describe.skipIf(!hasTestDb())('market statistics (#121, docker test profile)', (
     });
 
     it('counts the 운영 마켓메이커’s fills in price and volume but never as a participant', async () => {
-      const m = await market();
+      const m = await riskMarket();
       const mm = await fundMarketMakerFunds(t.db, m, 1_000n);
       const a = await member();
       // The bot resting, a member coming in.
@@ -339,7 +351,7 @@ describe.skipIf(!hasTestDb())('market statistics (#121, docker test profile)', (
     });
 
     it('is the number of people with a fill on the market, as 판정 이의 counts them', async () => {
-      const m = await market();
+      const m = await riskMarket();
       const mm = await fundMarketMakerFunds(t.db, m, 1_000n);
       const people = [await member(), await member(), await member(), await member()];
       const idle = await member();

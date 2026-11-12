@@ -31,6 +31,8 @@ import {
   closeMarketEarly,
   createFill,
   createJudgementRequest,
+  createConfiguredOpenMarket,
+  TEST_MM_TRADING_LIQUIDITY,
   createMarket,
   createMarketCancelRequest,
   createScheduledMarket,
@@ -184,7 +186,9 @@ describe.skipIf(!hasTestDb())('market cancel (#20, docker test profile)', () => 
     it('is false with no fill, with resting orders alone, and with orders that never filled', async () => {
       const empty = await createMarket(t.db);
       expect(await marketHasHumanFill(t.db, empty.id)).toBe(false);
-      const resting = await createMarket(t.db);
+      const resting = await createConfiguredOpenMarket(t.db, {
+        liquiditySettings: TEST_MM_TRADING_LIQUIDITY,
+      });
       const mm = await fundMarketMakerFunds(t.db, resting.id, 500n);
       await placeTestOrder(t.db, { ownerId: mm, marketId: resting.id, limitPriceCoin: 30 });
       const a = await member();
@@ -207,7 +211,9 @@ describe.skipIf(!hasTestDb())('market cancel (#20, docker test profile)', () => 
       const minted = await createMarket(t.db);
       await tradeOnce(t.db, minted.id);
       // The 운영 마켓메이커 rests, a person fills it — and the other way round.
-      const botResting = await createMarket(t.db);
+      const botResting = await createConfiguredOpenMarket(t.db, {
+        liquiditySettings: TEST_MM_TRADING_LIQUIDITY,
+      });
       const mm = await fundMarketMakerFunds(t.db, botResting.id, 500n);
       await placeTestOrder(t.db, {
         ownerId: mm,
@@ -220,7 +226,9 @@ describe.skipIf(!hasTestDb())('market cancel (#20, docker test profile)', () => 
         marketId: botResting.id,
         timeInForce: 'ioc',
       });
-      const botIncoming = await createMarket(t.db);
+      const botIncoming = await createConfiguredOpenMarket(t.db, {
+        liquiditySettings: TEST_MM_TRADING_LIQUIDITY,
+      });
       await fundMarketMakerFunds(t.db, botIncoming.id, 500n);
       await createFill(t.db, { marketId: botIncoming.id, userId: mm, amountCoin: 50n, qty: 1 });
       const paired = await createMarket(t.db);

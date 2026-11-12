@@ -477,6 +477,13 @@
       "when": 1794291970195,
       "tag": "0067_market_liquidity_versions",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1794296058436,
+      "tag": "0068_market_maker_capital_index",
+      "breakpoints": true
     }
   ]
 }

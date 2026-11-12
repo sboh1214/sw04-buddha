@@ -1,5 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { ownerOf, readHoldings, readMarketTradingFacts, readPublicBook, type Db } from '@buddha/db';
+import {
+  ownerOf,
+  readHoldings,
+  readMarketTradingFacts,
+  readPublicBookSnapshot,
+  type Db,
+} from '@buddha/db';
 import {
   marketTradingRejectReason,
   orderBookOf,
@@ -8,7 +14,6 @@ import {
   quoteTermsOf,
   sellableContractOf,
   sellableOf,
-  type BookOrder,
   type MarketTradingFacts,
   type OrderBook,
   type OrderQuote,
@@ -28,7 +33,9 @@ const marketNotFound = () => new AppError('NOT_FOUND', { message: 'Market not fo
  * 4 #179 '비로그인 견적', 결정 5 '#179·#119'): three reads of one market, built by @buddha/shared
  * `order-book.ts` on #117's line and walk.
  *
- * - 공개 호가 (`book`): both contracts' every level, price and summed quantity only. A market that
+ * - 공개 호가 (`book`): each direction's independently executable depth after sequential MM risk,
+ *   price and summed quantity only; the four directions cannot be added as simultaneous supply.
+ *   A market that
  *   takes no order now (SCHEDULED, PAUSED, CLOSED and after, and an OPEN one past its `close_at`
  *   by the read's DB clock before the worker closes it, #120 — the intake gate's own
  *   `marketTradingRejectReason`) shows empty sides with the reason, and its orders are not read:
@@ -42,7 +49,8 @@ const marketNotFound = () => new AppError('NOT_FOUND', { message: 'Market not fo
  *   own bid shows as the intake would make it).
  *
  * Each runs in one REPEATABLE READ READ ONLY transaction (`snapshot`): the status, the width, the
- * book and the holdings are one snapshot, it takes no lock (never `lockMarket`: a read neither
+ * book, MM assets/reservations and the holdings are one snapshot, it takes no lock (never
+ * `lockMarket`: a read neither
  * waits on an intake nor delays one), and Postgres refuses any write in it. A DRAFT, REVIEW or
  * unknown market is NOT_FOUND, as every public market read.
  */
@@ -54,7 +62,8 @@ export class OrderBookService {
   book(marketId: string): Promise<OrderBook> {
     return this.snapshot(async (tx) => {
       const market = await this.facts(tx, marketId);
-      return orderBookOf(marketId, market, await this.liveBook(tx, marketId, market));
+      const { book, risk } = await this.liveBook(tx, marketId, market);
+      return orderBookOf(marketId, market, book, risk);
     });
   }
 
@@ -62,8 +71,8 @@ export class OrderBookService {
   quote(marketId: string, body: QuoteOrderBody): Promise<OrderQuote> {
     return this.snapshot(async (tx) => {
       const market = await this.facts(tx, marketId);
-      const book = await this.liveBook(tx, marketId, market);
-      const answer = quoteOrder(book, market, quoteTermsOf(body), null);
+      const { book, risk } = await this.liveBook(tx, marketId, market);
+      const answer = quoteOrder(book, market, quoteTermsOf(body), null, risk);
       if (answer.kind === 'closed') throw priceProtectionClosed();
       return orderQuoteOf(answer.figures);
     });
@@ -75,13 +84,13 @@ export class OrderBookService {
       const market = await this.facts(tx, marketId);
       const owner = await ownerOf(tx, userId);
       if (!owner) throw new AppError('INTERNAL', { message: `Account ${userId} is gone` });
-      const book = await this.liveBook(tx, marketId, market);
+      const { book, risk } = await this.liveBook(tx, marketId, market);
       const holdings = await readHoldings(tx, userId, marketId);
       return {
         marketId,
         contracts: holdings.map((holding) =>
           sellableContractOf(
-            sellableOf(book, market, holding, { id: owner.id, human: owner.human }),
+            sellableOf(book, market, holding, { id: owner.id, human: owner.human }, risk),
           ),
         ),
       };
@@ -98,17 +107,18 @@ export class OrderBookService {
   /**
    * The live book of a market that takes orders now; none for any other, whose orders cannot
    * trade. The check is the intake gate's own (`marketTradingRejectReason`), so the `close_at`
-   * refusal (#120) leaves the book unread as it refuses the quote and the order. #128's trim
-   * of the 운영 마켓메이커's quantities is not inherited from the intake's: it goes here too, as
-   * after `placeOrder`'s `readLiveBook`, or the quote parts from the fill (ADR-0114 결과 5 #128;
-   * whether the public depth shows the trimmed quantities is #128's call).
+   * refusal (#120) leaves the book unread as it refuses the quote and the order. The whole raw
+   * book and MM risk snapshot feed the same sequential plan as intake (#128), with a separate
+   * projection for each depth direction or quote. Preview cancellations never change orders.
    */
   private async liveBook(
     tx: Tx,
     marketId: string,
     market: MarketTradingFacts,
-  ): Promise<BookOrder[]> {
-    return marketTradingRejectReason(market) === null ? readPublicBook(tx, marketId) : [];
+  ): ReturnType<typeof readPublicBookSnapshot> {
+    return marketTradingRejectReason(market) === null
+      ? readPublicBookSnapshot(tx, marketId)
+      : { book: [], risk: null };
   }
 
   private snapshot<T>(read: (tx: Tx) => Promise<T>): Promise<T> {

@@ -16,6 +16,8 @@ import {
   checkOrderInvariants,
   closeTestMarket,
   completeOnboarding,
+  createConfiguredOpenMarket,
+  TEST_MM_TRADING_LIQUIDITY,
   createMarket,
   createMarketPause,
   createModerationAction,
@@ -131,7 +133,10 @@ describe.skipIf(!hasTestInfra)('the public book and quotes (integration)', () =>
    * NO side of those pairs).
    */
   async function stocked() {
-    const market = await createMarket(t.db, { createdBy: admin.id });
+    const market = await createConfiguredOpenMarket(t.db, {
+      createdBy: admin.id,
+      liquiditySettings: TEST_MM_TRADING_LIQUIDITY,
+    });
     marketMaker = await fundMarketMakerFunds(t.db, market.id, 10_000n);
     await rest(market.id, a.id, 'NO', 'buy', 40, 10);
     await rest(market.id, marketMaker, 'NO', 'buy', 37, 5);

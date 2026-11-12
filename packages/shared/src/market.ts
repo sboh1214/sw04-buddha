@@ -1,4 +1,5 @@
 import { adminMarketLiquiditySchema } from './market-liquidity.js';
+import type { BotMatchSnapshot } from './market-maker/risk-matching.js';
 import * as z from 'zod';
 import { marketJudgingRecordSchema } from './market-judging-record.js';
 import { cursorQuerySchema } from './api/pagination.js';
@@ -629,9 +630,13 @@ export function orderBookOf(
   marketId: string,
   market: MarketTradingFacts,
   book: readonly BookOrder[],
+  risk?: BotMatchSnapshot | null,
 ): OrderBook {
   const reason = marketTradingRejectReason(market);
-  const depth: ContractDepth[] = bookDepth(reason === null ? book : []);
+  const depth: ContractDepth[] = bookDepth(
+    reason === null ? book : [],
+    reason === null ? risk : null,
+  );
   return {
     marketId,
     marketRejectReason: reason,

@@ -27,6 +27,8 @@ import {
   createApprovalRequest,
   createComment,
   createFill,
+  createConfiguredOpenMarket,
+  TEST_MM_TRADING_LIQUIDITY,
   createMarket,
   createMarketPause,
   createModerationAction,
@@ -1759,6 +1761,10 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
     });
 
     it('cancels the member’s resting orders in every market at the approval, the filled part kept, and nobody else’s; a refusal none', async () => {
+      market = await createConfiguredOpenMarket(t.db, {
+        title: '기준금리 인하',
+        liquiditySettings: TEST_MM_TRADING_LIQUIDITY,
+      });
       const another = await createMarket(t.db);
       const marketMaker = await fundMarketMakerFunds(t.db, market.id, 1_000n);
       // The member's NO bid of 2 at 40 meets the other member's IOC YES buy of one: partly filled.

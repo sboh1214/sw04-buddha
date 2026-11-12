@@ -1,0 +1,1 @@
+CREATE INDEX "ledger_entries_market_capital_idx" ON "ledger_entries" USING btree ("market_id","id") WHERE "ledger_entries"."type" IN ('BOT_ALLOCATION', 'BOT_RECALL', 'RECONCILIATION_CORRECTION');

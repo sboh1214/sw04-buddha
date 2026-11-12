@@ -11,6 +11,11 @@ import {
 } from './enums.js';
 import { assertWhole } from './market-maker/validate.js';
 import {
+  executableRiskLine,
+  planRiskIntakeMatch,
+  type BotMatchSnapshot,
+} from './market-maker/risk-matching.js';
+import {
   matchLine,
   type BookOrder,
   type MatchLineEntry,
@@ -23,9 +28,10 @@ import { intakeMarketGate, planIntakeMatch, type QuoteOrderBody } from './orders
  * 공개 호가와 견적 (#179, ADR-0114; ADR-0107 결정 1 #177 2·3·4·10·12·15항, 결정 2 #73 15항, 결정 4
  * #179, 결정 5 '#179·#119'; ADR-0111 결정 8·11): the public book of one market, the quote of an
  * order on it and the sellable figures of a holding, all built on #117's line and walk — the
- * depth is `matchLine` grouped by price, the quote is the intake's own gate and plan
- * (`intakeMarketGate`, `planIntakeMatch`) with no owner — so a quote on an unchanged book is the
- * fill the intake makes. Aggregates only: no order, owner, arrival, account type or fill row
+ * depth groups each direction's executable walk by price, the quote is the intake's own gate
+ * and plan (`intakeMarketGate`, `planRiskIntakeMatch` when MM risk exists) with no owner — so a
+ * quote on an unchanged book is the fill the intake makes. Aggregates only: no order, owner,
+ * arrival, account type or fill row
  * leaves these functions. Pure: no clock or I/O; Coin is bigint.
  */
 
@@ -41,7 +47,7 @@ export interface ContractDepth {
   /**
    * What a buyer of `outcome` meets: its direct sells and the converted buys of the other
    * outcome (payout − their price), merged into one quantity per price, cheapest first —
-   * `matchLine(book, outcome, 'buy')` grouped. No source split.
+   * grouped after sequential MM risk limits when present. No source split.
    */
   readonly asks: readonly BookLevel[];
   /** What a seller of `outcome` meets: its direct buys only, highest first (no cross-sell). */
@@ -70,11 +76,19 @@ export function bookLevels(line: readonly MatchLineEntry[]): BookLevel[] {
  * One contract's book: every level of each side (at most 99), never truncated — how many the
  * screen shows is #122's. A converted level exists only because a real opposite buy rests: no
  * value is a complement of a same-contract price (`100 − bid`), and no field sums both views of
- * one order. RangeError on a malformed book.
+ * one order. With risk, each side starts from the same snapshot and consumes its own sorted
+ * walk: these four alternatives are not a promise of simultaneously reservable liquidity.
+ * Depth does not apply a visitor's assets or IOC protection width. RangeError on a malformed book.
  */
-export function contractDepth(book: readonly BookOrder[], outcome: Outcome): ContractDepth {
-  const asks = bookLevels(matchLine(book, outcome, 'buy'));
-  const bids = bookLevels(matchLine(book, outcome, 'sell'));
+export function contractDepth(
+  book: readonly BookOrder[],
+  outcome: Outcome,
+  risk?: BotMatchSnapshot | null,
+): ContractDepth {
+  const line = (side: OrderSide) =>
+    risk ? executableRiskLine(book, outcome, side, risk) : matchLine(book, outcome, side);
+  const asks = bookLevels(line('buy'));
+  const bids = bookLevels(line('sell'));
   return {
     outcome,
     asks,
@@ -85,8 +99,11 @@ export function contractDepth(book: readonly BookOrder[], outcome: Outcome): Con
 }
 
 /** Both contracts' books, YES then NO (`OUTCOMES`). An empty book is '호가 없음' everywhere. */
-export function bookDepth(book: readonly BookOrder[]): ContractDepth[] {
-  return OUTCOMES.map((outcome) => contractDepth(book, outcome));
+export function bookDepth(
+  book: readonly BookOrder[],
+  risk?: BotMatchSnapshot | null,
+): ContractDepth[] {
+  return OUTCOMES.map((outcome) => contractDepth(book, outcome, risk));
 }
 
 /**
@@ -178,7 +195,8 @@ export type QuoteAnswer =
  * quote is `matchOrder` with no owner), in the intake's order: the market's gate
  * (`intakeMarketGate`: a market not OPEN answers a rejected order with its reason and nothing
  * filled, an immediate order on a market with no width `closed`), then the intake's plan
- * (`planIntakeMatch`: the reference, the protected limit, the walk and the end state). It leaves
+ * (`planRiskIntakeMatch` with MM risk, otherwise `planIntakeMatch`: the reference, the protected
+ * limit, the walk and the end state). It leaves
  * out what is not the public book's — the request id, `order.accepting` (a closed intake still
  * quotes, ADR-0107 결정 3) and the assets (the public quote holds no personal data, 결정 4) —
  * so it differs from the fill only there, when `owner`'s own group stops the walk, when the
@@ -194,6 +212,7 @@ export function quoteOrder(
   market: MarketTradingFacts,
   terms: QuoteTerms,
   owner: OrderOwner | null,
+  risk?: BotMatchSnapshot | null,
 ): QuoteAnswer {
   if (terms.limitPriceCoin === null && terms.timeInForce === 'gtc') {
     throw new RangeError('a GTC order rests at its limit, so its quote needs one');
@@ -221,7 +240,15 @@ export function quoteOrder(
       },
     };
   }
-  const plan = planIntakeMatch(book, { ...terms, limitPriceCoin }, market.widthTicks, owner);
+  const risky = risk
+    ? planRiskIntakeMatch(book, { ...terms, limitPriceCoin }, market.widthTicks, owner, risk)
+    : null;
+  // These public projections accept an anonymous visitor or a human holder. A bot admission
+  // refusal is an internal caller error, never a new public risk reason or an executable plan.
+  if (risky !== null && risky.kind !== 'planned')
+    throw new RangeError('A public quote cannot admit a bot order');
+  const plan =
+    risky?.plan ?? planIntakeMatch(book, { ...terms, limitPriceCoin }, market.widthTicks, owner);
   const { result, end } = plan;
   const maxSpend =
     terms.side === 'buy'
@@ -292,6 +319,7 @@ export function sellableOf(
   market: MarketTradingFacts,
   holding: HoldingFacts,
   owner: OrderOwner,
+  risk?: BotMatchSnapshot | null,
 ): SellableFigures {
   if (!OUTCOMES.includes(holding.outcome)) {
     throw new RangeError(`no outcome ${String(holding.outcome)}`);
@@ -319,6 +347,7 @@ export function sellableOf(
             budgetCoin: null,
           },
           owner,
+          risk,
         );
   return {
     outcome: holding.outcome,

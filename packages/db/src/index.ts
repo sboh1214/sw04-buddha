@@ -155,7 +155,12 @@ export {
   type MarketStatsColumn,
   type RecordFillStatsInput,
 } from './market-stats.js';
-export { readHoldings, readMarketTradingFacts, readPublicBook } from './order-book.js';
+export {
+  readHoldings,
+  readMarketTradingFacts,
+  readPublicBook,
+  readPublicBookSnapshot,
+} from './order-book.js';
 export {
   findOrderByRequest,
   orderLockFactsOf,
@@ -242,3 +247,4 @@ export * from './market-conflicts.js';
 export * from './role-boundary.js';
 export * from './transaction-retry.js';
 export * from './market-liquidity.js';
+export * from './market-maker-risk.js';

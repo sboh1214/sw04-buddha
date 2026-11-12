@@ -23,6 +23,8 @@ import {
 } from './schema/index.js';
 import { contractBook, positionOf } from './test/contracts.js';
 import {
+  createConfiguredOpenMarket,
+  TEST_MM_TRADING_LIQUIDITY,
   createMarket,
   createMarketPause,
   createUser,
@@ -79,7 +81,13 @@ describe.skipIf(!hasTestDb())('the close at close_at (#120, docker test profile)
   });
 
   const member = async (coin = 1_000n) => (await createUser(t.db, { balanceCoin: coin })).user.id;
-  const market = async () => (await createMarket(t.db, { createdBy: adminId })).id;
+  const market = async () =>
+    (
+      await createConfiguredOpenMarket(t.db, {
+        createdBy: adminId,
+        liquiditySettings: TEST_MM_TRADING_LIQUIDITY,
+      })
+    ).id;
   async function placed(input: PlaceTestOrderInput) {
     const result = await placeTestOrder(t.db, input);
     if (result.kind !== 'placed') throw new Error(`expected a placed order, got ${result.kind}`);

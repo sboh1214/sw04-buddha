@@ -32,6 +32,9 @@ import type { MarketTradingFacts } from './order-book.js';
 import {
   matchLine,
   matchOrder,
+  matchOrderWithBotRisk,
+  referencePriceWithBotRisk,
+  type BotMatchRiskPolicy,
   type BookOrder,
   type IncomingOrder,
   type MatchResult,
@@ -355,16 +358,28 @@ export interface IntakeMatchPlan {
   end: OrderEndState;
 }
 
+/** Internal #128 policies with independent state; absent for every existing caller. */
+export interface IntakeBotRiskPolicies {
+  reference: BotMatchRiskPolicy;
+  actual: BotMatchRiskPolicy;
+  /** Admission at the actual protected limit, before any speculative fill. */
+  beforeMatch?(prepared: IntakeMatchPreparation): void;
+}
+
+export type IntakeMatchPreparation = Pick<
+  IntakeMatchPlan,
+  'referencePriceCoin' | 'widthTicks' | 'protectedLimitPriceCoin' | 'incoming'
+>;
+
 /**
  * The intake's plan on the market's whole live book (ADR-0112 결정 4 steps 6 and 8, #177 2항): the
  * reference an immediate order reads (the converted supply included, the own resting order too),
  * its limit narrowed by the width (`protectedLimit`), the match (#117 `matchOrder`) and the end
  * state (`orderEndState`). The intake (@buddha/db `placeOrder`) runs it with the order's owner
  * under the market lock, and the quote (#179) with no owner on a snapshot, so a quote on an
- * unchanged book is the fill unless the owner's own group stops it. A trim of the 운영
- * 마켓메이커's quantities (#128) is not inherited: each caller reads its own book, so #128 trims
- * it before this in both (the intake's `readLiveBook`, the quote's `readPublicBook`); only a
- * per-fill bot cap from the bot's positions (ADR-0111 결정 8) may leave the quote above the fill.
+ * unchanged book is the fill unless the owner's own group stops it. The optional internal
+ * #128 policy runs over the raw line: the reference probe and the actual walk keep independent
+ * projections. Existing callers without that policy keep their ordinary matching behavior.
  * RangeError for an immediate order with no width (the gate answered first) and for malformed
  * terms or a malformed book.
  */
@@ -373,10 +388,13 @@ export function planIntakeMatch(
   terms: OrderTerms,
   widthTicks: number | null,
   owner: OrderOwner | null,
+  risk: IntakeBotRiskPolicies | undefined = undefined,
 ): IntakeMatchPlan {
   const isIoc = terms.timeInForce === 'ioc';
   const referencePriceCoin = isIoc
-    ? (matchLine(book, terms.outcome, terms.side)[0]?.priceCoin ?? null)
+    ? risk
+      ? referencePriceWithBotRisk(book, terms.outcome, terms.side, owner, risk.reference)
+      : (matchLine(book, terms.outcome, terms.side)[0]?.priceCoin ?? null)
     : null;
   const width = isIoc ? widthTicks : null;
   const protectedLimitPriceCoin = protectedLimit({
@@ -413,7 +431,15 @@ export function planIntakeMatch(
       budgetCoin: terms.budgetCoin,
     };
   }
-  const result = matchOrder(book, incoming);
+  risk?.beforeMatch?.({
+    referencePriceCoin,
+    widthTicks: width,
+    protectedLimitPriceCoin,
+    incoming,
+  });
+  const result = risk
+    ? matchOrderWithBotRisk(book, incoming, risk.actual)
+    : matchOrder(book, incoming);
   return {
     referencePriceCoin,
     widthTicks: width,

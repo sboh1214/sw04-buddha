@@ -83,6 +83,10 @@ export const ledgerEntries = pgTable(
     index('ledger_entries_market_id_idx')
       .on(t.marketId, t.id)
       .where(sql`${t.marketId} IS NOT NULL`),
+    /** #128 lifetime capital reads must not scan this market's accumulated trade history. */
+    index('ledger_entries_market_capital_idx')
+      .on(t.marketId, t.id)
+      .where(sql`${t.type} IN ('BOT_ALLOCATION', 'BOT_RECALL', 'RECONCILIATION_CORRECTION')`),
     index('ledger_entries_ref_type_ref_id_idx').on(t.refType, t.refId),
     /**
      * One forfeiture per closed account (#140, '탈퇴 소멸'): its entry refers to the account itself
