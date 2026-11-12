@@ -207,8 +207,9 @@ jobs:
   e2e:
     name: E2E Tests (Playwright ${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
-    # Covers the build, the chromium download, the seed and this shard's specs of both projects.
-    timeout-minutes: 30
+    # Covers setup, build, Chromium, seed, both projects and runner cleanup. At #273's first
+    # main run, all 247 shard-2 tests passed in 27.6m, but the 30m job budget expired afterward.
+    timeout-minutes: 45
 
     # The specs are split across the shards by test (fullyParallel), mobile-375 and
     # desktop-1280 alike. Add a shard here to split them further.
