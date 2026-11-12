@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { ledgerHeldMarketIds } from './ledger-held-markets.js';
+import { readMarketMakerConfig } from './market-liquidity.js';
 import { insertRuleVersion } from './market-rules-content.js';
 import { transitionMarket } from './market-transitions.js';
 import type * as schema from './schema/index.js';
@@ -19,8 +20,11 @@ type Executor = Pick<NodePgDatabase<typeof schema>, 'insert' | 'update' | 'selec
  *   sends it back to a draft to fix its times (ADR-0093 decision 2 #172 item 6).
  * - `ledger_hold`: reconciliation recovery is still awaiting approval. A passing retest alone
  *   does not open it; after recovery the normal open scan may open it while its close is ahead.
+ * - `liquidity_missing`: a legacy scheduled market has no explicit settings; return it to draft,
+ *   configure it and review it again. No budget is inferred and nothing is backfilled.
  */
-export type OpenSkipReason = 'not_scheduled' | 'not_due' | 'close_passed' | 'ledger_hold';
+export type OpenSkipReason =
+  'not_scheduled' | 'not_due' | 'close_passed' | 'ledger_hold' | 'liquidity_missing';
 
 /**
  * Who opened it, the `opened` event's payload `source` (#21, ADR-0100): the worker's `market.open`
@@ -68,7 +72,8 @@ export type OpenScheduledMarketResult =
  * was written outside them and waits rather than opening with no time. A close that has come is
  * never opened (ADR-0099 결과 5 left that to #21): trading would end as it began.
  *
- * Nothing else is checked again, since the approval was the last gate: not the open items — a
+ * The explicit liquidity version must exist and is pinned by this open. Other opening content
+ * is not checked again, since the approval was the last gate: not the open items — a
  * category hidden since keeps its markets (ADR-0093 #172 item 1 '기존 시장은 그 분류를 그대로
  * 가진다') — and not the lead close (ADR-0098 7-6). `lead_close_gap_minutes` stays as the
  * submission stored it.
@@ -76,7 +81,9 @@ export type OpenScheduledMarketResult =
  * The open is `transitionMarket`'s: the `opened` event — from `scheduled`, to `open`, the actor,
  * payload `{openAt, closeAt, source}` with the instants as ISO — and the row with `open_at`,
  * `updated_at` and the event's instant all `now`, `status_event_id` that event's id and
- * `rule_version` 1. Then, in the opened branch only, rule v1 (#80, ADR-0101; ADR-0093 decision 2
+ * `rule_version` 1 and `opened_liquidity_version` equal to the current configuration. The
+ * configuration stays in the admin-only version table, never in the public event payload.
+ * Then, in the opened branch only, rule v1 (#80, ADR-0101; ADR-0093 decision 2
  * #172 item 6 '개장할 때 잠긴 내용을 규칙 v1로 기록한다'): `insertRuleVersion` records the content
  * locked at the review — read back from the row and its sources after the write, blank items
  * included (nothing is checked again) — at `now`, made by the actor (null for the job). The
@@ -105,6 +112,9 @@ export async function openScheduledMarket(
   if ((await ledgerHeldMarketIds(tx, [market.id])).has(market.id))
     return { opened: false, reason: 'ledger_hold' };
 
+  const liquidity = await readMarketMakerConfig(tx, market.id);
+  if (!liquidity) return { opened: false, reason: 'liquidity_missing' };
+
   const statusEventId = await transitionMarket(tx, {
     marketId: market.id,
     from: 'scheduled',
@@ -113,7 +123,7 @@ export async function openScheduledMarket(
     actorId,
     payload: { openAt: now.toISOString(), closeAt: market.closeAt.toISOString(), source },
     at: now,
-    set: { openAt: now, ruleVersion: 1 },
+    set: { openAt: now, ruleVersion: 1, openedLiquidityVersion: liquidity.version },
   });
   await insertRuleVersion(tx, {
     marketId: market.id,

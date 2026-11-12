@@ -532,6 +532,10 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       ['bots'],
       ['market', 'maker'],
       ['market', 'makers'],
+      ['liquidity'],
+      ['current', 'liquidity', 'version'],
+      ['opened', 'liquidity', 'version'],
+      ['budget', 'coin'],
       ['liquidity', 'b'],
       ['liquidity', 'setting'],
       ['liquidity', 'settings'],
@@ -548,7 +552,8 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       ['concentration'],
     ],
     // The 운영 마켓메이커 account exists from #115 (ADR-0108); what it does per market does not yet.
-    pending: '시장별 운영 마켓메이커의 참여·설정·재고가 아직 없다(#72·#129·#182)',
+    pending:
+      '시장별 설정 버전은 관리자만 조회한다(#72); 참여·재고·위험 운영 화면은 후속이다(#129·#182)',
   },
   {
     id: 'account-type',

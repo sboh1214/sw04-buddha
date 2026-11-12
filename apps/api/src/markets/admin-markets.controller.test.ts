@@ -136,8 +136,8 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     };
   };
 
-  // Every rule item and time, and tagged, so a created draft passes the open-items check (#17,
-  // #23, #22) unless a test says otherwise; a time the overrides give wins.
+  // Every rule item and time, and tagged (#17, #23, #22); raw creation still needs an explicit
+  // liquidity version (#72). A time the overrides give wins.
   const createBody = (overrides: Record<string, unknown> = {}) => {
     const body = {
       title: '기준금리 3% 이하로 인하?',
@@ -171,6 +171,23 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
 
   const create = (overrides: Record<string, unknown> = {}) =>
     post('/api/v1/admin/markets', createBody(overrides));
+  /** Explicit test settings for a draft that this case intends to submit (#72). */
+  async function configureLiquidity(id: string): Promise<AdminMarket> {
+    const res = await post(`/api/v1/admin/markets/${id}/liquidity-settings`, {
+      baseVersion: null,
+      reason: '검수 시험용 유동성 설정',
+      settings: {
+        budgetCoin: '10000',
+        maxLossCoin: '5000',
+        b: 100,
+        levels: 3,
+        quantity: 10,
+        safetyTicks: 1,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    return detail(res);
+  }
   /** 검수 제출 (#78): the gate of the open-items check (OPEN_ITEMS_MISSING). */
   const submit = (id: string) => post(`/api/v1/admin/markets/${id}/submit`);
   /** 거래 일시 중단 (#114): one admin, at once — the transition these tests watch. */
@@ -178,7 +195,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
 
   /**
    * A market row written by the factory (no events, no tick) owned by the test admin, with one
-   * tag so a draft passes the open-items check (#17) unless the test gives others or none.
+   * tag (#17). It intentionally has no liquidity configuration, as a legacy row (#72).
    */
   const market = (input: Parameters<typeof createMarket>[1] = {}) =>
     createMarket(t.db, {
@@ -260,9 +277,9 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       primarySource: { name: '한국은행 보도자료', url: 'https://www.bok.or.kr' },
       fallbackSources: [],
       imageUrl: null,
-      // In the order sent (#17); and nothing missing, so it may be submitted for review.
+      // In the order sent (#17); liquidity remains unset until explicitly configured (#72).
       tags: ['금리', '한국은행'],
-      missingOpenItems: [],
+      missingOpenItems: ['liquidity'],
     });
     for (const field of AMM_FIELDS) expect(created).not.toHaveProperty(field);
     expect(created.events.map((event) => event.type)).toEqual(['created']);
@@ -422,7 +439,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect(blank).toMatchObject({
       status: 'draft',
       yesCondition: '',
-      missingOpenItems: ['yesCondition'],
+      missingOpenItems: ['yesCondition', 'liquidity'],
     });
   });
 
@@ -556,7 +573,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect(links.map((link) => link.position)).toEqual([1, 2, 3]);
     // Without tags a draft has none (the open-items check counts them missing).
     const bare = detail(await create({ tags: undefined }));
-    expect(bare).toMatchObject({ tags: [], missingOpenItems: ['tags'] });
+    expect(bare).toMatchObject({ tags: [], missingOpenItems: ['tags', 'liquidity'] });
     // Two creates making the same new tags at once, in opposite orders: one row per tag.
     const [a, b] = await Promise.all([
       create({ tags: ['동시 태그 가', '동시 태그 나'] }),
@@ -611,7 +628,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     });
     // A draft may be edited down to none (it cannot be submitted that way).
     const cleared = detail(await patch(`/api/v1/admin/markets/${draft.id}`, { tags: [] }));
-    expect(cleared).toMatchObject({ tags: [], missingOpenItems: ['tags'] });
+    expect(cleared).toMatchObject({ tags: [], missingOpenItems: ['tags', 'liquidity'] });
     expect(
       await t.db.select().from(schema.marketTags).where(eq(schema.marketTags.marketId, draft.id)),
     ).toEqual([]);
@@ -957,7 +974,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       yesCondition: '',
       primarySource: null,
       longDelayDays: null,
-      missingOpenItems: ['yesCondition', 'primarySource', 'longDelayDays'],
+      missingOpenItems: ['yesCondition', 'primarySource', 'longDelayDays', 'liquidity'],
     });
   });
 
@@ -1046,7 +1063,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       longDelayDays: 30,
       delayHandling: '장기 지연 기한까지 발표가 없으면 무효로 판정한다.',
     });
-    expect(created.missingOpenItems).toEqual(['fallbackSources']);
+    expect(created.missingOpenItems).toEqual(['fallbackSources', 'liquidity']);
     // Priority 0 the primary source, 1..n the fallbacks in the order sent.
     expect(await sourcesOf(created.id)).toEqual([
       { priority: 0, name: '통계청', url: 'https://kostat.go.kr/board' },
@@ -1071,7 +1088,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect(reordered).toMatchObject({
       primarySource: { name: '통계청', url: 'https://kostat.go.kr/board' },
       fallbackSources: [two, one],
-      missingOpenItems: [],
+      missingOpenItems: ['liquidity'],
     });
     expect(await sourcesOf(created.id)).toEqual([
       { priority: 0, name: '통계청', url: 'https://kostat.go.kr/board' },
@@ -1100,7 +1117,13 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       primarySource: null,
       fallbackSources: [two, one],
       longDelayDays: null,
-      missingOpenItems: ['description', 'eventDeadline', 'primarySource', 'longDelayDays'],
+      missingOpenItems: [
+        'description',
+        'eventDeadline',
+        'primarySource',
+        'longDelayDays',
+        'liquidity',
+      ],
     });
     expect((await sourcesOf(created.id)).map((row) => row.priority)).toEqual([1, 2]);
     expect(lastRulesEdit(cleared)).toEqual({
@@ -1248,7 +1271,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect(detail(both)).toMatchObject({
       fallbackSources: [],
       fallbackCondition: '',
-      missingOpenItems: [],
+      missingOpenItems: ['liquidity'],
     });
     expect(await sourcesOf(draft.id)).toEqual([
       { priority: 0, name: '한국은행 보도자료', url: 'https://www.bok.or.kr' },
@@ -1316,14 +1339,14 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
         value,
       });
     // Created while the default is entered: the market keeps its own copy.
-    const copied = detail(await create({ slug: 'width-copied' }));
+    const copied = await configureLiquidity(detail(await create({ slug: 'width-copied' })).id);
     expect(copied.priceProtectionTicks).toBe(TEST_PRICE_PROTECTION_TICKS);
     expect((await marketRow(copied.id)).priceProtectionTicks).toBe(TEST_PRICE_PROTECTION_TICKS);
 
     // Created while it is undecided: none, and the submission is refused naming it, writing nothing
     // (ADR-0098 7-5's lead close the precedent).
     await width(null);
-    const bare = detail(await create({ slug: 'width-bare' }));
+    const bare = await configureLiquidity(detail(await create({ slug: 'width-bare' })).id);
     expect(bare).toMatchObject({
       priceProtectionTicks: null,
       missingOpenItems: ['priceProtection'],
@@ -1387,7 +1410,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       'scheduledJudgementAt',
       'judgementTimeZone',
     ];
-    expect(blank.missingOpenItems).toEqual([...blankItems, 'tags']);
+    expect(blank.missingOpenItems).toEqual([...blankItems, 'tags', 'liquidity']);
     const leaf = await createCategory(t.db, {
       slug: 'rates',
       nameKo: '금리',
@@ -1395,7 +1418,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     });
     const res = await submit(blank.id);
     expect(res.statusCode).toBe(422);
-    const named = [...blankItems, 'category', 'tags'];
+    const named = [...blankItems, 'category', 'tags', 'liquidity'];
     expect(errorOf(res)).toEqual({
       code: 'OPEN_ITEMS_MISSING',
       message: `The market misses what it needs to open: ${named.join(', ')}`,
@@ -1403,6 +1426,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
         ...blankItems.map((item) => ({ path: [item], message: 'required' })),
         { path: ['category'], message: 'subcategories' },
         { path: ['tags'], message: 'required' },
+        { path: ['liquidity'], message: 'required' },
       ],
     });
     // The detail reports the same, read without the submission's locks.
@@ -1410,12 +1434,15 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       ...blankItems,
       'category',
       'tags',
+      'liquidity',
     ]);
     // Nothing written: still a draft, no event, no record, no review request.
     expect((await marketRow(blank.id)).status).toBe('draft');
     expect((await eventsFor(blank.id)).map((event) => event.type)).toEqual(['created']);
     expect((await actionsFor(blank.id)).map((row) => row.type)).toEqual(['market_create']);
     expect(await t.db.select().from(schema.approvalRequests)).toHaveLength(0);
+
+    await configureLiquidity(blank.id);
 
     // Each fixed in turn leaves the rest named: no RULES_REQUIRED at the submission. A fallback
     // needs its address and then its switch condition; with none, no condition is asked for.
@@ -1482,6 +1509,8 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       .update(schema.categories)
       .set({ isActive: false })
       .where(eq(schema.categories.id, orphanParent.id));
+    await configureLiquidity(hiddenDraft.id);
+    await configureLiquidity(orphanDraft.id);
     for (const [row, reason] of [
       [hiddenDraft, 'inactive'],
       [orphanDraft, 'parent_inactive'],
@@ -1511,6 +1540,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       closeAt: new Date(Date.now() - 1_000),
       eventDeadline: null,
     });
+    await configureLiquidity(staleRules.id);
     const undated = await submit(staleRules.id);
     expect(undated.statusCode).toBe(422);
     expect(errorOf(undated).details).toEqual([{ path: ['eventDeadline'], message: 'required' }]);
@@ -1519,6 +1549,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       categoryId: leaf.id,
       closeAt: new Date(Date.now() - 1_000),
     });
+    await configureLiquidity(staleTagged.id);
     const past = await submit(staleTagged.id);
     expect(past.statusCode).toBe(400);
     expect(detailPath(past)).toEqual(['closeAt']);
@@ -1530,10 +1561,11 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
 
   it('reports what the open-items check finds missing on the admin detail, for every status', async () => {
     const draft = detail(await create({ yesCondition: '', tags: [] }));
-    expect(draft.missingOpenItems).toEqual(['yesCondition', 'tags']);
+    expect(draft.missingOpenItems).toEqual(['yesCondition', 'tags', 'liquidity']);
     expect(detail(await get(`/api/v1/admin/markets/${draft.id}`)).missingOpenItems).toEqual([
       'yesCondition',
       'tags',
+      'liquidity',
     ]);
     // An open market whose category was hidden after it was filed reports it too, as does one
     // written before tags existed, and one opened before the rule items (#23) every item of them
@@ -1541,6 +1573,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     const live = await market({ status: 'open', tags: [] });
     expect(detail(await get(`/api/v1/admin/markets/${live.id}`)).missingOpenItems).toEqual([
       'tags',
+      'liquidity',
     ]);
     const legacy = await market({ status: 'open', blankRuleItems: true });
     expect(detail(await get(`/api/v1/admin/markets/${legacy.id}`)).missingOpenItems).toEqual([
@@ -1551,6 +1584,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       'primarySource',
       'longDelayDays',
       'delayHandling',
+      'liquidity',
     ]);
     // A blank title, which no route stores, is named first (the check is N03 §2's list).
     await t.db.update(schema.markets).set({ title: '   ' }).where(eq(schema.markets.id, legacy.id));
@@ -1564,11 +1598,13 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect(detail(await get(`/api/v1/admin/markets/${live.id}`)).missingOpenItems).toEqual([
       'category',
       'tags',
+      'liquidity',
     ]);
     expect(detail(await get(`/api/v1/admin/markets/${draft.id}`)).missingOpenItems).toEqual([
       'yesCondition',
       'category',
       'tags',
+      'liquidity',
     ]);
     const pub = data<Market>(
       await t.app.inject({ method: 'GET', url: `/api/v1/markets/${live.id}` }),
@@ -1587,6 +1623,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     });
     expect(detail(await get(`/api/v1/admin/markets/${live.id}`)).missingOpenItems).toEqual([
       'tags',
+      'liquidity',
     ]);
   });
 
@@ -1624,6 +1661,8 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       // alone would not show this: the fixture row is unlocked, so a transition that skipped
       // `lockMarket` would go straight through.
       const row = await market({ status });
+      if (status === 'draft') await configureLiquidity(row.id);
+      const beforeActions = await actionsFor(row.id);
       const holder = await t.db.$client.connect();
       let released = false;
       try {
@@ -1632,14 +1671,14 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
         const pending = transition(row.id).then((res) => res);
         await sleep(300);
         expect((await marketRow(row.id)).status).toBe(status);
-        expect(await actionsFor(row.id)).toHaveLength(0);
+        expect(await actionsFor(row.id)).toEqual(beforeActions);
 
         await holder.query('SELECT pg_advisory_unlock(hashtext($1))', [row.id]);
         released = true;
         const res = await pending;
         expect(res.statusCode).toBe(200);
         expect((await marketRow(row.id)).status).not.toBe(status);
-        expect(await actionsFor(row.id)).toHaveLength(1);
+        expect(await actionsFor(row.id)).toHaveLength(beforeActions.length + 1);
       } finally {
         if (!released) await holder.query('SELECT pg_advisory_unlock_all()');
         holder.release();
@@ -1866,10 +1905,12 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect(
       (await patch(`/api/v1/admin/markets/${created.id}`, { yesCondition: '규칙' })).statusCode,
     ).toBe(200);
+    await configureLiquidity(created.id);
     expect((await submit(created.id)).statusCode).toBe(200);
     expect((await actionsFor(created.id)).map((row) => [row.type, row.adminId])).toEqual([
       ['market_create', admin.id],
       ['market_update', admin.id],
+      ['market_update', admin.id], // explicit liquidity version
       ['market_submit', admin.id],
     ]);
     const live = await market({ status: 'open' });
@@ -1931,6 +1972,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect(await routeActions()).toHaveLength(0);
 
     // No Origin at all (curl, a server) is not a browser and passes; reads are never checked.
+    await configureLiquidity(row.id);
     const curl = await t.app.inject({
       method: 'POST',
       url: `/api/v1/admin/markets/${row.id}/submit`,

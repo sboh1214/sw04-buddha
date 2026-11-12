@@ -495,6 +495,53 @@ export const copy = {
   adminMarketPriceProtectionNewHint:
     '1~98틱. 즉시 거래 주문의 한도를 그때의 최우선 반대 호가에서 이 틱 수 안으로 좁힙니다.',
   adminMarketPriceProtectionChanged: '가격 보호 폭을 바꿨습니다.',
+  marketLiquidityTitle: '운영 유동성 설정',
+  marketLiquidityIntro:
+    '이 시장의 예산과 호가 설정입니다. 검수 제출부터 고정되며 다른 관리자가 함께 검토합니다.',
+  marketLiquidityEmpty: '아직 등록하지 않았습니다. 유동성 설정을 등록해야 검수 제출할 수 있습니다.',
+  marketLiquidityMissing: '등록된 유동성 설정이 없습니다.',
+  marketLiquidityEdit: '설정 등록·변경',
+  marketLiquidityDialogTitle: '유동성 설정을 저장합니다',
+  marketLiquidityDefaultsHint:
+    '처음 불러온 표준값의 상태입니다. 시험값·설계 제안은 운영 승인값이 아닙니다. 비어 있는 값은 직접 입력하고, 여섯 값과 사유를 확인해 저장해 주세요. 저장 전에는 시장에 반영되지 않습니다.',
+  marketLiquidityDefaultsLoading: '표준값을 불러오고 있습니다.',
+  marketLiquidityDefaultsFailed:
+    '표준값을 불러오지 못했습니다. 다시 조회하거나 여섯 값을 직접 입력할 수 있습니다.',
+  marketLiquidityDefaultsManual: '표준값 없이 직접 입력',
+  marketLiquidityDialogBody:
+    '여섯 값을 모두 확인해 주세요. 저장할 때마다 새 버전과 작업자·시각·사유가 남습니다.',
+  marketLiquiditySaved: '유동성 설정을 저장했습니다.',
+  marketLiquidityBudget: '배정 예산 A (Coin)',
+  marketLiquidityMaxLoss: '최대 손실 L (Coin)',
+  marketLiquidityB: '유동성 b (계약)',
+  marketLiquidityLevels: '호가 단계 (방향별 가격대 수)',
+  marketLiquidityQuantity: '기본 물량 (방향별 계약 수)',
+  marketLiquiditySafety: '안전 간격 (틱)',
+  marketLiquidityBudgetHint: '시장에 배정할 예산입니다. 최대 손실 L 이상이어야 합니다.',
+  marketLiquidityMaxLossHint: '운영 손실 한도입니다. 0보다 크고 배정 예산 A 이하여야 합니다.',
+  marketLiquidityBHint: '호가 곡선의 움직임을 조절합니다. b 자체가 봇의 손실을 보장하지 않습니다.',
+  marketLiquidityLevelsHint: 'YES·NO 매수 방향마다 게시할 서로 다른 가격대의 최대 개수입니다.',
+  marketLiquidityQuantityHint: '각 방향의 모든 가격대에 걸친 계약 수의 합입니다.',
+  marketLiquiditySafetyHint: '가격을 틱 단위로 내림한 뒤 더 낮추는 간격입니다.',
+  marketLiquidityReference: '개장 기준 50% · 고정',
+  marketLiquidityReferenceHint:
+    '호가 계산의 시작 기준이며, 체결된 시장가격이나 결과 예측을 뜻하지 않습니다.',
+  marketLiquidityCurrentVersion: '현재 설정 버전',
+  marketLiquidityVersion: '설정 버전',
+  marketLiquidityOpenedVersion: '개장 때의 설정 버전',
+  marketLiquidityHistory: '설정 변경 기록',
+  marketLiquidityReason: '설정 사유',
+  marketLiquidityLocked:
+    '검수 중·개장 예정에는 설정을 바꿀 수 없습니다. 고치려면 먼저 초안으로 되돌려 다시 검수해 주세요.',
+  marketLiquidityOpenedLocked: '이 상태에서는 유동성 설정을 바꿀 수 없습니다.',
+  marketLiquidityStale:
+    '설정 버전이나 시장 상태가 바뀌었습니다. 창을 닫고 최신 내용을 확인한 뒤 다시 열어 주세요.',
+  marketLiquidityUnchanged: '지금의 설정과 같습니다.',
+  errMarketLiquidityCoin: '0보다 큰 정수 Coin을 입력해 주세요.',
+  errMarketLiquidityMaxLoss: '배정 예산 A 이하의 양의 정수 Coin을 입력해 주세요.',
+  errMarketLiquidityB: '허용 범위의 양수를 입력해 주세요.',
+  errMarketLiquidityPositiveInteger: '허용 범위의 양의 정수를 입력해 주세요.',
+  errMarketLiquiditySafety: '허용 범위의 0 이상 정수 틱을 입력해 주세요.',
   errPriceProtectionTicks: '1~98 사이의 정수를 입력해 주세요.',
   errPriceProtectionUnchanged: '지금의 가격 보호 폭과 같습니다.',
   // 관리자 상세의 판정 지연 줄(#173 11항): 사용자 화면이 '판정 지연'으로 보이는 시장이다. 상태 배지는
@@ -547,6 +594,8 @@ export const copy = {
   // 가격 보호 폭(#119, ADR-0112): 즉시 거래 주문의 한도를 좁히는 틱 수. 시장을 만들 때 출시 설정의 표준값을
   // 옮겨 담고 검수 제출이 저장하므로, 폼에서 채우는 항목이 아니라 출시 설정이 정해져야 채워진다.
   openItemPriceProtection: '가격 보호 폭',
+  openItemLiquidity: '봇 예산·유동성 설정 버전',
+  openItemRuleLiquidity: '운영 유동성 설정을 등록한 뒤 검수 제출해 주세요',
   // 초안 상세의 안내는 시각 순서·선행 마감마다 어긋난 것을 한 줄씩 덧붙인다('시각 순서: …', 분 단위).
   // 선행 마감은 앞뒤 조각 사이에 간격의 분 수가 들어간다.
   openItemRuleOpenBeforeClose: '예정 개장 시각이 거래 마감 시각과 같거나 늦습니다',
@@ -654,6 +703,9 @@ export const copy = {
     "거래 마감이 발표 예정 시각보다 간격 이상 앞서는지, 발표 일정이 없으면 '없음'이 맞는지, 경기는 시작 전·선거는 투표 종료 전에 마감하는지",
   reviewCheckIndependence: '독립 판정',
   reviewCheckIndependenceHint: '다른 시장의 결과를 판정 조건으로 삼지 않는지',
+  reviewCheckLiquidity: '봇 예산·유동성 설정',
+  reviewCheckLiquidityHint:
+    '배정 예산 A·최대 손실 L과 호가 설정 여섯 값, 설정 버전과 사유가 적절한지',
   reviewRejectOther: '기타',
   // 검수의 사유: 승인·되돌리기·예정 개장 시각 변경의 사유와 반려의 설명. 1~500자이고 검수 기록에 남는다.
   adminMarketReviewReason: '사유',

@@ -172,9 +172,9 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
       .where(ne(schema.adminActions.type, 'release_setting_change'))
       .orderBy(asc(schema.adminActions.createdAt));
   /**
-   * Makes a market public as the market's own routes do (#78, #21): `admin` submits the draft for
-   * review and `second` approves it, which opens it at once — the factory's scheduled open has
-   * passed.
+   * Makes a market public as the market's own routes do (#72, #78, #21): its creator `admin`
+   * saves explicit test liquidity and submits the draft for review. `second` approves it, which
+   * opens it at once — the factory's scheduled open has passed.
    */
   const publish = async (marketId: string) => {
     const marketPost = (action: string, who: TestUser, payload: object = {}) =>
@@ -184,6 +184,19 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
         headers: { ...jsonHeaders, cookie: who.cookie },
         payload: { expectedAccountId: who.id, ...payload },
       });
+    const configured = await marketPost('liquidity-settings', admin, {
+      baseVersion: null,
+      reason: '제안 공개 시험용 유동성 설정',
+      settings: {
+        budgetCoin: '10000',
+        maxLossCoin: '5000',
+        b: 100,
+        levels: 3,
+        quantity: 10,
+        safetyTicks: 1,
+      },
+    });
+    expect(configured.statusCode, configured.body).toBe(200);
     const submitted = await marketPost('submit', admin);
     expect(submitted.statusCode, submitted.body).toBe(200);
     const pending = submitted.json<{ data: AdminMarket }>().data.review.pending;
@@ -506,6 +519,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
       'scheduledJudgementAt',
       'judgementTimeZone',
       'tags',
+      'liquidity',
     ]);
     expect((await actions()).map((row) => row.type)).toEqual([
       'proposal_review',

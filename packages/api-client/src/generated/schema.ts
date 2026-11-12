@@ -657,6 +657,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/markets/{id}/liquidity-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record a draft liquidity version with a reason; review and opening lock it */
+        post: operations["adminSetMarketLiquidity"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/markets/{id}/pause": {
         parameters: {
             query?: never;
@@ -3886,6 +3903,7 @@ export type components = {
             lastPrice: number | null;
             lastPrice24hAgo: number | null;
             leadCloseGapMinutes: number | null;
+            liquidity: components["schemas"]["AdminMarketLiquidity"];
             longDelayDays: number | null;
             missingOpenItems: components["schemas"]["OpenItem"][];
             noCondition: string;
@@ -4035,6 +4053,11 @@ export type components = {
             history: components["schemas"]["AdminMarketJudgement"][];
             log: components["schemas"]["MarketJudgementLogEntry"][];
             pending: components["schemas"]["MarketJudgementPending"] | null;
+        };
+        AdminMarketLiquidity: {
+            current: components["schemas"]["MarketLiquidityVersion"] | null;
+            history: components["schemas"]["MarketLiquidityVersion"][];
+            openedVersion: number | null;
         };
         AdminMarketPause: {
             /** Format: date-time */
@@ -5178,6 +5201,21 @@ export type components = {
             payoutDelayed: boolean;
             versions: components["schemas"]["PublicMarketJudgement"][];
         };
+        MarketLiquidityVersion: {
+            b: number;
+            budgetCoin: components["schemas"]["CoinAmount"];
+            /** Format: date-time */
+            createdAt: string;
+            createdBy: components["schemas"]["AdminAccountActor"];
+            levels: number;
+            /** Format: uuid */
+            marketId: string;
+            maxLossCoin: components["schemas"]["CoinAmount"];
+            quantity: number;
+            reason: string;
+            safetyTicks: number;
+            version: number;
+        };
         MarketPauseDecisionLogEntry: {
             /** Format: date-time */
             decidedAt: string | null;
@@ -5218,11 +5256,11 @@ export type components = {
         /** @enum {string} */
         MarketPauseReviewResult: "judgeable" | "not_judgeable";
         /** @enum {string} */
-        MarketRejectReason: "knownResult" | "ambiguity" | "duplicate" | "requiredItems" | "timeOrder" | "leadClose" | "independence" | "other";
+        MarketRejectReason: "knownResult" | "ambiguity" | "duplicate" | "requiredItems" | "timeOrder" | "leadClose" | "independence" | "liquidity" | "other";
         /** @enum {string} */
         MarketResult: "YES" | "NO" | "VOID";
         /** @enum {string} */
-        MarketReviewChecklistItem: "knownResult" | "ambiguity" | "duplicate" | "requiredItems" | "timeOrder" | "leadClose" | "independence";
+        MarketReviewChecklistItem: "knownResult" | "ambiguity" | "duplicate" | "requiredItems" | "timeOrder" | "leadClose" | "independence" | "liquidity";
         /** @enum {string} */
         MarketReviewEventType: "submitted" | "approved" | "rejected" | "reverted" | "open_rescheduled";
         MarketReviewLogEntry: {
@@ -5641,7 +5679,7 @@ export type components = {
         /** @enum {string} */
         OnboardingStep: "consent" | "verification" | "nickname";
         /** @enum {string} */
-        OpenItem: "title" | "description" | "yesCondition" | "noCondition" | "eventDeadline" | "primarySource" | "fallbackSources" | "fallbackCondition" | "longDelayDays" | "delayHandling" | "scheduledOpenAt" | "closeAt" | "scheduledJudgementAt" | "judgementTimeZone" | "timeOrder" | "leadClose" | "category" | "tags" | "priceProtection";
+        OpenItem: "title" | "description" | "yesCondition" | "noCondition" | "eventDeadline" | "primarySource" | "fallbackSources" | "fallbackCondition" | "longDelayDays" | "delayHandling" | "scheduledOpenAt" | "closeAt" | "scheduledJudgementAt" | "judgementTimeZone" | "timeOrder" | "leadClose" | "category" | "tags" | "priceProtection" | "liquidity";
         Order: {
             budgetCoin: components["schemas"]["CoinAmount"] | null;
             cancelledQty: number;
@@ -6626,6 +6664,19 @@ export type components = {
         SetInterestCategoriesBody: {
             categoryIds: number[];
             expectedAccountId: string;
+        };
+        SetMarketLiquidityBody: {
+            baseVersion: number | null;
+            expectedAccountId: string;
+            reason: string;
+            settings: {
+                b: number;
+                budgetCoin: components["schemas"]["CoinAmount"];
+                levels: number;
+                maxLossCoin: components["schemas"]["CoinAmount"];
+                quantity: number;
+                safetyTicks: number;
+            };
         };
         SetOnboardingNicknameBody: {
             expectedAccountId: string;
@@ -10374,6 +10425,87 @@ export interface operations {
             };
         };
     };
+    adminSetMarketLiquidity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetMarketLiquidityBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     adminPauseMarket: {
         parameters: {
             query?: never;
@@ -11245,6 +11377,15 @@ export interface operations {
             };
             /** @description ONBOARDING_REQUIRED */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description OPEN_ITEMS_MISSING */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

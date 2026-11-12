@@ -4989,6 +4989,123 @@
         ]
       }
     },
+    "/api/v1/admin/markets/{id}/liquidity-settings": {
+      "post": {
+        "operationId": "adminSetMarketLiquidity",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetMarketLiquidityBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AdminMarket"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Record a draft liquidity version with a reason; review and opening lock it",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/v1/admin/markets": {
       "get": {
         "operationId": "adminListMarkets",
@@ -6394,6 +6511,16 @@
           },
           "409": {
             "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "OPEN_ITEMS_MISSING",
             "content": {
               "application/json": {
                 "schema": {
@@ -28748,173 +28875,69 @@
         ],
         "additionalProperties": false
       },
-      "AdminRelatedMarket": {
+      "SetMarketLiquidityBody": {
         "type": "object",
         "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid",
-            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-          },
-          "slug": {
-            "type": "string"
-          },
-          "title": {
-            "type": "string"
-          },
-          "category": {
+          "settings": {
             "type": "object",
             "properties": {
-              "slug": {
-                "type": "string"
+              "budgetCoin": {
+                "maxLength": 17,
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/CoinAmount"
+                  }
+                ]
               },
-              "nameKo": {
-                "type": "string"
+              "maxLossCoin": {
+                "maxLength": 17,
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/CoinAmount"
+                  }
+                ]
+              },
+              "b": {
+                "type": "number",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "levels": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "quantity": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000000
+              },
+              "safetyTicks": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
               }
             },
             "required": [
-              "slug",
-              "nameKo"
+              "budgetCoin",
+              "maxLossCoin",
+              "b",
+              "levels",
+              "quantity",
+              "safetyTicks"
             ],
             "additionalProperties": false
           },
-          "imageUrl": {
-            "nullable": true,
-            "type": "string"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "draft",
-              "review",
-              "scheduled",
-              "open",
-              "paused",
-              "closed",
-              "provisional",
-              "resolved",
-              "settling",
-              "settled",
-              "cancelled"
-            ]
-          },
-          "judgementDelayed": {
-            "type": "boolean"
-          },
-          "disputeUnderReview": {
-            "type": "boolean"
-          },
-          "lastPrice": {
-            "nullable": true,
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 99
-          },
-          "lastFillAt": {
-            "nullable": true,
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          },
-          "volumeCoin": {
-            "$ref": "#/components/schemas/CoinAmount"
-          },
-          "tradeCount": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 9007199254740991
-          },
-          "traderCount": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 9007199254740991
-          },
-          "closeAt": {
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          },
-          "openAt": {
-            "nullable": true,
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          },
-          "resolvedResult": {
-            "nullable": true,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/MarketResult"
-              }
-            ]
-          },
-          "judgementVersion": {
+          "baseVersion": {
             "nullable": true,
             "type": "integer",
             "minimum": 1,
             "maximum": 2147483647
           },
-          "disputeDeadline": {
-            "nullable": true,
+          "reason": {
             "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          },
-          "disputeOpen": {
-            "type": "boolean"
-          },
-          "statusEventId": {
-            "nullable": true,
-            "type": "string"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          },
-          "linkedBy": {
-            "$ref": "#/components/schemas/AdminAccountActor"
-          },
-          "linkedAt": {
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          }
-        },
-        "required": [
-          "id",
-          "slug",
-          "title",
-          "category",
-          "imageUrl",
-          "status",
-          "judgementDelayed",
-          "disputeUnderReview",
-          "lastPrice",
-          "lastFillAt",
-          "volumeCoin",
-          "tradeCount",
-          "traderCount",
-          "closeAt",
-          "openAt",
-          "resolvedResult",
-          "judgementVersion",
-          "disputeDeadline",
-          "disputeOpen",
-          "statusEventId",
-          "createdAt",
-          "linkedBy",
-          "linkedAt"
-        ],
-        "additionalProperties": false
-      },
-      "LinkRelatedMarketBody": {
-        "type": "object",
-        "properties": {
-          "marketId": {
-            "type": "string",
-            "format": "uuid",
-            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            "minLength": 1,
+            "maxLength": 500
           },
           "expectedAccountId": {
             "type": "string",
@@ -28923,9 +28946,12 @@
           }
         },
         "required": [
-          "marketId",
+          "settings",
+          "baseVersion",
+          "reason",
           "expectedAccountId"
-        ]
+        ],
+        "additionalProperties": false
       },
       "AdminMarket": {
         "type": "object",
@@ -29164,6 +29190,9 @@
             "minimum": 1,
             "maximum": 99
           },
+          "liquidity": {
+            "$ref": "#/components/schemas/AdminMarketLiquidity"
+          },
           "createdBy": {
             "type": "string"
           },
@@ -29290,6 +29319,7 @@
           "judgementDelay",
           "judgingRecord",
           "lastPrice24hAgo",
+          "liquidity",
           "createdBy",
           "updatedAt",
           "openInterest",
@@ -29371,6 +29401,105 @@
           "requestedBy",
           "createdBy",
           "settlementImpact"
+        ],
+        "additionalProperties": false
+      },
+      "AdminMarketLiquidity": {
+        "type": "object",
+        "properties": {
+          "current": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketLiquidityVersion"
+              }
+            ]
+          },
+          "openedVersion": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 9007199254740991
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MarketLiquidityVersion"
+            }
+          }
+        },
+        "required": [
+          "current",
+          "openedVersion",
+          "history"
+        ],
+        "additionalProperties": false
+      },
+      "MarketLiquidityVersion": {
+        "type": "object",
+        "properties": {
+          "budgetCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
+          "maxLossCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
+          "b": {
+            "type": "number",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "levels": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000
+          },
+          "safetyTicks": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "marketId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 9007199254740991
+          },
+          "reason": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "createdBy": {
+            "$ref": "#/components/schemas/AdminAccountActor"
+          }
+        },
+        "required": [
+          "budgetCoin",
+          "maxLossCoin",
+          "b",
+          "levels",
+          "quantity",
+          "safetyTicks",
+          "marketId",
+          "version",
+          "reason",
+          "createdAt",
+          "createdBy"
         ],
         "additionalProperties": false
       },
@@ -29538,7 +29667,8 @@
           "leadClose",
           "category",
           "tags",
-          "priceProtection"
+          "priceProtection",
+          "liquidity"
         ]
       },
       "AdminMarketReview": {
@@ -29765,6 +29895,7 @@
           "timeOrder",
           "leadClose",
           "independence",
+          "liquidity",
           "other"
         ]
       },
@@ -29777,7 +29908,8 @@
           "requiredItems",
           "timeOrder",
           "leadClose",
-          "independence"
+          "independence",
+          "liquidity"
         ]
       },
       "AdminMarketSupplement": {
@@ -30922,6 +31054,185 @@
         "enum": [
           "closed",
           "provisional"
+        ]
+      },
+      "AdminRelatedMarket": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "category": {
+            "type": "object",
+            "properties": {
+              "slug": {
+                "type": "string"
+              },
+              "nameKo": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "slug",
+              "nameKo"
+            ],
+            "additionalProperties": false
+          },
+          "imageUrl": {
+            "nullable": true,
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "review",
+              "scheduled",
+              "open",
+              "paused",
+              "closed",
+              "provisional",
+              "resolved",
+              "settling",
+              "settled",
+              "cancelled"
+            ]
+          },
+          "judgementDelayed": {
+            "type": "boolean"
+          },
+          "disputeUnderReview": {
+            "type": "boolean"
+          },
+          "lastPrice": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 99
+          },
+          "lastFillAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "volumeCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
+          "tradeCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "traderCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "closeAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "openAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "resolvedResult": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketResult"
+              }
+            ]
+          },
+          "judgementVersion": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "disputeDeadline": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "disputeOpen": {
+            "type": "boolean"
+          },
+          "statusEventId": {
+            "nullable": true,
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "linkedBy": {
+            "$ref": "#/components/schemas/AdminAccountActor"
+          },
+          "linkedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "title",
+          "category",
+          "imageUrl",
+          "status",
+          "judgementDelayed",
+          "disputeUnderReview",
+          "lastPrice",
+          "lastFillAt",
+          "volumeCoin",
+          "tradeCount",
+          "traderCount",
+          "closeAt",
+          "openAt",
+          "resolvedResult",
+          "judgementVersion",
+          "disputeDeadline",
+          "disputeOpen",
+          "statusEventId",
+          "createdAt",
+          "linkedBy",
+          "linkedAt"
+        ],
+        "additionalProperties": false
+      },
+      "LinkRelatedMarketBody": {
+        "type": "object",
+        "properties": {
+          "marketId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "marketId",
+          "expectedAccountId"
         ]
       },
       "CreateMarketBody": {

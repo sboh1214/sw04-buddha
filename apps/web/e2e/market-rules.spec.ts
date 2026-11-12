@@ -18,6 +18,7 @@ import {
   submitRefusedItems,
   test,
   timesFor,
+  setMarketLiquidity,
 } from './helpers';
 
 /**
@@ -249,6 +250,8 @@ test.describe('규칙 항목', () => {
       });
       await expect(adminPage).toHaveURL(/\/admin\/markets\/[0-9a-f-]{36}$/);
       const marketId = adminPage.url().split('/').at(-1) ?? '';
+      await setMarketLiquidity(admin, marketId);
+      await adminPage.reload();
 
       // --- the draft names what 검수 제출 still needs: it is off, and the API refuses it naming
       // the same.

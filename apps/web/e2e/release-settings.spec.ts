@@ -4,7 +4,7 @@ import { copy } from '../src/copy';
 import { accountIdOf, adminAccount, expect, freshEmail, signIn, signUp, test } from './helpers';
 
 /**
- * 출시 설정 (#170, ADR-0055) as the shipped build has it: twelve registered items — 시작 지급액
+ * 출시 설정 (#170, ADR-0055) as the shipped build has it: eighteen registered items — 시작 지급액
  * (`grant.start_coin`, #70, ADR-0071), 선행 마감 최소 간격 (`market.lead_close_gap`, #22,
  * ADR-0098), 이의 기간 (`market.dispute_window`, #152, ADR-0103), 주문 접수, 주문 속도 제한 and 가격
  * 보호 폭 표준값 (`order.*`, #119, ADR-0112 — the first a flag) and the six retention periods
@@ -63,6 +63,15 @@ const ORDER_ITEMS = [
  * The retention periods (`RETENTION_PERIOD_SETTINGS`, #184 and #77) with their names, restated:
  * these specs import only types from `@buddha/shared` (helpers.ts). Whole days each.
  */
+const LIQUIDITY_ITEMS = [
+  ['market_maker.default_budget_coin', '시장 유동성 예산 표준값', 'Coin', 'string'],
+  ['market_maker.default_max_loss_coin', '시장 최대 손실 표준값', 'Coin', 'string'],
+  ['market_maker.default_b', '시장 곡선 계수 b 표준값', '계약', 'number'],
+  ['market_maker.default_levels', '시장 호가 단계 수 표준값', '단계', 'integer'],
+  ['market_maker.default_quantity', '시장 단계별 호가 수량 표준값', '계약', 'integer'],
+  ['market_maker.default_safety_ticks', '시장 안전 간격 표준값', '틱', 'integer'],
+] as const;
+
 const RETENTION_ITEMS = [
   ['retention.consent_records', '동의 기록 보존기간'],
   ['retention.phone_verification_records', '본인확인 기록 보존기간'],
@@ -83,6 +92,7 @@ const SHIPPED_KEYS = [
   LEAD_CLOSE_GAP_KEY,
   DISPUTE_WINDOW_KEY,
   ...ORDER_ITEMS.map(([key]) => key),
+  ...LIQUIDITY_ITEMS.map(([key]) => key),
   ...RETENTION_ITEMS.map(([key]) => key),
 ];
 
@@ -112,11 +122,11 @@ async function expectForbidden(response: APIResponse): Promise<void> {
 }
 
 test.describe('출시 설정 (#170)', () => {
-  test('관리자 메뉴에서 열면 시작 지급액·선행 마감 최소 간격·이의 기간, 주문의 세 항목과 여섯 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
+  test('관리자 메뉴에서 열면 시작 지급액·선행 마감 최소 간격·이의 기간, 주문의 세 항목·유동성 표준값 여섯·여섯 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
     page,
     admin,
   }) => {
-    // The API: the twelve items, as #70, #22, #152, #119, #184 and #77 registered them — whole
+    // The API: every registered item, including #72 liquidity defaults — whole
     // numbers of Coin, of minutes, of submissions, of ticks and of days, and one flag.
     const items = await dataOf<ReleaseSetting[]>(await admin.get(LIST));
     expect(items.map((item) => item.key)).toEqual(SHIPPED_KEYS);
@@ -135,12 +145,15 @@ test.describe('출시 설정 (#170)', () => {
     expect(disputeWindow).toMatchObject({ label: '이의 기간', unit: '분' });
     expect(disputeWindow?.valueSchema.type).toBe('integer');
     expect(disputeWindow?.status).not.toBe('undecided');
-    for (const [key, label, unit, type] of ORDER_ITEMS) {
+    for (const [key, label, unit, type] of [...ORDER_ITEMS, ...LIQUIDITY_ITEMS]) {
       const item = items.find((entry) => entry.key === key);
       expect(item, key).toMatchObject({ key, label, unit });
       expect(item?.valueSchema.type, key).toBe(type);
-      // Entered by the global setup while 미정, like the two above (`ensureOrderSettings`).
-      expect(item?.status, key).not.toBe('undecided');
+    }
+    // Only the three order settings are entered by ensureOrderSettings. Liquidity defaults
+    // stay unseeded: their actual state/value is checked against the screen below.
+    for (const [key] of ORDER_ITEMS) {
+      expect(items.find((item) => item.key === key)?.status, key).not.toBe('undecided');
     }
     for (const [key, label] of RETENTION_ITEMS) {
       const item = items.find((entry) => entry.key === key);
@@ -226,6 +239,20 @@ test.describe('출시 설정 (#170)', () => {
       expect(await valueInput.evaluate((element) => element.tagName)).toBe('INPUT');
       await expect(dialog).toContainText(`${copy.adminReleaseSettingValue}(${unit})`);
       await expect(dialog).toContainText(copy.adminReleaseSettingValueJsonHint);
+      await dialog.getByTestId('release-setting-cancel').click();
+      await expect(dialog).toHaveCount(0);
+    }
+    // Coin defaults use exact string text, while the curve accepts JSON numbers. No values
+    // are saved: merely opening the first-market suggestion registry has no write effects.
+    for (const [key, label, , type] of LIQUIDITY_ITEMS) {
+      await page.getByTestId(`release-setting-edit-${key}`).click();
+      const dialog = page.getByTestId('release-setting-dialog');
+      await expect(dialog).toContainText(label);
+      await dialog.getByTestId('release-setting-status-test').click();
+      await expect(dialog.getByTestId('release-setting-value-input')).toBeVisible();
+      if (type === 'string')
+        await expect(dialog).not.toContainText(copy.adminReleaseSettingValueJsonHint);
+      else await expect(dialog).toContainText(copy.adminReleaseSettingValueJsonHint);
       await dialog.getByTestId('release-setting-cancel').click();
       await expect(dialog).toHaveCount(0);
     }

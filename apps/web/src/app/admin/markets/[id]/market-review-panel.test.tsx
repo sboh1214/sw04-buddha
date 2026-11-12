@@ -84,6 +84,7 @@ const base: AdminMarket = {
   missingOpenItems: [],
   leadCloseGapMinutes: 60,
   priceProtectionTicks: 5,
+  liquidity: { current: null, openedVersion: null, history: [] },
   review: { pending: null, createdBy: CREATOR, editors: [EDITOR], sameCondition: [], log: [] },
 };
 

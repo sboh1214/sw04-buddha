@@ -998,9 +998,10 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
             // No width of its own (the seed writes none): the submission fills the default
             // (#119), here its test value.
             priceProtectionTicks: row.priceProtectionTicks ?? 5,
+            liquidityVersion: null, // Seed examples do not invent operator settings.
           }),
           row.slug,
-        ).toEqual([]);
+        ).toEqual(['liquidity']);
         // N03 §4: a late publication never makes it NO on its own.
         expect(row.delayHandling).toContain(SEED_RULE_NO_DELAY_NO);
         // Absolute, not seed time + N days: the rules name fixed cutoffs.

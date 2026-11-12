@@ -244,6 +244,7 @@ describe('read DTOs', () => {
   it('keep the author and exposure out of the public shape but in the admin one', () => {
     const admin = {
       ...market,
+      liquidity: { current: null, openedVersion: null, history: [] },
       createdBy: 'admin-1',
       updatedAt: at,
       openInterest: { yes: 10, no: 0 },
@@ -707,6 +708,7 @@ describe('read DTOs', () => {
     };
     const admin = {
       ...delayed,
+      liquidity: { current: null, openedVersion: null, history: [] },
       createdBy: 'admin-1',
       updatedAt: at,
       openInterest: { yes: 0, no: 0 },

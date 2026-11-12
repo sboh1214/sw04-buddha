@@ -573,7 +573,11 @@ describe.skipIf(!hasTestDb())('reconciliation and persistent recovery (#93)', ()
     expect(await open()).toEqual({ opened: false, reason: 'ledger_hold' });
 
     // Even a status changed outside the opening path must not bypass the persistent hold.
-    await t.db.update(markets).set({ status: 'open' }).where(eq(markets.id, market.id));
+    // Keep the immutable configuration pin valid while isolating that status/hold violation.
+    await t.db
+      .update(markets)
+      .set({ status: 'open', openedLiquidityVersion: market.currentLiquidityVersion })
+      .where(eq(markets.id, market.id));
     const facts = (await readMarketTradingFacts(t.db, market.id))!;
     expect(facts.ledgerHeld).toBe(true);
     expect(await placeTestOrder(t.db, { marketId: market.id, ownerId: person })).toMatchObject({

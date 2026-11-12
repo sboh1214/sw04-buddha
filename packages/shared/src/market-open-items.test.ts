@@ -37,6 +37,7 @@ describe('missingOpenItems (#17, #23, #22, #119)', () => {
     tagCount: 1,
     leadCloseGapMinutes: null,
     priceProtectionTicks: 5,
+    liquidityVersion: 1,
   };
   const blank = {
     title: '  ',
@@ -59,6 +60,7 @@ describe('missingOpenItems (#17, #23, #22, #119)', () => {
     tagCount: 0,
     leadCloseGapMinutes: null,
     priceProtectionTicks: null,
+    liquidityVersion: null,
   };
 
   it('finds nothing missing with every item, a selectable category and 1..5 tags', () => {
@@ -171,6 +173,7 @@ describe('missingOpenItems (#17, #23, #22, #119)', () => {
       'category',
       'tags',
       'priceProtection',
+      'liquidity',
     ]);
     expect(OPEN_ITEMS).toEqual([
       'title',
@@ -180,6 +183,7 @@ describe('missingOpenItems (#17, #23, #22, #119)', () => {
       'category',
       'tags',
       'priceProtection',
+      'liquidity',
     ]);
     // The announcement is optional ('없음', #172 item 13): no open item.
     expect(openItemSchema.safeParse('scheduledAnnouncementAt').success).toBe(false);

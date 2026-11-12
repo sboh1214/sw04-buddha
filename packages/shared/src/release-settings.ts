@@ -3,12 +3,15 @@ import { type ValidationIssue } from './api/errors.js';
 import { cursorQuerySchema } from './api/pagination.js';
 import {
   ORDER_RATE_LIMIT_MAX,
+  MAX_COIN_AMOUNT,
+  ORDER_QTY_MAX,
   PRICE_PROTECTION_TICKS_MAX,
   PRICE_PROTECTION_TICKS_MIN,
 } from './constants.js';
 import { releaseSettingStatusSchema, type ReleaseSettingStatus } from './enums.js';
 import { expectedAccountIdSchema } from './expected-account.js';
 import { disputeWindowMinutesSchema } from './market-judgement.js';
+import { liquidityCurveBSchema } from './market-liquidity.js';
 import { LEAD_CLOSE_GAP_MAX_MINUTES } from './market-times.js';
 import { RETENTION_PERIOD_MAX_DAYS, type RetentionPeriod } from './retention.js';
 import { START_GRANT_MAX_COIN } from './start-grant.js';
@@ -305,6 +308,66 @@ export const PRICE_PROTECTION_TICKS_SETTING = defineReleaseSetting({
   schema: z.number().int().min(PRICE_PROTECTION_TICKS_MIN).max(PRICE_PROTECTION_TICKS_MAX),
 });
 
+/** #72: suggestions for the first form only. No seed value, copy on read, or market backfill. */
+const LIQUIDITY_DEFAULT_RULES =
+  '시장별 유동성 설정이 없는 초안의 최초 입력폼에만 제안한다. 값이 있으면 설계 제안·시험값·승인됨 상태를 함께 보이며, 미정인 칸은 관리자가 직접 입력한다. 저장 전까지 시장에 반영하지 않고 기존 저장값을 덮어쓰지 않는다. 여섯 값을 완성하고 최대 손실이 예산 이하인지 확인한 뒤 저장해야 검수·개장할 수 있다. 운영 수치는 별도 승인한다.';
+// Keep a top-level string schema: the generic registry input chooses its text editor by type.
+// CoinAmount's named JSON $ref would otherwise select a JSON editor and demand quoted input.
+const liquidityCoinDefaultSchema = z
+  .string()
+  .regex(/^[1-9]\d*$/)
+  .refine(
+    (value) =>
+      /^[1-9]\d*$/.test(value) &&
+      value.length <= MAX_COIN_AMOUNT.toString().length &&
+      BigInt(value) <= MAX_COIN_AMOUNT,
+    'must be positive and no greater than MAX_COIN_AMOUNT',
+  );
+export const MARKET_LIQUIDITY_DEFAULT_SETTINGS = {
+  budgetCoin: defineReleaseSetting({
+    key: 'market_maker.default_budget_coin',
+    label: '시장 유동성 예산 표준값',
+    unit: 'Coin',
+    description: `양의 정수 Coin을 십진 문자열로 입력한다. ${LIQUIDITY_DEFAULT_RULES}`,
+    schema: liquidityCoinDefaultSchema,
+  }),
+  maxLossCoin: defineReleaseSetting({
+    key: 'market_maker.default_max_loss_coin',
+    label: '시장 최대 손실 표준값',
+    unit: 'Coin',
+    description: `양의 정수 Coin을 십진 문자열로 입력한다. ${LIQUIDITY_DEFAULT_RULES}`,
+    schema: liquidityCoinDefaultSchema,
+  }),
+  b: defineReleaseSetting({
+    key: 'market_maker.default_b',
+    label: '시장 곡선 계수 b 표준값',
+    unit: '계약',
+    description: `역수와 100배가 유한한 양수이며 소수를 허용한다. 손실 보장값이 아니다. ${LIQUIDITY_DEFAULT_RULES}`,
+    schema: liquidityCurveBSchema,
+  }),
+  levels: defineReleaseSetting({
+    key: 'market_maker.default_levels',
+    label: '시장 호가 단계 수 표준값',
+    unit: '단계',
+    description: `1 이상 안전한 정수로 입력한다. ${LIQUIDITY_DEFAULT_RULES}`,
+    schema: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  }),
+  quantity: defineReleaseSetting({
+    key: 'market_maker.default_quantity',
+    label: '시장 단계별 호가 수량 표준값',
+    unit: '계약',
+    description: `1부터 ${ORDER_QTY_MAX}까지 정수로 입력한다. ${LIQUIDITY_DEFAULT_RULES}`,
+    schema: z.number().int().min(1).max(ORDER_QTY_MAX),
+  }),
+  safetyTicks: defineReleaseSetting({
+    key: 'market_maker.default_safety_ticks',
+    label: '시장 안전 간격 표준값',
+    unit: '틱',
+    description: `0 이상 안전한 정수로 입력한다. ${LIQUIDITY_DEFAULT_RULES}`,
+    schema: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  }),
+} as const;
+
 /**
  * A retention period (#184, retention.ts): whole days, 1 to RETENTION_PERIOD_MAX_DAYS. Days, the
  * unit every count of this project's periods uses (a day is 24 hours of the database clock), so
@@ -458,6 +521,7 @@ export const RELEASE_SETTINGS: ReleaseSettingsRegistry = defineReleaseSettings([
   ORDER_ACCEPTING_SETTING,
   ORDER_RATE_LIMIT_SETTING,
   PRICE_PROTECTION_TICKS_SETTING,
+  ...Object.values(MARKET_LIQUIDITY_DEFAULT_SETTINGS),
   CONSENT_RECORDS_RETENTION_SETTING,
   PHONE_VERIFICATION_RECORDS_RETENTION_SETTING,
   DELETED_POSTS_RETENTION_SETTING,

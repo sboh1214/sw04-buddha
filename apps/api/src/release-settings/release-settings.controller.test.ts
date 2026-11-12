@@ -8,13 +8,14 @@
  * surface and that a change and its record commit together. Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
-import { completeOnboarding } from '@buddha/db/test';
+import { completeOnboarding, createMarket } from '@buddha/db/test';
 import {
   CONSENT_RECORDS_RETENTION_SETTING,
   DISPUTE_WINDOW_SETTING,
   JSONB_LONE_SURROGATE_MESSAGE,
   JSONB_NUL_MESSAGE,
   LEAD_CLOSE_GAP_SETTING,
+  MARKET_LIQUIDITY_DEFAULT_SETTINGS,
   ORDER_ACCEPTING_SETTING,
   ORDER_RATE_LIMIT_SETTING,
   PRICE_PROTECTION_TICKS_SETTING,
@@ -638,6 +639,7 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
       ORDER_ACCEPTING_SETTING.key,
       ORDER_RATE_LIMIT_SETTING.key,
       PRICE_PROTECTION_TICKS_SETTING.key,
+      ...Object.values(MARKET_LIQUIDITY_DEFAULT_SETTINGS).map(({ key }) => key),
       ...retention.map((definition) => definition.key),
     ]);
     const res = await t.app.inject({
@@ -736,6 +738,24 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
         updatedAt: null,
         updatedBy: null,
       },
+      ...Object.entries(MARKET_LIQUIDITY_DEFAULT_SETTINGS).map(([field, definition]) => ({
+        key: definition.key,
+        label: definition.label,
+        unit: definition.unit,
+        description: definition.description,
+        valueSchema: expect.objectContaining({
+          type:
+            field === 'budgetCoin' || field === 'maxLossCoin'
+              ? 'string'
+              : field === 'b'
+                ? 'number'
+                : 'integer',
+        }) as unknown,
+        status: 'undecided',
+        value: null,
+        updatedAt: null,
+        updatedBy: null,
+      })),
       ...retention.map((definition) => ({
         key: definition.key,
         label: definition.label,
@@ -787,6 +807,71 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
       expect(refused.statusCode, String(value)).toBe(400);
     }
     expect((await settings.get(START_COIN_SETTING)).value).toBe(10_000);
+  });
+
+  it('reads liquidity defaults without persisting anything and records explicit string Coin suggestions only', async () => {
+    const market = await createMarket(t.db, { status: 'draft', createdBy: admin.id });
+    await createMarket(t.db, { status: 'draft', createdBy: admin.id });
+    const saved = await t.app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/markets/${market.id}/liquidity-settings`,
+      headers: { ...jsonHeaders, cookie: admin.cookie },
+      payload: {
+        settings: {
+          budgetCoin: '700',
+          maxLossCoin: '100',
+          b: 10,
+          levels: 2,
+          quantity: 1,
+          safetyTicks: 0,
+        },
+        baseVersion: null,
+        reason: '기존 시장의 시험 설정',
+        expectedAccountId: admin.id,
+      },
+    });
+    expect(saved.statusCode).toBe(200);
+    const marketsBefore = await t.db.select().from(schema.markets).orderBy(schema.markets.id);
+    const before = await t.db.select().from(schema.releaseSettings);
+    const versionsBefore = await t.db.select().from(schema.marketLiquidityVersions);
+    const actionsBefore = await t.db.select().from(schema.adminActions);
+    for (let n = 0; n < 2; n++) {
+      const response = await t.app.inject({
+        method: 'GET',
+        url: BASE,
+        headers: { cookie: admin.cookie },
+      });
+      expect(response.statusCode).toBe(200);
+    }
+    expect(await t.db.select().from(schema.releaseSettings)).toEqual(before);
+    expect(await t.db.select().from(schema.marketLiquidityVersions)).toEqual(versionsBefore);
+    expect(await t.db.select().from(schema.markets).orderBy(schema.markets.id)).toEqual(
+      marketsBefore,
+    );
+    expect(await t.db.select().from(schema.adminActions)).toEqual(actionsBefore);
+    const key = MARKET_LIQUIDITY_DEFAULT_SETTINGS.budgetCoin.key;
+    const patch = (value: unknown) =>
+      t.app.inject({
+        method: 'PATCH',
+        url: `${BASE}/${key}`,
+        headers: { ...jsonHeaders, cookie: admin.cookie },
+        payload: { status: 'test', value, reason: '표준값 시험', expectedAccountId: admin.id },
+      });
+    expect((await patch('999999999999999')).statusCode).toBe(200);
+    for (const value of [100, '0', '-1', '1.5', '9223372036854775808'])
+      expect((await patch(value)).statusCode).toBe(400);
+    const read = await t.app.inject({
+      method: 'GET',
+      url: BASE,
+      headers: { cookie: admin.cookie },
+    });
+    expect(
+      read.json<{ data: ReleaseSetting[] }>().data.find((row) => row.key === key),
+    ).toMatchObject({ status: 'test', value: '999999999999999' });
+    expect(await t.db.select().from(schema.marketLiquidityVersions)).toEqual(versionsBefore);
+    expect(await t.db.select().from(schema.markets).orderBy(schema.markets.id)).toEqual(
+      marketsBefore,
+    );
   });
 
   it('takes the order intake as true or false, refusing anything else (#119, the first boolean)', async () => {

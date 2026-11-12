@@ -119,6 +119,7 @@ const draft: AdminMarket = {
   leadCloseGapMinutes: null,
   priceProtectionTicks: null,
   // Never submitted (#78): no request, no editor, no record.
+  liquidity: { current: null, openedVersion: null, history: [] },
   review: {
     pending: null,
     createdBy: { id: 'admin', nickname: '운영자' },

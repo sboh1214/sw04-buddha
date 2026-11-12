@@ -340,6 +340,10 @@ describe('findPrivateField', () => {
     ['bots', 'bots'],
     ['isMarketMaker', 'market maker'],
     ['market_makers', 'market makers'],
+    ['liquidity', 'liquidity'],
+    ['currentLiquidityVersion', 'current liquidity version'],
+    ['openedLiquidityVersion', 'opened liquidity version'],
+    ['budgetCoin', 'budget coin'],
     ['liquidityB', 'liquidity b'],
     ['liquiditySetting', 'liquidity setting'],
     ['liquiditySettings', 'liquidity settings'],
@@ -359,7 +363,7 @@ describe('findPrivateField', () => {
       findPrivateField(name)
         .filter((hit) => hit.item === 'market-maker')
         .map((hit) => hit.words),
-    ).toEqual([words]);
+    ).toEqual(name !== 'liquidity' && /liquidity/i.test(name) ? ['liquidity', words] : [words]);
   });
 
   // The watchlist item, by a name only that run catches (#37 for #89, ADR-0061 decision 3,

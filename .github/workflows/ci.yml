@@ -273,17 +273,11 @@ jobs:
       - name: Build the API, the worker and the web app
         run: pnpm turbo run build --filter=api --filter=worker --filter=web
 
-      # Playwright uses its own Chromium build, not the runner's Google Chrome package.
-      # Disable that unused APT source so its index (e.g. Hash Sum mismatch) cannot break
-      # the apt-get update performed by --with-deps. Keep Ubuntu's dependency sources.
-      - name: Disable unused Google Chrome APT repository
-        run: |
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
-            /etc/apt/sources.list.d/google-chrome.sources
-
-      # Install the browser through the web package to match the lockfile's Playwright.
+      # Use the lockfile's Chromium. The hosted image already supplies native libraries;
+      # verify an actual launch and the app's self-hosted Korean font below. A missing
+      # library/font must fail that step rather than depend on unrelated APT font mirrors.
       - name: Install Playwright chromium
-        run: pnpm --filter web exec playwright install --with-deps chromium
+        run: pnpm --filter web exec playwright install chromium
 
       # The e2e flow needs the categories, and its market fixture is created through the admin API
       # as the seeded admin (SEED_ADMIN_* above) and approved by the second one
@@ -336,6 +330,11 @@ jobs:
             tail -n 50 "$RUNNER_TEMP/e2e-logs/"*.log || true
             exit 1
           done
+
+      # Installation only warns about missing host libraries. Launch without a custom
+      # executable or validation bypass, and require actual Pretendard Korean glyphs.
+      - name: Verify browser runtime and Korean font
+        run: pnpm --filter web exec node e2e/verify-runtime.mjs
 
       # Invoked outside turbo (pnpm runs the package script directly), so CI / E2E_BASE_URL /
       # MAILPIT_URL reach Playwright from the workflow env and turbo.json stays untouched.

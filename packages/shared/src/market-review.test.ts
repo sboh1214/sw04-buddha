@@ -57,6 +57,7 @@ describe('market review constants (#78, ADR-0093 decision 2 #172 items 4·5)', (
       'timeOrder',
       'leadClose',
       'independence',
+      'liquidity',
     ]);
     // The bot budget and the config version are #72's.
     for (const later of ['botBudget', 'configVersion']) {
@@ -180,7 +181,7 @@ describe('approveMarketReviewBodySchema', () => {
           checklist: [...MARKET_REVIEW_CHECKLIST.slice(1), 'botBudget'],
         }),
       ),
-    ).toEqual(['checklist.6']);
+    ).toEqual([`checklist.${String(MARKET_REVIEW_CHECKLIST.length - 1)}`]);
     expect(
       paths(approveMarketReviewBodySchema.safeParse({ ...body, checklist: undefined })),
     ).toEqual(['checklist']);

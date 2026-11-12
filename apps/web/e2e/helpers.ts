@@ -23,6 +23,7 @@ import type {
   MarketRuleItems,
   MarketSupplementChanges,
   MarketTimes,
+  MarketLiquiditySettings,
   Me,
   ReleaseSetting,
 } from '@buddha/shared';
@@ -1229,6 +1230,8 @@ export interface TestMarket {
 }
 
 export interface CreateOpenMarketOptions {
+  /** A complete explicit test configuration; false leaves #72's required item missing. */
+  liquidity?: MarketLiquiditySettings | false;
   /**
    * Which TOP-LEVEL category, by position in `GET /categories` (parents first, in display
    * order): 0, the default, is the first. The market goes under its first sub-category, the
@@ -1462,8 +1465,38 @@ const CHECKLIST_ITEMS: Readonly<Record<MarketReviewChecklistItem, true>> = {
   timeOrder: true,
   leadClose: true,
   independence: true,
+  liquidity: true,
 };
 export const REVIEW_CHECKLIST = Object.keys(CHECKLIST_ITEMS) as MarketReviewChecklistItem[];
+
+/** Integration fixture values, not approved release settings. */
+export const TEST_MARKET_LIQUIDITY: MarketLiquiditySettings = {
+  budgetCoin: '10000',
+  maxLossCoin: '5000',
+  b: 100,
+  levels: 3,
+  quantity: 10,
+  safetyTicks: 1,
+};
+
+export async function setMarketLiquidity(
+  admin: APIRequestContext,
+  marketId: string,
+  settings: MarketLiquiditySettings = TEST_MARKET_LIQUIDITY,
+  reason = '자동화 시험의 명시적 유동성 설정입니다.',
+): Promise<AdminMarket> {
+  const market = await unwrap<AdminMarket>(await admin.get(`/api/v1/admin/markets/${marketId}`));
+  return unwrap<AdminMarket>(
+    await admin.post(`/api/v1/admin/markets/${marketId}/liquidity-settings`, {
+      data: {
+        settings,
+        baseVersion: market.liquidity.current?.version ?? null,
+        reason,
+        expectedAccountId: await accountIdOf(admin),
+      },
+    }),
+  );
+}
 
 /** The reason every helper approval gives (1..500 characters, #172 item 4). */
 const HELPER_APPROVAL_REASON = '자동화 테스트의 시장입니다. 체크리스트를 모두 확인했습니다.';
@@ -2816,6 +2849,7 @@ export async function createDraftMarket(
     ruleItems,
     closeAt = new Date(Date.now() + CLOSE_IN_MS).toISOString(),
     times,
+    liquidity = TEST_MARKET_LIQUIDITY,
   }: CreateOpenMarketOptions = {},
 ): Promise<TestMarket> {
   const { top, leaf } = await marketCategoryOf(admin, topLevelCategory);
@@ -2846,6 +2880,7 @@ export async function createDraftMarket(
       },
     }),
   );
+  if (liquidity !== false) await setMarketLiquidity(admin, draft.id, liquidity);
   return {
     id: draft.id,
     slug: draft.slug,

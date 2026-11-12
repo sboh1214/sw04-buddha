@@ -32,6 +32,7 @@ import {
   switchMeBeforeSession,
   test,
   timesFor,
+  setMarketLiquidity,
 } from './helpers';
 
 /**
@@ -147,6 +148,7 @@ async function createDraftMarket(
       },
     }),
   );
+  await setMarketLiquidity(admin, draft.id);
   return { id: draft.id, slug: draft.slug, title };
 }
 
@@ -349,6 +351,7 @@ test.describe('시장 제안', () => {
         'scheduledJudgementAt',
         'judgementTimeZone',
         'tags',
+        'liquidity',
       ]);
       expect(adopted).toMatchObject({
         scheduledOpenAt: null,
@@ -356,6 +359,7 @@ test.describe('시장 제안', () => {
         scheduledJudgementAt: null,
         judgementTimeZone: null,
       });
+      await setMarketLiquidity(admin, marketId);
       const items = ruleItemsFor(tag);
       const filled = await dataOf<AdminMarket>(
         await admin.patch(`/api/v1/admin/markets/${marketId}`, {

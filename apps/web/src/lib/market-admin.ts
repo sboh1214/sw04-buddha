@@ -1091,6 +1091,7 @@ export const REVIEW_CHECK_LABEL: Record<MarketReviewChecklistItem, string> = {
   timeOrder: copy.reviewCheckTimeOrder,
   leadClose: copy.reviewCheckLeadClose,
   independence: copy.reviewCheckIndependence,
+  liquidity: copy.reviewCheckLiquidity,
 };
 
 /** 반려 사유 (#172 item 4): the checklist item the market fails, or 기타 (MARKET_REJECT_REASONS). */
@@ -1118,7 +1119,7 @@ export interface ReviewDetail {
 /**
  * A review record's rows, shared by the 이벤트 로그 (`marketEventRows`, from the event's payload) and
  * the 검수 기록 (lib/market-review.ts, from `AdminMarket.review.log`): '반려 사유 모호한 기준', '체크리스트
- * 7/7개 항목 확인', '이전 예정 개장 …' and '이후 예정 개장 …' as `time` renders an instant (the
+ * 7개 항목 확인', '이전 예정 개장 …' and '이후 예정 개장 …' as `time` renders an instant (the
  * callers' KST), then '사유 …' (a 반려's '설명 …').
  */
 export function reviewDetailRows(detail: ReviewDetail, time: (iso: string) => string): EventRow[] {
@@ -1141,10 +1142,9 @@ export function reviewDetailRows(detail: ReviewDetail, time: (iso: string) => st
   }
   if (detail.checklist) {
     const confirmed = MARKET_REVIEW_CHECKLIST.filter((item) => detail.checklist?.includes(item));
-    const total = MARKET_REVIEW_CHECKLIST.length;
     rows.push({
       label: copy.reviewLogChecklist,
-      value: `${String(confirmed.length)}/${String(total)}${copy.reviewLogChecklistTail}`,
+      value: `${String(confirmed.length)}${copy.reviewLogChecklistTail}`,
     });
   }
   if (detail.type === 'open_rescheduled') {
@@ -1220,6 +1220,7 @@ export const OPEN_ITEM_LABEL: Record<OpenItem, string> = {
   category: copy.openItemCategory,
   tags: copy.openItemTags,
   priceProtection: copy.openItemPriceProtection,
+  liquidity: copy.openItemLiquidity,
 };
 
 /**
@@ -1438,6 +1439,9 @@ export function openItemsNotice(
   // No form field fills the width: the market takes the release setting's (#119, ADR-0112).
   if (market.missingOpenItems.includes('priceProtection')) {
     lines.push(`${OPEN_ITEM_LABEL.priceProtection}: ${copy.openItemRulePriceProtectionUndecided}`);
+  }
+  if (market.missingOpenItems.includes('liquidity')) {
+    lines.push(`${OPEN_ITEM_LABEL.liquidity}: ${copy.openItemRuleLiquidity}`);
   }
   const head = `${copy.adminMarketOpenItems}: ${openItemList(market.missingOpenItems)}`;
   return [head, ...lines].join('\n');

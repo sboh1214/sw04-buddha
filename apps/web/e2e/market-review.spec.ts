@@ -70,6 +70,7 @@ const CHECK_LABEL: Readonly<Record<MarketReviewChecklistItem, string>> = {
   timeOrder: copy.reviewCheckTimeOrder,
   leadClose: copy.reviewCheckLeadClose,
   independence: copy.reviewCheckIndependence,
+  liquidity: copy.reviewCheckLiquidity,
 };
 
 /** The ISO instant of the whole minute `ms` falls in: what a `datetime-local` input holds. */
@@ -283,13 +284,14 @@ test.describe('개설 검수', () => {
       await expect(firstPage.getByTestId('market-review-log-empty')).toHaveText(
         copy.adminMarketReviewLogEmpty,
       );
-      // Who will not decide it once submitted: its creator, the admin on screen (#172 item 5).
+      // The creator also wrote the draft's liquidity settings (#72): both roles exclude them.
       const excluded = firstPage.getByTestId('market-review-excluded');
       await expect(excluded.getByRole('listitem')).toHaveCount(1);
       const creatorRow = firstPage.getByTestId(`market-review-excluded-${first.id}`);
       await expect(creatorRow).toHaveAttribute('data-viewer', 'true');
       await expect(creatorRow).toHaveText(
-        `${firstName} ${copy.adminMarketReviewViewer} · ${copy.adminMarketReviewRoleCreator}`,
+        `${firstName} ${copy.adminMarketReviewViewer} · ${copy.adminMarketReviewRoleCreator} · ` +
+          copy.adminMarketReviewRoleEditor,
       );
       await expect(firstPage.getByTestId('market-review-actions')).toHaveCount(0);
       // Nothing is missing: 검수 제출 is on, the one way out of a draft — no 열기 (#21).
@@ -319,10 +321,10 @@ test.describe('개설 검수', () => {
         actor: firstName,
         rows: [statusRow(copy.marketStatusDraft, copy.marketStatusReview)],
       });
-      // The creator is the submitter too: one row, both places.
+      // The creator and liquidity editor is the submitter too: all three roles in one row.
       await expect(creatorRow).toHaveText(
         `${firstName} ${copy.adminMarketReviewViewer} · ${copy.adminMarketReviewRoleCreator} · ` +
-          copy.adminMarketReviewRoleRequester,
+          `${copy.adminMarketReviewRoleEditor} · ${copy.adminMarketReviewRoleRequester}`,
       );
 
       // --- the content is locked from the submission (#172 item 6 (a)): the form says why and
@@ -469,8 +471,7 @@ test.describe('개설 검수', () => {
         actor: secondName,
         rows: [
           statusRow(copy.marketStatusReview, copy.marketStatusScheduled),
-          `${copy.reviewLogChecklist} ${String(REVIEW_CHECKLIST.length)}/` +
-            `${String(REVIEW_CHECKLIST.length)}${copy.reviewLogChecklistTail}`,
+          `${copy.reviewLogChecklist} ${String(REVIEW_CHECKLIST.length)}${copy.reviewLogChecklistTail}`,
           `${copy.reviewLogReason} ${reason}`,
         ],
       });
@@ -521,10 +522,10 @@ test.describe('개설 검수', () => {
       await expect(secondPage.getByTestId('market-detail-status')).toHaveText(
         copy.marketStatusReview,
       );
-      // Admin 1 made and submitted it: one row, both places, not the viewer's.
+      // Admin 1 created it, set its liquidity and submitted it: all three roles, not the viewer's.
       await expect(secondPage.getByTestId(`market-review-excluded-${first.id}`)).toHaveText(
         `${firstName} · ${copy.adminMarketReviewRoleCreator} · ` +
-          copy.adminMarketReviewRoleRequester,
+          `${copy.adminMarketReviewRoleEditor} · ${copy.adminMarketReviewRoleRequester}`,
       );
       await expect(secondPage.getByTestId('market-review-reject')).toBeEnabled();
       await secondPage.getByTestId('market-review-reject').click();
@@ -846,7 +847,8 @@ test.describe('개설 검수', () => {
           data: { title: `${edited.title} 다듬음`, expectedAccountId: second.id },
         }),
       );
-      expect(afterEdit.review.editors.map((editor) => editor.id)).toEqual([second.id]);
+      // Admin 1 already set liquidity; admin 2's content edit adds a second editor.
+      expect(afterEdit.review.editors.map((editor) => editor.id)).toEqual([first.id, second.id]);
       expect(
         (await dataOf<AdminMarket>(await reviewWrite(admin, edited.id, 'submit'))).status,
       ).toBe('review');

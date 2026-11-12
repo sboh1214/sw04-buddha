@@ -1,14 +1,18 @@
 import { readMarketJudgingRecord } from './market-judging-record.js';
+import { readAdminMarketLiquidity } from './market-liquidity.js';
 import { marketCreationTimestamp } from '@buddha/db';
 import { assertMarketConflictAdmin } from './market-conflicts.js';
 import { Inject, Injectable } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import {
   DAY_AGO,
+  MarketLiquidityError,
   MarketTransitionError,
   marketPriceAt,
   openScheduledMarket,
   readJudgementDelays,
+  readMarketMakerConfig,
+  setMarketLiquidity,
   ruleContentOf,
   schema,
   transitionMarket,
@@ -61,6 +65,7 @@ import {
   type OpenItem,
   type RejectMarketReviewBody,
   type RescheduleMarketOpenBody,
+  type SetMarketLiquidityBody,
   type RevertMarketBody,
   type RuleVersionItem,
   type RulesEditedValues,
@@ -308,6 +313,7 @@ function assertOpenItems(
     tagCount: tags.length,
     leadCloseGapMinutes: gapMinutes,
     priceProtectionTicks,
+    liquidityVersion: row.currentLiquidityVersion,
   };
   const missing = missingOpenItems(input);
   if (missing.length > 0) {
@@ -481,6 +487,8 @@ export function snapshot(
     closeAt: row.closeAt.toISOString(),
     leadCloseGapMinutes: row.leadCloseGapMinutes,
     priceProtectionTicks: row.priceProtectionTicks,
+    currentLiquidityVersion: row.currentLiquidityVersion,
+    openedLiquidityVersion: row.openedLiquidityVersion,
   };
 }
 
@@ -1402,6 +1410,70 @@ export class MarketAdminService {
     });
   }
 
+  /** Version a draft's liquidity settings under the same lock as review and opening. */
+  async setLiquidity(
+    adminId: string,
+    id: string,
+    body: WithoutExpectedAccount<SetMarketLiquidityBody>,
+  ): Promise<AdminMarket> {
+    return this.db.transaction(async (tx) => {
+      await lockMarket(tx, id);
+      await assertMarketConflictAdmin(tx, adminId);
+      const current = await lockedMarketRow(tx, id);
+      if (current.status !== 'draft') throw wrongStatus(current.status);
+      if (current.currentLiquidityVersion !== body.baseVersion) {
+        throw fieldError('baseVersion', 'The liquidity version has changed', 'stale');
+      }
+      const before = await readMarketMakerConfig(tx, id);
+      const version = await setMarketLiquidity(tx, {
+        marketId: id,
+        actorId: adminId,
+        baseVersion: body.baseVersion,
+        reason: body.reason,
+        settings: body.settings,
+      }).catch((error: unknown) => {
+        if (!(error instanceof MarketLiquidityError)) throw error;
+        switch (error.code) {
+          case 'unchanged':
+            throw fieldError('settings', 'The liquidity settings are unchanged', 'unchanged');
+          case 'stale':
+            throw fieldError('baseVersion', 'The liquidity version has changed', 'stale');
+          case 'non_draft':
+            throw wrongStatus(current.status);
+          case 'forbidden':
+            throw new AppError('FORBIDDEN');
+          case 'not_found':
+            throw new AppError('NOT_FOUND');
+        }
+      });
+      await tx.insert(schema.adminActions).values({
+        adminId,
+        type: 'market_update',
+        targetType: 'market',
+        targetId: id,
+        payload: {
+          liquidity: {
+            beforeVersion: before?.version ?? null,
+            afterVersion: version.version,
+            settings: {
+              ...body.settings,
+              budgetCoin: serializeCoinAmount(body.settings.budgetCoin),
+              maxLossCoin: serializeCoinAmount(body.settings.maxLossCoin),
+            },
+          },
+          reason: body.reason,
+        },
+        createdAt: version.createdAt,
+      });
+      return this.toAdminMarket(
+        tx,
+        await lockedMarketRow(tx, id),
+        await marketTagNames(tx, id),
+        await readMarketSources(tx, id),
+      );
+    });
+  }
+
   /** `GET /admin/market-reviews` (검수 대기, #78): `listMarketReviews`, the oldest request first. */
   listReviews(query: CursorQuery): Promise<Page<AdminMarketReviewItem>> {
     return listMarketReviews(this.db, query);
@@ -1499,8 +1571,9 @@ export class MarketAdminService {
    * decision 3 '#21 앞당긴 개장'): `openScheduledMarket` under the market lock the caller holds, at
    * the caller's instant `now`, the admin as its actor. Answers the OPEN row, or null while the
    * scheduled open is still ahead (`not_due`) or a ledger hold awaits approved recovery
-   * (`ledger_hold`). The caller checked on the same clock that the close is ahead, so any other
-   * skip is a broken invariant — INTERNAL, never an answer.
+   * (`ledger_hold`). A legacy scheduled market without liquidity must go back to a draft and be
+   * reviewed with explicit settings; return the existing actionable open-item refusal. The caller
+   * checked on the same clock that the close is ahead, so other skips are broken invariants.
    */
   private async openIfDue(
     tx: Tx,
@@ -1512,6 +1585,12 @@ export class MarketAdminService {
     const result = await openScheduledMarket(tx, { market: row, now, actorId: adminId, source });
     if (result.opened) return result.row;
     if (result.reason === 'not_due' || result.reason === 'ledger_hold') return null;
+    if (result.reason === 'liquidity_missing') {
+      throw new AppError('OPEN_ITEMS_MISSING', {
+        message: 'The market misses what it needs to open: liquidity',
+        details: [{ path: ['liquidity'], message: 'required' }],
+      });
+    }
     throw new AppError('INTERNAL', {
       message: `Market ${row.id} was not opened by its ${source}: ${result.reason}`,
     });
@@ -1670,6 +1749,7 @@ export class MarketAdminService {
     const leadCloseGapMinutes = await this.leadCloseGap(executor, row);
     const priceProtectionTicks = await this.priceProtection(executor, row);
     const ruleVersions = await readAdminRuleVersions(executor, row.id);
+    const liquidity = await readAdminMarketLiquidity(executor, row);
     const judgementDelays = await readJudgementDelays(executor, row.id);
     // The public detail's baseline, read the same way (#121): the panel shows what visitors see.
     const lastPrice24hAgo = await marketPriceAt(executor, row.id, DAY_AGO);
@@ -1686,6 +1766,7 @@ export class MarketAdminService {
       ),
       // The admin's form of the history, in the public list's place (`AdminMarket.ruleVersions`).
       ruleVersions,
+      liquidity,
       createdBy: row.createdBy,
       updatedAt: row.updatedAt.toISOString(),
       openInterest,
@@ -1700,6 +1781,7 @@ export class MarketAdminService {
         tagCount: tags.length,
         leadCloseGapMinutes,
         priceProtectionTicks,
+        liquidityVersion: row.currentLiquidityVersion,
       }),
       leadCloseGapMinutes,
       priceProtectionTicks,

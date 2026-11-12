@@ -93,6 +93,7 @@ const open: AdminMarket = {
   missingOpenItems: [],
   leadCloseGapMinutes: 60,
   priceProtectionTicks: 5,
+  liquidity: { current: null, openedVersion: null, history: [] },
   review: {
     pending: null,
     createdBy: { id: 'creator', nickname: '만든이' },

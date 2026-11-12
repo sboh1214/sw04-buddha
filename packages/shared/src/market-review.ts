@@ -33,8 +33,8 @@ import { priceProtectionTicksSchema } from './orders.js';
  * Every one writes a `market_events` row of MARKET_REVIEW_EVENT_TYPES and an `admin_actions` row
  * (`market_submit` … `market_reschedule`, enums.ts), and the admin detail shows them back as the
  * 검수 기록 (`AdminMarket.review.log`); an approval or a reschedule that opens the market also
- * writes its own `opened` event, outside the 검수 기록, and no admin action. The bot budget and the
- * config version are #72's: neither the check nor the checklist names them until #72 adds them.
+ * writes its own `opened` event, outside the 검수 기록, and no admin action. The bot budget and
+ * the complete liquidity configuration are checked before review (#72).
  */
 
 /** `approval_requests.kind` of a review (#171: lower-case words joined by `_`); target `market`. */
@@ -55,8 +55,7 @@ export const MARKET_REVIEW_REQUEST_REASON = '시장 개설 검수';
  * #172 item 13: the gap before the announcement, '없음' only for an event with no scheduled release,
  * a match closing before it starts and an election before the polls close) and independent
  * judgement (`independence`, #172 item 3: no market's result is a judgement condition). An approval
- * confirms every one (`isCompleteReviewChecklist`). The bot budget and the config version join it
- * with #72.
+ * confirms every one (`isCompleteReviewChecklist`). The liquidity configuration confirms the budget, loss limit and ladder together (#72).
  */
 export const MARKET_REVIEW_CHECKLIST = [
   'knownResult',
@@ -66,6 +65,7 @@ export const MARKET_REVIEW_CHECKLIST = [
   'timeOrder',
   'leadClose',
   'independence',
+  'liquidity',
 ] as const;
 export type MarketReviewChecklistItem = (typeof MARKET_REVIEW_CHECKLIST)[number];
 export const marketReviewChecklistItemSchema = z

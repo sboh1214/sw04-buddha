@@ -1,3 +1,4 @@
+import { setMarketLiquidity } from '../market-liquidity.js';
 /**
  * Test data factories (PLAN 14). They write through the ORM as whatever role `db` is
  * connected with (buddha_app in integration tests), bypassing better-auth and the API so a
@@ -1605,6 +1606,10 @@ export interface CreateMarketInReviewInput extends ReviewedMarketFields {
    * TEST_PRICE_PROTECTION_TICKS, as the submission fills it in.
    */
   withoutPriceProtection?: boolean;
+  /** A review predating #72, for the approval gate that must send it back to configuration. */
+  withoutLiquidity?: boolean;
+  /** Private immutable liquidity-version reason, for public privacy sentinels. */
+  liquidityReason?: string;
 }
 
 /** A market under review, scheduled or opened from it, with its `market_review` request (#78). */
@@ -1628,7 +1633,15 @@ export async function createMarketInReview(
   db: Db,
   input: CreateMarketInReviewInput = {},
 ): Promise<ReviewedMarket> {
-  const { submittedBy, submittedAt, editedBy, withoutPriceProtection, ...fields } = input;
+  const {
+    submittedBy,
+    submittedAt,
+    editedBy,
+    withoutPriceProtection,
+    withoutLiquidity,
+    liquidityReason,
+    ...fields
+  } = input;
   const createdBy = fields.createdBy ?? (await createUser(db, { role: 'admin' })).user.id;
   const draft = await createMarket(db, {
     ...fields,
@@ -1637,6 +1650,21 @@ export async function createMarketInReview(
     status: 'draft',
   });
   return db.transaction(async (tx) => {
+    if (!withoutLiquidity)
+      await setMarketLiquidity(tx, {
+        marketId: draft.id,
+        actorId: createdBy,
+        baseVersion: null,
+        reason: liquidityReason ?? '시험용 유동성 설정',
+        settings: {
+          budgetCoin: 10_000n,
+          maxLossCoin: 5_000n,
+          b: 100,
+          levels: 3,
+          quantity: 10,
+          safetyTicks: 1,
+        },
+      });
     const at =
       submittedAt ??
       new Date(

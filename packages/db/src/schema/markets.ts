@@ -209,6 +209,10 @@ export const markets = pgTable(
      * no change.
      */
     ruleVersion: integer(),
+    /** Latest explicit configuration; draft edits append immutable versions (#72). */
+    currentLiquidityVersion: integer(),
+    /** The current version pinned by the open; never rewritten, no legacy backfill. */
+    openedLiquidityVersion: integer(),
     /**
      * The judgement's result type (YES·NO·VOID, #174): the current judgement's, written by the
      * approval that publishes it (CLOSED → PROVISIONAL, #152 — ADR-0095 8-2: a provisional result
@@ -334,6 +338,10 @@ export const markets = pgTable(
     index('markets_provisional_dispute_deadline_idx')
       .on(t.disputeDeadline, t.id)
       .where(sql`${t.status} = 'provisional'`),
+    check(
+      'markets_liquidity_versions_check',
+      sql`${t.currentLiquidityVersion} >= 1 AND ${t.openedLiquidityVersion} >= 1`,
+    ),
     check('markets_last_price_check', sql`${t.lastPrice} >= 1 AND ${t.lastPrice} <= 99`),
     // The 시장가격 and its 갱신시각 come from one fill and are set together (#121).
     check('markets_last_fill_at_check', sql`(${t.lastPrice} IS NULL) = (${t.lastFillAt} IS NULL)`),
