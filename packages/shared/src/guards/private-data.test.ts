@@ -54,7 +54,7 @@ describe('PRIVATE_DATA (#113)', () => {
     );
     expect(
       PRIVATE_DATA.filter((item) => item.pending !== undefined).map((item) => item.id),
-    ).toEqual(['market-maker']);
+    ).toEqual([]);
   });
 });
 
@@ -192,6 +192,11 @@ describe('findPrivateField', () => {
     ['liquidityB', 'market-maker'],
     ['liquiditySettings', 'market-maker'],
     ['maxLossCoin', 'market-maker'],
+    ['reservedWorstLossCoin', 'market-maker'],
+    ['capital', 'market-maker'],
+    ['investedCoin', 'market-maker'],
+    ['recoveredCoin', 'market-maker'],
+    ['fundsCoin', 'market-maker'],
     ['safetyTicks', 'market-maker'],
     ['utilizationBp', 'market-maker'],
     ['allocatedCoin', 'market-maker'],
@@ -349,6 +354,11 @@ describe('findPrivateField', () => {
     ['liquiditySettings', 'liquidity settings'],
     ['liquidityConfig', 'liquidity config'],
     ['maxLossCoin', 'max loss'],
+    ['reservedWorstLossCoin', 'worst loss'],
+    ['capital', 'capital'],
+    ['investedCoin', 'invested coin'],
+    ['recoveredCoin', 'recovered coin'],
+    ['fundsCoin', 'funds coin'],
     ['safetyTicks', 'safety ticks'],
     ['safetySpreadCoin', 'safety spread'],
     ['inventoryQty', 'inventory'],
@@ -360,6 +370,10 @@ describe('findPrivateField', () => {
     ['vaultBalance', 'vault'],
     ['treasuryCoin', 'treasury'],
     ['holderConcentration', 'concentration'],
+    ['postedQty', 'posted qty'],
+    ['fillBp', 'fill bp'],
+    ['combinedGapMs', 'combined gap'],
+    ['openMs', 'open ms'],
   ])('keeps %s private as a market-maker field (%s)', (name, words) => {
     expect(
       findPrivateField(name)

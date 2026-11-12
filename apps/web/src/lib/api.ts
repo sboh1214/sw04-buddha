@@ -55,6 +55,11 @@ export type TreasuryIssueRequest = components['schemas']['TreasuryIssueRequest']
 export type TreasuryIssueWrite = components['schemas']['TreasuryIssueWrite'];
 export type TreasuryIssuance = components['schemas']['TreasuryIssuance'];
 export type AdminMarketMaker = components['schemas']['AdminMarketMaker'];
+export type AdminMarketMakerMetrics = components['schemas']['AdminMarketMakerMetrics'];
+export type AdminMarketMakerMetricsListItem =
+  components['schemas']['AdminMarketMakerMetricsListItem'];
+export type AdminMarketMakerMetricsOverview =
+  components['schemas']['AdminMarketMakerMetricsOverview'];
 export type ReconciliationResult = components['schemas']['ReconciliationResult'];
 export type ReconciliationHoldDetail = components['schemas']['ReconciliationHoldDetail'];
 export type ReconciliationRecoveryRequest = components['schemas']['ReconciliationRecoveryRequest'];

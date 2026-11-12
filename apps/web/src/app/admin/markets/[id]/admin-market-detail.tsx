@@ -108,6 +108,7 @@ import { MarketConflictPanel } from './market-conflict-panel';
 import { MarketCancelPanel } from './market-cancel-panel';
 import { MarketLiquidityPanel } from './market-liquidity-panel';
 import { MarketMakerPanel } from './market-maker-panel';
+import { MarketMakerMetricsPanel } from './market-maker-metrics-panel';
 import { MarketJudgementPanel } from './market-judgement-panel';
 import { MarketPausePanel } from './market-pause-panel';
 import { PriceProtectionItem } from './market-price-protection';
@@ -206,6 +207,7 @@ export function AdminMarketDetail({ id }: { id: string }) {
       <OpenItemsNotice market={data} />
       <MarketLiquidityPanel key={`liquidity-${data.id}`} market={data} />
       <MarketMakerPanel key={`maker-${data.id}`} marketId={data.id} />
+      <MarketMakerMetricsPanel key={`maker-metrics-${data.id}`} marketId={data.id} />
       {/* 판정 (#152, ADR-0103): keyed and prefixed as the review panel is — its form and dialogs name
           the market and the registration they were opened on. First of the panels: from the close
           on, the judgement is what the market waits for. `readAt` judges 'before the scheduled

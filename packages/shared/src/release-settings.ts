@@ -393,6 +393,16 @@ export const MARKET_MAKER_REDUCE_RATIO_BP_SETTING = defineReleaseSetting({
   schema: z.number().int().min(0).max(5_000),
 });
 
+/** Current human concentration (#182); 5 is a test example, never a launch default. */
+export const MARKET_MAKER_CONCENTRATION_TOP_N_SETTING = defineReleaseSetting({
+  key: 'market_maker.concentration_top_n',
+  label: '마켓메이커 보유 집중도 상위 인원',
+  unit: '명',
+  description:
+    '관리자 지표에서 결과별 미정산 계약을 많이 보유한 사람 상위 N명을 닉네임과 관리자 계정 링크로 표시한다. 잠긴 보유를 포함하고 봇은 제외한다. 양의 정수이며 값이 있으면 상태와 상관없이 적용한다. 미정이면 상위 명단과 그 비율을 계산하지 않는다. 시험 예시 5를 기본값으로 넣지 않으며 거래·위험 한도를 바꾸지 않는다.',
+  schema: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+});
+
 /**
  * A retention period (#184, retention.ts): whole days, 1 to RETENTION_PERIOD_MAX_DAYS. Days, the
  * unit every count of this project's periods uses (a day is 24 hours of the database clock), so
@@ -550,6 +560,7 @@ export const RELEASE_SETTINGS: ReleaseSettingsRegistry = defineReleaseSettings([
   MARKET_MAKER_REDUCE_AT_BP_SETTING,
   MARKET_MAKER_HALT_AT_BP_SETTING,
   MARKET_MAKER_REDUCE_RATIO_BP_SETTING,
+  MARKET_MAKER_CONCENTRATION_TOP_N_SETTING,
   CONSENT_RECORDS_RETENTION_SETTING,
   PHONE_VERIFICATION_RECORDS_RETENTION_SETTING,
   DELETED_POSTS_RETENTION_SETTING,

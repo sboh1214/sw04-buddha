@@ -56,9 +56,9 @@ function sourceFiles(): string[] {
 
 /** A type column handed to the rule, which is how a query reads it. */
 const HANDED_TO_THE_RULE = /isHumanAccountTypeSql\(\s*[\w.]+\.accountType\s*\)/g;
-/** #129/#181's complete job/setting keys name neither an account type nor its column. */
+/** #129/#181/#182's complete job/setting keys name neither an account type nor its column. */
 const MARKET_MAKER_NAMESPACED_KEY =
-  /(['"])market_maker\.(?:recall|refresh|scan|reduce_at_bp|halt_at_bp|reduce_ratio_bp)\1/g;
+  /(['"])market_maker\.(?:recall|refresh|scan|reduce_at_bp|halt_at_bp|reduce_ratio_bp|concentration_top_n)\1/g;
 /** The type named as itself: its values, its column, its field. */
 const NAMES_THE_TYPE = /\bmarket_maker\b|\baccount_type\b|\baccountType\b/;
 /** Exact #72 setting literals do not inspect an account type. No prefix exemption. */
@@ -134,6 +134,7 @@ describe('the one rule of a person’s account (#115, static)', () => {
       'reduce_at_bp',
       'halt_at_bp',
       'reduce_ratio_bp',
+      'concentration_top_n',
     ]) {
       const named = `const key = 'market_maker.${key}';`;
       expect(namesAccountType(named)).toBe(false);

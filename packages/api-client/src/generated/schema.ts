@@ -348,6 +348,40 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/market-makers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List funded markets and their private current MM risk observations */
+        get: operations["adminListMarketMakerMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/market-makers/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read all funded markets risk totals and treasury in one private snapshot */
+        get: operations["adminGetMarketMakerMetricsOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/market-pause-decisions": {
         parameters: {
             query?: never;
@@ -683,6 +717,23 @@ export type paths = {
         };
         /** Read private bot settings, current readiness and previous runtime observations */
         get: operations["adminGetMarketMaker"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/market-maker/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read private current market inventory, capital, risk, depth and concentration */
+        get: operations["adminGetMarketMakerMetrics"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4284,6 +4335,237 @@ export type components = {
                 status: "ready" | "undecided" | "invalid";
             };
         };
+        AdminMarketMakerMetrics: {
+            /** Format: date-time */
+            asOf: string;
+            concentration: {
+                NO: {
+                    holders: {
+                        nickname: string | null;
+                        qty: string;
+                        shareBp: string;
+                        userId: string;
+                    }[] | null;
+                    topQty: string | null;
+                    topShareBp: string | null;
+                    totalQty: string;
+                };
+                setting: {
+                    key: string;
+                    status: components["schemas"]["ReleaseSettingStatus"];
+                    value: number | null;
+                };
+                YES: {
+                    holders: {
+                        nickname: string | null;
+                        qty: string;
+                        shareBp: string;
+                        userId: string;
+                    }[] | null;
+                    topQty: string | null;
+                    topShareBp: string | null;
+                    totalQty: string;
+                };
+            };
+            configVersion: number | null;
+            depth: {
+                bot: {
+                    NO: {
+                        asks: {
+                            priceCoin: number;
+                            qty: string;
+                        }[];
+                        bids: {
+                            priceCoin: number;
+                            qty: string;
+                        }[];
+                    };
+                    YES: {
+                        asks: {
+                            priceCoin: number;
+                            qty: string;
+                        }[];
+                        bids: {
+                            priceCoin: number;
+                            qty: string;
+                        }[];
+                    };
+                };
+                human: {
+                    NO: {
+                        asks: {
+                            priceCoin: number;
+                            qty: string;
+                        }[];
+                        bids: {
+                            priceCoin: number;
+                            qty: string;
+                        }[];
+                    };
+                    YES: {
+                        asks: {
+                            priceCoin: number;
+                            qty: string;
+                        }[];
+                        bids: {
+                            priceCoin: number;
+                            qty: string;
+                        }[];
+                    };
+                };
+            };
+            /** Format: uuid */
+            marketId: string;
+            openedVersion: number | null;
+            period: components["schemas"]["MarketMakerPeriodMetrics"];
+            risk: {
+                assets: {
+                    availableCoin: string;
+                    coin: string;
+                    lockedCoin: string;
+                    noLockedQty: string;
+                    noQty: string;
+                    yesLockedQty: string;
+                    yesQty: string;
+                };
+                capital: {
+                    investedCoin: string;
+                    recoveredCoin: string;
+                };
+                /** @enum {string} */
+                kind: "ready";
+                maxLossCoin: string;
+                pnl: {
+                    holdings: {
+                        NO: components["schemas"]["CoinAmount"];
+                        VOID: components["schemas"]["CoinAmount"];
+                        YES: components["schemas"]["CoinAmount"];
+                    };
+                    /** @enum {string} */
+                    kind: "scenarios";
+                    provisionalResult: components["schemas"]["MarketResult"] | null;
+                    reserved: {
+                        NO: components["schemas"]["CoinAmount"];
+                        VOID: components["schemas"]["CoinAmount"];
+                        YES: components["schemas"]["CoinAmount"];
+                    };
+                } | {
+                    amountCoin: components["schemas"]["CoinAmount"];
+                    /** @enum {string} */
+                    kind: "actual";
+                    /** @enum {string} */
+                    reason: "paid" | "cancelled";
+                    result: components["schemas"]["MarketResult"] | null;
+                };
+                reservedWorstLossCoin: string;
+                /** @enum {string|null} */
+                stage: "normal" | "reduce" | "halt" | null;
+                /** @enum {string} */
+                stageStatus: "ready" | "undecided" | "invalid";
+                utilizationBp: string;
+                worstLossCoin: string;
+            } | {
+                /** @enum {string} */
+                kind: "unavailable" | "inconsistent";
+                reason: string;
+            };
+            /** @enum {string} */
+            status: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
+            title: string;
+        };
+        AdminMarketMakerMetricsListItem: {
+            /** Format: date-time */
+            asOf: string;
+            configVersion: number | null;
+            /** Format: uuid */
+            marketId: string;
+            openedVersion: number | null;
+            risk: {
+                assets: {
+                    availableCoin: string;
+                    coin: string;
+                    lockedCoin: string;
+                    noLockedQty: string;
+                    noQty: string;
+                    yesLockedQty: string;
+                    yesQty: string;
+                };
+                capital: {
+                    investedCoin: string;
+                    recoveredCoin: string;
+                };
+                /** @enum {string} */
+                kind: "ready";
+                maxLossCoin: string;
+                pnl: {
+                    holdings: {
+                        NO: components["schemas"]["CoinAmount"];
+                        VOID: components["schemas"]["CoinAmount"];
+                        YES: components["schemas"]["CoinAmount"];
+                    };
+                    /** @enum {string} */
+                    kind: "scenarios";
+                    provisionalResult: components["schemas"]["MarketResult"] | null;
+                    reserved: {
+                        NO: components["schemas"]["CoinAmount"];
+                        VOID: components["schemas"]["CoinAmount"];
+                        YES: components["schemas"]["CoinAmount"];
+                    };
+                } | {
+                    amountCoin: components["schemas"]["CoinAmount"];
+                    /** @enum {string} */
+                    kind: "actual";
+                    /** @enum {string} */
+                    reason: "paid" | "cancelled";
+                    result: components["schemas"]["MarketResult"] | null;
+                };
+                reservedWorstLossCoin: string;
+                /** @enum {string|null} */
+                stage: "normal" | "reduce" | "halt" | null;
+                /** @enum {string} */
+                stageStatus: "ready" | "undecided" | "invalid";
+                utilizationBp: string;
+                worstLossCoin: string;
+            } | {
+                /** @enum {string} */
+                kind: "unavailable" | "inconsistent";
+                reason: string;
+            };
+            runtime: {
+                desiredEnabled: boolean;
+                reason: string | null;
+                /** @enum {string} */
+                state: "ready" | "waiting" | "stopped" | "error";
+            } | null;
+            /** @enum {string} */
+            status: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
+            title: string;
+        };
+        AdminMarketMakerMetricsOverview: {
+            /** Format: date-time */
+            asOf: string;
+            complete: boolean;
+            marketCount: string;
+            missing: {
+                /** @enum {string} */
+                kind: "unavailable" | "inconsistent";
+                /** Format: uuid */
+                marketId: string;
+                reason: string;
+            }[];
+            readyCount: string;
+            /** @enum {string} */
+            scope: "funded_markets";
+            totals: {
+                fundsCoin: string;
+                investedCoin: string;
+                maxLossCoin: string;
+                recoveredCoin: string;
+                reservedWorstLossCoin: string;
+                worstLossCoin: string;
+            };
+            treasury: components["schemas"]["AdminTreasury"];
+        };
         AdminMarketPause: {
             /** Format: date-time */
             endedAt: string | null;
@@ -5272,6 +5554,11 @@ export type components = {
             /** Format: uuid */
             marketId: string;
         };
+        ListMarketMakerMetricsQuery: {
+            cursor?: string;
+            /** @default 20 */
+            limit: number;
+        };
         Market: {
             category: {
                 nameKo: string;
@@ -5453,6 +5740,43 @@ export type components = {
             reason: string;
             safetyTicks: number;
             version: number;
+        };
+        MarketMakerPeriodMetrics: {
+            activity: {
+                /** @enum {string} */
+                basis: "recorded_orders";
+                bot: {
+                    fillBp: string | null;
+                    filledQty: string;
+                    postedQty: string;
+                } | null;
+                /** @enum {string} */
+                coverage: "complete" | "partial" | "unavailable";
+                humanIoc: {
+                    fillBp: string | null;
+                    filledOrders: string;
+                    orders: string;
+                } | null;
+            };
+            supply: {
+                /** @enum {string} */
+                basis: "posted_book";
+                botGapMs: string | null;
+                combinedGapMs: string | null;
+                /** @enum {string} */
+                coverage: "complete" | "partial" | "unavailable";
+                /** Format: date-time */
+                observedFrom: string | null;
+                /** Format: date-time */
+                observedTo: string | null;
+                openMs: string | null;
+            };
+            window: {
+                /** Format: date-time */
+                from: string | null;
+                /** Format: date-time */
+                to: string;
+            };
         };
         MarketPauseDecisionLogEntry: {
             /** Format: date-time */
@@ -9034,6 +9358,134 @@ export interface operations {
             };
         };
     };
+    adminListMarketMakerMetrics: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarketMakerMetricsListItem"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminGetMarketMakerMetricsOverview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarketMakerMetricsOverview"];
+                    };
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     adminListMarketPauseDecisions: {
         parameters: {
             query?: {
@@ -10802,6 +11254,83 @@ export interface operations {
                 content: {
                     "application/json": {
                         data: components["schemas"]["AdminMarketMaker"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminGetMarketMakerMetrics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarketMakerMetrics"];
                     };
                 };
             };

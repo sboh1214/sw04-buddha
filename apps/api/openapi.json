@@ -5422,6 +5422,305 @@
         ]
       }
     },
+    "/api/v1/admin/market-makers": {
+      "get": {
+        "operationId": "adminListMarketMakerMetrics",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "Opaque; `meta.nextCursor` of the previous page.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AdminMarketMakerMetricsListItem"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/PageMeta"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "List funded markets and their private current MM risk observations",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/market-makers/overview": {
+      "get": {
+        "operationId": "adminGetMarketMakerMetricsOverview",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AdminMarketMakerMetricsOverview"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Read all funded markets risk totals and treasury in one private snapshot",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/markets/{id}/market-maker/metrics": {
+      "get": {
+        "operationId": "adminGetMarketMakerMetrics",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AdminMarketMakerMetrics"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Read private current market inventory, capital, risk, depth and concentration",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/v1/admin/release-settings": {
       "get": {
         "operationId": "adminListReleaseSettings",
@@ -29413,6 +29712,1344 @@
           "approved"
         ]
       },
+      "ListMarketMakerMetricsQuery": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "limit": {
+            "default": 20,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        }
+      },
+      "AdminMarketMakerMetricsListItem": {
+        "type": "object",
+        "properties": {
+          "marketId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "review",
+              "scheduled",
+              "open",
+              "paused",
+              "closed",
+              "provisional",
+              "resolved",
+              "settling",
+              "settled",
+              "cancelled"
+            ]
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "configVersion": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 9007199254740991
+          },
+          "openedVersion": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 9007199254740991
+          },
+          "risk": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "ready"
+                    ]
+                  },
+                  "assets": {
+                    "type": "object",
+                    "properties": {
+                      "coin": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9]\\d*)$"
+                      },
+                      "availableCoin": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9]\\d*)$"
+                      },
+                      "lockedCoin": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9]\\d*)$"
+                      },
+                      "yesQty": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9]\\d*)$"
+                      },
+                      "noQty": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9]\\d*)$"
+                      },
+                      "yesLockedQty": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9]\\d*)$"
+                      },
+                      "noLockedQty": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9]\\d*)$"
+                      }
+                    },
+                    "required": [
+                      "coin",
+                      "availableCoin",
+                      "lockedCoin",
+                      "yesQty",
+                      "noQty",
+                      "yesLockedQty",
+                      "noLockedQty"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "capital": {
+                    "type": "object",
+                    "properties": {
+                      "investedCoin": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9]\\d*)$"
+                      },
+                      "recoveredCoin": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9]\\d*)$"
+                      }
+                    },
+                    "required": [
+                      "investedCoin",
+                      "recoveredCoin"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "maxLossCoin": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "worstLossCoin": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "reservedWorstLossCoin": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "utilizationBp": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "stage": {
+                    "nullable": true,
+                    "type": "string",
+                    "enum": [
+                      "normal",
+                      "reduce",
+                      "halt"
+                    ]
+                  },
+                  "stageStatus": {
+                    "type": "string",
+                    "enum": [
+                      "ready",
+                      "undecided",
+                      "invalid"
+                    ]
+                  },
+                  "pnl": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "scenarios"
+                            ]
+                          },
+                          "holdings": {
+                            "type": "object",
+                            "properties": {
+                              "YES": {
+                                "$ref": "#/components/schemas/CoinAmount"
+                              },
+                              "NO": {
+                                "$ref": "#/components/schemas/CoinAmount"
+                              },
+                              "VOID": {
+                                "$ref": "#/components/schemas/CoinAmount"
+                              }
+                            },
+                            "required": [
+                              "YES",
+                              "NO",
+                              "VOID"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "reserved": {
+                            "type": "object",
+                            "properties": {
+                              "YES": {
+                                "$ref": "#/components/schemas/CoinAmount"
+                              },
+                              "NO": {
+                                "$ref": "#/components/schemas/CoinAmount"
+                              },
+                              "VOID": {
+                                "$ref": "#/components/schemas/CoinAmount"
+                              }
+                            },
+                            "required": [
+                              "YES",
+                              "NO",
+                              "VOID"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "provisionalResult": {
+                            "nullable": true,
+                            "allOf": [
+                              {
+                                "$ref": "#/components/schemas/MarketResult"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "holdings",
+                          "reserved",
+                          "provisionalResult"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "actual"
+                            ]
+                          },
+                          "amountCoin": {
+                            "$ref": "#/components/schemas/CoinAmount"
+                          },
+                          "reason": {
+                            "type": "string",
+                            "enum": [
+                              "paid",
+                              "cancelled"
+                            ]
+                          },
+                          "result": {
+                            "nullable": true,
+                            "allOf": [
+                              {
+                                "$ref": "#/components/schemas/MarketResult"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "amountCoin",
+                          "reason",
+                          "result"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "assets",
+                  "capital",
+                  "maxLossCoin",
+                  "worstLossCoin",
+                  "reservedWorstLossCoin",
+                  "utilizationBp",
+                  "stage",
+                  "stageStatus",
+                  "pnl"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "unavailable",
+                      "inconsistent"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "runtime": {
+            "nullable": true,
+            "type": "object",
+            "properties": {
+              "desiredEnabled": {
+                "type": "boolean"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "ready",
+                  "waiting",
+                  "stopped",
+                  "error"
+                ]
+              },
+              "reason": {
+                "nullable": true,
+                "type": "string"
+              }
+            },
+            "required": [
+              "desiredEnabled",
+              "state",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "marketId",
+          "title",
+          "status",
+          "asOf",
+          "configVersion",
+          "openedVersion",
+          "risk",
+          "runtime"
+        ],
+        "additionalProperties": false
+      },
+      "MarketResult": {
+        "type": "string",
+        "enum": [
+          "YES",
+          "NO",
+          "VOID"
+        ]
+      },
+      "AdminMarketMakerMetricsOverview": {
+        "type": "object",
+        "properties": {
+          "asOf": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "funded_markets"
+            ]
+          },
+          "marketCount": {
+            "type": "string",
+            "pattern": "^(0|[1-9]\\d*)$"
+          },
+          "readyCount": {
+            "type": "string",
+            "pattern": "^(0|[1-9]\\d*)$"
+          },
+          "complete": {
+            "type": "boolean"
+          },
+          "treasury": {
+            "$ref": "#/components/schemas/AdminTreasury"
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "worstLossCoin": {
+                "type": "string",
+                "pattern": "^(0|[1-9]\\d*)$"
+              },
+              "reservedWorstLossCoin": {
+                "type": "string",
+                "pattern": "^(0|[1-9]\\d*)$"
+              },
+              "maxLossCoin": {
+                "type": "string",
+                "pattern": "^(0|[1-9]\\d*)$"
+              },
+              "investedCoin": {
+                "type": "string",
+                "pattern": "^(0|[1-9]\\d*)$"
+              },
+              "recoveredCoin": {
+                "type": "string",
+                "pattern": "^(0|[1-9]\\d*)$"
+              },
+              "fundsCoin": {
+                "type": "string",
+                "pattern": "^(0|[1-9]\\d*)$"
+              }
+            },
+            "required": [
+              "worstLossCoin",
+              "reservedWorstLossCoin",
+              "maxLossCoin",
+              "investedCoin",
+              "recoveredCoin",
+              "fundsCoin"
+            ],
+            "additionalProperties": false
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "marketId": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "unavailable",
+                    "inconsistent"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "marketId",
+                "kind",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "asOf",
+          "scope",
+          "marketCount",
+          "readyCount",
+          "complete",
+          "treasury",
+          "totals",
+          "missing"
+        ],
+        "additionalProperties": false
+      },
+      "AdminMarketMakerMetrics": {
+        "type": "object",
+        "properties": {
+          "marketId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "review",
+              "scheduled",
+              "open",
+              "paused",
+              "closed",
+              "provisional",
+              "resolved",
+              "settling",
+              "settled",
+              "cancelled"
+            ]
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "configVersion": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 9007199254740991
+          },
+          "openedVersion": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 9007199254740991
+          },
+          "risk": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "ready"
+                    ]
+                  },
+                  "assets": {
+                    "type": "object",
+                    "properties": {
+                      "coin": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9]\\d*)$"
+                      },
+                      "availableCoin": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9]\\d*)$"
+                      },
+                      "lockedCoin": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9]\\d*)$"
+                      },
+                      "yesQty": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9]\\d*)$"
+                      },
+                      "noQty": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9]\\d*)$"
+                      },
+                      "yesLockedQty": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9]\\d*)$"
+                      },
+                      "noLockedQty": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9]\\d*)$"
+                      }
+                    },
+                    "required": [
+                      "coin",
+                      "availableCoin",
+                      "lockedCoin",
+                      "yesQty",
+                      "noQty",
+                      "yesLockedQty",
+                      "noLockedQty"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "capital": {
+                    "type": "object",
+                    "properties": {
+                      "investedCoin": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9]\\d*)$"
+                      },
+                      "recoveredCoin": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9]\\d*)$"
+                      }
+                    },
+                    "required": [
+                      "investedCoin",
+                      "recoveredCoin"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "maxLossCoin": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "worstLossCoin": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "reservedWorstLossCoin": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "utilizationBp": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "stage": {
+                    "nullable": true,
+                    "type": "string",
+                    "enum": [
+                      "normal",
+                      "reduce",
+                      "halt"
+                    ]
+                  },
+                  "stageStatus": {
+                    "type": "string",
+                    "enum": [
+                      "ready",
+                      "undecided",
+                      "invalid"
+                    ]
+                  },
+                  "pnl": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "scenarios"
+                            ]
+                          },
+                          "holdings": {
+                            "type": "object",
+                            "properties": {
+                              "YES": {
+                                "$ref": "#/components/schemas/CoinAmount"
+                              },
+                              "NO": {
+                                "$ref": "#/components/schemas/CoinAmount"
+                              },
+                              "VOID": {
+                                "$ref": "#/components/schemas/CoinAmount"
+                              }
+                            },
+                            "required": [
+                              "YES",
+                              "NO",
+                              "VOID"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "reserved": {
+                            "type": "object",
+                            "properties": {
+                              "YES": {
+                                "$ref": "#/components/schemas/CoinAmount"
+                              },
+                              "NO": {
+                                "$ref": "#/components/schemas/CoinAmount"
+                              },
+                              "VOID": {
+                                "$ref": "#/components/schemas/CoinAmount"
+                              }
+                            },
+                            "required": [
+                              "YES",
+                              "NO",
+                              "VOID"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "provisionalResult": {
+                            "nullable": true,
+                            "allOf": [
+                              {
+                                "$ref": "#/components/schemas/MarketResult"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "holdings",
+                          "reserved",
+                          "provisionalResult"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "actual"
+                            ]
+                          },
+                          "amountCoin": {
+                            "$ref": "#/components/schemas/CoinAmount"
+                          },
+                          "reason": {
+                            "type": "string",
+                            "enum": [
+                              "paid",
+                              "cancelled"
+                            ]
+                          },
+                          "result": {
+                            "nullable": true,
+                            "allOf": [
+                              {
+                                "$ref": "#/components/schemas/MarketResult"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "amountCoin",
+                          "reason",
+                          "result"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "assets",
+                  "capital",
+                  "maxLossCoin",
+                  "worstLossCoin",
+                  "reservedWorstLossCoin",
+                  "utilizationBp",
+                  "stage",
+                  "stageStatus",
+                  "pnl"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "unavailable",
+                      "inconsistent"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "depth": {
+            "type": "object",
+            "properties": {
+              "bot": {
+                "type": "object",
+                "properties": {
+                  "YES": {
+                    "type": "object",
+                    "properties": {
+                      "bids": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "priceCoin": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 99
+                            },
+                            "qty": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9]\\d*)$"
+                            }
+                          },
+                          "required": [
+                            "priceCoin",
+                            "qty"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "asks": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "priceCoin": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 99
+                            },
+                            "qty": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9]\\d*)$"
+                            }
+                          },
+                          "required": [
+                            "priceCoin",
+                            "qty"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "bids",
+                      "asks"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "NO": {
+                    "type": "object",
+                    "properties": {
+                      "bids": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "priceCoin": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 99
+                            },
+                            "qty": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9]\\d*)$"
+                            }
+                          },
+                          "required": [
+                            "priceCoin",
+                            "qty"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "asks": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "priceCoin": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 99
+                            },
+                            "qty": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9]\\d*)$"
+                            }
+                          },
+                          "required": [
+                            "priceCoin",
+                            "qty"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "bids",
+                      "asks"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "YES",
+                  "NO"
+                ],
+                "additionalProperties": false
+              },
+              "human": {
+                "type": "object",
+                "properties": {
+                  "YES": {
+                    "type": "object",
+                    "properties": {
+                      "bids": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "priceCoin": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 99
+                            },
+                            "qty": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9]\\d*)$"
+                            }
+                          },
+                          "required": [
+                            "priceCoin",
+                            "qty"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "asks": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "priceCoin": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 99
+                            },
+                            "qty": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9]\\d*)$"
+                            }
+                          },
+                          "required": [
+                            "priceCoin",
+                            "qty"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "bids",
+                      "asks"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "NO": {
+                    "type": "object",
+                    "properties": {
+                      "bids": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "priceCoin": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 99
+                            },
+                            "qty": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9]\\d*)$"
+                            }
+                          },
+                          "required": [
+                            "priceCoin",
+                            "qty"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "asks": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "priceCoin": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 99
+                            },
+                            "qty": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9]\\d*)$"
+                            }
+                          },
+                          "required": [
+                            "priceCoin",
+                            "qty"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "bids",
+                      "asks"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "YES",
+                  "NO"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "bot",
+              "human"
+            ],
+            "additionalProperties": false
+          },
+          "period": {
+            "$ref": "#/components/schemas/MarketMakerPeriodMetrics"
+          },
+          "concentration": {
+            "type": "object",
+            "properties": {
+              "setting": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "$ref": "#/components/schemas/ReleaseSettingStatus"
+                  },
+                  "value": {
+                    "nullable": true,
+                    "type": "integer",
+                    "minimum": 0,
+                    "exclusiveMinimum": true,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "key",
+                  "status",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              "YES": {
+                "type": "object",
+                "properties": {
+                  "totalQty": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "topQty": {
+                    "nullable": true,
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "topShareBp": {
+                    "nullable": true,
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "holders": {
+                    "nullable": true,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "userId": {
+                          "type": "string"
+                        },
+                        "nickname": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "qty": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9]\\d*)$"
+                        },
+                        "shareBp": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9]\\d*)$"
+                        }
+                      },
+                      "required": [
+                        "userId",
+                        "nickname",
+                        "qty",
+                        "shareBp"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "totalQty",
+                  "topQty",
+                  "topShareBp",
+                  "holders"
+                ],
+                "additionalProperties": false
+              },
+              "NO": {
+                "type": "object",
+                "properties": {
+                  "totalQty": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "topQty": {
+                    "nullable": true,
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "topShareBp": {
+                    "nullable": true,
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "holders": {
+                    "nullable": true,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "userId": {
+                          "type": "string"
+                        },
+                        "nickname": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "qty": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9]\\d*)$"
+                        },
+                        "shareBp": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9]\\d*)$"
+                        }
+                      },
+                      "required": [
+                        "userId",
+                        "nickname",
+                        "qty",
+                        "shareBp"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "totalQty",
+                  "topQty",
+                  "topShareBp",
+                  "holders"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "setting",
+              "YES",
+              "NO"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "marketId",
+          "title",
+          "status",
+          "asOf",
+          "configVersion",
+          "openedVersion",
+          "risk",
+          "depth",
+          "period",
+          "concentration"
+        ],
+        "additionalProperties": false
+      },
+      "MarketMakerPeriodMetrics": {
+        "type": "object",
+        "properties": {
+          "window": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "nullable": true,
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ],
+            "additionalProperties": false
+          },
+          "activity": {
+            "type": "object",
+            "properties": {
+              "basis": {
+                "type": "string",
+                "enum": [
+                  "recorded_orders"
+                ]
+              },
+              "coverage": {
+                "type": "string",
+                "enum": [
+                  "complete",
+                  "partial",
+                  "unavailable"
+                ]
+              },
+              "bot": {
+                "nullable": true,
+                "type": "object",
+                "properties": {
+                  "postedQty": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "filledQty": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "fillBp": {
+                    "nullable": true,
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  }
+                },
+                "required": [
+                  "postedQty",
+                  "filledQty",
+                  "fillBp"
+                ],
+                "additionalProperties": false
+              },
+              "humanIoc": {
+                "nullable": true,
+                "type": "object",
+                "properties": {
+                  "orders": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "filledOrders": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  },
+                  "fillBp": {
+                    "nullable": true,
+                    "type": "string",
+                    "pattern": "^(0|[1-9]\\d*)$"
+                  }
+                },
+                "required": [
+                  "orders",
+                  "filledOrders",
+                  "fillBp"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "basis",
+              "coverage",
+              "bot",
+              "humanIoc"
+            ],
+            "additionalProperties": false
+          },
+          "supply": {
+            "type": "object",
+            "properties": {
+              "basis": {
+                "type": "string",
+                "enum": [
+                  "posted_book"
+                ]
+              },
+              "coverage": {
+                "type": "string",
+                "enum": [
+                  "complete",
+                  "partial",
+                  "unavailable"
+                ]
+              },
+              "observedFrom": {
+                "nullable": true,
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              "observedTo": {
+                "nullable": true,
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              "openMs": {
+                "nullable": true,
+                "type": "string",
+                "pattern": "^(0|[1-9]\\d*)$"
+              },
+              "botGapMs": {
+                "nullable": true,
+                "type": "string",
+                "pattern": "^(0|[1-9]\\d*)$"
+              },
+              "combinedGapMs": {
+                "nullable": true,
+                "type": "string",
+                "pattern": "^(0|[1-9]\\d*)$"
+              }
+            },
+            "required": [
+              "basis",
+              "coverage",
+              "observedFrom",
+              "observedTo",
+              "openMs",
+              "botGapMs",
+              "combinedGapMs"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "window",
+          "activity",
+          "supply"
+        ],
+        "additionalProperties": false
+      },
       "ReleaseSetting": {
         "type": "object",
         "properties": {
@@ -29718,14 +31355,6 @@
           "createdAt"
         ],
         "additionalProperties": false
-      },
-      "MarketResult": {
-        "type": "string",
-        "enum": [
-          "YES",
-          "NO",
-          "VOID"
-        ]
       },
       "Market": {
         "type": "object",

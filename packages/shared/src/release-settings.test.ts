@@ -13,6 +13,7 @@ import {
   LEAD_CLOSE_GAP_SETTING,
   MARKET_LIQUIDITY_DEFAULT_SETTINGS,
   MARKET_PROPOSALS_RETENTION_SETTING,
+  MARKET_MAKER_CONCENTRATION_TOP_N_SETTING,
   ORDER_ACCEPTING_SETTING,
   ORDER_RATE_LIMIT_SETTING,
   PRICE_PROTECTION_TICKS_SETTING,
@@ -77,6 +78,7 @@ describe('release settings registry', () => {
       'market_maker.reduce_at_bp',
       'market_maker.halt_at_bp',
       'market_maker.reduce_ratio_bp',
+      'market_maker.concentration_top_n',
       'retention.consent_records',
       'retention.phone_verification_records',
       'retention.deleted_posts',
@@ -90,6 +92,9 @@ describe('release settings registry', () => {
     expect(RELEASE_SETTINGS.get('market.dispute_window')).toBe(DISPUTE_WINDOW_SETTING);
     expect(RELEASE_SETTINGS.get('order.accepting')).toBe(ORDER_ACCEPTING_SETTING);
     expect(RELEASE_SETTINGS.get('order.rate_limit')).toBe(ORDER_RATE_LIMIT_SETTING);
+    expect(RELEASE_SETTINGS.get('market_maker.concentration_top_n')).toBe(
+      MARKET_MAKER_CONCENTRATION_TOP_N_SETTING,
+    );
     expect(RELEASE_SETTINGS.get('order.price_protection_ticks')).toBe(
       PRICE_PROTECTION_TICKS_SETTING,
     );

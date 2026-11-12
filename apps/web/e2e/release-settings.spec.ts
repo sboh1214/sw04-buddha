@@ -4,11 +4,11 @@ import { copy } from '../src/copy';
 import { accountIdOf, adminAccount, expect, freshEmail, signIn, signUp, test } from './helpers';
 
 /**
- * 출시 설정 (#170, ADR-0055) as the shipped build has it: twenty-one registered items — 시작 지급액
+ * 출시 설정 (#170, ADR-0055) as the shipped build has it: twenty-two registered items — 시작 지급액
  * (`grant.start_coin`, #70, ADR-0071), 선행 마감 최소 간격 (`market.lead_close_gap`, #22,
  * ADR-0098), 이의 기간 (`market.dispute_window`, #152, ADR-0103), 주문 접수, 주문 속도 제한 and 가격
  * 보호 폭 표준값 (`order.*`, #119, ADR-0112 — the first a flag), three MM risk-stage items
- * (`market_maker.*`, #129, ADR-0124), and the six retention periods
+ * (`#129` risk stages), the MM human concentration N (#182), and the six retention periods
  * (`retention.*` — #184's five, ADR-0087, and #77's market proposals, ADR-0089) — which the screen
  * and the API list alike, in the registry's order. Changing and recording an item are fixed by
  * the API suite with injected test items (`createTestApp({ releaseSettings })`), paying the start
@@ -81,6 +81,12 @@ const LIQUIDITY_ITEMS = [
   ['market_maker.default_safety_ticks', '시장 안전 간격 표준값', '틱', 'integer'],
 ] as const;
 
+const CONCENTRATION_ITEM = [
+  'market_maker.concentration_top_n',
+  '마켓메이커 보유 집중도 상위 인원',
+  '명',
+] as const;
+
 const RETENTION_ITEMS = [
   ['retention.consent_records', '동의 기록 보존기간'],
   ['retention.phone_verification_records', '본인확인 기록 보존기간'],
@@ -103,6 +109,7 @@ const SHIPPED_KEYS = [
   ...ORDER_ITEMS.map(([key]) => key),
   ...LIQUIDITY_ITEMS.map(([key]) => key),
   ...MARKET_MAKER_ITEMS.map(([key]) => key),
+  CONCENTRATION_ITEM[0],
   ...RETENTION_ITEMS.map(([key]) => key),
 ];
 
@@ -132,7 +139,7 @@ async function expectForbidden(response: APIResponse): Promise<void> {
 }
 
 test.describe('출시 설정 (#170)', () => {
-  test('관리자 메뉴에서 열면 시작 지급액·선행 마감 최소 간격·이의 기간, 주문·MM 각 세 항목·유동성 표준값 여섯·여섯 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
+  test('관리자 메뉴에서 열면 시작 지급액·선행 마감 최소 간격·이의 기간, 주문·MM 각 세 항목·유동성 표준값 여섯·집중도 인원·여섯 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
     page,
     admin,
   }) => {
@@ -177,6 +184,12 @@ test.describe('출시 설정 (#170)', () => {
       expect(item?.valueSchema.type, key).toBe('integer');
       expect(item?.status, key).not.toBe('undecided');
     }
+    const concentration = items.find((item) => item.key === CONCENTRATION_ITEM[0]);
+    expect(concentration).toMatchObject({ label: CONCENTRATION_ITEM[1], unit: '명' });
+    expect(concentration?.valueSchema.type).toBe('integer');
+    expect(concentration?.valueSchema.minimum).toBe(1);
+    if (concentration?.status === 'undecided') expect(concentration.value).toBeNull();
+    // There is no seeded N or fallback 5: the screen follows this registry reading.
     for (const item of items)
       expect(item.status === 'undecided', item.key).toBe(item.value === null);
     const undecidedKeys = items
@@ -245,6 +258,7 @@ test.describe('출시 설정 (#170)', () => {
       [LEAD_CLOSE_GAP_KEY, '선행 마감 최소 간격', '분'],
       [RETENTION_ITEMS[0][0], RETENTION_ITEMS[0][1], '일'],
       [MARKET_MAKER_ITEMS[0][0], MARKET_MAKER_ITEMS[0][1], 'bp'],
+      CONCENTRATION_ITEM,
     ] as const) {
       await page.getByTestId(`release-setting-edit-${key}`).click();
       const dialog = page.getByTestId('release-setting-dialog');
@@ -252,6 +266,8 @@ test.describe('출시 설정 (#170)', () => {
       await dialog.getByTestId('release-setting-status-test').click();
       const valueInput = dialog.getByTestId('release-setting-value-input');
       await expect(valueInput).toBeVisible();
+      if (key === CONCENTRATION_ITEM[0] && concentration?.status === 'undecided')
+        await expect(valueInput).toHaveValue('');
       expect(await valueInput.evaluate((element) => element.tagName)).toBe('INPUT');
       await expect(dialog).toContainText(`${copy.adminReleaseSettingValue}(${unit})`);
       await expect(dialog).toContainText(copy.adminReleaseSettingValueJsonHint);

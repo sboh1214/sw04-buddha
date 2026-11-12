@@ -1,6 +1,8 @@
 import { ReleaseSettingsModule } from '../release-settings/release-settings.module.js';
 import { AdminMarketMakerController } from './market-maker.controller.js';
 import { AdminMarketMakerService } from './market-maker.service.js';
+import { AdminMarketMakerMetricsController } from './market-maker-metrics.controller.js';
+import { AdminMarketMakerMetricsService } from './market-maker-metrics.service.js';
 import { TreasuryController } from './treasury.controller.js';
 import { TreasuryService } from './treasury.service.js';
 import { Module } from '@nestjs/common';
@@ -41,6 +43,7 @@ import { ReconciliationCorrectionService } from './reconciliation-corrections.se
     ReconciliationCorrectionsController,
     TreasuryController,
     AdminMarketMakerController,
+    AdminMarketMakerMetricsController,
   ],
   providers: [
     AdminService,
@@ -49,6 +52,7 @@ import { ReconciliationCorrectionService } from './reconciliation-corrections.se
     ReconciliationCorrectionService,
     TreasuryService,
     AdminMarketMakerService,
+    AdminMarketMakerMetricsService,
   ],
 })
 export class AdminModule {}
