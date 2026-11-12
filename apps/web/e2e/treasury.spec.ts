@@ -56,6 +56,7 @@ async function requestOnScreen(page: Page, by: string, amountCoin: string, reaso
   const dialog = page.getByTestId('treasury-request-dialog');
   await expect(dialog).toBeVisible();
   await expect(dialog.getByTestId('treasury-request-dialog-confirm')).toBeDisabled();
+  await expect(dialog.getByTestId('treasury-issue-amount')).toBeFocused();
   await dialog.getByTestId('treasury-issue-amount').fill('1.5');
   await dialog.getByTestId('treasury-issue-reason').fill(reason);
   await expect(dialog.getByTestId('treasury-request-dialog-confirm')).toBeDisabled();
@@ -254,8 +255,13 @@ test.describe('금고 발행의 2인 승인 (#129)', () => {
       pending.push(rejected);
       await clearToasts(page);
       await page.getByTestId('treasury-request-open').click();
+      await expect(page.getByTestId('treasury-issue-amount')).toBeFocused();
       await page.getByTestId('treasury-issue-amount').fill('31');
       await page.getByTestId('treasury-issue-reason').fill('계정 전환 때 폐기할 사유');
+      await expect(page.getByTestId('treasury-issue-amount')).toHaveValue('31');
+      await expect(page.getByTestId('treasury-issue-reason')).toHaveValue(
+        '계정 전환 때 폐기할 사유',
+      );
       await switchMeThenSessionTo(
         page,
         { id: secondId, cookies: (await secondAdmin.storageState()).cookies },
