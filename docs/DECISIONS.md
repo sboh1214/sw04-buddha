@@ -16126,3 +16126,83 @@ root는 격리된 `f516` 기반 checkout의 `treasury.spec.ts`에 매 요청 dia
 브라우저 **736 통과·flaky1·제외3·자동 재시도1**도 attempt1의 결과를 그대로 유지했으며 attempt2에서 브라우저를 다시 실행하지 않았다. 원 API 실패·댓글 focus flaky와 그 원인 한계를 삭제하지 않는다. 배포는 기존 성공한 attempt1을 유지했고 재배포하지 않았다. 17:06:19 UTC의 후속 공개 health200도 확인했다. PR274의 main CI·배포 관문이 충족됐다는 사실과 다음 PR의 정확한 head·리뷰·CI를 별도로 확인하는 순차 머지 조건을 구분한다. 이번1회 재실행의 성공은 동일 실패가 반복될 때 추가 재실행으로 덮지 않고 수정한다는 기존 기준을 바꾸지 않는다.
 
 이 추가 기록은 기존 ADR 전문 뒤의 문서 변경만 포함한다. PR284의 새 서명 head에 대한 실제 base CLI·GitHub 검토·CI는 별도 관문이며, 앞선 제품 실행 결과를 이 문서 head에서 재실행한 것으로 옮기지 않는다. PR274 이후 운영 반영 완료나 별도 승인 대기인 사진 공개를 주장하지 않는다.
+
+---
+
+## ADR-0132 — Dependabot 보안 경고 60건 가운데 57건: 상위 패키지 범위 안의 lockfile 갱신, Expo 57.0.32, vitest 4.1.12·vite 8.2.6
+
+- 날짜: 2026-11-13
+- 상태: 채택
+
+### 맥락
+
+2026-11-13에 기본 브랜치(main `47f3b8d4`)의 열린 Dependabot 경고를 API로 끝까지 조회했다. 60건(critical 1, high 21, medium 26, low 12)이고, 모두 npm이며 모두 `pnpm-lock.yaml`의 전이 의존성이다. 패키지는 15개다. 이 60건 가운데 우리 manifest나 catalog가 직접 고정한 판을 가리키는 것은 없다. 저장소에는 Dependabot 설정 파일이 없고(보안 갱신만 켜져 있다), 열린 Dependabot PR도 없다.
+
+경고가 가리키는 판이 lockfile에 들어온 길은 다음과 같다. '운영 이미지'는 `Dockerfile`이 담는 것(`api...`·`worker...`의 `--prod` 설치와 web의 standalone 출력)이다. `apps/mobile`의 Expo 트리는 이미지에 들지 않고, 개발 장비와 CI의 설치(lint·typecheck)에만 있다.
+
+| 패키지                      | 경고                                                                                         | 들어온 길                                                                                                                     | 운영 이미지                                                                                                                                      |
+| --------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| shell-quote 1.10.0          | #33(critical)                                                                                | mobile: react-native 0.86.3 → react-devtools-core 6.1.5                                                                       | 없음                                                                                                                                             |
+| node-forge 1.4.0            | #29·#74–#77·#81·#88·#89(high), #78·#82·#83·#90·#93–#95(medium), #79·#80·#84·#91·#92·#96(low) | mobile: expo → @expo/cli, @expo/code-signing-certificates                                                                     | 없음                                                                                                                                             |
+| compression 1.8.1           | #31(high)                                                                                    | mobile: expo → @expo/cli                                                                                                      | 없음                                                                                                                                             |
+| zod 3.25.76                 | #54(high)                                                                                    | mobile: expo → @expo/cli 57.0.21                                                                                              | 없음(우리 코드의 zod는 4.6.7로 범위 밖)                                                                                                          |
+| uuid 7.0.3                  | #2(medium)                                                                                   | mobile: @expo/config-plugins → xcode 3.0.1                                                                                    | 없음                                                                                                                                             |
+| deepmerge 4.3.1             | #73(low, 수정판 없음)                                                                        | mobile: @expo/config 57.0.9                                                                                                   | 없음                                                                                                                                             |
+| glob 13.0.6                 | #85(medium)                                                                                  | mobile: @expo/cli·config·config-plugins·metro-config·fingerprint                                                              | 없음                                                                                                                                             |
+| fast-uri 3.1.6·4.1.3        | #4–#7(high), #18–#20·#57·#58·#61·#62(medium), #55·#56·#59·#60(low)                           | api: fastify → @fastify/ajv-compiler·fast-json-stringify(4.x), ajv 8(3.x). web: @hookform/resolvers → ajv                     | **있음**(api가 불러온다)                                                                                                                         |
+| source-map-js 1.2.1         | #32(high)                                                                                    | next → postcss, vitest → vite → postcss, @vitest/coverage-v8 → magicast, mobile의 @expo/metro-config → postcss                | 설치만(api·worker 이미지에 better-auth의 선택 peer `next`·`vitest`를 따라 들어온다. 실행 코드는 불러오지 않는다. web의 standalone 출력에는 없다) |
+| brace-expansion 2.1.4·5.0.9 | #12–#15(high), #16·#17(medium)                                                               | minimatch 5(openapi-typescript → @redocly/openapi-core), minimatch 10(eslint·@nestjs/cli·typescript-eslint·@expo/fingerprint) | 없음(개발·빌드 도구)                                                                                                                             |
+| js-yaml 4.3.1               | #3(high)                                                                                     | api-client: openapi-typescript → @redocly/openapi-core 1.34.19(정확히 4.3.1로 고정)                                           | 없음(생성 도구)                                                                                                                                  |
+| vite 8.2.2                  | #42(high), #41·#43–#45(medium), #46(low)                                                     | vitest 4.1.11                                                                                                                 | 설치만(better-auth의 선택 peer `vitest`를 따라 들어온다. 실행 코드는 불러오지 않는다)                                                            |
+| @vitest/mocker 4.1.11       | #47·#48(medium)                                                                              | vitest 4.1.11                                                                                                                 | 설치만(위와 같다)                                                                                                                                |
+| esbuild 0.18.20             | #1(medium)                                                                                   | drizzle-kit 0.31.10 → @esbuild-kit/esm-loader → core-utils                                                                    | 설치만(better-auth의 선택 peer `drizzle-kit`)                                                                                                    |
+| minimatch 10.2.6            | #87(medium)                                                                                  | eslint 10.9.1·@eslint/config-array·typescript-eslint·@nestjs/cli 12.0.0(정확히 고정)·@expo/fingerprint·glob 13                | 없음(개발·빌드 도구)                                                                                                                             |
+
+권고의 조건과 우리 쓰임을 견주면, 운영 프로세스가 불러오는 것은 fast-uri뿐이다. API의 요청 검증은 zod다(ADR-0020). fast-uri는 Fastify가 JSON 스키마의 `$id`·`$ref`를 풀 때 쓰이고, 요청이 준 URI를 이 라이브러리로 해석하는 길은 찾지 못했다. shell-quote·node-forge·compression은 Expo·React Native 개발 서버와 그 CLI의 것이다. vite의 경고는 개발 서버(`vite dev`)와 편집기 열기에 대한 것이고, 우리는 vitest의 시험 실행에만 쓴다. 그래도 권고 범위 밖의 판이 상위 패키지의 범위 안에 있으므로 올린다.
+
+### 결정
+
+1. **상위 패키지가 선언한 범위 안에서 lockfile만 올린다.** manifest·catalog·override를 바꾸지 않는다.
+
+   | 패키지                | 이전         | 이후          | 상위 패키지의 범위                                               |
+   | --------------------- | ------------ | ------------- | ---------------------------------------------------------------- |
+   | shell-quote           | 1.10.0       | 1.12.0        | react-devtools-core `^1.6.1`                                     |
+   | node-forge            | 1.4.0        | 1.4.3         | @expo/cli·@expo/code-signing-certificates `^1.3.3`               |
+   | compression           | 1.8.1        | 1.8.2         | @expo/cli `^1.7.4`                                               |
+   | fast-uri              | 3.1.6, 4.1.3 | 3.1.9, 4.2.3  | ajv `^3.0.1`, @fastify/ajv-compiler·fast-json-stringify `^4.0.0` |
+   | source-map-js         | 1.2.1        | 1.2.2         | postcss·magicast `^1.2.1`                                        |
+   | brace-expansion       | 2.1.4, 5.0.9 | 2.1.8, 5.0.13 | minimatch 5 `^2.0.1`, minimatch 10 `^5.0.8`                      |
+   | @redocly/openapi-core | 1.34.19      | 1.34.24       | openapi-typescript `^1.34.6`                                     |
+   | js-yaml(4.x)          | 4.3.1, 4.3.2 | 4.3.2         | @redocly/openapi-core 1.34.24가 4.3.2로 고정                     |
+   | vite                  | 8.2.2        | 8.2.6         | vitest `^6 \|\| ^7 \|\| ^8`                                      |
+   - vite는 8.2 줄에 두고 8.3으로 올리지 않는다. 경고 여섯 건(#41–#46)은 8.2.4가 닫는다. 8.2.6은 8.2.4에서 rolldown만 올린 판이고(lockfile은 1.2.6 → 1.2.19), vite 저장소의 권고 GHSA-p4f5-76q4-ffq7(critical, 2026-11-10, `--host`로 연 개발 서버)을 고친 rolldown을 싣는다. 이 권고는 아직 GitHub 권고 DB에 없어 60건에 들지 않는다. 8.2.5는 npm에 없다.
+   - brace-expansion 2.1.8·5.0.13은 경고 여섯 건(2.1.7·5.0.12면 닫힌다)에 더해 그 저장소의 권고 GHSA-6jwq-xf8q-xcwh(high, 2026-11-11)의 수정판이다. 이것도 아직 Dependabot 경고가 아니다.
+   - node-forge의 #29는 권고에 수정판 표기가 없지만 범위가 1.4.0까지라서 1.4.3은 그 밖이다.
+
+2. **catalog의 네 줄을 올린다.** 모두 같은 줄 안의 패치다.
+   - `expo` 57.0.19 → 57.0.32, `expo-dev-client` 57.0.18 → 57.0.21(SDK 57). @expo/cli 57.0.33이 zod 3을 실행 의존성에서 뺐고(#54), @expo/config 57.0.11이 deepmerge를 뺐고(#73), @expo/config-plugins 57.0.12는 xcode 4를 써서 uuid가 빠졌다(#2). react·react-native의 `catalog:expo` 핀(19.2.3, 0.86.3)은 그대로다.
+   - `vitest`·`@vitest/coverage-v8` 4.1.11 → 4.1.12(#47·#48). vitest 5로 올리지 않는다.
+
+3. **발행한 지 24시간이 안 된 판은 고르지 않는다**(ADR-0004의 `minimumReleaseAge`). 그래서 expo 57.0.33(2026-11-12 13:27 UTC)이 아니라 57.0.32이고, @expo/fingerprint는 0.20.16(같은 날 13:23 UTC)이 아니라 0.20.15다. `minimumReleaseAgeExclude`에 더한 줄이 없다. 이미 있던 13줄(57.0.19 때의 것)은 이제 lockfile의 어느 판과도 맞지 않지만 손대지 않았다.
+
+4. **세 건은 이 PR이 닫지 못한다.** 권고 범위 밖의 판이 상위 패키지의 범위 안에 없거나, 있어도 3항에 걸린다. 다음 PR에서 다룬다.
+   - esbuild 0.18.20(#1): drizzle-kit 0.31 줄 전체가 @esbuild-kit을 거쳐 `~0.18.20`을 끌어온다. 최신 0.31.11도 같다.
+   - glob 13.0.6(#85): @expo/fingerprint 0.20.15가 `^13.0.0`이다. glob 13.0.7이 같은 수정을 13 줄에 옮겼지만 권고의 범위는 14.0.1까지 그대로여서, 13.0.7로 올려도 경고는 닫히지 않는다. glob을 뺀 @expo/fingerprint 0.20.16은 expo 57.0.32의 범위(`^0.20.15`) 안에 있는데 3항에 걸린다. 나머지 Expo 패키지는 이 PR에서 glob 14.0.5로 옮겨 갔다.
+   - minimatch 10.2.6(#87): 권고 범위 밖의 판은 11.0.1부터인데 eslint·@eslint/config-array·typescript-eslint·@expo/fingerprint는 `^10`이다. @nestjs/cli는 12.0.12가 11.0.5로 옮겼지만 그것만으로는 경고가 닫히지 않는다. 10 줄에는 수정판이 없다.
+
+5. **경고를 닫는 것은 GitHub이다.** 이 PR은 경고를 dismiss하지 않고 보안 설정을 바꾸지 않는다. 경고는 이 lockfile이 기본 브랜치에 들어간 뒤 Dependabot이 닫는다. 그 전까지는 열려 있다.
+
+### 결과
+
+- **바뀐 파일.** `pnpm-workspace.yaml`(catalog 네 줄), `pnpm-lock.yaml`, 이 문서. 실행 코드와 시험은 바꾸지 않았다. 마이그레이션·출시 설정·API 계약의 변화가 없다.
+- **운영 영향.** 이미지에서 프로세스가 불러오는 것 가운데 바뀌는 것은 fast-uri 둘(3.1.9, 4.2.3)이다. source-map-js 1.2.2와 vitest 4.1.12·vite 8.2.6·rolldown 1.2.19는 설치만 바뀐다. Expo 쪽은 이미지에 없다. lockfile이 바뀌므로 머지하면 세 이미지를 다시 빌드해 배포한다.
+- **lockfile의 곁다리.**
+  - Expo CLI 쪽 패키지가 glob 14.0.5로 옮기면서 minimatch 11, path-scurry 3.0.0과 새 패키지 `@isaacs/nonrecursive-glob-match` 1.1.0이 들어왔다. `apps/mobile`의 도구에만 닿는다. minimatch 11은 11.0.8로 두었다. glob 14.0.5의 범위(`^11.0.5`) 안이고, 그 저장소의 권고 셋(GHSA-cf2h-pxjq-68xw, GHSA-hqmv-qgp3-jx75, GHSA-c859-jr93-m5j4 — 아직 Dependabot 경고가 아니다)의 수정판이다. 셋째 권고는 4항의 minimatch 10.2.6에도 걸린다.
+  - glob 14.0.5에는 그 저장소의 권고 GHSA-qxr8-q827-836c(low, 2026-11-12)가 걸린다. 수정판 14.0.6은 3항에 걸려 다음 PR에서 올린다. 이 권고는 main의 glob 13.0.6에도 걸린다.
+  - @expo/fingerprint 0.20.15(`@expo/env ^2.4.4`)가 `@expo/env` 2.6.0을 따로 풀어, 나머지 SDK 57 패키지의 2.4.4와 두 벌이 됐다. Expo가 선언한 범위 안이다.
+  - vite 8.2.6의 rolldown 1.2.19가 선택 바인딩 `@rolldown/binding-wasm32-wasi`와 그 의존성(`@napi-rs/wasm-runtime`, `@emnapi/core`·`@emnapi/runtime` 2.0.0-beta.2, `@emnapi/wasi-threads`, `@tybys/wasm-util`)을 lockfile에 더했다. cpu가 wasm32일 때만 설치되어 우리 장비와 이미지에는 설치되지 않는다.
+  - pnpm이 `@smithy/core@3.36.0`(@aws-sdk/client-s3의 것)에 레지스트리의 지원 중단 표기를 옮겨 적었다. 판은 main과 같고 Dependabot 경고가 아니다. 그 표기는 SDK 클라이언트에 사용자 지정 `logger`를 넘길 때의 가림 버그를 말한다. 우리의 S3 클라이언트(`packages/storage/src/s3.ts`)는 `region`과 자격 증명만 넘기므로 해당하지 않는다. 고친 판(3.38.1부터)은 상위 패키지의 범위 안에 있어 lockfile만으로 올릴 수 있고, 운영에서 실행되는 코드라 이 PR에 섞지 않았다.
+- **expo-doctor.** `pnpm mobile:doctor`는 21개 가운데 20개가 통과하고, 판 맞춤 검사가 `expo ~57.0.33`을 바란다(3항 때문에 57.0.32다). 이 검사는 최신 판과 견주므로 main의 57.0.19도 통과하지 못한다. CI에는 없는 검사다. 모바일은 lint·typecheck·expo-doctor로만 확인했고, Metro 번들·`expo prebuild`·네이티브 빌드는 돌리지 않았다(앱은 M0의 자리뿐이다).
+- **확인.** 새 lockfile에서 경고 60건의 범위에 드는 판을 패키지마다 다시 셌다. 57건의 범위에 드는 판이 없고, 4항의 세 건만 남는다(`pnpm audit`와 GitHub 권고 조회도 같다). `pnpm install --frozen-lockfile`이 통과하고, 다시 `pnpm install`해도 lockfile이 바뀌지 않는다. 더한 판 80개의 integrity는 레지스트리와 같고, 설치 스크립트가 있는 새 패키지가 없다. 검사·시험·e2e의 결과는 PR 본문에 적는다.
+- **이 PR의 범위 밖.** 범위는 Dependabot 경고 60건이다. 검토하다가 GitHub 권고 DB에 아직 없어 Dependabot이 알리지 않는 공급자 저장소 권고가 직접 의존성(better-auth 1.7.7, next 16.4.3, @nestjs/\* 12.0.x, @nestjs/throttler 6.5.0, nodemailer 10.3.1, fastify 5.12.6)에 걸리고, 패키지 관리자 pnpm 11.10.0에 권고 DB의 권고 셋이 걸리는 것을 보았다. 운영 동작을 바꾸는 갱신이라 이 PR에 섞지 않고 오너에게 따로 보고했다.
+- **상태 줄.** 고칠 옛 ADR이 없다. ADR-0004의 릴리스 연령 정책을 그대로 따랐다.

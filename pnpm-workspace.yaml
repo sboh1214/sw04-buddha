@@ -116,13 +116,13 @@ catalog:
   "@tiptap/extension-text-style": 3.32.0
   "@tiptap/extensions": 3.32.0
   # mobile (react / react-native for mobile come from the `expo` catalog below)
-  expo: 57.0.19
-  expo-dev-client: 57.0.18
+  expo: 57.0.32
+  expo-dev-client: 57.0.21
   expo-status-bar: 57.0.1
   expo-doctor: 1.20.4
   # test
-  vitest: 4.1.11
-  "@vitest/coverage-v8": 4.1.11
+  vitest: 4.1.12
+  "@vitest/coverage-v8": 4.1.12
   fast-check: 4.9.0
   # lint / format / build tooling
   eslint: 10.9.1
