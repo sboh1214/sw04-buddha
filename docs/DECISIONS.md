@@ -16206,3 +16206,40 @@ root는 격리된 `f516` 기반 checkout의 `treasury.spec.ts`에 매 요청 dia
 - **확인.** 새 lockfile에서 경고 60건의 범위에 드는 판을 패키지마다 다시 셌다. 57건의 범위에 드는 판이 없고, 4항의 세 건만 남는다(`pnpm audit`와 GitHub 권고 조회도 같다). `pnpm install --frozen-lockfile`이 통과하고, 다시 `pnpm install`해도 lockfile이 바뀌지 않는다. 더한 판 80개의 integrity는 레지스트리와 같고, 설치 스크립트가 있는 새 패키지가 없다. 검사·시험·e2e의 결과는 PR 본문에 적는다.
 - **이 PR의 범위 밖.** 범위는 Dependabot 경고 60건이다. 검토하다가 GitHub 권고 DB에 아직 없어 Dependabot이 알리지 않는 공급자 저장소 권고가 직접 의존성(better-auth 1.7.7, next 16.4.3, @nestjs/\* 12.0.x, @nestjs/throttler 6.5.0, nodemailer 10.3.1, fastify 5.12.6)에 걸리고, 패키지 관리자 pnpm 11.10.0에 권고 DB의 권고 셋이 걸리는 것을 보았다. 운영 동작을 바꾸는 갱신이라 이 PR에 섞지 않고 오너에게 따로 보고했다.
 - **상태 줄.** 고칠 옛 ADR이 없다. ADR-0004의 릴리스 연령 정책을 그대로 따랐다.
+
+---
+
+## ADR-0133 — 남은 Dependabot 경고 셋: esbuild 0.18.20은 쓰이지 않는 @esbuild-kit 아래의 override로 걷어내고, glob과 minimatch는 override하지 않는다
+
+- 날짜: 2026-11-13
+- 상태: 채택
+
+### 맥락
+
+ADR-0132가 60건 가운데 57건을 lockfile에서 걷어냈고 medium 세 건을 남겼다. 셋 다 개발·빌드 도구의 것이고, 상위 패키지의 범위 안에는 권고 범위 밖의 판이 없다.
+
+- **esbuild 0.18.20(#1, GHSA-67mh-4wv8-2f99).** 권고는 esbuild의 개발 서버(`serve`)가 모든 출처의 요청에 답하는 것이다. 0.18.20의 부모는 `@esbuild-kit/core-utils` 3.3.2 하나이고, 그 위는 `@esbuild-kit/esm-loader` 2.6.5, 그 위는 drizzle-kit 0.31.10이다. 두 @esbuild-kit 패키지는 2023년의 마지막 판이고 지원이 끝났다('tsx로 합침'). drizzle-kit은 0.31.11도 이 의존성을 선언하고, 이것을 뺀 1.0은 아직 rc이며 drizzle-orm 1.0을 바란다.
+  - drizzle-kit 0.31.10의 배포 코드(`bin.cjs`, `api.js`·`api.mjs`, `utils.js`·`utils.mjs`, `index.js`·`index.mjs`)에는 `esbuild-kit`·`esm-loader`·`core-utils`라는 문자열이 없다. TS 설정과 스키마는 번들한 tsx로 읽고, `require("esbuild")` 둘은 그 tsx 안에 있어 drizzle-kit 자신의 esbuild(`^0.25.4` → 0.25.12)를 쓴다. 곧 @esbuild-kit은 선언만 있고 불러오지 않는다.
+  - core-utils가 esbuild에서 쓰는 것은 `transform`·`transformSync`·`version`뿐이다. `serve`는 부르지 않는다.
+- **glob 13.0.6(#85, GHSA-3g3m-2fjr-6pw4).** 남은 부모는 @expo/fingerprint 0.20.15(`^13.0.0`) 하나다. glob을 뺀 0.20.16과 그것을 바라는 expo 57.0.33은 2026-11-12 13:23·13:27 UTC에 나와, 이 PR을 만들 때 발행 24시간이 안 됐다(ADR-0004). fingerprint의 glob 호출은 `signal`을 넘기지 않아 권고의 조건에 닿지 않는다.
+- **minimatch 10.2.6(#87, GHSA-g3hv-75wg-m249).** 권고의 코드는 `optimizationLevel`이 2 이상일 때만 돈다(기본값 1). 부모 여섯 가운데 그 값을 주는 것은 glob 13뿐이고, 그것도 fingerprint가 고정한 패턴으로만 부른다. eslint·@eslint/config-array·typescript-eslint·@nestjs/cli·@expo/fingerprint는 기본값으로 `match`만 쓴다. 권고 범위 밖의 판은 major인 11.0.1부터다. minimatch 11은 정규식 대신 새 매처를 쓰고 일치 규칙 몇 가지를 바꿨다.
+  - eslint, @eslint/config-array, typescript-eslint는 main에서 minimatch 11로 옮겼지만(2026-11-07·11-10 머지) 그 판이 아직 나오지 않았다. @nestjs/cli는 12.0.12가 11.0.5로 고정한다. @expo/fingerprint는 일치 규칙이 달라진다는 까닭으로 `^10`에 남기로 했다(expo/expo PR #53091).
+  - glob 13은 `Minimatch.set`의 항목이 `RegExp`라고 보고 쓴다. minimatch 11에서는 그것이 `Matcher`여서, glob 13 아래의 minimatch를 11로 바꾸면 오류 없이 일치가 틀어진다.
+
+### 결정
+
+1. **esbuild: `@esbuild-kit/core-utils` 아래의 esbuild만 override한다.** `pnpm-workspace.yaml`의 `overrides`에 `"@esbuild-kit/core-utils>esbuild": "^0.25.4"`를 더한다. drizzle-kit이 자기 것으로 바라는 범위와 같아서 lockfile의 한 벌(0.25.12)로 모인다. esbuild 0.18.20과 그 플랫폼 패키지 22개가 lockfile에서 빠지고, 새로 들어오는 패키지는 없다. `allowBuilds`의 `esbuild: true`는 이름으로 보므로 고칠 것이 없다.
+   - 근거: 정상 경로가 없다(맥락). 바꾸는 것은 아무도 불러오지 않는 패키지 옆의 판이다. core-utils를 0.25.12로 돌려 본 `transform`·`transformSync`의 출력 크기가 0.18.20 때와 같았다.
+   - **걷어낼 때:** `@esbuild-kit/core-utils`가 `pnpm-lock.yaml`에서 사라지면(drizzle-kit 1.0이 뺐다) 이 줄을 지운다. pnpm은 쓰이지 않는 override를 알리지 않으므로 drizzle-kit을 올릴 때마다 본다. 그 줄의 주석에도 적었다.
+2. **glob: override하지 않고 expo 57.0.33을 기다린다.** glob 13.0.7이 같은 수정을 13 줄에 옮겼지만 권고의 범위(14.0.1까지)가 그대로라 그 판으로 올려도 경고가 닫히지 않고, `minimumReleaseAgeExclude`에 아홉 줄쯤을 더해 가며 24시간을 건너뛸 까닭이 없다. 57.0.33이 24시간을 넘기면(2026-11-13 13:27 UTC) catalog의 `expo` 한 줄을 올린다. 그때 glob 13과 fingerprint 0.20.15가 lockfile에서 빠지고 expo-doctor의 판 맞춤 검사도 맞는다.
+3. **minimatch: override하지 않는다.** eslint 아래의 매처를 선언 범위 밖의 major로 바꾸면 lint가 보는 파일이 조용히 달라질 수 있고, 닿지 않는 권고 하나를 닫자고 질 위험이 아니다. glob 13 아래로는 바꿀 수도 없다(맥락). @nestjs/cli만 12.0.12로 올리는 것도 하지 않는다 — 부모 여섯 가운데 하나만 줄고 경고는 그대로다.
+   - eslint·typescript-eslint의 다음 판이 나오고 expo 57.0.33으로 glob 13이 빠져도 @expo/fingerprint가 `^10`에 남는다. 그래서 #87은 upstream만으로는 닫히지 않을 수 있다. 그때 경고를 '취약한 코드를 쓰지 않음'으로 닫을지는 오너가 정한다. 이 PR은 dismiss하지 않는다.
+
+### 결과
+
+- **바뀐 파일.** `pnpm-workspace.yaml`(override 한 줄과 주석), `pnpm-lock.yaml`, 이 문서. 실행 코드와 시험은 바꾸지 않았다.
+- **경고.** 이 lockfile에서 범위에 드는 것은 #85와 #87 둘이다(60건 가운데 58건이 빠진다). 경고는 기본 브랜치에 들어간 뒤 Dependabot이 닫는다.
+- **운영 영향.** api·worker 이미지에는 better-auth의 선택 peer `drizzle-kit`를 따라 esbuild가 설치만 된다. 그 가운데 0.18.20이 빠진다. 프로세스가 불러오는 코드는 바뀌지 않는다. lockfile이 바뀌므로 머지하면 이미지를 다시 빌드해 배포한다.
+- **확인.** `drizzle-kit check`가 통과하고, core-utils가 푸는 esbuild는 0.25.12다. `pnpm install --frozen-lockfile`이 통과하고 `minimumReleaseAgeExclude`에 더한 줄이 없다. 검사·시험·e2e의 결과는 PR 본문에 적는다.
+- **상태 줄.** ADR-0132 결정 4의 '다음 PR에서 다룬다'가 이 문서다. 고칠 옛 ADR이 없다. `docs/QUESTIONS.md`는 동결이라 고치지 않는다(ADR-0047). 이 ADR과 ADR-0132가 낡게 만든 그 문서의 가정은 A-M1-11이다: `uuid@7`은 ADR-0132로 lockfile에서 빠졌고, `esbuild@0.18`은 '강제 override를 피하고 상위 갱신을 기다린다' 대신 결정 1의 override로 걷어냈다.
+- **넘긴 것.** catalog의 `expo` 57.0.33(#85, 2026-11-13 13:27 UTC 뒤), ADR-0132가 다음 PR로 넘긴 glob 14.0.6(GHSA-qxr8-q827-836c, low — 2026-11-12 12:02 UTC에 나와 이 PR을 만들 때 24시간이 안 됐다. 같은 때 expo와 함께 올린다), #87의 처리(오너).
