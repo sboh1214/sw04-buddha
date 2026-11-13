@@ -16243,3 +16243,56 @@ ADR-0132가 60건 가운데 57건을 lockfile에서 걷어냈고 medium 세 건�
 - **확인.** `drizzle-kit check`가 통과하고, core-utils가 푸는 esbuild는 0.25.12다. `pnpm install --frozen-lockfile`이 통과하고 `minimumReleaseAgeExclude`에 더한 줄이 없다. 검사·시험·e2e의 결과는 PR 본문에 적는다.
 - **상태 줄.** ADR-0132 결정 4의 '다음 PR에서 다룬다'가 이 문서다. 고칠 옛 ADR이 없다. `docs/QUESTIONS.md`는 동결이라 고치지 않는다(ADR-0047). 이 ADR과 ADR-0132가 낡게 만든 그 문서의 가정은 A-M1-11이다: `uuid@7`은 ADR-0132로 lockfile에서 빠졌고, `esbuild@0.18`은 '강제 override를 피하고 상위 갱신을 기다린다' 대신 결정 1의 override로 걷어냈다.
 - **넘긴 것.** catalog의 `expo` 57.0.33(#85, 2026-11-13 13:27 UTC 뒤), ADR-0132가 다음 PR로 넘긴 glob 14.0.6(GHSA-qxr8-q827-836c, low — 2026-11-12 12:02 UTC에 나와 이 PR을 만들 때 24시간이 안 됐다. 같은 때 expo와 함께 올린다), #87의 처리(오너).
+
+---
+
+## ADR-0134 — Dependabot 경고 #85 glob: 발행 24시간을 넘긴 Expo 57.0.33으로 glob 13을 걷어내고 glob 14.0.6으로 올린다
+
+- 날짜: 2026-11-13
+- 상태: 채택
+
+### 맥락
+
+ADR-0132와 ADR-0133이 경고 60건 가운데 58건을 걷어냈고, 기본 브랜치에는 medium 둘이 열려 있다. ADR-0133의 결정 2는 glob을 override하지 않고 expo 57.0.33이 발행 24시간(ADR-0004)을 넘기기를 기다린다는 것이었다.
+
+- **glob 13.0.6(#85, GHSA-3g3m-2fjr-6pw4, CVE-2026-118773).** 남은 부모는 @expo/fingerprint 0.20.15(`^13.0.0`) 하나였다. 0.20.16은 glob 의존성을 뺐고(`.gitignore`를 찾던 glob 호출 하나를 `fs/promises`의 `readdir`로 직접 걷는다), expo 57.0.33이 그것을 바란다(`^0.20.16`).
+- **24시간.** 이 PR의 lockfile은 2026-11-13 13:29 UTC에 만들었다. 새로 들어오는 판 열 개는 모두 그 전날 13:27 UTC 이전에 나왔다(가장 늦은 것이 expo 57.0.33, 13:27:00 UTC). glob 14.0.6은 12:02 UTC다.
+- **glob 14.0.5.** ADR-0132가 다음 PR로 넘긴 그 저장소의 권고 GHSA-qxr8-q827-836c(low, 범위 13.0.5–14.0.5, 수정판 14.0.6)가 걸려 있다. Dependabot 경고는 아니다.
+- **minimatch 10.2.6(#87, GHSA-g3hv-75wg-m249).** ADR-0133의 결정 3 그대로다. 권고 범위 밖의 판은 11.0.1부터이고, 부모 넷은 `^10`이며 @nestjs/cli 12.0.0은 10.2.6으로 고정한다.
+
+### 결정
+
+1. **catalog의 `expo`를 57.0.32에서 57.0.33으로 올린다.** `pnpm-workspace.yaml`에서 바뀌는 것은 이 한 줄이다. `expo-dev-client` 57.0.21과 `expo-status-bar` 57.0.1은 57.0.33이 바라는 범위(`~57.0.21`, `~57.0.1`) 그대로고, react·react-native의 `catalog:expo` 핀(19.2.3, 0.86.3)도 그대로다. `expo-doctor`는 1.20.4로 둔다 — 그 판으로 21개 검사가 모두 통과한다.
+   - expo-doctor는 의존성 없이 한 파일로 묶여 나오고, 1.20.4는 그 안에 자기 glob 13을 품는다. lockfile 밖이라 Dependabot과 `pnpm audit`이 보지 않고, 이 PR 뒤에도 `apps/mobile`에 설치된다. 그 glob을 부르는 곳은 하나고, 고정 패턴 둘을 `signal` 없이 넘기므로 권고의 조건(`AbortSignal`로 끊은 뒤의 탐색)에 닿지 않는다. 1.20.5(sdk-57)가 품은 glob 14는 그 수정이 들어 있지만 GHSA-qxr8-q827-836c의 수정판(14.0.6)보다 앞선 판이다. 경고와 무관한 개발 도구의 갱신이라 이 PR에 섞지 않고 오너에게 알린다.
+2. **lockfile은 `pnpm install` 뒤에 `pnpm update -r --depth Infinity @expo/config-plugins expo-constants glob`으로 맞춘다.** `pnpm install`만 하면 @expo/config-plugins(57.0.12·57.0.13)와 expo-constants(57.0.23·57.0.24)가 두 벌로 남고 glob 14는 14.0.5에 머문다. 셋 다 상위 패키지가 선언한 범위 안에서 한 벌로 모은다.
+3. **override를 쓰지 않고 `minimumReleaseAgeExclude`에 줄을 더하지 않는다.** 24시간을 넘겼으므로 정상 경로다.
+4. **minimatch(#87)는 이 PR에서 다루지 않는다.** override하지 않고 dismiss하지 않는다. 닫을지는 오너가 정한다(ADR-0133 결정 3).
+
+### 결과
+
+- **바뀐 파일.** `pnpm-workspace.yaml`(catalog 한 줄), `pnpm-lock.yaml`, 이 문서. 실행 코드와 시험은 바꾸지 않았다. 마이그레이션·출시 설정·API 계약의 변화가 없다.
+- **lockfile.** 판이 바뀐 패키지는 열한 개고, 새 이름은 없다. 패키지 수는 1,234에서 1,232로 준다.
+
+  | 패키지                   | 이전 → 이후            |
+  | ------------------------ | ---------------------- |
+  | expo                     | 57.0.32 → 57.0.33      |
+  | @expo/cli                | 57.0.33 → 57.0.34      |
+  | @expo/config-plugins     | 57.0.12 → 57.0.13      |
+  | @expo/fingerprint        | 0.20.15 → 0.20.16      |
+  | @expo/metro-file-map     | 57.0.4 → 57.0.5        |
+  | @expo/prebuild-config    | 57.0.20 → 57.0.21      |
+  | expo-constants           | 57.0.23 → 57.0.24      |
+  | expo-modules-autolinking | 57.0.17 → 57.0.18      |
+  | expo-modules-core        | 57.0.25 → 57.0.26      |
+  | glob                     | 13.0.6·14.0.5 → 14.0.6 |
+  | path-scurry              | 2.0.2·3.0.0 → 3.0.0    |
+
+  나머지 줄은 peer로 적힌 `expo@57.0.32`가 `expo@57.0.33`으로 바뀐 것이다. `@expo/env`의 두 벌(2.4.4, fingerprint 아래의 2.6.0)은 ADR-0132 때와 같다.
+
+- **경고.** 이 lockfile에서 경고 60건의 범위에 드는 것은 #87 하나다(`pnpm audit`도 moderate 하나, 같은 권고). #85는 기본 브랜치에 들어간 뒤 Dependabot이 닫는다. glob 14.0.6으로 GHSA-qxr8-q827-836c의 범위에서도 벗어난다.
+- **#87의 남은 부모.** minimatch 10.2.6의 부모는 eslint 10.9.1, @eslint/config-array, @typescript-eslint/typescript-estree, @nestjs/cli 12.0.0, @expo/fingerprint 0.20.16 다섯이다. ADR-0133이 `optimizationLevel` 2 이상을 주는 유일한 부모로 본 glob 13이 빠졌다. fingerprint 0.20.16은 `{ dot: true }`만 주고(기본값 1), 그 코드의 주석도 같은 까닭으로 이 권고가 닿지 않는다고 적는다. minimatch 10.2.6에는 ADR-0132가 적은 그 저장소의 권고 GHSA-c859-jr93-m5j4(`escape()`, 수정판은 11.0.8, 아직 Dependabot 경고가 아니다)도 걸린다. 다섯 부모는 `escape()`를 부르지 않는다.
+- **운영 영향.** 바뀌는 패키지는 모두 `apps/mobile`의 것이고 Expo 쪽은 이미지에 없다. api·worker·web이 설치하거나 불러오는 것은 바뀌지 않는다. lockfile이 바뀌므로 머지하면 세 이미지를 다시 빌드해 배포한다. 배포는 평소처럼 migrate와 시드를 돌리는데, 이 PR은 마이그레이션과 시드 코드를 바꾸지 않아 새로 적용할 것이 없다.
+- **expo-doctor.** `pnpm mobile:doctor`가 21개 모두 통과한다(ADR-0132 때는 판 맞춤 검사 하나가 `expo ~57.0.33`을 바라 20개였다). 모바일은 lint·typecheck·expo-doctor로만 확인했고, Metro 번들·`expo prebuild`·네이티브 빌드는 돌리지 않았다(앱은 M0의 자리뿐이다).
+- **확인.** `pnpm install --frozen-lockfile`이 통과하고 `minimumReleaseAgeExclude`에 더한 줄이 없다. 새 판 열 개의 integrity는 레지스트리와 같고 설치 스크립트가 있는 것이 없다. 검사·시험·e2e의 결과는 PR 본문에 적는다.
+- **상태 줄.** ADR-0133 결정 2의 '57.0.33이 24시간을 넘기면 올린다'와 '넘긴 것'의 expo 57.0.33·glob 14.0.6이 이 문서다. 고칠 옛 ADR이 없다.
+- **넘긴 것.** #87의 처리(오너). Dependabot이 알리지 않는 공급자 권고(ADR-0132의 '이 PR의 범위 밖')는 그대로다.
