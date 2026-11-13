@@ -28,6 +28,14 @@ allowBuilds:
 # at or above the version it pins (the adapter imports fastify/lib internals).
 overrides:
   fastify: "catalog:"
+  # esbuild 0.18.20 (GHSA-67mh-4wv8-2f99, Dependabot #1) is in the tree only because drizzle-kit 0.31
+  # still DECLARES @esbuild-kit/esm-loader -> @esbuild-kit/core-utils (`esbuild ~0.18.20`, both
+  # deprecated, final releases). drizzle-kit's shipped code never loads them (it loads TS through its
+  # bundled tsx), so this only changes which esbuild sits next to an unused package: the same
+  # `^0.25.4` drizzle-kit itself asks for, so no extra copy. Remove this line when
+  # @esbuild-kit/core-utils is gone from pnpm-lock.yaml (drizzle-kit 1.0 drops it); pnpm does not
+  # warn about an unused override, so look at each drizzle-kit bump (ADR-0133).
+  "@esbuild-kit/core-utils>esbuild": "^0.25.4"
 
 # ---- supply-chain policy --------------------------------------------------
 # minimumReleaseAge is left at the pnpm 11 default (1440 min, non-strict). When a pinned version is
