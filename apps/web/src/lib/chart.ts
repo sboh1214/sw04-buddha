@@ -64,10 +64,22 @@ export interface ChartFraction {
 }
 
 export interface ChartGeometry {
-  /** Step-after outline for `<path d>`; `''` when there are no points. */
-  readonly line: string;
-  /** The same outline closed to the baseline, for the flat fill; `''` when empty. */
+  /**
+   * The step-after line through the recorded points, from the first one (not the left edge: the
+   * window before the first fill is empty, ADR-0135 결정 1의 6) to the last fill; `''` when it
+   * has no length — no fill, one fill, or a last fill older than the window (ADR-0139).
+   */
+  readonly solid: string;
+  /**
+   * The last fill's level held from it — or from the window's start when it is older — to the
+   * window's end: the 무거래 구간 after the last fill (ADR-0135 C3), drawn faint and dashed;
+   * `''` when nothing is left of the window after it.
+   */
+  readonly dotted: string;
+  /** `solid` closed to the baseline, for the flat fill; `''` when `solid` is. */
   readonly area: string;
+  /** The last fill's position, or null when it is outside the window (or there is none). */
+  readonly dot: ChartFraction | null;
   /**
    * One entry per point, as fractions of the box. The hover dot, the crosshair and the tooltip
    * are HTML positioned with these, never SVG children: `preserveAspectRatio="none"` distorts
@@ -75,6 +87,16 @@ export interface ChartGeometry {
    */
   readonly at: readonly ChartFraction[];
   readonly domain: ChartDomain;
+}
+
+/** Where `chartGeometry` closes the lines; each defaults from the points (`chartLayout`). */
+export interface ChartGeometryOptions {
+  /** The window the axes describe; the points' own span when absent. */
+  readonly domain?: ChartDomain;
+  /** The last fill's instant, which may precede the window; the last point's when absent. */
+  readonly lastFillT?: number;
+  /** The window's end, where the dotted hold stops; `domain.t1` when absent. */
+  readonly end?: number;
 }
 
 /** One gridline: where it sits in the box, and the probability it names. */
@@ -141,62 +163,129 @@ export function toChartPoints(ticks: readonly ChartTick[]): ChartPoint[] {
 }
 
 /**
- * Appends the live probability at `nowMs`, so the last fill's price visibly holds until now
- * instead of the line stopping at the newest tick.
- *
- * An empty series stays empty: the caller renders 체결 없음 on length 0 (N02 §5), and a
- * synthesised point would replace that empty state with a line drawn from nothing. An instant
- * at or before the newest point is dropped for the same reason a clock is never trusted here —
- * the server's window end can lag a tick that has just arrived over the socket, and a segment
- * running backwards would draw a fold in the curve.
+ * The series fields the chart reads, structurally (the cached `PriceSeries`): its window, the
+ * trade count it was read at, and its points — a point the socket drew carries its trade count.
  */
-export function extendToNow(
+export interface ChartSeries {
+  readonly from: string;
+  readonly to: string;
+  readonly tradeCount: number;
+  readonly points: readonly (ChartTick & { readonly tradeCount?: number })[];
+}
+
+/** The market row's last fill, read ONCE beside its trade count (`ProbabilityChart`). */
+export interface ChartRow {
+  /** `lastPrice` in basis points, or null before the first fill. */
+  readonly bp: number | null;
+  readonly lastFillAt: string | null;
+  readonly tradeCount: number;
+}
+
+/**
+ * The last fill as the chart places it (#64, ADR-0139): the row's `(lastFillAt, lastPrice)`
+ * when the row knows every trade the series does — `joinMarket` keeps it newest, and the series
+ * answer pins its own steps on grid boundaries, not on the fill's instant — and otherwise the
+ * series' last point the socket drew (a tick that reached the series before the row's first
+ * answer), or its last point at all. Null when there is no fill. An equal count is the same
+ * fills: the route reads the counter and the points in one snapshot (`listTicks`).
+ *
+ * On a closed window (`closed`, `isClosedWindow`) a row fill past `to` is ignored: no fill can
+ * join a window that trading has left. It replaces `rowSupersedesSeries`/`withLiveEdge`.
+ */
+export function lastFill(series: ChartSeries, row: ChartRow, closed: boolean): ChartPoint | null {
+  const toMs = Date.parse(series.to);
+  const rowT = row.lastFillAt === null ? Number.NaN : Date.parse(row.lastFillAt);
+  const rowUsable =
+    row.bp !== null && Number.isFinite(row.bp) && Number.isFinite(rowT) && !(closed && rowT > toMs);
+  // A count that is not an integer (an older API's series) cannot order the two; the row wins.
+  const rowCurrent =
+    !(Number.isInteger(row.tradeCount) && Number.isInteger(series.tradeCount)) ||
+    row.tradeCount >= series.tradeCount;
+  if (rowCurrent && rowUsable && row.bp !== null) return { t: rowT, bp: row.bp };
+  // The socket's last point, else the last point at all.
+  let live: ChartPoint | undefined;
+  let any: ChartPoint | undefined;
+  for (const tick of series.points) {
+    const [point] = toChartPoints([tick]);
+    if (point === undefined || (closed && point.t > toMs)) continue;
+    any = point;
+    if (tick.tradeCount !== undefined) live = point;
+  }
+  return live ?? any ?? null;
+}
+
+/**
+ * The points the chart RECORDS — what its readout, its table and its summary read (ADR-0139):
+ * the series' points before the last fill, then the last fill. The answer's grid places a step
+ * on the next boundary (up to one stride late) and on its own window end (`rn = cnt`), so every
+ * point at or after the last fill is dropped, as `pushPoint` trims. A last fill older than the
+ * window's start leaves the value in force there, at `fromMs`, and nothing else. The dotted end
+ * of the line is no point: nothing was recorded there.
+ */
+export function recordedPoints(
   points: readonly ChartPoint[],
-  nowMs: number,
-  bp: number,
+  fill: ChartPoint | null,
+  fromMs: number,
 ): ChartPoint[] {
-  const last = points[points.length - 1];
-  if (last === undefined) return [];
-  if (!Number.isFinite(nowMs) || !Number.isFinite(bp) || nowMs <= last.t) return [...points];
-  return [...points, { t: nowMs, bp }];
+  if (fill === null) return [];
+  if (fill.t < fromMs) return [{ t: fromMs, bp: fill.bp }];
+  return [...points.filter((point) => point.t < fill.t), fill];
+}
+
+/** What `ProbabilityChart` draws: the recorded points, the last fill and the geometry. */
+export interface ChartLayout {
+  readonly points: readonly ChartPoint[];
+  readonly lastFill: ChartPoint | null;
+  readonly geometry: ChartGeometry;
 }
 
 /**
- * The newest known probability AS the newest reading: the last point keeps its instant and
- * takes `bp`. Only the level moves, never the time, so the drawn shape and every hover readout
- * keep the instants the server sent.
- *
- * This is what `extendToNow` above cannot do. Its `nowMs <= last.t` test is a GEOMETRY guard —
- * a segment running backwards would draw a fold — and every bucketed answer makes it a tie,
- * because the server pins a point at its own window end (`rn = cnt`, market.service.ts). So a
- * series that is a trade behind keeps drawing the old level while the header, which reads the
- * market row, has moved. The caller decides WHETHER the row is newer, by counter
- * (`rowSupersedesSeries`, ticks.ts); this only carries out the decision.
- *
- * `joinMarket` (market-live.ts) does the same thing to the row itself, and the detail chart is
- * the one live line on the site (the card draws none, ADR-0062). An empty series stays empty for
- * the reason `extendToNow` gives, and a level that cannot be plotted is refused rather than
- * written into the path as a NaN.
+ * One series and one row as the chart lays them out (#64, ADR-0139). The x axis is the window,
+ * `[from, end]`: before the first fill it is empty (ADR-0135 결정 1의 6). `end` is the series'
+ * `to` on a closed window — the end of trading, and nothing after it is drawn — and on an open
+ * one the latest of `to`, the socket's last point and the last fill, so a live trade never
+ * lands past the right edge. Both instants are the server's: no clock is read here.
  */
-export function withLiveEdge(points: readonly ChartPoint[], bp: number): ChartPoint[] {
-  const last = points[points.length - 1];
-  if (last === undefined) return [];
-  if (!Number.isFinite(bp)) return [...points];
-  return [...points.slice(0, -1), { t: last.t, bp }];
+export function chartLayout(series: ChartSeries, row: ChartRow, closed: boolean): ChartLayout {
+  const toMs = Date.parse(series.to);
+  const all = toChartPoints(series.points);
+  const kept = closed ? all.filter((point) => !(point.t > toMs)) : all;
+  const fill = lastFill(series, row, closed);
+  const fromMs = Date.parse(series.from);
+  const points = recordedPoints(kept, fill, fromMs);
+  let end = toMs;
+  if (!closed) {
+    for (const t of [kept.at(-1)?.t, fill?.t]) {
+      if (t !== undefined && !(t <= end)) end = t;
+    }
+  }
+  const window =
+    Number.isFinite(fromMs) && Number.isFinite(end) && fromMs <= end
+      ? { t0: fromMs, t1: end }
+      : undefined;
+  const domain = chartDomain(points, window);
+  const geometry = chartGeometry(points, { domain, lastFillT: fill?.t, end: domain.t1 });
+  return { points, lastFill: fill, geometry };
 }
 
 /**
- * The window the axes describe: the points' own time span, and their probability span widened
- * to at least `CHART_MIN_SPAN_BP` (A-M4-1).
+ * The window the axes describe: the given time window — the series' own, `chartLayout` — or else
+ * the points' own time span, and their probability span widened to at least `CHART_MIN_SPAN_BP`
+ * (A-M4-1).
  *
  * At the 0 and 10000 edges the widened window slides back inside rather than being squashed,
  * so `hi - lo` stays at the floor whatever the data. That is why `yFraction` cannot divide by
  * zero, and why the flat-series special case both designs needed does not exist here. Because
  * the window floats, the text labels from `axisLabels` are mandatory, not decorative.
  */
-export function chartDomain(points: readonly ChartPoint[]): ChartDomain {
+export function chartDomain(
+  points: readonly ChartPoint[],
+  window?: { readonly t0: number; readonly t1: number },
+): ChartDomain {
   const first = points[0];
-  if (first === undefined) return { t0: 0, t1: 0, lo: 0, hi: CHART_MIN_SPAN_BP };
+  if (first === undefined) {
+    return { t0: window?.t0 ?? 0, t1: window?.t1 ?? 0, lo: 0, hi: CHART_MIN_SPAN_BP };
+  }
   let lo = first.bp;
   let hi = first.bp;
   let t0 = first.t;
@@ -220,15 +309,14 @@ export function chartDomain(points: readonly ChartPoint[]): ChartDomain {
     lo -= hi - BP_MAX;
     hi = BP_MAX;
   }
-  return { t0, t1, lo: lo < 0 ? 0 : lo, hi };
+  return { t0: window?.t0 ?? t0, t1: window?.t1 ?? t1, lo: lo < 0 ? 0 : lo, hi };
 }
 
 /**
  * x is time-scaled, never index-scaled: `listTicks` anchors its downsample stride at the newest
  * row (A-M3-25), so the points it returns are not evenly spaced in time and index spacing would
- * misrepresent the history for free. A market with a single fill, or a burst of fills inside
- * one millisecond, has no span at all — every x is then 0 and step-after's trailing `H1000`
- * draws a full-width flat hold, which is the honest picture of one price held across the window.
+ * misrepresent the history for free. A window with no span (a series' own span of one fill, or
+ * a burst of fills inside one millisecond) puts every x at 0 rather than at NaN.
  */
 function xFraction(t: number, domain: ChartDomain): number {
   return clamp01((t - domain.t0) / (domain.t1 - domain.t0));
@@ -241,31 +329,52 @@ function yFraction(bp: number, domain: ChartDomain): number {
 }
 
 /**
- * The outline, the fill and the overlay positions for one series.
+ * The lines, the fill and the overlay positions for one series (ADR-0032, ADR-0139).
  *
  * Step-after, not linear: a price does not move between fills, so a diagonal would draw a price
- * nobody traded at. The path is `M0,y0` — the first point always sits on the left
- * edge — then `H<x> V<y>` per later point, then `H<w>` to hold the newest level to the right
- * edge, which is the same segment `extendToNow` makes explicit when a live probability is known.
+ * nobody traded at. `solid` starts at the first point — `M<x0>,y0`, not the left edge: the
+ * window before the first fill is empty — then `H<x> V<y>` per later point, and ends at the last
+ * one, the last fill. From there `dotted` holds that level to the window's end, starting at the
+ * window's start when the fill is older than it; the area fills under `solid` only.
  */
-export function chartGeometry(points: readonly ChartPoint[]): ChartGeometry {
-  const domain = chartDomain(points);
+export function chartGeometry(
+  points: readonly ChartPoint[],
+  options: ChartGeometryOptions = {},
+): ChartGeometry {
+  const domain = options.domain ?? chartDomain(points);
   const at: ChartFraction[] = points.map((point) => ({
     x: round(xFraction(point.t, domain), FRACTION_DP),
     y: round(yFraction(point.bp, domain), FRACTION_DP),
   }));
   const first = at[0];
+  const last = at.at(-1);
+  const lastPoint = points.at(-1);
   // Empty `d` strings rather than a lone moveto, which some renderers still paint as a dot.
-  if (first === undefined) return { line: '', area: '', at, domain };
-  const { w, h } = CHART_VIEWBOX;
-  let line = `M0,${coord(first.y * h)}`;
-  for (const cell of at.slice(1)) {
-    line += ` H${coord(cell.x * w)} V${coord(cell.y * h)}`;
+  if (first === undefined || last === undefined || lastPoint === undefined) {
+    return { solid: '', dotted: '', area: '', dot: null, at, domain };
   }
-  line += ` H${String(w)}`;
+  const { w, h } = CHART_VIEWBOX;
+  let solid = '';
+  if (at.length > 1) {
+    solid = `M${coord(first.x * w)},${coord(first.y * h)}`;
+    for (const cell of at.slice(1)) {
+      solid += ` H${coord(cell.x * w)} V${coord(cell.y * h)}`;
+    }
+  }
   // The outline closed down to the baseline and back, so the fill is one path with no seam.
-  const area = `${line} V${String(h)} H0 Z`;
-  return { line, area, at, domain };
+  const area = solid === '' ? '' : `${solid} V${String(h)} H${coord(first.x * w)} Z`;
+  const lastFillT = options.lastFillT ?? lastPoint.t;
+  const end = options.end ?? domain.t1;
+  // Decided on the unrounded fractions, so a fill seconds before the window's end still has its
+  // hold — a path too short to see — and written rounded, as every other coordinate.
+  const holdFrom = xFraction(Math.max(lastFillT, domain.t0), domain);
+  const holdTo = xFraction(end, domain);
+  const holdX = (fraction: number): string => coord(round(fraction, FRACTION_DP) * w);
+  const dotted =
+    holdTo > holdFrom ? `M${holdX(holdFrom)},${coord(last.y * h)} H${holdX(holdTo)}` : '';
+  const inWindow = lastFillT >= domain.t0 && lastFillT <= domain.t1;
+  const dot = inWindow ? { x: round(xFraction(lastFillT, domain), FRACTION_DP), y: last.y } : null;
+  return { solid, dotted, area, dot, at, domain };
 }
 
 /**
@@ -274,9 +383,12 @@ export function chartGeometry(points: readonly ChartPoint[]): ChartGeometry {
  * there is nothing to point at. A tie goes to the earlier point, so crossing a gap left and
  * right lands on the same pair of points either way.
  */
-export function nearestIndex(points: readonly ChartPoint[], xFraction: number): number {
+export function nearestIndex(
+  points: readonly ChartPoint[],
+  xFraction: number,
+  domain: ChartDomain = chartDomain(points),
+): number {
   if (points.length === 0) return -1;
-  const domain = chartDomain(points);
   const target = domain.t0 + clamp01(xFraction) * (domain.t1 - domain.t0);
   // Every index below is in range; the fallback only satisfies noUncheckedIndexedAccess.
   const timeAt = (index: number): number => points[index]?.t ?? domain.t1;
@@ -293,14 +405,17 @@ export function nearestIndex(points: readonly ChartPoint[], xFraction: number): 
 
 /**
  * The three gridlines for the current window, top to bottom. They are text, not decoration:
- * the y window floats, so an unlabelled axis would be a lie. The label rounds to whole basis
- * points while the line stays where the unrounded value puts it.
+ * the y window floats, so an unlabelled axis would be a lie. Each sits on a whole percent
+ * (ADR-0139) — the highest and the lowest inside the window and the one nearest their middle —
+ * and the line is drawn where that value is, so the label and its line agree.
  */
 export function axisLabels(domain: ChartDomain): readonly ChartAxisLabel[] {
-  const mid = (domain.lo + domain.hi) / 2;
-  return [domain.hi, mid, domain.lo].map((bp) => ({
+  const top = Math.floor(domain.hi / 100) * 100;
+  const bottom = Math.ceil(domain.lo / 100) * 100;
+  const mid = Math.round((top + bottom) / 200) * 100;
+  return [top, mid, bottom].map((bp) => ({
     y: round(yFraction(bp, domain), FRACTION_DP),
-    bp: Math.round(bp),
+    bp,
   }));
 }
 
@@ -318,10 +433,15 @@ export function chartExtent(points: readonly ChartPoint[]): ChartExtent | undefi
   return { first: first.bp, min, max, last: last.bp };
 }
 
-/** Whole percent: a screen reader reading '63.00%' four times in one sentence is worse. */
-function percent(bp: number): string {
+/**
+ * The chart's number: a whole percent, 6300 → '63%' (ADR-0135 결과 4, ADR-0139) — its axis, its
+ * readout, its table and its summary. The fills are whole percents.
+ */
+export function formatChartPct(bp: number): string {
   return `${String(Math.round(bp / 100))}%`;
 }
+
+const percent = formatChartPct;
 
 /**
  * One sentence for the chart's accessible name — '시작 61%, 최고 66%, 최저 60%, 현재 63%' — so a

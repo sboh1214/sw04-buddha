@@ -553,3 +553,18 @@ export function voidPayoutText(
 export function complementReading(lastPrice: number | null): string | null {
   return lastPrice === null ? null : formatNoPrice(lastPrice);
 }
+
+/**
+ * The detail badge's move (ADR-0135 결정 1의 5, ADR-0139): 시장가격 now minus 시장가격 24 hours
+ * before the row was read (`lastPrice24hAgo`), in whole percentage points, on a market 거래 중
+ * (`open`) only — not a paused one, whose screen name is not 거래 중. `null`, and no badge, with
+ * no price, with no fill by then (never the open's 50%) or with no move.
+ */
+export function delta24h(
+  market: Pick<Market, 'status' | 'lastPrice' | 'lastPrice24hAgo'>,
+): number | null {
+  if (market.status !== 'open') return null;
+  if (market.lastPrice === null || market.lastPrice24hAgo === null) return null;
+  const delta = market.lastPrice - market.lastPrice24hAgo;
+  return delta === 0 ? null : delta;
+}

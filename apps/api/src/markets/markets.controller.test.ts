@@ -7,6 +7,7 @@
  */
 import { clockTimestamp, schema } from '@buddha/db';
 import {
+  closeMarketEarly,
   createCategory,
   createFill,
   createFillRecord,
@@ -41,10 +42,11 @@ import {
 } from '@buddha/shared';
 import { randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_PARAM_LENGTH } from '../infra/http/fastify-options.js';
 import { createTestApp, type TestApp } from '../test/app.js';
 import { marketOrder } from './market-order.js';
+import { MarketService } from './market.service.js';
 import { MarketRankingCursors } from './market-ranking-cursor.js';
 import { hasTestInfra } from '../test/setup-env.js';
 
@@ -1462,7 +1464,28 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       { ts: firstAt, pYesBp: 6_000, trigger: 'trade' },
       { ts: secondAt, pYesBp: 5_500, trigger: 'trade' },
     ]);
-    expect((await series(`/api/v1/markets/${m.id}/ticks`)).tradeCount).toBe(2);
+    const latest = await series(`/api/v1/markets/${m.id}/ticks`);
+    expect(latest.tradeCount).toBe(2);
+    // An open market's window ends where it was read (#64, ADR-0139).
+    expect(latest.asOf).toBe(latest.to);
+    // The counter and the points are ONE snapshot (#64 review): a fill stamped inside the window
+    // and committed right after the counter's read is in neither — never in the points alone,
+    // where the web took the row's older price over it at the same count.
+    const service = t.app.get(MarketService);
+    const readRow = service.requirePublicAt.bind(service);
+    const racing = vi
+      .spyOn(service, 'requirePublicAt')
+      .mockImplementationOnce(async (marketId, executor) => {
+        const read = await readRow(marketId, executor);
+        await writeHistory(m.id, [{ at: read.now.getTime(), yes: 70 }]);
+        return read;
+      });
+    const raced = await series(`/api/v1/markets/${m.id}/ticks?resolution=raw`);
+    racing.mockRestore();
+    expect(raced.tradeCount).toBe(2);
+    expect(raced.points.map((point) => point.ts)).toEqual([firstAt, secondAt]);
+    // It did commit: the next read has it (`writeHistory` moves no counter).
+    expect((await series(`/api/v1/markets/${m.id}/ticks?resolution=raw`)).points).toHaveLength(3);
   });
 
   it('charts each fill at its YES value on the 1m and 1h grid too: NO fills, a NO pair mint, one intake (#121)', async () => {
@@ -1831,9 +1854,11 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     const windowed = await series(
       `/api/v1/markets/${open.id}/ticks?windowSeconds=3600&resolution=1m`,
     );
-    // The window is exactly an hour wide and both ends are the service's own reading.
+    // The window is exactly an hour wide and both ends are the service's own reading — the
+    // instant the answer was read at (`asOf`, ADR-0139), trading going on.
     const span = Date.parse(windowed.to) - Date.parse(windowed.from);
     expect(span).toBe(HOUR_MS);
+    expect(windowed.asOf).toBe(windowed.to);
     // And it is anchored to NOW, not to anything the caller said: the older fill is outside it.
     expect(Date.parse(windowed.from)).toBeGreaterThan(twoHoursAgo);
   });
@@ -1907,6 +1932,8 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
         to: before,
         points: [],
       });
+      // A pinned `to` is history: the answer was read after it (ADR-0139).
+      expect(Date.parse(older.asOf)).toBeGreaterThan(Date.parse(older.to));
     }
 
     // The mirror case: a clock running days fast sends a `from` past the server's own `now`
@@ -1918,6 +1945,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     );
     expect(Date.parse(skewed.to)).toBeLessThan(ahead);
     expect(skewed.from).toBe(skewed.to);
+    expect(skewed.asOf).toBe(skewed.to);
     expect(skewed.points).toEqual([{ ts: skewed.to, pYesBp: 4_000, trigger: 'trade' }]);
 
     // A window no ladder entry can cover (about ten years) is trimmed at the old end, and the
@@ -1934,6 +1962,50 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       604_800 * 1_000 * (TICKS_MAX_POINTS - 2),
     );
     expect(wide.points).toEqual([{ ts: iso(tickAt), pYesBp: 4_000, trigger: 'trade' }]);
+  });
+
+  it('closes a default window at the end of trading once it has ended, read at `asOf` (#64)', async () => {
+    // ADR-0139 (ADR-0135 C4): with no `to`, an ended market's window ends where its trading did —
+    // an early close's end, the instant its public judging record names, or else `close_at` —
+    // and `windowSeconds` counts back from there, so 전체 is 개장~실제 거래 종료 and 1일 the day
+    // before it. `asOf` is the instant the answer was read, later than such a `to`; a `to` the
+    // caller names stands.
+    const openAt = new Date(Date.now() - 3 * DAY_MS);
+    const early = await market({ openAt });
+    await closeMarketEarly(t.db, early.id);
+    // After the close: the history fixture leaves its resting sells live with nothing locked
+    // (a read fixture), which the early close's pause would try to cancel.
+    await writeHistory(early.id, [{ at: openAt.getTime() + HOUR_MS, yes: 40 }]);
+    const record = (await get(`/api/v1/markets/${early.id}`)).json<{ data: Market }>().data
+      .judgingRecord;
+    const endedAt = record.pauses[0]?.endedAt;
+    if (endedAt === null || endedAt === undefined) throw new Error('no early close recorded');
+    const day = await series(`/api/v1/markets/${early.id}/ticks?windowSeconds=86400&resolution=1m`);
+    expect(day.to).toBe(endedAt);
+    expect(Date.parse(day.to) - Date.parse(day.from)).toBe(DAY_MS);
+    expect(Date.parse(day.asOf)).toBeGreaterThan(Date.parse(day.to));
+    const all = await series(`/api/v1/markets/${early.id}/ticks?resolution=1h`);
+    expect(all).toMatchObject({ from: openAt.toISOString(), to: endedAt });
+    expect(all.points.at(-1)?.ts).toBe(endedAt);
+    expect(Date.parse(all.asOf)).toBeGreaterThan(Date.parse(all.to));
+    const pinned = iso(openAt.getTime() + 2 * HOUR_MS);
+    expect((await series(`/api/v1/markets/${early.id}/ticks?to=${pinned}&resolution=1h`)).to).toBe(
+      pinned,
+    );
+
+    // Closed on schedule: `close_at`. Due but not yet closed by the worker, the market is already
+    // 마감 (ADR-0115, the intake gate's reading) and ends there too.
+    const closeAt = new Date(Date.now() - HOUR_MS);
+    const scheduled = await market({ status: 'closed', openAt, closeAt });
+    const ended = await series(`/api/v1/markets/${scheduled.id}/ticks?resolution=1h`);
+    expect(ended).toMatchObject({ from: openAt.toISOString(), to: closeAt.toISOString() });
+    expect(Date.parse(ended.asOf)).toBeGreaterThan(Date.parse(ended.to));
+    const due = await market({ openAt, closeAt });
+    const dueDay = await series(
+      `/api/v1/markets/${due.id}/ticks?windowSeconds=86400&resolution=1m`,
+    );
+    expect(dueDay.to).toBe(closeAt.toISOString());
+    expect(Date.parse(dueDay.asOf)).toBeGreaterThan(Date.parse(dueDay.to));
   });
 
   it('lists each market as its summary alone: no sparkline, the participant count as stored', async () => {

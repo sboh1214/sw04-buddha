@@ -781,9 +781,16 @@ describe('read DTOs', () => {
       to: '2026-09-05T04:00:00.000Z',
       truncated: false,
       tradeCount: 3,
+      asOf: '2026-09-05T04:00:00.000Z',
       points: [point],
     };
     expect(priceSeriesSchema.parse(series)).toEqual(series);
+    // The read instant (#64): required, an instant (ordering is the API's, not the schema's).
+    expect(priceSeriesSchema.safeParse({ ...series, asOf: undefined }).success).toBe(false);
+    expect(priceSeriesSchema.safeParse({ ...series, asOf: '2026-09-05' }).success).toBe(false);
+    expect(priceSeriesSchema.parse({ ...series, asOf: '2026-09-06T00:00:00.000Z' }).asOf).toBe(
+      '2026-09-06T00:00:00.000Z',
+    );
     // Required, and the ordering key a client compares an event against — `to` cannot serve as
     // one, because a tick's `ts` is fixed before its row commits.
     expect(priceSeriesSchema.safeParse({ ...series, tradeCount: undefined }).success).toBe(false);

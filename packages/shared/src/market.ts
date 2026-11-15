@@ -827,9 +827,20 @@ export const priceSeriesSchema = z
     resolution: tickResolutionSchema,
     /** The stride actually served, in seconds; 0 for `raw`. */
     bucketSeconds: z.number().int().min(0),
-    /** The window the answer describes; equals the request when both bounds were given. */
+    /**
+     * The window the answer describes; equals the request when both bounds were given. An
+     * omitted `to` is the read instant while trading goes on and the instant trading ended
+     * after it (`close_at`, or an early close's end; #64, ADR-0139).
+     */
     from: z.iso.datetime(),
     to: z.iso.datetime(),
+    /**
+     * The database instant this answer was read at. An open window ends there (`asOf === to`);
+     * a closed one ended before it (`asOf > to`): no fill can join it, so a client takes such
+     * an answer whole instead of merging it with live points (ADR-0139). The detail page's
+     * clock reads this, never `to`, which on an ended market is the end of trading.
+     */
+    asOf: z.iso.datetime(),
     /** Points older than the served ones exist inside the window but were left out. */
     truncated: z.boolean(),
     /**
@@ -851,11 +862,11 @@ export const priceSeriesSchema = z
      * tell the two apart. A client merging live `market:tick` events, which carry this same
      * counter, compares this instead.
      *
-     * Read BEFORE the points, never after: an earlier snapshot can only lag them, which at
-     * worst makes a client keep a point the answer already has — the same trade at the same
-     * price. A count read AFTER the points could claim a trade the points predate, and the
-     * client would then drop the live tick it is holding, which is the failure this field
-     * exists to prevent.
+     * Read in the SAME snapshot as the points (#64, ADR-0139). A count read AFTER them could
+     * claim a trade the points predate, and the client would then drop the live tick it is
+     * holding, which is the failure this field exists to prevent. A count read BEFORE them
+     * could lag a fill they hold, and the web's chart, which takes the row over a series of
+     * the same count, then drew the row's older price over that fill.
      */
     tradeCount: z.number().int().min(0),
     /**

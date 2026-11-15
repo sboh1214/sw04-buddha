@@ -1,7 +1,9 @@
 import {
+  type MarketStatus,
   type MarketTickEvent,
   TICKS_MAX_POINTS,
   type TickResolution,
+  isPreCloseMarketStatus,
   supersedes,
 } from '@buddha/shared';
 import { type PriceSeries, type PriceTick, api, unwrap } from './api';
@@ -21,8 +23,34 @@ import { ticksKey } from './market-keys';
 export const TICK_RANGES = ['1D', '1W', 'all'] as const;
 export type TickRange = (typeof TICK_RANGES)[number];
 
-/** What the detail page opens on, and the only range the server seeds into the cache. */
+/** The range a chart opens on when its caller names none (`useMarketTicks`' default). */
 export const DEFAULT_TICK_RANGE: TickRange = '1D';
+
+/**
+ * The range the detail opens on, and the one the server seeds into the cache (ADR-0135 C1·C4,
+ * ADR-0139): 1일 while trading has not ended (개장 예정, 거래 중, 거래 일시 중단) and 전체 — 개장부터
+ * 실제 거래 종료까지 — after. Read off the row's status when the page opens only; a status that
+ * changes under the reader leaves the range they are on.
+ */
+export function initialTickRange(status: MarketStatus): TickRange {
+  return isPreCloseMarketStatus(status) ? '1D' : 'all';
+}
+
+/**
+ * How often the detail re-reads an open market's row (ADR-0139): `lastPrice24hAgo`, the 24시간
+ * badge's baseline, moves with time and no event carries it. Five minutes, the 1일 grid's stride.
+ */
+export const LIVE_REFRESH_MS = 5 * 60_000;
+
+/**
+ * Whether the server closed this answer's window before it read it (`asOf > to`, ADR-0139):
+ * trading had ended, so no fill can join the window and the answer is whole. An open window ends
+ * where it was read (`asOf === to`); a series without `asOf` (an older API) reads as open.
+ */
+export function isClosedWindow(series: Pick<PriceSeries, 'to'> & { asOf?: string }): boolean {
+  if (series.asOf === undefined) return false;
+  return Date.parse(series.asOf) > Date.parse(series.to);
+}
 
 /** Window a range covers. `all` has none — it sends no `from` and the server fills in `openAt`. */
 const RANGE_MS: Record<Exclude<TickRange, 'all'>, number> = {
@@ -88,23 +116,6 @@ export function ticksQueryFor(range: TickRange): TicksQuery {
  */
 export interface CachedTick extends PriceTick {
   tradeCount?: number;
-  /**
-   * The probability this point MOVED FROM, in basis points — present only on a point the socket
-   * drew, and the reason 시장가격 변화 can report a trade at all.
-   *
-   * The badge used to read the last STEP of the series (`points.at(-1)` minus `points.at(-2)`),
-   * which is the same thing only while every trade gets its own point. It does not: `pushPoint`
-   * REPLACES the last point when the two share a bucket, and a 1D window comes back on a
-   * 5-minute grid (`tickBucketSeconds`), so the second trade in five minutes made the
-   * penultimate point the PREVIOUS bucket's and the badge reported the whole bucket's movement.
-   * It accumulated: measured at +6, +7, +8%p for three consecutive +3, +1, +1%p trades.
-   *
-   * Recorded here rather than in a ref or in state, which is what a "previous render" reading
-   * would need: this page is server-rendered, and a first client render that differs from the
-   * HTML is a hydration mismatch. A point the server answered has no tag and the badge falls
-   * back to the step — the reading the first paint has always had.
-   */
-  movedFromBp?: number;
 }
 
 export interface CachedSeries extends Omit<PriceSeries, 'points'> {
@@ -159,8 +170,8 @@ export function ticksQueryOptions(marketId: string, range: TickRange) {
  * refused because this event cannot BUILD a series: it carries no window, resolution or stride,
  * and inventing one would flip a pending query to `success` over its own skeleton and outlive a
  * fetch that then failed. What covers the gap instead is the chart reading the row it is a
- * trade behind (`rowSupersedesSeries` below), and the NEXT event, which supersedes the answer's
- * own `tradeCount` and appends normally.
+ * trade behind (`lastFill`, chart.ts), and the NEXT event, which supersedes the answer's own
+ * `tradeCount` and appends normally.
  *
  * An event in the last point's bucket REPLACES that point rather than appending, so a busy
  * market does not grow a spike of sub-stride points the next refetch would erase.
@@ -226,9 +237,6 @@ export function appendTickToSeries(
  * replacing, and a market trading more often than one bucket would never gain a point again.
  * `bucketMs > 0` keeps raw appending (and never divides by zero); an empty series has
  * `lastMs === -Infinity`, whose floor equals no real bucket, so its first point appends.
- *
- * It is also where a live point's `movedFromBp` is stamped, because the replacement is exactly
- * what destroys the evidence the 시장가격 변화 badge needs — see the branch's own comment.
  */
 function pushPoint(held: CachedSeries, point: CachedTick, pointMs: number): CachedSeries {
   const kept: CachedTick[] = [];
@@ -241,21 +249,7 @@ function pushPoint(held: CachedSeries, point: CachedTick, pointMs: number): Cach
   const bucketMs = held.bucketSeconds * 1000;
   const sameBucket =
     bucketMs > 0 && Math.floor(pointMs / bucketMs) === Math.floor(lastMs / bucketMs);
-  // The probability this point moved FROM, recorded here because here is the only place that
-  // knows it: `previous` is the reading the point supersedes in BOTH branches — the point being
-  // replaced when they share a bucket, the last kept point when they do not — and one line down
-  // the replaced one is gone. `recentDelta` (market-detail.tsx) reads it so 시장가격 변화 reports
-  // the trade rather than the bucket; see `CachedTick.movedFromBp` for what that was worth.
-  //
-  // Only a point that does not already carry one is tagged. `joinSeries` re-pushes a live point
-  // that survived a refetch, and that point's move was measured when it was CREATED — against
-  // the reading the socket superseded, not against whatever the server's answer happens to end
-  // with now.
-  const tagged =
-    point.movedFromBp === undefined && previous !== undefined
-      ? { ...point, movedFromBp: previous.pYesBp }
-      : point;
-  const points = sameBucket ? [...kept.slice(0, -1), tagged] : [...kept, tagged];
+  const points = sameBucket ? [...kept.slice(0, -1), point] : [...kept, point];
 
   return {
     ...held,
@@ -296,17 +290,22 @@ function pushPoint(held: CachedSeries, point: CachedTick, pointMs: number): Cach
  *    kept it. That is the very divergence this function exists to remove, re-entered through
  *    its own cutoff.
  *
- * A trade whose `executedAt` lands after the route's clock read but which commits before its
- * sampling snapshot is COUNTED by the answer and excluded from its points: only the first test
- * keeps that one. A trade committed after the snapshot is inside the window: only the second.
+ * The route reads the counter and the points in one snapshot (ADR-0139). A trade whose
+ * `executedAt` lands after the route's clock read is outside the window: the first test keeps
+ * it. A trade stamped before `to` but committed after the snapshot is in neither the counter
+ * nor the points: only the second test keeps that one.
  *
  * Each survivor goes back through `pushPoint`, so a live point sharing the last bucket replaces
  * rather than doubles it, and `TICKS_MAX_POINTS` still bounds the result. Idempotent (a second
  * join against the same answer keeps the same tail) and a no-op in the ordinary case, where the
  * answer already contains the tick and nothing is newer than its `to`.
+ *
+ * A CLOSED answer (`isClosedWindow`, ADR-0139) is taken whole: trading had ended before it was
+ * read, so it holds every fill its window will ever have, and neither test applies — a held
+ * point past its `to` and a later `to` would be the open window a `market:status` just closed.
  */
 export function joinSeries(held: CachedSeries | undefined, incoming: CachedSeries): CachedSeries {
-  if (held === undefined) return incoming;
+  if (held === undefined || isClosedWindow(incoming)) return incoming;
   const cutoffMs = Date.parse(incoming.to);
   const fromMs = Date.parse(incoming.from);
   let next = incoming;
@@ -349,78 +348,8 @@ export function joinSeries(held: CachedSeries | undefined, incoming: CachedSerie
   // in flight can land newest-first, and then the older answer names an earlier right edge
   // than one this cache already held with no point past it to carry the difference. Letting it
   // through would move `to` backwards, which `appendTickToSeries` forbids for its own writes —
-  // and `to` is what `extendToNow` (chart.ts) draws the live probability out to.
+  // and `to` is where the chart's dotted hold after the last fill ends (`chartLayout`).
   return Date.parse(held.to) > Date.parse(next.to) ? { ...next, to: held.to } : next;
-}
-
-/**
- * The move the 시장가격 변화 badge reports, in percentage points, or `null` when there is nothing
- * to report.
- *
- * It is a property of the SERIES, not a difference between two renders, and that is the whole
- * reason it can be computed at all: a previous-render value would have to be held in state or a
- * ref, which on this server-rendered page means a first client render that differs from the
- * HTML. The series is a pure value both sides read from the same seeded cache entry.
- *
- * It lives here rather than beside its one caller for the reason `ticksQueryOptions` gives above:
- * a decision inside a component is a decision this app's node-only vitest cannot reach, and it
- * IS a decision — which of two readings the badge takes, and what a market with no live point
- * gets instead.
- *
- * A point the socket drew names the probability it moved FROM (`CachedTick.movedFromBp`), and
- * that is the badge's first reading. It has to be: the last STEP of the series is the same
- * number only while every trade gets its own point, and `pushPoint` REPLACES the last point
- * when the two share a bucket — a 1D window comes back on a 5-minute grid — so the second trade
- * in five minutes left the penultimate point in the PREVIOUS bucket and the badge reported that
- * bucket's whole movement, accumulating with each further trade (+6, +7, +8%p for +3, +1, +1).
- *
- * Falling back to the step is what keeps the first paint unchanged: the server's points carry no
- * tag, and a market that has been quiet answers 0 there — the server samples the window's right
- * edge onto the grid and carries the last price forward to it, so the final two points are equal
- * and `deltaLabel` hides the badge.
- */
-export function recentDelta(points: readonly CachedTick[] | undefined): number | null {
-  const last = points?.at(-1);
-  if (last === undefined) return null;
-  if (last.movedFromBp !== undefined) return (last.pYesBp - last.movedFromBp) / 100;
-  const previous = points?.at(-2);
-  if (previous === undefined) return null;
-  return (last.pYesBp - previous.pYesBp) / 100;
-}
-
-/** The move the badge announces, and the identity it is remembered by — read off ONE point. */
-export interface RecentMove {
-  deltaPoints: number;
-  moveId: string;
-}
-
-/**
- * `recentDelta` and the identity of the move it describes, together, because reading them apart
- * is how they drift: both come from `points.at(-1)`, so no render can pair a delta with another
- * move's id.
- *
- * THE HAZARD the id closes: `ProbabilityDisplay` hides a badge whose identity matches the last
- * one it DISMISSED, so the identity has to be unique per move. A value-based one is not. Keying
- * on the whole percent collapsed every move too small to change it — three consecutive +0.1%p
- * trades inside one percent lit the badge once and stayed dark for the other two. Keying on
- * `pYesBp` fixes that pair but not an oscillation: `dismissed` remembers the last move whose
- * five-second timer actually FIRED, and a move superseded before then never writes the slot, so
- * up-down-up put the third move's identity back on a slot the first had left — measured
- * [SHOWN, SHOWN, NOT SHOWN].
- *
- * So the id is MONOTONE, never a value. `tradeCount` for a point the socket drew (`pushPoint`
- * stamps it beside `movedFromBp`, so a tagged point always has one), and the point's own `ts`
- * otherwise: a server point carries no counter, and its right edge is pinned at the answer's
- * `to`, which moves with every fetch. Neither can repeat, so no later move can collide with an
- * earlier one however the market moves. Both are values already in the cache, so the string is
- * the same on the server render and the first client render.
- */
-export function recentMove(points: readonly CachedTick[] | undefined): RecentMove | null {
-  const deltaPoints = recentDelta(points);
-  const last = points?.at(-1);
-  if (deltaPoints === null || last === undefined) return null;
-  const moveId = last.tradeCount === undefined ? `s${last.ts}` : `t${String(last.tradeCount)}`;
-  return { deltaPoints, moveId };
 }
 
 /**
@@ -429,27 +358,4 @@ export function recentMove(points: readonly CachedTick[] | undefined): RecentMov
  * from the same event, and two functions called `app…Tick` on one screen are one
  * autocomplete away from each other.
  */
-/**
- * Whether the market ROW knows a trade this series does not — the question the chart asks
- * before it draws `withLiveEdge` (chart.ts) over its right edge.
- *
- * The two counters are the same one: `PriceSeries.tradeCount` is the market's count as of the
- * answer, and the row's is kept newest by `joinMarket`. So this is an ordering, not a policy,
- * and in the ordinary case — both sides on the same trade — it is provably inert.
- *
- * Both integers are checked before `supersedes` sees them, and neither guard is decoration.
- * An ABSENT count (a series an older API answered) makes `supersedes` answer true for anything,
- * which would turn this into the unconditional override it exists to avoid. A fractional or NaN
- * count makes `BigInt()` THROW — and this is the first caller inside a render, where a throw
- * blanks the page rather than mis-drawing a line.
- */
-export function rowSupersedesSeries(
-  held: CachedSeries | undefined,
-  rowTradeCount: number,
-): boolean {
-  if (held === undefined) return false;
-  if (!Number.isInteger(rowTradeCount) || !Number.isInteger(held.tradeCount)) return false;
-  return supersedes(rowTradeCount, held.tradeCount);
-}
-
 export { appendTickToSeries as appendTick };

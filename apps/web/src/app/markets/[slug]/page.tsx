@@ -16,7 +16,7 @@ import { dehydratePublic, relatedMarketsKey } from '@/lib/market-keys';
 import { detailWindowEnd, prefetchRelatedMarkets, seedMarketDetail } from '@/lib/market-ssr';
 import { getQueryClient } from '@/lib/query-client';
 import { prefetchMarketThemes } from '@/lib/themes';
-import { DEFAULT_TICK_RANGE } from '@/lib/ticks';
+import { initialTickRange } from '@/lib/ticks';
 import { MarketDetail } from './market-detail';
 import { MarketThemes } from './market-themes';
 import { RelatedMarkets } from './related-markets';
@@ -108,12 +108,15 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
   const queryClient = getQueryClient();
   // The themes it is in (#81, ADR-0088) are read beside them the same way: once, a failure left
   // to the browser.
+  // The range the chart opens on — 1일 before trading ends, 전체 after (ADR-0135 C4) — is the
+  // one read here and seeded, so the first paint draws it without a request.
+  const range = initialTickRange(market.status);
   const [series] = await Promise.all([
-    fetchTicksServer(market.id, DEFAULT_TICK_RANGE),
+    fetchTicksServer(market.id, range),
     prefetchRelatedMarkets(queryClient, market.id, fetchRelatedMarketsPageServer),
     prefetchMarketThemes(queryClient, market.id, fetchMarketThemesServer),
   ]);
-  seedMarketDetail(queryClient, market, series);
+  seedMarketDetail(queryClient, market, series, range);
   // The related cards' countdowns measure against the server's read of them, as the home's do
   // (app/page.tsx says why it is the query's own `dataUpdatedAt`); 0 is a read that failed.
   const relatedFetchedAt =
@@ -135,7 +138,7 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
           component carries the server row as its own `fallback` besides, so no branch can leave
           an AC 2 string out even if the query is unreadable. */}
       <HydrationBoundary state={dehydratePublic(queryClient)}>
-        {/* `now` is the server's own window end, never a clock read in this render body — see
+        {/* `now` is the server's own read instant, never a clock read in this render body — see
             `detailWindowEnd`. It is absent when the series is. The nodes are rendered HERE and
             only placed by `MarketDetail`, outside every branch it takes. 배경 and 규칙 are
             rendered once for each width: md and up draws them before the chart, below md after

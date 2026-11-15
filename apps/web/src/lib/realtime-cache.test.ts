@@ -23,7 +23,7 @@ import {
   marketsKey,
   ticksKey,
 } from './market-keys';
-import { DEFAULT_TICK_RANGE, appendTick, rowSupersedesSeries } from './ticks';
+import { DEFAULT_TICK_RANGE, appendTick, isClosedWindow } from './ticks';
 import {
   type MarketPages,
   applyBalanceEvent,
@@ -32,7 +32,7 @@ import {
   applyToPages,
   BalanceOrder,
 } from './market-live';
-import { extendToNow, toChartPoints, withLiveEdge } from './chart';
+import { chartLayout } from './chart';
 import { getQueryClient, restartQueries } from './query-client';
 
 /**
@@ -175,6 +175,8 @@ const seriesBeforeTrade: PriceSeries = {
   // The same counter the market snapshot carries, so the `tick()` above (11) supersedes it —
   // the ordering `appendTickToSeries` and `joinSeries` both read.
   tradeCount: 10,
+  // Read where its window ends: open, so live points join it (`isClosedWindow`).
+  asOf: '2026-09-06T23:00:00.000Z',
   points: [{ ts: '2026-09-06T23:00:00.000Z', pYesBp: 5000, trigger: 'trade' }],
 };
 
@@ -630,6 +632,7 @@ describe('the tick series cache', () => {
     const servedTooEarly: PriceSeries = {
       ...seriesBeforeTrade,
       to: '2026-09-06T23:00:00.004Z',
+      asOf: '2026-09-06T23:00:00.004Z',
       // Its own boundary, pinned at `to` and carrying the PRE-trade price.
       points: [{ ts: '2026-09-06T23:00:00.004Z', pYesBp: 5000, trigger: 'trade' }],
     };
@@ -688,12 +691,19 @@ describe('the tick series cache', () => {
       expect(held?.tradeCount).toBe(10);
       expect(held?.points.at(-1)?.pYesBp).toBe(5000);
 
-      // What the chart draws is not. The row is a trade ahead, so its probability replaces the
-      // stale right edge — at the server's own instant, which is all that is known.
+      // What the chart draws is not. The row is a trade ahead, so its last fill is the chart's
+      // last point and dot, at the fill's own instant (`lastFill`, ADR-0139) — past the window,
+      // which the open series stretches to meet it.
       const row = queryClient.getQueryData<Market>(marketKey(ID));
-      expect(rowSupersedesSeries(held, 11)).toBe(true);
-      const plotted = extendToNow(toChartPoints(held!.points), Date.parse(held!.to), 6300);
-      expect(withLiveEdge(plotted, 6300).at(-1)).toEqual({ t: Date.parse(held!.to), bp: 6300 });
+      const fillAt = '2026-09-07T00:00:00.000Z';
+      const layout = chartLayout(
+        held!,
+        { bp: 6300, lastFillAt: fillAt, tradeCount: 11 },
+        isClosedWindow(held!),
+      );
+      expect(layout.lastFill).toEqual({ t: Date.parse(fillAt), bp: 6300 });
+      expect(layout.points.at(-1)).toEqual({ t: Date.parse(fillAt), bp: 6300 });
+      expect(layout.geometry.dot).not.toBeNull();
       expect(row).toBeUndefined();
 
       // And the next event still appends normally, so the series heals on its own.
@@ -717,6 +727,7 @@ describe('the tick series cache', () => {
       queryClient.setQueryData<PriceSeries>(key, {
         ...seriesBeforeTrade,
         to: '2026-09-06T23:00:00.004Z',
+        asOf: '2026-09-06T23:00:00.004Z',
         points: [{ ts: '2026-09-06T23:00:00.004Z', pYesBp: 5000, trigger: 'trade' }],
       });
 

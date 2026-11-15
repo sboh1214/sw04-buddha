@@ -1,9 +1,13 @@
-import { RECOMMENDED_VOLUME_HOURS, type MarketFillStats } from '@buddha/shared';
+import {
+  RECOMMENDED_VOLUME_HOURS,
+  isPreCloseMarketStatus,
+  type MarketFillStats,
+} from '@buddha/shared';
 import { and, desc, eq, lte, sql, type SQL } from 'drizzle-orm';
 import { isFillExcludedSql } from './fill-classification-read.js';
 import { isHumanAccountTypeSql } from './account-types.js';
 import type { Db } from './client.js';
-import { fills, markets } from './schema/index.js';
+import { fills, marketPauses, markets } from './schema/index.js';
 
 /*
  * 시장 통계 (#121, ADR-0116; ADR-0107 결정 1 #177 11–15항, 결정 4 #121 rows). The statistics on
@@ -177,6 +181,41 @@ export async function marketPriceAt(
     .orderBy(desc(fills.createdAt), desc(fills.id))
     .limit(1);
   return row?.yesPriceCoin ?? null;
+}
+
+/**
+ * The instant trading in `market` ended, as the chart closes its window there (#64, ADR-0139;
+ * ADR-0135 결과 4 '실제 거래 종료 시각'), or null while the window is still open:
+ *
+ * - a pre-close market (scheduled, open, paused) ended at `close_at` once that is due by `now` —
+ *   it is already 마감 before the worker moves it (ADR-0115, the intake gate's own reading), a
+ *   pause meeting `close_at` included — and is open otherwise;
+ * - a market that never opened (cancelled before its opening) has no trading to end;
+ * - any other ended at its early close — the `ended_at` of its `early_closed` pause, the column
+ *   the public judging record carries as `pauses[].endedAt` — or else at `close_at`; never at
+ *   its last fill. Cut to `now`: an early close is approved only before `close_at`
+ *   (`endMarketPause`), so the cut binds only a clock read behind the row.
+ *
+ * `now` is the database clock the caller read the row with. Read outside the row's snapshot is
+ * fine: an ended market's end is written by the transaction that closed it and never changes.
+ */
+export async function marketTradingEndedAt(
+  reader: Reader,
+  market: Pick<typeof markets.$inferSelect, 'id' | 'status' | 'openAt' | 'closeAt'>,
+  now: Date,
+): Promise<Date | null> {
+  if (isPreCloseMarketStatus(market.status)) {
+    return market.closeAt.getTime() <= now.getTime() ? market.closeAt : null;
+  }
+  if (market.openAt === null) return null;
+  const [row] = await reader
+    .select({ endedAt: marketPauses.endedAt })
+    .from(marketPauses)
+    .where(and(eq(marketPauses.marketId, market.id), eq(marketPauses.endKind, 'early_closed')))
+    .orderBy(desc(marketPauses.endedAt))
+    .limit(1);
+  const ended = row?.endedAt ?? market.closeAt;
+  return ended.getTime() < now.getTime() ? ended : now;
 }
 
 /** Approved classifications change participants alone, under the same market lock as intake. */

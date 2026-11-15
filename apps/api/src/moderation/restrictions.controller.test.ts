@@ -506,8 +506,9 @@ describe.skipIf(!hasTestInfra)('/api/v1 writing restriction (integration)', () =
           `/profiles/${profile!.publicId}/comments`,
         ]),
       );
-      // What moves with the clock alone: the health's uptime and probes, a price series' window.
-      const VOLATILE = new Set(['uptimeSeconds', 'checks', 'from', 'to', 'points']);
+      // What moves with the clock alone: the health's uptime and probes, a price series' window
+      // and its server instant (`asOf`, #64).
+      const VOLATILE = new Set(['uptimeSeconds', 'checks', 'from', 'to', 'points', 'asOf']);
       const stable = (body: string): string => {
         try {
           return JSON.stringify(JSON.parse(body), (key, value: unknown) =>

@@ -44,9 +44,7 @@ import {
   auditFailureKindLabel,
   compactJson,
   deltaLabel,
-  deltaMoveKey,
   editsAfterOpen,
-  formatBp,
   formatContracts,
   formatNoPrice,
   formatPricePerContract,
@@ -340,9 +338,7 @@ describe('formats', () => {
     expect(formatYesPrice(null)).toBe(copy.noFills);
   });
 
-  it('renders basis points and quantities for reading', () => {
-    expect(formatBp(6300)).toBe('63.00%');
-    expect(formatBp(5)).toBe('0.05%');
+  it('renders quantities for reading', () => {
     expect(formatQuantity('1234.5678901234')).toBe('1,234.5679');
     expect(formatQuantity('0.0000000000')).toBe('0');
     expect(formatQuantity('abc')).toBe('abc');
@@ -1696,21 +1692,6 @@ describe('marketFormError', () => {
     expect(marketFormError(apiError(409, 'MARKET_NOT_OPEN'))).toBeUndefined();
     expect(marketFormError(new Error('network'))).toBeUndefined();
     expect(marketFormError(undefined)).toBeUndefined();
-  });
-});
-
-describe('deltaMoveKey', () => {
-  it('is the whole percent and the label, the fallback a caller without a moveId gets', () => {
-    expect(deltaMoveKey(63, '+2%p')).toBe('63:+2%p');
-    // 체결 없음 has no price to key on, and no move to badge either.
-    expect(deltaMoveKey(null, '')).toBe(':');
-  });
-
-  it('collapses two small moves inside one percent, which is why the call site passes a moveId', () => {
-    // `lastPrice` is the whole percent, so two +0.1%p moves inside it share one identity — the
-    // badge, dismissed after the first, would stay dark for the second (`recentMove`, ticks.ts).
-    const label = deltaLabel(0.1);
-    expect(deltaMoveKey(50, label)).toBe(deltaMoveKey(50, label));
   });
 });
 

@@ -1,8 +1,7 @@
 import { VisuallyHidden } from '@chakra-ui/react';
 import { DateTimeText } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
-import { CHART_VIEWBOX, type ChartPoint, chartGeometry } from '@/lib/chart';
-import { formatBp } from '@/lib/market-admin';
+import { CHART_VIEWBOX, type ChartGeometry, type ChartPoint, formatChartPct } from '@/lib/chart';
 
 /**
  * The chart primitive behind 시장가격 추이 (PLAN 11.4): one `<svg>` built from `lib/chart.ts`
@@ -12,10 +11,11 @@ import { formatBp } from '@/lib/market-admin';
  * Three properties are load-bearing here, and each one is why no chart library can take this
  * file's place.
  *
- * **Deterministic output.** Every coordinate comes from `chartGeometry`, which takes each
- * instant as data and rounds what it emits. The server and the browser therefore produce the
- * same `d` string, so the first paint AC 2 measures is never thrown away by a hydration
- * mismatch. Nothing in this file reads a clock, measures the DOM or mints an id.
+ * **Deterministic output.** Every coordinate comes from `chartGeometry`, which the caller runs
+ * and hands in, taking each instant as data and rounding what it emits. The server and the
+ * browser therefore produce the same `d` string, so the first paint AC 2 measures is never
+ * thrown away by a hydration mismatch.
+ * Nothing in this file reads a clock, measures the DOM or mints an id.
  *
  * **Colour by `currentColor` only.** The wrapper sets `color="colorPalette.fg"` and Chakra's
  * `_dark` is a class on `<html>` (next-themes `attribute="class"`), so the theme resolves at
@@ -26,8 +26,11 @@ import { formatBp } from '@/lib/market-admin';
  * **A fixed 1000x300 user space** stretched by `preserveAspectRatio="none"`, with the stroke
  * width held by `vector-effect="non-scaling-stroke"`: the same markup is correct on the
  * server, at 375px and at 1280px without measuring anything. That stretch is also why a hover
- * dot, a crosshair or a tooltip must be HTML positioned from `ChartGeometry.at` rather than an
- * SVG child — a circle drawn in this box would come out an ellipse.
+ * dot, the last fill's dot, a crosshair or a tooltip must be HTML positioned from `ChartGeometry`
+ * rather than an SVG child — a circle drawn in this box would come out an ellipse.
+ *
+ * Three paths (ADR-0139): the fill under the solid line, the solid step line up to the last
+ * fill, and the faint dashed hold after it (ADR-0135 C3). An empty one is not drawn.
  *
  * Nothing here transitions or animates, so `prefers-reduced-motion` is satisfied by
  * construction; the animated primitive next door, `RollingNumber`, carries its own
@@ -49,8 +52,13 @@ const SVG_STYLE: React.CSSProperties = {
 /** How much of the area fill shows through. Flat, so there is no gradient `id` to keep unique. */
 const AREA_OPACITY = 0.12;
 
+/** The hold after the last fill: dashes in CSS px (non-scaling), and fainter than the line. */
+const DOTTED_DASH = '2 4';
+const DOTTED_OPACITY = 0.5;
+
 export interface LineChartProps {
-  points: readonly ChartPoint[];
+  /** `chartGeometry`'s answer for the series the caller lays out (`chartLayout`). */
+  geometry: ChartGeometry;
   /**
    * Accessible name. Omit it to mark the chart decorative — a trace beside a written 시장가격
    * whose shape, announced as well, would read the same market out twice.
@@ -63,17 +71,21 @@ export interface LineChartProps {
   /** Stroke width in CSS px; non-scaling, so a wide box does not thicken the line. */
   strokeWidth?: number;
   'data-testid'?: string;
+  /** The solid line's and the dotted hold's own test ids. */
+  lineTestId?: string;
+  dottedTestId?: string;
 }
 
 export function LineChart({
-  points,
+  geometry,
   label,
   describedBy,
   area = false,
   strokeWidth = 2,
   'data-testid': testId,
+  lineTestId,
+  dottedTestId,
 }: LineChartProps) {
-  const geometry = chartGeometry(points);
   const decorative = label === undefined;
   return (
     <svg
@@ -94,15 +106,28 @@ export function LineChart({
       {area && geometry.area !== '' ? (
         <path d={geometry.area} fill="currentColor" fillOpacity={AREA_OPACITY} />
       ) : null}
-      {geometry.line !== '' ? (
+      {geometry.solid !== '' ? (
         <path
-          d={geometry.line}
+          d={geometry.solid}
           fill="none"
           stroke="currentColor"
           strokeWidth={strokeWidth}
           strokeLinecap="round"
           strokeLinejoin="round"
           vectorEffect="non-scaling-stroke"
+          data-testid={lineTestId}
+        />
+      ) : null}
+      {geometry.dotted !== '' ? (
+        <path
+          d={geometry.dotted}
+          fill="none"
+          stroke="currentColor"
+          strokeOpacity={DOTTED_OPACITY}
+          strokeWidth={strokeWidth}
+          strokeDasharray={DOTTED_DASH}
+          vectorEffect="non-scaling-stroke"
+          data-testid={dottedTestId}
         />
       ) : null}
     </svg>
@@ -144,7 +169,7 @@ export function ChartDataTable({ id, rows }: ChartDataTableProps) {
               <td>
                 <DateTimeText iso={isoAt(row.t)} />
               </td>
-              <td>{formatBp(row.bp)}</td>
+              <td>{formatChartPct(row.bp)}</td>
             </tr>
           ))}
         </tbody>

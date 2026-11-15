@@ -8765,7 +8765,7 @@
             }
           }
         },
-        "summary": "Price series, ascending, at most 500 points. Every point is a fill: its YES value in basis points at its server time (the open and a judgement are no point). `raw` returns the fills, downsampled from the newest 10000 of the range (`truncated` says when older ones were left out). `1m`/`1h` sample the price in force on an absolute grid, coarsening the stride until the window fits; `bucketSeconds` reports the stride served, and the point at `from` carries the last fill at or before it, if any — before the first fill the series starts empty.",
+        "summary": "Price series, ascending, at most 500 points. Every point is a fill: its YES value in basis points at its server time (the open and a judgement are no point). `raw` returns the fills, downsampled from the newest 10000 of the range (`truncated` says when older ones were left out). `1m`/`1h` sample the price in force on an absolute grid, coarsening the stride until the window fits; `bucketSeconds` reports the stride served, and the point at `from` carries the last fill at or before it, if any — before the first fill the series starts empty. With no `to`, the window ends now while trading goes on and where trading ended after it (`close_at`, or an early close), `windowSeconds` counting back from there; `asOf` is the instant the answer was read, later than such a `to`.",
         "tags": [
           "markets"
         ]
@@ -35983,6 +35983,11 @@
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
           },
+          "asOf": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
           "truncated": {
             "type": "boolean"
           },
@@ -36004,6 +36009,7 @@
           "bucketSeconds",
           "from",
           "to",
+          "asOf",
           "truncated",
           "tradeCount",
           "points"

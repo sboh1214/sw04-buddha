@@ -11,6 +11,7 @@ import { copy } from '@/copy';
 import { SRC } from '../test/screen-text';
 import { ApiError } from './api';
 import { BOTTOM_TABS_HEIGHT_PX, ORDER_ENTRY_BAR_HEIGHT_PX } from './nav';
+import { LIVE_REFRESH_MS } from './ticks';
 import {
   DEFAULT_DETAIL_VIEW,
   DETAIL_SLOTS,
@@ -26,6 +27,7 @@ import {
   complementReading,
   copyDisplay,
   copyTestId,
+  delta24h,
   detailViewOf,
   drawnOrder,
   LONG_DELAY_SEPARATOR,
@@ -276,13 +278,31 @@ describe('personalAreaView (ADR-0061 decision 1, item 18; owner decision 2026-10
   });
 });
 
-describe('showsOrderArea (ADR-0048)', () => {
+describe('showsOrderArea (ADR-0048), delta24h and the 5-minute re-read (ADR-0139)', () => {
   it('is an open market only: every other status explains itself with the status notice', () => {
     for (const status of MARKET_STATUSES) {
       expect(showsOrderArea(status), status).toBe(status === 'open');
+      // The 24시간 badge is 거래 중's alone (ADR-0135 결정 1의 5): not paused, not ended.
+      expect(delta24h({ status, lastPrice: 63, lastPrice24hAgo: 61 }), status).toBe(
+        status === 'open' ? 2 : null,
+      );
     }
-    // The row not loaded yet: no order area to promise.
+    // The row not loaded yet: no order area to promise, no badge.
     expect(showsOrderArea(undefined)).toBe(false);
+    expect(LIVE_REFRESH_MS).toBe(5 * 60_000);
+    // The detail re-reads its row on a fixed timer while 거래 중 (the component is not run here):
+    // pin the call site. Not a `refetchInterval` — a tick's write re-arms that (#64 review), and
+    // the row observer keeps `marketQueryOptions`' own settlement poll like every other screen.
+    const source = readFileSync(path.join(SRC, 'app/markets/[slug]/market-detail.tsx'), 'utf8');
+    expect(source).toContain('useMarket(marketId);');
+    expect(source).toContain("useMarketBaselineRefresh(marketId, market.data?.status === 'open')");
+    expect(source).not.toMatch(/refetchInterval|useMarket\(marketId, /);
+    // A falling market reads negative; no baseline (no fill 24 hours back), no price or no move
+    // is no badge — never a move from the open's 50%.
+    expect(delta24h({ status: 'open', lastPrice: 58, lastPrice24hAgo: 61 })).toBe(-3);
+    expect(delta24h({ status: 'open', lastPrice: 63, lastPrice24hAgo: null })).toBeNull();
+    expect(delta24h({ status: 'open', lastPrice: null, lastPrice24hAgo: null })).toBeNull();
+    expect(delta24h({ status: 'open', lastPrice: 61, lastPrice24hAgo: 61 })).toBeNull();
   });
 });
 
