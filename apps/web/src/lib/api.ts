@@ -177,6 +177,17 @@ export type PriceSeries = components['schemas']['PriceSeries'];
 export type Position = components['schemas']['Position'];
 export type Order = components['schemas']['Order'];
 /**
+ * 주문 패널 (#66, ADR-0140): a quote (`POST /markets/:id/quote`, public) and its body, an order's
+ * body and answer (`POST /markets/:id/orders`), and the caller's 매도 가능액 on one market
+ * (`GET /me/markets/:id/sellable`, owner only).
+ */
+export type OrderQuote = components['schemas']['OrderQuote'];
+export type QuoteOrderBody = components['schemas']['QuoteOrderBody'];
+export type PlaceOrderBody = components['schemas']['PlaceOrderBody'];
+export type PlaceOrderResult = components['schemas']['PlaceOrderResult'];
+export type Sellable = components['schemas']['Sellable'];
+export type SellableContract = components['schemas']['SellableContract'];
+/**
  * 공개 호가 (#179, ADR-0114): `GET /markets/:id/book` — per contract, every level's price and
  * summed quantity on each side, the best prices, and why the market takes no order if it does
  * not. What the detail's 호가창 draws (#122, ADR-0138).

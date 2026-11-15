@@ -23,11 +23,11 @@ import {
  * accessibility readings AC 6 can actually be held to in a browser (the Lighthouse number
  * itself is a manual run recorded in ADR-0032).
  *
- * There is no way to trade on screen until the order panel lands (#66; D13 — the API takes
- * orders since #119, orders.spec.ts, on its own markets): an open market here has no fill, so
- * its price reads 체결 없음, its chart is empty (N02 §5) and its order area says 거래 준비 중 — the
- * desktop column, and below md the sheet its YES 매수 · NO 매수 bar opens for a member, a sign-in
- * prompt in that sheet for a signed-out visitor (#122, ADR-0067). A market `closeMarket` closes
+ * The order panel (#66, ADR-0140) is order-panel.spec.ts's; here it is only where it stands: an
+ * open market here has no fill, so its price reads 체결 없음, its chart is empty (N02 §5) and its
+ * order area holds the panel — the desktop column, and below md the sheet its YES 매수 · NO 매수
+ * bar opens, each button with its contract's best ask or 호가 없음 (ADR-0135 D2), a visitor's
+ * sheet too, which asks for a sign-in at 주문 확인 (ADR-0135 D3). A market `closeMarket` closes
  * has the helper members' one pair, traded just before the close so it stays CLOSED (#20); its
  * detail draws that one fill as a dot and a dotted hold to the end of trading, opening on 전체,
  * with no 24시간 badge (#64, ADR-0139). What a live fill moves — the live price, the chart's line
@@ -152,10 +152,13 @@ test.describe('시장 상세', () => {
     // 결정 1의 3, ADR-0139).
     expect(html).toContain(copy.marketPriceNotice);
 
-    // 주문 영역 of an open market: 거래 준비 중 where the direct-AMM trade panel was (owner
-    // decision #125 (a)), and nothing of that panel left to quote or trade with.
-    expect(html).toContain('data-testid="order-area-notice"');
-    expect(html).toContain(copy.tradePreparing);
+    // 주문 영역 of an open market: the order panel's place (#66, ADR-0140), a Skeleton in the
+    // server's HTML — the panel is drawn once the page knows its width and its reader — and
+    // nothing of the old direct-AMM trade panel.
+    expect(html).toContain('data-testid="order-area"');
+    expect(html).toContain('data-testid="order-panel-pending"');
+    expect(html).not.toContain('data-testid="order-panel"');
+    expect(html).not.toContain('data-testid="order-area-notice"');
     expect(html).not.toContain('data-testid="trade-');
 
     /*
@@ -174,10 +177,12 @@ test.describe('시장 상세', () => {
      */
     expect(html).toMatch(new RegExp(`<h2[^>]*>${copy.marketBackground}</h2>`));
     expect(html).toContain(background);
-    expect(html).toContain('data-testid="order-entry-bar"');
+    // The bar and the sheet as elements: the toast group's CSS names both test ids in a selector
+    // (components/ui/toaster.tsx), so the bare strings are in the HTML whether they are drawn or not.
+    expect(html).toMatch(/<[a-z]+ [^<>]*data-testid="order-entry-bar"/);
     expect(html).toMatch(/data-testid="order-entry-yes"[^>]*>YES 매수</);
     expect(html).toMatch(/data-testid="order-entry-no"[^>]*>NO 매수</);
-    expect(html).not.toContain('data-testid="order-sheet');
+    expect(html).not.toMatch(/<[a-z]+ [^<>]*data-testid="order-sheet/);
     // …and 관련 시장 (#65) after them, public too and one shared section at both widths, with its
     // notice for a market nothing is linked to.
     for (const slot of ['market-order-book', 'market-discussion', 'market-related']) {
@@ -204,6 +209,18 @@ test.describe('시장 상세', () => {
       expect(page).not.toContain('data-testid="market-my-open-orders"');
       expect(page).not.toContain('data-testid="market-personal-signed-out');
       expect(page).not.toContain(copy.marketPersonalSignedOut);
+      // The order panel (#66, ADR-0140): nothing of the reader's — 매도 가능액, the 잔액 부족 line, a
+      // restored input, a request kept — nor the panel itself, which waits for the session.
+      for (const testId of [
+        'order-panel',
+        'order-sellable',
+        'order-shortfall',
+        'order-restored',
+        'order-unsent',
+        'order-account-blocked',
+      ]) {
+        expect(page, testId).not.toContain(`data-testid="${testId}"`);
+      }
     }
   });
 
@@ -250,9 +267,9 @@ test.describe('시장 상세', () => {
       const cardB = listB.getByTestId(`market-card-${market.id}`);
       const cardC = listC.getByTestId(`market-card-${market.id}`);
       await expect(statusB).toHaveText(copy.marketStatusOpen);
-      // Open, so the order area is there, saying 거래 준비 중 and nothing else — the desktop
-      // column and, below md, the 매수 bar (each in the DOM at both widths, drawn at one).
-      await expect(detailB.getByTestId('order-area-notice')).toHaveText(copy.tradePreparing);
+      // Open, so the order area is there with the order panel (#66) — the desktop column and,
+      // below md, the 매수 bar (each in the DOM at both widths, drawn at one).
+      await expect(detailB.getByTestId('order-area')).toHaveCount(1);
       await expect(detailB.getByTestId('order-entry-bar')).toHaveCount(1);
       // An open card names no status — its countdown is its state — and has no fill to price:
       // its YES and NO rows stay, '—' in each pill, with 체결 없음 beside them (ADR-0048).
@@ -442,6 +459,24 @@ test.describe('시장 상세', () => {
     expect(metaBox.y).toBeGreaterThanOrEqual(noBox.y + noBox.height);
     expect(Math.abs(metaBox.x - readingBox.x)).toBeLessThanOrEqual(1);
     expect(metaBox.x + metaBox.width).toBeLessThanOrEqual(readingBox.x + readingBox.width + 0.5);
+    // …and on one line here (Korean time, at either width), with its middle dot drawn: in the
+    // room the name keeps, inside the line's box, ending where the time begins (owner answer
+    // 64-Q2, ADR-0140 결정 2-27). Where the time starts a line of its own the dot is left of the
+    // line's box, which clips it — a zone tail at 375, not this browser's zone.
+    const fillBox = await boxOf(page, 'market-detail-last-fill');
+    const dotBox = await meta.getByTestId('market-detail-last-fill').evaluate((fill) => {
+      const dot = fill.previousElementSibling;
+      if (dot === null) return null;
+      const rect = dot.getBoundingClientRect();
+      return { text: dot.textContent, x: rect.x, width: rect.width };
+    });
+    if (dotBox === null) throw new Error('the last fill has no separator before it');
+    expect(dotBox.text).toBe(' · ');
+    expect(dotBox.width).toBeGreaterThan(0);
+    expect(dotBox.x).toBeGreaterThan(metaBox.x);
+    expect(Math.abs(dotBox.x + dotBox.width - fillBox.x)).toBeLessThanOrEqual(0.5);
+    expect(fillBox.x).toBeGreaterThan(metaBox.x);
+    expect(metaBox.height).toBeLessThan(2 * fillBox.height);
 
     // A reading, not a price to press (ADR-0061 decision 1, item 2; the card's look, ADR-0062):
     // no button or link by that name, and plain text — no outline, ring, fill or pointer.
@@ -626,9 +661,10 @@ test.describe('시장 상세 · 375px', () => {
     // fixed YES/NO bar away, so this test narrowed to the price and the bottom tabs and asserted
     // there was NO bar (`trade-bar`), the order area being an ordinary block further down saying
     // 거래 준비 중. The owner's #122 row (ADR-0061 decision 3) brings a bar back on an open market —
-    // YES 매수 · NO 매수, no prices, opening the order sheet — so the criterion as PLAN wrote it holds
-    // again: the price and the two buttons are on the first screen. The bar stands ON the tab bar
-    // instead of taking its place, so the tabs #125 added to this test are still there too.
+    // YES 매수 · NO 매수 (with their prices since #66), opening the order sheet — so the criterion
+    // as PLAN wrote it holds again: the price and the two buttons are on the first screen. The bar
+    // stands ON the tab bar instead of taking its place, so the tabs #125 added to this test are
+    // still there too.
     const market = await createOpenMarket(admin);
     await page.goto(`/markets/${market.slug}`);
 
@@ -770,7 +806,7 @@ test.describe('시장 상세 · 375px', () => {
     expect(stops.some((stop) => stop.includes(copy.marketDetailViewBook))).toBe(true);
   });
 
-  test('YES 매수·NO 매수는 가격 없이 같은 시트를 열고, 시트는 누른 계약을 제목에 두고 비로그인에게 로그인 안내를 보인다', async ({
+  test('YES 매수·NO 매수는 최우선 매도호가를 붙여 같은 시트를 열고, 시트는 누른 계약을 제목에 두고 비로그인도 주문 패널을 쓰며 주문 확인에서 로그인 안내를 보인다', async ({
     admin,
     page,
   }) => {
@@ -781,10 +817,13 @@ test.describe('시장 상세 · 375px', () => {
 
     const yes = page.getByTestId('order-entry-yes');
     const no = page.getByTestId('order-entry-no');
-    // The owner's #122 row: two entry points and no price on either (#66 brings the prices).
-    await expect(yes).toHaveText('YES 매수');
-    await expect(no).toHaveText('NO 매수');
-    await expect(page.getByTestId('order-entry-bar')).not.toContainText(/\d|%|Coin/);
+    // Two entry points, each with its contract's best ask (ADR-0135 D2, #66): this market's book
+    // is empty, so '호가 없음' — never a probability, never 100 − a bid.
+    await expect(yes).toHaveText(/^YES 매수\s*(\d+\.\d{2} Coin|호가 없음)$/);
+    await expect(no).toHaveText(/^NO 매수\s*(\d+\.\d{2} Coin|호가 없음)$/);
+    await expect(page.getByTestId('order-entry-yes-price')).toHaveText(copy.marketBookEmpty);
+    await expect(page.getByTestId('order-entry-no-price')).toHaveText(copy.marketBookEmpty);
+    await expect(page.getByTestId('order-entry-bar')).not.toContainText('%');
     // Each says it opens a dialog, and that the dialog is closed.
     for (const entry of [yes, no]) {
       await expect(entry).toHaveAttribute('aria-haspopup', 'dialog');
@@ -794,18 +833,22 @@ test.describe('시장 상세 · 375px', () => {
     const sheet = page.getByRole('dialog');
     await yes.click();
     await expect(sheet).toBeVisible();
-    // A dialog named after the contract pressed. This reader is signed out, and an order is placed
-    // signed in (N02 §2), so the sheet asks them to sign in — coming back to this market — instead
-    // of saying 거래 준비 중 (owner decision 2026-10-17); a member's sheet is the next test.
+    // A dialog named after the contract pressed. This reader is signed out: the sheet still holds
+    // the order panel — typing and the quote need no sign-in — and 주문 확인 asks them to sign in,
+    // coming back to this market (ADR-0135 D3; order-panel.spec.ts follows the rest).
     await expect(sheet).toHaveAccessibleName('YES 매수');
     await expect(page.getByTestId('order-sheet-title')).toHaveText('YES 매수');
-    const prompt = sheet.getByTestId('order-sheet-sign-in');
-    await expect(prompt).toContainText(copy.orderSheetSignedOut);
-    await expect(sheet.getByRole('link', { name: copy.login })).toHaveAttribute(
+    await expect(sheet.getByTestId('order-panel')).toBeVisible();
+    await sheet.getByTestId('order-kind-gtc').click();
+    await sheet.getByTestId('order-qty').fill('1');
+    await sheet.getByTestId('order-limit').fill('40');
+    await expect(sheet.getByTestId('order-quote')).toBeVisible();
+    await sheet.getByTestId('order-confirm-open').click();
+    await expect(sheet.getByTestId('order-sign-in')).toContainText(copy.orderSignIn);
+    await expect(sheet.getByTestId('order-sign-in-login')).toHaveAttribute(
       'href',
       `/login?next=${encodeURIComponent(`/markets/${market.slug}`)}`,
     );
-    await expect(page.getByTestId('order-sheet-notice')).toHaveCount(0);
     // A bottom sheet (N02 §4 '별도 시트'; `placement="bottom"`): once it has slid in it rests on
     // the bottom edge across the whole width, and its top is well below the top of the screen —
     // not a side drawer (the full height, part of the width) nor a top one.
@@ -848,7 +891,7 @@ test.describe('시장 상세 · 375px', () => {
     await no.click();
     await expect(sheet).toBeVisible();
     await expect(sheet).toHaveAccessibleName('NO 매수');
-    await expect(sheet.getByTestId('order-sheet-sign-in')).toContainText(copy.orderSheetSignedOut);
+    await expect(sheet.getByTestId('order-panel')).toBeVisible();
     await sheet.getByRole('button', { name: copy.close }).click();
     await expect(sheet).toBeHidden();
     await expect(page.getByTestId('order-sheet')).toHaveCount(0);
@@ -868,33 +911,6 @@ test.describe('시장 상세 · 375px', () => {
     await expect(yes).toBeFocused();
   });
 
-  test('로그인한 회원이 누르면 시트는 같은 제목에 거래 준비 중이고, 로그인 안내는 없다', async ({
-    admin,
-    page,
-  }) => {
-    const market = await createOpenMarket(admin);
-    // The seed admin, whose phone the `admin` fixture verified (helpers.ts).
-    await signIn(page, adminAccount.email, adminAccount.password);
-    await page.goto(`/markets/${market.slug}`);
-    await expect(page.getByTestId('watch-button')).toBeVisible();
-
-    const sheet = page.getByRole('dialog');
-    for (const [entry, title] of [
-      ['order-entry-yes', 'YES 매수'],
-      ['order-entry-no', 'NO 매수'],
-    ] as const) {
-      await page.getByTestId(entry).click();
-      await expect(sheet).toBeVisible();
-      await expect(sheet).toHaveAccessibleName(title);
-      // Until the order panel (#66), the one line the desktop's order column says (ADR-0048).
-      await expect(sheet.getByTestId('order-sheet-notice')).toHaveText(copy.tradePreparing);
-      await expect(sheet.getByTestId('order-sheet-sign-in')).toHaveCount(0);
-      await expect(sheet.getByRole('link', { name: copy.login })).toHaveCount(0);
-      await page.keyboard.press('Escape');
-      await expect(sheet).toBeHidden();
-    }
-  });
-
   test('열린 시트는 폭이 md에 닿으면 닫히고, 다시 좁아져도 닫힌 채다', async ({ admin, page }) => {
     const market = await createOpenMarket(admin);
     await page.goto(`/markets/${market.slug}`);
@@ -908,7 +924,10 @@ test.describe('시장 상세 · 375px', () => {
     // the bar is gone, so the sheet does not stay over them (ADR-0067).
     await page.setViewportSize({ width: 1024, height: 768 });
     await expect(page.getByTestId('order-sheet')).toHaveCount(0);
-    await expect(page.getByTestId('order-area-notice')).toBeVisible();
+    // The column draws the same panel, on the contract the sheet was opened on (one state).
+    const column = page.getByTestId('order-area');
+    await expect(column.getByTestId('order-panel')).toBeVisible();
+    await expect(column.getByTestId('order-contract-no')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('order-entry-bar')).toBeHidden();
 
     // Turned back, nothing reopens it: the bar is there and the sheet waits for a press.
@@ -1122,7 +1141,7 @@ test.describe('시장 상세 · 1280px', () => {
     await expect(page.getByTestId('order-entry-bar')).toBeHidden();
     await expect(page.getByTestId('market-order-book')).toBeVisible();
     await expect(page.getByTestId('market-fills')).toBeVisible();
-    await expect(page.getByTestId('order-area-notice')).toHaveText(copy.tradePreparing);
+    await expect(page.getByTestId('order-area').getByTestId('order-panel')).toBeVisible();
     // 호가창 (#122, ADR-0138): YES and NO side by side at this width — level, YES on the left.
     const bookCard = page.getByTestId('market-order-book');
     await expect(bookCard.getByRole('heading', { level: 3 })).toHaveText([copy.yes, copy.no]);

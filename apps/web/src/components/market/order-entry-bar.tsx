@@ -1,41 +1,34 @@
 'use client';
 
-import {
-  Alert,
-  Box,
-  Button,
-  CloseButton,
-  Drawer,
-  HStack,
-  Portal,
-  Skeleton,
-} from '@chakra-ui/react';
-import { type Outcome } from '@buddha/shared';
-import { useEffect, useState } from 'react';
-import { SignInPrompt } from '@/components/market/sign-in-prompt';
+import { Box, Button, CloseButton, Drawer, HStack, Portal, Skeleton, Text } from '@chakra-ui/react';
 import { copy } from '@/copy';
 import {
-  INITIAL_ORDER_SHEET,
-  MD_UP_MEDIA_QUERY,
   ORDER_ENTRY_CONTRACTS,
   ORDER_ENTRY_SCROLL_PADDING,
-  type OrderSheetState,
-  type PersonalAreaView,
-  closeOrderSheet,
-  openOrderSheet,
   orderEntryLabel,
+  orderEntryPrice,
   orderSheetBody,
 } from '@/lib/market-detail';
-import { BOTTOM_TABS_HEIGHT_PX, ORDER_ENTRY_BAR_HEIGHT_PX } from '@/lib/nav';
+import {
+  BOTTOM_TABS_HEIGHT_PX,
+  ORDER_ENTRY_BAR_HEIGHT_PX,
+  ORDER_SHEET_MAX_HEIGHT,
+} from '@/lib/nav';
+import { contractSideLabel } from '@/lib/order-confirm';
+import { bestPriceOf } from '@/lib/order-panel';
+import { OrderPanel } from './order-panel';
+import { useOrderPanel } from './order-panel-provider';
 
 /**
  * 모바일 주문 진입 (N02 §4 "주문 패널을 별도 시트로 연다", #122): below md, an open market's
- * YES 매수 and NO 매수, and the bottom sheet both of them open. The owner's #122 row (ADR-0061
- * decision 3): two entry points, no price on either, and until the order panel (#66) the sheet
- * says 거래 준비 중 to a member — the one line the desktop's order column says (ADR-0048). A
- * signed-out visitor is asked to sign in there instead, since an order is placed signed in (N02
- * §2; owner decision 2026-10-17); `orderSheetBody` decides which. The sheet remembers which
- * contract was pressed and names it in its title either way, which is what #66 opens its panel on.
+ * YES 매수 and NO 매수, and the bottom sheet both of them open. Each names the contract's best ask
+ * beside its words — '63.00 Coin', or '호가 없음' (ADR-0135 D2, #66 ADR-0140; in the gap the
+ * reason's short name, 결정 2-23) — in a slot of its own that the server's HTML leaves empty, so
+ * the price comes in without moving the words. The
+ * sheet holds the order panel (#66), a visitor's too: typing and the quote need no sign-in, 주문
+ * 확인 asks for one (D3). Its state — open, the contract pressed, what was typed — is the
+ * provider's (`OrderPanelProvider`), which the column from md up shares, so a width that crosses
+ * md keeps the order.
  *
  * The caller draws this for an open market only (`showsOrderArea`), so a `market:status` that
  * closes the market takes the bar and an open sheet away with it.
@@ -60,39 +53,18 @@ import { BOTTOM_TABS_HEIGHT_PX, ORDER_ENTRY_BAR_HEIGHT_PX } from '@/lib/nav';
  * (내 포지션, 최근 체결), with their words on them, so the colour never carries the choice alone
  * (PLAN 11.2). Their `solid` and `contrast` pair is the one measured for buttons (ADR-0032).
  */
-export function OrderEntryBar({
-  viewer,
-}: {
-  /** Who is reading (`personalAreaView`): what the sheet holds under its title. */
-  viewer: PersonalAreaView;
-}) {
-  const [sheet, setSheet] = useState<OrderSheetState>(INITIAL_ORDER_SHEET);
-
-  // The sheet is the order panel below md only. A width that reaches md while it is open — a
-  // tablet turned to landscape, a window widened — hides this bar and draws the order column
-  // beside the sections, so the sheet closes there rather than stay over the column with its
-  // backdrop (ADR-0067). Watched only while it is open, and closed from the media query's
-  // callback, never in the effect body. Back below md it stays closed: nobody pressed anything.
-  useEffect(() => {
-    if (!sheet.open) return;
-    const wide = window.matchMedia(MD_UP_MEDIA_QUERY);
-    const close = (event: MediaQueryListEvent) => {
-      if (event.matches) setSheet(closeOrderSheet);
-    };
-    wide.addEventListener('change', close);
-    return () => {
-      wide.removeEventListener('change', close);
-    };
-  }, [sheet.open]);
-
+export function OrderEntryBar() {
+  const panel = useOrderPanel();
+  const { sheet, book, mdUp, inputClosed } = panel;
+  // The provider closes the sheet when the width reaches md (ADR-0067).
   return (
     <Drawer.Root
       open={sheet.open}
       // The pressed contract is also the dialog's trigger value, so the trigger zag gives the
-      // focus back to is the one that was pressed.
+      // focus back to is the one that was pressed — a restored input's contract too (D4).
       triggerValue={sheet.contract}
       onOpenChange={(details) => {
-        if (!details.open) setSheet(closeOrderSheet);
+        if (!details.open) panel.closeSheet();
       }}
       placement="bottom"
       lazyMount
@@ -122,31 +94,56 @@ export function OrderEntryBar({
         data-testid="order-entry-bar"
       >
         <HStack gap="3">
-          {ORDER_ENTRY_CONTRACTS.map((contract) => (
-            // The dialog's own triggers, one per contract, rather than buttons that set `open`:
-            // zag then returns the focus to the trigger of the pressed contract on close, which
-            // does not depend on the press having focused the button — Safari and iOS never
-            // focus a button on a click or a tap, and zag's other fallback is whatever had the
-            // focus before, `<body>` there. They also say what they open (`aria-haspopup`,
-            // `aria-expanded`, `aria-controls` while the sheet is mounted).
-            <Drawer.Trigger key={contract} asChild value={contract}>
-              <Button
-                flex="1"
-                size="lg"
-                variant="solid"
-                colorPalette={contract === 'YES' ? 'yes' : 'no'}
-                onClick={() => {
-                  setSheet(openOrderSheet(contract));
-                }}
-                data-testid={`order-entry-${contract === 'YES' ? 'yes' : 'no'}`}
-              >
-                {orderEntryLabel(contract)}
-              </Button>
-            </Drawer.Trigger>
-          ))}
+          {ORDER_ENTRY_CONTRACTS.map((contract) => {
+            const id = contract === 'YES' ? 'yes' : 'no';
+            // Blank until the page has mounted: the server's HTML and hydration say the words. In
+            // the gap, the reason's short name rather than '호가 없음' (ADR-0140 결정 2-23).
+            const price =
+              mdUp === null
+                ? undefined
+                : orderEntryPrice(bestPriceOf(book, contract, 'buy'), inputClosed);
+            return (
+              // The dialog's own triggers, one per contract, rather than buttons that set `open`:
+              // zag then returns the focus to the trigger of the pressed contract on close, which
+              // does not depend on the press having focused the button — Safari and iOS never
+              // focus a button on a click or a tap, and zag's other fallback is whatever had the
+              // focus before, `<body>` there. They also say what they open (`aria-haspopup`,
+              // `aria-expanded`, `aria-controls` while the sheet is mounted).
+              <Drawer.Trigger key={contract} asChild value={contract}>
+                <Button
+                  flex="1"
+                  minW="0"
+                  size="lg"
+                  px="3"
+                  gap="1.5"
+                  variant="solid"
+                  colorPalette={contract === 'YES' ? 'yes' : 'no'}
+                  onClick={() => {
+                    panel.openSheet(contract);
+                  }}
+                  data-testid={`order-entry-${id}`}
+                >
+                  {orderEntryLabel(contract)}
+                  {/* A fixed slot, empty until the book answers: the words never move. */}
+                  <Text
+                    as="span"
+                    display="inline-block"
+                    minW="9ch"
+                    textAlign="start"
+                    fontSize="sm"
+                    fontWeight="normal"
+                    fontVariantNumeric="tabular-nums"
+                    data-testid={`order-entry-${id}-price`}
+                  >
+                    {price}
+                  </Text>
+                </Button>
+              </Drawer.Trigger>
+            );
+          })}
         </HStack>
       </Box>
-      <OrderSheet contract={sheet.contract} viewer={viewer} />
+      <OrderSheet />
     </Drawer.Root>
   );
 }
@@ -157,40 +154,39 @@ export function OrderEntryBar({
  * trigger that opened it — with a close button named in Korean (`CloseButton` says 'Close').
  *
  * The frame has one scrolling body and no collapsible part (N02 §4: the price, quantity and amount
- * an order is confirmed on are never in a collapsed area), so whatever #66 puts in it stays in the
- * open. `lazyMount` and `unmountOnExit` on the root: nothing of it is in the server's HTML or in
- * the page while it is closed.
- *
- * The body is `orderSheetBody`'s — the sign-in prompt, 거래 준비 중 or a placeholder while the
- * session is unknown — and the title stays the pressed contract for all three.
+ * an order is confirmed on are never in a collapsed area); 확인's buttons stay at its bottom, the
+ * body's bottom padding moved into their bar so they reach the sheet's edge.
+ * `lazyMount` and `unmountOnExit` on the root: nothing of it is in the server's HTML or in the page
+ * while it is closed. The title is the contract and the direction chosen now ('YES 매수').
  */
-function OrderSheet({ contract, viewer }: { contract: Outcome | null; viewer: PersonalAreaView }) {
+function OrderSheet() {
+  const { viewer, state } = useOrderPanel();
   const body = orderSheetBody(viewer);
   return (
     <Portal>
       <Drawer.Backdrop />
       <Drawer.Positioner>
-        <Drawer.Content roundedTop="card" maxH="85dvh" data-testid="order-sheet">
+        <Drawer.Content roundedTop="card" maxH={ORDER_SHEET_MAX_HEIGHT} data-testid="order-sheet">
           <Drawer.Header>
             <Drawer.Title data-testid="order-sheet-title">
-              {contract === null ? null : orderEntryLabel(contract)}
+              {contractSideLabel(state.input.outcome, state.input.side)}
             </Drawer.Title>
           </Drawer.Header>
-          <Drawer.Body overflowY="auto" pb="calc(24px + env(safe-area-inset-bottom))">
-            {body === 'login' ? (
-              <SignInPrompt message={copy.orderSheetSignedOut} data-testid="order-sheet-sign-in" />
-            ) : body === 'preparing' ? (
-              <Alert.Root status="info" role="status">
-                <Alert.Indicator />
-                <Alert.Content>
-                  <Alert.Description data-testid="order-sheet-notice">
-                    {copy.tradePreparing}
-                  </Alert.Description>
-                </Alert.Content>
-              </Alert.Root>
+          {/* In 확인 its button bar carries this bottom padding (order-confirm.tsx): a sticky bar
+              stops at the scroll box's padding, and rows would scroll by below it. */}
+          <Drawer.Body
+            overflowY="auto"
+            pb={
+              body === 'panel' && state.step.name === 'confirm'
+                ? '0'
+                : 'calc(24px + env(safe-area-inset-bottom))'
+            }
+          >
+            {body === 'panel' ? (
+              <OrderPanel place="sheet" />
             ) : (
-              // The session has not answered yet: neither line, so nobody is told one thing and
-              // then the other (`orderSheetBody`). The 거래 준비 중 alert's own height.
+              // The session has not answered yet: no panel, so nobody is shown one and then
+              // another (`orderSheetBody`).
               <Skeleton height="12" data-testid="order-sheet-pending" />
             )}
           </Drawer.Body>

@@ -19,14 +19,31 @@ export interface EmptyStateProps {
   message: string;
   /** Optional single next step, e.g. 로그인 or 검색 지우기. */
   action?: React.ReactNode;
+  /**
+   * Given, the message can take the focus (`tabIndex=-1`): for a caller that shows the block in
+   * place of the control that had it — the order panel's 로그인 안내 (#66, ADR-0140 결정 2-23).
+   */
+  messageRef?: React.Ref<HTMLParagraphElement>;
   'data-testid'?: string;
 }
 
-export function EmptyState({ message, action, 'data-testid': testId }: EmptyStateProps) {
+export function EmptyState({
+  message,
+  action,
+  messageRef,
+  'data-testid': testId,
+}: EmptyStateProps) {
   return (
     <Stack align="center" gap="3" py="8" px="4" textAlign="center" data-testid={testId}>
       {/* `fg.muted` is 7.73:1 light / 8.19:1 dark — muted to the eye, still AA (AC 6). */}
-      <Text color="fg.muted">{message}</Text>
+      <Text
+        color="fg.muted"
+        ref={messageRef}
+        tabIndex={messageRef === undefined ? undefined : -1}
+        outline={messageRef === undefined ? undefined : 'none'}
+      >
+        {message}
+      </Text>
       {action}
     </Stack>
   );

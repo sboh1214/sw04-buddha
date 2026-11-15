@@ -21,6 +21,9 @@ import {
   INITIAL_ORDER_SHEET,
   MD_UP_MEDIA_QUERY,
   ORDER_ENTRY_CONTRACTS,
+  ORDER_COLUMN_MAX_H,
+  ORDER_COLUMN_TOP,
+  DETAIL_TOP_PADDING_MD_PX,
   ORDER_ENTRY_SCROLL_PADDING,
   backgroundText,
   closeOrderSheet,
@@ -36,6 +39,8 @@ import {
   nextReviewWaitAt,
   openOrderSheet,
   orderEntryLabel,
+  orderEntryPrice,
+  orderInputClosedReason,
   orderSheetBody,
   perWidth,
   personalAreaView,
@@ -562,20 +567,41 @@ describe('the mobile order sheet (the #122 row in ADR-0061 decision 3)', () => {
     expect(MD_UP_MEDIA_QUERY).toBe('screen and (min-width: 48rem)');
   });
 
-  it('has two entry points, YES 매수 then NO 매수, with no price on either', () => {
+  it('has two entry points, YES 매수 then NO 매수, whose words carry no price', () => {
     expect(ORDER_ENTRY_CONTRACTS).toEqual(['YES', 'NO']);
     expect(ORDER_ENTRY_CONTRACTS.map(orderEntryLabel)).toEqual(['YES 매수', 'NO 매수']);
     for (const contract of ORDER_ENTRY_CONTRACTS) {
-      // Neither a percent nor a Coin price nor a digit at all.
+      // The words are the server's HTML: the price is a slot of its own (`orderEntryPrice`).
       expect(orderEntryLabel(contract)).not.toMatch(/\d|%|Coin/);
     }
   });
 
-  it('asks a visitor to sign in, tells a member 거래 준비 중, and waits while the session is unknown', () => {
-    // N02 §2: an order is placed signed in (owner decision 2026-10-17, '시트에 로그인 안내').
-    expect(orderSheetBody('visitor')).toBe('login');
-    expect(orderSheetBody('member')).toBe('preparing');
-    // Neither line until the session answers, so nobody reads one and then the other.
+  it("prices an entry point with the contract's best ask, or 호가 없음 (ADR-0135 D2, #66)", () => {
+    // A whole-Coin price as the book writes it, never a probability or 100 − a bid.
+    expect(orderEntryPrice(63)).toBe('63.00 Coin');
+    expect(orderEntryPrice(1)).toBe('1.00 Coin');
+    expect(orderEntryPrice(99)).toBe('99.00 Coin');
+    expect(orderEntryPrice(null)).toBe(copy.marketBookEmpty);
+    // The book not known yet: the slot stays blank.
+    expect(orderEntryPrice(undefined)).toBeUndefined();
+  });
+
+  it('names the gap’s reason where the price stands, not 호가 없음 (ADR-0140 결정 2-23)', () => {
+    // A book that answers with a reason has empty sides: they are not merely unquoted.
+    expect(orderEntryPrice(null, 'closed')).toBe(copy.orderClosedShortClosed);
+    expect(orderEntryPrice(null, 'paused')).toBe(copy.orderClosedShortPaused);
+    expect(orderEntryPrice(null, 'not_open_yet')).toBe(copy.orderClosedShortNotOpenYet);
+    // The close passed on the clock before the book said so: the reason, whatever the book holds.
+    expect(orderEntryPrice(63, 'closed')).toBe(copy.orderClosedShortClosed);
+    expect(orderEntryPrice(undefined, 'closed')).toBe(copy.orderClosedShortClosed);
+    expect(orderEntryPrice(null, null)).toBe(copy.marketBookEmpty);
+  });
+
+  it('holds the order panel for a visitor and a member alike, and waits while the session is unknown', () => {
+    // ADR-0135 D3: a visitor types and reads a quote too, and is asked to sign in at 주문 확인.
+    expect(orderSheetBody('visitor')).toBe('panel');
+    expect(orderSheetBody('member')).toBe('panel');
+    // Nothing until the session answers, so nobody is shown one panel and then another.
     expect(orderSheetBody('unknown')).toBe('pending');
   });
 
@@ -592,6 +618,20 @@ describe('the mobile order sheet (the #122 row in ADR-0061 decision 3)', () => {
     expect(ORDER_ENTRY_SCROLL_PADDING).toBe('calc(119px + env(safe-area-inset-bottom))');
   });
 
+  it('sticks the md-and-up order column where it stands and fits it in the window (결정 2-24)', () => {
+    // The header (107) and the page's md top padding (40): no jump as the page starts to scroll.
+    expect(ORDER_COLUMN_TOP).toBe('147px');
+    // Top + height = the window less 16px, so the card's bottom edge is on the first screen.
+    expect(ORDER_COLUMN_MAX_H).toBe('calc(100dvh - 163px)');
+    // The padding it counts is the page's own.
+    const page = readFileSync(path.join(SRC, 'app/markets/[slug]/page.tsx'), 'utf8');
+    expect(DETAIL_TOP_PADDING_MD_PX).toBe(40);
+    expect(page).toContain("py={{ base: '6', md: '10' }}");
+    const detail = readFileSync(path.join(SRC, 'app/markets/[slug]/market-detail.tsx'), 'utf8');
+    expect(detail).toContain('top={ORDER_COLUMN_TOP}');
+    expect(detail).toContain('maxH={ORDER_COLUMN_MAX_H}');
+  });
+
   it('remembers the contract through a close, and the next press replaces it', () => {
     const closed = closeOrderSheet(openOrderSheet('NO'));
     expect(closed).toEqual({ open: false, contract: 'NO' });
@@ -599,6 +639,37 @@ describe('the mobile order sheet (the #122 row in ADR-0061 decision 3)', () => {
     // Closing a closed sheet changes nothing.
     expect(closeOrderSheet(closed)).toEqual(closed);
     expect(closeOrderSheet(INITIAL_ORDER_SHEET)).toEqual(INITIAL_ORDER_SHEET);
+  });
+});
+
+/**
+ * The window ADR-0135 결과 4 names between `close_at` and the worker's close, and a ledger hold
+ * (ADR-0138's reason on the book): an open market keeps its order area with the input off.
+ */
+describe('orderInputClosedReason (#66, ADR-0140)', () => {
+  const book = (marketRejectReason: 'closed' | 'paused' | 'not_open_yet' | null) => ({
+    marketRejectReason,
+  });
+
+  it("takes the book's reason on an open market", () => {
+    expect(orderInputClosedReason('open', book('paused'), false)).toBe('paused');
+    expect(orderInputClosedReason('open', book('closed'), false)).toBe('closed');
+  });
+
+  it('says 마감 at the close instant, ahead of the book read a second later', () => {
+    expect(orderInputClosedReason('open', book(null), true)).toBe('closed');
+    expect(orderInputClosedReason('open', undefined, true)).toBe('closed');
+  });
+
+  it('is null on an open market before its close with a book that takes orders', () => {
+    expect(orderInputClosedReason('open', book(null), false)).toBeNull();
+    expect(orderInputClosedReason('open', undefined, false)).toBeNull();
+  });
+
+  it('is null where there is no order area at all: the status notice speaks there (D1)', () => {
+    expect(orderInputClosedReason('paused', book('paused'), true)).toBeNull();
+    expect(orderInputClosedReason('closed', book('closed'), true)).toBeNull();
+    expect(orderInputClosedReason(undefined, undefined, true)).toBeNull();
   });
 });
 

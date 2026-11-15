@@ -212,6 +212,38 @@ describe('palette contrast', () => {
     expect(failures).toEqual([]);
   });
 
+  it('reads a warning line (`fg.warning`) at 4.5:1 on the page, the panel and a card', () => {
+    // The order panel's block, D8, D7, 잔액 부족 and refusal lines (#66, ADR-0140 결정 2-23):
+    // 14px text on the card's or the sheet's `bg.panel`, and the column on the page. Chakra's own
+    // orange.600 was 3.56:1 on white.
+    const grounds: Record<Mode, { name: string; hex: string }[]> = {
+      _light: [
+        { name: 'bg', hex: resolve('bg', '_light') },
+        { name: 'bg.panel', hex: resolve('bg.panel', '_light') },
+        { name: 'bg.subtle', hex: resolve('bg.subtle', '_light') },
+        { name: 'surface.card', hex: over('#808080', resolve('bg.panel', '_light'), 0.02) },
+      ],
+      _dark: [
+        { name: 'bg', hex: resolve('bg', '_dark') },
+        { name: 'bg.panel', hex: resolve('bg.panel', '_dark') },
+        { name: 'bg.subtle', hex: resolve('bg.subtle', '_dark') },
+        { name: 'surface.card', hex: over('#ffffff', resolve('bg.panel', '_dark'), 0.02) },
+      ],
+    };
+    const failures = MODES.flatMap((mode) =>
+      grounds[mode].flatMap((ground) =>
+        shortfall(
+          `fg.warning on ${ground.name} ${mode}`,
+          ratio(resolve('fg.warning', mode), ground.hex),
+          TEXT_MIN,
+        ),
+      ),
+    );
+    expect(failures).toEqual([]);
+    // The theme's own value, not Chakra's orange.600 (3.56:1 on white).
+    expect(resolve('fg.warning', '_light')).toBe(system.token('colors.orange.700'));
+  });
+
   it('reads every post text colour on the page and on a card at 4.5:1 in both modes', () => {
     // A post's body is drawn on the page, and its card's excerpt has no colour, but the post page
     // sits the body on the plain page and a later screen may put it on a card: both grounds are

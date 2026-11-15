@@ -46,6 +46,11 @@ export const CATEGORIES_QUERY_KEY = ['categories'] as const;
  */
 export const POSITIONS_KEY = ['positions'] as const;
 export const ORDERS_KEY = ['orders'] as const;
+/**
+ * 매도 가능액 (#179, `GET /me/markets/:id/sellable`): the caller's holding on one market, its
+ * resting sells and the rest, read by the order panel (#66, ADR-0140). Owner only, so private.
+ */
+export const SELLABLE_KEY = ['sellable'] as const;
 
 /**
  * 관심 시장 (#89, ADR-0064): the caller's watchlist, private like the two above — nobody but the
@@ -299,6 +304,23 @@ export const marketBookKey = (marketId: string) =>
   [...MARKET_BOOK_KEY, marketId.toLowerCase()] as const;
 
 /**
+ * One market's 매도 가능액, on the canonical lower-cased uuid like `marketKey`: the prefix every
+ * read again (`user:position`, an order's end) invalidates, whoever's entry is under it.
+ */
+export const marketSellableKey = (marketId: string) =>
+  [...SELLABLE_KEY, marketId.toLowerCase()] as const;
+
+/**
+ * The 매도 가능액 entry of one account on one market, under `marketSellableKey`: the account the
+ * screen shows (`Me`'s id), like `watchStateKey`. The answer names no owner, and `['me']` can turn
+ * from A to B in place before the session does — and so before SessionCacheGuard's reset (ADR-0090
+ * 결정 4-2) — so an entry read for A is never drawn as B's holding (ADR-0140 결정 2-22).
+ * `accountId` is undefined while that account is not known: the query is disabled then.
+ */
+export const sellableKey = (marketId: string, accountId: string | undefined) =>
+  [...marketSellableKey(marketId), accountId] as const;
+
+/**
  * Key roots that need the session cookie. They are never fetched on the server (`api.server.ts`
  * forwards no cookie), and this is the second lock: `dehydrate` serialises the WHOLE
  * per-request client (`getQueryCache().getAll()`), so a `['me']` that got in would ride the RSC
@@ -333,6 +355,9 @@ export const PRIVATE_QUERY_ROOTS: ReadonlySet<string> = new Set([
   // the reason are the submitter's and the operators' alone (#173 item 13, PRIVATE_DATA `dispute`),
   // read with the member's cookie (lib/disputes.ts `DISPUTES_KEY`). The operators' under `admin`.
   'disputes',
+  // 매도 가능액 (#66, ADR-0140): the caller's holding and resting sells on one market, read with
+  // the member's cookie (`SELLABLE_KEY`) for the order panel.
+  'sellable',
 ]);
 
 export function isPrivateQueryKey(queryKey: readonly unknown[]): boolean {

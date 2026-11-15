@@ -1,8 +1,14 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, type MyModerationAction, type MyReport, api } from '@/lib/api';
 import { myAuthoredKey, profileAuthoredKey } from '@/lib/authored';
 import { postCommentsKey } from '@/lib/comments';
-import { MY_ACTIONS_KEY, MY_REPORTS_KEY, MY_RESTRICTION_KEY } from '@/lib/moderation';
+import {
+  MY_ACTIONS_KEY,
+  MY_REPORTS_KEY,
+  MY_RESTRICTION_KEY,
+  myRestrictionKey,
+} from '@/lib/moderation';
 import { POST_LIST_KEY, marketPostsKey, postKey } from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
 import {
@@ -91,23 +97,34 @@ describe('the member’s lists', () => {
   it('ask for the restriction that governs the member now, apart from the actions (#185)', async () => {
     const restriction = { kind: 'writing', endsAt: null };
     const get = vi.spyOn(api, 'GET').mockResolvedValue(answer({ restriction }));
-    const options = myRestrictionQueryOptions(signedIn);
-    expect(options.queryKey).toEqual(MY_RESTRICTION_KEY);
+    const options = myRestrictionQueryOptions('user-1');
+    // Under the account it is read for (ADR-0140 결정 2-26), below the prefix every invalidation uses.
+    expect(options.queryKey).toEqual(myRestrictionKey('user-1'));
+    expect(options.queryKey).toEqual([...MY_RESTRICTION_KEY, 'user-1']);
+    expect(myRestrictionQueryOptions('user-2').queryKey).not.toEqual(options.queryKey);
     expect(await options.queryFn()).toEqual({ restriction });
     expect(get).toHaveBeenLastCalledWith('/api/v1/me/moderation/restriction');
   });
 
   it('wait for the session and are read again on every mount', () => {
-    for (const make of [
-      myReportsInfiniteQueryOptions,
-      myModerationActionsInfiniteQueryOptions,
-      myRestrictionQueryOptions,
-    ]) {
+    for (const make of [myReportsInfiniteQueryOptions, myModerationActionsInfiniteQueryOptions]) {
       expect(make(undefined).enabled).toBe(false);
       expect(make(null).enabled).toBe(false);
       expect(make(signedIn).enabled).toBe(true);
       expect(make(signedIn).refetchOnMount).toBe('always');
     }
+    // The restriction waits for its account instead (ADR-0140 결정 2-26).
+    expect(myRestrictionQueryOptions(undefined).enabled).toBe(false);
+    expect(myRestrictionQueryOptions(null).enabled).toBe(false);
+    expect(myRestrictionQueryOptions('user-1').enabled).toBe(true);
+    expect(myRestrictionQueryOptions('user-1').refetchOnMount).toBe('always');
+  });
+
+  it('read the session’s account’s restriction where no account is named (the banners)', () => {
+    const source = readFileSync(new URL('./use-reports.ts', import.meta.url), 'utf8');
+    expect(source).toContain(
+      'myRestrictionQueryOptions(accountId === undefined ? (session?.user.id ?? null) : accountId)',
+    );
   });
 });
 

@@ -218,6 +218,18 @@ export const MY_ACTIONS_KEY = [...MY_MODERATION_KEY, 'actions'] as const;
 export const MY_RESTRICTION_KEY = [...MY_MODERATION_KEY, 'restriction'] as const;
 
 /**
+ * One account's restriction, under its id (#66, ADR-0140 결정 2-26): the order panel judges D13 by
+ * the account `GET /me` names, which can turn to another account before the session does and
+ * SessionCacheGuard resets the cache — under the bare key it would read the last account's
+ * restriction as the new one's (its end shown, its orders blocked). Every invalidation is by the
+ * `MY_RESTRICTION_KEY` prefix, so it reaches each account's entry. Null: no account yet (the
+ * query waits).
+ */
+export function myRestrictionKey(accountId: string | null) {
+  return [...MY_RESTRICTION_KEY, accountId] as const;
+}
+
+/**
  * The operators' reads, under the `admin` root (`PRIVATE_QUERY_ROOTS`). One prefix, so an action
  * re-reads the queue, the action log and every moderation page it may have changed at once.
  */

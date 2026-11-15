@@ -5,7 +5,7 @@ import { positionsKey } from '@/hooks/use-portfolio';
 import { postImageUploader } from '@/hooks/use-posts';
 import { ApiError, type Position, api } from './api';
 import { POSITIONS_KEY } from './market-keys';
-import { MY_ACTIONS_KEY, MY_REPORTS_KEY, MY_RESTRICTION_KEY } from './moderation';
+import { MY_ACTIONS_KEY, MY_REPORTS_KEY, MY_RESTRICTION_KEY, myRestrictionKey } from './moderation';
 import {
   ME_KEY,
   cancelFirstFetch,
@@ -122,6 +122,8 @@ describe('a write refused with RESTRICTED (#185)', () => {
   it('reads the member’s restriction and actions again, so the banner says the restriction that refused it', async () => {
     const client = getQueryClient();
     client.setQueryData(MY_RESTRICTION_KEY, { restriction: null });
+    // An account's own entry (ADR-0140 결정 2-26) is under the same prefix.
+    client.setQueryData(myRestrictionKey('account-a'), { restriction: null });
     client.setQueryData(MY_ACTIONS_KEY, { pages: [], pageParams: [] });
     client.setQueryData(MY_REPORTS_KEY, { pages: [], pageParams: [] });
     const refuse = (error: Error) =>
@@ -143,6 +145,7 @@ describe('a write refused with RESTRICTED (#185)', () => {
       }),
     );
     expect(client.getQueryState(MY_RESTRICTION_KEY)?.isInvalidated).toBe(true);
+    expect(client.getQueryState(myRestrictionKey('account-a'))?.isInvalidated).toBe(true);
     expect(client.getQueryState(MY_ACTIONS_KEY)?.isInvalidated).toBe(true);
     // Nothing else of the member's is touched.
     expect(client.getQueryState(MY_REPORTS_KEY)?.isInvalidated).toBe(false);

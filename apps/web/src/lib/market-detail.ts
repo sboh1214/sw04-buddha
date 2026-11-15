@@ -2,6 +2,7 @@ import {
   type ContractTerms,
   type MarketResult,
   type MarketStatus,
+  type MarketStatusRejectReason,
   type Outcome,
   CONTRACT_TERMS,
   formatCoin,
@@ -9,9 +10,9 @@ import {
 import { copy } from '@/copy';
 import { system } from '@/theme/system';
 import { type Market, type MarketJudgementDelay, isApiError } from './api';
-import { formatNoPrice } from './market-admin';
+import { formatNoPrice, formatPricePerContract } from './market-admin';
 import { readsDisputeUnderReview, readsJudgementDelayed } from './market-status';
-import { BOTTOM_TABS_HEIGHT_PX, ORDER_ENTRY_BAR_HEIGHT_PX } from './nav';
+import { BOTTOM_TABS_HEIGHT_PX, HEADER_HEIGHT_PX, ORDER_ENTRY_BAR_HEIGHT_PX } from './nav';
 
 /**
  * 시장 상세의 배치 틀 (#122, ADR-0067): which section goes where at each width, what the mobile
@@ -238,8 +239,9 @@ export function marketRefreshNotice(error: unknown): string {
  * Whether the order area exists at all — the desktop column, the mobile YES·NO 매수 bar and its
  * sheet: on an open market only (ADR-0048 decision 5 and result 6). Any other status explains
  * itself with the status notice, and a `market:status` that closes the market takes the three
- * away with it. `undefined` is the row not loaded yet. Whether a scheduled or a paused market
- * shows one is asked with the orders themselves (#119·#66, ADR-0093 decision 5 '남은 것').
+ * away with it. `undefined` is the row not loaded yet. A scheduled, paused or ended market shows
+ * none (ADR-0135 D1); an open one past its close or under a ledger hold keeps it with its input off
+ * (`orderInputClosedReason`, #66).
  */
 export function showsOrderArea(status: MarketStatus | undefined): boolean {
   return status === 'open';
@@ -390,41 +392,91 @@ export const ORDER_ENTRY_SCROLL_PADDING = `calc(${String(
   BOTTOM_TABS_HEIGHT_PX + ORDER_ENTRY_BAR_HEIGHT_PX + FOCUS_RING_EXTENT_PX,
 )}px + env(safe-area-inset-bottom))`;
 
+/**
+ * The page's own top padding from md up (`app/markets/[slug]/page.tsx`, `py={{ md: '10' }}`):
+ * where the order column starts below the header before the page scrolls.
+ */
+export const DETAIL_TOP_PADDING_MD_PX = 40;
+
+/** The space the order column keeps above the bottom of the window. */
+const ORDER_COLUMN_BOTTOM_GAP_PX = 16;
+
+/**
+ * The md-and-up order column's sticky top and its height (#66, ADR-0140 결정 2-24). It sticks
+ * where it already stands unscrolled — the header and the page's top padding — so it never moves
+ * when the page starts to scroll, and it is no taller than the window under that, less a 16px gap:
+ * the card's bottom edge and 확인's sticky buttons stay on the first screen. The column stuck 24px
+ * higher (header + 16px) with a height counted from there, so unscrolled it reached 8px past the
+ * window's bottom.
+ */
+export const ORDER_COLUMN_TOP = `${String(HEADER_HEIGHT_PX + DETAIL_TOP_PADDING_MD_PX)}px`;
+export const ORDER_COLUMN_MAX_H = `calc(100dvh - ${String(
+  HEADER_HEIGHT_PX + DETAIL_TOP_PADDING_MD_PX + ORDER_COLUMN_BOTTOM_GAP_PX,
+)}px)`;
+
 /** The two entry points of the mobile order sheet, in the order the bar draws them. */
 export const ORDER_ENTRY_CONTRACTS: readonly Outcome[] = ['YES', 'NO'];
 
 /**
- * An entry point's label and the sheet's title for it: 'YES 매수' / 'NO 매수'. No price — the
- * owner's #122 row in ADR-0061 decision 3; what a contract costs is #66's, from the order book
- * (N02 §5).
+ * An entry point's words: 'YES 매수' / 'NO 매수' (ADR-0067), the sheet's title for it too. Its price
+ * (D2, #66) is drawn beside the words in a slot of its own (`orderEntryPrice`), so the server's
+ * HTML and the first render say the words alone and the price arrives without moving them.
  */
 export function orderEntryLabel(contract: Outcome): string {
   return `${contract === 'YES' ? copy.yes : copy.no} ${copy.buy}`;
 }
 
 /**
- * What the mobile order sheet holds under its title, by who pressed 'YES 매수' or 'NO 매수':
- *
- * - `login` for a signed-out visitor: a sign-in prompt that comes back to this market, since an
- *   order is placed signed in (N02 §2; owner decision 2026-10-17, '시트에 로그인 안내').
- * - `preparing` for a member: 거래 준비 중, the one line the desktop's order column says, until the
- *   order panel (#66; ADR-0048).
- * - `pending` while the session is still unknown: a neutral placeholder rather than either line,
- *   so a visitor who presses before the session has answered is never told 거래 준비 중 and then,
- *   a moment later, to sign in instead (ADR-0067 decision 4). The press itself needs hydration,
- *   so this is a short window after it, not the server's render — the sheet is never in the HTML.
+ * An entry point's price (ADR-0135 D2, #66), and the order panel's contract buttons': the
+ * contract's real best price from the public book as '63.00 Coin', or '호가 없음' when that side is
+ * empty (N02 §5) — never 100 − a bid. In the gap (결정 2-16: the market trades but the book or the
+ * quote names a reason, or the close has passed) the reason's short name instead — '마감', '일시
+ * 중단', '개장 전' — as the gap's line says, not '호가 없음' (ADR-0140 결정 2-23). Otherwise undefined
+ * while the book is not known, which leaves the slot blank.
  */
-export type OrderSheetBody = 'pending' | 'preparing' | 'login';
+export function orderEntryPrice(
+  bestCoin: number | null | undefined,
+  closed: MarketStatusRejectReason | null = null,
+): string | undefined {
+  if (closed !== null) return inputClosedShort(closed);
+  if (bestCoin === undefined) return undefined;
+  return bestCoin === null ? copy.marketBookEmpty : formatPricePerContract(bestCoin * 100);
+}
+
+/**
+ * What the mobile order sheet holds under its title: the order panel (#66) — a visitor's too,
+ * who may type and quote and is asked to sign in at 주문 확인 (ADR-0135 D3) — or, while the
+ * session is still unknown, a neutral placeholder, so nobody is shown one panel and then another.
+ * The press itself needs hydration, so this is a short window after it, not the server's render —
+ * the sheet is never in the HTML.
+ */
+export type OrderSheetBody = 'pending' | 'panel';
 
 export function orderSheetBody(viewer: PersonalAreaView): OrderSheetBody {
-  if (viewer === 'unknown') return 'pending';
-  return viewer === 'member' ? 'preparing' : 'login';
+  return viewer === 'unknown' ? 'pending' : 'panel';
+}
+
+/**
+ * Why an open market's order panel takes no input now, or null: the window ADR-0135 결과 4 names
+ * between `close_at` and the worker's close ('마감'), and a ledger hold ('일시 중단'), which the
+ * book's reason says (ADR-0138) and the close's own instant says first (`closeReached`, a timer on
+ * the server's clock: the book is read again a second later). The order area itself is the
+ * status's (`showsOrderArea`, D1); the server refuses those orders with the same reason.
+ */
+export function orderInputClosedReason(
+  status: MarketStatus | undefined,
+  book: { marketRejectReason: MarketStatusRejectReason | null } | undefined,
+  closeReached: boolean,
+): MarketStatusRejectReason | null {
+  if (!showsOrderArea(status)) return null;
+  if (book?.marketRejectReason != null) return book.marketRejectReason;
+  return closeReached ? 'closed' : null;
 }
 
 /**
  * The mobile order sheet: whether it is open, and the contract its entry point named. The
- * contract outlives the close, so the title does not change under the closing animation and the
- * order panel (#66) will open on the contract that was pressed.
+ * contract outlives the close, so the title does not change under the closing animation; the order
+ * panel (#66) opens on the contract that was pressed.
  */
 export interface OrderSheetState {
   open: boolean;
@@ -567,4 +619,20 @@ export function delta24h(
   if (market.lastPrice === null || market.lastPrice24hAgo === null) return null;
   const delta = market.lastPrice - market.lastPrice24hAgo;
   return delta === 0 ? null : delta;
+}
+
+/**
+ * The short name of the gap's reason (결정 2-16), where a price would stand — the contract
+ * buttons and the mobile entry buttons: '개장 전'·'일시 중단'·'마감', the 거절 reasons' own names,
+ * rather than '호가 없음', which would say the book is merely empty (ADR-0140 결정 2-23).
+ */
+export function inputClosedShort(reason: MarketStatusRejectReason): string {
+  switch (reason) {
+    case 'not_open_yet':
+      return copy.orderClosedShortNotOpenYet;
+    case 'paused':
+      return copy.orderClosedShortPaused;
+    case 'closed':
+      return copy.orderClosedShortClosed;
+  }
 }

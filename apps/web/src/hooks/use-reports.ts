@@ -20,7 +20,7 @@ import { postCommentsKey } from '@/lib/comments';
 import {
   MY_ACTIONS_KEY,
   MY_REPORTS_KEY,
-  MY_RESTRICTION_KEY,
+  myRestrictionKey,
   type ModerationPage,
 } from '@/lib/moderation';
 import { POST_LIST_KEY, postKey } from '@/lib/posts';
@@ -96,21 +96,30 @@ export function myModerationActionsInfiniteQueryOptions(session?: SessionLike) {
 /**
  * `GET /me/moderation/restriction`: the writing restriction (#185) and the account restriction
  * (#139) that govern the member now, each or none — what the banner says (`SanctionBanner`), read
- * apart from the paged actions so that no number of later actions keeps one off. Once the session
- * is known, and again on every mount and after any write a restriction refused (query-client.ts).
+ * apart from the paged actions so that no number of later actions keeps one off. Kept under the
+ * account it is read for (`myRestrictionKey`, ADR-0140 결정 2-26) and read once that account is
+ * known, and again on every mount and after any write a restriction refused (query-client.ts,
+ * by the prefix).
  */
-export function myRestrictionQueryOptions(session?: SessionLike) {
+export function myRestrictionQueryOptions(accountId: string | null | undefined) {
   return {
-    queryKey: MY_RESTRICTION_KEY,
+    queryKey: myRestrictionKey(accountId ?? null),
     queryFn: async () => unwrap(await api.GET('/api/v1/me/moderation/restriction')).data,
     refetchOnMount: 'always' as const,
-    enabled: session != null,
+    enabled: typeof accountId === 'string',
   };
 }
 
-export function useMyRestriction() {
+/**
+ * The restriction of `accountId` — the order panel's account on screen, `GET /me`'s (null: none
+ * yet) — or, left out, of the session's account: the banners, which follow the session as
+ * SessionCacheGuard does.
+ */
+export function useMyRestriction(accountId?: string | null) {
   const { data: session } = useSession();
-  return useQuery(myRestrictionQueryOptions(session));
+  return useQuery(
+    myRestrictionQueryOptions(accountId === undefined ? (session?.user.id ?? null) : accountId),
+  );
 }
 
 export function useMyReports() {
