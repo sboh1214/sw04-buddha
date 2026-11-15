@@ -13,6 +13,7 @@ import type {
   Sellable,
 } from '@buddha/shared';
 import { copy } from '../src/copy';
+import { formatKst } from '../src/lib/datetime';
 import {
   adminAccount,
   createOpenMarket,
@@ -1112,6 +1113,56 @@ test.describe('시장 통계 (#121)', () => {
       const series = await readRawTicks();
       expect(series.points.map((point) => point.pYesBp)).toEqual([6000, 6000, 5500]);
       expect(series.tradeCount).toBe(3);
+
+      // --- The card (#61, ADR-0136), on the search screen holding exactly this market's card:
+      // its question and category, the price — its YES value and NO's complement — with
+      // '최근 체결 <절대 시각>' at its fill's server time, in Korean time as this browser's is,
+      // and the 2 participants.
+      await page.goto(`/search?q=${market.tag}`);
+      const card = page.getByTestId(`market-card-${market.id}`);
+      await expect(card.getByRole('link', { name: market.title })).toBeVisible();
+      await expect(card).toContainText(after.category.nameKo);
+      await expect(card.getByTestId('market-card-probability')).toHaveText('55%');
+      await expect(card.getByTestId('market-card-probability-no')).toHaveText('45%');
+      await expect(card.getByTestId('market-card-last-fill')).toHaveText(
+        `${copy.marketLastFillAt} ${formatKst(after.lastFillAt ?? '')}`,
+      );
+      await expect(card.getByTestId('market-card-traders')).toHaveText(`${copy.marketTraders} 2`);
+      // A card that has traded still draws no payout multiple ('1.59x', O-21), no 거래량 and no
+      // price trend line (ADR-0061 decision 1, item 4): the first spec to read one (market.spec).
+      await expect(card).not.toContainText(/\d\.\d{2}x/);
+      await expect(card).not.toContainText(copy.marketVolume);
+      await expect(card.getByTestId('market-card-volume')).toHaveCount(0);
+      await expect(card.getByTestId('market-card-sparkline')).toHaveCount(0);
+      // The footer's two boxes stay inside the tile's padding and on screen at this project's
+      // width (375 or 1280), and the page does not scroll sideways. Not the tile's outer box: a
+      // one-column grid (`1fr` at 375) lets a `nowrap` piece too long for its column widen the
+      // tile with it, so the tile always holds it, and at 1280 its padding and stroke would hide
+      // 17px of overflow. The page width catches the first; the padded body the second.
+      const inner = await card.evaluate((shell) => {
+        const body = shell.firstElementChild;
+        if (body === null) throw new Error('the card has no body');
+        const rect = body.getBoundingClientRect();
+        const style = getComputedStyle(body);
+        return {
+          left: rect.left + parseFloat(style.paddingLeft),
+          right: rect.right - parseFloat(style.paddingRight),
+          bottom: rect.bottom - parseFloat(style.paddingBottom),
+        };
+      });
+      const viewport = await page.evaluate(() => ({
+        width: document.documentElement.clientWidth,
+        scrollWidth: document.documentElement.scrollWidth,
+      }));
+      expect(viewport.scrollWidth, 'page width').toBeLessThanOrEqual(viewport.width);
+      for (const testId of ['market-card-traders', 'market-card-last-fill']) {
+        const box = await card.getByTestId(testId).boundingBox();
+        if (box === null) throw new Error(`${testId} has no bounding box`);
+        expect(box.x, testId).toBeGreaterThanOrEqual(inner.left - 0.5);
+        expect(box.x + box.width, testId).toBeLessThanOrEqual(inner.right + 0.5);
+        expect(box.x + box.width, testId).toBeLessThanOrEqual(viewport.width);
+        expect(box.y + box.height, testId).toBeLessThanOrEqual(inner.bottom + 0.5);
+      }
     } finally {
       await aContext.close();
       await visitorContext.close();

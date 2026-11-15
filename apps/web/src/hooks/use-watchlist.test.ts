@@ -199,6 +199,7 @@ describe('the watchlist queries', () => {
       statsRevision: '11',
       closeAt: '2026-10-01T00:00:00.000Z',
       openAt: '2026-09-01T00:00:00.000Z',
+      scheduledOpenAt: '2026-09-01T00:00:00.000Z',
       resolvedResult: null,
       judgementVersion: null,
       disputeDeadline: null,

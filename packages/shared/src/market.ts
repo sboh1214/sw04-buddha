@@ -138,7 +138,7 @@ const marketSummaryFields = {
   /**
    * 시장가격의 갱신시각 (ADR-0107 결정 4 #121 '대표 시장가격'): the last fill's server time. Null
    * exactly when `lastPrice` is ('체결 없음'). Cards and the detail show '최근 체결 <절대 시각>'
-   * (M11 #61/#60).
+   * (the card since #61, ADR-0136; the detail header is #64's).
    */
   lastFillAt: z.iso.datetime().nullable(),
   /**
@@ -162,6 +162,15 @@ const marketSummaryFields = {
   statsRevision: statsRevisionSchema,
   closeAt: z.iso.datetime(),
   openAt: z.iso.datetime().nullable(),
+  /**
+   * 예정 개장 시각 (#22, ADR-0098): the detail's own definition (`marketTimesSchema`), so a card
+   * and the detail read one value. Never changed by the open — `market-open.ts` writes `openAt`
+   * alone — so it stays the scheduled time after it. Null on a market made before #22 and on a
+   * draft saved without the times (a test factory's `blankTimes`). Carried in every public
+   * status, as the detail does; the card draws it only while the status is SCHEDULED (ADR-0135
+   * decision 2 A3, #61).
+   */
+  scheduledOpenAt: marketTimesSchema.shape.scheduledOpenAt,
   /**
    * The judgement's result type (YES·NO·VOID, #174): null before a judgement publishes one and
    * on a CANCELLED market (ADR-0093 decision 1 item 10). Set when another admin approves the
@@ -213,8 +222,9 @@ const marketSummaryFields = {
 /**
  * List card: the row of `GET /markets` and of `GET /admin/markets`. No list-only DTO sits
  * beside it any more — the card sparkline that made one (`MarketListItem`, ADR-0030) is gone
- * (ADR-0062). `volumeCoin` stays although the card no longer shows it: the detail header and
- * the admin screens do.
+ * (ADR-0062). The card (#61, ADR-0136) draws the price with `lastFillAt` ('최근 체결'), the
+ * participants, the close and, while SCHEDULED, `scheduledOpenAt`. `volumeCoin` stays although
+ * the card no longer shows it: the detail header and the admin screens do.
  */
 export const marketSummarySchema = z.object(marketSummaryFields).meta({ id: 'MarketSummary' });
 export type MarketSummary = z.infer<typeof marketSummarySchema>;
@@ -223,7 +233,8 @@ export type MarketSummary = z.infer<typeof marketSummarySchema>;
  * Public detail (PLAN 7.1): no author, exposure or settlement steps — those are
  * `adminMarketSchema` only. The rule items (`marketRuleItemsSchema`, #23) and the market's times
  * and judgement time zone (`marketTimesSchema`, #22: the close is the summary's) are public in
- * every public status, signed in or not (N02 §2, N03 §4); cards carry none of them.
+ * every public status, signed in or not (N02 §2, N03 §4); cards carry only the scheduled open
+ * (#61) and the close of them.
  */
 export const marketSchema = z
   .object({

@@ -543,6 +543,8 @@ test.describe('시장 카드', () => {
     await expect(card.getByTestId('market-card-probability')).toHaveText('—');
     await expect(card.getByTestId('market-card-probability-no')).toHaveText('—');
     await expect(card.getByTestId('market-card-no-fills')).toHaveText(copy.noFills);
+    // No fill, so no '최근 체결 <시각>' either: its slot stays empty (#61, ADR-0135 결과 4).
+    await expect(card.getByTestId('market-card-last-fill')).toHaveCount(0);
 
     // The participant count, and a 0 is written as 0 rather than hidden (ADR-0061 decision 1,
     // item 4), in the detail header's spelling.
@@ -551,11 +553,10 @@ test.describe('시장 카드', () => {
 
     // What the card no longer draws: no 거래량 and no price trend line (ADR-0061 decision 1,
     // item 4) — both were on every card, priced or not, so these two fail on the old one.
-    // The payout multiple ('1.59x', O-21) is checked here too, but that line proves nothing yet:
-    // a card with no fill never showed one (ADR-0048) and this market has none (orders.spec.ts
-    // trades on its own markets only, #119; the screen tests are #189). What pins its removal
-    // today is the source scan in lib/market-card.test.ts; this line starts to count once a
-    // spec trades on the market it reads.
+    // The payout multiple ('1.59x', O-21) is checked here too, but that line proves little: a
+    // card with no fill never showed one (ADR-0048) and this market has none. The card that has
+    // traded is checked in orders.spec.ts '시장 통계 (#121)' (#61), and the source scan in
+    // lib/market-card.test.ts pins the removal for every card.
     await expect(card).not.toContainText(/\d\.\d{2}x/);
     await expect(card).not.toContainText(copy.marketVolume);
     await expect(card.getByTestId('market-card-volume')).toHaveCount(0);

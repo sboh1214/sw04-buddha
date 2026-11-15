@@ -152,6 +152,8 @@ export function toMarketSummary(
     statsRevision: row.statsRevision.toString(),
     closeAt: row.closeAt.toISOString(),
     openAt: row.openAt?.toISOString() ?? null,
+    // The detail's 예정 개장 시각 (`timesOf`), which the card draws while SCHEDULED (#61).
+    scheduledOpenAt: row.scheduledOpenAt?.toISOString() ?? null,
     resolvedResult: row.resolvedResult,
     judgementVersion: row.judgementVersion,
     disputeDeadline: display.disputeDeadline,

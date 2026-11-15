@@ -1,6 +1,7 @@
 import type { APIRequestContext, APIResponse, Locator, Page, Request } from '@playwright/test';
 import type { AdminMarket, Market, Order, PlaceOrderResult } from '@buddha/shared';
 import { copy } from '../src/copy';
+import { formatKst } from '../src/lib/datetime';
 import {
   NO_FILL_CANCEL_REASON,
   adminAccount,
@@ -252,12 +253,26 @@ test.describe('거래 없는 시장의 취소 (#20)', () => {
     admin,
     secondAdmin,
     browser,
+    page,
     request,
   }) => {
     const [first, second] = await Promise.all([meOf(admin), meOf(secondAdmin)]);
     const market = await createScheduledMarket(admin);
     const reason = `판정 출처가 운영을 멈춰 열지 않고 끝냅니다 ${market.tag}`;
     const approval = `출처가 멈춘 것을 확인했습니다 ${market.tag}`;
+
+    // --- A visitor's card first (#61, ADR-0136; ADR-0135 A3), on the search screen holding
+    // exactly it: the 개장 예정 badge, and '예정 개장 <절대 시각>' before the countdown.
+    const { scheduledOpenAt } = await publicMarketOf(request, market.id);
+    if (scheduledOpenAt === null) throw new Error('the scheduled market has no scheduled open');
+    await page.goto(`/search?q=${market.tag}`);
+    const card = page.getByTestId(`market-card-${market.id}`);
+    await expect(card.getByText(copy.marketStatusScheduled, { exact: true })).toBeVisible();
+    await expect(card.getByTestId('market-card-opens-at')).toHaveText(
+      `${copy.marketScheduledOpenAt} ${formatKst(scheduledOpenAt)}`,
+    );
+    await expect(card.getByTestId('market-countdown')).toContainText(copy.marketCloseAt);
+    await expect(card.getByTestId('market-countdown')).not.toHaveText(copy.marketClosed);
 
     const firstContext = await browser.newContext();
     const secondContext = await browser.newContext();
@@ -380,6 +395,13 @@ test.describe('거래 없는 시장의 취소 (#20)', () => {
     const shown = await publicMarketOf(request, market.id);
     expect(shown.status).toBe('cancelled');
     expect(shown.resolvedResult).toBeNull();
+    // … and so does its card, 취소 with the close line left empty: it never opened, so there was
+    // no trading to close (#61, ADR-0135 결과 4), and no scheduled open is drawn any more.
+    await page.goto(`/search?q=${market.tag}`);
+    await expect(card.getByText(copy.marketStatusCancelled, { exact: true })).toBeVisible();
+    await expect(card).not.toContainText(copy.marketClosed);
+    await expect(card.getByTestId('market-countdown')).toHaveCount(0);
+    await expect(card.getByTestId('market-card-opens-at')).toHaveCount(0);
   });
 
   test('기다리는 취소 요청은 요청한 관리자만 화면에서 철회하고 다른 관리자는 반려하며, 그 뒤에도 시장은 개장 예정이다', async ({

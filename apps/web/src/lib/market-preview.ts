@@ -29,8 +29,8 @@ export const PREVIEW_SLUG = 'preview';
  * CLOSED one whose scheduled judgement has passed its 판정 지연 (`judgementDelayed`, #22), a held 잠정
  * 결과 its 이의 검토 중 (`disputeUnderReview`, #175) with its judgement and 이의 기한 — and the
  * 수정 card must preview that card, not one with 체결 없음 and '참여자 0'. Of that history the card
- * draws the price, the status, the countdown and the 참여자; `volumeCoin` and `tradeCount` come along
- * only because a `MarketSummary` carries them.
+ * draws the price and its fill's time, the status, the countdown and the 참여자; `volumeCoin` and
+ * `tradeCount` come along only because a `MarketSummary` carries them.
  *
  * Written as two exhaustive objects rather than `base?.x ?? fallback`: `??` reads fine for
  * `lastPrice` but hides that `openAt` and `resolvedResult` are legitimately null on a live row,
@@ -101,6 +101,9 @@ export function toPreviewMarket(
     // `''` while the required field is empty: the badge's formatter renders that blank and it reads
     // 마감됨 until a close time is typed. Inventing an instant would mean reading the clock here.
     closeAt: body.closeAt,
+    // The form's, as the 상세 미리보기 takes it (`toPreviewRules`): the card draws it only while
+    // the status is SCHEDULED (#61), so only the 수정 card of a 개장 예정 market shows it.
+    scheduledOpenAt: body.scheduledOpenAt ?? null,
     ...history,
   };
 }

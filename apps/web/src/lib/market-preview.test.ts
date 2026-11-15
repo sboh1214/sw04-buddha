@@ -33,6 +33,7 @@ const traded: MarketSummary = {
   statsRevision: '42',
   closeAt: '2026-12-01T00:00:00.000Z',
   openAt: '2026-09-01T00:00:00.000Z',
+  scheduledOpenAt: '2026-09-01T00:00:00.000Z',
   createdAt: '2026-08-31T00:00:00.000Z',
   resolvedResult: null,
   judgementVersion: null,
@@ -98,6 +99,20 @@ describe('toPreviewMarket', () => {
     expect(preview.status).toBe('scheduled');
     expect(preview.lastPrice).toBeNull();
     expect(preview.traderCount).toBe(0);
+  });
+
+  it("carries the form's scheduled open, which the card draws while 개장 예정 (#61)", () => {
+    // The form's value, as the rules preview takes it — not the base's, which an edit may move.
+    const opens = '2026-11-20T00:00:00.000Z';
+    const scheduled = { ...traded, status: 'scheduled' as const, lastPrice: null, openAt: null };
+    expect(
+      toPreviewMarket({ ...body, scheduledOpenAt: opens }, categories, scheduled).scheduledOpenAt,
+    ).toBe(opens);
+    expect(toPreviewMarket({ ...body, scheduledOpenAt: opens }, categories).scheduledOpenAt).toBe(
+      opens,
+    );
+    // Not typed yet: none, never the base's or a made-up one.
+    expect(toPreviewMarket(body, categories, scheduled).scheduledOpenAt).toBeNull();
   });
 
   it('takes the history of every public market, a paused or cancelled one included', () => {

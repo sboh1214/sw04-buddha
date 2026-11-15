@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { type Category } from './api';
-import { groupCategories, locateCategory, parentCategorySlug } from './category-tree';
+import { cardIconSlug, groupCategories, locateCategory, parentCategorySlug } from './category-tree';
 
 const category = (
   id: number,
@@ -77,5 +77,40 @@ describe('parentCategorySlug', () => {
   it('answers undefined for a slug the seeded tree does not know', () => {
     expect(parentCategorySlug('retired')).toBeUndefined();
     expect(parentCategorySlug('')).toBeUndefined();
+  });
+});
+
+describe('cardIconSlug', () => {
+  // As the public list answers once an admin has added to the seed (#17): a leaf under a seeded
+  // parent and a new top-level category with a leaf of its own.
+  const LIVE: Category[] = [
+    category(1, 'economy', null),
+    category(2, 'weather', null),
+    category(3, 'sports', null),
+    category(11, 'housing', 1, 10),
+    category(13, 'stocks', 1, 30),
+    category(31, 'esports', 3, 10),
+  ];
+
+  it('answers a seeded category from the seed alone, before any list', () => {
+    expect(cardIconSlug('housing', undefined)).toBe('economy');
+    expect(cardIconSlug('economy', undefined)).toBe('economy');
+    expect(cardIconSlug('housing', LIVE)).toBe('economy');
+  });
+
+  it("draws an admin's leaf under a seeded parent with its parent's glyph, once listed", () => {
+    expect(cardIconSlug('stocks', LIVE)).toBe('economy');
+    // Before the list has come: the slug itself, the neutral glyph.
+    expect(cardIconSlug('stocks', undefined)).toBe('stocks');
+  });
+
+  it('answers a new top-level category and its leaves with the new slug: the neutral glyph', () => {
+    expect(cardIconSlug('sports', LIVE)).toBe('sports');
+    expect(cardIconSlug('esports', LIVE)).toBe('sports');
+  });
+
+  it('answers a slug the public list does not hold with itself (a hidden category)', () => {
+    expect(cardIconSlug('retired', LIVE)).toBe('retired');
+    expect(cardIconSlug('', LIVE)).toBe('');
   });
 });

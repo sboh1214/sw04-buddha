@@ -17,7 +17,6 @@ import {
   type AdminMarketReviewItem,
   type AdminMarketSupplementItem,
   type AdminRelatedMarket,
-  type Category,
   type Fill,
   type MarketSummary,
   api,
@@ -129,13 +128,11 @@ export const adminRelatedSearchKey = (q: string) =>
  */
 export { CATEGORIES_QUERY_KEY, MARKET_FILLS_KEY, marketFillsKey };
 
-/** Active categories in display order (`GET /categories`, public). */
-export function useCategories() {
-  return useQuery({
-    queryKey: CATEGORIES_QUERY_KEY,
-    queryFn: async (): Promise<Category[]> => unwrap(await api.GET('/api/v1/categories')).data,
-  });
-}
+/**
+ * Active categories in display order (`GET /categories`, public). Declared in `./use-categories`
+ * since the market card reads it too (#61), and re-exported so no admin import site moved.
+ */
+export { useCategories } from './use-categories';
 
 /**
  * One market with its trade stats, exposure and event log (`GET /admin/markets/:id`), keyed

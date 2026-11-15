@@ -6,7 +6,15 @@ import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { SRC, copyRefsOf, literalsOf, localImportsOf } from '../test/screen-text';
 import { formatNoPrice, formatYesPrice } from './market-admin';
-import { type OutcomeReading, noPrice, outcomeRows, participantsText } from './market-card';
+import {
+  type OutcomeReading,
+  closeLineKind,
+  lastFillLine,
+  noPrice,
+  opensAtLine,
+  outcomeRows,
+  participantsText,
+} from './market-card';
 
 /** The two readings of a market that HAS a fill; a missing one here is a failure, not a value. */
 function readings(lastPrice: number): [OutcomeReading, OutcomeReading] {
@@ -107,6 +115,67 @@ describe('participantsText', () => {
 
   it("is the detail header's spelling: the count as String writes it, ungrouped", () => {
     expect(participantsText({ traderCount: 12345 })).toBe(`${copy.marketTraders} 12345`);
+  });
+});
+
+const AT = '2026-09-07T00:00:00.000Z';
+const PUBLIC_STATUSES = [
+  'scheduled',
+  'open',
+  'paused',
+  'closed',
+  'provisional',
+  'resolved',
+  'settling',
+  'settled',
+  'cancelled',
+] as const;
+
+describe('lastFillLine', () => {
+  it("is the last fill's instant in every status, an ended card's too (ADR-0135 A2)", () => {
+    for (const status of PUBLIC_STATUSES) {
+      const row = { status, lastFillAt: AT };
+      expect(lastFillLine(row), status).toBe(AT);
+    }
+  });
+
+  it('is nothing before the first fill: the slot stays empty', () => {
+    expect(lastFillLine({ lastFillAt: null })).toBeNull();
+  });
+});
+
+describe('opensAtLine', () => {
+  it('is the scheduled open while 개장 예정, by the status alone (ADR-0135 A3)', () => {
+    expect(opensAtLine({ status: 'scheduled', scheduledOpenAt: AT })).toBe(AT);
+    // Past its time and not opened yet (a close passed, a held ledger, the worker's lag): the
+    // status decides, and no clock is read.
+    expect(opensAtLine({ status: 'scheduled', scheduledOpenAt: '2000-01-01T00:00:00.000Z' })).toBe(
+      '2000-01-01T00:00:00.000Z',
+    );
+  });
+
+  it('is nothing for a market made before #22, nor in any other status', () => {
+    expect(opensAtLine({ status: 'scheduled', scheduledOpenAt: null })).toBeNull();
+    for (const status of PUBLIC_STATUSES.filter((status) => status !== 'scheduled')) {
+      expect(opensAtLine({ status, scheduledOpenAt: AT }), status).toBeNull();
+    }
+    expect(opensAtLine({ status: 'draft', scheduledOpenAt: AT })).toBeNull();
+    expect(opensAtLine({ status: 'review', scheduledOpenAt: AT })).toBeNull();
+  });
+});
+
+describe('closeLineKind', () => {
+  it('leaves the line blank for a market cancelled before it opened (#20)', () => {
+    expect(closeLineKind({ status: 'cancelled', openAt: null })).toBe('blank');
+  });
+
+  it('counts down, or reads 마감됨, in every other case', () => {
+    expect(closeLineKind({ status: 'cancelled', openAt: AT })).toBe('countdown');
+    for (const status of ['scheduled', 'open', 'paused', 'closed', 'settled'] as const) {
+      expect(closeLineKind({ status, openAt: status === 'scheduled' ? null : AT }), status).toBe(
+        'countdown',
+      );
+    }
   });
 });
 

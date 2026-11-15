@@ -88,3 +88,38 @@ function readingOf(percent: number, accessibleName: string): OutcomeReading {
 export function participantsText(market: Pick<MarketSummary, 'traderCount'>): string {
   return `${copy.marketTraders} ${String(market.traderCount)}`;
 }
+
+/**
+ * The footer's '최근 체결 <절대 시각>' (#61, ADR-0136; ADR-0135 decision 1 item 1): the instant of
+ * the fill that set the price, `lastFillAt`, in every status — an ended or cancelled card keeps
+ * its last price and its time (ADR-0135 A2). Null with no fill ('체결 없음'), and the slot stays
+ * empty. The ISO instant as the API sent it: the card formats it, and no clock is read.
+ */
+export function lastFillLine(market: Pick<MarketSummary, 'lastFillAt'>): string | null {
+  return market.lastFillAt;
+}
+
+/**
+ * The close line's '예정 개장 <절대 시각>' (#61, ADR-0136; ADR-0135 A3): the scheduled open while
+ * the market is 개장 예정, by its status alone — one whose scheduled time has passed and which the
+ * worker has not opened yet (a close already passed, a held ledger, a few seconds' lag) still
+ * says it, as the detail's rules show the time until the open (ADR-0098). Null in every other
+ * status, and on a market made before #22, which has none: nothing stands in for it.
+ */
+export function opensAtLine(
+  market: Pick<MarketSummary, 'status' | 'scheduledOpenAt'>,
+): string | null {
+  return market.status === 'scheduled' ? market.scheduledOpenAt : null;
+}
+
+/**
+ * What the card's close line holds (#61, ADR-0136; ADR-0135 결과 4): the countdown, which reads
+ * 마감됨 once a market has closed or was cancelled after its open (ADR-0062 decision 2), or
+ * nothing for a market cancelled before it ever opened (`openAt` null, the two-admin cancel of a
+ * 개장 예정 market, #20) — it had no trading to close. The card keeps the line's height either way.
+ */
+export function closeLineKind(
+  market: Pick<MarketSummary, 'status' | 'openAt'>,
+): 'countdown' | 'blank' {
+  return market.status === 'cancelled' && market.openAt === null ? 'blank' : 'countdown';
+}
