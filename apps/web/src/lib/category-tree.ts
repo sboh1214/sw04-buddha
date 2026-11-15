@@ -63,9 +63,9 @@ export function locateCategory(
  * else `undefined`. Static on purpose — a card needs the parent to pick its glyph
  * (`CategoryIcon`) inside the server's HTML, where no `['categories']` query has resolved yet.
  * Since #17 admins add categories (/admin/categories), and the glyphs stay keyed to the seed's
- * slugs: a category added there, or a leaf added under a seeded parent, answers `undefined` and
- * draws the neutral glyph (cards are #61's; #17 implementation choice 16). `locateCategory` is
- * the live answer for the screens that hold the query.
+ * slugs: a category added there, or a leaf added under a seeded parent, answers `undefined` here
+ * (#17 implementation choice 16). `locateCategory` is the live answer for the screens that hold
+ * the query, and `cardIconSlug` below puts the two together for the card (#61, ADR-0136).
  */
 export function parentCategorySlug(slug: string): CategorySlug | undefined {
   for (const parent of CATEGORY_SLUGS) {
@@ -73,4 +73,21 @@ export function parentCategorySlug(slug: string): CategorySlug | undefined {
     if ((SUBCATEGORY_SLUGS[parent] as readonly string[]).includes(slug)) return parent;
   }
   return undefined;
+}
+
+/**
+ * The slug whose glyph a market card draws (#61, ADR-0136; ADR-0135 결과 4): the top-level
+ * category's, which a leaf inherits. The seeded tree answers first (`parentCategorySlug`), so a
+ * seeded category is right from the server's HTML on. A category an admin added is looked up in
+ * the public list once the card holds it (`categories`, `GET /categories`): a leaf added under a
+ * seeded parent then draws its parent's glyph, and a new top-level one answers itself, which
+ * draws the neutral glyph. Before the list has come, and for a slug it does not hold — a hidden
+ * category, or a leaf of a hidden parent, which the public list leaves out — the slug answers
+ * itself: the neutral glyph again.
+ */
+export function cardIconSlug(slug: string, categories: readonly Category[] | undefined): string {
+  const seeded = parentCategorySlug(slug);
+  if (seeded !== undefined) return seeded;
+  if (categories === undefined) return slug;
+  return locateCategory(groupCategories(categories), slug)?.parent.category.slug ?? slug;
 }

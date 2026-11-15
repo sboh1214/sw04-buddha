@@ -82,6 +82,11 @@ describe('copy', () => {
       expect([copy.marketStatusScheduled, copy.marketStatusClosed]).not.toContain(row);
     }
     expect(copy.rulesLongDelayBefore).toContain(copy.rulesJudgementAt);
+    // The card's 개장 예정 line (#61, ADR-0136) is a time too, of the same stem as the row.
+    expect(copy.marketScheduledOpenAt).toBe('예정 개장');
+    expect([copy.marketStatusScheduled, copy.marketStatusClosed]).not.toContain(
+      copy.marketScheduledOpenAt,
+    );
   });
 
   it('never makes a late result a NO, nor promises a refund for it (N03 §4, §6)', () => {

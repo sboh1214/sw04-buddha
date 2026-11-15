@@ -51,6 +51,7 @@ const summary: MarketSummary = {
   statsRevision: '10',
   closeAt: '2026-10-01T00:00:00.000Z',
   openAt: '2026-09-01T00:00:00.000Z',
+  scheduledOpenAt: '2026-09-01T00:00:00.000Z',
   resolvedResult: null,
   judgementVersion: null,
   disputeDeadline: null,
@@ -723,6 +724,24 @@ describe('joinMarket', () => {
     // an older snapshot must not drag the participant count back under a newer probability —
     // even though this stale answer names a higher one.
     expect(joined.traderCount).toBe(7);
+  });
+
+  it("takes a card's scheduled open from the answer, and no status event moves it (#61)", () => {
+    // Descriptive, like the title: a reschedule before the open reaches a card by its next read,
+    // never by an event (ADR-0136). An older answer's own value is the one it carries.
+    const held: MarketSummary = {
+      ...card,
+      status: 'scheduled',
+      openAt: null,
+      scheduledOpenAt: '2026-09-02T00:00:00.000Z',
+    };
+    const moved = { ...held, scheduledOpenAt: '2026-09-03T00:00:00.000Z' };
+    expect(joinMarket(held, moved).scheduledOpenAt).toBe('2026-09-03T00:00:00.000Z');
+    // The open's `market:status` changes the status alone; the card stops drawing the time by it.
+    const opened = applyStatus(held, statusEvent({ status: 'open', statusEventId: '3' }));
+    expect(opened?.status).toBe('open');
+    expect(opened?.scheduledOpenAt).toBe('2026-09-02T00:00:00.000Z');
+    expect(opened?.openAt).toBeNull();
   });
 
   it('keeps the newer transition in both directions', () => {

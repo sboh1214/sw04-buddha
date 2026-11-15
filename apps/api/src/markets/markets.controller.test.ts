@@ -1120,6 +1120,19 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
         judgementDelayed: false,
       },
     );
+    // The card carries the detail's 예정 개장 시각 (#61, ADR-0136; ADR-0135 decision 2 A3): the
+    // same instant, null before #22, and on a SCHEDULED market — the one status it draws it in.
+    const upcoming = await market({ status: 'scheduled', scheduledOpenAt: minute(at(2)) });
+    const listed = (await get('/api/v1/markets?status=all&limit=100')).json<ListPage>().data;
+    const opensOf = (id: string) => listed.find((row) => row.id === id)?.scheduledOpenAt;
+    expect(opensOf(live.id)).toBe(detail.scheduledOpenAt);
+    expect(opensOf(live.id)).toBe(times.scheduledOpenAt.toISOString());
+    expect(opensOf(legacy.id)).toBeNull();
+    expect(listed.find((row) => row.id === upcoming.id)).toMatchObject({
+      status: 'scheduled',
+      openAt: null,
+      scheduledOpenAt: minute(at(2)).toISOString(),
+    });
 
     // '판정 지연' (#173 item 11, ADR-0098): CLOSED with the scheduled judgement passed, on the
     // server's clock at the read — no operator record needed. A display, not a status: the card

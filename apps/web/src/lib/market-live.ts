@@ -49,9 +49,9 @@ export interface LiveMarket {
   /** The last fill's price, 1..99, or `null` before the first fill (N02 §5's 체결 없음). */
   lastPrice: number | null;
   /**
-   * That fill's server time (#121, ADR-0116: the 시장가격's 갱신시각, the cards' and the detail's
-   * '최근 체결 <시각>' once #61/#60 draw it), `null` exactly when `lastPrice` is. It moves with the
-   * price under `tradeCount`.
+   * That fill's server time (#121, ADR-0116: the 시장가격's 갱신시각; the card draws it as '최근
+   * 체결 <시각>' since #61, ADR-0136, and the detail header's is #64's), `null` exactly when
+   * `lastPrice` is. It moves with the price under `tradeCount`.
    */
   lastFillAt: string | null;
   volumeCoin: string;

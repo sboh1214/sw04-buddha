@@ -67,6 +67,7 @@ const summary = {
   statsRevision: '3',
   closeAt: at,
   openAt: at,
+  scheduledOpenAt: '2026-09-01T00:00:00.000Z',
   resolvedResult: null,
   judgementVersion: null,
   disputeDeadline: null,
@@ -519,11 +520,25 @@ describe('read DTOs', () => {
     }
   });
 
-  it('carry the times and the judgement time zone on the detail and none on a card (#22)', () => {
-    // The close is the summary's; the four others are the detail's, each null while not filled in.
+  it('carry the times and the time zone on the detail and two on a card (#22, #61)', () => {
+    // The close and the scheduled open are the summary's too; the three others are the detail's,
+    // each null while not filled in.
     expect(TIME_ITEMS.filter((item) => item in marketSchema.shape)).toEqual([...TIME_ITEMS]);
     const card = marketSummarySchema.parse(market);
-    expect(TIME_ITEMS.filter((item) => item in card)).toEqual(['closeAt']);
+    expect(TIME_ITEMS.filter((item) => item in card)).toEqual(['scheduledOpenAt', 'closeAt']);
+    // One definition: the card's scheduled open is the detail's (ADR-0135 A3).
+    expect(marketSummarySchema.shape.scheduledOpenAt).toBe(marketSchema.shape.scheduledOpenAt);
+    expect(marketSummarySchema.parse({ ...summary, scheduledOpenAt: null }).scheduledOpenAt).toBe(
+      null,
+    );
+    expect(marketSummarySchema.parse({ ...summary, status: 'scheduled' }).scheduledOpenAt).toBe(
+      '2026-09-01T00:00:00.000Z',
+    );
+    expect(
+      marketSummarySchema.safeParse({ ...summary, scheduledOpenAt: '2026-09-01 09:00' }).success,
+    ).toBe(false);
+    const { scheduledOpenAt: _open, ...withoutOpen } = summary;
+    expect(marketSummarySchema.safeParse(withoutOpen).success).toBe(false);
     // A market opened before #22: every new time null, the zone too.
     const older = {
       ...market,

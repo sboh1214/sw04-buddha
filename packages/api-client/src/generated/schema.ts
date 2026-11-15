@@ -5172,6 +5172,8 @@ export type components = {
             /** Format: date-time */
             openAt: string | null;
             resolvedResult: components["schemas"]["MarketResult"] | null;
+            /** Format: date-time */
+            scheduledOpenAt: string | null;
             slug: string;
             statsRevision: string;
             /** @enum {string} */
@@ -5327,6 +5329,8 @@ export type components = {
             /** Format: date-time */
             openAt: string | null;
             resolvedResult: components["schemas"]["MarketResult"] | null;
+            /** Format: date-time */
+            scheduledOpenAt: string | null;
             slug: string;
             statsRevision: string;
             /** @enum {string} */
@@ -6367,6 +6371,8 @@ export type components = {
             /** Format: date-time */
             openAt: string | null;
             resolvedResult: components["schemas"]["MarketResult"] | null;
+            /** Format: date-time */
+            scheduledOpenAt: string | null;
             slug: string;
             statsRevision: string;
             /** @enum {string} */

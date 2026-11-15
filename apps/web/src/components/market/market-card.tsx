@@ -16,11 +16,20 @@ import {
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useState } from 'react';
+import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
+import { useCategories } from '@/hooks/use-categories';
 import { type MarketSummary } from '@/lib/api';
-import { parentCategorySlug } from '@/lib/category-tree';
+import { cardIconSlug } from '@/lib/category-tree';
 import { MARKET_STATUS_PALETTE } from '@/lib/market-admin';
-import { type OutcomeRow, outcomeRows, participantsText } from '@/lib/market-card';
+import {
+  type OutcomeRow,
+  closeLineKind,
+  lastFillLine,
+  opensAtLine,
+  outcomeRows,
+  participantsText,
+} from '@/lib/market-card';
 import { marketStatusLabel } from '@/lib/market-status';
 import { CategoryIcon } from './category-icon';
 import { CountdownBadge } from './countdown-badge';
@@ -78,9 +87,19 @@ import { CountdownBadge } from './countdown-badge';
  *
  * The footer is one line, Kalshi's 28px: '참여자 N' on the left (`participantsText`, the detail
  * header's spelling — the count as it is, 0 included, ADR-0061 decision 1, item 4) where Kalshi
- * prints its volume. Its right slot, Kalshi's market count ("27 markets"), stays empty: a market
- * here is one question, not a series. The line is there for every market, so every tile in a
- * row keeps the same height.
+ * prints its volume. Its right slot, where Kalshi counts a series' markets, holds '최근 체결 <절대
+ * 시각>' (#61, ADR-0136; ADR-0135 decision 1 item 1): when the price was set, in every status —
+ * an ended card keeps its price and its time, and draws no result (ADR-0135 A2) — and empty
+ * before the first fill. The line is there for every market, so every tile in a row keeps the
+ * same height. Too long for one line — a zone marker such as ' (GMT-4)' in a narrow column — the
+ * time folds under the count, right-aligned, rather than being cut.
+ *
+ * The line under the question is the countdown (`CountdownBadge`), as it is in every status. A
+ * 개장 예정 market puts '예정 개장 <절대 시각>' before it on the same line (ADR-0135 A3), by its
+ * status alone (`opensAtLine`), and a market cancelled before it opened (`closeLineKind`) leaves
+ * the line empty at its height, as it had no trading to close. Every absolute time on the card is
+ * one line in the zone in effect (`useFormatDateTime`, ADR-0063): the 판정 기준 시간대 is the
+ * detail's rules area's (owner answer 2026-11-16, ADR-0136).
  *
  * The picture is a Chakra `Image` — a plain `<img>`, inside `CategoryIcon` — and never
  * `next/image`: `next.config.ts` declares no `images` block, so the optimizer answers 400 for
@@ -121,6 +140,30 @@ export const MARKET_GRID_COLUMNS = {
 
 /** What a reading paints before the first fill (N02 §5): no number, not a 0 or a 50. */
 const EMPTY = '—';
+
+/**
+ * The box of the '·' between '예정 개장 <시각>' and the countdown on a 개장 예정 card's close line:
+ * the old `columnGap` of 8px on each side of the dot, as one fixed width, because the row is
+ * pulled left by exactly this much to clip the dot that starts a line.
+ */
+const CLOSE_LINE_SEPARATOR = '20px';
+
+/** The close line's '·' — decoration only, so a reader hears the two pieces and no dot. */
+function CloseLineSeparator() {
+  return (
+    <Text
+      as="span"
+      textStyle="bodyXs"
+      color="fg.muted"
+      w={CLOSE_LINE_SEPARATOR}
+      flexShrink="0"
+      textAlign="center"
+      aria-hidden="true"
+    >
+      ·
+    </Text>
+  );
+}
 
 /**
  * An outcome's reading: the percentage as plain emphasised text, right-aligned, with no outline
@@ -206,11 +249,17 @@ export function MarketCard({
   );
   /**
    * The tile at the head of the card shows the glyph of the market's TOP-LEVEL category, which
-   * the leaf inherits, and `parentCategorySlug` resolves it from the seeded tree so the server's
-   * HTML already has the right glyph. A slug the tree does not know (the preview's `''` before
-   * a category is chosen) falls back to itself and draws the neutral glyph.
+   * the leaf inherits (`cardIconSlug`): a seeded category from the seeded tree, so the server's
+   * HTML already has the right glyph, and a leaf an admin added under a seeded parent from the
+   * public category list once it has come (#61, ADR-0136) — one shared query on every screen, the
+   * header's row too. Until then, and for a slug the list does not hold (the preview's `''` before
+   * a category is chosen, a hidden category), the slug answers itself: the neutral glyph.
    */
-  const iconSlug = parentCategorySlug(market.category.slug) ?? market.category.slug;
+  const { data: categories } = useCategories();
+  const iconSlug = cardIconSlug(market.category.slug, categories);
+  const formatDateTime = useFormatDateTime();
+  const opensAt = opensAtLine(market);
+  const lastFillAt = lastFillLine(market);
   const categoryHeader = (
     <>
       <CategoryIcon
@@ -289,7 +338,44 @@ export function MarketCard({
           ) : (
             title
           )}
-          <CountdownBadge market={market} now={now} variant="text" />
+          {closeLineKind(market) === 'blank' ? (
+            // Cancelled before it opened (#20): no trading to close, so no 마감됨 under the 취소
+            // badge — and the line's 18px stay, so the tile keeps its rows where they were.
+            <Box h="18px" aria-hidden="true" />
+          ) : (
+            // Only a 개장 예정 card has more than the countdown on this line: '예정 개장 <시각> · 마감
+            // …'. A line too long for the tile folds between the two pieces, never inside the time
+            // (`nowrap`), and the '·' never hangs at a line's end or starts one: each piece carries
+            // its own leading '·' in a fixed `CLOSE_LINE_SEPARATOR` box, the row is pulled that
+            // far to the left, and the wrapper's `overflow: hidden` clips the '·' of whichever
+            // piece starts a line — so it shows only between two pieces on the same line.
+            // One tree for every card that has the line, the 예정 개장 piece a hole when absent:
+            // the countdown keeps its place, so a 개장 예정 card that opens under the visitor
+            // (`market:status`) keeps the SAME CountdownBadge, with its server-clock anchor —
+            // a remount would anchor to `now`, which a list's later renders no longer pass.
+            <Box overflow="hidden" minH="18px" data-testid="market-card-close-line">
+              <Flex wrap="wrap" rowGap="0" ms={`-${CLOSE_LINE_SEPARATOR}`}>
+                {opensAt !== null && (
+                  <Flex as="span" key="opens-at">
+                    <CloseLineSeparator />
+                    <Text
+                      as="span"
+                      textStyle="bodyXs"
+                      color="fg.muted"
+                      whiteSpace="nowrap"
+                      data-testid="market-card-opens-at"
+                    >
+                      {`${copy.marketScheduledOpenAt} ${formatDateTime(opensAt)}`}
+                    </Text>
+                  </Flex>
+                )}
+                <Flex as="span" key="countdown">
+                  <CloseLineSeparator />
+                  <CountdownBadge market={market} now={now} variant="text" />
+                </Flex>
+              </Flex>
+            </Box>
+          )}
         </Stack>
       </Stack>
 
@@ -321,7 +407,7 @@ export function MarketCard({
         )}
       </Grid>
 
-      <Flex align="center" minH="28px">
+      <Flex align="center" justify="space-between" wrap="wrap" columnGap="3" minH="28px">
         {/* `participantsText` writes it in the detail header's spelling. One line, so the label
             and its number never part. */}
         <Text
@@ -333,6 +419,20 @@ export function MarketCard({
         >
           {participantsText(market)}
         </Text>
+        {/* Its own box, not inside the count's, and one line: folded under the count, it keeps to
+            the right edge (`ms="auto"`). */}
+        {lastFillAt !== null && (
+          <Text
+            as="span"
+            textStyle="bodyXs"
+            color="fg.muted"
+            whiteSpace="nowrap"
+            ms="auto"
+            data-testid="market-card-last-fill"
+          >
+            {`${copy.marketLastFillAt} ${formatDateTime(lastFillAt)}`}
+          </Text>
+        )}
       </Flex>
     </Stack>
   );

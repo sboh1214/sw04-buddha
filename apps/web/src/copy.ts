@@ -2477,6 +2477,13 @@ export const copy = {
   // 글이 아니라 남은 시간이다(#174). 상태 배지의 marketStatusClosed와는 다른 자리다.
   marketClosed: '마감됨',
   marketTraders: '참여자',
+  // 카드 바닥줄 오른쪽의 '최근 체결 <절대 시각>'(#61, ADR-0136): 시장가격을 정한 마지막 체결의
+  // 시각. 낱말은 오너가 정했다(ADR-0135 결정 1의 1). 상세 헤더(#64)도 이 키를 쓴다.
+  marketLastFillAt: '최근 체결',
+  // 개장 예정 카드 마감 줄의 '예정 개장 <절대 시각>'(#61, ADR-0136의 8-1). 상세 규칙 영역의
+  // rulesScheduledOpenAt '예정 개장 시각'과 같은 말뿌리이고, 상태 배지 '개장 예정'과는 다르다.
+  // '개장 <시각>'은 실제 개장 시각(openAt, ADR-0065)으로 읽혀 쓰지 않는다.
+  marketScheduledOpenAt: '예정 개장',
   // formatRemaining(lib/datetime.ts)이 숫자에 붙이는 단위. 문자열은 여기에만 있다.
   unitDay: '일',
   unitHour: '시간',
