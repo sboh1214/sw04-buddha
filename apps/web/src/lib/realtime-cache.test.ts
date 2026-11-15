@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import {
   type MarketTickEvent,
   type UserBalanceEvent,
@@ -10,6 +12,7 @@ import { positionsKey } from '@/hooks/use-portfolio';
 import { BALANCE_HISTORY_KEYS } from '@/hooks/use-wallet';
 import { MEMBER_CORRECTIONS_KEY } from '@/hooks/use-reconciliation-corrections';
 import { memberCorrection } from '@/test/reconciliation-corrections';
+import { SRC } from '@/test/screen-text';
 import { type Market, type MarketSummary, type Me, type Position, type PriceSeries } from './api';
 import {
   DEFAULT_MARKET_FILTERS,
@@ -820,5 +823,35 @@ describe('the positions caches', () => {
     expect(queryClient.getQueryData<Position[]>(positionsKey('open'))?.[0]?.qty).toBe(14);
     expect(queryClient.getQueryData<Position[]>(positionsKey('settled'))?.[0]?.qty).toBe(0);
     queryClient.clear();
+  });
+});
+
+/**
+ * What a reconnect and the two book signals ask again (realtime-provider.tsx), pinned in its
+ * source: the provider is a component, which this runner cannot mount. The 호가창 (#122,
+ * ADR-0138) adds no handler of its own — the book and the fills arrive by these paths — so a key
+ * dropped from the resnapshot list, or a handler that stopped re-reading the book, would leave it
+ * behind silently.
+ */
+describe('the realtime provider’s re-reads for the 호가창 (#122)', () => {
+  const source = readFileSync(path.join(SRC, 'components/realtime/realtime-provider.tsx'), 'utf8');
+  /** The body of one socket handler, from its key to the next one. */
+  const handler = (name: string, next: string) =>
+    source.slice(source.indexOf(`'${name}': (raw: unknown) => {`), source.indexOf(`'${next}': (`));
+
+  it('re-reads the book and the fills on a reconnect', () => {
+    const snapshot = source.slice(
+      source.indexOf('const SNAPSHOT_KEYS = ['),
+      source.indexOf('] as const;', source.indexOf('const SNAPSHOT_KEYS = [')),
+    );
+    expect(snapshot).toContain('MARKET_BOOK_KEY');
+    expect(snapshot).toContain('MARKET_FILLS_KEY');
+  });
+
+  it('asks for the book again on market:book and on market:status', () => {
+    expect(handler('market:book', 'user:balance')).toContain('refreshBook(parsed.data.marketId);');
+    expect(handler('market:status', 'market:trade')).toContain('refreshBook(event.marketId);');
+    // …through `restartQueries` on the book's own key, which `useOrderBook` reads.
+    expect(source).toContain('void restartQueries(queryClient, marketBookKey(marketId));');
   });
 });

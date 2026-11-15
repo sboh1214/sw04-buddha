@@ -82,10 +82,12 @@ import { type CachedSeries, appendTick } from '@/lib/ticks';
  * `market:tick` with the market's figures after the intake (`ts` = the last fill's time).
  *
  * `market:book` (#179, ADR-0114) is a signal with no state: the public book changed, so its
- * `['market-book', id]` is asked again (`refreshBook`). Nothing reads that key until the 호가창
- * (#122), so the handler costs nothing before then. The close sends one after `market:status`
- * when it expired the market's remaining orders (#120, ADR-0115); nothing comes at `close_at`
- * itself, so re-reading the book at the close time is #122's.
+ * `['market-book', id]` is asked again (`refreshBook`) — the detail's 호가창 reads that key (#122,
+ * ADR-0138), and where no 호가창 is mounted the entry only goes stale (`refetchType: 'active'`),
+ * so there it costs nothing. The close sends one after `market:status` when it expired the
+ * market's remaining orders (#120, ADR-0115); nothing comes at `close_at` itself, so the open
+ * 호가창 reads its book once more a second past it on a timer of its own (`bookRereadAt`,
+ * order-book.tsx), not from here.
  */
 
 /**
@@ -110,11 +112,15 @@ const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000').rep
 const FILLS_INVALIDATE_MS = 1_000;
 
 /**
- * At most one book refetch per market per second, leading and trailing like the fills: every
+ * At most one book refetch per market every 3 s, leading and trailing like the fills: every
  * order that rests, fills or is cancelled publishes `market:book` (the close's expiry one per
- * market), and a bot market (#129) moves its book many times a second.
+ * market), and a bot market (#129) moves its book many times a second. 3 s, not the fills' 1 s
+ * (#122, ADR-0138): measured with a book moving every second and a trade every 10 s, one tab
+ * read `/book` 51 and `/fills` 6 times a minute at 1 s — over the 50 a minute ADR-0138 allows a
+ * tab under the address bucket's 100 (rate-limit.ts), which a second tab or a shared address
+ * would pass and which counts the order POSTs too.
  */
-const BOOK_INVALIDATE_MS = 1_000;
+const BOOK_INVALIDATE_MS = 3_000;
 
 /**
  * At most one first-fetch restart per market per second (`tickRestartsMarket`).
@@ -681,8 +687,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         const parsed = marketTradeEventSchema.safeParse(raw);
         if (!parsed.success) return;
         // Invalidate, never prepend a row: the event carries the public row since #121 (ADR-0116),
-        // but merging it into `['market-fills', id]` — SHARED with the admin detail — and trimming
-        // the list to its twenty is the recent-fill area's (#122), so the refetch stays the path.
+        // but `['market-fills', id]` is SHARED with the admin detail, and merging the row would
+        // need its own ordering and the trim to twenty. #122 kept the re-read (ADR-0138).
         refreshFills(parsed.data.marketId);
       },
 

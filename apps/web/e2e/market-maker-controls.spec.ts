@@ -111,6 +111,26 @@ test('봇 정지·재개는 고정 요청과 다른 관리자의 승인으로 �
         return book.contracts.every((c) => c.bids.length === 0 && c.asks.length === 0);
       })
       .toBe(true);
+    // A visitor's detail of the market with its bot stopped (#122, ADR-0138): still 거래 중, no
+    // reason line in the 호가창 — the contracts are drawn, not 마감 or 일시 중단 — and the order
+    // entry open: the column from md up, the 매수 bar below it. The levels are not asserted: the
+    // screen names no source, and when the bot's quotes are gone is the worker's.
+    const visitorContext = await browser.newContext({
+      baseURL,
+      viewport: page.viewportSize() ?? undefined,
+    });
+    try {
+      const visitor = await visitorContext.newPage();
+      await visitor.goto(`/markets/${market.slug}`);
+      await expect(visitor.getByTestId('market-status-badge')).toHaveText(copy.marketStatusOpen);
+      const book = visitor.getByTestId('market-order-book');
+      await expect(book.getByRole('heading', { level: 3 })).toHaveText([copy.yes, copy.no]);
+      await expect(book.getByTestId('market-order-book-reason')).toHaveCount(0);
+      const narrow = (page.viewportSize()?.width ?? 0) < 768;
+      await expect(visitor.getByTestId(narrow ? 'order-entry-bar' : 'order-area')).toBeVisible();
+    } finally {
+      await visitorContext.close();
+    }
     await page.reload();
     await clearToasts(page);
     await page.getByTestId('maker-control-open-resume').click();

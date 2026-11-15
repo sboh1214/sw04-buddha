@@ -3,9 +3,10 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
 
 /**
- * A section of the market detail whose content its own issue brings — 호가창 (#179), 내 거래 (#123;
- * #121 only shaped the public fill row, ADR-0116 결정 10의 18), 내 대기 주문 (#123), 공개 판정 기록
- * (#24); 토론 was one until #47 filled it (ADR-0075) — drawn as its title and '준비 중입니다.'
+ * A section of the market detail whose content its own issue brings — 내 거래 (#123; #121 only
+ * shaped the public fill row, ADR-0116 결정 10의 18) and 내 대기 주문 (#123); 토론, 공개 판정 기록
+ * and 호가창 were ones until #47, #24 and #122 filled them (ADR-0075, ADR-0121, ADR-0138) — drawn
+ * as its title and '준비 중입니다.'
  * rather than left out (owner decision, ADR-0061 decision 3, the #122 row): MY's `ComingSoonTab`
  * on the detail's own card. The same card and `h2` as the sections beside it (규칙, 최근 체결, 내
  * 포지션), so each slot is already the heading a screen reader can jump to, and the issue that

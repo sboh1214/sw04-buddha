@@ -25,6 +25,7 @@ import { MarketJudgingRecord } from '@/components/market/market-judging-record';
 import { ComingSoonSection } from '@/components/market/coming-soon-section';
 import { CountdownBadge } from '@/components/market/countdown-badge';
 import { MyPosition } from '@/components/market/my-position';
+import { OrderBookSection } from '@/components/market/order-book';
 import { OrderEntryBar } from '@/components/market/order-entry-bar';
 import { ProbabilityChart } from '@/components/market/probability-chart';
 import { ProbabilityDisplay } from '@/components/market/probability-display';
@@ -106,8 +107,9 @@ import { MarketTags } from './market-tags';
  *   거래 내역 (최근 체결 and 내 거래), then the rest (N02 §4). The order panel is a bottom sheet
  *   opened from a YES 매수 · NO 매수 bar on an open market (`OrderEntryBar`); a signed-out visitor
  *   finds a sign-in prompt in it instead of 거래 준비 중 (N02 §2).
- * - Sections whose content another issue brings — 호가창, 내 거래, 내 대기 주문 —
- *   are their title and 준비 중 (`ComingSoonSection`, the owner's #122 row). The personal areas —
+ * - Sections whose content another issue brings — 내 거래, 내 대기 주문 (#123) — are their title
+ *   and 준비 중 (`ComingSoonSection`, the owner's #122 row). 호가창 is the public book, YES and NO
+ *   together, read in the browser (`OrderBookSection`, #122, ADR-0138). The personal areas —
  *   내 포지션, 내 거래 and 내 대기 주문 — are drawn for a signed-in reader only; a signed-out visitor
  *   gets one sign-in prompt where 내 포지션 · 내 대기 주문 stand, and neither is ever in the server's
  *   HTML (`personalAreaView`).
@@ -248,7 +250,9 @@ export function MarketDetail({
         />
       </Box>
     ),
-    activity: <MarketActivity marketId={marketId} member={viewer === 'member'} />,
+    activity: (
+      <MarketActivity marketId={marketId} market={data} now={now} member={viewer === 'member'} />
+    ),
     // 내 포지션 and 내 대기 주문: personal areas, so a signed-in reader's only (ADR-0061 decision 1,
     // item 18). A signed-out visitor gets ONE sign-in prompt in their place, which stands for 내
     // 거래 as well (owner decision 2026-10-17, '로그인 안내 하나'). Neither is in the server's HTML.
@@ -339,19 +343,32 @@ function PersonalArea({ viewer, children }: { viewer: PersonalAreaView; children
 }
 
 /**
- * 호가 and 거래 내역 (N02 §4): from md up the 호가창 slot (#179) and, under it, 최근 체결 with 내 거래
- * (#123, ADR-0116 결정 10의 18; signed-in only — a visitor's prompt is the one at 내 포지션's place);
- * below md a switch between the two, opening on 호가 (ADR-0061 decision 1, item 16: 거래 내역 is the
- * market's recent fills and the reader's own trades).
+ * 호가 and 거래 내역 (N02 §4): from md up the 호가창 (#122, ADR-0138: the public book of #179) and,
+ * under it, 최근 체결 with 내 거래 (#123, ADR-0116 결정 10의 18; signed-in only — a visitor's prompt
+ * is the one at 내 포지션's place); below md a switch between the two, opening on 호가 (ADR-0061
+ * decision 1, item 16: 거래 내역 is the market's recent fills and the reader's own trades).
  *
  * Both panels are always rendered and the switch only decides which is displayed below md
- * (`viewDisplay`), so one DOM serves both widths: 최근 체결 is mounted once and never refetched by a
- * switch, the server's HTML is the same at every width, and no test id is drawn twice. The switch
- * is the chart's control (`SegmentGroup`, a radio group under a name) rather than ARIA tabs:
- * from md up the same two panels stand side by side under their own headings with no switch, and
- * a `tabpanel` there would point at tabs nobody can see.
+ * (`viewDisplay`), so one DOM serves both widths: 호가창 and 최근 체결 are mounted once and never
+ * refetched by a switch, the server's HTML is the same at every width, and no test id is drawn
+ * twice. The switch is the chart's control (`SegmentGroup`, a radio group under a name) rather
+ * than ARIA tabs: from md up the same two panels stand side by side under their own headings with
+ * no switch, and a `tabpanel` there would point at tabs nobody can see.
+ *
+ * `market` is the live row, undefined while it is unknown, and `now` the server's instant: the
+ * 호가창 reads its book once more at an open market's close (`bookRereadAt`).
  */
-function MarketActivity({ marketId, member }: { marketId: string; member: boolean }) {
+function MarketActivity({
+  marketId,
+  market,
+  now,
+  member,
+}: {
+  marketId: string;
+  market: Market | undefined;
+  now?: number;
+  member: boolean;
+}) {
   const [view, setView] = useState<DetailView>(DEFAULT_DETAIL_VIEW);
   return (
     <Stack gap={{ base: '4', md: '6' }} minW="0" data-testid="market-activity">
@@ -371,7 +388,7 @@ function MarketActivity({ marketId, member }: { marketId: string; member: boolea
         <SegmentGroup.Items items={DETAIL_VIEW_ITEMS} flex="1" justifyContent="center" />
       </SegmentGroup.Root>
       <Box display={viewDisplay(view, 'book')} data-testid="market-activity-book">
-        <ComingSoonSection title={copy.marketOrderBook} testId="market-order-book" />
+        <OrderBookSection marketId={marketId} market={market} now={now} />
       </Box>
       <Stack
         gap="6"

@@ -184,9 +184,21 @@ describe('the detail sections (#122, ADR-0061 decision 1, item 16)', () => {
     const source = readFileSync(path.join(SRC, 'app/markets/[slug]/market-detail.tsx'), 'utf8');
     expect(source).toContain('discussion: <MarketDiscussion marketId={marketId} now={now} />');
     expect(source).not.toContain('copy.marketDiscussion');
-    for (const slot of ['market-order-book', 'market-my-trades', 'market-my-open-orders']) {
+    for (const slot of ['market-my-trades', 'market-my-open-orders']) {
       expect(source, slot).toContain(`testId="${slot}"`);
     }
+  });
+
+  it('draws 호가창 as the public book now, no longer a 준비 중 slot (#122, ADR-0138)', () => {
+    // The book section is its own card with the slot's test id and title (order-book.tsx); the
+    // detail hands it the market's id, the live row for the close's re-read and the server's `now`.
+    const source = readFileSync(path.join(SRC, 'app/markets/[slug]/market-detail.tsx'), 'utf8');
+    expect(source).toContain('<OrderBookSection marketId={marketId} market={market} now={now} />');
+    expect(source).not.toContain('testId="market-order-book"');
+    expect(source).not.toContain('title={copy.marketOrderBook}');
+    expect(source).toContain(
+      "<MarketActivity marketId={marketId} market={data} now={now} member={viewer === 'member'} />",
+    );
   });
 
   it('draws the public judging record from the live market in each responsive slot (#24)', () => {
