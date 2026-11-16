@@ -3,6 +3,7 @@ import {
   completeOnboarding,
   createMarket,
   createStartGrant,
+  createWatch,
   openOrderIntake,
   placeTestOrder,
   withLedgerGuardsOff,
@@ -56,14 +57,15 @@ describe.skipIf(!hasTestInfra)('fixed fill classification API (#132)', () => {
     }
     return who;
   }
-  async function pair() {
+  /** One fill of `qty` in `market`, worth 60 a contract to the volumes. */
+  async function pair(qty = 1) {
     await placeTestOrder(t.db, {
       marketId: market.id,
       ownerId: other.id,
       outcome: 'NO',
       side: 'buy',
       limitPriceCoin: 40,
-      qty: 1,
+      qty,
       timeInForce: 'gtc',
     });
     const done = await placeTestOrder(t.db, {
@@ -72,7 +74,7 @@ describe.skipIf(!hasTestInfra)('fixed fill classification API (#132)', () => {
       outcome: 'YES',
       side: 'buy',
       limitPriceCoin: 60,
-      qty: 1,
+      qty,
       timeInForce: 'gtc',
     });
     if (done.kind !== 'placed' || done.fills.length !== 1) throw new Error('actual fill required');
@@ -351,6 +353,55 @@ describe.skipIf(!hasTestInfra)('fixed fill classification API (#132)', () => {
       expect(malformed.statusCode, malformed.body).toBe(200);
     },
   );
+  it('ranks 거래량 순 and 추천 without one approved abnormal fill, on the home and the watchlist (#63)', async () => {
+    // The lighter market: 60 + 60. The heavier one: 180 + 60, then 60 once its big fill is marked,
+    // still above the idle market's 0 (excluding the whole market would tie it with idle, and the
+    // later opening would put idle first).
+    const lighter = market;
+    await pair();
+    market = await createMarket(t.db, { createdBy: asker.id });
+    const heavier = market;
+    const big = await pair(3);
+    await pair();
+    const idle = await createMarket(t.db, {
+      createdBy: asker.id,
+      openAt: new Date(heavier.openAt!.getTime() + 1),
+    });
+    for (const watched of [lighter, heavier, idle])
+      await createWatch(t.db, { userId: member.id, marketId: watched.id });
+    const urls = ['recommended', 'volume'].flatMap((sort) => [
+      `/api/v1/markets?sort=${sort}`,
+      `/api/v1/me/watchlist?sort=${sort}`,
+    ]);
+    const page = async (url: string) => {
+      const response = await t.app.inject({
+        method: 'GET',
+        url,
+        headers: { cookie: member.cookie },
+      });
+      expect(response.statusCode, `${url}: ${response.body}`).toBe(200);
+      return response.json<{ data: { id: string }[]; meta: { nextCursor: string | null } }>();
+    };
+    const orders = async () => {
+      const seen: { url: string; ids: string[] }[] = [];
+      for (const url of urls) seen.push({ url, ids: (await page(url)).data.map((r) => r.id) });
+      return seen;
+    };
+    expect(await orders()).toEqual(
+      urls.map((url) => ({ url, ids: [heavier.id, lighter.id, idle.id] })),
+    );
+    const first = await page('/api/v1/markets?sort=volume&limit=1');
+    expect(first.data.map((r) => r.id)).toEqual([heavier.id]);
+    fillId = big;
+    expect((await approve((await request()).request.id)).statusCode).toBe(200);
+    expect(await orders()).toEqual(
+      urls.map((url) => ({ url, ids: [lighter.id, heavier.id, idle.id] })),
+    );
+    // A page read before the approval keeps its cutoff: heavier (240 then, 60 now) does not return.
+    const cursor = encodeURIComponent(first.meta.nextCursor!);
+    const rest = await page(`/api/v1/markets?sort=volume&limit=2&cursor=${cursor}`);
+    expect(rest.data.map((r) => r.id)).toEqual([lighter.id, idle.id]);
+  });
   it('allows only admins and requires onboarding for every read/write surface', async () => {
     for (const path of ['', '/classification-requests', '/classification-history']) {
       expect((await t.app.inject({ method: 'GET', url: `${base()}${path}` })).statusCode).toBe(401);

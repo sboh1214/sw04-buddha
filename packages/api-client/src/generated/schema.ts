@@ -2815,7 +2815,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Markets by status (default open; all is every public status), never draft or in review, optionally by category and a search (q: a title partial match, case-insensitive, or a tag of exactly that name, case and spaces aside); sorted recommended (24-hour volume, then the latest opening; the default), newest (latest opening) or closing (soonest close; with all or an ended status, the markets not closed yet (scheduled, open, paused) first and then the ended ones, latest close first) */
+        /** Markets by status (default open; all is every public status), never draft or in review, optionally by category and a search (q: a title partial match, case-insensitive, or a tag of exactly that name, case and spaces aside); sorted recommended (24-hour volume, then the latest opening; the default), volume (all-time volume, then the latest opening; both sort keys leave out fills approved as abnormal, while each row's volumeCoin still counts them), newest (latest opening) or closing (soonest close; with all or an ended status, the markets not closed yet (scheduled, open, paused) first and then the ended ones, latest close first) */
         get: operations["listMarkets"];
         put?: never;
         post?: never;
