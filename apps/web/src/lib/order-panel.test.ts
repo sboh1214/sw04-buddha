@@ -30,16 +30,20 @@ import {
   orderTermsOf,
   panelOwnerChanged,
   panelSignedIn,
+  parseSellIntent,
   placeBodyOf,
   placeOutcomeOf,
   quoteBodyOf,
   quoteRefused,
   quoteStatusReason,
+  quoteStopReason,
   requestOwnedBy,
   requoteNext,
   sendLocked,
   sendUnlocked,
   sideMovedSinceQuote,
+  sellIntentQuery,
+  withoutSellIntent,
 } from './order-panel';
 
 /**
@@ -1049,6 +1053,121 @@ describe('debouncer: a burst of keystrokes asks for one quote', () => {
       expect(settled).toEqual(['123']);
     } finally {
       vi.useRealTimers();
+    }
+  });
+});
+
+describe('a holding’s sell entry (#67, ADR-0142; ADR-0135 F6)', () => {
+  const editing: OrderPanelState = { ...INITIAL_ORDER_PANEL, input: input() };
+  const confirm = orderPanelReducer(editing, {
+    type: 'openConfirm',
+    frozen: frozen(),
+    requestId: ID_A,
+    accountId: ACCOUNT,
+  });
+
+  it('chooses the contract and 매도, in the sheet below md and the column from md up', () => {
+    const sheet = orderPanelReducer(editing, { type: 'openSell', outcome: 'NO', sheet: true });
+    expect(sheet).toMatchObject({
+      step: { name: 'editing' },
+      input: { outcome: 'NO', side: 'sell' },
+      sheet: { open: true, contract: 'NO' },
+    });
+    const column = orderPanelReducer(editing, { type: 'openSell', outcome: 'YES', sheet: false });
+    expect(column.input).toMatchObject({ outcome: 'YES', side: 'sell' });
+    expect(column.sheet.open).toBe(false);
+    // The quantity is not filled in: only the contract and the direction were chosen.
+    expect(column.input.qty).toBe(editing.input.qty);
+  });
+
+  it('follows `openSheet`’s rules: 확인 goes back to 입력, a request in flight keeps its terms', () => {
+    const fromConfirm = orderPanelReducer(confirm, {
+      type: 'openSell',
+      outcome: 'NO',
+      sheet: true,
+    });
+    expect(fromConfirm.step).toEqual({ name: 'editing' });
+    expect(fromConfirm.input).toMatchObject({ outcome: 'NO', side: 'sell' });
+    const sent = orderPanelReducer(confirm, {
+      type: 'submit',
+      request: pending({ requestId: ID_A }),
+    });
+    const busy = orderPanelReducer(sent, { type: 'openSell', outcome: 'NO', sheet: true });
+    expect(busy.step).toBe(sent.step);
+    expect(busy.input).toBe(sent.input);
+    expect(busy.sheet).toMatchObject({ open: true, contract: 'NO' });
+    // As `openSheet` does, a result or a failure stays on screen.
+    const result = orderPanelReducer(sent, {
+      type: 'placed',
+      requestId: ID_A,
+      order: order(),
+      replayed: false,
+    });
+    const after = orderPanelReducer(result, { type: 'openSell', outcome: 'YES', sheet: true });
+    expect(after.step).toBe(result.step);
+    const bar = orderPanelReducer(result, { type: 'openSheet', outcome: 'YES' });
+    expect(bar.step).toBe(result.step);
+    const failed: OrderPanelState = {
+      ...editing,
+      step: { name: 'failed', failure: { code: 'X' } },
+    };
+    expect(orderPanelReducer(failed, { type: 'openSell', outcome: 'NO', sheet: false }).step).toBe(
+      failed.step,
+    );
+  });
+
+  it('reads the address’s intent in either case and nothing else', () => {
+    const intent = (search: string) => parseSellIntent(new URLSearchParams(search));
+    expect(intent('order=sell&contract=yes')).toBe('YES');
+    expect(intent('order=SELL&contract=No')).toBe('NO');
+    expect(intent(sellIntentQuery('NO'))).toBe('NO');
+    expect(intent('order=sell')).toBeNull();
+    expect(intent('order=buy&contract=yes')).toBeNull();
+    expect(intent('order=sell&contract=maybe')).toBeNull();
+    expect(intent('contract=yes')).toBeNull();
+    expect(intent('order=sell&contract=yes&contract=no')).toBeNull();
+    expect(intent('')).toBeNull();
+  });
+
+  it('writes the intent out of the address and keeps the rest', () => {
+    expect(withoutSellIntent('/markets/m', '?order=sell&contract=yes')).toBe('/markets/m');
+    expect(withoutSellIntent('/markets/m', '?x=1&order=sell&contract=no', '#top')).toBe(
+      '/markets/m?x=1#top',
+    );
+  });
+});
+
+describe('quoteStopReason: one mapping for the panel and MY’s 매도 가능 (#67, M6)', () => {
+  const none = quote({ filledQty: 0, filledAmountCoin: '0', status: 'rejected' });
+  const facts = {
+    input: input(),
+    quote: undefined,
+    noWidth: false,
+    bestOpposite: 60,
+    account: null,
+    unlockedQty: undefined,
+  } as const;
+
+  it('names the refusal, then the walk’s stop, then 호가 없음', () => {
+    expect(quoteStopReason({ rejectReason: 'price_limit', stop: null })).toBe('price_limit');
+    expect(quoteStopReason({ rejectReason: 'self_trade', stop: null })).toBe('self_trade');
+    expect(quoteStopReason({ rejectReason: null, stop: 'price_limit' })).toBe('price_limit');
+    // A partial fill that met the holder's own bid is cancelled with no refusal.
+    expect(quoteStopReason({ rejectReason: null, stop: 'self_trade' })).toBe('self_trade');
+    expect(quoteStopReason({ rejectReason: 'no_quote', stop: 'no_quote' })).toBe('no_quote');
+    expect(quoteStopReason({ rejectReason: null, stop: null })).toBe('no_quote');
+  });
+
+  it('is what `orderBlock` says of an immediate quote that fills nothing', () => {
+    for (const over of [
+      { rejectReason: 'price_limit', stop: 'price_limit' },
+      { rejectReason: 'self_trade', stop: 'self_trade' },
+      { rejectReason: 'no_quote', stop: 'no_quote' },
+      { rejectReason: null, stop: 'price_limit' },
+      { rejectReason: null, stop: null },
+    ] as const) {
+      const q = { ...none, ...over };
+      expect(orderBlock({ ...facts, quote: q }), JSON.stringify(over)).toBe(quoteStopReason(q));
     }
   });
 });

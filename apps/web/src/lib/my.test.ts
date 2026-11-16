@@ -1,10 +1,14 @@
-import { ORDER_STATUSES, type OrderStatus } from '@buddha/shared';
+import {
+  LIVE_ORDER_STATUSES,
+  ORDER_STATUSES,
+  type OrderStatus,
+  isLiveOrderStatus,
+} from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import {
   MY_TABS,
   isMyTabCurrent,
-  isPendingOrder,
   myLoginPath,
   orderHistoryEmpty,
   showMoreOrders,
@@ -122,9 +126,11 @@ describe('myLoginPath', () => {
   });
 });
 
-describe('isPendingOrder', () => {
-  it('puts open and partially filled orders under 대기 주문 and every other state in 이력', () => {
-    const pending = ORDER_STATUSES.filter((status) => isPendingOrder(status));
+describe('대기 주문 (isLiveOrderStatus, #67)', () => {
+  it('puts the live statuses under 대기 주문 and every other state in 이력', () => {
+    // `isPendingOrder` is gone (ADR-0142): MY splits on the shared live statuses, the same set.
+    const pending = ORDER_STATUSES.filter((status) => isLiveOrderStatus(status));
+    expect(pending).toEqual([...LIVE_ORDER_STATUSES]);
     expect(pending).toEqual(['open', 'partially_filled']);
   });
 });
@@ -157,7 +163,7 @@ describe('orderHistoryEmpty', () => {
   });
 
   it('has nothing to say while a finished order is there to show', () => {
-    for (const status of ORDER_STATUSES.filter((s) => !isPendingOrder(s))) {
+    for (const status of ORDER_STATUSES.filter((s) => !isLiveOrderStatus(s))) {
       expect(orderHistoryEmpty([order('open'), order(status)]), status).toBeNull();
     }
   });

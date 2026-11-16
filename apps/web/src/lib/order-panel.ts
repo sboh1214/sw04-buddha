@@ -439,6 +439,11 @@ export const INITIAL_ORDER_PANEL: OrderPanelState = {
 export type OrderAction =
   | { type: 'edit'; patch: Partial<OrderInput> }
   | { type: 'openSheet'; outcome: Outcome }
+  /**
+   * The sell entry of a holding (#67, ADR-0142; ADR-0135 F6): the contract and 매도 chosen, below
+   * md in the sheet (`sheet`), from md up in the column.
+   */
+  | { type: 'openSell'; outcome: Outcome; sheet: boolean }
   | { type: 'closeSheet' }
   | { type: 'restore'; input: OrderInput; openSheet: boolean }
   | { type: 'signIn' }
@@ -504,6 +509,20 @@ export function orderPanelReducer(state: OrderPanelState, action: OrderAction): 
         ...state,
         sheet,
         input: { ...state.input, outcome: action.outcome, side: 'buy' },
+        step: step.name === 'result' || step.name === 'failed' ? step : { name: 'editing' },
+      };
+    }
+    case 'openSell': {
+      // A holding's '매도' (F6): `openSheet`'s rules with the direction sell — a request in flight
+      // keeps its terms and only the sheet opens; 확인 goes back to 입력 on the new choice; a
+      // result or a failure stays on screen. The quantity is not filled in: the owner chose the
+      // contract and the direction, nothing more.
+      const sheet = action.sheet ? openOrderSheet(action.outcome) : state.sheet;
+      if (stepBusy(step)) return { ...state, sheet };
+      return {
+        ...state,
+        sheet,
+        input: { ...state.input, outcome: action.outcome, side: 'sell' },
         step: step.name === 'result' || step.name === 'failed' ? step : { name: 'editing' },
       };
     }
@@ -712,6 +731,24 @@ export interface OrderBlockFacts {
   unlockedQty: number | undefined;
 }
 
+/** Why an immediate quote's walk stopped short, by the name the screens give it. */
+export type QuoteStopReason = 'no_quote' | 'price_limit' | 'self_trade';
+
+/**
+ * Why an immediate quote filled less than asked (#67, ADR-0142; out of `orderBlock`, ADR-0140 D9):
+ * the quote's refusal when it names 가격 한도 or 자기 체결, else the walk's stop — `price_limit` or
+ * `self_trade` (a partial fill that met the holder's own bid is 취소 with no refusal) — and
+ * 호가 없음 for every other. The panel's 주문 확인 line and MY's 매도 가능 cell read the same quote
+ * through this one mapping, so they never say two things of it.
+ */
+export function quoteStopReason(quote: Pick<OrderQuote, 'rejectReason' | 'stop'>): QuoteStopReason {
+  if (quote.rejectReason === 'price_limit' || quote.rejectReason === 'self_trade') {
+    return quote.rejectReason;
+  }
+  if (quote.stop === 'price_limit' || quote.stop === 'self_trade') return quote.stop;
+  return 'no_quote';
+}
+
 export function orderBlock(facts: OrderBlockFacts): OrderBlockReason | null {
   const { input, quote } = facts;
   if (facts.account !== null) return facts.account;
@@ -722,17 +759,8 @@ export function orderBlock(facts: OrderBlockFacts): OrderBlockReason | null {
       if (facts.bestOpposite === null) return 'no_quote';
     } else if (quote.filledQty === 0) {
       // An immediate quote that fills nothing keeps 확인 off whatever its reason (D9).
-      switch (quote.rejectReason) {
-        case 'budget_too_small':
-          return 'budget_too_small';
-        case 'price_limit':
-          return 'price_limit';
-        case 'self_trade':
-          return 'self_trade';
-        default:
-          if (quote.stop === 'price_limit') return 'price_limit';
-          return 'no_quote';
-      }
+      if (quote.rejectReason === 'budget_too_small') return 'budget_too_small';
+      return quoteStopReason(quote);
     }
   }
   if (input.side === 'sell' && facts.unlockedQty !== undefined) {
@@ -772,6 +800,46 @@ export function quoteStatusReason(quote: OrderQuote | undefined): MarketStatusRe
     default:
       return null;
   }
+}
+
+// ---- a holding's sell entry (#67) -------------------------------------------------------------
+
+/** The query a holding's '매도' in MY opens the market's detail with (ADR-0142, F6). */
+export const SELL_INTENT_PARAMS = { order: 'order', contract: 'contract' } as const;
+
+/** `?order=sell&contract=yes|no`: the detail's address for a holding's '매도' (F6). */
+export function sellIntentQuery(outcome: Outcome): string {
+  const contract = outcome === 'YES' ? 'yes' : 'no';
+  return `${SELL_INTENT_PARAMS.order}=sell&${SELL_INTENT_PARAMS.contract}=${contract}`;
+}
+
+/**
+ * The contract a detail's address asks to sell (`?order=sell&contract=yes|no`), or null: either
+ * word in any case, nothing else — a missing or unknown contract, another order or a repeated
+ * parameter is no intent. Read once when the panel mounts; the page itself never reads it, so the
+ * server's HTML is the same with it or without (ADR-0142).
+ */
+export function parseSellIntent(params: Pick<URLSearchParams, 'getAll'>): Outcome | null {
+  const orders = params.getAll(SELL_INTENT_PARAMS.order);
+  const contracts = params.getAll(SELL_INTENT_PARAMS.contract);
+  if (orders.length !== 1 || contracts.length !== 1) return null;
+  if (orders[0]?.toLowerCase() !== 'sell') return null;
+  const contract = contracts[0]?.toLowerCase();
+  if (contract === 'yes') return 'YES';
+  if (contract === 'no') return 'NO';
+  return null;
+}
+
+/**
+ * The address with the sell intent taken out, the rest of the query and the hash kept: what the
+ * panel writes in place once it has read the intent, so a reload or a back does not open it again.
+ */
+export function withoutSellIntent(pathname: string, search: string, hash = ''): string {
+  const params = new URLSearchParams(search);
+  params.delete(SELL_INTENT_PARAMS.order);
+  params.delete(SELL_INTENT_PARAMS.contract);
+  const rest = params.toString();
+  return `${pathname}${rest === '' ? '' : `?${rest}`}${hash}`;
 }
 
 // ---- the book beside the panel ----------------------------------------------------------------

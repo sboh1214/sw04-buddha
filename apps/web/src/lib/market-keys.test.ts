@@ -57,6 +57,9 @@ import {
   watchlistPagesKey,
 } from './market-keys';
 
+/** The account a positions list is keyed by (#67, ADR-0142). */
+const TEST_ACCOUNT = 'a1e1c0de-0000-4000-8000-000000000001';
+
 const ID = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
 
 describe('the market key builders', () => {
@@ -281,11 +284,11 @@ describe('key prefix isolation', () => {
     // fetch write those two — and it must reach neither `['orders']`
     // (a paged `{ items, nextCursor }`) nor any market key, whose values are a different shape
     // entirely.
-    expect(partialMatchKey(positionsKey('open'), POSITIONS_KEY)).toBe(true);
-    expect(partialMatchKey(positionsKey('settled'), POSITIONS_KEY)).toBe(true);
+    expect(partialMatchKey(positionsKey('open', TEST_ACCOUNT), POSITIONS_KEY)).toBe(true);
+    expect(partialMatchKey(positionsKey('settled', TEST_ACCOUNT), POSITIONS_KEY)).toBe(true);
     expect(partialMatchKey(ORDERS_KEY, POSITIONS_KEY)).toBe(false);
     expect(partialMatchKey(marketKey(ID), POSITIONS_KEY)).toBe(false);
-    expect(partialMatchKey(positionsKey('open'), MARKETS_KEY)).toBe(false);
+    expect(partialMatchKey(positionsKey('open', TEST_ACCOUNT), MARKETS_KEY)).toBe(false);
   });
 });
 

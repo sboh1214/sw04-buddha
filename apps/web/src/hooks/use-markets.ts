@@ -181,6 +181,42 @@ export function useMarket(marketId: string) {
 }
 
 /**
+ * MY's holdings' market row (`useHoldings`, #67, ADR-0142 결정 2-22): the detail's entry and request
+ * (`marketQueryOptions`), with two OBSERVER options of its own — the detail watching the same entry
+ * keeps its poll and its focus re-read.
+ *
+ * - No poll. The 5-second read of a 판정 완료·지급 중 market (`settlementPollInterval`) is for the
+ *   detail's payout-delay record (ADR-0121), which MY never draws: a holding's badge reads only
+ *   `judgementDelayed`·`disputeUnderReview` (`holdingDisplay`), and settlement reaches the holder as
+ *   `user:position`. Kept, it added 12 requests a minute per such holding to a steady 10.
+ * - A focus re-read only where it can change what is shown (`holdingMarketRefetchOnFocus`).
+ */
+export function holdingMarketQueryOptions(marketId: string) {
+  return {
+    ...marketQueryOptions(marketId),
+    refetchInterval: false as const,
+    refetchOnWindowFocus: holdingMarketRefetchOnFocus,
+  };
+}
+
+/**
+ * Whether a held market's row is read again when the window regains focus (ADR-0142 결정 2-22):
+ * when there is no row or its read failed, and when it is 거래 마감 or 잠정 결과 — the two statuses
+ * whose label moves with time alone ('판정 지연' `readsJudgementDelayed`, '이의 검토 중'
+ * `readsDisputeUnderReview`). Any other row's price, time, trade count and status key come with the
+ * `GET /me/positions` that focus re-reads anyway, and `markToLiveMarket` takes the later of the two
+ * (by trade count and status key), so the money figures are as fresh as before. Still subject to
+ * `staleTime`, as every focus re-read.
+ */
+export function holdingMarketRefetchOnFocus(query: {
+  state: { data: Market | undefined; status: string };
+}): boolean {
+  const { data, status } = query.state;
+  if (data === undefined || status === 'error') return true;
+  return data.status === 'closed' || data.status === 'provisional';
+}
+
+/**
  * The detail's 5-minute re-read of an open market's row (ADR-0139 결정 2-3): `lastPrice24hAgo`
  * moves with time and no event carries it. A fixed timer, NOT a `refetchInterval`: query-core
  * re-arms an observer's interval on every write to its query (`onQueryUpdate` →

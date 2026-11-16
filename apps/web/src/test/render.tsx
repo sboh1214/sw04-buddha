@@ -79,6 +79,12 @@ export function byTestId(html: string, testId: string): RenderedElement | undefi
   return open === null ? undefined : elementAt(html, open);
 }
 
+/** The element carrying `id="<id>"` — what an `aria-describedby` points at — or `undefined`. */
+export function byId(html: string, id: string): RenderedElement | undefined {
+  const open = new RegExp(`<([a-z][a-z0-9]*)\\b[^>]*\\sid="${escapeRegExp(id)}"[^>]*>`).exec(html);
+  return open === null ? undefined : elementAt(html, open);
+}
+
 /** The elements of one tag name (`h2`, `a`…), in the order they are drawn. */
 export function byTagName(html: string, name: string): RenderedElement[] {
   return [...html.matchAll(new RegExp(`<(${name})\\b[^>]*>`, 'g'))].map((open) =>

@@ -11,7 +11,7 @@ import type {
   PriceSeries,
   Sellable,
 } from '@buddha/shared';
-import { tickBucketSeconds } from '@buddha/shared';
+import { MINUS_SIGN, formatCoin, parseCoinAmount, tickBucketSeconds } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { formatKst } from '../src/lib/datetime';
 import {
@@ -92,6 +92,9 @@ import {
  * with '최근 체결 <절대 시각>', where the chart puts the last fill's dot and the dotted hold after it
  * (#64, ADR-0139). The bot's exclusion from the participants is the db and api suites' (no spec
  * runs the bot). A sends two orders, B three.
+ *
+ * 보유 계약 (#67, ADR-0142) on the screens: MY's 보유 계약 and the detail's 내 포지션 against a
+ * counterparty moved through the API (its own describe), and the 마감 market's holding on #120's.
  */
 
 /** What a member's own fill carries, and nothing of the counterparty (ADR-0107 결정 5). */
@@ -751,6 +754,209 @@ test.describe('대기 주문과 주문 상세 (#123)', () => {
     await expect(page).toHaveURL(/\/onboarding/);
   });
 });
+
+/**
+ * 보유 계약과 내 포지션 (#67, ADR-0142; ADR-0135 F1~F7·D13·결정 4·결과 4): A's holdings on MY's
+ * 보유 계약 and the detail's 내 포지션, against counterparty C moved through the API. A resting buy
+ * alone is no holding; 2@33 and 1@34 make an average of 33.33, a sell of one at 45 leaves 33.50
+ * with 12 realised; NO is valued at the complement of the market price; the card's totals are the
+ * rows' sums; a bid that comes moves 매도 가능 (through the book window, no reload) and never the
+ * valuation; a resting sell is 매도 잠금 and leaves the rest quoted; MY's '매도' opens the detail's
+ * panel on the contract and 매도 and writes the intent out of the address; a contract sold out
+ * leaves MY (F4) and is '보유 없음' with its 실현 손익 on the detail. The values are for a 가격 보호
+ * 폭 of 5 or more, read from the market. C sends six orders, A six and one cancel.
+ */
+test.describe('보유 계약 (#67)', () => {
+  test('보유 계약과 내 포지션 (#67)', async ({ admin, browser, page }) => {
+    const market = await createOpenMarket(admin);
+    const width = (await dataOf<AdminMarket>(await admin.get(`/api/v1/admin/markets/${market.id}`)))
+      .priceProtectionTicks;
+    expect(width, '가격 보호 폭 (global-setup.ts)').not.toBeNull();
+    expect(width ?? 0).toBeGreaterThanOrEqual(5);
+    const wide = (page.viewportSize()?.width ?? 0) >= 768;
+    const cContext = await browser.newContext();
+    try {
+      const cPage = await cContext.newPage();
+      await signUp(page, freshEmail());
+      await signUp(cPage, freshEmail());
+      const a = page.request;
+      const c = cPage.request;
+      const aId = (await meOf(a)).id;
+      const order = (context: APIRequestContext, t: OrderTerms) =>
+        placeOrder(context, market.id, crypto.randomUUID(), t);
+      const positions = page.getByTestId('portfolio-positions');
+      const yesRow = positions.getByTestId(`portfolio-position-${market.id}-YES`);
+      const noRow = positions.getByTestId(`portfolio-position-${market.id}-NO`);
+      const lastFillLine = async () => {
+        const m = await dataOf<Market>(await page.request.get(`/api/v1/markets/${market.id}`));
+        if (m.lastFillAt === null) throw new Error('no fill yet');
+        return `${copy.marketLastFillAt} ${formatKst(m.lastFillAt)}`;
+      };
+
+      // --- 0단계: a resting buy alone is no holding (수용 기준 2), then it is cancelled.
+      const resting = (await order(a, terms('YES', 'buy', 'gtc', 10, 1))).order;
+      await page.goto('/my/positions');
+      await expect(positions).toContainText(copy.portfolioPositionsEmpty);
+      await expect(positions.locator('[data-testid^="portfolio-market-"]')).toHaveCount(0);
+      // 수용 기준 1: 가용 코인 and the 10 the buy locks are two figures, on the card above the
+      // list (ADR-0135 H6) and not in it.
+      const available = parseCoinAmount((await meOf(a)).balance.availableCoin);
+      await expect(page.getByTestId('portfolio-available')).toHaveText(formatCoin(available));
+      await expect(page.getByTestId('portfolio-locked')).toHaveText(formatCoin(10n));
+      await expect(positions.getByTestId('portfolio-available')).toHaveCount(0);
+      await expect(positions.getByTestId('portfolio-locked')).toHaveCount(0);
+      await page.goto(`/markets/${market.slug}`);
+      await expect(page.getByTestId('market-my-position')).toContainText(
+        copy.marketMyPositionEmpty,
+      );
+      const cancelled = await a.post(`/api/v1/me/orders/${resting.id}/cancel`, {
+        data: { expectedAccountId: aId },
+      });
+      expect(cancelled.status()).toBe(200);
+
+      // --- 1단계: YES 3 at 33, 33 and 34 — C's NO bids at 67 and 66 met as YES asks.
+      await order(c, terms('NO', 'buy', 'gtc', 67, 2));
+      await order(c, terms('NO', 'buy', 'gtc', 66, 1));
+      await order(a, terms('YES', 'buy', 'ioc', 99, 3));
+      // --- 2단계: NO 1 at 60 — C's YES bid at 40 met as a NO ask.
+      await order(c, terms('YES', 'buy', 'gtc', 40, 1));
+      await order(a, terms('NO', 'buy', 'ioc', 99, 1));
+      // --- 3단계: one YES sold at 45 to C's bid.
+      await order(c, terms('YES', 'buy', 'gtc', 45, 1));
+      await order(a, terms('YES', 'sell', 'ioc', 1, 1));
+
+      // In the market's room before 4단계's bid: a `market:book` sent before the join is lost, and
+      // nothing else re-reads 매도 가능 here (no interval, no staleTime refetch).
+      const joined = subscribed(page, market.id);
+      await page.goto('/my/positions');
+      await joined;
+      await expect(positions.getByTestId(`portfolio-market-${market.id}`)).toContainText(
+        market.title,
+      );
+      await expect(yesRow.getByTestId('position-qty')).toHaveText('2계약');
+      await expect(yesRow.getByTestId('position-avg')).toHaveText('33.50 Coin');
+      await expect(yesRow.getByTestId('position-cost')).toHaveText('67 Coin');
+      await expect(yesRow.getByTestId('position-realized')).toHaveText('12 Coin');
+      await expect(yesRow.getByTestId('position-last-price')).toContainText('45 Coin');
+      await expect(yesRow.getByTestId('position-value')).toHaveText('90 Coin');
+      await expect(yesRow.getByTestId('position-unrealized')).toHaveText('23 Coin');
+      // NO at the complement of the market price (결정 4): 100 − 45.
+      await expect(noRow.getByTestId('position-last-price')).toContainText('55 Coin');
+      await expect(noRow.getByTestId('position-value')).toHaveText('55 Coin');
+      await expect(noRow.getByTestId('position-unrealized')).toHaveText(`${MINUS_SIGN}5 Coin`);
+      // F3: '최근 체결 <절대 시각>', the market's own time in the card's format.
+      const fillLine = await lastFillLine();
+      await expect(yesRow.getByTestId('position-last-fill')).toHaveText(fillLine);
+      await expect(noRow.getByTestId('position-last-fill')).toHaveText(fillLine);
+      // The card: 145 / 18 / 12, and the rows add up to it (M4).
+      await expect(page.getByTestId('portfolio-value')).toHaveText('145 Coin');
+      await expect(page.getByTestId('portfolio-unrealized')).toHaveText('18 Coin');
+      await expect(page.getByTestId('portfolio-realized')).toHaveText('12 Coin');
+      expect(
+        (await coinOn(yesRow.getByTestId('position-value'))) +
+          (await coinOn(noRow.getByTestId('position-value'))),
+      ).toBe(await coinOn(page.getByTestId('portfolio-value')));
+
+      // --- 4단계: C's YES bid of one at 44 — part of the YES holding sells now, NO has no bid.
+      // Through the book window, no reload; the valuation does not move (a bid is no fill). The
+      // empty book first, so the cell is read before the bid and only the socket can move it.
+      await expect(yesRow.getByTestId('position-sellable')).toHaveText(copy.marketBookEmpty);
+      await order(c, terms('YES', 'buy', 'gtc', 44, 1));
+      await expect(yesRow.getByTestId('position-sellable')).toContainText(
+        `${copy.positionSellablePartial} · 1계약 · 44 Coin`,
+      );
+      await expect(yesRow.getByTestId('position-sell-reason')).toHaveText(
+        copy.orderRejectNameNoQuote,
+      );
+      await expect(noRow.getByTestId('position-sellable')).toHaveText(copy.marketBookEmpty);
+      await expect(yesRow.getByTestId('position-value')).toHaveText('90 Coin');
+      await expect(yesRow.getByTestId('position-unrealized')).toHaveText('23 Coin');
+      // A resting sell of one at 90: 매도 잠금 1, the rest quoted in full — with the screen open.
+      const sell = (await order(a, terms('YES', 'sell', 'gtc', 90, 1))).order;
+      await expect(yesRow.getByTestId('position-locked')).toHaveText('1계약');
+      await expect(yesRow.getByTestId('position-sellable')).toHaveText('1계약 · 44 Coin');
+      await page.reload();
+      await expect(yesRow.getByTestId('position-locked')).toHaveText('1계약');
+      await expect(yesRow.getByTestId('position-sellable')).toHaveText('1계약 · 44 Coin');
+      // The same as the resting order's 남은 수량 on 대기 주문 (ADR-0141).
+      await page.goto('/my/orders');
+      await expect(
+        page
+          .getByTestId('my-orders')
+          .getByTestId(`portfolio-order-${sell.id}`)
+          .getByTestId('order-row-remaining'),
+      ).toHaveText('1계약');
+      await page.goto('/my/positions');
+
+      // --- 5단계: MY's 매도 opens the detail's panel on the row's contract and 매도 (F6) — NO,
+      // which the panel does not start on, so `?contract=` is what chose it.
+      // The rows drawn in full before the width is measured (R16): it reads once, no retry.
+      await expect(yesRow.getByTestId('position-locked')).toHaveText('1계약');
+      await expect(yesRow.getByTestId('position-sellable')).toHaveText('1계약 · 44 Coin');
+      await expect(noRow.getByTestId('position-sellable')).toHaveText(copy.marketBookEmpty);
+      if (!wide) await expectNoSideScroll(page);
+      await noRow.getByTestId('position-sell').click();
+      await expect(page).toHaveURL(new RegExp(`/markets/${market.slug}$`));
+      const place = page.getByTestId(wide ? 'order-area' : 'order-sheet');
+      await expect(place.getByTestId('order-panel')).toBeVisible();
+      await expect(place.getByTestId('order-contract-no')).toHaveAttribute('aria-pressed', 'true');
+      await expect(place.getByTestId('order-side-sell')).toHaveAttribute('aria-pressed', 'true');
+      await expect(place.getByTestId('order-sellable')).toBeVisible();
+      // Written out of the address: a reload opens nothing.
+      await page.reload();
+      if (wide) {
+        await expect(place.getByTestId('order-side-buy')).toHaveAttribute('aria-pressed', 'true');
+      } else {
+        await expect(page.getByTestId('order-sheet')).toHaveCount(0);
+      }
+      // 내 포지션: MY's row, field for field, and its own 매도 opens the same panel.
+      const detailYes = page.getByTestId('market-my-position').getByTestId('market-position-yes');
+      await expect(detailYes.getByTestId('position-value')).toHaveText('90 Coin');
+      await expect(detailYes.getByTestId('position-unrealized')).toHaveText('23 Coin');
+      await expect(detailYes.getByTestId('position-avg')).toHaveText('33.50 Coin');
+      await expect(detailYes.getByTestId('position-locked')).toHaveText('1계약');
+      await expect(detailYes.getByTestId('position-last-fill')).toHaveText(fillLine);
+      if (!wide) await expectNoSideScroll(page);
+      // NO's 매도 first and then YES's, so each contract is one the panel had to move to.
+      const detailNoSell = page
+        .getByTestId('market-my-position')
+        .getByTestId('market-position-no')
+        .getByTestId('position-sell');
+      await detailNoSell.click();
+      await expect(place.getByTestId('order-side-sell')).toHaveAttribute('aria-pressed', 'true');
+      await expect(place.getByTestId('order-contract-no')).toHaveAttribute('aria-pressed', 'true');
+      if (!wide) await page.getByTestId('order-sheet-close').click();
+      await detailYes.getByTestId('position-sell').click();
+      await expect(place.getByTestId('order-side-sell')).toHaveAttribute('aria-pressed', 'true');
+      await expect(place.getByTestId('order-contract-yes')).toHaveAttribute('aria-pressed', 'true');
+      if (!wide) await page.getByTestId('order-sheet-close').click();
+
+      // --- 6단계: NO sold out at 50 — it leaves MY (F4) and is 보유 없음 on the detail.
+      await order(c, terms('NO', 'buy', 'gtc', 50, 1));
+      await order(a, terms('NO', 'sell', 'ioc', 1, 1));
+      const detailNo = page.getByTestId('market-my-position').getByTestId('market-position-no');
+      await expect(detailNo.getByTestId('position-none')).toHaveText(copy.positionNoHolding);
+      await expect(detailNo.getByTestId('position-realized')).toHaveText(`${MINUS_SIGN}10 Coin`);
+      await page.goto('/my/positions');
+      await expect(yesRow.getByTestId('position-value')).toHaveText('100 Coin');
+      await expect(noRow).toHaveCount(0);
+      await expect(yesRow.getByTestId('position-unrealized')).toHaveText('33 Coin');
+      await expect(page.getByTestId('portfolio-value')).toHaveText('100 Coin');
+      await expect(page.getByTestId('portfolio-unrealized')).toHaveText('33 Coin');
+      await expect(page.getByTestId('portfolio-realized')).toHaveText('2 Coin');
+    } finally {
+      await cContext.close();
+    }
+  });
+});
+
+/** No page scroll sideways at this width (R16): the widest row still wraps inside it. */
+async function expectNoSideScroll(page: Page): Promise<void> {
+  const fits = await page.evaluate(
+    () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+  );
+  expect(fits).toBe(true);
+}
 
 /** What a public book carries (#179): no order, account, account type or count (결정 5). */
 const BOOK_KEYS = ['contracts', 'marketId', 'marketRejectReason'];
@@ -1414,6 +1620,31 @@ test.describe('시장 마감과 주문 만료 (#120)', () => {
       await page.goto(`/my/orders/${resting.id}`);
       await expect(page.getByTestId('order-detail-status')).toHaveText(copy.orderStatusExpired);
       await expect(page.getByTestId('order-detail-reason')).toHaveText(copy.orderExpiredReason);
+
+      // --- 보유 계약 (#67, ADR-0142; ADR-0135 F2): A's NO 1 in the closed market, valued at the
+      // last fill (YES 60, so NO 40) with its time and the status, 매도 가능 '마감' and 매도 off — no
+      // expected payout.
+      const closedMarket = await dataOf<Market>(await a.get(`/api/v1/markets/${market.id}`));
+      const fillLine = `${copy.marketLastFillAt} ${formatKst(closedMarket.lastFillAt ?? '')}`;
+      const expectClosedRow = async (row: Locator) => {
+        await expect(row.getByTestId('position-last-price')).toContainText('40 Coin');
+        await expect(row.getByTestId('position-last-fill')).toHaveText(fillLine);
+        await expect(row.getByTestId('position-value')).toHaveText('40 Coin');
+        await expect(row.getByTestId('position-cost')).toHaveText('40 Coin');
+        await expect(row.getByTestId('position-unrealized')).toHaveText('0 Coin');
+        await expect(row.getByTestId('position-sellable')).toHaveText(copy.orderRejectNameClosed);
+        await expect(row.getByTestId('position-sell')).toBeDisabled();
+      };
+      await page.goto('/my/positions');
+      const group = page.getByTestId(`portfolio-market-${market.id}`);
+      await expect(group.getByTestId('portfolio-market-status')).toHaveText(
+        copy.marketStatusClosed,
+      );
+      await expectClosedRow(group.getByTestId(`portfolio-position-${market.id}-NO`));
+      await page.goto(`/markets/${market.slug}`);
+      await expectClosedRow(
+        page.getByTestId('market-my-position').getByTestId('market-position-no'),
+      );
     } finally {
       await bContext.close();
       await visitorContext.close();

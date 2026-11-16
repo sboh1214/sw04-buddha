@@ -151,6 +151,56 @@ describe.skipIf(!hasTestInfra)('positions (integration)', () => {
     expect(anonymous.statusCode).toBe(401);
   });
 
+  it('GET /me/positions carries the market’s last fill time, fill count and status key (#67)', async () => {
+    // Public market values beside the price (ADR-0142): what a holding row shows as '최근 체결
+    // <시각>' and the two keys it is ordered on against a live market row.
+    const lastFillAt = new Date(base + 30_000);
+    const traded = await createMarket(t.db, {
+      lastPrice: 33,
+      lastFillAt,
+      tradeCount: 4,
+      statusEventId: 77,
+    });
+    await insertPosition({
+      userId: user.id,
+      marketId: traded.id,
+      outcome: 'YES',
+      qty: 3,
+      costBasisCoin: 100n,
+      updatedAt: at(2),
+    });
+    // Never traded: the time is null with the price and the count is 0 (N02 §5).
+    await insertPosition({
+      userId: user.id,
+      marketId: market.id,
+      outcome: 'NO',
+      qty: 1,
+      costBasisCoin: 40n,
+      updatedAt: at(1),
+    });
+    const res = await t.app.inject({
+      method: 'GET',
+      url: '/api/v1/me/positions?status=open',
+      headers: { cookie: user.cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const [withFill, withoutFill] = res.json<{ data: Position[] }>().data;
+    expect(withFill).toMatchObject({
+      marketId: traded.id,
+      marketLastPrice: 33,
+      marketLastFillAt: lastFillAt.toISOString(),
+      marketTradeCount: 4,
+      marketStatusEventId: '77',
+    });
+    expect(withoutFill).toMatchObject({
+      marketId: market.id,
+      marketLastPrice: null,
+      marketLastFillAt: null,
+      marketTradeCount: 0,
+      marketStatusEventId: null,
+    });
+  });
+
   it('GET /me/positions carries the market’s status and result as stored, a VOID result included (#174)', async () => {
     // The result is not a contract side: a NO position on a market judged VOID says so.
     const provisional = await createMarket(t.db, { status: 'provisional', resolvedResult: 'VOID' });

@@ -12,6 +12,7 @@ import { positionsKey } from '@/hooks/use-portfolio';
 import { BALANCE_HISTORY_KEYS } from '@/hooks/use-wallet';
 import { MEMBER_CORRECTIONS_KEY } from '@/hooks/use-reconciliation-corrections';
 import { memberCorrection } from '@/test/reconciliation-corrections';
+import { positionFixture } from '@/test/positions';
 import { SRC } from '@/test/screen-text';
 import { type Market, type MarketSummary, type Me, type Position, type PriceSeries } from './api';
 import {
@@ -31,9 +32,13 @@ import {
   applyTick,
   applyToPages,
   BalanceOrder,
+  positionReopensMarket,
 } from './market-live';
 import { chartLayout } from './chart';
 import { getQueryClient, restartQueries } from './query-client';
+
+/** The account a positions list is keyed by (#67, ADR-0142). */
+const TEST_ACCOUNT = 'a1e1c0de-0000-4000-8000-000000000001';
 
 /**
  * The reducers of market-live.ts driven through a real QueryClient, because the contracts that
@@ -181,21 +186,15 @@ const seriesBeforeTrade: PriceSeries = {
 };
 
 /** The row as a snapshot taken before the trade carries it. */
-const beforeTrade: Position = {
+const beforeTrade: Position = positionFixture({
   marketId: ID,
   marketSlug: summary.slug,
   marketTitle: summary.title,
-  marketStatus: 'open',
   marketLastPrice: 50,
-  resolvedResult: null,
-  outcome: 'YES',
   qty: 10,
-  costBasisCoin: '5000',
-  realizedPnlCoin: '0',
-  settled: false,
   version: 3,
   updatedAt: '2026-09-06T00:00:00.000Z',
-};
+});
 
 /** The `user:position` that carries the trade the snapshot above is missing. */
 const traded: UserPositionEvent = {
@@ -751,17 +750,20 @@ describe('the positions caches', () => {
     const queryClient = getQueryClient();
     let answer: Position[] = [beforeTrade];
     const observer = new QueryObserver<Position[]>(queryClient, {
-      queryKey: positionsKey('open'),
+      queryKey: positionsKey('open', TEST_ACCOUNT),
       queryFn: () => Promise.resolve(answer),
       retry: false,
     });
     const unsubscribe = observer.subscribe(() => undefined);
     try {
       await observer.refetch();
-      const patch = applyPositionEvent(queryClient.getQueryData(positionsKey('open')), traded);
+      const patch = applyPositionEvent(
+        queryClient.getQueryData(positionsKey('open', TEST_ACCOUNT)),
+        traded,
+      );
       expect(patch.kind).toBe('replace');
       if (patch.kind === 'replace') {
-        queryClient.setQueryData<Position[]>(positionsKey('open'), patch.positions);
+        queryClient.setQueryData<Position[]>(positionsKey('open', TEST_ACCOUNT), patch.positions);
       }
       // The in-flight answer: one trade behind, and news only about the market it names.
       answer = [{ ...beforeTrade, marketTitle: '10월 기준금리 인하?', marketLastPrice: 63 }];
@@ -792,7 +794,7 @@ describe('the positions caches', () => {
     const queryClient = getQueryClient();
     let fetches = 0;
     const observer = new QueryObserver<Position[]>(queryClient, {
-      queryKey: positionsKey('open'),
+      queryKey: positionsKey('open', TEST_ACCOUNT),
       queryFn: () => {
         fetches += 1;
         // The first request knows nothing about the trade the event announces.
@@ -803,15 +805,20 @@ describe('the positions caches', () => {
     const unsubscribe = observer.subscribe(() => undefined);
     try {
       const first = observer.refetch();
-      expect(queryClient.getQueryData<Position[]>(positionsKey('open'))).toBeUndefined();
+      expect(
+        queryClient.getQueryData<Position[]>(positionsKey('open', TEST_ACCOUNT)),
+      ).toBeUndefined();
 
-      const patch = applyPositionEvent(queryClient.getQueryData(positionsKey('open')), traded);
+      const patch = applyPositionEvent(
+        queryClient.getQueryData(positionsKey('open', TEST_ACCOUNT)),
+        traded,
+      );
       expect(patch.kind).toBe('refetch');
       await restartQueries(queryClient, POSITIONS_KEY);
       await first;
 
       expect(fetches).toBe(2);
-      const rows = queryClient.getQueryData<Position[]>(positionsKey('open'));
+      const rows = queryClient.getQueryData<Position[]>(positionsKey('open', TEST_ACCOUNT));
       expect(rows?.[0]?.qty).toBe(14);
       expect(rows?.[0]?.version).toBe(4);
     } finally {
@@ -820,19 +827,83 @@ describe('the positions caches', () => {
     }
   });
 
+  it('reads the market again when a sold-out holding is bought back inside staleTime (#67)', async () => {
+    // THE HAZARD (ADR-0142 결정 2-2): MY joins and reads only the markets held at 1 or more, so
+    // selling out leaves the market's room and unmounts its observer, with the `['market', id]`
+    // entry still inside `staleTime`. A buy back from another tab publishes its `market:tick`
+    // to a room this tab is not in, the `user:position` carries no price, and the observer MY
+    // mounts again took the entry as fresh: the holding, 미실현 손익 and the totals were marked to
+    // the price from before the holding's own fill until some later tick.
+    const queryClient = getQueryClient();
+    const afterBuy: Market = { ...snapshot, lastPrice: 70, tradeCount: 11 };
+    let reads = 0;
+    const market = {
+      queryKey: marketKey(ID),
+      queryFn: () => {
+        reads += 1;
+        return Promise.resolve(afterBuy);
+      },
+      retry: false,
+    };
+    const open = positionsKey('open', TEST_ACCOUNT);
+    // Sold out: the list keeps the row at 0, and the entry is the one MY's last read left.
+    queryClient.setQueryData<Position[]>(open, [{ ...beforeTrade, qty: 0 }]);
+    queryClient.setQueryData<Market>(marketKey(ID), snapshot);
+    try {
+      // The bug, measured: a mount inside `staleTime` asks nothing and keeps the old price.
+      const stale = new QueryObserver<Market>(queryClient, market);
+      stale.subscribe(() => undefined)();
+      expect(reads).toBe(0);
+      expect(stale.getCurrentResult().data?.lastPrice).toBe(50);
+
+      // The provider's handler shape: the decision off the list as it stood, the patch, then
+      // the restart of that one market.
+      const held = queryClient.getQueryData<Position[]>(open);
+      const reopens = positionReopensMarket(held, traded);
+      expect(reopens).toBe(true);
+      const patch = applyPositionEvent(held, traded, 'open');
+      if (patch.kind !== 'replace') throw new Error(`expected replace, got ${patch.kind}`);
+      queryClient.setQueryData<Position[]>(open, patch.positions);
+      await restartQueries(queryClient, marketKey(ID));
+      // Nothing observes the market yet, so nothing is asked: it is marked stale.
+      expect(reads).toBe(0);
+
+      // MY's row is back at 1 or more, so `useHoldings` mounts the market's observer again.
+      const observer = new QueryObserver<Market>(queryClient, market);
+      const unsubscribe = observer.subscribe(() => undefined);
+      try {
+        await vi.waitFor(() => expect(observer.getCurrentResult().data?.lastPrice).toBe(70));
+        expect(reads).toBe(1);
+        // And once: the holding is positive now, so the next buy is a patch and no request.
+        const again: UserPositionEvent = { ...traded, qty: 20, version: 5 };
+        expect(positionReopensMarket(queryClient.getQueryData<Position[]>(open), again)).toBe(
+          false,
+        );
+      } finally {
+        unsubscribe();
+      }
+    } finally {
+      queryClient.clear();
+    }
+  });
+
   it('keeps the two lists apart, so one join cannot reach the other', () => {
     // `['positions']` covers both variants by prefix; a settled row at an older version must
     // not be merged into the open list's row of the same (market, outcome).
     const queryClient = getQueryClient();
-    queryClient.setQueryData<Position[]>(positionsKey('open'), [
+    queryClient.setQueryData<Position[]>(positionsKey('open', TEST_ACCOUNT), [
       { ...beforeTrade, qty: 14, version: 4 },
     ]);
-    queryClient.setQueryData<Position[]>(positionsKey('settled'), [
+    queryClient.setQueryData<Position[]>(positionsKey('settled', TEST_ACCOUNT), [
       { ...beforeTrade, qty: 0, settled: true, version: 2 },
     ]);
 
-    expect(queryClient.getQueryData<Position[]>(positionsKey('open'))?.[0]?.qty).toBe(14);
-    expect(queryClient.getQueryData<Position[]>(positionsKey('settled'))?.[0]?.qty).toBe(0);
+    expect(queryClient.getQueryData<Position[]>(positionsKey('open', TEST_ACCOUNT))?.[0]?.qty).toBe(
+      14,
+    );
+    expect(
+      queryClient.getQueryData<Position[]>(positionsKey('settled', TEST_ACCOUNT))?.[0]?.qty,
+    ).toBe(0);
     queryClient.clear();
   });
 });
@@ -876,5 +947,65 @@ describe('the realtime provider’s re-reads for the 호가창 (#122)', () => {
       source.indexOf('] as const;', source.indexOf('const PRIVATE_SNAPSHOT_KEYS = [')),
     );
     expect(privateKeys).toContain('SELLABLE_KEY');
+  });
+});
+
+/**
+ * The resnapshot debt (#67, ADR-0142 결정 2-21), pinned in the provider's source for the reason the
+ * block above is: the provider cannot be mounted here. `lib/query-client.test.ts` drives what the
+ * debt does to `online`; these pin when the provider sets and clears it.
+ */
+describe('the realtime provider’s resnapshot debt (ADR-0142 결정 2-21)', () => {
+  const source = readFileSync(path.join(SRC, 'components/realtime/realtime-provider.tsx'), 'utf8');
+  /** A socket handler's body, from its registration to the `});` that closes it. */
+  const socketHandler = (event: string) => {
+    const start = source.indexOf(`socket.on('${event}', () => {`);
+    expect(start).toBeGreaterThan(-1);
+    return source.slice(start, source.indexOf('\n    });', start));
+  };
+  const effect = source.slice(source.indexOf('  useEffect(() => {'));
+
+  it('pays it only after the connect’s resnapshot', () => {
+    const connect = socketHandler('connect');
+    const resnapshot = connect.indexOf('if (bootstrapped.current) resnapshot();');
+    const paid = connect.indexOf('setResnapshotOwed(queryClient, null);');
+    expect(resnapshot).toBeGreaterThan(-1);
+    expect(paid).toBeGreaterThan(resnapshot);
+    // Once: never cleared ahead of the re-read, where an `online` in between would read twice.
+    expect(connect.split('setResnapshotOwed(').length).toBe(2);
+  });
+
+  it('sets it on a disconnect only for a bootstrapped socket that will reconnect', () => {
+    expect(socketHandler('disconnect')).toContain(
+      'if (bootstrapped.current && socket.active) setResnapshotOwed(queryClient, snapshotKeys);',
+    );
+  });
+
+  it('owes the very keys resnapshot reads', () => {
+    expect(effect).toContain(
+      'const snapshotKeys =\n      identity === null ? SNAPSHOT_KEYS : [...SNAPSHOT_KEYS, ...PRIVATE_SNAPSHOT_KEYS];',
+    );
+    const resnapshot = effect.slice(effect.indexOf('const resnapshot = () => {'));
+    expect(resnapshot.slice(0, resnapshot.indexOf('\n    };'))).toContain(
+      'for (const queryKey of snapshotKeys) {',
+    );
+    // Every debt names that one list.
+    const owed = [...effect.matchAll(/setResnapshotOwed\(queryClient, ([^)]+)\)/g)].map(
+      (match) => match[1],
+    );
+    expect(new Set(owed)).toEqual(new Set(['snapshotKeys', 'null']));
+  });
+
+  it('owes it at a rebuilt socket’s start only after the tab connected once, and clears it with the socket', () => {
+    const start = effect.slice(0, effect.indexOf('const socket = io('));
+    expect(start).toContain(
+      'if (bootstrapped.current) setResnapshotOwed(queryClient, snapshotKeys);',
+    );
+    const cleanup = effect.slice(effect.lastIndexOf('    return () => {'));
+    expect(cleanup).toContain('setResnapshotOwed(queryClient, null);');
+    // After the listeners go, so the teardown's own `disconnect()` cannot set it again.
+    expect(cleanup.indexOf('setResnapshotOwed(queryClient, null);')).toBeGreaterThan(
+      cleanup.indexOf('socket.removeAllListeners();'),
+    );
   });
 });

@@ -222,6 +222,38 @@ test.describe('시장 상세', () => {
         expect(page, testId).not.toContain(`data-testid="${testId}"`);
       }
     }
+    // A holding's sell entry (#67, ADR-0142): `?order=sell&contract=yes` is read by the panel on
+    // the client only — the server's HTML, a visitor's or a member's, is the one without it: no
+    // panel, no 매도 가능, no open sheet, no 내 포지션, and the order area byte for byte the same.
+    // As elements: the toast group's CSS names `order-entry-bar` and `order-sheet` in a selector
+    // (components/ui/toaster.tsx), so their bare strings are in the HTML's styles anyway.
+    const elementAt = (page: string, testId: string) =>
+      page.search(new RegExp(`<[a-z]+ [^<>]*data-testid="${testId}"`));
+    const orderArea = (page: string) => {
+      const start = elementAt(page, 'order-area');
+      const end = elementAt(page, 'order-entry-bar');
+      // Both drawn, in this order: a missing one would slice to the end of the document.
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(end).toBeGreaterThan(start);
+      return page.slice(start, end);
+    };
+    const intent = `/markets/${market.slug}?order=sell&contract=yes`;
+    for (const [plain, withIntent] of [
+      [html, await (await request.get(intent)).text()],
+      [memberHtml, await (await admin.get(intent)).text()],
+    ] as const) {
+      for (const testId of [
+        'order-panel',
+        'order-sellable',
+        'order-sheet',
+        'market-my-position',
+        'position-sell',
+      ]) {
+        expect(elementAt(withIntent, testId), testId).toBe(-1);
+      }
+      expect(orderArea(withIntent)).not.toBe('');
+      expect(orderArea(withIntent)).toBe(orderArea(plain));
+    }
   });
 
   test('AC 1: 관리자의 마감이 B의 상세와 홈 카드, C의 검색 결과 카드를 1초 안에, 리프레시 없이 갱신한다', async ({

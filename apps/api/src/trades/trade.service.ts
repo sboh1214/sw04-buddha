@@ -10,7 +10,15 @@ type PositionRow = typeof schema.positions.$inferSelect;
 /** What the market row carries for the position DTO. */
 type MarketRef = Pick<
   MarketRow,
-  'id' | 'slug' | 'title' | 'status' | 'lastPrice' | 'resolvedResult'
+  | 'id'
+  | 'slug'
+  | 'title'
+  | 'status'
+  | 'lastPrice'
+  | 'lastFillAt'
+  | 'tradeCount'
+  | 'statusEventId'
+  | 'resolvedResult'
 >;
 
 export function toPosition(row: PositionRow, market: MarketRef): Position {
@@ -20,6 +28,10 @@ export function toPosition(row: PositionRow, market: MarketRef): Position {
     marketTitle: market.title,
     marketStatus: market.status,
     marketLastPrice: market.lastPrice,
+    // Public market values beside the price (#67, ADR-0142): its time and the two ordering keys.
+    marketLastFillAt: market.lastFillAt === null ? null : market.lastFillAt.toISOString(),
+    marketTradeCount: market.tradeCount,
+    marketStatusEventId: market.statusEventId === null ? null : String(market.statusEventId),
     resolvedResult: market.resolvedResult,
     outcome: row.outcome,
     qty: row.qty,
@@ -54,6 +66,9 @@ export class TradeService {
           title: schema.markets.title,
           status: schema.markets.status,
           lastPrice: schema.markets.lastPrice,
+          lastFillAt: schema.markets.lastFillAt,
+          tradeCount: schema.markets.tradeCount,
+          statusEventId: schema.markets.statusEventId,
           resolvedResult: schema.markets.resolvedResult,
         },
       })

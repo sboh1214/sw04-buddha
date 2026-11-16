@@ -8,7 +8,6 @@ import {
   Field,
   HStack,
   Input,
-  Link as ChakraLink,
   Skeleton,
   Stack,
   Text,
@@ -23,10 +22,9 @@ import {
   PRICE_MIN,
   formatCoin,
 } from '@buddha/shared';
-import NextLink from 'next/link';
 import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { SignInPrompt } from '@/components/market/sign-in-prompt';
-import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
+import { AccountBlockLine } from '@/components/position/account-block-line';
 import { copy } from '@/copy';
 import { formatContracts } from '@/lib/market-admin';
 import { orderEntryPrice } from '@/lib/market-detail';
@@ -47,10 +45,9 @@ import {
   insufficientContractsLine,
   sellableLine,
 } from '@/lib/order-reasons';
-import { MY_MODERATION_PATH } from '@/lib/moderation';
 import { OrderConfirm } from './order-confirm';
 import { useOrderPanel } from './order-panel-provider';
-import { OrderOutcome, RestrictedText } from './order-result';
+import { OrderOutcome } from './order-result';
 
 /**
  * 주문 패널 (#66, ADR-0140): 계약 → 매수/매도 → 즉시 거래/지정가 → 수량·금액·한도가격 → 견적 →
@@ -167,39 +164,17 @@ function accountLineId(place: 'column' | 'sheet'): string {
 
 /**
  * D13: why 주문 확인 and the sell entry are off for an admin or a restricted account — the values
- * stay (owner answer 66-Q3). The restriction's line names its end and links to 조치·신고 내역.
+ * stay (owner answer 66-Q3). The line is `AccountBlockLine`, which MY's holdings draw too (#67).
  */
 function AccountLine({ id }: { id: string }) {
   const { account, restrictionEndsAt } = useOrderPanel();
-  const format = useFormatDateTime();
-  if (account === null) return null;
   return (
-    <Alert.Root
+    <AccountBlockLine
       id={id}
-      status="warning"
-      role="status"
-      tabIndex={-1}
-      outline="none"
-      data-testid="order-account-blocked"
-    >
-      <Alert.Indicator />
-      <Alert.Content>
-        <Alert.Description>
-          {account === 'admin' ? (
-            copy.orderAdmin
-          ) : (
-            <RestrictedText
-              endsAtText={restrictionEndsAt === null ? null : format(restrictionEndsAt)}
-            />
-          )}
-        </Alert.Description>
-        {account === 'restricted' && (
-          <ChakraLink asChild colorPalette="brand" color="colorPalette.fg" fontSize="sm">
-            <NextLink href={MY_MODERATION_PATH}>{copy.myModeration}</NextLink>
-          </ChakraLink>
-        )}
-      </Alert.Content>
-    </Alert.Root>
+      account={account}
+      restrictionEndsAt={restrictionEndsAt}
+      testId="order-account-blocked"
+    />
   );
 }
 

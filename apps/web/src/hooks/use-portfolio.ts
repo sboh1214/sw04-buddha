@@ -6,12 +6,13 @@ import {
   type MarketStatus,
   type PositionStatus,
   parseCoinAmount,
+  statusSupersedes,
 } from '@buddha/shared';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { type Market, type Order, type Position, api, unwrap } from '@/lib/api';
 import { useSession } from '@/lib/use-session';
 import { ORDERS_KEY, POSITIONS_KEY } from '@/lib/market-keys';
-import { statusRank } from '@/lib/market-live';
+import { type LiveMarket, statusRank } from '@/lib/market-live';
 
 /**
  * The account's two private lists and the arithmetic MY renders (PLAN 11.3's portfolio, which
@@ -33,11 +34,17 @@ import { statusRank } from '@/lib/market-live';
  */
 
 /**
- * `['positions', 'open' | 'settled']`. Both hang off `POSITIONS_KEY`, which is what lets the
- * socket's `user:position` handler refresh the two lists with one invalidation: react-query
+ * `['positions', 'open' | 'settled', accountId]`. Both hang off `POSITIONS_KEY`, which is what lets
+ * the socket's `user:position` handler refresh the two lists with one invalidation: react-query
  * matches by key PREFIX, so `['positions']` covers both and never reaches `['orders']`.
+ *
+ * The account the screen shows (`Me`'s id) is the last part (#67, ADR-0142; ADR-0090 결정 4-2,
+ * ADR-0140 결정 2-22): a holding row carries a sell button, and `['me']` can turn from A to B
+ * before the session does, so A's holdings are never drawn as B's. `undefined` while that account
+ * is not known: the query is off then.
  */
-export const positionsKey = (status: PositionStatus) => [...POSITIONS_KEY, status] as const;
+export const positionsKey = (status: PositionStatus, accountId: string | undefined) =>
+  [...POSITIONS_KEY, status, accountId] as const;
 
 /**
  * Which list a cached `['positions', …]` key names, or `undefined` for a key that names none.
@@ -66,14 +73,14 @@ type SessionLike = { user: unknown } | null;
 /**
  * `GET /me/positions?status=`. A plain query, not an infinite one: the route answers `{ data }`
  * with no `meta` because the list is bounded by the markets one account has touched, so there
- * is no cursor to page on.
+ * is no cursor to page on. Read only once the account it is keyed by is known (`GET /me`).
  */
-export function positionsQueryOptions(status: PositionStatus, session?: SessionLike) {
+export function positionsQueryOptions(status: PositionStatus, accountId: string | undefined) {
   return {
-    queryKey: positionsKey(status),
+    queryKey: positionsKey(status, accountId),
     queryFn: async (): Promise<Position[]> =>
       unwrap(await api.GET('/api/v1/me/positions', { params: { query: { status } } })).data,
-    enabled: session != null,
+    enabled: accountId !== undefined,
   };
 }
 
@@ -82,10 +89,14 @@ export function positionsQueryOptions(status: PositionStatus, session?: SessionL
  * that shows 결과 · 실현 손익. `isPending` covers the session lookup as well (use-me.ts:29):
  * without it a signed-in reload flashes the empty state, because a disabled query reports
  * `isPending` with no data of its own.
+ *
+ * `accountId` is MY's account (`useMe().data?.id`): while it is undefined the query is off and the
+ * caller draws `GET /me`'s wait or failure (`ProfileUnavailable`), as #123's lists do — so every
+ * holdings list's first request waits for `GET /me` (ADR-0142).
  */
-export function usePositions(status: PositionStatus) {
+export function usePositions(status: PositionStatus, accountId: string | undefined) {
   const { data: session, isPending: sessionPending } = useSession();
-  const query = useQuery(positionsQueryOptions(status, session));
+  const query = useQuery(positionsQueryOptions(status, accountId));
   return {
     ...query,
     isPending: sessionPending || (session != null && query.isPending),
@@ -111,6 +122,10 @@ export function usePositions(status: PositionStatus) {
  * The worker pays out and writes `settled` in one transaction (ADR-0046) that also takes the
  * market from `settling` to `settled`; if a step added later lets the Coin step finish before the
  * market is `settled`, this function has to change with it.
+ *
+ * The open list is not what MY's 보유 계약 draws (ADR-0135 F4, #67): that tab shows the rows held
+ * at 1 contract or more (`heldGroups`). A row sold out of stays in the open list all the same —
+ * 총 실현 손익 counts it, and the detail's 내 포지션 shows it as '보유 없음' with its 실현 손익.
  */
 export function positionListStatusFor(marketStatus: MarketStatus): PositionStatus {
   return marketStatus === 'settled' || marketStatus === 'cancelled' ? 'settled' : 'open';
@@ -175,7 +190,8 @@ export type PositionMath = Pick<
 >;
 
 /**
- * 현재가: what one contract of this position is worth right now, in Coin.
+ * 최근 체결가 of the contract (#67, ADR-0135 결정 4): what one contract of this position is worth
+ * at the market's last fill, in Coin.
  *
  * `marketLastPrice` is the market's last YES fill price (1..99 Coin per contract), so the NO side
  * is its complement against the `PAYOUT_PER_CONTRACT_COIN` a winning contract pays — the same
@@ -185,7 +201,7 @@ export type PositionMath = Pick<
  * wrong by 100 − 2·price per contract.
  *
  * `undefined` for a market with no fill (체결 없음, N02 §5): there is no price to mark to, and
- * the row shows a dash the way `averageCostCoin` answers for nothing held. A holding comes from a
+ * the row shows a dash the way `averageCostBp` answers for nothing held. A holding comes from a
  * fill, so this is the type's case more than a live one.
  */
 export function markPriceCoin(
@@ -203,8 +219,8 @@ export function markPriceCoin(
  * Meaningful only while the market still trades. Settlement never writes a price, so a settled
  * market's `lastPrice` is the last price something TRADED at, not the 100/0 it resolved to:
  * the 정산 이력 section renders `realizedPnlCoin` and never this. That is also why
- * `portfolioTotals` is given one list at a time — `usePositions('open')` for 총 평가 금액 and
- * 총 평가손익, `usePositions('settled')` for 총 실현 손익.
+ * `portfolioTotals` is given one list at a time — the open rows for 총 참고 평가 and 총 미실현 손익,
+ * both lists for 총 실현 손익.
  */
 export function positionValueCoin(
   position: Pick<PositionMath, 'outcome' | 'marketLastPrice' | 'qty'>,
@@ -214,7 +230,7 @@ export function positionValueCoin(
 }
 
 /**
- * 평가손익: what the holding is worth now minus what it cost. Negative is ordinary, and
+ * 미실현 손익 (ADR-0135 F1): 참고 평가 minus 잔여 원가. Negative is ordinary, and
  * `formatCoin` renders it with `MINUS_SIGN` (PLAN 11.1 principle 6) rather than an ASCII hyphen.
  * `undefined` with no price to mark to, like `positionValueCoin`.
  */
@@ -226,16 +242,21 @@ export function unrealizedPnlCoin(
 }
 
 /**
- * 평단: cost basis per held contract, rounded half-up in bigint the way `applySell` releases
- * cost, so the average on screen and the cost the API releases never round apart. `undefined`
- * when nothing is held — that row shows a dash, not a division by zero.
+ * 평균 매입가 (#67, ADR-0142; ADR-0135 결과 4): cost basis per held contract in basis points of a
+ * Coin (3333 = 33.33 Coin, `formatPricePerContract`), rounded half-up in bigint — the same rule as
+ * `orderAveragePriceBp`. Shown to two decimals: 33·33·34 Coin for one contract each is 33.33, not
+ * the 33 a whole-Coin average said. The server releases cost in whole Coin (`applySell`), so after
+ * a partial sell the average may move inside a Coin (33.33 → 33.50 when one of the three goes for
+ * a released 33); 미실현 손익 is read off the remaining cost (`unrealizedPnlCoin`), never off this
+ * average, so the rounding never reaches a PnL. `undefined` when nothing is held — that row shows a
+ * dash, not a division by zero.
  */
-export function averageCostCoin(
+export function averageCostBp(
   position: Pick<PositionMath, 'qty' | 'costBasisCoin'>,
-): bigint | undefined {
+): number | undefined {
   if (position.qty === 0) return undefined;
   const held = BigInt(position.qty);
-  return (parseCoinAmount(position.costBasisCoin) + held / 2n) / held;
+  return Number((parseCoinAmount(position.costBasisCoin) * 100n + held / 2n) / held);
 }
 
 /**
@@ -253,11 +274,11 @@ export function orderAveragePriceBp(
 }
 
 export interface PortfolioTotals {
-  /** Σ `positionValueCoin` — copy.portfolioValue. */
+  /** Σ `positionValueCoin` — copy.portfolioValue (총 참고 평가). */
   valueCoin: bigint;
   /** Σ `costBasisCoin`, the figure the two PnL lines are read against. */
   costBasisCoin: bigint;
-  /** `valueCoin − costBasisCoin` — copy.portfolioUnrealizedPnl. */
+  /** `valueCoin − costBasisCoin` — copy.portfolioUnrealizedPnl (총 미실현 손익). */
   unrealizedPnlCoin: bigint;
   /** Σ `realizedPnlCoin` — copy.portfolioRealizedPnl. */
   realizedPnlCoin: bigint;
@@ -268,8 +289,9 @@ export interface PortfolioTotals {
  *
  * Deliberately independent of the balance: `availableCoin`/`lockedCoin` come from `useMe()` and
  * adding them here would double-count, because the Coin a position cost has already left the
- * balance. `undefined` sums to zeros so the summary can render while the list is still
- * loading instead of branching at every call site.
+ * balance. Nor does a start grant or a 재지급 reach it: they move the ledger, never a position
+ * (N02 §8, N04 §3; ADR-0135 F5 and 결정 4 — no 총 자산 line). `undefined` sums to zeros so the
+ * summary can render while the list is still loading instead of branching at every call site.
  *
  * A row with no price to mark to (`markPriceCoin` is `undefined`) is left out of the value and
  * of the cost the two PnL lines are read against: counting its cost alone would print a loss
@@ -312,7 +334,9 @@ export function portfolioTotals(positions: readonly PositionMath[] = []): Portfo
  * row into 정산 이력, and this sum printed 500 Coin for one 250 Coin row. The write refreshed
  * `dataUpdatedAt` as well, so the poisoned list sat inside `staleTime` and the next mount did not
  * correct it. The reducer now answers `refetch` when the flag MOVES (market-live.ts), which is
- * what makes the sentence above true rather than merely intended.
+ * what makes the sentence above true rather than merely intended. And for the moment a
+ * settlement's two answers land out of order — the settled list before the open one — the open
+ * copy is left out before either sum (`dedupeAcrossLists`, #67).
  *
  * The two other totals are open-only and stay that way: settlement writes no price, so a
  * settled row's `marketLastPrice` is the last price something TRADED at rather than the 100/0
@@ -332,102 +356,168 @@ export function realizedPnlAcross(...totals: readonly PortfolioTotals[]): bigint
  * had when a REFETCH fails, so a positions answer carrying 거래 마감 could be overwritten on
  * screen by a market entry still saying 거래 중, with nothing scheduled to correct it.
  *
- * Two orders, because only one side has a key. The live row carries `statusEventId` and every
- * writer of it compares on `statusSupersedes` (`applyStatus`, `joinMarket`), so it is ordered
- * against every `market:status` there is; `Position.marketStatus` is a join with no event id
- * beside it, so the two rows can only be compared by VALUE (`lifecycleStep`). By value the
- * statuses are not a total order — OPEN ↔ PAUSED goes both ways (#174) — so:
+ * With the transition key on both sides (`keys`: the live row's `statusEventId` and, since #67,
+ * the position's `marketStatusEventId`, ADR-0142) the two are compared on it (`statusSupersedes`),
+ * as every other writer of a market row is: the later transition wins, OPEN ↔ PAUSED included.
+ * Without a key on either side (a test factory's row, a caller that has none), by VALUE
+ * (`lifecycleStep`): the statuses are not a total order — OPEN ↔ PAUSED goes both ways (#174) — so:
  * - a live status a step BEHIND the held one is refused: the lifecycle never goes back there, so
  *   the live row is the older reading, and no reading here can walk a badge backwards;
  * - a live status on the SAME step — 거래 중 against 거래 일시 중단, either way round — is taken:
  *   the value cannot say which came later, and the live row is the one the room keeps in event
- *   order, while the snapshot is a join frozen at the list's last fetch. Ranked by `statusRank`
- *   alone, a market resumed after the list was read kept its 거래 일시 중단 badge here for good.
+ *   order, while the snapshot is a join frozen at the list's last fetch.
  *
- * A status that would move the row to the OTHER list is refused outright. Membership is the
- * server's `positions.settled` flag (`positionListStatusFor`), and a settlement publishes its own `user:position` that `applyPositionEvent` answers with `refetch` PRECISELY
- * because the flag moved — so both lists are re-asked and the terminal case is already delivered,
- * with no help needed here. That is a recent guarantee rather than an old one: while the reducer
- * wrote the flag in place, this sentence was a promise nothing kept, and the refusal below was
- * resting on it. Taking it anyway would draw an open holding badged
- * 지급 완료 while 평가 금액 and 총 평가 금액 still value the row at the last traded price, which is
- * the fiction `positionValueCoin` and 정산 이력 are both documented never to print. It is the same
- * rule `wroteAnOrder` (market-live.ts) states from the other side: a terminal transition is the
- * REST answer's business, not an event's.
+ * Either way a status that would move the row to the OTHER list is refused outright. Membership is
+ * the server's `positions.settled` flag (`positionListStatusFor`), and a settlement publishes its
+ * own `user:position` that `applyPositionEvent` answers with `refetch` PRECISELY because the flag
+ * moved — so both lists are re-asked and the terminal case is already delivered. Taking it anyway
+ * would draw an open holding badged 지급 완료 while 참고 평가 and 총 참고 평가 still value the row
+ * at the last traded price, which is the fiction `positionValueCoin` and 정산 이력 are both
+ * documented never to print. It is the same rule `wroteAnOrder` (market-live.ts) states from the
+ * other side: a terminal transition is the REST answer's business, not an event's.
  */
-export function liveMarketStatus(held: MarketStatus, live: MarketStatus | undefined): MarketStatus {
+export function liveMarketStatus(
+  held: MarketStatus,
+  live: MarketStatus | undefined,
+  keys: { held: string | null; live: string | null } = { held: null, live: null },
+): MarketStatus {
   if (live === undefined || live === held) return held;
-  if (lifecycleStep(live) < lifecycleStep(held)) return held;
-  return positionListStatusFor(live) === positionListStatusFor(held) ? live : held;
+  if (positionListStatusFor(live) !== positionListStatusFor(held)) return held;
+  if (keys.held !== null && keys.live !== null) {
+    const later = statusSupersedes(
+      { status: live, statusEventId: keys.live },
+      { status: held, statusEventId: keys.held },
+    );
+    return later ? live : held;
+  }
+  return lifecycleStep(live) < lifecycleStep(held) ? held : live;
 }
 
+/** What `markToLiveMarket` reads off the live `['market', id]` row: a `Market` satisfies it. */
+export type LiveMarketReading = Pick<
+  LiveMarket,
+  'lastPrice' | 'lastFillAt' | 'tradeCount' | 'status' | 'statusEventId'
+>;
+
 /**
- * The position as the screen must read it: the market's LIVE price and status where the tab
- * holds the row, and the position's own snapshot otherwise.
+ * The position as the screen must read it: the market's LIVE price, its time and status where the
+ * tab holds the row, and the position's own snapshot otherwise.
  *
  * `Position.marketLastPrice` is a join taken when the list was fetched, and nothing refreshes it
  * on somebody else's trade — `applyPositionEvent` (market-live.ts) patches qty, cost and realised
  * PnL from a `user:position` event, which is only ever this account's own change. The `['market',
  * id]` cache is the thing a `market:tick` writes, so reading the mark price from there is what
- * makes 현재가 and 평가손익 move within the second PLAN 11.1 asks for — and what keeps the
- * probability in a market's header from disagreeing with the 내 포지션 card below it.
+ * makes 최근 체결가 and 미실현 손익 move within the second PLAN 11.1 asks for — and what keeps the
+ * price in a market's header from disagreeing with the 내 포지션 card below it.
  *
- * The same object is returned when nothing moved, so an untouched row keeps its reference.
+ * The price and its time are ONE pair, chosen by the market's fill count (#67, ADR-0142, closing
+ * A-M4-33): the live row's pair when its `tradeCount` is not behind the position's
+ * `marketTradeCount`, the position's otherwise. A price moves both ways, so its value cannot say
+ * which reading is later; the count only grows. So a live row read before the first fill
+ * (`lastPrice: null`) never covers a holding's real price with '체결 없음', a live row that missed a
+ * tick never walks the price back past the list's, and the time under the price is always that
+ * price's.
+ * `Position.version` could not stand in: it bumps on writes to the POSITION row, and somebody
+ * else's trade moves the market without touching it.
  *
- * `marketStatus` is the same story and was the half that was missing. A transition publishes
- * `market:status`, which moves `['market', id]` and nothing else — no `user:position` is
- * published for it — so 보유 포지션 kept announcing a closed market as 거래 중 until an
- * unrelated positions refetch. The detail screen already made this call once, passing the live
- * `status` to `MyPosition` rather than trusting the row's copy; this is MY doing the
- * same. Refetching the lists on a status event would be the wrong half: two private requests
- * per event per signed-in tab, to move one denormalized enum. WHICH of the two statuses wins is
- * `liveMarketStatus`'s decision, not a `??`: the live row may be the older of the two, and a
- * terminal one would badge a row the list it is in cannot value.
+ * The status is `liveMarketStatus`'s, on the two transition keys where both rows have one. A
+ * transition publishes `market:status`, which moves `['market', id]` and nothing else — no
+ * `user:position` — so 보유 계약 would otherwise keep announcing a closed market as 거래 중 until an
+ * unrelated positions refetch.
  *
- * `marketLastPrice` gets NO such guard, and the asymmetry is a decision rather than an oversight
- * — it is the first thing a reader of the two lines below will ask. Status can mostly be ordered
- * from the VALUE: `lifecycleStep` reads the position in `MARKET_STATUSES`, and every transition a
- * held market takes goes forward but OPEN ↔ PAUSED, which shares one step, so "newer" is
- * knowable without a counter everywhere else. A price is not — it moves both ways, and nothing in
- * either row says which reading is later. `Position.version` cannot stand in: it bumps on writes
- * to the POSITION row (`$onUpdate`, migration 0010), and somebody else's trade moves
- * `markets.last_price` without touching it. Ordering them would mean widening the wire (a market
- * counter on `positionSchema` plus the join in `listPositions`), which is A-M4-33 — recorded
- * beside the two other snapshots missing an ordering key rather than bolted on here.
- *
- * The live row is the fresher of the two in the ordinary case: MY joins every held
- * market's room, so `market:tick` patches it, while `marketLastPrice` is a join frozen when the
- * list was fetched. For it to be the OLDER one it has to have MISSED a move — `market:tick` is
- * no longer volatile (ADR-0116 10-6 replaced A-M4-7), but a socket misses what was sent while it
- * was disconnected; a first page load is
- * subscribed only after the SSR read (A-M4-8); past `REALTIME_ROOMS_MAX` some held markets are
- * in no room at all; and a failed refetch keeps the row it last answered.
- *
- * The second half is NOT rare, which a first draft of this comment got wrong: a positions answer
- * has to land after the miss for it to show, and one does on ANY of this account's own trades.
- * `user:position` is absent from `['positions', 'settled']`, so `applyPositionEvent` answers
- * `refetch` and the provider restarts the whole `['positions']` root — both lists, never
- * `['market', id]`. So the honest statement is "one missed tick plus any own trade", not a
- * compound failure. What bounds it is that any LATER tick repairs it (`setQueryData` even puts
- * an errored query back to `success` with the new price), and what the screen does about the
- * window is SAY so rather than reorder: see `marketsStale` (portfolio.tsx), the same notice the
- * home grid and the detail already render.
- *
- * Applied at RENDER time by both readers and never written back to `['positions', …]`:
- * `joinPositions` (market-live.ts) deliberately gives both fields to the REST answer, so a live
- * value stored in the row would be the one field with two owners.
+ * The same object is returned when nothing moved, so an untouched row keeps its reference. Applied
+ * at RENDER time by both readers and never written back to `['positions', …]`: `joinPositions`
+ * (market-live.ts) gives the market's fields to the REST answer, so a live value stored in the row
+ * would be the one field with two owners.
  */
 export function markToLiveMarket(
   position: Position,
-  live: { lastPrice?: number | null; status?: MarketStatus },
+  live: LiveMarketReading | undefined,
 ): Position {
-  // `undefined` is "no live row"; `null` is the live row saying 체결 없음, which it means.
-  const marketLastPrice = live.lastPrice === undefined ? position.marketLastPrice : live.lastPrice;
-  const marketStatus = liveMarketStatus(position.marketStatus, live.status);
-  if (marketLastPrice === position.marketLastPrice && marketStatus === position.marketStatus) {
+  if (live === undefined) return position;
+  const livePair = live.tradeCount >= position.marketTradeCount;
+  const marketLastPrice = livePair ? live.lastPrice : position.marketLastPrice;
+  const marketLastFillAt = livePair ? live.lastFillAt : position.marketLastFillAt;
+  const marketTradeCount = livePair ? live.tradeCount : position.marketTradeCount;
+  const marketStatus = liveMarketStatus(position.marketStatus, live.status, {
+    held: position.marketStatusEventId,
+    live: live.statusEventId,
+  });
+  if (
+    marketLastPrice === position.marketLastPrice &&
+    marketLastFillAt === position.marketLastFillAt &&
+    marketTradeCount === position.marketTradeCount &&
+    marketStatus === position.marketStatus
+  ) {
     return position;
   }
-  return { ...position, marketLastPrice, marketStatus };
+  return { ...position, marketLastPrice, marketLastFillAt, marketTradeCount, marketStatus };
+}
+
+/** YES before NO, within a market (F7). */
+const outcomeOrder = (row: Pick<Position, 'outcome'>): number => (row.outcome === 'YES' ? 0 : 1);
+
+const contractKey = (row: Pick<Position, 'marketId' | 'outcome'>): string =>
+  `${row.marketId.toLowerCase()}:${row.outcome}`;
+
+/**
+ * The open rows that are not in the settled list as well (#67, ADR-0142). A settlement's
+ * `user:position` reads both lists again (`applyPositionEvent` answers `refetch`), and when the
+ * settled answer lands first the same contract is in both for a moment: its 실현 손익 would be
+ * counted twice, and a paid-out holding valued at the last traded price. The settled list is the
+ * later reading — a row only ever moves from open to settled — so the open copy goes. Both the rows
+ * on screen and the totals are read off this.
+ */
+export function dedupeAcrossLists(
+  open: readonly Position[],
+  settled: readonly Position[] | undefined,
+): Position[] {
+  if (settled === undefined || settled.length === 0) return [...open];
+  const done = new Set(settled.map(contractKey));
+  return open.filter((row) => !done.has(contractKey(row)));
+}
+
+/** One market of MY's 보유 계약: its held contracts, YES then NO (F7). */
+export interface HeldGroup {
+  marketId: string;
+  /** The rows held at 1 contract or more, YES before NO: one or two. */
+  rows: readonly Position[];
+  /** The newest `updatedAt` among them: what the groups are ordered by. */
+  updatedAt: string;
+}
+
+/**
+ * MY's 보유 계약 (ADR-0135 F4·F7, #67): the open rows held at 1 contract or more, one group per
+ * market with YES before NO, the group with the most recent change first (its rows' newest
+ * `updatedAt`; a tie by market id). A row sold out of is not drawn but still counted — the totals
+ * take every open row (`portfolioTotals`, `realizedPnlAcross`), and this answers another type, so
+ * a group cannot be handed to a sum by mistake. A resting sell changes `updatedAt` too
+ * (order.service.ts), so its market moves to the top: the owner's '최근 변동 순', not held still
+ * while the screen is up (ADR-0142).
+ */
+export function heldGroups(markedAll: readonly Position[]): HeldGroup[] {
+  const groups = new Map<string, Position[]>();
+  for (const row of markedAll) {
+    if (row.qty < 1) continue;
+    const rows = groups.get(row.marketId);
+    if (rows === undefined) groups.set(row.marketId, [row]);
+    else rows.push(row);
+  }
+  const at = (iso: string) => Date.parse(iso);
+  return [...groups.entries()]
+    .map(([marketId, rows]) => {
+      const ordered = [...rows].sort((a, b) => outcomeOrder(a) - outcomeOrder(b));
+      const updatedAt = ordered.reduce(
+        (newest, row) => (at(row.updatedAt) > at(newest) ? row.updatedAt : newest),
+        ordered[0]?.updatedAt ?? '',
+      );
+      return { marketId, rows: ordered, updatedAt };
+    })
+    .sort((a, b) => {
+      const byTime = at(b.updatedAt) - at(a.updatedAt);
+      if (byTime !== 0) return byTime;
+      return a.marketId < b.marketId ? -1 : a.marketId > b.marketId ? 1 : 0;
+    });
 }
 
 /**
@@ -490,5 +580,39 @@ export function listState(query: { data: unknown; isPending: boolean }): ListSta
 export function combinedListState(...states: readonly ListState[]): ListState {
   if (states.includes('failed')) return 'failed';
   if (states.includes('pending')) return 'pending';
+  return 'ready';
+}
+
+/** What `realizedPnlState` reads of each position list (`useQuery`'s answer satisfies it). */
+export interface PositionListReading {
+  data: unknown;
+  isPending: boolean;
+  isFetching: boolean;
+  isRefetchError: boolean;
+  dataUpdatedAt: number;
+}
+
+/**
+ * The reading of 총 실현 손익 (#67, ADR-0142), which sums BOTH position lists
+ * (`realizedPnlAcross`) — `combinedListState` of the two, and two cases it cannot see because
+ * each list still HAS data:
+ * - the settled list behind the open one: a settlement's `user:position` reads both again at once
+ *   (`applyPositionEvent` answers `refetch`), and when the open answer lands first the settled
+ *   contract has left 보유 계약 while 정산 이력 is the old list — the row is in NEITHER, and the
+ *   sum drops its 실현 손익 until the settled answer lands. `dedupeAcrossLists` covers the other
+ *   order. So while the settled list is fetching and older than the open one, the figure waits;
+ *   a focus refetch of both shows the skeleton for that moment too, never a short sum.
+ * - a refetch that failed on either list keeps its old rows, and a settlement that one list saw
+ *   and the other did not leaves the row in neither or both. The figure is 'failed' then — a dash
+ *   with 다시 시도 — rather than a sum nothing says is wrong.
+ */
+export function realizedPnlState(
+  open: PositionListReading,
+  settled: PositionListReading,
+): ListState {
+  const both = combinedListState(listState(open), listState(settled));
+  if (both !== 'ready') return both;
+  if (open.isRefetchError || settled.isRefetchError) return 'failed';
+  if (settled.isFetching && open.dataUpdatedAt > settled.dataUpdatedAt) return 'pending';
   return 'ready';
 }

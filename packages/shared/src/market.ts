@@ -581,6 +581,25 @@ export const positionSchema = z
     marketStatus: marketStatusSchema,
     /** The market's `lastPrice`: null until its first fill. */
     marketLastPrice: priceSchema.nullable(),
+    /**
+     * The market's `lastFillAt` (#67, ADR-0142; ADR-0116 결정 16 left it to #67): the server time
+     * of the fill `marketLastPrice` is, which a holding row shows as '최근 체결 <절대 시각>' (F3).
+     * `marketLastPrice` and `marketLastFillAt` are null together (DB CHECK
+     * `markets_last_fill_at_check`). This and the two below are public market values.
+     */
+    marketLastFillAt: z.iso.datetime().nullable(),
+    /**
+     * The market's `tradeCount` (`Market.tradeCount`, `applyTick`'s key): what orders the
+     * price-and-time pair against a live market row (A-M4-33, ADR-0142) — a live row read before
+     * the first fill never covers a holding's real price with '체결 없음'.
+     */
+    marketTradeCount: countSchema,
+    /**
+     * The market's `statusEventId` (`Market.statusEventId`, ADR-0112 left the position's to #67):
+     * the ordering key a holding's status is compared on against a live row (`statusSupersedes`).
+     * Null only for a row written outside the transition paths (a test factory).
+     */
+    marketStatusEventId: z.string().nullable(),
     /** The market's result type (YES·NO·VOID); null before a judgement and when cancelled. */
     resolvedResult: marketResultSchema.nullable(),
     outcome: outcomeSchema,

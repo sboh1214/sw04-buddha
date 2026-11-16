@@ -352,6 +352,14 @@ test.describe('정산', () => {
         await expect(page.getByTestId('market-detail-result')).toHaveText(
           result === 'VOID' ? copy.marketResultVoid : result === 'YES' ? copy.yes : copy.no,
         );
+        if (result === 'YES') {
+          // 보유 계약 (#67, ADR-0142; F4): a paid-out market's holding has left MY's list — once.
+          await yesPage.goto('/my/positions');
+          await expect(yesPage.getByTestId('portfolio-positions')).toContainText(
+            copy.portfolioPositionsEmpty,
+          );
+          await expect(yesPage.getByTestId(`portfolio-market-${market.id}`)).toHaveCount(0);
+        }
       } finally {
         await noContext.close();
         await yesContext.close();

@@ -280,11 +280,12 @@ export function MarketDetail({
         {/* Both readings follow the LIVE row rather than the positions list's own copy of it:
             `status` says which of the two position lists this account's rows moved to — a
             settled market's holder is in 정산 이력, and asking the open list would tell them
-            they never participated — and `lastPrice` is what 현재가 and 평가손익 are marked
-            to, so the card cannot disagree with the price above it. `undefined` while the row
-            is unknown, which is each prop's documented default; the page seeds the cache
-            before the first client render, so that is a fallback and not the path. */}
-        <MyPosition marketId={marketId} status={data?.status} lastPrice={data?.lastPrice} />
+            they never participated — and `live` is what 최근 체결가 and 미실현 손익 are marked
+            to (price, time and status, each on its key, #67), so the card cannot disagree with
+            the price above it. `undefined` while the row is unknown, which is each prop's
+            documented default; the page seeds the cache before the first client render, so that
+            is a fallback and not the path. */}
+        <MyPosition marketId={marketId} status={data?.status} live={data} />
         {/* 내 대기 주문 (#123, ADR-0141): this market's live orders of the account, the rows MY
             draws with 주문 취소 and '취소 요청 중'. */}
         <MarketMyOpenOrders marketId={marketId} />

@@ -25,7 +25,13 @@ import {
   type Order,
   type Position,
 } from './api';
-import { MY_ORDERS_LIVE_KEY, MY_ORDER_DETAIL_KEY, marketBookKey, myOrderKey } from './market-keys';
+import {
+  MY_ORDERS_LIVE_KEY,
+  MY_ORDER_DETAIL_KEY,
+  marketBookKey,
+  myOrderKey,
+  sellableKey,
+} from './market-keys';
 
 /**
  * The reducers every realtime writer shares (PLAN 8, 11.5), in two contracts.
@@ -515,6 +521,42 @@ export function wroteAnOrder(event: UserPositionEvent): boolean {
 }
 
 /**
+ * Whether this event puts a market back among the ones MY marks to a live price (#67, ADR-0142):
+ * the open list holds the event's contract at 0, holds no contract of that market at 1 or more,
+ * and the event takes it to 1 or more. The caller then reads `['market', id]` again
+ * (`restartQueries`).
+ *
+ * MY joins and reads only the markets held at 1 or more (`useHoldings`, app/my/portfolio.tsx), so
+ * a sold-out market's room is left and its entry keeps the last price MY saw. A buy back from
+ * another tab publishes its `market:tick` to a room this tab is no longer in, the event here
+ * carries no price, and the entry — written by the last tick, so inside `staleTime` for 30 s — is
+ * taken as fresh by the observer that mounts again: the holding would be valued at the price from
+ * before its own fill until some later tick. Marked stale here, that mount reads it once.
+ *
+ * `false` for everything a request would buy nothing for:
+ *  - a market already held at 1 or more (either contract): MY is in its room, the tick arrives;
+ *  - a row the list does not hold, or a list with no answer: `applyPositionEvent` reads the list
+ *    again, and that answer carries the market's price with its fill count
+ *    (`markToLiveMarket` takes the later pair);
+ *  - a late or duplicate delivery (`version`), a sell, and a settlement.
+ */
+export function positionReopensMarket(
+  held: Position[] | undefined,
+  event: UserPositionEvent,
+): boolean {
+  if (held === undefined || event.settled || event.qty < 1) return false;
+  const key = positionRowKey(event);
+  let current: Position | undefined;
+  for (const row of held) {
+    if (row.marketId !== event.marketId) continue;
+    if (row.qty >= 1) return false;
+    if (positionRowKey(row) === key) current = row;
+  }
+  if (current === undefined || current.settled) return false;
+  return supersedes(event.version, current.version);
+}
+
+/**
  * The positions list join — `joinMarket`'s counterpart for `['positions', status]`, registered
  * as that key's `structuralSharing` in query-client.ts.
  *
@@ -531,11 +573,11 @@ export function wroteAnOrder(event: UserPositionEvent): boolean {
  * a `user:position` event writes are kept from the held row, and only while its `version` is
  * strictly newer. Monotone, idempotent and order-independent, exactly like `joinMarket`.
  *
- * It is account-BLIND — no key carries a user id (PLAN 11.5) and the pair above is all it
- * matches on — so it is correct only because `SessionCacheGuard` answers an account change with
- * `resetQueries()`, which puts every positions query back to `data === undefined` and makes the
- * next answer win whole. Weakening that guard to anything lazier would graft one account's qty
- * and version onto another's row.
+ * The pair above is all it matches on. Since #67 each list is keyed by the account it is read
+ * for (`positionsKey`, ADR-0142), so one entry only ever holds one account's rows; before that it
+ * was correct only because `SessionCacheGuard` answers an account change with `resetQueries()`,
+ * which still puts every positions query back to `data === undefined` and makes the next answer
+ * win whole.
  */
 export function joinPositions(held: Position[] | undefined, incoming: Position[]): Position[] {
   if (held === undefined) return incoming;
@@ -694,6 +736,116 @@ export class MarketWindow {
   clear(): void {
     this.held.clear();
   }
+}
+
+/**
+ * The 매도 가능액 read-again window for `market:book` (#67, ADR-0142): every market whose sellable a
+ * book change may have moved waits here in the order it was signalled, and one is read every
+ * `gapMs` — whatever the number of held markets, at most 60 / gap reads a minute. `MarketWindow`'s
+ * every-market round would cost a read per held market per round: ten bot markets at 10 s are 60 a
+ * minute, past the tab's 50 (ADR-0138). The price is a delay of up to gap × N; the order panel
+ * reads its own quote again, so no Coin is ever decided on it (ADR-0140 결정 2-13).
+ *
+ * A market read again by another path since it was signalled — `user:position`, `market:status`,
+ * an own order's end, a focus or a reconnect — is skipped (`readSince`, or `drop`), unless a read
+ * was already in flight at the signal (`mark`'s `inFlight`): that answer is older than the change
+ * however late it lands. Clock-free like
+ * `Throttle`: the caller owns the clock, the timer, and the pause while the tab is hidden.
+ */
+export class SellableRotation {
+  private readonly gapMs: number;
+  /**
+   * Lower-cased market id → when it was last signalled, and whether a read of it was in flight
+   * then. Its place in the line is its first signal's (a Map keeps a key where it was set first);
+   * the time is the last signal's, so a read between two signals does not skip the second
+   * (`readSince`).
+   */
+  private readonly waiting = new Map<string, { at: number; inFlight: boolean }>();
+  private lastReadAt: number | undefined;
+
+  constructor(gapMs: number) {
+    this.gapMs = gapMs;
+  }
+
+  /**
+   * Keeps `marketId` for a read: its place in the line is its first signal's, the time it is
+   * compared on (`readSince`) its last signal's. `inFlight`: a read of that market's sellable was
+   * on its way when the signal came. Its answer lands AFTER the signal but was taken BEFORE the
+   * change, so an answer's time cannot clear this mark — the market is read in its turn (at most
+   * one read more), as `invalidateOwn` reads the account's orders once more after a GET that left
+   * before the change (#123, ADR-0141 결정 10). Only the last signal's flag counts: a read that
+   * lands after a signal sent with none in flight left after it, and covers the earlier changes.
+   */
+  mark(marketId: string, now: number, inFlight = false): void {
+    this.waiting.set(marketId.toLowerCase(), { at: now, inFlight });
+  }
+
+  /** Forgets `marketId`: it was read again by another path. */
+  drop(marketId: string): void {
+    this.waiting.delete(marketId.toLowerCase());
+  }
+
+  /** Forgets every market (a reconnect read them all; a socket that is gone). */
+  clear(): void {
+    this.waiting.clear();
+  }
+
+  get size(): number {
+    return this.waiting.size;
+  }
+
+  /**
+   * The market to read now — the longest waiting one not read since its signal (`readSince`) — or
+   * how long until one may be read, or null when none waits. A market it returns is taken out.
+   */
+  next(
+    now: number,
+    readSince: (marketId: string, markedAt: number) => boolean = () => false,
+  ): { marketId: string } | { wait: number } | null {
+    for (const [id, mark] of this.waiting) {
+      if (!mark.inFlight && readSince(id, mark.at)) this.waiting.delete(id);
+    }
+    if (this.waiting.size === 0) return null;
+    if (this.lastReadAt !== undefined && now - this.lastReadAt < this.gapMs) {
+      return { wait: this.gapMs - (now - this.lastReadAt) };
+    }
+    const [first] = this.waiting.keys();
+    if (first === undefined) return null;
+    this.waiting.delete(first);
+    this.lastReadAt = now;
+    return { marketId: first };
+  }
+}
+
+/**
+ * Whether a `market:book` in `marketId` puts the account's 매도 가능액 there in the read-again
+ * window (#67, ADR-0142): the tab holds the account's sellable of that market with a contract it
+ * holds — unlocked, which a book change can price differently, or locked in resting sells, which
+ * a book change can UNLOCK. An account restriction's approval and an admin grant cancel the
+ * account's resting orders and publish `market:book` alone (no `market:status`, no `user:`
+ * event), so a holding all in resting sells read again only on its own change would keep its
+ * 매도 잠금 after those sells were gone. A visitor and a member who holds nothing there (the
+ * detail's sellable says 0 for both) add no request (R5); the window's gap caps the reads a
+ * minute whatever the number of markets in it.
+ *
+ * A FIRST read still on its way (the entry exists, is fetching, and holds no answer) counts too:
+ * whether the account holds anything there is not known yet, and that read left before this change,
+ * so its answer would be drawn as current with no later signal behind it. The caller marks it
+ * `inFlight` (its `fetchStatus` is 'fetching'), so the window reads it once more in its turn; if the
+ * answer says 0 held, that one read is the whole cost, and the gap still bounds it.
+ */
+export function bookRestartsSellable(
+  client: QueryClient,
+  marketId: string,
+  accountId: string | undefined,
+): boolean {
+  if (accountId === undefined) return false;
+  const state = client.getQueryState<{ contracts?: readonly { qty: number }[] }>(
+    sellableKey(marketId, accountId),
+  );
+  if (state === undefined) return false;
+  if (state.data === undefined) return state.fetchStatus === 'fetching';
+  return state.data.contracts?.some((contract) => contract.qty > 0) ?? false;
 }
 
 /**

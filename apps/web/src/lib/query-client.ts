@@ -5,6 +5,7 @@ import {
   QueryClient,
   hashKey,
   isServer,
+  partialMatchKey,
   replaceEqualDeep,
 } from '@tanstack/react-query';
 import { type Market, type Me, type Order, type Position, isApiError } from './api';
@@ -47,6 +48,34 @@ export function afterRestricted(client: QueryClient, error: unknown): void {
   void client.invalidateQueries({ queryKey: MY_ACTIONS_KEY });
 }
 
+/**
+ * The query-key roots a reconnecting socket will re-read (`resnapshot()`, realtime-provider.tsx),
+ * per client, for as long as that re-read is owed (#67, ADR-0142 결정 2-21).
+ *
+ * A reconnect read every such observer TWICE: the browser's `online` refetched each one past its
+ * `staleTime` (`refetchOnReconnect`), and the socket's `connect` then restarted all of them. The
+ * first answer left before the tab was back in its rooms, so it could miss what was published in
+ * between, and the second always replaced it — a request spent for nothing, twice the market rows
+ * of a full MY screen in one minute. So while a resnapshot is owed, `online` leaves those keys to
+ * it (`refetchOnReconnect` in `makeQueryClient`); every other key, and every key when nothing is
+ * owed, is read on `online` as before. A first read paused while offline still resumes there:
+ * that is the retryer's `continue()`, not the reconnect refetch.
+ *
+ * Set by the provider when a connected socket drops and will reconnect, and when a socket is
+ * rebuilt for another account; cleared right after the `connect` that re-read them, and with the
+ * socket. A WeakMap so a server render's client never holds an entry past itself.
+ */
+const resnapshotOwed = new WeakMap<QueryClient, readonly (readonly unknown[])[]>();
+
+/** Records the roots `client`'s next socket `connect` will re-read; `null` says none are owed. */
+export function setResnapshotOwed(
+  client: QueryClient,
+  keys: readonly (readonly unknown[])[] | null,
+): void {
+  if (keys === null) resnapshotOwed.delete(client);
+  else resnapshotOwed.set(client, keys);
+}
+
 function makeQueryClient() {
   const client: QueryClient = new QueryClient({
     // Tells a 더 보기's failure from every other the moment it lands, while the query still says
@@ -62,6 +91,13 @@ function makeQueryClient() {
         // Do not refetch immediately on mount; the realtime socket patches the caches with
         // setQueryData instead (PLAN 11.5: an event must not become a request).
         staleTime: 30 * 1000,
+        // On, as TanStack's default, except for a key a resnapshot is owed on (`setResnapshotOwed`):
+        // the socket's `connect` re-reads those, and an `online` read before it is thrown away. A
+        // hook's own `refetchOnReconnect` still wins.
+        refetchOnReconnect: (query) =>
+          !(
+            resnapshotOwed.get(client)?.some((key) => partialMatchKey(query.queryKey, key)) ?? false
+          ),
         retry: (failureCount, error) => {
           // 4xx never fixes itself by retrying (401 in particular must fail fast).
           if (isApiError(error) && error.status < 500) return false;
@@ -73,8 +109,9 @@ function makeQueryClient() {
   // Ordering is enforced on EVERY write to a market, not only in the socket handler: a value
   // written by `setQueryData` and a value answered by a queryFn both route through
   // `replaceData`, which hands a function-valued `structuralSharing` both sides. The
-  // race this fixes has nothing to do with sockets — refetchOnWindowFocus and
-  // refetchOnReconnect are on, so a refetch that started before a trade and lands after it
+  // race this fixes has nothing to do with sockets — refetchOnWindowFocus is on, and so is
+  // refetchOnReconnect (save for the snapshot keys while a resnapshot is owed, which the socket's
+  // `connect` restarts instead), so a refetch that started before a trade and lands after it
   // would roll the probability backwards on its own.
   //
   // Query defaults match by key PREFIX, so `['market']` covers `['market', <any id>]` and

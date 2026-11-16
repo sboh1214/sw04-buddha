@@ -342,7 +342,8 @@ export const OWNER_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
     reason: '본인의 결제 한 건(보존한 결제 코드, D9): 다른 계정의 결제는 404',
   },
   'GET /me/positions': {
-    reason: '본인 보유 계약과 손익(N04 §2·§3)',
+    reason:
+      '본인 보유 계약과 손익(N04 §2·§3). 시장가격과 그 체결 시각·체결 수·상태 키(공개 값, #67, ADR-0142)',
   },
   'GET /me/markets/:id/sellable': {
     reason:
