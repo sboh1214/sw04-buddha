@@ -80,7 +80,7 @@ export const PUBLIC_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
   },
   'GET /markets/:id/ticks': {
     reason:
-      '시장가격 흐름(N02 §5 차트; #121, ADR-0116): 체결마다의 YES 기준 가격과 서버 시각(개장 설정·판정은 점이 아니다). 체결한 계정·주문은 싣지 않는다',
+      '시장가격 흐름(N02 §5 차트; #121, ADR-0116): 체결마다의 YES 기준 가격과 서버 시각(개장 설정·판정은 점이 아니다). 체결한 계정·주문은 싣지 않는다. 마감 뒤 `to`를 주지 않은 창의 끝은 실제 거래 종료 시각(거래 마감 시각, 조기 마감은 공개 판정 기록의 일시 중단 종료 시각; #64, ADR-0139)이고, `asOf`는 답을 읽은 서버 시각이다(닫힌 창은 `asOf > to`). 조기 마감의 사유·승인자는 싣지 않는다',
   },
   'GET /markets/:id/related': {
     reason:

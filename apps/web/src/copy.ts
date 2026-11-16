@@ -2708,10 +2708,19 @@ export const copy = {
   chartSummaryHigh: '최고',
   chartSummaryLow: '최저',
   chartSummaryCurrent: '현재',
+  // 거래가 끝난 시장(마감 이후 모든 상태)의 요약은 '현재'가 아니라 '마지막'으로 끝난다(#64, ADR-0139).
+  chartSummaryLast: '마지막',
   chartTableCaption: '시각별 시장가격',
   chartTime: '시각',
   chartValue: '시장가격',
   probabilityChange: '시장가격 변화',
+  // 상세 헤더(#64, ADR-0139). marketPriceName은 YES·NO 아래 셋째 줄 '시장가격 · 최근 체결 <시각>'의
+  // 이름이고, 표의 열 chartValue와 같은 낱말이지만 자리가 달라 키를 나눈다(ADR-0136 결정 7과 같은 까닭).
+  marketPriceName: '시장가격',
+  // 거래 중 시장의 배지 '24시간 ▲+2%p'의 기간(ADR-0135 결정 1의 5). 화살표와 숫자는 호출 쪽이 붙인다.
+  marketDelta24h: '24시간',
+  // 상세 차트 아래 한 줄, 모든 공개 상태(ADR-0135 결정 1의 3, A4). 카드에는 두지 않는다.
+  marketPriceNotice: '시장가격은 실제 발생 확률의 보장이 아닙니다.',
 
   // 포지션 한 줄 (상세의 내 포지션과 MY 목록이 같이 쓴다)
   positionQty: '보유 수량',

@@ -1,5 +1,6 @@
 import { type Locator, type Page } from '@playwright/test';
 import { copy } from '../src/copy';
+import { formatKst } from '../src/lib/datetime';
 import {
   accountIdOf,
   adminAccount,
@@ -27,10 +28,12 @@ import {
  * its price reads 체결 없음, its chart is empty (N02 §5) and its order area says 거래 준비 중 — the
  * desktop column, and below md the sheet its YES 매수 · NO 매수 bar opens for a member, a sign-in
  * prompt in that sheet for a signed-out visitor (#122, ADR-0067). A market `closeMarket` closes
- * has the helper members' one pair, traded just before the close so it stays CLOSED (#20).
- * What a real fill moves — the live price, the chart's line and its keyboard readout — comes back
- * with the order panel and its screen tests (#189); the priced header alone (YES, its move's
- * badge, the NO complement) is drawn here from the API's answers with a price put in.
+ * has the helper members' one pair, traded just before the close so it stays CLOSED (#20); its
+ * detail draws that one fill as a dot and a dotted hold to the end of trading, opening on 전체,
+ * with no 24시간 badge (#64, ADR-0139). What a live fill moves — the live price, the chart's line
+ * and its keyboard readout — comes back with the order panel and its screen tests (#189); the
+ * priced header alone (YES with its 24시간 badge, the NO complement, '시장가격 · 최근 체결 <시각>')
+ * is drawn here from the API's answer with a price put in.
  *
  * The frame itself (#122): N02 §4's order at each width, the two columns from md up, the mobile
  * 호가·거래 내역 switch, the 매수 bar on the tab bar and its sheet, the 준비 중 slots (내 거래, 내
@@ -145,6 +148,9 @@ test.describe('시장 상세', () => {
      */
     expect(html).toContain('data-testid="probability-chart"');
     expect(html).toContain('data-testid="probability-chart-empty"');
+    // The one line under the chart, on every public status and in the first paint (ADR-0135
+    // 결정 1의 3, ADR-0139).
+    expect(html).toContain(copy.marketPriceNotice);
 
     // 주문 영역 of an open market: 거래 준비 중 where the direct-AMM trade panel was (owner
     // decision #125 (a)), and nothing of that panel left to quote or trade with.
@@ -314,34 +320,38 @@ test.describe('시장 상세', () => {
     await page.goto(`/markets/${market.slug}`);
     await expect(page.getByTestId('watch-button')).toBeVisible();
 
-    // The header says 체결 없음 and nothing else — no 'NO —' row like the card's, no NO reading
-    // at all (#122): the NO complement is 100 − YES of a fill there is not. Once a fill exists
-    // the reading appears beside YES (the next test).
+    // The header says 체결 없음 once and names it — no 'NO —' row like the card's, no NO reading
+    // at all (#122): the NO complement is 100 − YES of a fill there is not, and with no price
+    // there is no time and no badge (#64, ADR-0139). Once a fill exists the reading appears
+    // beside YES (the next test).
     const reading = page.getByTestId('market-probability');
-    await expect(reading).toHaveText(copy.noFills);
+    await expect(reading).toHaveText(`${copy.noFills}${copy.marketPriceName}`);
     await expect(reading.getByTestId('market-probability-value')).toHaveText(copy.noFills);
+    await expect(reading.getByTestId('market-detail-price-meta')).toHaveText(copy.marketPriceName);
+    await expect(page.getByTestId('market-detail-last-fill')).toHaveCount(0);
+    await expect(page.getByTestId('market-probability-delta')).toHaveCount(0);
     await expect(page.getByTestId('market-probability-no')).toHaveCount(0);
     await expect(page.getByTestId('market-summary')).not.toContainText(`${copy.no} `);
   });
 
-  test('상세 머리의 가격: 체결이 있으면 YES 옆에 그 변화 배지, 아래 줄에 NO 보완값이 누를 수 없는 글자로 있고, 배지가 사라져도 NO는 그 자리다', async ({
+  test('상세 머리의 가격: 체결이 있으면 YES 옆에 24시간 배지, 아래 줄에 NO 보완값이 누를 수 없는 글자로, 그 아래에 시장가격과 최근 체결 시각이 있고, 배지는 사라지지 않는다', async ({
     admin,
     page,
   }) => {
     /*
      * Real fills exist since the order intake (orders.spec.ts makes them for #121's figures), but
      * this test is about the header's layout, so the reading is pinned rather than traded: the
-     * browser's own reads of this market are answered with the API's real answers and a price put
-     * in — the row is at 63% after two trades, and its 1D series has the last move, 61 → 63. The
-     * server's HTML stays the real, unpriced one. The price arrives the way an admin's edit reaches
-     * an open detail: the edit — a tag added, which an open market takes directly (#80: its rule
-     * version items change by a supplement alone) — publishes `market:status`, and the reader
-     * refetches the row and every range of its series (realtime-provider.tsx) — the two requests
-     * these routes answer. `joinMarket` and `joinSeries` take both, since two trades supersede
-     * none.
+     * browser's own reads of this market's row are answered with the API's real answer and a
+     * price put in — 63% after two trades, 61% 24 hours before (the badge's baseline, ADR-0135
+     * 결정 1의 5). The server's HTML stays the real, unpriced one. The price arrives the way an
+     * admin's edit reaches an open detail: the edit — a tag added, which an open market takes
+     * directly (#80: its rule version items change by a supplement alone) — publishes
+     * `market:status`, and the reader refetches the row (realtime-provider.tsx), which this route
+     * answers. `joinMarket` takes it, since two trades supersede none.
      */
     const market = await createOpenMarket(admin);
     const rowPath = `/api/v1/markets/${market.id}`;
+    const lastFillAt = new Date(Date.now() - 60_000).toISOString();
     await page.route(
       (url) => url.pathname === rowPath,
       async (route) => {
@@ -355,32 +365,9 @@ test.describe('시장 상세', () => {
             data: {
               ...body.data,
               lastPrice: 63,
-              lastFillAt: new Date().toISOString(),
+              lastFillAt,
+              lastPrice24hAgo: 61,
               tradeCount: 2,
-            },
-          },
-        });
-      },
-    );
-    await page.route(
-      (url) => url.pathname === `${rowPath}/ticks`,
-      async (route) => {
-        const response = await route.fetch();
-        const body = (await response.json()) as { data: { to: string } };
-        const to = Date.parse(body.data.to);
-        const fill = (agoMs: number, pYesBp: number) => ({
-          ts: new Date(to - agoMs).toISOString(),
-          pYesBp,
-          trigger: 'trade',
-        });
-        await route.fulfill({
-          response,
-          json: {
-            ...body,
-            data: {
-              ...body.data,
-              tradeCount: 2,
-              points: [fill(120_000, 6100), fill(60_000, 6300)],
             },
           },
         });
@@ -402,33 +389,45 @@ test.describe('시장 상세', () => {
     const yes = reading.getByTestId('market-probability-value');
     const badge = reading.getByTestId('market-probability-delta');
     const no = reading.getByTestId('market-probability-no');
+    const meta = reading.getByTestId('market-detail-price-meta');
     // YES and its display complement together (ADR-0061 decision 1, item 2). The rolling figure's
     // digit stacks are `aria-hidden`; its words are the visually hidden label beside them.
     await expect(yes.getByText(`${copy.yes} 63%`, { exact: true })).toHaveCount(1);
     await expect(no).toHaveText(`${copy.no} 37%`);
-    // The badge lives five seconds (PLAN 11.4), so it is read as soon as it is up.
+    // '24시간 ▲+2%p' (63 − 61): the period, then the arrow on the number; its name for a screen
+    // reader is 시장가격 변화.
     await expect(badge).toBeVisible();
-    await expect(badge).toContainText('+2%p');
+    await expect(badge).toContainText(`${copy.marketDelta24h} ▲+2%p`);
+    await expect(badge).toContainText(copy.probabilityChange);
+    // The third line: what the figure is and when it was set, in Korean time as this browser's
+    // is, on one line with no 판정 기준 시간대 under it (owner answer 64-Q1).
+    await expect(meta).toHaveText(
+      `${copy.marketPriceName} · ${copy.marketLastFillAt} ${formatKst(lastFillAt)}`,
+    );
 
     // The badge is YES's move, so it stands right after the YES figure on the YES line, and NO has
     // the line under it (owner decision 2026-10-17, 'NO를 아래 줄로'): a badge after 'NO 37%' reads
-    // as NO's own move, which went the other way, and NO beside the badge moved over each time it
-    // came and went.
+    // as NO's own move, which went the other way. The name and time come last.
     const order = await reading.evaluate((root) =>
-      Array.from(root.querySelectorAll('[data-testid^="market-probability-"]')).map((element) =>
-        element.getAttribute('data-testid'),
-      ),
+      Array.from(
+        root.querySelectorAll(
+          '[data-testid^="market-probability-"], [data-testid^="market-detail-"]',
+        ),
+      ).map((element) => element.getAttribute('data-testid')),
     );
     expect(order).toEqual([
       'market-probability-value',
       'market-probability-delta',
       'market-probability-no',
+      'market-detail-price-meta',
+      'market-detail-last-fill',
     ]);
-    const [readingBox, yesBox, badgeBox, noBox] = await Promise.all([
+    const [readingBox, yesBox, badgeBox, noBox, metaBox] = await Promise.all([
       boxOf(page, 'market-probability'),
       boxOf(page, 'market-probability-value'),
       boxOf(page, 'market-probability-delta'),
       boxOf(page, 'market-probability-no'),
+      boxOf(page, 'market-detail-price-meta'),
     ]);
     // Line 1: the badge after the figure, level with it.
     expect(badgeBox.x).toBeGreaterThanOrEqual(yesBox.x + yesBox.width);
@@ -439,6 +438,10 @@ test.describe('시장 상세', () => {
       Math.max(yesBox.y + yesBox.height, badgeBox.y + badgeBox.height),
     );
     expect(Math.abs(noBox.x - readingBox.x)).toBeLessThanOrEqual(1);
+    // Line 3: under NO, from the same edge, and inside the reading's box at this width.
+    expect(metaBox.y).toBeGreaterThanOrEqual(noBox.y + noBox.height);
+    expect(Math.abs(metaBox.x - readingBox.x)).toBeLessThanOrEqual(1);
+    expect(metaBox.x + metaBox.width).toBeLessThanOrEqual(readingBox.x + readingBox.width + 0.5);
 
     // A reading, not a price to press (ADR-0061 decision 1, item 2; the card's look, ADR-0062):
     // no button or link by that name, and plain text — no outline, ring, fill or pointer.
@@ -469,9 +472,10 @@ test.describe('시장 상세', () => {
       cursor: 'auto',
     });
 
-    // Five seconds on (PLAN 11.4) the badge goes, and NO has not moved: nothing it does reaches
-    // the line NO stands on.
-    await expect(badge).toHaveCount(0, { timeout: 10_000 });
+    // Past the five seconds PLAN 11.4's badge lived, it is still there and NO has not moved: the
+    // 24-hour move stays while the row says so (ADR-0139).
+    await page.waitForTimeout(5_500);
+    await expect(badge).toBeVisible();
     await expect(no).toHaveText(`${copy.no} 37%`);
     const noAfter = await boxOf(page, 'market-probability-no');
     expect(Math.abs(noAfter.x - noBox.x)).toBeLessThanOrEqual(0.5);
@@ -521,13 +525,21 @@ test.describe('시장 상세', () => {
     await page.goto(`/markets/${market.slug}`);
 
     const chart = page.getByTestId('probability-chart');
-    // 1일 / 1주 / 전체 as real radios inside a named group, not three styled divs.
-    await expect(page.getByTestId('chart-range').getByRole('radio')).toHaveCount(3);
+    // 1일 / 1주 / 전체 as real radios inside a named group, not three styled divs; an open market
+    // opens on 1일 (ADR-0135 C1·C4).
+    const ranges = page.getByTestId('chart-range').getByRole('radio');
+    await expect(ranges).toHaveCount(3);
+    await expect(ranges.first()).toBeChecked();
     // Fills only (N02 §5): a market nobody has traded draws no line, not a flat one at the
-    // opening setting. The named line and its keyboard readout need a fill (#189).
+    // opening setting — no line, no dot, no dotted hold. The named line and its keyboard readout
+    // need a fill (#189).
     await expect(chart.getByTestId('probability-chart-empty')).toHaveText(copy.noFills);
     await expect(chart.getByTestId('probability-chart-line')).toHaveCount(0);
+    await expect(chart.getByTestId('probability-chart-dot')).toHaveCount(0);
+    await expect(chart.getByTestId('probability-chart-dotted')).toHaveCount(0);
     await expect(page.getByTestId('chart-readout')).toHaveText('');
+    // The notice under the chart holds with no fill too (ADR-0135 결정 1의 3).
+    await expect(page.getByTestId('market-price-notice')).toHaveText(copy.marketPriceNotice);
   });
 });
 
@@ -1041,13 +1053,15 @@ async function expectReadingOrder(page: Page, headings: readonly string[]): Prom
 /**
  * Inside 요약, at either width (ADR-0067 decision 2, owner decision 2026-10-17 from the screenshots):
  * the first row — the category trail first, 관심 등록 at its end — then the question under it, then
- * the price, then 거래량. Before #122 the question was above the first row.
+ * the price with its '시장가격' line (#64, ADR-0139), then 거래량. Before #122 the question was above
+ * the first row.
  */
 async function expectSummaryOrder(page: Page): Promise<void> {
   await expectInOrder(page, [
     'market-detail-category',
     'market-detail-question',
     'market-probability',
+    'market-detail-price-meta',
     'market-detail-volume',
   ]);
   await expectInOrder(page, ['watch-button', 'market-detail-question']);
@@ -1189,6 +1203,43 @@ test.describe('시장 상세 · 상태와 로그인', () => {
     ]) {
       await expect(page.getByTestId(slot), slot).toHaveCount(1);
     }
+    // The price place after the close (#64, ADR-0135 C5·C4): the last price and its fill's time
+    // stay, with no 24시간 badge; the chart opens on 전체 and ends at the end of trading — the
+    // helper's one fill a dot and a dotted hold, no solid line — and the notice is under it.
+    await expect(page.getByTestId('market-probability-value')).not.toHaveText(copy.noFills);
+    await expect(page.getByTestId('market-detail-last-fill')).toContainText(copy.marketLastFillAt);
+    await expect(page.getByTestId('market-probability-delta')).toHaveCount(0);
+    await expect(
+      page.getByTestId('chart-range').getByRole('radio', { name: copy.chartRangeAll }),
+    ).toBeChecked();
+    const chart = page.getByTestId('probability-chart');
+    await expect(chart.getByTestId('probability-chart-line')).toHaveCount(0);
+    await expect(chart.getByTestId('probability-chart-dot')).toHaveCount(1);
+    await expect(chart.getByTestId('probability-chart-dotted')).toHaveCount(1);
+    // The summary ends on '마지막' once trading has ended (ADR-0139); the value is not asserted.
+    await expect(chart.getByTestId('probability-chart-svg')).toHaveAttribute(
+      'aria-label',
+      new RegExp(`${copy.chartSummaryLast} \\d+%$`),
+    );
+    // The dot and the hold clear of the y-axis values (ADR-0139): the one fill sits at the
+    // window's right edge, at the level of the middle value — the price itself — so a value drawn
+    // over the plot would cover both. The plot ends before every value starts, and the dot's
+    // centre is on the plot.
+    const plot = await boxIn(chart, 'probability-chart-svg');
+    const dot = await boxIn(chart, 'probability-chart-dot');
+    const values = chart.getByTestId('probability-chart-axis-label');
+    expect(await values.count()).toBeGreaterThan(0);
+    for (const value of await values.all()) {
+      const box = await value.boundingBox();
+      if (box === null) throw new Error('an axis value has no bounding box');
+      expect(plot.x + plot.width).toBeLessThanOrEqual(box.x + 0.5);
+      expect(dot.x + dot.width).toBeLessThanOrEqual(box.x + 0.5);
+    }
+    expect(dot.x + dot.width / 2).toBeGreaterThanOrEqual(plot.x - 0.5);
+    expect(dot.x + dot.width / 2).toBeLessThanOrEqual(plot.x + plot.width + 0.5);
+    expect(dot.y + dot.height / 2).toBeGreaterThanOrEqual(plot.y - 0.5);
+    expect(dot.y + dot.height / 2).toBeLessThanOrEqual(plot.y + plot.height + 0.5);
+    await expect(page.getByTestId('market-price-notice')).toHaveText(copy.marketPriceNotice);
   });
 
   test('로그인하지 않으면 개인 영역 대신 그 자리에 로그인 안내 하나가 있고, 로그인하면 내 포지션과 준비 중인 두 자리가 보인다', async ({

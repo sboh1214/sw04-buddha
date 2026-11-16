@@ -1,6 +1,13 @@
 import { MarketRankingCursors } from './market-ranking-cursor.js';
 import { Inject, Injectable } from '@nestjs/common';
-import { DAY_AGO, marketPriceAt, readPublicJudgementDelay, schema, type Db } from '@buddha/db';
+import {
+  DAY_AGO,
+  marketPriceAt,
+  marketTradingEndedAt,
+  readPublicJudgementDelay,
+  schema,
+  type Db,
+} from '@buddha/db';
 import {
   ALL_MARKET_STATUSES,
   FILLS_RECENT_LIMIT,
@@ -450,8 +457,11 @@ export class MarketService {
    * and not the API host's, at no extra round trip (clock.ts, A-M3-16). Epoch millis as text, like
    * `clockTimestamp`: no driver-side date parser is involved.
    */
-  async requirePublicAt(marketId: string): Promise<{ market: MarketRow; now: Date }> {
-    const [row] = await this.db
+  async requirePublicAt(
+    marketId: string,
+    executor: Db | Tx = this.db,
+  ): Promise<{ market: MarketRow; now: Date }> {
+    const [row] = await executor
       .select({
         market: schema.markets,
         nowMs: sql<string>`(extract(epoch FROM clock_timestamp()) * 1000)::bigint::text`,
@@ -512,10 +522,22 @@ export class MarketService {
    * is never `truncated`: its grid spans the whole window it echoes (ADR-0029).
    */
   async listTicks(marketId: string, query: TicksQuery): Promise<PriceSeries> {
+    // One read-only REPEATABLE READ snapshot (#64 review, ADR-0139 결정 2-6): `tradeCount` and
+    // the points must describe the same fills. A fill committing between two snapshots was in
+    // the points and not the counter, and the web then drew the row's older price over it.
+    return this.db.transaction((tx) => this.readTicks(tx, marketId, query), {
+      isolationLevel: 'repeatable read',
+      accessMode: 'read only',
+    });
+  }
+
+  /** `listTicks` inside its snapshot: every statement reads through `tx`. */
+  private async readTicks(tx: Tx, marketId: string, query: TicksQuery): Promise<PriceSeries> {
     // The row and the DB clock in one statement, as every public sub-resource reads them: the
     // window's open end is `now` as the database sees it and its start defaults to the
-    // market's own opening, so no probe query is needed.
-    const { market, now } = await this.requirePublicAt(marketId);
+    // market's own opening, so no probe query is needed. `clock_timestamp()` is read after the
+    // snapshot is taken, so every fill it sees has `created_at` (its tx's `now()`) <= `now`.
+    const { market, now } = await this.requirePublicAt(marketId, tx);
     // Close the window first, then clamp its start DOWN to it. `ticksQuerySchema` only orders
     // the two bounds when both are given, so a defaulted one can still invert the window — a
     // `to` older than the market's opening (a client paging backwards through history), or a
@@ -524,7 +546,13 @@ export class MarketService {
     // would pin a boundary at the opening and serve a point after the caller's `to`, while
     // `raw` — which filters on the untouched `query.to` — answered nothing for the same
     // request. Clamping down keeps both resolutions describing the same window.
-    const to = new Date(query.to ? Date.parse(query.to) : now.getTime());
+    //
+    // An omitted `to` is `now` while trading goes on and the instant it ended after (#64,
+    // ADR-0139; ADR-0135 C4): `close_at`, or an early close's `ended_at` — so `windowSeconds`
+    // counts back from the end and a default window is 개장~실제 거래 종료. A `to` the caller
+    // named is kept. `asOf` below stays `now`, which is how a client tells the window closed.
+    const endedAt = query.to ? null : await marketTradingEndedAt(tx, market, now);
+    const to = new Date(query.to ? Date.parse(query.to) : (endedAt ?? now).getTime());
     // A RELATIVE range is opened from `to` — the DATABASE's own instant — so the window a client
     // asked for is the window it gets whatever its clock says. `from` names an absolute instant
     // and is kept for a caller that really means one; a client deriving it from `Date.now()` was
@@ -556,7 +584,16 @@ export class MarketService {
           : undefined;
     const bucketSeconds = tickBucketSeconds(query.resolution, to.getTime() - from.getTime());
     if (bucketSeconds === 0) {
-      return this.rawSeries(marketId, query.resolution, filterFrom, from, to, market.tradeCount);
+      return this.rawSeries(
+        tx,
+        marketId,
+        query.resolution,
+        filterFrom,
+        from,
+        to,
+        market.tradeCount,
+        now,
+      );
     }
     // Even the coarsest stride cannot cover a window this wide (about ten years). Trim the old
     // end rather than overrun the documented cap; the narrowed `from` in the response is what
@@ -574,14 +611,14 @@ export class MarketService {
       from: start.toISOString(),
       to: to.toISOString(),
       truncated: false,
-      // From `requirePublicAt` above — the same statement that produced the LIVE `to`, and
-      // deliberately BEFORE the sampling statement below. An earlier snapshot can only LAG the
-      // points, and lagging is the harmless direction; a counter read after them could claim a
-      // trade they predate (packages/shared market.ts states which way that fails). When the
-      // CALLER pinned `to`, this is still the counter at answer time — the schema says so, and
-      // says why the row cannot answer otherwise.
+      // From `requirePublicAt` above — the same statement that produced the LIVE `to`, and the
+      // same snapshot as the sampling below (`listTicks`' transaction): the counter neither
+      // lags nor leads the points (packages/shared market.ts says why both directions fail).
+      // When the CALLER pinned `to`, this is still the counter at answer time — the schema says
+      // so, and says why the row cannot answer otherwise.
       tradeCount: market.tradeCount,
-      points: await this.sampleTicks(marketId, start, to, bucketSeconds),
+      asOf: now.toISOString(),
+      points: await this.sampleTicks(tx, marketId, start, to, bucketSeconds),
     };
   }
 
@@ -591,6 +628,7 @@ export class MarketService {
    * between fills), so the last fill at or before a boundary IS the value there.
    */
   private async sampleTicks(
+    tx: Tx,
     marketId: string,
     from: Date,
     to: Date,
@@ -623,7 +661,7 @@ export class MarketService {
     // node-postgres session replaces the driver's timestamptz parser, so a raw `execute` yields
     // the wire string rather than a Date and `new Date(<pg text>)` would be at the mercy of the
     // host's non-ISO date parsing.
-    const result: unknown = await this.db.execute(sql`
+    const result: unknown = await tx.execute(sql`
       with boundaries as (
         select ${start} as b
         union
@@ -691,15 +729,17 @@ export class MarketService {
    * stops this WHERE and the `truncated` probe below drifting apart from it again.
    */
   private async rawSeries(
+    tx: Tx,
     marketId: string,
     resolution: TicksQuery['resolution'],
     filterFrom: Date | undefined,
     from: Date,
     to: Date,
     tradeCount: number,
+    asOf: Date,
   ): Promise<PriceSeries> {
     const { fills } = schema;
-    const recent = this.db
+    const recent = tx
       .select({ id: fills.id, ts: fills.createdAt, pYesBp: fillYesBp.as('p_yes_bp') })
       .from(fills)
       .where(
@@ -707,8 +747,7 @@ export class MarketService {
           eq(fills.marketId, marketId),
           filterFrom ? gte(fills.createdAt, filterFrom) : undefined,
           // The window's own end, not `query.to`. `listTicks` closes the window on the database
-          // clock when the caller sends no `to`, and this statement runs afterwards under its
-          // own snapshot — so filtering on the REQUEST let a trade committing in between answer
+          // clock when the caller sends no `to`; filtering on the REQUEST let a trade answer
           // with `ts` past the `to` this response echoes, and past the `tradeCount` read with
           // it. The bucketed path never had the gap: its grid is built from the same `to`.
           lte(fills.createdAt, to),
@@ -717,7 +756,7 @@ export class MarketService {
       .orderBy(desc(fills.createdAt), desc(fills.id))
       .limit(TICKS_SCAN_MAX)
       .as('recent');
-    const ranked = this.db
+    const ranked = tx
       .select({
         id: recent.id,
         ts: recent.ts,
@@ -729,7 +768,7 @@ export class MarketService {
       .as('ranked');
     // `cnt` is cast, not the literal: a `${n}.0` would reach Postgres as `$1.0`.
     const stride = sql`greatest(1, ceil(${ranked.cnt}::numeric / ${TICKS_MAX_POINTS}))::bigint`;
-    const rows = await this.db
+    const rows = await tx
       .select({ id: ranked.id, ts: ranked.ts, pYesBp: ranked.pYesBp, cnt: ranked.cnt })
       .from(ranked)
       .where(
@@ -750,7 +789,7 @@ export class MarketService {
     const truncated =
       first !== undefined &&
       Number(first.cnt) >= TICKS_SCAN_MAX &&
-      (await this.hasOlderFill(marketId, first.ts, first.id, filterFrom));
+      (await this.hasOlderFill(tx, marketId, first.ts, first.id, filterFrom));
     return {
       resolution,
       bucketSeconds: 0,
@@ -759,6 +798,7 @@ export class MarketService {
       truncated,
       // Handed down from `listTicks`, which read it beside `to` — see the bucketed return.
       tradeCount,
+      asOf: asOf.toISOString(),
       points: rows.map((row) => ({
         ts: row.ts.toISOString(),
         pYesBp: row.pYesBp,
@@ -774,13 +814,14 @@ export class MarketService {
    * truncation.
    */
   private async hasOlderFill(
+    tx: Tx,
     marketId: string,
     ts: Date,
     id: number,
     filterFrom: Date | undefined,
   ): Promise<boolean> {
     const { fills } = schema;
-    const [row] = await this.db
+    const [row] = await tx
       .select({ one: sql<number>`1` })
       .from(fills)
       .where(

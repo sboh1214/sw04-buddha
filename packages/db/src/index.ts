@@ -149,6 +149,7 @@ export {
 export {
   DAY_AGO,
   marketPriceAt,
+  marketTradingEndedAt,
   newHumanParticipants,
   recordFillStats,
   type MarketRowWrite,

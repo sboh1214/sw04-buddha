@@ -2968,7 +2968,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Price series, ascending, at most 500 points. Every point is a fill: its YES value in basis points at its server time (the open and a judgement are no point). `raw` returns the fills, downsampled from the newest 10000 of the range (`truncated` says when older ones were left out). `1m`/`1h` sample the price in force on an absolute grid, coarsening the stride until the window fits; `bucketSeconds` reports the stride served, and the point at `from` carries the last fill at or before it, if any — before the first fill the series starts empty. */
+        /** Price series, ascending, at most 500 points. Every point is a fill: its YES value in basis points at its server time (the open and a judgement are no point). `raw` returns the fills, downsampled from the newest 10000 of the range (`truncated` says when older ones were left out). `1m`/`1h` sample the price in force on an absolute grid, coarsening the stride until the window fits; `bucketSeconds` reports the stride served, and the point at `from` carries the last fill at or before it, if any — before the first fill the series starts empty. With no `to`, the window ends now while trading goes on and where trading ended after it (`close_at`, or an early close), `windowSeconds` counting back from there; `asOf` is the instant the answer was read, later than such a `to`. */
         get: operations["listMarketTicks"];
         put?: never;
         post?: never;
@@ -7011,6 +7011,8 @@ export type components = {
             type: "tableRow";
         };
         PriceSeries: {
+            /** Format: date-time */
+            asOf: string;
             bucketSeconds: number;
             /** Format: date-time */
             from: string;

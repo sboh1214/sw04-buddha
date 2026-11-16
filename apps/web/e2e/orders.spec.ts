@@ -12,6 +12,7 @@ import type {
   PriceSeries,
   Sellable,
 } from '@buddha/shared';
+import { tickBucketSeconds } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { formatKst } from '../src/lib/datetime';
 import {
@@ -80,8 +81,10 @@ import {
  * immediate YES buy meet as one pair mint at 60, the market price is that fill's YES value at its
  * server time, the volume is counted once (60, not 60 + 40), the participants are two, and the
  * public fill is one anonymous row; B's second buy adds a trade and volume but no participant; a
- * NO trade at 45 makes the price its YES value 55. The bot's exclusion from the participants is
- * the db and api suites' (no spec runs the bot). A sends two orders, B three.
+ * NO trade at 45 makes the price its YES value 55 — on the card (#61) and in the detail's header
+ * with '최근 체결 <절대 시각>', where the chart puts the last fill's dot and the dotted hold after it
+ * (#64, ADR-0139). The bot's exclusion from the participants is the db and api suites' (no spec
+ * runs the bot). A sends two orders, B three.
  */
 
 /** `{ data }` out of the success envelope, with the body in the message on a failure. */
@@ -1337,6 +1340,35 @@ test.describe('시장 통계 (#121)', () => {
         expect(box.x + box.width, testId).toBeLessThanOrEqual(viewport.width);
         expect(box.y + box.height, testId).toBeLessThanOrEqual(inner.bottom + 0.5);
       }
+
+      // --- The detail (#64, ADR-0139): the same price and fill time in its header, one line
+      // in Korean time, and on its 1일 chart the last fill's dot with the dotted hold after it.
+      // The solid line needs a recorded step before that fill: the 1일 grid (5 minutes) puts the
+      // earlier fills' price on its next boundary, so there is one only when a boundary falls
+      // between the first fill and the last.
+      await page.goto(`/markets/${market.slug}`);
+      const reading = page.getByTestId('market-probability');
+      await expect(
+        reading.getByTestId('market-probability-value').getByText(`${copy.yes} 55%`, {
+          exact: true,
+        }),
+      ).toHaveCount(1);
+      await expect(reading.getByTestId('market-detail-last-fill')).toHaveText(
+        `${copy.marketLastFillAt} ${formatKst(after.lastFillAt ?? '')}`,
+      );
+      // The grid the server picks for 1일's `1m` request over a day (ticksQueryFor('1D')).
+      const stepMs = tickBucketSeconds('1m', 86_400_000) * 1_000;
+      const stepped =
+        Math.ceil(Date.parse(first.createdAt) / stepMs) * stepMs < Date.parse(last.createdAt);
+      const chart = page.getByTestId('probability-chart');
+      await expect(chart.getByTestId('probability-chart-dot')).toHaveCount(1);
+      await expect(chart.getByTestId('probability-chart-dotted')).toHaveCount(1);
+      await expect(chart.getByTestId('probability-chart-line')).toHaveCount(stepped ? 1 : 0);
+      // While trading goes on the summary ends on '현재' (ADR-0139).
+      await expect(chart.getByTestId('probability-chart-svg')).toHaveAttribute(
+        'aria-label',
+        new RegExp(`${copy.chartSummaryCurrent} \\d+%$`),
+      );
     } finally {
       await aContext.close();
       await visitorContext.close();

@@ -305,6 +305,13 @@ test.describe('판정 이의', () => {
       await expect(
         discussionNote.getByTestId('market-discussion-dispute-note-link'),
       ).toHaveAttribute('href', screenPath);
+      // The price place after the judgement (#64, ADR-0135 C5): the last price and its fill's
+      // time as they were, no 24시간 badge, and the result in the status notice's row only.
+      await expect(page.getByTestId('market-detail-last-fill')).toContainText(
+        copy.marketLastFillAt,
+      );
+      await expect(page.getByTestId('market-probability-delta')).toHaveCount(0);
+      await expect(notice.getByTestId('market-detail-result')).toHaveText(copy.yes);
       expect(await documentSurvived(page)).toBe(true);
 
       // Public data (#173 item 6): the deadline the approval fixed, the version a submission

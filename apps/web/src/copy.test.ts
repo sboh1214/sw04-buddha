@@ -161,6 +161,22 @@ describe('copy', () => {
     for (const [key, text] of Object.entries(copy)) {
       expect(text.trim(), key).not.toBe('');
     }
+    // The detail header and chart's words (#64, ADR-0135 결정 1의 3·5, ADR-0139): the notice word
+    // for word, the badge's period, and the price's name apart from the table column's key.
+    expect(copy.marketPriceNotice).toBe('시장가격은 실제 발생 확률의 보장이 아닙니다.');
+    expect(copy.marketDelta24h).toBe('24시간');
+    expect(copy.marketPriceName).toBe(copy.chartValue);
+    expect(copy.chartSummaryLast).toBe('마지막');
+    // #64 AC 7: the last fill's price, a fill's price, the average fill price and the two book
+    // sides appear together on the detail page, so each carries its own name.
+    const priceNames = [
+      copy.marketPriceName,
+      copy.fillPrice,
+      copy.fillAvgPrice,
+      copy.marketBookAsks,
+      copy.marketBookBids,
+    ];
+    expect(new Set(priceNames).size).toBe(priceNames.length);
   });
 
   it('formats Coin via @buddha/shared (workspace wiring)', () => {

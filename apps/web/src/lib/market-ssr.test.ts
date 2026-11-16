@@ -82,6 +82,7 @@ const series: PriceSeries = {
   to: '2026-09-07T00:00:00.000Z',
   truncated: false,
   tradeCount: 41,
+  asOf: '2026-09-07T00:00:00.000Z',
   points: [
     { ts: '2026-09-06T00:00:00.000Z', pYesBp: 5000, trigger: 'trade' },
     { ts: '2026-09-06T12:00:00.000Z', pYesBp: 6300, trigger: 'trade' },
@@ -89,9 +90,9 @@ const series: PriceSeries = {
 };
 
 describe('seedMarketDetail', () => {
-  it('seeds exactly the detail row and its default range, keyed on the uuid', () => {
+  it('seeds exactly the detail row and the range it opens on, keyed on the uuid', () => {
     const queryClient = new QueryClient();
-    seedMarketDetail(queryClient, market, series);
+    seedMarketDetail(queryClient, market, series, '1D');
 
     // The slug is what the URL carried, but every live write (market:tick, the ticks and fills
     // routes) speaks uuids, so a slug-keyed entry would never be updated.
@@ -99,11 +100,19 @@ describe('seedMarketDetail', () => {
     expect(keys).toHaveLength(2);
     expect(keys).toContainEqual(['market', MARKET_ID]);
     expect(keys).toContainEqual(['ticks', MARKET_ID, '1D']);
+    // An ended market opens on 전체 (ADR-0135 C4), and its series is seeded under that key.
+    const ended = new QueryClient();
+    seedMarketDetail(ended, { ...market, status: 'closed' }, series, 'all');
+    expect(dehydrate(ended).queries.map((query) => query.queryKey)).toContainEqual([
+      'ticks',
+      MARKET_ID,
+      'all',
+    ]);
   });
 
   it('seeds the values the screens read back, not a copy of them', () => {
     const queryClient = new QueryClient();
-    seedMarketDetail(queryClient, market, series);
+    seedMarketDetail(queryClient, market, series, '1D');
 
     expect(queryClient.getQueryData(['market', MARKET_ID])).toBe(market);
     expect(queryClient.getQueryData(['ticks', MARKET_ID, '1D'])).toBe(series);
@@ -111,7 +120,7 @@ describe('seedMarketDetail', () => {
 
   it('dehydrates to plain JSON, so no serialize/deserialize transformer is needed', () => {
     const queryClient = new QueryClient();
-    seedMarketDetail(queryClient, market, series);
+    seedMarketDetail(queryClient, market, series, '1D');
 
     // Every Coin amount is a decimal string and every instant an ISO string: no bigint, no Date, no
     // undefined. toStrictEqual rather than toEqual because a dropped `undefined` property is
@@ -122,7 +131,7 @@ describe('seedMarketDetail', () => {
 
   it('cannot leak a private query into the SSR payload', () => {
     const queryClient = new QueryClient();
-    seedMarketDetail(queryClient, market, series);
+    seedMarketDetail(queryClient, market, series, '1D');
     // The RSC payload Next inlines into the HTML would otherwise carry one account's data,
     // and refill the cache SessionCacheGuard exists to empty.
     queryClient.setQueryData(['me'], { profile: { nickname: 'someone' } });
@@ -139,7 +148,7 @@ describe('seedMarketDetail', () => {
     // it, so the page renders with `null` here. The ticks key must then stay UNBUILT: seeding
     // the `null` would build a SUCCESSFUL query holding it, and the chart reads `held.points`
     // straight off a settled ticks query instead of fetching and reporting the failure itself.
-    seedMarketDetail(queryClient, market, null);
+    seedMarketDetail(queryClient, market, null, '1D');
 
     const keys = dehydrate(queryClient).queries.map((query) => query.queryKey);
     expect(keys).toEqual([['market', MARKET_ID]]);
@@ -189,18 +198,21 @@ describe('prefetchRelatedMarkets (#65, ADR-0068)', () => {
 });
 
 describe('detailWindowEnd', () => {
-  it('is the window end the server closed on its own clock', () => {
+  it('is the instant the server read the series at on its own clock', () => {
     expect(detailWindowEnd(series)).toBe(Date.parse('2026-09-07T00:00:00.000Z'));
+    // Not `to`: a closed window ends at the end of trading, before it was read (ADR-0139).
+    const closed = { ...series, to: '2026-09-06T12:00:00.000Z' };
+    expect(detailWindowEnd(closed)).toBe(Date.parse('2026-09-07T00:00:00.000Z'));
   });
 
   it('is absent when there is no series, so the countdown falls back to the close time', () => {
     expect(detailWindowEnd(null)).toBeUndefined();
   });
 
-  it('is absent rather than NaN for an unparseable `to`', () => {
+  it('is absent rather than NaN for an unparseable `asOf`', () => {
     // `z.iso.datetime()` makes this unrealistic, but a NaN would reach `CountdownBadge` as a
     // number, and `formatRemaining` divides by it — the badge would render a literal `NaN초`.
-    expect(detailWindowEnd({ ...series, to: 'not a date' })).toBeUndefined();
+    expect(detailWindowEnd({ ...series, asOf: 'not a date' })).toBeUndefined();
   });
 });
 

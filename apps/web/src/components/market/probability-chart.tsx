@@ -1,35 +1,43 @@
 'use client';
 
 import { Alert, Box, Button, HStack, SegmentGroup, Skeleton, Stack, Text } from '@chakra-ui/react';
-import { useId, useState } from 'react';
+import { type MarketStatus, isPreCloseMarketStatus } from '@buddha/shared';
+import { useId, useRef, useState } from 'react';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { ChartDataTable, LineChart } from '@/components/ui/line-chart';
 import { copy } from '@/copy';
 import { useMarketTicks } from '@/hooks/use-markets';
 import {
+  type ChartLayout,
   type ChartPoint,
   type ChartSummaryLabels,
   axisLabels,
   chartGeometry,
+  chartLayout,
   chartSummary,
-  extendToNow,
-  withLiveEdge,
+  formatChartPct,
   nearestIndex,
   readoutIndex,
   readoutMove,
   sampleForTable,
-  toChartPoints,
 } from '@/lib/chart';
-import { formatBp } from '@/lib/market-admin';
-import { DEFAULT_TICK_RANGE, TICK_RANGES, type TickRange, rowSupersedesSeries } from '@/lib/ticks';
+import { DEFAULT_TICK_RANGE, TICK_RANGES, type TickRange, isClosedWindow } from '@/lib/ticks';
 
-/** The four words the accessible summary joins its readings with (lib/chart.ts keeps `copy` out). */
-const SUMMARY_LABELS: ChartSummaryLabels = {
-  start: copy.chartSummaryStart,
-  high: copy.chartSummaryHigh,
-  low: copy.chartSummaryLow,
-  current: copy.chartSummaryCurrent,
-};
+/**
+ * The four words the accessible summary joins its readings with (lib/chart.ts keeps `copy` out).
+ * The last is '현재' while trading goes on and '마지막' after it (ADR-0139).
+ */
+function summaryLabels(status: MarketStatus): ChartSummaryLabels {
+  return {
+    start: copy.chartSummaryStart,
+    high: copy.chartSummaryHigh,
+    low: copy.chartSummaryLow,
+    current: isPreCloseMarketStatus(status) ? copy.chartSummaryCurrent : copy.chartSummaryLast,
+  };
+}
+
+/** No series yet: nothing recorded, nothing drawn. */
+const EMPTY_LAYOUT: ChartLayout = { points: [], lastFill: null, geometry: chartGeometry([]) };
 
 /**
  * 시장가격 추이 (PLAN 11.4 ProbabilityChart): the price series, a 1일/1주/전체 toggle, and a
@@ -40,10 +48,12 @@ const SUMMARY_LABELS: ChartSummaryLabels = {
  * `components/ui/line-chart.tsx` owns the one `<svg>`. What is left here is the render ladder,
  * the range state and the hover index — and the rule that no clock is read while rendering.
  *
- * The live edge is drawn at `Date.parse(series.to)`, the window end the SERVER closed on its
- * own `clock_timestamp()` and sent in the payload. A `Date.now()` here would move between the
- * server's render and the browser's first one, so the two would emit different `d` strings and
- * React would throw away exactly the first paint AC 2 measures.
+ * The line is the recorded points — the fills, sampled on the server's grid — up to the last
+ * fill, which gets a dot; from there a faint dotted hold runs to the window's end (ADR-0135 C3,
+ * ADR-0139). That end is `series.to`, the instant the SERVER closed the window on its own
+ * `clock_timestamp()` — the end of trading, once trading has ended — never a `Date.now()`, which
+ * would move between the server's render and the browser's first one, so the two would emit
+ * different `d` strings and React would throw away exactly the first paint AC 2 measures.
  *
  * The interaction layer is HTML around the svg, never inside it: the box is stretched by
  * `preserveAspectRatio="none"`, so an SVG dot would come out an ellipse. `role="application"`
@@ -56,10 +66,20 @@ const SUMMARY_LABELS: ChartSummaryLabels = {
 const TABLE_ROWS = 12;
 
 /**
+ * The strip at the box's right edge the y-axis values sit in, which the plot stops short of.
+ * A value ('100%' at `xs`, with its `px="1"`) is under 40px wide, so 48px leaves the last fill's
+ * 8px dot — centred on the plot's edge when the fill is seconds old — clear of it. Without the
+ * strip the values, positioned and opaque (`bg="bg"`), painted over the dot and hid the dotted
+ * hold under them exactly where an open market's 1일 window puts both: at the right edge, at
+ * the level of the middle value, which IS the price when the window holds one.
+ */
+const AXIS_GUTTER = '12';
+
+/**
  * The read point, plus WHICH input put it there. Only the keyboard's moves are announced: a
  * polite live region queues its changes instead of coalescing them, and `onPointerMove` writes a
  * new index for roughly every pixel the pointer crosses (a 1D range on a busy market carries
- * enough points to fill the ~343px plot a 375px viewport draws, one per pixel), so a single sweep
+ * enough points to fill the ~295px plot a 375px viewport draws, one per pixel), so a single sweep
  * of the pointer buys a screen reader half a minute of timestamps it has long left behind. The
  * arrow keys move once per press, which is the rate an announcement is for.
  */
@@ -99,7 +119,14 @@ export interface ProbabilityChartProps {
    * arrived, for one.
    */
   currentTradeCount: number;
-  /** The range the toggle opens on. Defaults to the one the server seeds into the cache. */
+  /** The same row's `lastFillAt`: where the last fill's dot goes (`lastFill`, chart.ts). */
+  lastFillAt: string | null;
+  /** The same row's status: whether the summary ends on '현재' or '마지막'. */
+  status: MarketStatus;
+  /**
+   * The range the toggle opens on (`initialTickRange`), read once at mount: a status that
+   * changes under the reader leaves the range they chose.
+   */
   defaultRange?: TickRange;
   'data-testid'?: string;
 }
@@ -109,6 +136,8 @@ export function ProbabilityChart({
   label,
   currentBp,
   currentTradeCount,
+  lastFillAt,
+  status,
   defaultRange = DEFAULT_TICK_RANGE,
   'data-testid': testId = 'probability-chart',
 }: ProbabilityChartProps) {
@@ -117,27 +146,26 @@ export function ProbabilityChart({
   const series = useMarketTicks(marketId, range);
   const tableId = useId();
   const readoutId = useId();
+  // The plot's own box, read in the pointer handler only: the hover fraction is of the plot, not
+  // of the box that also holds the axis values' strip.
+  const plotRef = useRef<HTMLDivElement>(null);
   // The readout is an absolute time, so it reads in the member's zone (ADR-0063).
   const formatDateTime = useFormatDateTime();
 
   const held = series.data;
-  // `extendToNow` holds the newest fill's price out to the window's right edge, so a quiet
-  // market draws the line it actually had rather than stopping at its last trade.
-  const plotted =
+  // The recorded points, the last fill and the three lines — one layout from the series and ONE
+  // read of the row (`currentBp`, `lastFillAt`, `currentTradeCount`), so the dot can never put
+  // one fill's price at another's instant.
+  const layout =
     held === undefined
-      ? []
-      : currentBp === null
-        ? toChartPoints(held.points)
-        : extendToNow(toChartPoints(held.points), Date.parse(held.to), currentBp);
-  // `extendToNow` alone cannot reach a series that is a trade behind: it draws PAST the right
-  // edge, and every bucketed answer pins a point at its own window end, so the test it makes is
-  // a tie. Only when the row names a trade the series does not does the newest level replace
-  // that edge — an ordering, decided by the counter both sides carry.
-  const points =
-    currentBp !== null && rowSupersedesSeries(held, currentTradeCount)
-      ? withLiveEdge(plotted, currentBp)
-      : plotted;
-  const geometry = chartGeometry(points);
+      ? EMPTY_LAYOUT
+      : chartLayout(
+          held,
+          { bp: currentBp, lastFillAt, tradeCount: currentTradeCount },
+          isClosedWindow(held),
+        );
+  const { points, geometry } = layout;
+  const summary = chartSummary(points, summaryLabels(status));
   // Resolved against the series ON SCREEN NOW, never the one the index was taken from: the
   // window rolls, so the same range answers fewer points as old changes slide off the left edge
   // and a parked readout would otherwise point past the end (`readoutIndex`).
@@ -222,11 +250,16 @@ export function ProbabilityChart({
               }}
               onPointerMove={(event) => {
                 // Measured once per event, never during a render: a layout read in the render
-                // path is what makes a chart re-render itself into a loop.
-                const rect = event.currentTarget.getBoundingClientRect();
+                // path is what makes a chart re-render itself into a loop. The plot's box, not
+                // the wrapper's: a pointer over the axis strip is past the end and clamps there.
+                const rect = (plotRef.current ?? event.currentTarget).getBoundingClientRect();
                 if (rect.width === 0) return;
                 setHovered({
-                  index: nearestIndex(points, (event.clientX - rect.left) / rect.width),
+                  index: nearestIndex(
+                    points,
+                    (event.clientX - rect.left) / rect.width,
+                    geometry.domain,
+                  ),
                   spoken: false,
                 });
               }}
@@ -274,46 +307,80 @@ export function ProbabilityChart({
                       bg="bg"
                       fontSize="xs"
                       color="fg.muted"
+                      data-testid="probability-chart-axis-label"
                     >
-                      {formatBp(row.bp)}
+                      {formatChartPct(row.bp)}
                     </Text>
                   </Box>
                 ))}
               </Box>
 
-              <LineChart
-                points={points}
-                // The summary comes first so a screen reader hears the shape of the series
-                // ('시작 61%, 최고 66%, 최저 60%, 현재 63%') before it reaches the sampled table.
-                label={`${copy.chartLabel} · ${label} · ${chartSummary(points, SUMMARY_LABELS)}`}
-                describedBy={tableId}
-                area
-                data-testid="probability-chart-line"
-              />
+              {/* The plot: the line, the last fill's dot and the hover marker, in one box that
+                  ends where the axis strip starts (`AXIS_GUTTER`), so no value covers them. */}
+              <Box
+                ref={plotRef}
+                position="absolute"
+                top="0"
+                bottom="0"
+                left="0"
+                right={AXIS_GUTTER}
+                data-testid="probability-chart-plot"
+              >
+                <LineChart
+                  geometry={geometry}
+                  // The summary comes first so a screen reader hears the shape of the series
+                  // ('시작 61%, 최고 66%, 최저 60%, 현재 63%') before it reaches the sampled table.
+                  label={`${copy.chartLabel} · ${label} · ${summary}`}
+                  describedBy={tableId}
+                  area
+                  data-testid="probability-chart-svg"
+                  lineTestId="probability-chart-line"
+                  dottedTestId="probability-chart-dotted"
+                />
 
-              {marker === undefined ? null : (
-                <Box
-                  position="absolute"
-                  left={`${String(marker.x * 100)}%`}
-                  top="0"
-                  bottom="0"
-                  borderLeftWidth="1px"
-                  borderColor="colorPalette.fg"
-                  opacity="0.4"
-                  pointerEvents="none"
-                  aria-hidden="true"
-                >
+                {/* The last fill (ADR-0135 C3): HTML, as the hover dot is — inside the
+                    stretched box a circle would be an ellipse. None when the fill is older than
+                    the window. */}
+                {geometry.dot === null ? null : (
                   <Box
                     position="absolute"
-                    top={`${String(marker.y * 100)}%`}
-                    w="2.5"
-                    h="2.5"
+                    left={`${String(geometry.dot.x * 100)}%`}
+                    top={`${String(geometry.dot.y * 100)}%`}
+                    w="2"
+                    h="2"
                     borderRadius="full"
                     bg="colorPalette.fg"
                     transform="translate(-50%, -50%)"
+                    pointerEvents="none"
+                    aria-hidden="true"
+                    data-testid="probability-chart-dot"
                   />
-                </Box>
-              )}
+                )}
+
+                {marker === undefined ? null : (
+                  <Box
+                    position="absolute"
+                    left={`${String(marker.x * 100)}%`}
+                    top="0"
+                    bottom="0"
+                    borderLeftWidth="1px"
+                    borderColor="colorPalette.fg"
+                    opacity="0.4"
+                    pointerEvents="none"
+                    aria-hidden="true"
+                  >
+                    <Box
+                      position="absolute"
+                      top={`${String(marker.y * 100)}%`}
+                      w="2.5"
+                      h="2.5"
+                      borderRadius="full"
+                      bg="colorPalette.fg"
+                      transform="translate(-50%, -50%)"
+                    />
+                  </Box>
+                )}
+              </Box>
             </Box>
           )}
 
@@ -345,7 +412,9 @@ export function ProbabilityChart({
         fontSize="sm"
         color="fg.muted"
       >
-        {point === undefined ? '' : `${formatDateTime(isoAt(point.t))} · ${formatBp(point.bp)}`}
+        {point === undefined
+          ? ''
+          : `${formatDateTime(isoAt(point.t))} · ${formatChartPct(point.bp)}`}
       </Text>
 
       <ChartDataTable id={tableId} rows={sampleForTable(points, TABLE_ROWS)} />

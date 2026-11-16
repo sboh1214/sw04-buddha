@@ -659,9 +659,10 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // a load and four events on an answered one, 0 → 1 in the broken state, which is the
         // correction itself. It adds no new refetch site; it upgrades one that was already here.
         //
-        // The ticks line is SYMMETRY, not a second fix, and saying so is the point: its hole is
-        // inert. No transition writes a price tick (`market-admin.service.ts`; only a fill does,
-        // N02 §5), so no status event can leave a held series behind.
+        // The ticks line is SYMMETRY, not a second fix: no transition writes a price tick
+        // (`market-admin.service.ts`; only a fill does, N02 §5). What a close changes is the
+        // window — the answer read after it ends at the end of trading, `asOf > to` (ADR-0139) —
+        // and `joinSeries` takes such a closed answer whole, so no held live edge outlasts it.
         // `restartQueries` is still the right call there because it matches by PREFIX, which is
         // what these entries need: they are `['ticks', id, range]`, one per range this tab opened.
         void restartQueries(queryClient, marketKey(event.marketId));

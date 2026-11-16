@@ -37,7 +37,7 @@ import { copy } from '@/copy';
 import { useDisputeOpen } from '@/hooks/use-disputes';
 import { useInstantReached } from '@/hooks/use-instant-reached';
 import { useMarketSocket } from '@/hooks/use-market-socket';
-import { useCategories, useMarket, useMarketTicks } from '@/hooks/use-markets';
+import { useCategories, useMarket, useMarketBaselineRefresh } from '@/hooks/use-markets';
 import { type Market } from '@/lib/api';
 import { CATEGORY_TRAIL_SEPARATOR, categoryBreadcrumb } from '@/lib/category-label';
 import { disputePath } from '@/lib/disputes';
@@ -53,6 +53,7 @@ import {
   type SharedSection,
   copyDisplay,
   copyTestId,
+  delta24h,
   detailViewOf,
   marketRefreshNotice,
   nextReviewWaitAt,
@@ -66,7 +67,7 @@ import {
 import { marketKey } from '@/lib/market-keys';
 import { marketStatusLabel } from '@/lib/market-status';
 import { HEADER_HEIGHT_PX } from '@/lib/nav';
-import { type RecentMove, recentMove } from '@/lib/ticks';
+import { initialTickRange } from '@/lib/ticks';
 import { useSession } from '@/lib/use-session';
 import { MarketDiscussion } from './market-discussion';
 import { MarketTags } from './market-tags';
@@ -75,7 +76,7 @@ import { MarketTags } from './market-tags';
  * The live half of 시장 상세: everything that a `market:tick` or a `market:status` may change
  * while the page is open (PLAN 11.3, AC 1).
  *
- * It takes an id, not a row. The page seeded `['market', id]` and `['ticks', id, '1D']` into
+ * It takes an id, not a row. The page seeded `['market', id]` and `['ticks', id, <range>]` into
  * the cache it dehydrated, so the first client render reads the server's own values out of
  * that cache — no second fetch, no skeleton beside hydrated content — and every later value
  * arrives through the same key, whether it comes from the socket or from a refetch. Nothing on
@@ -173,9 +174,9 @@ export function MarketDetail({
 }: MarketDetailProps) {
   useMarketSocket([marketId]);
   const market = useMarket(marketId);
-  // The same seeded series the chart draws (one key, one query, no second request). It is read
-  // here for the delta badge only — see `recentDelta`.
-  const series = useMarketTicks(marketId);
+  // Re-reads an open market's row every five minutes, for the 24시간 badge's baseline that no
+  // event carries — a fixed timer that ticks cannot push back (ADR-0139).
+  useMarketBaselineRefresh(marketId, market.data?.status === 'open');
   const session = useSession();
   // `unknown` on the server and through hydration, so nothing that depends on who is reading — the
   // personal areas, their sign-in prompt, the sheet's body — differs between visitors' HTML.
@@ -228,7 +229,7 @@ export function MarketDetail({
           )
         ) : (
           <>
-            <MarketSummary market={data} move={recentMove(series.data?.points)} />
+            <MarketSummary market={data} />
             <StatusNotice market={data} now={now} />
             {/* The '#이름' chips (#17), each its tag's search: the first of the two lines of links
                 out at the end of 요약, the themes' after it (market-tags.tsx). */}
@@ -238,16 +239,27 @@ export function MarketDetail({
         {themes}
       </Stack>
     ),
-    chart: data !== undefined && (
+    chart: (
       <Box minW="0">
-        {/* `currentBp` and `currentTradeCount` come from ONE read of the row, so the chart can
-            never draw one fill's price under another's claim. */}
-        <ProbabilityChart
-          marketId={marketId}
-          label={data.title}
-          currentBp={data.lastPrice === null ? null : data.lastPrice * 100}
-          currentTradeCount={data.tradeCount}
-        />
+        {/* `currentBp`, `lastFillAt` and `currentTradeCount` come from ONE read of the row, so
+            the chart can never draw one fill's price under another's claim. The range it opens
+            on follows the status the page opened with (ADR-0135 C4). */}
+        {data !== undefined && (
+          <ProbabilityChart
+            marketId={marketId}
+            label={data.title}
+            currentBp={data.lastPrice === null ? null : data.lastPrice * 100}
+            currentTradeCount={data.tradeCount}
+            lastFillAt={data.lastFillAt}
+            status={data.status}
+            defaultRange={initialTickRange(data.status)}
+          />
+        )}
+        {/* Right under the chart on every public status (ADR-0135 결정 1의 3, A4), and outside
+            the row's condition: a row or a series still loading or failed leaves it there. */}
+        <Text mt="2" fontSize="xs" color="fg.muted" data-testid="market-price-notice">
+          {copy.marketPriceNotice}
+        </Text>
       </Box>
     ),
     activity: (
@@ -540,24 +552,20 @@ export function MarketRefreshAlert({
 }
 
 /**
- * 요약 under the question: YES and, on the line under it, its NO complement (ADR-0061 decision 1,
- * item 2; owner decision 2026-10-17), 거래량 and 참여자. With the row above and the question it is
- * the mobile first screen's '요약' (N02 §4).
+ * 요약 under the question: YES with its 24시간 badge on a market 거래 중, on the line under it its
+ * NO complement (ADR-0061 decision 1, item 2; owner decision 2026-10-17), under that '시장가격 ·
+ * 최근 체결 <시각>' (ADR-0139), then 거래량 and 참여자. With the row above and the question it is
+ * the mobile first screen's '요약' (N02 §4). Every reading is the row's: the badge is
+ * `lastPrice − lastPrice24hAgo` (`delta24h`), and a judged market keeps its price and time with
+ * no badge, its result in the status notice (ADR-0135 C5).
  */
-function MarketSummary({
-  market,
-  move,
-}: {
-  market: Market;
-  /** The last move and its monotone identity, read off ONE point — see `recentMove`. */
-  move: RecentMove | null;
-}) {
+function MarketSummary({ market }: { market: Market }) {
   return (
     <Stack gap="3">
       <ProbabilityDisplay
         lastPrice={market.lastPrice}
-        deltaPoints={move?.deltaPoints ?? null}
-        moveId={move?.moveId}
+        delta24hPp={delta24h(market)}
+        lastFillAt={market.lastFillAt}
       />
 
       <HStack gap="4" flexWrap="wrap" fontSize="sm" color="fg.muted">

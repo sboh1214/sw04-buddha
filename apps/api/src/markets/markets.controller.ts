@@ -155,7 +155,9 @@ export class MarketsController {
       'out). `1m`/`1h` sample the price in force on an absolute grid, coarsening the ' +
       'stride until the window fits; `bucketSeconds` reports the stride served, and the point ' +
       'at `from` carries the last fill at or before it, if any — before the first fill the ' +
-      'series starts empty.',
+      'series starts empty. With no `to`, the window ends now while trading goes on and where ' +
+      'trading ended after it (`close_at`, or an early close), `windowSeconds` counting back ' +
+      'from there; `asOf` is the instant the answer was read, later than such a `to`.',
   })
   @ApiData(priceSeriesSchema)
   @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')

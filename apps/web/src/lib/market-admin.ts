@@ -567,13 +567,8 @@ export function formatNoPrice(lastPrice: number): string {
   return `${copy.no} ${String(100 - lastPrice)}%`;
 }
 
-/** Basis points (0..10000) as a percentage with two decimals: 6300 → "63.00%". */
-export function formatBp(bp: number): string {
-  return `${(bp / 100).toFixed(2)}%`;
-}
-
 /**
- * The same basis points as what one contract costs: 6300 → "63.00 Coin" (a winner pays 100 Coin).
+ * Basis points (0..10000) as what one contract costs: 6300 → "63.00 Coin" (a winner pays 100 Coin).
  * Two decimals, which `formatCoin` (integers only) cannot write, so the unit is spelled here the
  * way it spells it: one ordinary space, then `COIN_UNIT`.
  */
@@ -595,21 +590,6 @@ export function deltaLabel(deltaPoints: number | null): string {
   const rounded = Math.round(deltaPoints * 10) / 10;
   if (rounded === 0) return '';
   return `${rounded > 0 ? '+' : MINUS_SIGN}${String(Math.abs(rounded))}%p`;
-}
-
-/**
- * The value-based identity of ONE price move — what `ProbabilityDisplay` remembers a dismissal
- * against when its caller passes no `moveId`, so the NEXT move revives the five-second badge
- * (PLAN 11.4).
- *
- * Only a fallback, and a weak one: `lastPrice` is the WHOLE percent, so a move too small to
- * change it — which `deltaLabel` still shows as +0.1%p and up — produces the same string as the
- * move before it and a badge already dismissed never comes back. The one call site passes the
- * monotone `moveId` (`recentMove`, lib/ticks.ts) for exactly that reason. Derived from values
- * alone, so a server render and the first client render produce the same string.
- */
-export function deltaMoveKey(lastPrice: number | null, label: string): string {
-  return `${lastPrice === null ? '' : String(lastPrice)}:${label}`;
 }
 
 /** A quantity, possibly a decimal string, trimmed to four decimals and grouped for reading. */

@@ -3,6 +3,7 @@ import {
   InfiniteQueryObserver,
   type QueryClient,
   QueryObserver,
+  focusManager,
   hashKey,
   hydrate,
 } from '@tanstack/react-query';
@@ -33,12 +34,14 @@ import {
 import { prefetchRelatedMarkets } from '@/lib/market-ssr';
 import { getQueryClient, restartQueries } from '@/lib/query-client';
 import { handleMarketStats } from '@/lib/market-stats-event';
+import { LIVE_REFRESH_MS } from '@/lib/ticks';
 import {
   marketQueryOptions,
   marketSearchInfiniteQueryOptions,
   marketsInfiniteQueryOptions,
   orderBookQueryOptions,
   relatedMarketsInfiniteQueryOptions,
+  scheduleMarketBaselineRefresh,
 } from './use-markets';
 
 /**
@@ -841,6 +844,55 @@ describe('marketQueryOptions', () => {
     const shown = queryClient.getQueryData<Market>(marketQueryOptions(routeId).queryKey);
     expect(shown?.lastPrice).toBe(63);
     queryClient.clear();
+  });
+  it('re-reads an open detail every five minutes however often ticks land (ADR-0139)', async () => {
+    // THE HAZARD (#64 review): a `refetchInterval` is re-armed by every write to its query, so
+    // a tick every four minutes pushed the read back forever and `lastPrice24hAgo` never moved.
+    vi.useFakeTimers();
+    const queryClient = getQueryClient();
+    queryClient.setQueryData<Market>(marketKey(ID), detail);
+    let fetches = 0;
+    const observer = new QueryObserver<Market>(queryClient, {
+      ...marketQueryOptions(ID),
+      queryFn: () => {
+        fetches += 1;
+        return Promise.resolve(queryClient.getQueryData<Market>(marketKey(ID)) ?? detail);
+      },
+      retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      const mounted = fetches;
+      const stop = scheduleMarketBaselineRefresh(queryClient, ID);
+      for (let minute = 1; minute <= 20; minute += 1) {
+        await vi.advanceTimersByTimeAsync(60_000);
+        if (minute % 4 === 0) {
+          const tradeCount = 10 + minute / 4;
+          queryClient.setQueryData<Market>(marketKey(ID), (row) =>
+            applyTick(row, tick({ tradeCount, statsRevision: String(tradeCount) })),
+          );
+        }
+        // Minute 5, 10, 15 and 20: one read each, the tick a minute earlier notwithstanding.
+        expect(fetches - mounted, `minute ${String(minute)}`).toBe(Math.floor(minute / 5));
+      }
+      expect(LIVE_REFRESH_MS).toBe(5 * 60_000);
+      // Stopped (the market left 거래 중, or the detail unmounted): no read.
+      stop();
+      await vi.advanceTimersByTimeAsync(2 * LIVE_REFRESH_MS);
+      expect(fetches - mounted).toBe(4);
+      // A hidden tab reads nothing, as `refetchIntervalInBackground: false` did.
+      const hidden = scheduleMarketBaselineRefresh(queryClient, ID);
+      focusManager.setFocused(false);
+      await vi.advanceTimersByTimeAsync(2 * LIVE_REFRESH_MS);
+      expect(fetches - mounted).toBe(4);
+      hidden();
+    } finally {
+      unsubscribe();
+      focusManager.setFocused(undefined);
+      vi.useRealTimers();
+      queryClient.clear();
+    }
   });
 });
 

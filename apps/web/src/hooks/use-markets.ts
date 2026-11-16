@@ -1,6 +1,14 @@
 'use client';
 
-import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import {
+  type QueryClient,
+  focusManager,
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
+import { useEffect } from 'react';
 import { type Market, type OrderBook, api, unwrap } from '@/lib/api';
 import { settlementPollInterval } from '@/lib/market-admin';
 import {
@@ -16,7 +24,12 @@ import {
   searchListQuery,
 } from '@/lib/market-keys';
 import { type MarketPage } from '@/lib/market-live';
-import { DEFAULT_TICK_RANGE, type TickRange, ticksQueryOptions } from '@/lib/ticks';
+import {
+  DEFAULT_TICK_RANGE,
+  LIVE_REFRESH_MS,
+  type TickRange,
+  ticksQueryOptions,
+} from '@/lib/ticks';
 import { useMarketFills as useMarketFillsQuery } from './use-admin-markets';
 
 /**
@@ -165,6 +178,41 @@ export function marketQueryOptions(marketId: string) {
 
 export function useMarket(marketId: string) {
   return useQuery(marketQueryOptions(marketId));
+}
+
+/**
+ * The detail's 5-minute re-read of an open market's row (ADR-0139 결정 2-3): `lastPrice24hAgo`
+ * moves with time and no event carries it. A fixed timer, NOT a `refetchInterval`: query-core
+ * re-arms an observer's interval on every write to its query (`onQueryUpdate` →
+ * `#updateTimers`), so a `market:tick` landing more often than every five minutes pushed the
+ * read back forever and the badge kept its first baseline (#64 review).
+ *
+ * Only the ACTIVE entry is asked — the detail's own observer — and a hidden tab reads nothing,
+ * as `refetchIntervalInBackground: false` did. A read already in flight is joined, not
+ * cancelled. Answers the cleanup.
+ */
+export function scheduleMarketBaselineRefresh(
+  queryClient: QueryClient,
+  marketId: string,
+): () => void {
+  const queryKey = marketQueryOptions(marketId).queryKey;
+  const timer = setInterval(() => {
+    if (!focusManager.isFocused()) return;
+    void queryClient.refetchQueries(
+      { queryKey, exact: true, type: 'active' },
+      { cancelRefetch: false },
+    );
+  }, LIVE_REFRESH_MS);
+  return () => clearInterval(timer);
+}
+
+/** `scheduleMarketBaselineRefresh` while `open` (거래 중): keyed on the flag, not the row. */
+export function useMarketBaselineRefresh(marketId: string, open: boolean): void {
+  const queryClient = useQueryClient();
+  useEffect(
+    () => (open ? scheduleMarketBaselineRefresh(queryClient, marketId) : undefined),
+    [queryClient, marketId, open],
+  );
 }
 
 /**

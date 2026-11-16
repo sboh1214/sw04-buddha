@@ -1,4 +1,4 @@
-import { type MarketTickEvent, TICKS_MAX_POINTS } from '@buddha/shared';
+import { MARKET_STATUSES, type MarketTickEvent, TICKS_MAX_POINTS } from '@buddha/shared';
 import fc from 'fast-check';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { type PriceSeries, type PriceTick } from './api';
@@ -6,10 +6,9 @@ import {
   DEFAULT_TICK_RANGE,
   TICK_RANGES,
   appendTickToSeries,
+  initialTickRange,
+  isClosedWindow,
   joinSeries,
-  recentDelta,
-  recentMove,
-  rowSupersedesSeries,
   tickRangeWindowSeconds,
   ticksQueryFor,
   ticksQueryOptions,
@@ -28,13 +27,17 @@ const HOUR = 60 * MINUTE;
 
 /** A `1m` request the server coarsened to an hourly grid — the ordinary answer for a day. */
 function series(overrides: Partial<PriceSeries> = {}): PriceSeries {
+  const to = overrides.to ?? '2026-09-07T01:00:00.000Z';
   return {
     resolution: '1m',
     bucketSeconds: 3600,
     from: '2026-09-07T00:00:00.000Z',
-    to: '2026-09-07T01:00:00.000Z',
+    to,
     truncated: false,
     tradeCount: 41,
+    // Read where the window ends, as the server answers an open window (`asOf === to`,
+    // `isClosedWindow`), unless the override names its own `asOf`.
+    asOf: to,
     points: [
       { ts: '2026-09-07T00:00:00.000Z', pYesBp: 4000, trigger: 'trade' },
       { ts: '2026-09-07T01:00:00.000Z', pYesBp: 4200, trigger: 'trade' },
@@ -70,6 +73,15 @@ describe('TICK_RANGES', () => {
   it('opens on a range it actually offers', () => {
     expect(TICK_RANGES).toContain(DEFAULT_TICK_RANGE);
     expect(DEFAULT_TICK_RANGE).toBe('1D');
+  });
+
+  // ADR-0135 C1·C4: 1일 until trading has ended, 전체 (개장~실제 거래 종료) after it.
+  it.each([...MARKET_STATUSES])('opens a %s market on its range', (status) => {
+    const range = initialTickRange(status);
+    expect(TICK_RANGES).toContain(range);
+    expect(range).toBe(
+      ['draft', 'review', 'scheduled', 'open', 'paused'].includes(status) ? '1D' : 'all',
+    );
   });
 });
 
@@ -155,15 +167,7 @@ describe('appendTickToSeries', () => {
 
     expect(merged?.points).toEqual([
       held.points[0],
-      // The move is measured against the point this one REPLACED, which is the only place it
-      // still exists — see `CachedTick.movedFromBp`.
-      {
-        ts: '2026-09-07T01:30:00.000Z',
-        pYesBp: 4600,
-        tradeCount: 42,
-        trigger: 'trade',
-        movedFromBp: 4200,
-      },
+      { ts: '2026-09-07T01:30:00.000Z', pYesBp: 4600, tradeCount: 42, trigger: 'trade' },
     ]);
   });
 
@@ -176,7 +180,6 @@ describe('appendTickToSeries', () => {
       pYesBp: 4600,
       tradeCount: 42,
       trigger: 'trade',
-      movedFromBp: 4200,
     });
   });
 
@@ -190,22 +193,8 @@ describe('appendTickToSeries', () => {
 
     expect(second?.points).toEqual([
       series().points[0],
-      {
-        ts: '2026-09-07T01:30:00.000Z',
-        pYesBp: 4600,
-        tradeCount: 42,
-        trigger: 'trade',
-        movedFromBp: 4200,
-      },
-      // Each live point names the reading IT superseded, so two trades in a row report +5 and
-      // then +5 rather than +6 and +11.
-      {
-        ts: '2026-09-07T02:15:00.000Z',
-        pYesBp: 5100,
-        tradeCount: 43,
-        trigger: 'trade',
-        movedFromBp: 4600,
-      },
+      { ts: '2026-09-07T01:30:00.000Z', pYesBp: 4600, tradeCount: 42, trigger: 'trade' },
+      { ts: '2026-09-07T02:15:00.000Z', pYesBp: 5100, tradeCount: 43, trigger: 'trade' },
     ]);
   });
 
@@ -290,9 +279,6 @@ describe('appendTickToSeries', () => {
       pYesBp: 6000,
       tradeCount: 42,
       trigger: 'trade',
-      // The stale boundary is trimmed FIRST, so the move is measured against the last point
-      // that survives the trim rather than against a price the trade already invalidated.
-      movedFromBp: 4000,
     });
     // That stale boundary carried the pre-trade price across the trade's own instant, so it
     // goes rather than sitting after the live point out of order.
@@ -356,49 +342,6 @@ describe('appendTickToSeries', () => {
   });
 });
 
-describe('recentDelta', () => {
-  it('reports the trade, not the bucket, when several land inside one sampled stride', () => {
-    // THE HAZARD. A 1D window comes back on a 5-minute grid (`tickBucketSeconds`), and
-    // `pushPoint` REPLACES the last point when a tick shares its bucket — so from the second
-    // trade onwards `points.at(-2)` is the PREVIOUS bucket's point and the badge measured the
-    // whole bucket's movement. It accumulated with every further trade: the three trades below
-    // moved the probability +5, +5 and +5%p, and 시장가격 변화 announced +10, +15 and +20 — a
-    // number that is not the move, on the badge PLAN 11.4 shows for five seconds after a trade.
-    let live = series({ bucketSeconds: 300, to: '2026-09-07T01:00:00.000Z' });
-    live = appendTickToSeries(live, tick('2026-09-07T01:01:00.000Z', 4700, 42)) ?? live;
-    expect(recentDelta(live.points)).toBe(5);
-    live = appendTickToSeries(live, tick('2026-09-07T01:02:00.000Z', 5200, 43)) ?? live;
-    expect(recentDelta(live.points)).toBe(5);
-    live = appendTickToSeries(live, tick('2026-09-07T01:03:00.000Z', 5700, 44)) ?? live;
-    expect(recentDelta(live.points)).toBe(5);
-    // All three replaced one another, so the series never grew the sub-stride spike the next
-    // refetch would erase — the rule this fix had to leave alone.
-    expect(live.points).toHaveLength(2);
-  });
-
-  it('falls back to the last step for a series only the server answered', () => {
-    // The first paint, unchanged: the server tags no point, and a market that has been quiet
-    // has its last price carried forward onto the window edge, so the final two points are
-    // equal, the delta is 0 and `deltaLabel` hides the badge (실시간은 조용하게, PLAN 11.1-5).
-    const quiet = series({
-      points: [
-        { ts: '2026-09-07T00:00:00.000Z', pYesBp: 4200, trigger: 'trade' },
-        { ts: '2026-09-07T01:00:00.000Z', pYesBp: 4200, trigger: 'trade' },
-      ],
-    });
-    expect(recentDelta(quiet.points)).toBe(0);
-    expect(recentDelta(series().points)).toBe(2);
-  });
-
-  it('has nothing to report for a series with no points, and for none at all', () => {
-    expect(recentDelta(series({ points: [] }).points)).toBeNull();
-    expect(recentDelta(undefined)).toBeNull();
-    // One point is a market whose first trade is on screen: there is no earlier reading to
-    // measure against, and inventing 0 would claim the probability had not moved.
-    expect(recentDelta(series({ points: [series().points[0]!] }).points)).toBeNull();
-  });
-});
-
 describe('joinSeries', () => {
   /** The live edge the socket drew while a refetch was in flight. */
   const live = (): PriceSeries =>
@@ -418,9 +361,6 @@ describe('joinSeries', () => {
       pYesBp: 6000,
       tradeCount: 42,
       trigger: 'trade',
-      // Carried through the re-push unchanged: the move was measured when the socket CREATED
-      // this point, against the reading it superseded — not against the answer's right edge.
-      movedFromBp: 4200,
     });
     expect(joined.to).toBe('2026-09-07T01:30:00.000Z');
     // Everything the SERVER owns still comes from the answer.
@@ -475,9 +415,17 @@ describe('joinSeries', () => {
     const slid = series({
       from: '2026-09-08T00:00:00.000Z',
       to: '2026-09-08T01:00:00.000Z',
+      asOf: '2026-09-08T01:00:00.000Z',
       points: [],
     });
     expect(joinSeries(live(), slid)).toBe(slid);
+    // A CLOSED answer (ADR-0139) — read after trading ended, so `asOf > to` — is taken whole:
+    // the open window's live point past its `to`, and its later `to`, do not outlast the close.
+    const closed = series({ to: '2026-09-07T00:30:00.000Z', asOf: '2026-09-07T02:00:00.000Z' });
+    expect(isClosedWindow(closed)).toBe(true);
+    expect(isClosedWindow(series())).toBe(false);
+    expect(isClosedWindow(live())).toBe(false);
+    expect(joinSeries(live(), closed)).toBe(closed);
   });
 
   it('replaces rather than doubles a live point inside the last bucket', () => {
@@ -492,8 +440,8 @@ describe('joinSeries', () => {
   it('never lets the right edge move backwards, even with nothing to carry it', () => {
     // Two refetches in flight can land newest-first; the older answer then names an earlier
     // `to` with no point past it for the loop to advance on. `appendTickToSeries` forbids a
-    // backwards `to` for its own writes, and `extendToNow` draws the live probability out to
-    // exactly this instant.
+    // backwards `to` for its own writes, and the chart's dotted hold after the last fill runs
+    // out to exactly this instant.
     const ahead = series({ to: '2026-09-07T05:00:00.000Z' });
     expect(joinSeries(ahead, series()).to).toBe('2026-09-07T05:00:00.000Z');
     // …and it does not run FORWARD on its own: a newer answer's own `to` stands.
@@ -519,87 +467,14 @@ describe('joinSeries', () => {
     });
     const joined = joinSeries(
       held,
-      series({ bucketSeconds: 0, resolution: 'raw', points: [], to: '2026-09-07T00:00:00.000Z' }),
+      series({
+        bucketSeconds: 0,
+        resolution: 'raw',
+        points: [],
+        to: '2026-09-07T00:00:00.000Z',
+        asOf: '2026-09-07T00:00:00.000Z',
+      }),
     );
     expect(joined.points.length).toBeLessThanOrEqual(TICKS_MAX_POINTS);
-  });
-});
-
-describe('rowSupersedesSeries', () => {
-  it('answers yes only when the row names a trade the series does not', () => {
-    // The chart asks this before it draws the row's probability over the series' right edge.
-    // Same trade on both sides — the ordinary path — is provably inert.
-    expect(rowSupersedesSeries(series(), 42)).toBe(true);
-    expect(rowSupersedesSeries(series(), 41)).toBe(false);
-  });
-
-  it('refuses to overrule a series that is the newer of the two', () => {
-    // A live tick already appended: the series is ahead, so the row has nothing to add.
-    const live = appendTickToSeries(series(), tick('2026-09-07T01:30:00.000Z', 6000));
-    expect(rowSupersedesSeries(live, 41)).toBe(false);
-    expect(rowSupersedesSeries(undefined, 99)).toBe(false);
-  });
-
-  it('refuses a series an older API answered, rather than letting the row always win', () => {
-    // `supersedes` takes anything over an absent key, which would turn this into the
-    // unconditional override it exists to avoid.
-    const legacy = { ...series(), tradeCount: undefined } as unknown as ReturnType<typeof series>;
-    expect(rowSupersedesSeries(legacy, 99)).toBe(false);
-  });
-
-  it('never throws out of a render for a count that is not an integer', () => {
-    // `supersedes` compares as BigInt, which THROWS on a fraction or a NaN — and this is the
-    // first caller inside a render, where a throw blanks the page.
-    expect(() => rowSupersedesSeries(series(), Number.NaN)).not.toThrow();
-    expect(rowSupersedesSeries(series(), Number.NaN)).toBe(false);
-    expect(rowSupersedesSeries(series(), 42.5)).toBe(false);
-    expect(rowSupersedesSeries({ ...series(), tradeCount: 1.5 }, 42)).toBe(false);
-  });
-});
-
-describe('recentMove', () => {
-  it('gives every move a monotone identity, which no later move can repeat', () => {
-    // THE HAZARD: `ProbabilityDisplay` hides a badge whose identity matches the last one it
-    // DISMISSED, and `dismissed` holds the last move whose five-second timer actually FIRED — so
-    // a move superseded before then leaves an OLDER identity in the slot. A value-based key
-    // therefore fails on an oscillation: up, down, up put the third move back on the first
-    // move's key (measured [SHOWN, SHOWN, NOT SHOWN]). `tradeCount` only ever increases.
-    let live = series({ bucketSeconds: 300, to: '2026-09-07T01:00:00.000Z' });
-    const ids: string[] = [];
-    for (const [i, bp] of [4700, 4200, 4700].entries()) {
-      live =
-        appendTickToSeries(live, tick(`2026-09-07T01:0${String(i + 1)}:00.000Z`, bp, 42 + i)) ??
-        live;
-      const move = recentMove(live.points);
-      ids.push(move?.moveId ?? '(none)');
-    }
-    expect(ids).toEqual(['t42', 't43', 't44']);
-    // The probability came back to where it began, and the identities still differ.
-    expect(new Set(ids).size).toBe(3);
-  });
-
-  it('reads the delta and its identity off the SAME point', () => {
-    // Read apart they can drift; `recentMove` is what makes that impossible.
-    const live =
-      appendTickToSeries(
-        series({ bucketSeconds: 300 }),
-        tick('2026-09-07T01:30:00.000Z', 4700, 42),
-      ) ?? series();
-    expect(recentMove(live.points)).toEqual({
-      deltaPoints: recentDelta(live.points),
-      moveId: 't42',
-    });
-  });
-
-  it('falls back to the instant for a server point, which carries no counter', () => {
-    // A pristine answer has no socket-tagged point; its right edge is pinned at the answer's
-    // `to`, which moves with every fetch, so the instant is monotone here too.
-    const answered = series();
-    expect(recentMove(answered.points)?.moveId).toBe(`s${String(answered.points.at(-1)?.ts)}`);
-  });
-
-  it('has nothing to report when the delta does not', () => {
-    expect(recentMove(undefined)).toBeNull();
-    expect(recentMove(series({ points: [] }).points)).toBeNull();
   });
 });
