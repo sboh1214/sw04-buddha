@@ -33,8 +33,9 @@ export const TICKS_KEY = ['ticks'] as const;
 export const MARKET_FILLS_KEY = ['market-fills'] as const;
 /**
  * 공개 호가 (#179, ADR-0114): `GET /markets/:id/book`, the same for every reader (no cookie), so
- * public and dehydratable. Nothing reads it yet — #122's 호가창 query will — but the realtime
- * provider already restarts it on `market:book` and `market:status` and on a resnapshot.
+ * public and dehydratable. The detail's 호가창 reads it (`useOrderBook`, #122, ADR-0138) in the
+ * browser only — the page seeds nothing under it — and the realtime provider restarts it on
+ * `market:book` and `market:status` and on a resnapshot.
  */
 export const MARKET_BOOK_KEY = ['market-book'] as const;
 /** `_QUERY_KEY` rather than `_KEY` because the admin screens already import it under that name. */

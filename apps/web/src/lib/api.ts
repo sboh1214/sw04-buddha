@@ -176,6 +176,14 @@ export type PriceTick = components['schemas']['PriceTick'];
 export type PriceSeries = components['schemas']['PriceSeries'];
 export type Position = components['schemas']['Position'];
 export type Order = components['schemas']['Order'];
+/**
+ * 공개 호가 (#179, ADR-0114): `GET /markets/:id/book` — per contract, every level's price and
+ * summed quantity on each side, the best prices, and why the market takes no order if it does
+ * not. What the detail's 호가창 draws (#122, ADR-0138).
+ */
+export type OrderBook = components['schemas']['OrderBook'];
+export type OrderBookContract = components['schemas']['OrderBookContract'];
+export type OrderBookLevel = components['schemas']['OrderBookLevel'];
 /** Whether the caller watches one market (#89): `GET` and `PUT /me/watchlist/{marketId}`. */
 export type WatchState = components['schemas']['WatchState'];
 /** `PUT /me/watchlist/{marketId}`: watch or unwatch, and the account on screen (ADR-0064). */

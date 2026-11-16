@@ -1,4 +1,4 @@
-import type { APIRequestContext, APIResponse } from '@playwright/test';
+import type { APIRequestContext, APIResponse, Page } from '@playwright/test';
 import type {
   AdminMarket,
   Fill,
@@ -17,12 +17,15 @@ import { formatKst } from '../src/lib/datetime';
 import {
   adminAccount,
   createOpenMarket,
+  documentSurvived,
   expect,
   freshEmail,
+  markDocument,
   meOf,
   pauseMarket,
   signIn,
   signUp,
+  subscribed,
   test,
   workerProbeDisabled,
 } from './helpers';
@@ -49,21 +52,26 @@ import {
  * NOT_FOUND, as an id naming none; and an admin's pause cancels A's resting order on another
  * market as 일시 중단. Each member sends a handful of orders, well under the limit.
  *
- * 공개 호가와 견적 (#179, ADR-0114), through the API too — the 호가창 is #122's, the order panel
- * #66's and the holdings screen #67's: a visitor with no cookie reads the book of a market where
+ * 공개 호가와 견적 (#179, ADR-0114), through the API too — the order panel is #66's and the
+ * holdings screen #67's: a visitor with no cookie reads the book of a market where
  * A rests a NO bid and a YES bid and B a YES sell — A's NO bid once as a YES ask merged with B's
  * sell at one price, once as a NO bid, every level summed and nothing else — and '호가 없음' as a
  * null best price; the visitor's quotes (an empty book, a budget, a quantity) are what member C's
  * same orders with the quoted limit then fill; B's 매도 가능액 is its unlocked YES quoted with the
  * resting sell apart, and what B's own sell then fills; A's stops at A's own bid where the public
  * quote fills it (ADR-0111 P9). Quotes and reads are no orders: A and B send three orders, C two.
+ * The detail's 호가창 (#122, ADR-0138) rides on the same market rather than a test of its own: a
+ * signed-out page of the visitor's and B's draw the same rows; the visitor's, never reloaded,
+ * follows the book to '호가 없음' and 최근 체결 to C's fills; then A rests five more YES bids of
+ * one (A sends eight orders in all), both deep sides fold to five with a 더 보기, one opened opens
+ * that side only and turns into 접기, which folds it back, and a reload folds it again.
  *
  * 시장 마감과 주문 만료 (#120, ADR-0115), through the API too — the MY lists are #123's and #124's,
  * the notice #134's: on a market whose close is 70 s away (a worker to wait on, as pause.spec.ts's
  * close), A's NO bid rests and fills one, B's YES sell of that one rests; an order sent past the
  * close is a 마감 row; the worker closes the market and ends both orders as 만료 — A's fill kept,
- * every lock back, both holdings as they were — and the book is empty with the reason 마감. A
- * sends one order, B three.
+ * every lock back, both holdings as they were — and the book is empty with the reason 마감, which
+ * a visitor's open 호가창 then says without a reload (#122, ADR-0138). A sends one order, B three.
  *
  * 시장 통계 (#121, ADR-0116; ADR-0107 결정 1 #177 11·12·13항, 결정 4 #121 행), through the API
  * too — the cards, chart and recent-fill area that draw them are #61's, #64's and #122's: a
@@ -473,6 +481,49 @@ async function readBook(context: APIRequestContext, marketId: string): Promise<O
   return dataOf<OrderBook>(await context.get(`/api/v1/markets/${marketId}/book`));
 }
 
+/** One side of one contract in the detail's 호가창 (#122, ADR-0138), as its test ids name it. */
+type BookSideId = 'yes-asks' | 'yes-bids' | 'no-asks' | 'no-bids';
+
+/** The rows a side draws, best first, each `[price, quantity]`; none is '호가 없음'. */
+type BookSideRows = readonly (readonly [priceCoin: number, qty: number])[];
+
+/** A price per contract as the 호가창 writes it (`formatPricePerContract`): '60.00 Coin'. */
+const bookPrice = (priceCoin: number) => `${priceCoin.toFixed(2)} Coin`;
+
+/**
+ * The 호가창 side `side` on `page` draws exactly `rows`, in order: each level's price and summed
+ * quantity, and on its title line the best price — the first row's, as the book answers it — or
+ * '호가 없음' with no row at all. Nothing else is asserted to be there: a row is two cells.
+ */
+async function expectBookSide(page: Page, side: BookSideId, rows: BookSideRows): Promise<void> {
+  const testId = `market-order-book-${side}`;
+  await expect(page.getByTestId(testId)).toBeVisible();
+  const levels = page.getByTestId(testId).locator(`[data-testid^="${testId}-level-"]`);
+  await expect(levels).toHaveCount(rows.length);
+  const [best] = rows;
+  if (best === undefined) {
+    await expect(page.getByTestId(`${testId}-empty`)).toHaveText(copy.marketBookEmpty);
+    await expect(page.getByTestId(`${testId}-best`)).toHaveCount(0);
+    return;
+  }
+  await expect(page.getByTestId(`${testId}-best`)).toHaveText(
+    `${copy.marketBookBest} ${bookPrice(best[0])}`,
+  );
+  for (const [index, [priceCoin, qty]] of rows.entries()) {
+    const row = levels.nth(index);
+    await expect(row).toHaveAttribute('data-testid', `${testId}-level-${String(priceCoin)}`);
+    await expect(row).toContainText(bookPrice(priceCoin));
+    await expect(row).toContainText(`${String(qty)}${copy.unitContracts}`);
+  }
+}
+
+/** Below md the 호가 and 거래 내역 panels take turns behind the switch (ADR-0067). */
+async function showActivity(page: Page, view: 'book' | 'history'): Promise<void> {
+  if ((page.viewportSize()?.width ?? 0) >= 768) return;
+  const label = view === 'book' ? copy.marketDetailViewBook : copy.marketTradeHistory;
+  await page.getByTestId('market-activity-switch').getByText(label, { exact: true }).click();
+}
+
 /** `POST /markets/:id/quote`: the terms with no account and no request id. */
 async function quote(
   context: APIRequestContext,
@@ -642,6 +693,31 @@ test.describe('공개 호가와 견적 (#179)', () => {
       });
       expect(await readBook(b, market.id)).toEqual(book);
 
+      // --- 호가창 (#122, ADR-0138) on screen: a signed-out visitor's detail (a page of the
+      // visitor's context: no new sign-up) and member B's draw the same rows — the book's levels
+      // and best prices as they are, A's NO bid once as the YES ask beside B's sell and once as
+      // the NO bid, and YES 60 beside NO 70 with nothing making them 100. Each joins the room
+      // first.
+      const visitorPage = await visitorContext.newPage();
+      const firstBook: Record<BookSideId, BookSideRows> = {
+        'yes-asks': [[60, 2]],
+        'yes-bids': [[30, 3]],
+        'no-asks': [[70, 3]],
+        'no-bids': [[40, 1]],
+      };
+      for (const reader of [visitorPage, page]) {
+        const joined = subscribed(reader, market.id);
+        await reader.goto(`/markets/${market.slug}`);
+        await joined;
+        for (const [side, rows] of Object.entries(firstBook) as [BookSideId, BookSideRows][]) {
+          await expectBookSide(reader, side, rows);
+        }
+      }
+      await markDocument(visitorPage);
+      const fillsBefore = await dataOf<Fill[]>(
+        await visitor.get(`/api/v1/markets/${market.id}/fills`),
+      );
+
       // --- 매도 가능액: a visitor has none to read; B's YES is 3 held, 1 in its resting sell
       // (shown apart), 2 quoted as an immediate sell into A's 30 within the protection; no NO.
       expect((await visitor.get(`/api/v1/me/markets/${market.id}/sellable`)).status()).toBe(401);
@@ -775,6 +851,26 @@ test.describe('공개 호가와 견적 (#179)', () => {
           bestBidCoin: null,
         },
       ]);
+      // …and on the visitor's detail, never reloaded (`market:book`): '호가 없음' on those two
+      // sides, the other two as they were; 최근 체결 holds C's fills too (`market:trade`).
+      await expectBookSide(visitorPage, 'yes-asks', []);
+      await expectBookSide(visitorPage, 'no-bids', []);
+      await expectBookSide(visitorPage, 'yes-bids', [[30, 3]]);
+      await expectBookSide(visitorPage, 'no-asks', [[70, 3]]);
+      const fillsAfter = await dataOf<Fill[]>(
+        await visitor.get(`/api/v1/markets/${market.id}/fills`),
+      );
+      expect(fillsAfter.length).toBeGreaterThan(fillsBefore.length);
+      await showActivity(visitorPage, 'history');
+      const fillRows = visitorPage.getByTestId('market-fills');
+      await expect(fillRows.locator('[data-testid^="market-fill-"]')).toHaveCount(
+        fillsAfter.length,
+      );
+      for (const fill of fillsAfter) {
+        await expect(fillRows.getByTestId(`market-fill-${fill.id}`)).toBeVisible();
+      }
+      await showActivity(visitorPage, 'book');
+      expect(await documentSurvived(visitorPage)).toBe(true);
 
       // --- B's sell was bought: its 2 YES are all unlocked now, and its own immediate sell with
       // the quoted limit fills what its 매도 가능액 said.
@@ -791,6 +887,65 @@ test.describe('공개 호가와 견적 (#179)', () => {
         qty: 2,
       });
       expect(asQuoted(bSold.order)).toEqual(quoted(bNow.quote));
+
+      // --- Five levels a side, then 더 보기 (ADR-0135 B2): A rests YES bids of one at 14 down to
+      // 10, after B's sale left A's 30 with one. YES 매수호가 is six levels, and so is NO 매도호가 —
+      // each of A's YES bids converted, once. Both fold to five with a 더 보기 on the open page.
+      for (const limitPriceCoin of [14, 13, 12, 11, 10]) {
+        await placeOrder(a, market.id, crypto.randomUUID(), {
+          ...gtc,
+          outcome: 'YES',
+          limitPriceCoin,
+          qty: 1,
+        });
+      }
+      const deepYesBids: BookSideRows = [30, 14, 13, 12, 11, 10].map((p) => [p, 1] as const);
+      const deepNoAsks: BookSideRows = [70, 86, 87, 88, 89, 90].map((p) => [p, 1] as const);
+      await expectBookSide(visitorPage, 'yes-bids', deepYesBids.slice(0, 5));
+      await expectBookSide(visitorPage, 'no-asks', deepNoAsks.slice(0, 5));
+      const yesMore = visitorPage.getByTestId('market-order-book-yes-bids-more');
+      const noMore = visitorPage.getByTestId('market-order-book-no-asks-more');
+      for (const more of [yesMore, noMore]) {
+        await expect(more).toHaveText(copy.marketBookShowAll);
+        await expect(more).toHaveAttribute('aria-expanded', 'false');
+      }
+      await expect(yesMore).toHaveAttribute(
+        'aria-label',
+        `${copy.yes} ${copy.marketBookBids} ${copy.marketBookShowAll}`,
+      );
+      // Pressed, it opens that side only: six YES bids, NO asks still five with their 더 보기.
+      // Below md the 매수 bar's scroll padding keeps a scrolled-to control above it.
+      await yesMore.scrollIntoViewIfNeeded();
+      await yesMore.click();
+      await expectBookSide(visitorPage, 'yes-bids', deepYesBids);
+      // The same button stays as 접기 and keeps the focus (owner decision 2026-11-16, ADR-0138).
+      await expect(yesMore).toHaveText(copy.marketBookCollapse);
+      await expect(yesMore).toHaveAttribute('aria-expanded', 'true');
+      await expect(yesMore).toHaveAttribute(
+        'aria-label',
+        `${copy.yes} ${copy.marketBookBids} ${copy.marketBookCollapse}`,
+      );
+      await expect(yesMore).toBeFocused();
+      await expectBookSide(visitorPage, 'no-asks', deepNoAsks.slice(0, 5));
+      await expect(noMore).toHaveText(copy.marketBookShowAll);
+      await expect(noMore).toHaveAttribute('aria-expanded', 'false');
+      // 접기 folds that side back to five, and the button reads 더 보기 again.
+      await yesMore.scrollIntoViewIfNeeded();
+      await yesMore.click();
+      await expectBookSide(visitorPage, 'yes-bids', deepYesBids.slice(0, 5));
+      await expect(yesMore).toHaveText(copy.marketBookShowAll);
+      await expect(yesMore).toHaveAttribute('aria-expanded', 'false');
+      await expect(yesMore).toBeFocused();
+      await expectBookSide(visitorPage, 'no-asks', deepNoAsks.slice(0, 5));
+      expect(await documentSurvived(visitorPage)).toBe(true);
+      // Opened again, a reload reads the same book, folded again.
+      await yesMore.scrollIntoViewIfNeeded();
+      await yesMore.click();
+      await expectBookSide(visitorPage, 'yes-bids', deepYesBids);
+      await visitorPage.reload();
+      await expectBookSide(visitorPage, 'yes-bids', deepYesBids.slice(0, 5));
+      await expectBookSide(visitorPage, 'no-asks', deepNoAsks.slice(0, 5));
+      await expect(yesMore).toHaveText(copy.marketBookShowAll);
     } finally {
       await visitorContext.close();
       await aContext.close();
@@ -826,6 +981,7 @@ test.describe('시장 마감과 주문 만료 (#120)', () => {
     // Both members sign up before the clock starts: CLOSE_IN_MS budgets the market's making and
     // the orders, not two sign-ups as well.
     const bContext = await browser.newContext();
+    const visitorContext = await browser.newContext();
     try {
       const bPage = await bContext.newPage();
       await signUp(page, freshEmail());
@@ -870,6 +1026,16 @@ test.describe('시장 마감과 주문 만료 (#120)', () => {
           .contracts[0],
       ).toMatchObject({ outcome: 'YES', qty: 1, restingSellQty: 1, unlockedQty: 0 });
 
+      // --- A visitor's detail, opened inside the 70 s window, after the orders, and in the
+      // market's room: the 호가창 (#122, ADR-0138) draws the contracts, with no reason line.
+      const visitorPage = await visitorContext.newPage();
+      const joined = subscribed(visitorPage, market.id);
+      await visitorPage.goto(`/markets/${market.slug}`);
+      await joined;
+      await expect(visitorPage.getByTestId('market-order-book-yes')).toBeVisible();
+      await expect(visitorPage.getByTestId('market-order-book-reason')).toHaveCount(0);
+      await markDocument(visitorPage);
+
       // --- From close_at a new order is a 마감 row, whoever answers it: the intake's own clock
       // while the market is still OPEN, or the status once the worker has closed it (which one
       // is not deterministic here; the db, API and shared tests hold the OPEN window).
@@ -901,6 +1067,13 @@ test.describe('시장 마감과 주문 만료 (#120)', () => {
           { timeout: CLOSE_WAIT_MS, intervals: [2_000] },
         )
         .toBe('closed');
+      // The visitor's 호가창, never reloaded, says 마감 in place of the contracts — by the close's
+      // `market:status` here; the read a second past close_at is the unit tests' (order-book.test).
+      await expect(visitorPage.getByTestId('market-order-book-reason')).toHaveText(
+        copy.marketBookReasonClosed,
+      );
+      await expect(visitorPage.getByTestId('market-order-book-yes')).toHaveCount(0);
+      expect(await documentSurvived(visitorPage)).toBe(true);
 
       // A's order: 만료 (no cancel reason — 만료 is a state), the fill kept, the rest ended.
       const expired = await dataOf<Order>(await a.get(`/api/v1/me/orders/${resting.id}`));
@@ -957,6 +1130,7 @@ test.describe('시장 마감과 주문 만료 (#120)', () => {
       ).toContainText(copy.orderStatusExpired);
     } finally {
       await bContext.close();
+      await visitorContext.close();
     }
   });
 });

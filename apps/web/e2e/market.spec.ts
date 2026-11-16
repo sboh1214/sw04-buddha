@@ -33,9 +33,12 @@ import {
  * badge, the NO complement) is drawn here from the API's answers with a price put in.
  *
  * The frame itself (#122): N02 §4's order at each width, the two columns from md up, the mobile
- * 호가·거래 내역 switch, the 매수 bar on the tab bar and its sheet, the 준비 중 slots, which of
- * them only a signed-in reader gets and the one sign-in prompt a visitor gets instead — '시장 상세 ·
- * 375px', '시장 상세 · 1280px' and '시장 상세 · 상태와 로그인' below.
+ * 호가·거래 내역 switch, the 매수 bar on the tab bar and its sheet, the 준비 중 slots (내 거래, 내
+ * 대기 주문), which of them only a signed-in reader gets and the one sign-in prompt a visitor gets
+ * instead — '시장 상세 · 375px', '시장 상세 · 1280px' and '시장 상세 · 상태와 로그인' below. The 호가창
+ * (#122, ADR-0138) is the public book: YES over NO below lg and side by side at 1280, '호가 없음' on
+ * every side of a market nobody quotes, and a closed market's 마감 line; its rows and their moves
+ * are orders.spec.ts's '공개 호가와 견적 (#179)'.
  *
  * Every test creates its own market through the admin API, so nothing here depends on which
  * markets `pnpm db:seed` wrote or on what today's date does to their close times (A-M3-31).
@@ -951,7 +954,21 @@ test.describe('시장 상세 · 375px', () => {
     ).toBeChecked();
     await expect(book).toBeVisible();
     await expect(book.getByRole('heading', { level: 2 })).toHaveText(copy.marketOrderBook);
-    await expect(book).toContainText(copy.comingSoon);
+    // The public book now (#122, ADR-0138): YES over NO at this width (ADR-0135 B1), each side
+    // '호가 없음' on a market nobody quotes — open, so no reason line. Measured once the contracts
+    // are drawn: the skeleton before them is a different height.
+    await expect(book.getByRole('heading', { level: 3 })).toHaveText([copy.yes, copy.no]);
+    for (const side of ['yes-asks', 'yes-bids', 'no-asks', 'no-bids']) {
+      await expect(book.getByTestId(`market-order-book-${side}-empty`), side).toHaveText(
+        copy.marketBookEmpty,
+      );
+    }
+    await expect(book.getByTestId('market-order-book-reason')).toHaveCount(0);
+    const [yesBox, noBox] = await Promise.all([
+      boxIn(book, 'market-order-book-yes'),
+      boxIn(book, 'market-order-book-no'),
+    ]);
+    expect(yesBox.y + yesBox.height).toBeLessThanOrEqual(noBox.y);
     await expect(fills).toBeHidden();
 
     await switcher.getByText(copy.marketTradeHistory).click();
@@ -1092,6 +1109,15 @@ test.describe('시장 상세 · 1280px', () => {
     await expect(page.getByTestId('market-order-book')).toBeVisible();
     await expect(page.getByTestId('market-fills')).toBeVisible();
     await expect(page.getByTestId('order-area-notice')).toHaveText(copy.tradePreparing);
+    // 호가창 (#122, ADR-0138): YES and NO side by side at this width — level, YES on the left.
+    const bookCard = page.getByTestId('market-order-book');
+    await expect(bookCard.getByRole('heading', { level: 3 })).toHaveText([copy.yes, copy.no]);
+    const [yesBook, noBook] = await Promise.all([
+      boxIn(bookCard, 'market-order-book-yes'),
+      boxIn(bookCard, 'market-order-book-no'),
+    ]);
+    expect(Math.abs(yesBook.y - noBook.y)).toBeLessThanOrEqual(1);
+    expect(yesBook.x + yesBook.width).toBeLessThanOrEqual(noBook.x);
 
     const [sections, summary, panel] = await Promise.all([
       boxOf(page, 'market-detail-sections'),
@@ -1146,6 +1172,14 @@ test.describe('시장 상세 · 상태와 로그인', () => {
     await expect(page.getByRole('button', { name: 'NO 매수' })).toHaveCount(0);
     await expect(page.getByTestId('order-area')).toHaveCount(0);
     await expect(page.getByRole('dialog')).toHaveCount(0);
+    // 호가창 (#122, ADR-0138): the book's reason, 마감, in one line in place of the contracts — the
+    // reject reason's name, not the badge's label (ADR-0135 B3).
+    const book = page.getByTestId('market-order-book');
+    await expect(book.getByTestId('market-order-book-reason')).toHaveText(
+      copy.marketBookReasonClosed,
+    );
+    await expect(book.getByRole('heading', { level: 3 })).toHaveCount(0);
+    await expect(book.getByRole('heading', { level: 2 })).toHaveText(copy.marketOrderBook);
     // The rest of the frame is the same for every public status (공개 판정 기록: this width's copy).
     for (const slot of [
       'market-order-book',

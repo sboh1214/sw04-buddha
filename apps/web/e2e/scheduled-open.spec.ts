@@ -256,6 +256,10 @@ test.describe('예정 개장', () => {
       await expect(page.getByTestId('market-status-notice')).toContainText(
         copy.marketScheduledNotice,
       );
+      // The 호가창 says 개장 전 in one line, no contracts (#122, ADR-0138).
+      await expect(page.getByTestId('market-order-book-reason')).toHaveText(
+        copy.marketBookReasonNotOpenYet,
+      );
       await markDocument(page);
 
       // --- admin 1 on its detail: 개장 예정, the note that it opens by itself at its scheduled
@@ -301,9 +305,12 @@ test.describe('예정 개장', () => {
       expect(Date.parse(opened.ruleVersions[0]?.createdAt ?? '')).toBe(Date.parse(openAt));
 
       // --- the visitor's detail took the `market:status` the worker published: 거래 중 and no
-      // 개장 예정 notice, without a reload.
+      // 개장 예정 notice, without a reload — and the 호가창 read its book again on it: no reason
+      // line, the contracts in its place (#122, ADR-0138).
       await expect(badge).toHaveText(copy.marketStatusOpen);
       await expect(page.getByTestId('market-status-notice')).toHaveCount(0);
+      await expect(page.getByTestId('market-order-book-reason')).toHaveCount(0);
+      await expect(page.getByTestId('market-order-book-yes')).toHaveCount(1);
       expect(await documentSurvived(page)).toBe(true);
 
       // --- the admin detail, left open, read it again by itself (it re-reads a 개장 예정 market from

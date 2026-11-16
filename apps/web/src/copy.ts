@@ -2501,13 +2501,33 @@ export const copy = {
   marketFillsEmpty: '아직 체결이 없습니다.',
   marketMyPosition: '내 포지션',
   marketMyPositionEmpty: '아직 이 시장에 참여하지 않았습니다.',
-  // 상세의 배치 틀 (#122, ADR-0067). 배경은 시장의 설명(description)이다. 나머지는 내용을 아직
-  // 만들 수 없어 제목과 comingSoon('준비 중입니다.')으로 보이는 자리다(ADR-0061 결정 3의 #122 행):
-  // 호가창(#179), 내 거래(#123, ADR-0116 결정 10의 18), 내 대기 주문(#123). 공개 판정 기록은 #24가 채운다. 자리의 제목은 그 결정의
-  // 글 그대로다(오너 결정 2026-10-17). 내 거래와 내 대기 주문은 로그인한 본인에게만 보인다
-  // (ADR-0061 결정 1의 18).
+  // 상세의 배치 틀 (#122, ADR-0067). 배경은 시장의 설명(description)이다. 내 거래와 내 대기
+  // 주문(#123, ADR-0116 결정 10의 18)은 내용을 아직 만들 수 없어 제목과 comingSoon('준비
+  // 중입니다.')으로 보이는 자리다(ADR-0061 결정 3의 #122 행). 호가창은 #122가(ADR-0138), 공개 판정
+  // 기록은 #24가 채웠다. 자리의 제목은 그 결정의 글 그대로다(오너 결정 2026-10-17). 내 거래와 내
+  // 대기 주문은 로그인한 본인에게만 보인다(ADR-0061 결정 1의 18).
   marketBackground: '배경',
   marketOrderBook: '호가창',
+  // 호가창 (#122, ADR-0138; ADR-0135 B1·B2·B3). YES·NO는 copy.yes·copy.no다. 쪽 이름은 호가의
+  // 쪽이지 계정의 방향이 아니다. 빈 쪽은 '호가 없음'(N02 §5)이고 거절 사유 '호가 부족'과 다르다.
+  // 칸은 '가격'·'수량' 둘이다('잔량'은 쓰지 않는다). 낱말은 시안에서 승인받았다(2026-11-16).
+  marketBookAsks: '매도호가',
+  marketBookBids: '매수호가',
+  marketBookBest: '최우선',
+  marketBookEmpty: '호가 없음',
+  marketBookPrice: '가격',
+  marketBookQty: '수량',
+  // 글자는 목록의 '더 보기'와 같지만 다시 읽지 않는다: 이미 받은 그 쪽의 가격대를 펼칠 뿐이라
+  // (B2) 알릴 실패가 없고, 쪽 단위 목록을 훑는 load-more-failed.test.ts(`copy.loadMore`) 밖이다.
+  marketBookShowAll: '더 보기',
+  // 펼친 쪽에서 같은 버튼이 바뀌는 글자(오너 결정 2026-11-16): 누르면 그 쪽을 다시 5단계로 접는다.
+  // 다른 화면의 '…접기'(adminLinkFlagHideItems·consentHideText)와 따로 둔다.
+  marketBookCollapse: '접기',
+  // 거래할 수 없는 시장의 사유 한 줄(B3). 호가 답의 사유를 거절 사유 이름(개장 전·일시 중단·마감)
+  // 으로 말한다 — #173의 상태 라벨이 아니다(마감 시각이 지난 '거래 중' 시장도 '마감'이다).
+  marketBookReasonNotOpenYet: '개장 전에는 거래할 수 없습니다.',
+  marketBookReasonPaused: '일시 중단 중에는 거래할 수 없습니다.',
+  marketBookReasonClosed: '마감되어 거래할 수 없습니다.',
   marketMyTrades: '내 거래',
   marketMyOpenOrders: '내 대기 주문',
   marketJudgingRecord: '공개 판정 기록',

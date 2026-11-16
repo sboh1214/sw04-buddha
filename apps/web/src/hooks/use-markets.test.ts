@@ -15,6 +15,7 @@ import {
   type MarketFilters,
   type MarketSearch,
   dehydratePublic,
+  marketBookKey,
   marketKey,
   marketSearchKey,
   marketsKey,
@@ -36,6 +37,7 @@ import {
   marketQueryOptions,
   marketSearchInfiniteQueryOptions,
   marketsInfiniteQueryOptions,
+  orderBookQueryOptions,
   relatedMarketsInfiniteQueryOptions,
 } from './use-markets';
 
@@ -747,6 +749,34 @@ describe('a detail’s 관련 시장 (#65, ADR-0068)', () => {
       queryClient.clear();
       serverClient.clear();
     }
+  });
+});
+
+describe('a detail’s 호가창 (#122, ADR-0138)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('keys and asks for the book by the lower-cased market, the key the signal restarts', async () => {
+    // `as never`: see 'the request each list sends' above.
+    const book = { marketId: ID, marketRejectReason: null, contracts: [] };
+    const spy = vi.spyOn(api, 'GET').mockResolvedValue({
+      data: { data: book },
+      response: new Response(null, { status: 200 }),
+    } as never);
+    const options = orderBookQueryOptions(ID.toUpperCase());
+    expect(options.queryKey).toEqual(marketBookKey(ID));
+    expect(options.queryKey).toEqual(['market-book', ID]);
+    await expect(options.queryFn()).resolves.toEqual(book);
+    const calls = spy.mock.calls as unknown as [string, { params: { path: unknown } }][];
+    expect(calls.map(([route, init]) => ({ route, path: init.params.path }))).toEqual([
+      { route: '/api/v1/markets/{id}/book', path: { id: ID } },
+    ]);
+  });
+
+  it('reads the book again on every mount, so a return to the detail misses no signal', () => {
+    // The room is left with the detail, and nothing restarts the key on a re-join (ADR-0138 2-1).
+    expect(orderBookQueryOptions(ID).refetchOnMount).toBe('always');
   });
 });
 

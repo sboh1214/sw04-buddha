@@ -64,8 +64,8 @@ export function RecentFills({
       </Card.Header>
       <Card.Body>
         {/* A refetch that FAILED keeps the rows it last answered, and on this list that silence
-            costs a row: `market:trade` now carries the public row (#121), but merging it into the
-            cache is the recent-fill area's (#122), so the refetch is still the only path a new
+            costs a row: `market:trade` carries the public row (#121), but #122 kept the re-read
+            rather than merge it into the cache (ADR-0138), so the refetch is the only path a new
             fill arrives by. The rows stay — the same reading `market-list.tsx` takes — with the
             same notice and a way back. */}
         {view === 'stale' && (

@@ -355,6 +355,12 @@ test.describe('거래 일시 중단', () => {
       await expect(badge).toHaveText(copy.marketStatusPaused);
       await expect(page.getByTestId('market-status-notice')).toContainText(copy.marketPausedNotice);
       await expect(page.getByTestId('order-area')).toHaveCount(0);
+      // …and the 호가창 says why in one line, the book read again on `market:status` (#122,
+      // ADR-0138): 일시 중단, a whole market's pause — not a quiet bot's empty sides.
+      await expect(page.getByTestId('market-order-book-reason')).toHaveText(
+        copy.marketBookReasonPaused,
+      );
+      await expect(page.getByTestId('market-order-book-yes')).toHaveCount(0);
       expect(await documentSurvived(page)).toBe(true);
       // #24 (ADR-0121 decision 1) publishes the pause's note and result-publication instant
       // through its allowlisted history, without the administrator-only pause or identity.
@@ -523,9 +529,12 @@ test.describe('거래 일시 중단', () => {
       await secondContext.close();
     }
 
-    // --- the visitor's detail, never reloaded: 거래 중 again, with no notice.
+    // --- the visitor's detail, never reloaded: 거래 중 again, with no notice — and the 호가창's
+    // contracts back in place of its reason line (#122, ADR-0138).
     await expect(badge).toHaveText(copy.marketStatusOpen);
     await expect(page.getByTestId('market-status-notice')).toHaveCount(0);
+    await expect(page.getByTestId('market-order-book-reason')).toHaveCount(0);
+    await expect(page.getByTestId('market-order-book-yes')).toHaveCount(1);
     expect(await documentSurvived(page)).toBe(true);
 
     // --- the records: `resumed` by admin 2 after `paused` by admin 1, both naming the pause; the
@@ -796,9 +805,13 @@ test.describe('거래 일시 중단', () => {
       await secondContext.close();
     }
 
-    // --- the visitor's detail, never reloaded: 거래 마감 and its notice.
+    // --- the visitor's detail, never reloaded: 거래 마감 and its notice, and the 호가창's 마감 line
+    // (#122, ADR-0138).
     await expect(badge).toHaveText(copy.marketStatusClosed);
     await expect(page.getByTestId('market-status-notice')).toContainText(copy.marketClosedNotice);
+    await expect(page.getByTestId('market-order-book-reason')).toHaveText(
+      copy.marketBookReasonClosed,
+    );
     expect(await documentSurvived(page)).toBe(true);
 
     // --- the records: `closed` by admin 2 from PAUSED, an early close naming the pause, the
@@ -907,10 +920,15 @@ test.describe('거래 일시 중단', () => {
       await secondContext.close();
     }
 
-    // --- the visitor's detail, never reloaded: 취소 and its notice.
+    // --- the visitor's detail, never reloaded: 취소 and its notice. The 호가창 says 마감 — a
+    // cancelled market's reason in the book is 마감 (ADR-0135 decision 4), the badge says 취소
+    // (#122, ADR-0138).
     await expect(badge).toHaveText(copy.marketStatusCancelled);
     await expect(page.getByTestId('market-status-notice')).toContainText(
       copy.marketCancelledNotice,
+    );
+    await expect(page.getByTestId('market-order-book-reason')).toHaveText(
+      copy.marketBookReasonClosed,
     );
     expect(await documentSurvived(page)).toBe(true);
 

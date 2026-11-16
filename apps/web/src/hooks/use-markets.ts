@@ -1,11 +1,12 @@
 'use client';
 
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { type Market, api, unwrap } from '@/lib/api';
+import { type Market, type OrderBook, api, unwrap } from '@/lib/api';
 import { settlementPollInterval } from '@/lib/market-admin';
 import {
   type MarketFilters,
   type MarketSearch,
+  marketBookKey,
   marketKey,
   marketSearchKey,
   marketsKey,
@@ -20,7 +21,7 @@ import { useMarketFills as useMarketFillsQuery } from './use-admin-markets';
 
 /**
  * The public market screens' reads (PLAN 11.4-11.5): the home list, the detail row, its price
- * series and its fills.
+ * series, its fills and its book.
  *
  * Not one query key is declared here. `lib/market-keys.ts` owns them all because the server
  * components seed the cache under those keys, and a server component cannot take a key from a
@@ -196,6 +197,36 @@ export function usePublicMarketFills(marketId: string, enabled = true) {
  * and it is spelled like the admin hook because it is the admin hook.
  */
 export { usePublicMarketFills as useMarketFills };
+
+/**
+ * One market's public book (`GET /markets/:id/book`, #179, ADR-0114), the detail's 호가창 (#122,
+ * ADR-0138) and the order panel's (#66), keyed and requested by the canonical lower-cased uuid:
+ * the `market:book` signal names the row's own id, and the realtime provider restarts this key
+ * on it, on `market:status` and on a resnapshot. One declaration of the key, so one queryFn.
+ *
+ * Not seeded on the server: the book is read in the browser, at hydration, and the window
+ * before the tab joins the market's room is the one the provider accepts for ticks and statuses
+ * (ADR-0138). The default `staleTime` keeps a focus re-read behind that.
+ *
+ * Read again on every mount, fresh or not: a tab that left the detail left the market's room, so
+ * a `market:book`·`market:status` sent while it was away never reached this key, and a return
+ * inside the `staleTime` would otherwise draw the book from before it left — under a status the
+ * server has seeded anew (ADR-0138 decision 2-1). A first mount has no data to keep, so only a
+ * return costs one more GET.
+ */
+export function orderBookQueryOptions(marketId: string) {
+  const id = marketId.toLowerCase();
+  return {
+    queryKey: marketBookKey(id),
+    queryFn: async (): Promise<OrderBook> =>
+      unwrap(await api.GET('/api/v1/markets/{id}/book', { params: { path: { id } } })).data,
+    refetchOnMount: 'always' as const,
+  };
+}
+
+export function useOrderBook(marketId: string) {
+  return useQuery(orderBookQueryOptions(marketId));
+}
 
 /**
  * Active categories in display order (`GET /categories`) for the header's category row, the
