@@ -21,6 +21,7 @@ import { copy } from '@/copy';
 import { type Order, type PlaceOrderBody } from '@/lib/api';
 import { formatContracts } from '@/lib/market-admin';
 import { MY_MODERATION_PATH } from '@/lib/moderation';
+import { myOrderPath } from '@/lib/my';
 import {
   contractSideLabel,
   formatContractPrice,
@@ -308,6 +309,12 @@ function OrderResultCard({ order }: { order: Order }) {
           </DataList.Item>
         ))}
       </DataList.Root>
+      {/* The order's 주문 상세 (#123, ADR-0141): what it does next, its fills and its cancel. */}
+      <ChakraLink asChild fontSize="sm" colorPalette="brand" color="colorPalette.fg">
+        <NextLink href={myOrderPath(order.id)} data-testid="order-result-detail">
+          {copy.orderDetail}
+        </NextLink>
+      </ChakraLink>
       <Button variant="outline" onClick={panel.newOrder} data-testid="order-new">
         {copy.orderNew}
       </Button>

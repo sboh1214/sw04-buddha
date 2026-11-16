@@ -108,6 +108,7 @@ function order(over: Partial<Order> = {}): Order {
     cancelReason: null,
     createdAt: '2026-11-16T00:00:00.000Z',
     endedAt: '2026-11-16T00:00:00.000Z',
+    awaitingRecovery: false,
     ...over,
   };
 }

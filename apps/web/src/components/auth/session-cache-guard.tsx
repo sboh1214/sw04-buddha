@@ -94,7 +94,8 @@ export function SessionCacheGuard() {
     // 8-36).
     const settled = sessionAccountTurned(identity);
     void queryClient.resetQueries().then(settled, settled);
-    // The order toasts another account's orders left (#66, ADR-0140 결정 2-25): gone with it.
+    // The order toasts another account's orders left (#66, ADR-0140 결정 2-25; #123's notices,
+    // ADR-0141 결정 2-6): gone with it.
     dismissAccountToastsExcept(identity);
   }, [identity, queryClient]);
 

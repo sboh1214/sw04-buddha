@@ -10,12 +10,18 @@ import {
   type UserPositionEvent,
   supersedes,
 } from '@buddha/shared';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { QueryClient, QueryObserver } from '@tanstack/react-query';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { type Market, type MarketSummary, type Me, type Position } from './api';
+import { SRC } from '@/test/screen-text';
+import { type Market, type MarketSummary, type Me, type Order, type Position } from './api';
+import { MY_ORDERS_LIVE_KEY, marketBookKey, myOrderKey, myOrdersLiveKey } from './market-keys';
 import {
   BalanceOrder,
   type MarketPages,
+  MarketWindow,
   Throttle,
   applyBalanceEvent,
   applyPositionEvent,
@@ -23,10 +29,14 @@ import {
   applyStats,
   applyTick,
   applyToPages,
+  bookRestartsOwnOrders,
   chunkIds,
   joinMarket,
   joinMarketPages,
   joinPositions,
+  ownLiveOrderIds,
+  ownOrdersRefreshKeys,
+  ownOrdersStatusKeys,
   wroteAnOrder,
 } from './market-live';
 
@@ -1330,5 +1340,169 @@ describe('independent participant freshness (#132)', () => {
     );
     expect(next).toMatchObject({ tradeCount: 11, traderCount: 2, statsRevision: '13' });
     expect(applyStats(next, stats)).toBeUndefined();
+  });
+});
+
+describe('the account’s own live orders on a market signal (#123, ADR-0141 결정 10)', () => {
+  const ACCOUNT = 'account-a';
+  const live = (over: Partial<Order> = {}): Order => ({
+    id: OTHER_ID,
+    requestId: 'request-1',
+    marketId: ID,
+    marketSlug: 'rate-cut-2026',
+    marketTitle: '기준금리 인하?',
+    outcome: 'YES',
+    side: 'buy',
+    timeInForce: 'gtc',
+    limitPriceCoin: 40,
+    protectedLimitPriceCoin: 40,
+    qty: 1,
+    budgetCoin: null,
+    filledQty: 0,
+    filledAmountCoin: '0',
+    cancelledQty: 0,
+    unspentCoin: null,
+    status: 'open',
+    rejectReason: null,
+    cancelReason: null,
+    createdAt: '2026-11-16T00:00:00.000Z',
+    endedAt: null,
+    awaitingRecovery: false,
+    ...over,
+  });
+  const listed = (client: QueryClient, ...orders: Order[]) =>
+    client.setQueryData(myOrdersLiveKey(ACCOUNT), {
+      pages: [{ items: orders, nextCursor: null }],
+      pageParams: [undefined],
+    });
+
+  it('restarts for a market the account holds a live order on, by any case of its id', () => {
+    const client = new QueryClient();
+    listed(client, live());
+    expect(bookRestartsOwnOrders(client, ID, ACCOUNT)).toBe(true);
+    expect(bookRestartsOwnOrders(client, ID.toUpperCase(), ACCOUNT)).toBe(true);
+    expect(ownLiveOrderIds(client, ID, ACCOUNT)).toEqual([OTHER_ID]);
+    expect(bookRestartsOwnOrders(client, THIRD_ID, ACCOUNT)).toBe(false);
+  });
+
+  it('counts an order’s detail too, and never an ended order or another account’s', () => {
+    const client = new QueryClient();
+    client.setQueryData(myOrderKey(OTHER_ID, ACCOUNT), live());
+    expect(bookRestartsOwnOrders(client, ID, ACCOUNT)).toBe(true);
+    client.setQueryData(myOrderKey(OTHER_ID, ACCOUNT), live({ status: 'filled', filledQty: 1 }));
+    expect(bookRestartsOwnOrders(client, ID, ACCOUNT)).toBe(false);
+    listed(client, live());
+    expect(bookRestartsOwnOrders(client, ID, 'account-b')).toBe(false);
+    // Signed out, or `['me']` not read yet.
+    expect(bookRestartsOwnOrders(client, ID, undefined)).toBe(false);
+  });
+
+  it('leaves it to the screen that reads the market’s book (the detail’s budget, ADR-0138)', () => {
+    const client = new QueryClient();
+    listed(client, live());
+    const observer = new QueryObserver(client, {
+      queryKey: marketBookKey(ID),
+      queryFn: () => ({}),
+      enabled: false,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    expect(bookRestartsOwnOrders(client, ID, ACCOUNT)).toBe(false);
+    unsubscribe();
+    expect(bookRestartsOwnOrders(client, ID, ACCOUNT)).toBe(true);
+  });
+
+  it('keeps every market signalled inside the shared window for the trailing round', () => {
+    const shared = new MarketWindow(10_000);
+    // The leading round reads A at once.
+    expect(shared.offer(ID, 0)).toEqual({ markets: [ID] });
+    // A again, then B (the user went from MY to B's order detail): both refused, both kept.
+    expect(shared.offer(ID, 1_000)).toEqual({ wait: 9_000 });
+    expect(shared.offer(THIRD_ID.toUpperCase(), 2_000)).toEqual({ wait: 8_000 });
+    // The trailing timer offers nothing of its own and reads every market kept, once each.
+    expect(shared.offer(undefined, 10_000)).toEqual({ markets: [ID, THIRD_ID] });
+    // One round per window: the next signal waits, and a round reads only what came since.
+    expect(shared.offer(THIRD_ID, 10_001)).toEqual({ wait: 9_999 });
+    expect(shared.offer(undefined, 20_000)).toEqual({ markets: [THIRD_ID] });
+    // A torn-down socket's markets are not read by the next one's round.
+    expect(shared.offer(ID, 20_001)).toEqual({ wait: 9_999 });
+    shared.clear();
+    expect(shared.offer(undefined, 30_000)).toEqual({ markets: [] });
+  });
+
+  it('reads the live lists and the live details of every market of the round', () => {
+    const client = new QueryClient();
+    const DETAIL = '0b0b0b0b-0000-4000-8000-0000000000aa';
+    // MY listed A's order; B's order is held by its detail, the screen now shown.
+    listed(client, live());
+    client.setQueryData(myOrderKey(DETAIL, ACCOUNT), live({ id: DETAIL, marketId: THIRD_ID }));
+    expect(ownOrdersRefreshKeys(client, [ID, THIRD_ID], ACCOUNT)).toEqual([
+      MY_ORDERS_LIVE_KEY,
+      myOrderKey(OTHER_ID, ACCOUNT),
+      myOrderKey(DETAIL, ACCOUNT),
+    ]);
+    // A round of A alone left B's detail out — the hole: the lists' prefix does not cover it.
+    expect(ownOrdersRefreshKeys(client, [ID], ACCOUNT)).not.toContainEqual(
+      myOrderKey(DETAIL, ACCOUNT),
+    );
+    expect(ownOrdersRefreshKeys(client, [ID, THIRD_ID], undefined)).toEqual([MY_ORDERS_LIVE_KEY]);
+  });
+
+  it('restarts on a status the first reads still on their way, held order or not', () => {
+    const client = new QueryClient();
+    const DETAIL = '0b0b0b0b-0000-4000-8000-0000000000bb';
+    /** A first read that left and has not answered: no data, fetching. */
+    const firstRead = (queryKey: readonly unknown[]) =>
+      void client.prefetchQuery({ queryKey, queryFn: () => new Promise<never>(() => undefined) });
+    // Nothing held, nothing on its way: nothing to restart (the old rule's whole case).
+    expect(ownOrdersStatusKeys(client, ID, ACCOUNT)).toEqual([]);
+    // The market detail's 내 대기 주문, MY's list and a detail, each still on its first read; and
+    // reads that are not this market's or not this account's.
+    firstRead(myOrdersLiveKey(ACCOUNT, ID));
+    firstRead(myOrdersLiveKey(ACCOUNT));
+    firstRead(myOrderKey(DETAIL, ACCOUNT));
+    firstRead(myOrdersLiveKey(ACCOUNT, THIRD_ID));
+    firstRead(myOrdersLiveKey('account-b', ID));
+    expect(ownOrdersStatusKeys(client, ID.toUpperCase(), ACCOUNT)).toEqual([
+      myOrdersLiveKey(ACCOUNT, ID),
+      myOrdersLiveKey(ACCOUNT),
+      myOrderKey(DETAIL, ACCOUNT),
+    ]);
+    expect(ownOrdersStatusKeys(client, ID, undefined)).toEqual([]);
+    client.clear();
+  });
+
+  it('restarts every live list and the held orders’ details when the tab holds one there', () => {
+    const client = new QueryClient();
+    listed(client, live());
+    expect(ownOrdersStatusKeys(client, ID, ACCOUNT)).toEqual([
+      MY_ORDERS_LIVE_KEY,
+      myOrderKey(OTHER_ID, ACCOUNT),
+    ]);
+    // An answered read is not a first one: another market's status restarts nothing of it.
+    expect(ownOrdersStatusKeys(client, THIRD_ID, ACCOUNT)).toEqual([]);
+  });
+
+  it('is what the provider’s market:status restarts', () => {
+    const source = readFileSync(
+      path.join(SRC, 'components/realtime/realtime-provider.tsx'),
+      'utf8',
+    );
+    expect(source).toMatch(
+      /for \(const key of ownOrdersStatusKeys\(queryClient, event\.marketId, identity \?\? undefined\)\) \{\s*void restartQueries\(queryClient, key\);/,
+    );
+  });
+
+  it('is what the provider’s market:book round reads, the trailing timer offering nothing', () => {
+    const source = readFileSync(
+      path.join(SRC, 'components/realtime/realtime-provider.tsx'),
+      'utf8',
+    );
+    expect(source).toContain('const ownOrders = new MarketWindow(OWN_ORDERS_INVALIDATE_MS);');
+    expect(source).toContain('const round = ownOrders.offer(marketId, now);');
+    expect(source).toContain(
+      'for (const key of ownOrdersRefreshKeys(queryClient, round.markets, identity ?? undefined)) {',
+    );
+    expect(source).toMatch(/ownOrdersPending = null;\s*refreshOwnOrders\(\);/);
+    expect(source).toMatch(/ownOrdersPending = null;\s*ownOrders\.clear\(\);/);
   });
 });

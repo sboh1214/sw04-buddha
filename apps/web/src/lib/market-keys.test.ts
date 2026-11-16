@@ -42,6 +42,10 @@ import {
   marketSearchKey,
   marketSellableKey,
   marketsKey,
+  myMarketFillsKey,
+  myOrderFillsKey,
+  myOrderKey,
+  myOrdersLiveKey,
   publicListQuery,
   relatedMarketsKey,
   relatedMarketsQuery,
@@ -314,6 +318,11 @@ describe('isPrivateQueryKey', () => {
       ['MY_DISPUTES_KEY', MY_DISPUTES_KEY],
       ['myDisputesKey', myDisputesKey('user-1')],
       ['myMarketDisputeKey', myMarketDisputeKey(ID, 'user-1')],
+      // 대기 주문과 주문 상세 (#123): the live list, an order, its fills, a market's own fills.
+      ['myOrdersLiveKey', myOrdersLiveKey('user-1')],
+      ['myOrderKey', myOrderKey(ID, 'user-1')],
+      ['myOrderFillsKey', myOrderFillsKey(ID, 'user-1')],
+      ['myMarketFillsKey', myMarketFillsKey(ID, 'user-1')],
     ];
     for (const [name, key] of sessionKeys) expect(isPrivateQueryKey(key), name).toBe(true);
   });

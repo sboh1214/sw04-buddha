@@ -1,7 +1,7 @@
 'use client';
 
 import { Button, Dialog, Portal } from '@chakra-ui/react';
-import { type ReactNode } from 'react';
+import { type ReactNode, useRef } from 'react';
 import { copy } from '@/copy';
 
 export interface ConfirmDialogProps {
@@ -16,6 +16,15 @@ export interface ConfirmDialogProps {
   confirmDisabled?: boolean;
   onConfirm: () => void;
   children: ReactNode;
+  /** The dismiss button's word, `copy.cancel` unless given ('닫기' beside '주문 취소', #123). */
+  dismissLabel?: string;
+  /**
+   * Which button takes the focus as it opens: Chakra's first (`default`), or the dismiss button
+   * (`dismiss`) for a confirmation of an act that cannot be undone (#123's 주문 취소).
+   */
+  initialFocus?: 'dismiss' | 'default';
+  /** Where the focus goes as it closes, when not back to what opened it (a row, a heading). */
+  finalFocusEl?: () => HTMLElement | null;
 }
 
 /**
@@ -37,7 +46,11 @@ export function ConfirmDialog({
   confirmDisabled = false,
   onConfirm,
   children,
+  dismissLabel = copy.cancel,
+  initialFocus = 'default',
+  finalFocusEl,
 }: ConfirmDialogProps) {
+  const dismissRef = useRef<HTMLButtonElement>(null);
   return (
     <Dialog.Root
       open={open}
@@ -49,6 +62,8 @@ export function ConfirmDialog({
       unmountOnExit
       closeOnInteractOutside={!loading}
       closeOnEscape={!loading}
+      {...(initialFocus === 'dismiss' ? { initialFocusEl: () => dismissRef.current } : {})}
+      {...(finalFocusEl === undefined ? {} : { finalFocusEl })}
     >
       <Portal>
         <Dialog.Backdrop />
@@ -60,13 +75,14 @@ export function ConfirmDialog({
             <Dialog.Body>{children}</Dialog.Body>
             <Dialog.Footer>
               <Button
+                ref={dismissRef}
                 variant="outline"
                 size="sm"
                 disabled={loading}
                 onClick={onClose}
                 data-testid={`${testId}-cancel`}
               >
-                {copy.cancel}
+                {dismissLabel}
               </Button>
               <Button
                 size="sm"

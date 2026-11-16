@@ -1,4 +1,4 @@
-import type { APIRequestContext, Page } from '@playwright/test';
+import type { APIRequestContext, Locator, Page } from '@playwright/test';
 import type {
   AdminMarket,
   Fill,
@@ -17,11 +17,13 @@ import { formatKst } from '../src/lib/datetime';
 import {
   type OrderTerms,
   adminAccount,
+  asReconsent,
   createOpenMarket,
   dataOf,
   documentSurvived,
   expect,
   freshEmail,
+  holdOrderCancel,
   markDocument,
   meOf,
   pauseMarket,
@@ -32,6 +34,7 @@ import {
   signUp,
   subscribed,
   test,
+  toastsOf,
   workerProbeDisabled,
 } from './helpers';
 
@@ -252,9 +255,18 @@ test.describe('주문 접수 (#119)', () => {
       const refusedRow = history.getByTestId(`portfolio-order-${refused.id}`);
       await expect(refusedRow).toContainText(copy.orderStatusRejected);
       await otherPage.goto('/my/orders');
-      await expect(
-        otherPage.getByTestId('my-orders').getByTestId(`portfolio-order-${resting.id}`),
-      ).toContainText(copy.orderStatusPartiallyFilled);
+      const restingRow = otherPage
+        .getByTestId('my-orders')
+        .getByTestId(`portfolio-order-${resting.id}`);
+      await expect(restingRow).toContainText(copy.orderStatusPartiallyFilled);
+      // 대기 주문 한 줄 (#123, ADR-0141): the limit, the three quantities, the average and the
+      // condition, from the server's live list.
+      await expect(restingRow.getByTestId('order-row-limit')).toHaveText('40.00 Coin');
+      await expect(restingRow.getByTestId('order-row-qty')).toHaveText('2계약');
+      await expect(restingRow.getByTestId('order-row-filled')).toHaveText('1계약');
+      await expect(restingRow.getByTestId('order-row-remaining')).toHaveText('1계약');
+      await expect(restingRow.getByTestId('order-row-avg')).toHaveText('40.00 Coin');
+      await expect(restingRow.getByTestId('order-row-gtc')).toHaveText(copy.orderUnfilledGtc);
 
       // --- The admin's detail: the width the market holds, changed by one admin with a reason,
       // recorded in the 이벤트 로그; A's resting order keeps its terms.
@@ -420,6 +432,323 @@ test.describe('주문 취소 (#178)', () => {
     } finally {
       await otherContext.close();
     }
+  });
+});
+
+/** A GTC or IOC order's terms in one line: `terms('NO', 'buy', 'gtc', 40, 2)`. */
+function terms(
+  outcome: 'YES' | 'NO',
+  side: 'buy' | 'sell',
+  timeInForce: 'ioc' | 'gtc',
+  limitPriceCoin: number,
+  qty: number,
+): OrderTerms {
+  return { outcome, side, timeInForce, limitPriceCoin, qty };
+}
+
+/** The Coin a live buy row on screen still locks: its 한도가격 × 남은 수량, read off the row. */
+async function rowLockCoin(row: Locator): Promise<number> {
+  const limit = await row.getByTestId('order-row-limit').innerText();
+  const left = await row.getByTestId('order-row-remaining').innerText();
+  return Number(limit.replace(/[^\d.]/g, '')) * Number(left.replace(/\D/g, ''));
+}
+
+/** The whole Coin a CoinText on screen says ('1,234 Coin' → 1234). */
+async function coinOn(locator: Locator): Promise<number> {
+  return Number((await locator.innerText()).replace(/\D/g, ''));
+}
+
+/**
+ * 대기 주문과 주문 상세 (#123, ADR-0141; ADR-0135 E1·E2·E4·E5·B4, 결과 4 #123): the screens of the
+ * account's live orders — MY's 대기 주문, the detail's 내 대기 주문 and 내 거래 — with one
+ * confirmation before a cancel, '취소 요청 중' while it is in flight (held here in the browser
+ * while a fill comes first) and the server's end after it, one notice for it; 주문 상세 with the
+ * state history and the fills; another account's order as no order at all. Then a market held for
+ * a ledger failure turns the cancel off and says why, and an account facing a re-consent alone
+ * still reaches both order pages. A places three orders (and cancels three), B three; M two.
+ */
+test.describe('대기 주문과 주문 상세 (#123)', () => {
+  test('대기 주문 화면과 취소 (#123)', async ({ admin, browser, page }) => {
+    const market = await createOpenMarket(admin);
+    const bContext = await browser.newContext();
+    try {
+      const bPage = await bContext.newPage();
+      await signUp(page, freshEmail());
+      await signUp(bPage, freshEmail());
+      const a = page.request;
+      const b = bPage.request;
+
+      // --- A's NO bid of 2 at 40 meets B's immediate YES of one (부분 체결); A's YES bid of 3 at
+      // 20 rests whole. 40 + 60 Coin locked.
+      const noBid = (
+        await placeOrder(a, market.id, crypto.randomUUID(), terms('NO', 'buy', 'gtc', 40, 2))
+      ).order;
+      await placeOrder(b, market.id, crypto.randomUUID(), terms('YES', 'buy', 'ioc', 99, 1));
+      const yesBid = (
+        await placeOrder(a, market.id, crypto.randomUUID(), terms('YES', 'buy', 'gtc', 20, 3))
+      ).order;
+      expect((await meOf(a)).balance.lockedCoin).toBe('100');
+
+      // --- MY 대기 주문: both rows, every figure of 수용 기준 2.
+      await page.goto('/my/orders');
+      const list = page.getByTestId('my-orders');
+      const noRow = list.getByTestId(`portfolio-order-${noBid.id}`);
+      const yesRow = list.getByTestId(`portfolio-order-${yesBid.id}`);
+      await expect(noRow.getByTestId('order-row-status')).toHaveText(
+        copy.orderStatusPartiallyFilled,
+      );
+      await expect(noRow).toContainText(market.title);
+      await expect(noRow.getByTestId('order-row-limit')).toHaveText('40.00 Coin');
+      await expect(noRow.getByTestId('order-row-qty')).toHaveText('2계약');
+      await expect(noRow.getByTestId('order-row-filled')).toHaveText('1계약');
+      await expect(noRow.getByTestId('order-row-remaining')).toHaveText('1계약');
+      await expect(noRow.getByTestId('order-row-avg')).toHaveText('40.00 Coin');
+      await expect(noRow.getByTestId('order-row-gtc')).toHaveText(copy.orderUnfilledGtc);
+      await expect(noRow.getByTestId('order-row-at')).not.toBeEmpty();
+      await expect(yesRow.getByTestId('order-row-status')).toHaveText(copy.orderStatusOpen);
+      await expect(yesRow.getByTestId('order-row-limit')).toHaveText('20.00 Coin');
+      await expect(yesRow.getByTestId('order-row-qty')).toHaveText('3계약');
+      await expect(yesRow.getByTestId('order-row-filled')).toHaveText('0계약');
+      await expect(yesRow.getByTestId('order-row-remaining')).toHaveText('3계약');
+      await expect(yesRow.getByTestId('order-row-avg')).toHaveText(copy.orderNone);
+      await expect(yesRow.getByTestId('order-row-gtc')).toHaveText(copy.orderUnfilledGtc);
+      // No 일괄 취소 (E2): one 주문 취소 per row and none besides.
+      await expect(list.getByTestId('order-row-cancel')).toHaveCount(2);
+
+      // --- MY 요약: the buy rows' Σ 한도가격 × 남은 수량 is the 주문 잠금 코인 above them (수용 기준 9).
+      await page.goto('/my');
+      const preview = page.getByTestId('my-preview-orders');
+      const previewNo = preview.getByTestId(`portfolio-order-${noBid.id}`);
+      const previewYes = preview.getByTestId(`portfolio-order-${yesBid.id}`);
+      await expect(previewYes.getByTestId('order-row-remaining')).toHaveText('3계약');
+      await expect(page.getByTestId('portfolio-locked')).toContainText('100');
+      expect((await rowLockCoin(previewNo)) + (await rowLockCoin(previewYes))).toBe(
+        await coinOn(page.getByTestId('portfolio-locked')),
+      );
+
+      // --- The market's detail: 내 대기 주문 with both rows, 내 거래 with A's one fill.
+      await page.goto(`/markets/${market.slug}`);
+      const mine = page.getByTestId('market-my-open-orders');
+      await expect(mine.getByTestId(`market-my-order-${noBid.id}`)).toBeVisible();
+      await expect(mine.getByTestId(`market-my-order-${yesBid.id}`)).toBeVisible();
+      await expect(mine).not.toContainText(market.title);
+      const [aFill] = await dataOf<MyFill[]>(await a.get(`/api/v1/me/fills?marketId=${market.id}`));
+      if (aFill === undefined) throw new Error('A has no fill');
+      await showActivity(page, 'history');
+      const trades = page.getByTestId('market-my-trades');
+      const trade = trades.getByTestId(`market-my-trade-${aFill.id}`);
+      await expect(trade).toContainText('40.00 Coin');
+      await expect(trade).toContainText('1계약');
+      await expect(trade.getByTestId('market-my-trade-detail')).toHaveAttribute(
+        'href',
+        `/my/orders/${noBid.id}`,
+      );
+      // One fill of A's here: one row, each with its order's link.
+      await expect(trades.getByTestId('market-my-trade-detail')).toHaveCount(1);
+
+      // --- 주문 취소 of the YES bid from MY 요약's preview, and a fill while it is in flight.
+      await page.goto('/my');
+      await previewYes.getByTestId('order-row-cancel').click();
+      const dialog = page.getByRole('alertdialog');
+      const confirmTerms = dialog.getByTestId('order-cancel-terms');
+      await expect(confirmTerms).toContainText(market.title);
+      await expect(confirmTerms).toContainText(`${copy.yes} ${copy.buy}`);
+      await expect(confirmTerms).toContainText('20.00 Coin');
+      await expect(dialog.getByTestId('order-cancel-remaining')).toHaveText('3계약');
+      await expect(dialog.getByTestId('order-cancel-irreversible')).toHaveText(
+        copy.orderCancelIrreversible,
+      );
+      await expect(page.getByTestId('order-cancel-cancel')).toHaveText(copy.close);
+      await expect(page.getByTestId('order-cancel-cancel')).toBeFocused();
+      const held = await holdOrderCancel(page, yesBid.id);
+      await page.getByTestId('order-cancel-confirm').click();
+      await held.sent;
+      // The dialog is gone and the focus is on the row (its button turned into 취소 요청 중); the
+      // row says 취소 요청 중 under the server's state, never 취소 완료.
+      await expect(dialog).toHaveCount(0);
+      await expect(previewYes).toBeFocused();
+      await expect(previewYes.getByTestId('order-row-cancelling')).toContainText(
+        copy.orderCancelling,
+      );
+      await expect(previewYes.getByTestId('order-row-status')).toHaveText(copy.orderStatusOpen);
+      await expect(previewYes).not.toContainText(copy.orderStatusCancelled);
+      // B's immediate NO of one meets the YES bid first: the row follows it, still 취소 요청 중.
+      await placeOrder(b, market.id, crypto.randomUUID(), terms('NO', 'buy', 'ioc', 99, 1));
+      await expect(previewYes.getByTestId('order-row-filled')).toHaveText('1계약');
+      await expect(previewYes.getByTestId('order-row-remaining')).toHaveText('2계약');
+      await expect(previewYes.getByTestId('order-row-status')).toHaveText(
+        copy.orderStatusPartiallyFilled,
+      );
+      await expect(previewYes.getByTestId('order-row-cancelling')).toBeVisible();
+      held.release();
+      // The answer: out of the list at once, and one notice.
+      await expect(previewYes).toHaveCount(0);
+      const ownCancel = `${copy.orderStatusCancelled}(${copy.orderCancelNameByOwner})`;
+      await expect(toastsOf(page).filter({ hasText: ownCancel })).toHaveCount(1);
+      await expect(previewNo).toBeVisible();
+      // The focused row left with it: the focus is on the row now in its place, not the page's
+      // start.
+      await expect(previewNo).toBeFocused();
+      // The lock: 100 → 40 (20 spent on the fill, 40 of the rest released; the NO bid's 40 stays),
+      // on screen with no reload — the cancel asks `['me']` again — and the rows' Σ still equal.
+      expect((await meOf(a)).balance.lockedCoin).toBe('40');
+      const locked = page.getByTestId('portfolio-locked');
+      await expect.poll(() => coinOn(locked)).toBe(40);
+      expect(await rowLockCoin(previewNo)).toBe(await coinOn(locked));
+      await page.goto(`/my/orders/${yesBid.id}`);
+      await expect(page.getByTestId('order-detail-status')).toHaveText(copy.orderStatusCancelled);
+      await expect(page.getByTestId('order-detail-reason')).toHaveText(copy.orderCancelNameByOwner);
+      await expect(page.getByTestId('order-detail-filled')).toHaveText('1계약');
+      await expect(page.getByTestId('order-detail-cancelled')).toHaveText('2계약');
+
+      // --- 주문 취소 from the detail while a fill takes the whole order: 전량 체결, nothing else.
+      const full = (
+        await placeOrder(a, market.id, crypto.randomUUID(), terms('YES', 'buy', 'gtc', 20, 2))
+      ).order;
+      await page.goto(`/my/orders/${full.id}`);
+      await expect(page.getByTestId('order-detail-status')).toHaveText(copy.orderStatusOpen);
+      const whole = await holdOrderCancel(page, full.id);
+      await page.getByTestId('order-detail-cancel').click();
+      await page.getByTestId('order-cancel-confirm').click();
+      await whole.sent;
+      await expect(page.getByTestId('order-detail-cancelling')).toBeVisible();
+      await placeOrder(b, market.id, crypto.randomUUID(), terms('NO', 'buy', 'ioc', 99, 2));
+      await expect(page.getByTestId('order-detail-status')).toHaveText(copy.orderStatusFilled);
+      await expect(page.getByTestId('order-detail-cancelling')).toHaveCount(0);
+      await expect(page.getByTestId('order-detail')).not.toContainText(copy.orderStatusCancelled);
+      const answered = page.waitForResponse((response) =>
+        response.url().endsWith(`/api/v1/me/orders/${full.id}/cancel`),
+      );
+      whole.release();
+      expect((await (await answered).json()) as { data: Order }).toMatchObject({
+        data: { status: 'filled' },
+      });
+      await expect(page.getByTestId('order-detail-status')).toHaveText(copy.orderStatusFilled);
+      await expect(page.getByTestId('order-detail')).not.toContainText(copy.orderStatusCancelled);
+      // One notice, from whichever learnt of the end first.
+      await expect(toastsOf(page).filter({ hasText: copy.orderStatusFilled })).toHaveCount(1);
+
+      // --- The partly filled NO bid cancelled on screen: its 주문 상세 in full.
+      await page.goto('/my/orders');
+      await noRow.getByTestId('order-row-cancel').click();
+      await page.getByTestId('order-cancel-confirm').click();
+      await expect(noRow).toHaveCount(0);
+      await page.goto(`/my/orders/${noBid.id}`);
+      const bMe = await meOf(b);
+      const expectDetail = async () => {
+        await expect(page.getByTestId('order-detail-status')).toHaveText(copy.orderStatusCancelled);
+        const rows = page.getByTestId('order-detail-timeline-row');
+        await expect(rows).toHaveCount(3);
+        await expect(rows.nth(0)).toContainText(copy.orderTimelineAccepted);
+        await expect(rows.nth(1)).toContainText(
+          `${copy.orderTimelineFill} 1계약 @40.00 Coin · ${copy.orderStatusPartiallyFilled}`,
+        );
+        await expect(rows.nth(2)).toContainText(
+          `${copy.orderStatusCancelled}(${copy.orderCancelNameByOwner})`,
+        );
+        await expect(page.getByTestId('order-detail-filled')).toHaveText('1계약');
+        await expect(page.getByTestId('order-detail-cancelled')).toHaveText('1계약');
+        await expect(page.getByTestId('order-detail-avg')).toHaveText('40.00 Coin');
+        const fills = page.getByTestId('order-detail-fills');
+        await expect(fills.getByTestId(`order-detail-fill-${aFill.id}`)).toContainText(
+          '40.00 Coin',
+        );
+        await expect(fills.locator('[data-testid^="order-detail-fill-"]')).toHaveCount(1);
+        // No counterparty (B4): nothing of B's. No rule version — the market's link is where the
+        // rules are (E4).
+        const detailText = await page.getByTestId('order-detail').innerText();
+        expect(detailText).not.toContain(bMe.id);
+        expect(detailText).not.toContain(bMe.profile.nickname);
+        await expect(page.getByTestId('order-detail-market-link')).toHaveAttribute(
+          'href',
+          `/markets/${market.slug}`,
+        );
+      };
+      await expectDetail();
+      await page.reload();
+      await expectDetail();
+      // 거래·정산 이력: its reason by name and the way back to this page.
+      await page.goto('/my/history');
+      const historyRow = page
+        .getByTestId('my-order-history')
+        .getByTestId(`portfolio-order-${noBid.id}`);
+      await expect(historyRow.getByTestId('portfolio-order-reason')).toHaveText(
+        copy.orderCancelNameByOwner,
+      );
+      await expect(historyRow.getByTestId('portfolio-order-detail')).toHaveAttribute(
+        'href',
+        `/my/orders/${noBid.id}`,
+      );
+
+      // --- B at A's order: no order at all, and its fills are never asked for.
+      const fillReads: string[] = [];
+      bPage.on('request', (request) => {
+        if (request.url().includes('/api/v1/me/fills')) fillReads.push(request.url());
+      });
+      await bPage.goto(`/my/orders/${noBid.id}`);
+      await expect(bPage.getByTestId('order-detail-not-found')).toBeVisible();
+      await expect(bPage.getByTestId('order-detail')).toHaveCount(0);
+      await expect(bPage.locator('body')).not.toContainText(market.title);
+      expect(fillReads).toEqual([]);
+    } finally {
+      await bContext.close();
+    }
+  });
+
+  test('복구 대기 시장과 재동의 계정 (#123)', async ({ admin, page }) => {
+    const market = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    const m = page.request;
+    const first = (
+      await placeOrder(m, market.id, crypto.randomUUID(), terms('YES', 'buy', 'gtc', 30, 1))
+    ).order;
+    const second = (
+      await placeOrder(m, market.id, crypto.randomUUID(), terms('NO', 'buy', 'gtc', 30, 1))
+    ).order;
+
+    // --- The confirmation open on one, and the market held for a ledger failure meanwhile: the
+    // cancel is refused (409), said once, and the row turns its button off and says why.
+    await page.goto('/my/orders');
+    const list = page.getByTestId('my-orders');
+    const row = list.getByTestId(`portfolio-order-${first.id}`);
+    await expect(row.getByTestId('order-row-gtc')).toHaveText(copy.orderUnfilledGtc);
+    await row.getByTestId('order-row-cancel').click();
+    await expect(page.getByRole('alertdialog')).toBeVisible();
+    await pauseMarket(admin, market.id, 'ledger_failure');
+    await page.getByTestId('order-cancel-confirm').click();
+    await expect(toastsOf(page).filter({ hasText: copy.orderHeldMarket })).toHaveCount(1);
+    for (const order of [first, second]) {
+      const held = list.getByTestId(`portfolio-order-${order.id}`);
+      await expect(held.getByTestId('order-row-cancel')).toBeDisabled();
+      await expect(held.getByTestId('order-row-held')).toHaveText(copy.orderHeldMarket);
+      await expect(held.getByTestId('order-row-gtc')).toHaveCount(0);
+      // Kept, as it was: 대기, nothing written.
+      await expect(held.getByTestId('order-row-status')).toHaveText(copy.orderStatusOpen);
+    }
+    await page.goto(`/my/orders/${first.id}`);
+    await expect(page.getByTestId('order-detail-held')).toHaveText(copy.orderHeldMarket);
+    await expect(page.getByTestId('order-detail-cancel')).toBeDisabled();
+    const refused = await m.post(`/api/v1/me/orders/${first.id}/cancel`, {
+      data: { expectedAccountId: (await meOf(m)).id },
+    });
+    expect(refused.status()).toBe(409);
+    expect(((await refused.json()) as { error: { code: string } }).error.code).toBe(
+      'MARKET_NOT_OPEN',
+    );
+
+    // --- A re-consent alone left (E5): both order pages open, the market goes to the step.
+    const reconsent = await asReconsent(page);
+    reconsent.on = true;
+    await page.goto('/my/orders');
+    await expect(
+      page.getByTestId('my-orders').getByTestId(`portfolio-order-${second.id}`),
+    ).toBeVisible();
+    await expect(page).toHaveURL(/\/my\/orders$/);
+    await page.goto(`/my/orders/${second.id}`);
+    await expect(page.getByTestId('order-detail-status')).toHaveText(copy.orderStatusOpen);
+    await expect(page).toHaveURL(new RegExp(`/my/orders/${second.id}$`));
+    await page.goto(`/markets/${market.slug}`);
+    await expect(page).toHaveURL(/\/onboarding/);
   });
 });
 
@@ -1081,6 +1410,10 @@ test.describe('시장 마감과 주문 만료 (#120)', () => {
       await expect(
         page.getByTestId('my-order-history').getByTestId(`portfolio-order-${resting.id}`),
       ).toContainText(copy.orderStatusExpired);
+      // …and its 주문 상세 (#123, ADR-0141) says 만료 and why: the trading ended.
+      await page.goto(`/my/orders/${resting.id}`);
+      await expect(page.getByTestId('order-detail-status')).toHaveText(copy.orderStatusExpired);
+      await expect(page.getByTestId('order-detail-reason')).toHaveText(copy.orderExpiredReason);
     } finally {
       await bContext.close();
       await visitorContext.close();

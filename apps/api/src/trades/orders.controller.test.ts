@@ -40,6 +40,7 @@ import {
   ORDER_ACCEPTING_SETTING,
   ORDER_RATE_LIMIT_SETTING,
   orderBookSchema,
+  orderRemainingLock,
   marketTickEventSchema,
   marketTradeEventSchema,
   myFillSchema,
@@ -572,6 +573,7 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
         cancelReason: null,
         createdAt: expect.any(String) as unknown,
         endedAt: incoming.order.createdAt,
+        awaitingRecovery: false,
       },
     });
     const aOrder = dataOf<Order>(await read(`/me/orders/${resting.order.id}`, a));
@@ -1414,6 +1416,48 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
       expect(list.map(Number)).toEqual([...list.map(Number)].sort((x, y) => y - x));
       expect(new Set(list).size).toBe(4);
     }
+
+    // One own order's fills (#123, ADR-0141): narrowed by its own side's order column beside its
+    // own side's owner — a resting bid's and an immediate buy's alike.
+    type FillPage = { data: MyFill[]; meta: { nextCursor: string | null } };
+    const fillsBody = async (who: TestUser, query: string) => {
+      const res = await read(`/me/fills${query}`, who);
+      expect(res.statusCode, res.body).toBe(200);
+      return res.body;
+    };
+    for (const [who, order, priceCoin] of [
+      [a, a1, 40],
+      [a, a2, 55],
+      [b, b1, 60],
+      [b, b2, 45],
+    ] as const) {
+      const page = JSON.parse(await fillsBody(who, `?orderId=${order.id}`)) as FillPage;
+      expect(page.data.map((fill) => [fill.orderId, fill.priceCoin])).toEqual([
+        [order.id, priceCoin],
+      ]);
+    }
+    // The other side asking with an account's order id reads, to the letter, what an unknown id
+    // does: never the fill its own order met (no OR across the two order columns).
+    const unknown = await fillsBody(b, `?orderId=${randomUUID()}`);
+    expect((JSON.parse(unknown) as FillPage).data).toEqual([]);
+    expect(await fillsBody(b, `?orderId=${a1.id}`)).toBe(unknown);
+    expect(await fillsBody(a, `?orderId=${b1.id}`)).toBe(unknown);
+    // With its market, a page of one at a time: A's NO bid of 2 met twice.
+    const a5 = placed(await send(a, { outcome: 'NO', qty: 2 })).order;
+    for (let i = 0; i < 2; i += 1) {
+      placed(await send(b, { timeInForce: 'ioc', limitPriceCoin: 99 }));
+    }
+    const query = `?orderId=${a5.id}&marketId=${market.id}&limit=1`;
+    const first = JSON.parse(await fillsBody(a, query)) as FillPage;
+    expect(first.data.map((fill) => fill.orderId)).toEqual([a5.id]);
+    const cursor = encodeURIComponent(first.meta.nextCursor!);
+    const second = JSON.parse(await fillsBody(a, `${query}&cursor=${cursor}`)) as FillPage;
+    expect(second.data.map((fill) => fill.orderId)).toEqual([a5.id]);
+    expect(second.meta.nextCursor).toBeNull();
+    expect(Number(second.data[0]!.id)).toBeLessThan(Number(first.data[0]!.id));
+    const another = await fillsBody(a, `?orderId=${a5.id}&marketId=${randomUUID()}`);
+    expect((JSON.parse(another) as FillPage).data).toEqual([]);
+    expect((await read('/me/fills?orderId=x', a)).statusCode).toBe(400);
   });
 
   it('changes an open market’s width by one admin with a reason, for the next orders only (#177 2항)', async () => {
@@ -1596,6 +1640,75 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
       await expectSound();
     });
 
+    it('keeps the live buys’ remaining locks equal to the Coin locked, and the live sells’ remaining to the resting sell lock (#123)', async () => {
+      await open();
+      // The two sums a screen of the live list draws (ADR-0141), against what the account reads
+      // of its balance and its 매도 가능액. A has no other Coin lock than its orders here.
+      const sums = async () => {
+        const live = dataOf<Order[]>(await read('/me/orders?state=live&limit=100', a));
+        let coin = 0n;
+        let sellQty = 0;
+        for (const order of live) {
+          const lock = orderRemainingLock({
+            side: order.side,
+            outcome: order.outcome,
+            limitPriceCoin: order.side === 'buy' ? order.protectedLimitPriceCoin : null,
+            qty: order.qty,
+            filledQty: order.filledQty,
+            budgetCoin: null,
+            live: true,
+          });
+          if (lock.kind === 'coin') coin += lock.amountCoin;
+          else if (lock.outcome === 'YES') sellQty += lock.qty;
+        }
+        return { coin, sellQty };
+      };
+      const expectEqual = async () => {
+        const { coin, sellQty } = await sums();
+        const me = dataOf<{ balance: { lockedCoin: string } }>(await read('/me', a));
+        expect(BigInt(me.balance.lockedCoin)).toBe(coin);
+        const sellable = dataOf<{ contracts: { outcome: string; restingSellQty: number }[] }>(
+          await read(`/me/markets/${market.id}/sellable`, a),
+        );
+        const yes = sellable.contracts.find((contract) => contract.outcome === 'YES');
+        expect(yes?.restingSellQty ?? 0).toBe(sellQty);
+        return { coin, sellQty };
+      };
+      // A bids YES at 40 for 3; B's immediate NO buy of 2 mints two pairs: A holds YES 2 and its
+      // bid rests partly filled (1 left).
+      const bid = placed(await send(a, { qty: 3 })).order;
+      placed(await send(b, { outcome: 'NO', timeInForce: 'ioc', limitPriceCoin: 99, qty: 2 }));
+      // A rests a NO bid of 2 at 20 and sells its two YES at 70.
+      placed(await send(a, { outcome: 'NO', limitPriceCoin: 20, qty: 2 }));
+      const ask = placed(await send(a, { side: 'sell', limitPriceCoin: 70, qty: 2 })).order;
+      expect(await expectEqual()).toEqual({ coin: 80n, sellQty: 2 });
+      // B buys one YES at once: it meets A's sell at 70 (부분 체결).
+      placed(await send(b, { timeInForce: 'ioc', limitPriceCoin: 99, qty: 1 }));
+      expect(dataOf<Order>(await read(`/me/orders/${ask.id}`, a))).toMatchObject({
+        status: 'partially_filled',
+        filledQty: 1,
+      });
+      expect(await expectEqual()).toEqual({ coin: 80n, sellQty: 1 });
+      // B bids NO at 45 for one: the YES ask is 55. A's GTC YES buy of 3 at 58 meets it there, below
+      // its limit — the 3 it saved come back at the fill — and its other two rest locked at 58.
+      placed(await send(b, { outcome: 'NO', limitPriceCoin: 45 }));
+      expect(await expectEqual()).toEqual({ coin: 80n, sellQty: 1 });
+      const better = placed(await send(a, { limitPriceCoin: 58, qty: 3 })).order;
+      expect(better).toMatchObject({
+        status: 'partially_filled',
+        protectedLimitPriceCoin: 58,
+        filledQty: 1,
+        filledAmountCoin: '55',
+      });
+      expect(await expectEqual()).toEqual({ coin: 80n + 58n * 2n, sellQty: 1 });
+      // A cancels the sell and both YES bids: the NO bid's lock is all that stays.
+      await cancelled(a, ask.id);
+      await cancelled(a, bid.id);
+      await cancelled(a, better.id);
+      expect(await expectEqual()).toEqual({ coin: 40n, sellQty: 0 });
+      await expectSound();
+    });
+
     it('answers an ended order as it is, and another account’s as a random id: NOT_FOUND, nothing changed', async () => {
       await open();
       // An immediate order on an empty book is rejected (no quote); one meeting part of a bid
@@ -1690,24 +1803,54 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
       await open();
       const held = placed(await send(a, { qty: 2 })).order;
       const ended = placed(await send(a, { timeInForce: 'ioc', limitPriceCoin: 99 })).order;
+      // A's order on a market that is never held, live the whole time.
+      const free = await createMarket(t.db);
+      const elsewhere = placed(await send(a, {}, { marketId: free.id })).order;
+      expect(held.awaitingRecovery).toBe(false);
       // Two other members' pair, so the close below is CLOSED, not CANCELLED (#20).
       await tradeOnce(t.db, market.id);
       await createMarketPause(t.db, { marketId: market.id, reason: 'ledger_failure' });
       const before = await orderRow(held.id);
+      // Every read of the held order says it waits for the recovery (#123, ADR-0141): the live
+      // list, the order, its request id and a re-sent request's replayed answer (the one-table
+      // select a column of the hold's SQL would have gone wrong in); the order elsewhere does not.
+      const awaiting = async () => {
+        const live = dataOf<Order[]>(await read('/me/orders?state=live&limit=100', a));
+        const flag = (id: string) => live.find((row) => row.id === id)?.awaitingRecovery;
+        expect(flag(held.id)).toBe(true);
+        expect(flag(elsewhere.id)).toBe(false);
+        expect(dataOf<Order>(await read(`/me/orders/${held.id}`, a)).awaitingRecovery).toBe(true);
+        const byRequest = await read(`/me/orders/request/${held.requestId}`, a);
+        expect(dataOf<Order>(byRequest).awaitingRecovery).toBe(true);
+        const again = placed(await send(a, { qty: 2 }, { requestId: held.requestId }));
+        expect(again).toMatchObject({
+          replayed: true,
+          order: { id: held.id, awaitingRecovery: true },
+        });
+        expect(dataOf<Order>(await read(`/me/orders/${elsewhere.id}`, a)).awaitingRecovery).toBe(
+          false,
+        );
+      };
+      await awaiting();
       const refuse = async () => {
         const res = await cancel(a, held.id);
         expect(errorOf(res, 409, 'MARKET_NOT_OPEN')).toEqual([
           { path: ['market'], message: 'paused' },
         ]);
         expect(await orderRow(held.id)).toEqual(before);
-        expect(await balanceOf(t.db, a.id)).toMatchObject({ lockedCoin: 80n });
+        // 80 for the held order, 40 for the one elsewhere.
+        expect(await balanceOf(t.db, a.id)).toMatchObject({ lockedCoin: 120n });
       };
       await refuse();
-      // An ended order there answers its final state.
+      await awaiting();
+      // An ended order there answers its final state, never waiting.
       expect(await cancelled(a, ended.id)).toEqual(ended);
+      expect(ended.awaitingRecovery).toBe(false);
+      expect(dataOf<Order>(await read(`/me/orders/${ended.id}`, a)).awaitingRecovery).toBe(false);
       // Closed at its close before the recovery: still held.
       expect((await workerClose(market.id)).status).toBe('closed');
       await refuse();
+      await awaiting();
 
       // A CLOSED market not held: the close ended the order 만료 at its instant (#120), and the
       // owner's cancel answers it in that final state — 200, nothing released, nothing published.
@@ -1752,11 +1895,15 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
       const waiting = placed(await send(a, {}, { marketId: third.id })).order;
       await createMarketPause(t.db, { marketId: third.id, reason: 'ledger_failure' });
       errorOf(await cancel(a, waiting.id), 409, 'MARKET_NOT_OPEN');
+      expect(dataOf<Order>(await read(`/me/orders/${waiting.id}`, a)).awaitingRecovery).toBe(true);
       await resumeMarket(t.db, third.id);
+      // The recovery ended it: no longer waiting.
       expect(await cancelled(a, waiting.id)).toMatchObject({
         status: 'cancelled',
         cancelReason: 'paused',
+        awaitingRecovery: false,
       });
+      expect(dataOf<Order>(await read(`/me/orders/${waiting.id}`, a)).awaitingRecovery).toBe(false);
     });
 
     it('meets a crossing order on the market lock: whichever comes first, one remainder and one lock', async () => {

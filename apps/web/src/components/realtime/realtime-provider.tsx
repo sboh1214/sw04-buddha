@@ -15,7 +15,7 @@ import {
   userBalanceEventSchema,
   userPositionEventSchema,
 } from '@buddha/shared';
-import { useQueryClient } from '@tanstack/react-query';
+import { type QueryKey, useQueryClient } from '@tanstack/react-query';
 import {
   type ReactNode,
   type RefObject,
@@ -50,13 +50,17 @@ import {
 } from '@/lib/market-keys';
 import {
   BalanceOrder,
+  MarketWindow,
   type MarketPages,
   Throttle,
   applyPositionEvent,
   applyStatus,
   applyTick,
   applyToPages,
+  bookRestartsOwnOrders,
   chunkIds,
+  ownOrdersRefreshKeys,
+  ownOrdersStatusKeys,
   tickRestartsMarket,
   wroteAnOrder,
 } from '@/lib/market-live';
@@ -123,6 +127,14 @@ const FILLS_INVALIDATE_MS = 1_000;
  * would pass and which counts the order POSTs too.
  */
 const BOOK_INVALIDATE_MS = 3_000;
+
+/**
+ * At most one read of the account's live orders every 10 s for `market:book` (#123, ADR-0141 결정
+ * 10), for every market at once, leading and trailing — 12 a minute at most, times the pages read.
+ * Only where no screen reads that market's book (`bookRestartsOwnOrders`): MY's 대기 주문 and an
+ * order's 상세. The count a tab spends is measured before the PR (ADR-0141 결과 3).
+ */
+const OWN_ORDERS_INVALIDATE_MS = 10_000;
 
 /**
  * At most one first-fetch restart per market per second (`tickRestartsMarket`).
@@ -353,6 +365,10 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     // The book's pair of the two above (`refreshBook`), per connection for the same reasons.
     const book = new Throttle(BOOK_INVALIDATE_MS);
     const bookPending = new Map<string, () => void>();
+    // The account's live orders on `market:book` (`refreshOwnOrders`): one window for every market,
+    // keeping each market signalled inside it for the next round.
+    const ownOrders = new MarketWindow(OWN_ORDERS_INVALIDATE_MS);
+    let ownOrdersPending: (() => void) | null = null;
 
     /**
      * PLAN 8's "클라이언트 재연결 시 스냅샷 재요청", once per gap rather than once per event.
@@ -462,6 +478,47 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       bookPending.set(marketId, () => {
         clearTimeout(timer);
       });
+    };
+
+    /**
+     * One key of the account's orders read again for `market:book`. `cancelRefetch: false`: a
+     * 더 보기 on its way is not cut short. But a read on its way then takes the invalidation in
+     * (TanStack returns its promise, no second request): it left before the change, lands without
+     * it and clears the mark. So when such a read was on its way, once more after it lands.
+     */
+    const invalidateOwn = (queryKey: QueryKey) => {
+      const behind = queryClient.isFetching({ queryKey }) > 0;
+      const read = queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
+      if (!behind) return;
+      void read.then(() => queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false }));
+    };
+
+    /**
+     * The account's live orders and its live orders' details read again (#123, ADR-0141 결정 10):
+     * the live lists, and the detail of each live order on every market signalled since the last
+     * round (`ownOrdersRefreshKeys`). Leading and trailing like `refreshBook`, one window for every
+     * market (`ownOrders`, a `MarketWindow`): MY lists many markets, and a bot market signals many
+     * times a second. A market refused inside the window is kept for the trailing round, which
+     * offers nothing of its own. Through `invalidateOwn`, so a read already on its way does not
+     * swallow the signal.
+     */
+    const refreshOwnOrders = (marketId?: string) => {
+      const now = Date.now();
+      const round = ownOrders.offer(marketId, now);
+      if ('markets' in round) {
+        for (const key of ownOrdersRefreshKeys(queryClient, round.markets, identity ?? undefined)) {
+          invalidateOwn(key);
+        }
+        return;
+      }
+      if (ownOrdersPending !== null) return;
+      const timer = setTimeout(() => {
+        ownOrdersPending = null;
+        refreshOwnOrders();
+      }, round.wait);
+      ownOrdersPending = () => {
+        clearTimeout(timer);
+      };
     };
 
     socket.on('connect', () => {
@@ -686,6 +743,14 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // 기각 or 수용 republishes this event unchanged, and no event carries the decision or its
         // reason. Only an open submission screen asks again (`refreshMyMarketDisputeOnStatus`).
         void refreshMyMarketDisputeOnStatus(queryClient, event.marketId);
+        // The first kind once more (#123, ADR-0141 결정 10): a pause, a close or a recovery can end
+        // or hold the account's live orders there — 만료 at the close, 일시 중단 and 복구 대기 — and no
+        // `user:` event says so for a buy. Only where the tab holds such an order, or where a first
+        // read of the account's orders is still on its way (it left before this status, so it
+        // would land as fresh): `ownOrdersStatusKeys`.
+        for (const key of ownOrdersStatusKeys(queryClient, event.marketId, identity ?? undefined)) {
+          void restartQueries(queryClient, key);
+        }
       },
 
       'market:trade': (raw: unknown) => {
@@ -703,6 +768,12 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // The first kind of the RULE: the signal carries no level, so the book is asked again.
         // No ordering key is needed — the newest read wins (`restartQueries`).
         refreshBook(parsed.data.marketId);
+        // And the account's live orders there, where no screen reads that book (#123, ADR-0141):
+        // a cancel by an account restriction, the admin role or another tab publishes this alone.
+        // The detail reads the book, and its budget (ADR-0138) leaves nothing for this.
+        if (bookRestartsOwnOrders(queryClient, parsed.data.marketId, identity ?? undefined)) {
+          refreshOwnOrders(parsed.data.marketId);
+        }
       },
 
       'user:balance': (raw: unknown) => {
@@ -774,7 +845,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
             queryClient.setQueryData<Position[]>(query.queryKey, patch.positions);
           }
         }
-        // 주문 이력 has no reducer and no event of its own: an `Order` carries its id, status,
+        // The order lists have no reducer and no event of their own (#123's 대기 주문, 주문 상세 and
+        // their fills, 내 거래 too, all under `['orders']`): an `Order` carries its id, status,
         // filledQty, filledAmountCoin and the market's slug and title, none of which any
         // `user:` event does, so a row cannot be built and has to be asked for — the same answer
         // `market:trade` gives 체결 내역. Without it MY moved its balance and its holding
@@ -810,6 +882,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       fillsPending.clear();
       for (const cancel of bookPending.values()) cancel();
       bookPending.clear();
+      ownOrdersPending?.();
+      ownOrdersPending = null;
+      ownOrders.clear();
     };
   }, [identity, queryClient]);
 

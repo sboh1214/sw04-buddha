@@ -22,7 +22,6 @@ import type { Route } from 'next';
 import NextLink from 'next/link';
 import { Fragment, type ReactNode, useState } from 'react';
 import { MarketJudgingRecord } from '@/components/market/market-judging-record';
-import { ComingSoonSection } from '@/components/market/coming-soon-section';
 import { CountdownBadge } from '@/components/market/countdown-badge';
 import { MyPosition } from '@/components/market/my-position';
 import { OrderBookSection } from '@/components/market/order-book';
@@ -34,6 +33,8 @@ import { ProbabilityDisplay } from '@/components/market/probability-display';
 import { RecentFills } from '@/components/market/recent-fills';
 import { SignInPrompt } from '@/components/market/sign-in-prompt';
 import { WatchButton } from '@/components/market/watch-button';
+import { MyMarketTrades } from '@/components/orders/my-market-trades';
+import { MarketMyOpenOrders } from '@/components/orders/pending-orders';
 import { DateTimeText } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { useDisputeOpen } from '@/hooks/use-disputes';
@@ -114,8 +115,8 @@ import { MarketTags } from './market-tags';
  * The order panel is one (`OrderPanelProvider`): the column and the sheet draw the same state, and
  * only one of them at a time. The provider wraps the whole detail whatever the status, so an order
  * whose answer was lost is read back even after a `market:status` took the area away.
- * - Sections whose content another issue brings — 내 거래, 내 대기 주문 (#123) — are their title
- *   and 준비 중 (`ComingSoonSection`, the owner's #122 row). 호가창 is the public book, YES and NO
+ * - 내 거래 and 내 대기 주문 are the account's own fills and live orders here (#123, ADR-0141:
+ *   `MyMarketTrades`, `MarketMyOpenOrders`). 호가창 is the public book, YES and NO
  *   together, read in the browser (`OrderBookSection`, #122, ADR-0138). The personal areas —
  *   내 포지션, 내 거래 and 내 대기 주문 — are drawn for a signed-in reader only; a signed-out visitor
  *   gets one sign-in prompt where 내 포지션 · 내 대기 주문 stand, and neither is ever in the server's
@@ -284,7 +285,9 @@ export function MarketDetail({
             is unknown, which is each prop's documented default; the page seeds the cache
             before the first client render, so that is a fallback and not the path. */}
         <MyPosition marketId={marketId} status={data?.status} lastPrice={data?.lastPrice} />
-        <ComingSoonSection title={copy.marketMyOpenOrders} testId="market-my-open-orders" />
+        {/* 내 대기 주문 (#123, ADR-0141): this market's live orders of the account, the rows MY
+            draws with 주문 취소 and '취소 요청 중'. */}
+        <MarketMyOpenOrders marketId={marketId} />
       </PersonalArea>
     ),
     // 토론 (#47, ADR-0075): this market's posts as the community list's cards (without their
@@ -417,7 +420,7 @@ function MarketActivity({
         data-testid="market-activity-history"
       >
         <RecentFills marketId={marketId} />
-        {member && <ComingSoonSection title={copy.marketMyTrades} testId="market-my-trades" />}
+        {member && <MyMarketTrades marketId={marketId} />}
       </Stack>
     </Stack>
   );

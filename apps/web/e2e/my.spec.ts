@@ -87,7 +87,8 @@ test.describe('MY', () => {
     // A fresh account has never ordered, and 거래·정산 이력's 주문 이력 says that rather than that
     // none has finished (owner decision 2026-10-13); 대기 주문 keeps its own line.
     await expect(page.getByTestId('my-preview-history')).toContainText(copy.portfolioOrdersEmpty);
-    await expect(page.getByTestId('my-preview-orders')).toContainText(
+    // 대기 주문's preview is the tab's live list (#123, ADR-0141): none for a fresh account.
+    await expect(page.getByTestId('my-preview-orders-empty')).toHaveText(
       copy.portfolioPendingOrdersEmpty,
     );
     // A member has no way into /admin.

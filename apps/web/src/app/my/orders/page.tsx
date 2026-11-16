@@ -6,8 +6,8 @@ import { MyOrders } from '../portfolio';
 export const metadata: Metadata = { title: `${copy.myOrders} | ${copy.appName}` };
 
 /**
- * `/my/orders`: MY's 대기 주문 tab (#16). Gated on every navigation to it (`requireMySession`); the
- * layout draws the tabs.
+ * `/my/orders`: MY's 대기 주문 tab (#16; the server's live list with 주문 취소 since #123, ADR-0141).
+ * Gated on every navigation to it (`requireMySession`); the layout draws the tabs.
  */
 export default async function MyOrdersPage() {
   await requireMySession();

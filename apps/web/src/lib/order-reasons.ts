@@ -89,6 +89,98 @@ export function cancelReasonText(reason: OrderCancelReason): string {
   }
 }
 
+/**
+ * A 거절 row's reason by its short name (#123, ADR-0141; 결정 4, E3 '계정 확인 중'·'관리자 권한'):
+ * MY's lists, the state history and the end's notice. Its own copy key, never the sentence cut at
+ * its dash — the sentence is `rejectReasonText`'s, for the order's detail and the panel.
+ */
+export function rejectReasonName(reason: OrderRejectReason): string {
+  switch (reason) {
+    case 'insufficient_coin':
+      return copy.orderRejectNameInsufficientCoin;
+    case 'insufficient_contracts':
+      return copy.orderRejectNameInsufficientContracts;
+    case 'not_open_yet':
+      return copy.orderRejectNameNotOpenYet;
+    case 'closed':
+      return copy.orderRejectNameClosed;
+    case 'paused':
+      return copy.orderRejectNamePaused;
+    case 'no_quote':
+      return copy.orderRejectNameNoQuote;
+    case 'price_limit':
+      return copy.orderRejectNamePriceLimit;
+    case 'budget_too_small':
+      return copy.orderRejectNameBudgetTooSmall;
+    case 'self_trade':
+      return copy.orderRejectNameSelfTrade;
+    case 'ledger_hold':
+      return copy.orderRejectNameLedgerHold;
+    case 'admin_role_revoked':
+      return copy.orderRejectNameAdminRoleRevoked;
+  }
+}
+
+/**
+ * A 취소 완료 row's reason by its short name (#123, ADR-0141; 결정 4). '탈퇴' has its case though no
+ * member screen meets it: the closure ends the sign-in in the same transaction
+ * (account-closure.service.ts), so nothing hides it.
+ */
+export function cancelReasonName(reason: OrderCancelReason): string {
+  switch (reason) {
+    case 'by_owner':
+      return copy.orderCancelNameByOwner;
+    case 'ioc_remainder':
+      return copy.orderCancelNameIocRemainder;
+    case 'self_trade':
+      return copy.orderCancelNameSelfTrade;
+    case 'paused':
+      return copy.orderCancelNamePaused;
+    case 'admin_role':
+      return copy.orderCancelNameAdminRole;
+    case 'restricted':
+      return copy.orderCancelNameRestricted;
+    case 'account_closed':
+      return copy.orderCancelNameAccountClosed;
+  }
+}
+
+/** An ended order's reason by its short name, or null (전량 체결 and 만료 carry none). */
+export function orderReasonName(order: {
+  rejectReason: OrderRejectReason | null;
+  cancelReason: OrderCancelReason | null;
+}): string | null {
+  if (order.rejectReason !== null) return rejectReasonName(order.rejectReason);
+  if (order.cancelReason !== null) return cancelReasonName(order.cancelReason);
+  return null;
+}
+
+/**
+ * The line 만료 shows on an order's detail (#123, ADR-0141): a 만료 has no reason of its own, and
+ * every one comes of a market whose trading ended (#120, ADR-0115) — the market link says which.
+ */
+export function expiredReasonText(): string {
+  return copy.orderExpiredReason;
+}
+
+/**
+ * The reason line of an order's detail (#123, ADR-0141): a 거절's whole sentence; a 취소 완료's
+ * short name, but the two an intake writes — 즉시 거래 잔량 and 자기 체결 — as their sentence (the
+ * result card's); 만료's line; none for the rest.
+ */
+export function detailReasonText(order: {
+  status: OrderStatus;
+  rejectReason: OrderRejectReason | null;
+  cancelReason: OrderCancelReason | null;
+}): string | null {
+  if (order.rejectReason !== null) return rejectReasonText(order.rejectReason);
+  if (order.cancelReason === 'ioc_remainder' || order.cancelReason === 'self_trade') {
+    return cancelReasonText(order.cancelReason);
+  }
+  if (order.cancelReason !== null) return cancelReasonName(order.cancelReason);
+  return order.status === 'expired' ? expiredReasonText() : null;
+}
+
 /** D11: '잔액 부족 — 가용 코인 N Coin, 필요 M Coin'. No link (ADR-0135 D11). */
 export function insufficientCoinLine(availableCoin: bigint, needCoin: bigint): string {
   return `${copy.orderShortCoinHead} ${formatCoin(availableCoin)}, ${copy.orderNeed} ${formatCoin(

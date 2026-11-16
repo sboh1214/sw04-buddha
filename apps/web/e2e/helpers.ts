@@ -3158,3 +3158,74 @@ export async function quote(
     await context.post(`/api/v1/markets/${marketId}/quote`, { data: terms }),
   );
 }
+
+// ---- 대기 주문과 주문 상세 (#123, ADR-0141) ----
+
+/**
+ * Makes `page`'s reads of `GET /api/v1/me` say a re-consent alone is left while `state.on` is true
+ * (the account finished once, and a revision asks for the terms again, #57-5): the profile as the
+ * server answered it, its consent step not done and its terms version an old one. Agreeing on
+ * screen (`POST /me/consents`) turns it off. The same shape several specs keep their own copy of
+ * (onboarding's first, then posts, comments, likes, notices, profile, closure and others); this
+ * one is for #123's order pages.
+ */
+export async function asReconsent(page: Page): Promise<{ on: boolean }> {
+  const state = { on: false };
+  await page.route('**/api/v1/me', async (route) => {
+    if (route.request().method() !== 'GET' || !state.on) return route.fallback();
+    const response = await route.fetch();
+    if (!response.ok()) return route.fulfill({ response });
+    const body = (await response.json()) as { data: Me };
+    const { onboarding } = body.data;
+    body.data.onboarding = {
+      ...onboarding,
+      consent: false,
+      completed: false,
+      nextStep: 'consent',
+      consents: onboarding.consents.map((answer) =>
+        answer.item === 'terms' ? { ...answer, version: 'draft-1999-01-01' } : answer,
+      ),
+    };
+    await route.fulfill({ response, json: body });
+  });
+  await page.route('**/api/v1/me/consents', async (route) => {
+    const response = await route.fetch();
+    state.on = false;
+    await route.fulfill({ response });
+  });
+  return state;
+}
+
+/**
+ * Holds `page`'s next `POST /me/orders/<orderId>/cancel` in the browser until `release()`: the
+ * request has not reached the API, so the screen stays on '취소 요청 중' while the spec makes a fill
+ * happen first. `sent` settles once the screen has sent it. Released, it goes on as it was.
+ */
+export async function holdOrderCancel(
+  page: Page,
+  orderId: string,
+): Promise<{ sent: Promise<void>; release: () => void }> {
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let markSent = () => {};
+  const sent = new Promise<void>((resolve) => {
+    markSent = resolve;
+  });
+  await page.route(
+    `**/api/v1/me/orders/${orderId}/cancel`,
+    async (route) => {
+      markSent();
+      await gate;
+      await route.continue();
+    },
+    { times: 1 },
+  );
+  return { sent, release };
+}
+
+/** The toasts on `page` (Chakra's `role="status"` roots), counted apart from any other status. */
+export function toastsOf(page: Page): Locator {
+  return page.locator('[data-scope="toast"][data-part="root"]');
+}

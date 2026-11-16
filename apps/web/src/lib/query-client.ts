@@ -7,7 +7,7 @@ import {
   isServer,
   replaceEqualDeep,
 } from '@tanstack/react-query';
-import { type Market, type Me, type Position, isApiError } from './api';
+import { type Market, type Me, type Order, type Position, isApiError } from './api';
 import {
   type CommentPages,
   type PlacedCommentsOwner,
@@ -18,12 +18,15 @@ import {
 import {
   MARKETS_KEY,
   MARKET_KEY,
+  MY_ORDERS_LIVE_KEY,
+  MY_ORDER_DETAIL_KEY,
   POSITIONS_KEY,
   TICKS_KEY,
   WATCHLIST_PAGES_KEY,
 } from './market-keys';
 import { type MarketPages, joinMarket, joinMarketPages, joinPositions } from './market-live';
 import { MY_ACTIONS_KEY, MY_RESTRICTION_KEY } from './moderation';
+import { type OrderPages, joinOrder, joinOrderPages } from './order-join';
 import { type CachedSeries, joinSeries } from './ticks';
 
 /**
@@ -129,6 +132,22 @@ function makeQueryClient() {
         held,
         joinSeries(held as CachedSeries | undefined, incoming as CachedSeries),
       ),
+  });
+  // The account's live orders and one order's detail (#123, ADR-0141 결정 8), for the reason of
+  // the four above: a cancel's answer is written into both (use-my-orders.ts), and a GET that left
+  // before it — a focus, a 더 보기, an invalidation already on its way — must not put 대기 back,
+  // nor a fill's smaller 체결 수량 (`orderRank`). `['orders', 'live']` and `['orders', 'detail']`,
+  // never the root: `['orders']` itself is the history list, which keeps its own reading (#124).
+  client.setQueryDefaults(MY_ORDERS_LIVE_KEY, {
+    structuralSharing: (held, incoming) =>
+      replaceEqualDeep(
+        held,
+        joinOrderPages(held as OrderPages | undefined, incoming as OrderPages),
+      ),
+  });
+  client.setQueryDefaults(MY_ORDER_DETAIL_KEY, {
+    structuralSharing: (held, incoming) =>
+      replaceEqualDeep(held, joinOrder(held as Order | undefined, incoming as Order)),
   });
   // A post's comment pages (#48, ADR-0074), for another reason: the writer's own 댓글 or 대댓글 that
   // its read toward its place left at the end of what is held (`withNewComment`) must stay there

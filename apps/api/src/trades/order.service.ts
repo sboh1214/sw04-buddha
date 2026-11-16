@@ -3,6 +3,7 @@ import { MarketJobs } from '../jobs/market-jobs.service.js';
 import {
   cancelOrder,
   findOrderByRequest,
+  ledgerHeldMarketIds,
   lockMarket,
   placeOrder,
   placeOrderChangedBook,
@@ -17,6 +18,7 @@ import {
 import {
   decodeTupleCursor,
   encodeTupleCursor,
+  isLiveOrderStatus,
   isPublicMarketStatus,
   LIVE_ORDER_STATUSES,
   marketTickEvent,
@@ -47,6 +49,7 @@ import { priceProtectionClosed } from './price-protection-closed.js';
 const { fills, markets, orders, profiles } = schema;
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+type Reader = Db | Tx;
 
 /** The live states (대기·부분 체결), the one shared list (`LIVE_ORDER_STATUSES`). */
 const LIVE = [...LIVE_ORDER_STATUSES];
@@ -65,8 +68,10 @@ const MARKET_REF = { slug: markets.slug, title: markets.title, status: markets.s
  * (`isPublicMarketStatus`): a SCHEDULED market's rejected order outlives #78's 되돌리기, and the
  * draft being fixed is the admin's alone — the rule ADR-0099's owner answer (2026-11-01) gave posts
  * (`postMarketOf`), which this PR extends to the owner's orders (ADR-0112 10-18).
+ * `held`: whether its market waits for a ledger-failure recovery (`ledgerHeldMarketIds`), shown on
+ * a live order only as `awaitingRecovery` (#123, ADR-0141) — the cancel's 409 condition.
  */
-export function toOrder(row: OrderRow, market: MarketRef): Order {
+export function toOrder(row: OrderRow, market: MarketRef, held: boolean): Order {
   const ended = row.status === 'cancelled' || row.status === 'expired';
   const shown = isPublicMarketStatus(market.status);
   return {
@@ -91,7 +96,22 @@ export function toOrder(row: OrderRow, market: MarketRef): Order {
     cancelReason: row.cancelReason,
     createdAt: row.createdAt.toISOString(),
     endedAt: row.endedAt?.toISOString() ?? null,
+    awaitingRecovery: isLiveOrderStatus(row.status) && held,
   };
+}
+
+/**
+ * The held markets among the live ones of `rows` (`ledgerHeldMarketIds`, one read; none when no
+ * row is live). Not a select column: drizzle rewrites a single-table select's SQL fragment
+ * columns without their table, which would bind the held subqueries' bare `id` to their own rows
+ * (ADR-0141).
+ */
+async function heldMarketsOf(
+  reader: Reader,
+  rows: readonly Pick<OrderRow, 'status' | 'marketId'>[],
+): Promise<Set<string>> {
+  const live = rows.filter((row) => isLiveOrderStatus(row.status)).map((row) => row.marketId);
+  return ledgerHeldMarketIds(reader, live);
 }
 
 /** The `user:position` event of one position row after a write (PLAN 8), keyed by its version. */
@@ -175,7 +195,8 @@ const notFound = (what: 'Market' | 'Order') =>
  *   ended, or a held one, changed nothing and publishes nothing.
  * - The owner's reads (`listMine`, `mine`, `mineByRequest`, `listMyFills`): the session's own
  *   rows only — another account's order is NOT_FOUND, as if it did not exist (N04 §7) — and a
- *   fill as the caller's own order took it, the counterparty anonymous (결정 5 '#179·#119').
+ *   fill as the caller's own order took it, the counterparty anonymous (결정 5 '#179·#119'). A
+ *   live order says whether its market waits for a ledger recovery (`awaitingRecovery`, #123).
  */
 @Injectable()
 export class OrderService {
@@ -240,8 +261,9 @@ export class OrderService {
           case 'replayed':
           case 'placed': {
             const market = await this.marketRef(tx, result.order.marketId);
+            const held = await heldMarketsOf(tx, [result.order]);
             const answer: PlaceOrderResult = {
-              order: toOrder(result.order, market),
+              order: toOrder(result.order, market, held.has(result.order.marketId)),
               replayed: result.kind === 'replayed',
             };
             const placed = result.kind === 'placed' ? result : null;
@@ -285,7 +307,8 @@ export class OrderService {
         case 'ended':
         case 'cancelled': {
           const market = await this.marketRef(tx, result.order.marketId);
-          const answer = toOrder(result.order, market);
+          // Ended either way (an answer is a final state; a held live one is the 409 above).
+          const answer = toOrder(result.order, market, false);
           return { answer, touched: result.kind === 'cancelled' ? result.touched : null };
         }
       }
@@ -322,8 +345,12 @@ export class OrderService {
     const hasMore = rows.length > query.limit;
     const kept = hasMore ? rows.slice(0, query.limit) : rows;
     const last = kept.at(-1);
+    const held = await heldMarketsOf(
+      this.db,
+      kept.map((row) => row.order),
+    );
     return {
-      items: kept.map((row) => toOrder(row.order, row.market)),
+      items: kept.map((row) => toOrder(row.order, row.market, held.has(row.order.marketId))),
       nextCursor: hasMore && last ? encodeTupleCursor([], String(last.order.arrivalSeq)) : null,
     };
   }
@@ -337,7 +364,8 @@ export class OrderService {
       .where(and(eq(orders.id, orderId), eq(orders.userId, userId)))
       .limit(1);
     if (!row) throw notFound('Order');
-    return toOrder(row.order, row.market);
+    const held = await heldMarketsOf(this.db, [row.order]);
+    return toOrder(row.order, row.market, held.has(row.order.marketId));
   }
 
   /**
@@ -349,7 +377,8 @@ export class OrderService {
   async mineByRequest(userId: string, requestId: string): Promise<Order> {
     const row = await findOrderByRequest(this.db, userId, requestId);
     if (!row) throw notFound('Order');
-    return toOrder(row, await this.marketRef(this.db, row.marketId));
+    const held = await heldMarketsOf(this.db, [row]);
+    return toOrder(row, await this.marketRef(this.db, row.marketId), held.has(row.marketId));
   }
 
   /**
@@ -357,7 +386,9 @@ export class OrderService {
    * order, outcome and side, its price per contract (`ownFillPrice` of the recorded YES price)
    * and Coin. One read per side of a fill (the owner indexes `fills_incoming_owner_id_id_idx`,
    * `fills_resting_owner_id_id_idx`; an account is never both sides of one fill), merged: the
-   * other side's order, owner and account type are never selected.
+   * other side's order, owner and account type are never selected. `orderId` narrows each read
+   * by its own side's order column, beside its own side's owner (#123, ADR-0141): never by the
+   * other side's, so a counterparty asking with this account's order id reads nothing.
    */
   async listMyFills(userId: string, query: MyFillsQuery): Promise<Page<MyFill>> {
     const cursor = decodeTupleCursor(query.cursor, [], 'int');
@@ -384,6 +415,7 @@ export class OrderService {
         .where(
           and(
             eq(owner, userId),
+            query.orderId === undefined ? undefined : eq(order, query.orderId),
             query.marketId === undefined ? undefined : eq(fills.marketId, query.marketId),
             cursor === undefined ? undefined : lt(fills.id, Number(cursor.id)),
           ),
@@ -420,7 +452,7 @@ export class OrderService {
   }
 
   /** The market an order names (an order's market is never deleted: the FK restricts it). */
-  private async marketRef(executor: Db | Tx, id: string): Promise<MarketRef> {
+  private async marketRef(executor: Reader, id: string): Promise<MarketRef> {
     const [market] = await executor
       .select(MARKET_REF)
       .from(markets)

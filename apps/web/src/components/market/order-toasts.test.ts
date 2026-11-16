@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { toaster } from '@/components/ui/toaster';
 import { forgetAccountInTab } from '@/hooks/use-sign-out';
 import {
+  accountToastAfterCommit,
   accountToastIds,
   createAccountToast,
   dismissAccountToasts,
@@ -56,6 +57,62 @@ describe('order toasts kept per account', () => {
     forgetAccountInTab(new QueryClient());
     await flush();
     expect(dismiss.mock.calls.flat().toSorted()).toEqual([a, b].toSorted());
+  });
+});
+
+/**
+ * A toast raised while React runs effects (#123, ADR-0141 결정 2-6: the order detail's notice) is
+ * stored a microtask later (ADR-0092 8-37) — as its account's all the same, and never once that
+ * account left the screen in between.
+ */
+describe('an account toast raised while React runs effects', () => {
+  it('is stored a microtask later, under its account, and goes with it', async () => {
+    const create = vi.spyOn(toaster, 'create');
+    accountToastAfterCommit(A, { type: 'info', title: 'A' });
+    expect(create).not.toHaveBeenCalled();
+    expect(accountToastIds(A)).toEqual([]);
+    await flush();
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0]?.[0]).toMatchObject({ type: 'info', title: 'A' });
+    const [id] = accountToastIds(A);
+    expect(id).toBe(create.mock.results[0]?.value);
+    const dismiss = vi.spyOn(toaster, 'dismiss');
+    dismissAccountToastsExcept(B);
+    await flush();
+    expect(dismiss.mock.calls).toEqual([[id]]);
+    expect(accountToastIds(A)).toEqual([]);
+  });
+
+  it('is never stored once its account left before the commit ended', async () => {
+    const create = vi.spyOn(toaster, 'create');
+    // The three ways out (결정 2-25), each in the same task as the raise — an effect of the same
+    // commit: the session turned, the screen's account turned, the tab's own sign-out or 탈퇴.
+    const leaving: readonly (() => void)[] = [
+      () => dismissAccountToastsExcept(B),
+      () => dismissAccountToastsExcept(null),
+      () => dismissAccountToasts(A),
+      () => forgetAccountInTab(new QueryClient()),
+    ];
+    for (const leave of leaving) {
+      accountToastAfterCommit(A, { type: 'info', title: 'A' });
+      leave();
+      await flush();
+      await flush();
+      expect(create).not.toHaveBeenCalled();
+      expect(accountToastIds(A)).toEqual([]);
+    }
+  });
+
+  it('is stored for the account that stays, and for one raised after the leave', async () => {
+    const create = vi.spyOn(toaster, 'create');
+    accountToastAfterCommit(B, { type: 'info', title: 'B' });
+    dismissAccountToastsExcept(B);
+    dismissAccountToasts(A);
+    accountToastAfterCommit(A, { type: 'info', title: 'A again' });
+    await flush();
+    expect(create.mock.calls.map(([options]) => options.title)).toEqual(['B', 'A again']);
+    expect(accountToastIds(B)).toHaveLength(1);
+    expect(accountToastIds(A)).toHaveLength(1);
   });
 });
 
