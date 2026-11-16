@@ -40,11 +40,13 @@ import {
   MARKET_KEY,
   ORDERS_KEY,
   POSITIONS_KEY,
+  SELLABLE_KEY,
   TICKS_KEY,
   WATCHLIST_PAGES_KEY,
   marketBookKey,
   marketFillsKey,
   marketKey,
+  marketSellableKey,
 } from '@/lib/market-keys';
 import {
   BalanceOrder,
@@ -156,6 +158,8 @@ const PRIVATE_SNAPSHOT_KEYS = [
   ...BALANCE_HISTORY_KEYS,
   // MY's 관심 시장 cards (#89): the home grid's `['markets']` above, for the cards of one account.
   WATCHLIST_PAGES_KEY,
+  // The order panel's 매도 가능액 (#66, ADR-0140): a missed `user:position` is a holding it lacks.
+  SELLABLE_KEY,
 ] as const;
 
 /**
@@ -780,6 +784,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // stays at its default `'active'`, so every tab not showing 주문 이력 pays nothing and
         // is merely marked stale.
         if (wroteAnOrder(event)) void restartQueries(queryClient, ORDERS_KEY);
+        // The order panel's 매도 가능액 on that market (#66, ADR-0140): the holding moved, and so
+        // may the part its resting sells lock. Only a mounted panel's query is asked again.
+        void restartQueries(queryClient, marketSellableKey(event.marketId));
         if (refetch) {
           // `restartQueries`, not a bare invalidation: a list that has answered nothing yet
           // would otherwise subscribe to the request it already has instead of issuing one,

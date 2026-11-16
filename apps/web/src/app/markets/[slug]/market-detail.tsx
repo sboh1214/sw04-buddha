@@ -27,6 +27,8 @@ import { CountdownBadge } from '@/components/market/countdown-badge';
 import { MyPosition } from '@/components/market/my-position';
 import { OrderBookSection } from '@/components/market/order-book';
 import { OrderEntryBar } from '@/components/market/order-entry-bar';
+import { OrderPanel } from '@/components/market/order-panel';
+import { OrderPanelProvider, useOrderPanel } from '@/components/market/order-panel-provider';
 import { ProbabilityChart } from '@/components/market/probability-chart';
 import { ProbabilityDisplay } from '@/components/market/probability-display';
 import { RecentFills } from '@/components/market/recent-fills';
@@ -49,6 +51,8 @@ import {
   DETAIL_VIEW_ITEMS,
   type DetailView,
   type DetailWidth,
+  ORDER_COLUMN_MAX_H,
+  ORDER_COLUMN_TOP,
   type PersonalAreaView,
   type SharedSection,
   copyDisplay,
@@ -66,7 +70,6 @@ import {
 } from '@/lib/market-detail';
 import { marketKey } from '@/lib/market-keys';
 import { marketStatusLabel } from '@/lib/market-status';
-import { HEADER_HEIGHT_PX } from '@/lib/nav';
 import { initialTickRange } from '@/lib/ticks';
 import { useSession } from '@/lib/use-session';
 import { MarketDiscussion } from './market-discussion';
@@ -97,17 +100,20 @@ import { MarketTags } from './market-tags';
  * and 공개 판정 기록 have one copy for each width's place, so the DOM holds what each width draws in
  * the order it draws it — and this file builds each section and lays the two columns out.
  *
- * - From md up: two columns. The left one holds every section; the right one is the order panel,
- *   sticky under the header so it stays beside the chart and the 호가 while the page scrolls (N02
- *   §4 "차트·호가와 주문 패널을 병렬 배치"). There is no way to trade until the CLOB order panel lands
- *   (#119, #66; D13), so an open market's column holds the 거래 준비 중 notice (owner decision #125
- *   (a)). Any other status leaves the column empty: the status notice on the left already says
- *   what the market is (ADR-0048), and the left column keeps its width when a market closes under
- *   a reader.
+ * - From md up: two columns. The left one holds every section; the right one is the order panel
+ *   (#66, ADR-0140), sticky under the header so it stays beside the chart and the 호가 while the
+ *   page scrolls (N02 §4 "차트·호가와 주문 패널을 병렬 배치"), and scrolling in itself when 확인 is
+ *   taller than the window. Any other status than 거래 중 leaves the column empty: the status
+ *   notice on the left already says what the market is (ADR-0048, ADR-0135 D1), and the left
+ *   column keeps its width when a market closes under a reader.
  * - Below md: one column whose first screen is 요약 and the chart, then a switch between 호가 and
  *   거래 내역 (최근 체결 and 내 거래), then the rest (N02 §4). The order panel is a bottom sheet
  *   opened from a YES 매수 · NO 매수 bar on an open market (`OrderEntryBar`); a signed-out visitor
- *   finds a sign-in prompt in it instead of 거래 준비 중 (N02 §2).
+ *   types and reads a quote there too and is asked to sign in at 주문 확인 (ADR-0135 D3).
+ *
+ * The order panel is one (`OrderPanelProvider`): the column and the sheet draw the same state, and
+ * only one of them at a time. The provider wraps the whole detail whatever the status, so an order
+ * whose answer was lost is read back even after a `market:status` took the area away.
  * - Sections whose content another issue brings — 내 거래, 내 대기 주문 (#123) — are their title
  *   and 준비 중 (`ComingSoonSection`, the owner's #122 row). 호가창 is the public book, YES and NO
  *   together, read in the browser (`OrderBookSection`, #122, ADR-0138). The personal areas —
@@ -304,30 +310,33 @@ export function MarketDetail({
   };
 
   return (
-    <Box data-testid="market-detail">
-      <Grid templateColumns={DETAIL_COLUMNS} gap={{ base: '6', md: '8' }}>
-        {/* One flex column, in DOM order (`DETAIL_SLOTS`): each width draws its own copies and
-            the shared sections, and never anything out of the order the DOM holds it in. A copy's
-            wrapper is `display: contents` at its width, so the section in it is the flex item,
-            and `none` at the other. Fragments keep each shared section's own element the item. */}
-        <Stack gap="6" minW="0" data-testid="market-detail-sections">
-          {DETAIL_SLOTS.map((slot) =>
-            slot.width === 'all' ? (
-              <Fragment key={slot.section}>{sections[slot.section]}</Fragment>
-            ) : (
-              <Box key={`${slot.section}-${slot.width}`} display={copyDisplay(slot.width)}>
-                {copies[slot.section][slot.width]}
-              </Box>
-            ),
-          )}
-        </Stack>
+    <OrderPanelProvider marketId={marketId} market={data} now={now} viewer={viewer}>
+      <Box data-testid="market-detail">
+        <Grid templateColumns={DETAIL_COLUMNS} gap={{ base: '6', md: '8' }}>
+          {/* One flex column, in DOM order (`DETAIL_SLOTS`): each width draws its own copies
+              and the shared sections, and never anything out of the order the DOM holds it in. A
+              copy's wrapper is `display: contents` at its width, so the section in it is the flex
+              item, and `none` at the other. Fragments keep each shared section's own element the
+              item. */}
+          <Stack gap="6" minW="0" data-testid="market-detail-sections">
+            {DETAIL_SLOTS.map((slot) =>
+              slot.width === 'all' ? (
+                <Fragment key={slot.section}>{sections[slot.section]}</Fragment>
+              ) : (
+                <Box key={`${slot.section}-${slot.width}`} display={copyDisplay(slot.width)}>
+                  {copies[slot.section][slot.width]}
+                </Box>
+              ),
+            )}
+          </Stack>
 
-        {orderArea ? <OrderArea /> : null}
-      </Grid>
-      {/* Last in the detail, so its sticky box rests under the last section and leaves with the
-          detail (order-entry-bar.tsx). Below md only. */}
-      {orderArea ? <OrderEntryBar viewer={viewer} /> : null}
-    </Box>
+          {orderArea ? <OrderArea /> : null}
+        </Grid>
+        {/* Last in the detail, so its sticky box rests under the last section and leaves with the
+            detail (order-entry-bar.tsx). Below md only. */}
+        {orderArea ? <OrderEntryBar /> : null}
+      </Box>
+    </OrderPanelProvider>
   );
 }
 
@@ -415,34 +424,38 @@ function MarketActivity({
 }
 
 /**
- * 주문 영역 of an open market from md up, while there is no order panel: one line, 거래 준비 중,
- * with no reason or date beside it (owner decisions #125, ADR-0048). The right column, sticky
- * under the two-row header. Below md the same place is the bottom sheet (`OrderEntryBar`), so
- * this column is not drawn there.
+ * 주문 영역 of an open market from md up: the order panel (#66, ADR-0140) in the right column,
+ * sticky under the two-row header and no taller than the window under it, scrolling in itself
+ * when 확인 is longer (its buttons stay at its bottom). Below md the same place is the bottom
+ * sheet (`OrderEntryBar`), and this column is only hidden there by CSS — so its panel is drawn
+ * once the page knows it is md and up (`mdUp`), and a Skeleton holds the place before that (the
+ * server's HTML, hydration) and below md: one panel is ever mounted.
  */
 function OrderArea() {
   return (
     <Box
       hideBelow="md"
       position="sticky"
-      top={`calc(${String(HEADER_HEIGHT_PX)}px + 16px)`}
+      // Where it stands unscrolled, and no taller than the window under that (결정 2-24).
+      top={ORDER_COLUMN_TOP}
       alignSelf="start"
+      maxH={ORDER_COLUMN_MAX_H}
+      overflowY="auto"
       data-testid="order-area"
     >
       <Card.Root>
         <Card.Body>
-          <Alert.Root status="info" role="status">
-            <Alert.Indicator />
-            <Alert.Content>
-              <Alert.Description data-testid="order-area-notice">
-                {copy.tradePreparing}
-              </Alert.Description>
-            </Alert.Content>
-          </Alert.Root>
+          <OrderColumnBody />
         </Card.Body>
       </Card.Root>
     </Box>
   );
+}
+
+function OrderColumnBody() {
+  const { mdUp } = useOrderPanel();
+  if (mdUp !== true) return <Skeleton height="48" data-testid="order-panel-pending" />;
+  return <OrderPanel place="column" />;
 }
 
 /**

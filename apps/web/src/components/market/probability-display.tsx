@@ -31,6 +31,11 @@ import { complementReading } from '@/lib/market-detail';
  * second line in the 판정 기준 시간대 — a fill's time is not a judging time (owner answer 64-Q1).
  * The server's HTML and the first client render write it in KST (ADR-0063).
  *
+ * The third line may wrap between its two parts at 375px — a time with a zone tail, '(GMT-5)', is
+ * too long to stand beside the name — and the middle dot is then not drawn: a dot left at the end
+ * of '시장가격 ·' separates nothing (owner answer 64-Q2, ADR-0140 결정 2-27). That is CSS alone,
+ * the same on the server and after hydration, with nothing measured: see `PriceMeta`.
+ *
  * Rolling lives here and nowhere else. A card renders `formatYesPrice` as plain text: AC 1 asks
  * a card to UPDATE within a second, not to animate, PLAN 11.1-1 says a card shows "63%" only,
  * and ten digit stacks per card would be paid for in the home page's HTML twenty times over.
@@ -50,6 +55,8 @@ const ARROW_DOWN = '▼';
 
 /** Between '시장가격' and '최근 체결 <시각>' on the third line: punctuation, not a word. */
 const PRICE_META_SEPARATOR = ' · ';
+/** The same glyphs as a CSS string, for the room the name keeps after itself (`PriceMeta`). */
+const PRICE_META_SEPARATOR_ROOM = JSON.stringify(PRICE_META_SEPARATOR);
 
 const VALUE_FONT_SIZE = {
   sm: '2xl',
@@ -148,17 +155,64 @@ export function ProbabilityDisplay({
       )}
       {/* Line 3: what the figure is and the time it was set (ADR-0135 결과 4). It wraps inside
           this box at 375px rather than pushing the box wider. */}
+      <PriceMeta lastFill={lastFillAt === null ? null : formatDateTime(lastFillAt)} />
+    </Stack>
+  );
+}
+
+/**
+ * The third line: '시장가격', and after the first fill '시장가격 · 최근 체결 <절대 시각>' — the same
+ * text in the DOM, in the same order, whichever way it is drawn (ADR-0139 결정 2-1).
+ *
+ * Where both parts fit on one line it is drawn as inline text would draw it. Where they do not,
+ * the time goes to a line of its own, whole, and the middle dot is not drawn (owner answer 64-Q2).
+ * No script measures anything, so the server's HTML, the first client render and every later one
+ * are the same markup:
+ *
+ * - the line is a wrapping flex row that clips what leaves its box;
+ * - the name keeps room after itself exactly as wide as the separator — an invisible `::after`
+ *   holding the same glyphs, so the room is the font's own width and no length is guessed;
+ * - the separator is in the second part and out of its flow, drawn just before that part's left
+ *   edge. On one line that is the room the name kept, so the line reads '시장가격 · 최근 체결 …' as
+ *   before. At the start of a second line it is left of the row's own edge, and clipped.
+ *
+ * The `::after` is not in the DOM's text and, being `visibility: hidden`, not in the accessibility
+ * tree; the separator a screen reader and a test read is the one real text between the two parts.
+ * Before the first fill there is one part and none of this: plain text, as it was.
+ */
+function PriceMeta({ lastFill }: { lastFill: string | null }) {
+  if (lastFill === null) {
+    return (
       <Text as="span" fontSize="sm" color="fg.muted" data-testid="market-detail-price-meta">
         {copy.marketPriceName}
-        {lastFillAt !== null && (
-          <>
-            {PRICE_META_SEPARATOR}
-            <Text as="span" whiteSpace="nowrap" data-testid="market-detail-last-fill">
-              {`${copy.marketLastFillAt} ${formatDateTime(lastFillAt)}`}
-            </Text>
-          </>
-        )}
       </Text>
-    </Stack>
+    );
+  }
+  return (
+    <Text
+      as="span"
+      display="flex"
+      flexWrap="wrap"
+      overflow="hidden"
+      fontSize="sm"
+      color="fg.muted"
+      data-testid="market-detail-price-meta"
+    >
+      <Text
+        as="span"
+        whiteSpace="pre"
+        _after={{ content: PRICE_META_SEPARATOR_ROOM, visibility: 'hidden' }}
+      >
+        {copy.marketPriceName}
+      </Text>
+      <Text as="span" position="relative" whiteSpace="nowrap">
+        <Text as="span" position="absolute" top="0" right="100%" whiteSpace="pre">
+          {PRICE_META_SEPARATOR}
+        </Text>
+        <Text as="span" data-testid="market-detail-last-fill">
+          {`${copy.marketLastFillAt} ${lastFill}`}
+        </Text>
+      </Text>
+    </Text>
   );
 }

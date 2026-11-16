@@ -75,6 +75,23 @@ export const BOTTOM_TABS_HEIGHT_PX = 46;
 export const ORDER_ENTRY_BAR_HEIGHT_PX = 69;
 
 /**
+ * The order sheet's tallest, below md (#66): `order-entry-bar.tsx` builds the sheet to it, and a
+ * toast stands above it while the sheet is open (`TOAST_OFFSET_BOTTOM_ORDER_SHEET`,
+ * components/ui/toaster.tsx), so one that stays until it is closed never covers what the sheet
+ * asks for.
+ *
+ * 85dvh on a tall viewport, and never so tall that the toast above it leaves the viewport: the
+ * sheet always stops `ORDER_SHEET_TOAST_ROOM` short of the top, which is the toast's 1rem gap above
+ * the sheet, a toast of two lines (a title and a description: 16px padding above and below, two
+ * 20px lines and the 4px between them, 76px — within 5rem) and 1rem between the toast and the top
+ * of the viewport. The two meet at a height of 7rem / 0.15, about 747px: 85dvh at 812px, 555px
+ * rather than 567px at 667px, and 263px with 112px above it at 375px (a phone in landscape). The
+ * sheet's body scrolls, so a shorter sheet hides nothing.
+ */
+export const ORDER_SHEET_TOAST_ROOM = '7rem';
+export const ORDER_SHEET_MAX_HEIGHT = `min(85dvh, calc(100dvh - ${ORDER_SHEET_TOAST_ROOM}))`;
+
+/**
  * The resting opacity of row 2's inactive category items. Kalshi rests them at 0.5, which puts
  * 15px text at 3.74:1 on the light page (`fg` is gray.950, #09090b, not black) — under the
  * 4.5:1 WCAG 1.4.3 asks of text and the theme file otherwise measures (AC 6). 0.6 is the first

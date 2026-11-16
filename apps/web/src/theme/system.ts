@@ -276,6 +276,15 @@ const config = defineConfig({
           border: { value: { _light: '{colors.yellow.700}', _dark: '{colors.yellow.500}' } },
           focusRing: { value: { _light: '{colors.yellow.700}', _dark: '{colors.yellow.500}' } },
         },
+        // A warning LINE of text, not a notice (#66, ADR-0140 결정 2-23): the order panel's block,
+        // D8, D7, 잔액 부족 and refusal lines and the 버리기 warning. Chakra's own `fg.warning` is
+        // orange.600 in light — 3.56:1 on white, the 1.4.3 miss the `orange.solid` note above
+        // describes — so light takes the 700 step (5.18:1 on white); dark keeps Chakra's 300. The
+        // notices themselves stay `<Alert status="warning">`, yellow (ADR-0070). Measured on the
+        // page, the panel and a card in contrast.test.ts.
+        fg: {
+          warning: { value: { _light: '{colors.orange.700}', _dark: '{colors.orange.300}' } },
+        },
         // The six text colours a post's writer picks (#46, ADR-0073; owner decision 2026-10-18:
         // a fixed palette drawn with values readable in either theme). The document stores the
         // name; these are what it paints, on the page ground: the 700 step on white and the 300

@@ -5,6 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { PasswordInput } from '@/components/ui/password-input';
 import { toaster } from '@/components/ui/toaster';
@@ -12,6 +13,7 @@ import { copy } from '@/copy';
 import { useMe, useSetPassword } from '@/hooks/use-me';
 import { isForAnotherAccount } from '@/lib/api';
 import { CREDENTIAL_PROVIDER_ID } from '@/lib/auth-client';
+import { clearSessionOrderDrafts } from '@/lib/order-drafts';
 import { newPasswordSchema, type NewPasswordValues } from '@/lib/password';
 
 /**
@@ -26,6 +28,11 @@ import { newPasswordSchema, type NewPasswordValues } from '@/lib/password';
  */
 export function SetPasswordForm({ next }: { next: string }) {
   const { data: me, isPending, isFetching, refetch } = useMe();
+  // An order input a visitor kept in this tab is not given back past the 인증 링크 opened here
+  // (ADR-0135 D4, #66 ADR-0140); the tab they typed it in keeps its own (owner answer 66-Q4).
+  useEffect(() => {
+    clearSessionOrderDrafts();
+  }, []);
 
   if (isPending) return <Skeleton height="32" />;
 

@@ -133,7 +133,8 @@ export const copy = {
 
   // --- navigation / auth buttons (M1) ---
   navAdmin: '관리자',
-  balance: '잔고',
+  // 헤더 잔고 칩(ADR-0135 H6): 지갑과 같은 '가용 코인'. 바꾼 것은 #66(ADR-0140)이다.
+  balance: '가용 코인',
   login: '로그인',
   signup: '가입하기',
   logout: '로그아웃',
@@ -380,8 +381,9 @@ export const copy = {
 
   // --- wallet (M2) ---
   walletTitle: '지갑',
-  walletBalance: '사용 가능 잔고',
-  walletLocked: '주문 예약',
+  // 잔고 두 이름(ADR-0135 H6, N02 §8): 헤더 칩·MY 요약·지갑·주문 패널이 같은 낱말을 쓴다(#66, ADR-0140).
+  walletBalance: '가용 코인',
+  walletLocked: '주문 잠금 코인',
   // ADR-0069 decision 4 #70, the owner's words: the start Coin waits for its amount (the release
   // setting 시작 지급액 is undecided) and is paid once an admin enters it (ADR-0071).
   walletStartGrantPending: '시작 Coin은 준비되는 대로 지급됩니다.',
@@ -2597,11 +2599,152 @@ export const copy = {
   marketDetailViewLabel: '호가와 거래 내역 보기',
   marketDetailViewBook: '호가',
   marketTradeHistory: '거래 내역',
-  // 모바일 주문 시트(ADR-0061 결정 3의 #122 행). 진입점 'YES 매수'·'NO 매수'는 copy.yes·copy.no와
-  // copy.buy를 잇고(lib/market-detail.ts) 가격을 붙이지 않는다. 시트 안은 회원에게는 주문 패널(#66)
-  // 전까지 tradePreparing('거래 준비 중')이고, 비로그인 방문자에게는 아래의 로그인 안내와 copy.login
-  // 버튼이다(N02 §2 주문은 로그인 뒤, 오너 결정 2026-10-17). 닫는 단추는 copy.close다.
-  orderSheetSignedOut: '거래는 로그인한 뒤에 할 수 있습니다.',
+  // 주문 패널(#66, ADR-0140). 모바일 진입점 'YES 매수'·'NO 매수'는 copy.yes·copy.no와 copy.buy를
+  // 잇고 그 옆에 최우선 매도호가를 붙인다(ADR-0135 D2). 패널은 데스크톱 열과 모바일 시트가 같다.
+  orderPanelTitle: '주문',
+  orderContract: '계약',
+  orderSideGroup: '매수·매도',
+  orderKind: '주문 방식',
+  orderKindIoc: '즉시 거래',
+  orderKindGtc: '지정가',
+  orderSizeGroup: '수량·금액',
+  orderQty: '수량',
+  // 입력 칸은 '금액', 확인 화면의 행은 N02 §6의 '예산'이다.
+  orderBudgetInput: '금액',
+  orderBudget: '예산',
+  orderLimit: '한도가격',
+  // 입력 칸의 범위 안내: '1계약부터 1,000,000계약까지 입력할 수 있습니다.'의 앞뒤.
+  orderRangeFrom: '부터',
+  orderRangeTo: '까지 입력할 수 있습니다.',
+  orderDigitsOnly: '숫자만 입력할 수 있습니다.',
+  // 견적과 확인 화면의 행(N02 §6, N01 §8, ADR-0135 D5·D6).
+  orderFilled: '예상 체결량',
+  orderImmediate: '지금 체결 예상',
+  orderResting: '대기',
+  orderAvgPrice: '평균가',
+  orderPay: '예상 지불',
+  orderReceive: '예상 수령',
+  orderUnspent: '남는 금액',
+  orderPayFull: '전량 체결 시 예상 지불',
+  // 지정가의 '예상 지불'·'예상 수령'은 지금 체결될 부분만이다: 바로 위 '지금 체결 예상' 행과 같은 말로
+  // 그 몫임을 이름에 적는다(ADR-0140 결정 2-23). 즉시 거래는 위 두 이름 그대로다.
+  orderPayImmediate: '지금 체결분 예상 지불',
+  orderReceiveImmediate: '지금 체결분 예상 수령',
+  orderMaxSpend: '최대 지출',
+  orderMaxBuyPrice: '최대 매수 단가',
+  orderMinSellPrice: '최소 매도 단가',
+  orderMinReceive: '최소 수령(전량 체결 시)',
+  orderFee: '수수료',
+  orderPayoutWin: '정답 시 총지급',
+  orderNet: '순이익',
+  orderPayoutLose: '오답 시 지급',
+  orderPayoutVoid: '무효 시 지급',
+  orderPerContract: '계약당',
+  orderTotal: '합계',
+  orderUnfilled: '미체결 처리',
+  orderUnfilledIoc: '남은 수량 취소',
+  orderUnfilledGtc: '시장 마감 때 만료',
+  orderNone: '—',
+  orderQuoteNotice: '현재 호가 기준 예상입니다.',
+  orderBudgetNotice: '입력한 금액을 다 쓰지 않을 수 있습니다.',
+  orderQuoteLoading: '견적을 계산하는 중',
+  orderQuoteFailed: '견적을 불러오지 못했습니다. 잠시 뒤 다시 시도하세요.',
+  // D8: 지정가가 반대 호가를 넘어 일부가 바로 체결될 때. 가운데에 'N계약'이 들어간다.
+  orderImmediateNoticeHead: '한도가격이 반대 호가를 넘어',
+  orderImmediateNoticeTail: '이 바로 체결됩니다.',
+  // D7: 확인 화면에 머무는 동안 호가가 바뀌면 숫자는 그대로 두고 알린다. 제출은 막지 않는다.
+  orderBookChanged: '호가가 바뀌었습니다.',
+  orderRequote: '다시 견적',
+  // '다시 견적'이 새 견적을 얼렸을 때 늘 있는 알림 줄에 넣는 한 줄(결정 2-19).
+  orderRequoted: '견적을 새로 읽었습니다.',
+  // 주문 확인을 끄는 줄(ADR-0140 결정 2, D9·결과 4). 둘에는 '지정가로 바꾸기' 단추가 붙는다.
+  orderBlockNoQuote:
+    '이 방향은 호가 없음이라 즉시 거래할 수 없습니다. 지정가로 주문할 수 있습니다.',
+  orderBlockNoWidth: '이 시장은 지금 즉시 거래를 받지 않습니다. 지정가로 주문할 수 있습니다.',
+  orderBlockBudget: '이 금액으로는 1계약도 살 수 없습니다.',
+  // 견적 단계의 가격 한도 막힘: 아직 주문하지 않았으니 거절 문장(과거형)이 아니라 지금의 문장이다.
+  orderBlockPriceLimit:
+    '가격 한도 — 반대 호가가 가격 한도보다 나빠 지금은 즉시 거래로 체결되지 않습니다. 지정가로 주문할 수 있습니다.',
+  orderSwitchToGtc: '지정가로 바꾸기',
+  // D11: 사유와 수치만, 링크 없음. 이름은 H6.
+  orderShortCoinHead: '잔액 부족 — 가용 코인',
+  orderNeed: '필요',
+  orderShortContractsHead: '보유량 부족 —',
+  orderSellable: '매도 가능',
+  orderRestingSellLock: '대기 매도 잠금',
+  orderSellNone: '매도할 수 있는 계약이 없습니다.',
+  // D13: 값은 보이고 주문 확인과 매도 진입만 끈다(오너 답 66-Q3). 계정 제한은 끝과 조치·신고 내역 링크.
+  orderAdmin: '관리자 계정은 주문할 수 없습니다.',
+  orderRestricted: '계정 제한 중에는 주문할 수 없습니다',
+  orderRestrictedUntil: '까지',
+  orderRestrictedNoEnd: '기한 없음',
+  // 틈(거래 중인데 호가 답에 사유가 있을 때)의 계약 버튼·진입 버튼 가격 자리: '호가 없음' 대신 사유의
+  // 짧은 이름이다(거절 사유와 같은 낱말, ADR-0140 결정 2-23).
+  orderClosedShortNotOpenYet: '개장 전',
+  orderClosedShortPaused: '일시 중단',
+  orderClosedShortClosed: '마감',
+  // D3: 비로그인은 입력과 견적까지, 주문 확인에서 로그인 안내. 되살린 뒤의 알림(D4, 자동 제출 없음).
+  orderSignIn: '주문하려면 로그인하세요. 입력한 내용은 이 탭에서 1시간 동안 남습니다.',
+  orderRestored: '입력한 주문을 되살렸습니다. 확인 뒤 다시 제출하세요.',
+  // 진행.
+  orderConfirmOpen: '주문 확인',
+  orderReviewTitle: '주문 확인',
+  orderEdit: '수정',
+  orderSubmit: '주문 제출',
+  orderSubmitting: '접수 중',
+  orderRecovering: '주문 결과를 다시 확인하는 중',
+  orderRecheck: '다시 확인',
+  orderResultTitle: '주문 결과',
+  orderNew: '새 주문',
+  // 답을 잃은 주문을 세 번 조회해도 찾지 못했을 때(오너 답 66-Q2).
+  orderUnsent: '보낸 주문을 아직 찾지 못했습니다.',
+  orderUnsentSentAt: '보낸 시각',
+  orderResend: '같은 요청 다시 보내기',
+  orderDiscard: '버리기',
+  // 'MY 주문'이라는 화면은 없다: MY의 탭 이름 '대기 주문'(myOrders)과 '거래·정산 이력'(myHistory).
+  orderDiscardWarning:
+    '이미 접수되었을 수 있습니다. 버린 뒤에도 MY의 대기 주문이나 거래·정산 이력에 나타날 수 있습니다.',
+  // 주문 영역이 없는 채로 미결 주문을 다시 읽었는데 찾지 못했을 때.
+  orderLookupMissing:
+    '보낸 주문을 찾지 못했습니다. MY의 대기 주문이나 거래·정산 이력에서 확인하세요.',
+  // 결과 카드.
+  orderFilledQty: '체결 수량',
+  orderFilledPaid: '체결 지불',
+  orderFilledReceived: '체결 수령',
+  orderCancelledQty: '취소 수량',
+  orderRestingQty: '대기 수량',
+  orderUnspentReleased: '쓰지 않고 푼 금액',
+  // 거절 사유 11(결정 4, E3). 수용 기준의 여섯은 서로 다른 문장이다.
+  orderRejectInsufficientCoin: '잔액 부족 — 주문에 잠글 가용 코인이 모자랐습니다.',
+  orderRejectInsufficientContracts: '보유량 부족 — 매도할 수 있는 계약이 모자랐습니다.',
+  orderRejectNotOpenYet: '개장 전 — 아직 거래가 열리지 않았습니다.',
+  orderRejectClosed: '마감 — 거래가 마감되어 주문을 받지 않았습니다.',
+  orderRejectPaused: '일시 중단 — 거래가 일시 중단되어 주문을 받지 않았습니다.',
+  orderRejectNoQuote: '호가 부족 — 체결할 반대 호가가 없었습니다.',
+  orderRejectPriceLimit: '가격 한도 — 반대 호가가 가격 한도보다 나빠 체결되지 않았습니다.',
+  orderRejectBudgetTooSmall: '금액 부족 — 이 금액으로는 1계약도 살 수 없었습니다.',
+  orderRejectSelfTrade: '자기 체결 — 내 다른 주문과 만나 체결하지 않았습니다.',
+  orderRejectLedgerHold: '계정 확인 중 — 계정을 확인하고 있어 주문을 받지 않았습니다.',
+  orderRejectAdminRoleRevoked:
+    '관리자 권한 — 관리자 권한이 있던 때의 시장이라 주문을 받지 않았습니다.',
+  // 취소 사유 7(결정 4). 접수가 쓰는 것은 즉시 거래 잔량과 자기 체결이다.
+  orderCancelByOwner: '본인 취소',
+  orderCancelIocRemainder: '즉시 거래 잔량 — 체결되지 않은 남은 수량은 취소되었습니다.',
+  orderCancelSelfTrade: '자기 체결 — 내 다른 주문과 만나 남은 수량이 취소되었습니다.',
+  orderCancelPaused: '일시 중단',
+  orderCancelAdminRole: '관리자 권한',
+  orderCancelRestricted: '계정 제한',
+  orderCancelAccountClosed: '탈퇴',
+  // 행 없는 오류(orders.controller.ts).
+  orderForbidden: '이 주문을 보낼 수 없습니다. 화면을 새로 고친 뒤 다시 시도하세요.',
+  // 처음 가입한 계정과 약관 개정에 다시 동의해야 하는 계정 모두에 맞는 말(errPostOnboarding과 같은 꼴).
+  orderOnboarding: '약관 동의 등 남은 절차를 마친 뒤에 주문할 수 있습니다.',
+  orderMarketGone: '이 시장은 지금 볼 수 없습니다.',
+  orderInvalid: '입력한 주문을 다시 확인하세요.',
+  // D12: 주문 접수가 닫혀 있을 때(details 없는 409).
+  orderIntakeClosed: '지금은 주문을 받지 않습니다.',
+  orderRateLimited: '잠시 뒤에 다시 주문하세요',
+  orderSeconds: '초',
   // 관심 시장 (#89, ADR-0064): 상세 머리의 토글 하나. 라벨은 상태와 상관없이 같고, 등록했는지는
   // 버튼의 눌림(aria-pressed)과 채운 별이 말한다. 로그인하지 않았으면 누를 때 로그인으로 가고,
   // 돌아와서 다시 눌러야 등록된다(ADR-0061 결정 3).
@@ -2736,11 +2879,11 @@ export const copy = {
   orderCreatedAt: '주문 시각',
   orderStatusOpen: '대기',
   orderStatusPartiallyFilled: '부분 체결',
-  orderStatusFilled: '체결 완료',
-  orderStatusCancelled: '취소됨',
-  orderStatusRejected: '거절됨',
-  // 만료: 시장이 마감(조기 마감 포함)할 때 남은 지정가 주문이 끝나는 상태(#120, ADR-0115). 위 넷의
-  // 이름 정리는 #123의 것이다.
+  // 결정 4의 이름(ADR-0135 '주문 상태와 사유의 이름'). 주문 패널(#66)과 MY가 같은 키를 쓴다(ADR-0140).
+  orderStatusFilled: '전량 체결',
+  orderStatusCancelled: '취소 완료',
+  orderStatusRejected: '거절',
+  // 만료: 시장이 마감(조기 마감 포함)할 때 남은 지정가 주문이 끝나는 상태(#120, ADR-0115).
   orderStatusExpired: '만료',
 
   // 옛 포트폴리오(PLAN 11.3)의 잔고 요약·목록. #16이 MY 요약과 보유 계약·대기 주문·거래·정산 이력
@@ -3695,8 +3838,6 @@ export const copy = {
   // 첫 체결 전의 가격 자리(N02 §5): 초기 설정값을 가격처럼 보이지 않는다. 카드·상세·차트·관리자 목록·
   // MY가 같은 문구를 쓴다.
   noFills: '체결 없음',
-  // 주문 영역 자리의 안내(오너 결정 #125 (a)): CLOB 주문(#119·#66)이 들어올 때까지 거래할 수 없다.
-  tradePreparing: '거래 준비 중',
   // 계약 수 단위. 수량은 호출 쪽에서 붙인다.
   unitContracts: '계약',
 

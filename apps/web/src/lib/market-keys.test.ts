@@ -28,6 +28,7 @@ import {
   POSITIONS_KEY,
   PRIVATE_QUERY_ROOTS,
   SEARCH_HISTORY_KEY,
+  SELLABLE_KEY,
   TICKS_KEY,
   WATCHLIST_KEY,
   WATCHLIST_PAGES_KEY,
@@ -39,12 +40,14 @@ import {
   marketFillsKey,
   marketKey,
   marketSearchKey,
+  marketSellableKey,
   marketsKey,
   publicListQuery,
   relatedMarketsKey,
   relatedMarketsQuery,
   searchHistoryKey,
   searchListQuery,
+  sellableKey,
   ticksKey,
   watchStateKey,
   watchlistPagesKey,
@@ -255,6 +258,19 @@ describe('key prefix isolation', () => {
     expect(watchStateKey(ID.toUpperCase(), 'user-1')).toEqual(watchStateKey(ID, 'user-1'));
   });
 
+  it("keeps a market's 매도 가능액 under the account on screen, reached by the market's prefix (#66)", () => {
+    // `['me']` can turn from A to B before the session does (ADR-0140 결정 2-22): B's panel reads
+    // its own entry, never A's holding.
+    expect(hashKey(sellableKey(ID, 'user-2'))).not.toBe(hashKey(sellableKey(ID, 'user-1')));
+    expect(sellableKey(ID.toUpperCase(), 'user-1')).toEqual(sellableKey(ID, 'user-1'));
+    // `user:position` and an order's end invalidate by the market alone, whoever's entry it is.
+    expect(partialMatchKey(sellableKey(ID, 'user-1'), marketSellableKey(ID.toUpperCase()))).toBe(
+      true,
+    );
+    expect(partialMatchKey(sellableKey(ID, 'user-1'), SELLABLE_KEY)).toBe(true);
+    expect(isPrivateQueryKey(sellableKey(ID, 'user-1'))).toBe(true);
+  });
+
   it('gives the positions join both lists and nothing else', () => {
     // The third `setQueryDefaults` registration joins `Position[]` by row version. It has to
     // reach `['positions', 'open']` and `['positions', 'settled']` — the socket and every REST
@@ -319,6 +335,7 @@ describe('isPrivateQueryKey', () => {
     // (ADR-0069 decision 4) — that PR changed the list too. 'disputes' came back with #175
     // (ADR-0104): a 판정 이의's links and reason are the submitter's and the operators' alone (#173
     // item 13), read with the member's cookie — the root M5's dispute stage held, with new keys.
+    // 'sellable' came with #66 (ADR-0140): a member's holding and resting sells on one market.
     expect([...PRIVATE_QUERY_ROOTS].sort()).toEqual(
       [
         'admin',
@@ -336,6 +353,7 @@ describe('isPrivateQueryKey', () => {
         'my-moderation',
         'proposals',
         'disputes',
+        'sellable',
       ].sort(),
     );
   });

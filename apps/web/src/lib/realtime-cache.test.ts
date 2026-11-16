@@ -865,4 +865,16 @@ describe('the realtime provider’s re-reads for the 호가창 (#122)', () => {
     // …through `restartQueries` on the book's own key, which `useOrderBook` reads.
     expect(source).toContain('void restartQueries(queryClient, marketBookKey(marketId));');
   });
+
+  it("re-reads the order panel's 매도 가능액 on user:position and a signed-in reconnect (#66)", () => {
+    // ADR-0140: the holding moved, and so may the part resting sells lock.
+    expect(source.slice(source.indexOf("'user:position': (raw: unknown) => {"))).toContain(
+      'void restartQueries(queryClient, marketSellableKey(event.marketId));',
+    );
+    const privateKeys = source.slice(
+      source.indexOf('const PRIVATE_SNAPSHOT_KEYS = ['),
+      source.indexOf('] as const;', source.indexOf('const PRIVATE_SNAPSHOT_KEYS = [')),
+    );
+    expect(privateKeys).toContain('SELLABLE_KEY');
+  });
 });

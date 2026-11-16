@@ -25,6 +25,8 @@ import type {
   MarketTimes,
   MarketLiquiditySettings,
   Me,
+  OrderQuote,
+  PlaceOrderResult,
   ReleaseSetting,
 } from '@buddha/shared';
 import { copy } from '../src/copy';
@@ -3099,4 +3101,60 @@ export function subscribed(page: Page, marketId: string): Promise<void> {
     )
     .then(() => undefined)
     .catch(() => page.waitForTimeout(REALTIME_BUDGET_MS));
+}
+
+// ---- orders through the API (#119; shared by orders.spec.ts and order-panel.spec.ts, #66) ----
+
+/** `{ data }` out of the success envelope, with the body in the message on a failure. */
+export async function dataOf<T>(response: APIResponse): Promise<T> {
+  const body = await response.text();
+  expect(response.ok(), `${response.url()} -> ${String(response.status())} ${body}`).toBe(true);
+  return (JSON.parse(body) as { data: T }).data;
+}
+
+/**
+ * The order fields a request sends besides the account (`PlaceOrderBody`): a quantity, or for an
+ * immediate buy a Coin budget (#177 3항).
+ */
+export interface OrderTerms {
+  outcome: 'YES' | 'NO';
+  side: 'buy' | 'sell';
+  timeInForce: 'ioc' | 'gtc';
+  limitPriceCoin: number;
+  qty?: number;
+  budgetCoin?: string;
+}
+
+/** `POST /markets/:id/orders` as `context`'s member, under `requestId`. */
+export async function sendOrder(
+  context: APIRequestContext,
+  marketId: string,
+  requestId: string,
+  terms: OrderTerms,
+): Promise<APIResponse> {
+  return context.post(`/api/v1/markets/${marketId}/orders`, {
+    headers: { 'Idempotency-Key': requestId },
+    data: { ...terms, expectedAccountId: (await meOf(context)).id },
+  });
+}
+
+/** The same, read as the answer it must be. */
+export async function placeOrder(
+  context: APIRequestContext,
+  marketId: string,
+  requestId: string,
+  terms: OrderTerms,
+): Promise<PlaceOrderResult> {
+  return dataOf<PlaceOrderResult>(await sendOrder(context, marketId, requestId, terms));
+}
+
+/** `POST /markets/:id/quote`: the terms with no account and no request id. */
+export async function quote(
+  context: APIRequestContext,
+  marketId: string,
+  terms: Omit<OrderTerms, 'limitPriceCoin'> & { limitPriceCoin?: number },
+): Promise<OrderQuote> {
+  return dataOf<OrderQuote>(
+    await context.post(`/api/v1/markets/${marketId}/quote`, { data: terms }),
+  );
 }

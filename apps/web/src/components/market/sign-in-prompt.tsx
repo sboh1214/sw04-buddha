@@ -15,16 +15,19 @@ import { loginPathBackTo } from '@/lib/next-path';
  * signed-out rungs draw (MY's `SessionEnded`, the home's 관심 시장 view).
  *
  * Two places use it: where the personal areas stand (`market-detail.tsx`, one prompt for 내 포지션,
- * 내 대기 주문 and 내 거래) and the mobile order sheet (`order-entry-bar.tsx`, since an order is
- * placed signed in — N02 §2). Neither is in the server's HTML: each is drawn only once the session
- * is known to be nobody's (`personalAreaView`), so the page is the same for every visitor.
+ * 내 대기 주문 and 내 거래) and the order panel's 주문 확인 (`order-panel.tsx`, since an order is
+ * placed signed in — N02 §2, ADR-0135 D3). Neither is in the server's HTML: each is drawn only once
+ * the session is known (`personalAreaView`), so the page is the same for every visitor.
  */
 export function SignInPrompt({
   message,
+  messageRef,
   'data-testid': testId,
 }: {
   /** Korean, from `copy`. */
   message: string;
+  /** The sentence, focusable, for the order panel that moves the focus to it (결정 2-23). */
+  messageRef?: React.Ref<HTMLParagraphElement>;
   'data-testid'?: string;
 }) {
   const pathname = usePathname();
@@ -41,6 +44,7 @@ export function SignInPrompt({
           </NextLink>
         </Button>
       }
+      messageRef={messageRef}
       data-testid={testId}
     />
   );

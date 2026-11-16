@@ -1,6 +1,9 @@
 import { QueryClient } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { keepSessionCommentDraft } from '@/lib/comment-drafts';
+import { keepSessionOrderDraft, readSessionOrderDraft } from '@/lib/order-drafts';
+import { initialOrderInput } from '@/lib/order-panel';
+import { keepSessionOrderRequest, readSessionOrderRequest } from '@/lib/order-requests';
 import { type DraftStorage, keepSessionPostDraft } from '@/lib/post-drafts';
 import { keepSessionProfileDraft } from '@/lib/profile-drafts';
 import { accountNowOf, goesWithAccountTurn, sessionAccountTurned } from '@/lib/session-account';
@@ -151,15 +154,35 @@ describe('forgetAccountInTab', () => {
     ).toBe(true);
     expect(keepSessionProfileDraft(account, { kind: 'bio', text: '쓰던 소개' })).toBe(true);
     expect(keepSessionProfileDraft(account, { kind: 'nickname', text: '쓰던닉네임' })).toBe(true);
+    // The order panel's (#66, ADR-0140): a visitor's input kept for the sign-in, which whoever
+    // signs in next would get, and a request this account sent with no answer yet.
+    const market = { id: '0b1c2d3e-0000-4000-8000-000000000006', slug: 'kept' };
+    expect(keepSessionOrderDraft(market, { ...initialOrderInput('NO'), qty: '3' })).toBe(true);
+    keepSessionOrderRequest(account, market.id, {
+      requestId: '0b1c2d3e-0000-4000-8000-000000000007',
+      sendId: '0b1c2d3e-0000-4000-8000-000000000008',
+      body: {
+        outcome: 'NO',
+        side: 'buy',
+        timeInForce: 'ioc',
+        limitPriceCoin: 45,
+        qty: 3,
+        expectedAccountId: account,
+      },
+      savedAt: Date.now(),
+      phase: 'first',
+    });
     const queryClient = new QueryClient();
     queryClient.setQueryData(['me'], { id: account });
     queryClient.setQueryData(['me', 'closure'], { coin: 0 });
-    expect(storage.items.size).toBe(6);
+    expect(storage.items.size).toBe(8);
 
     forgetAccountInTab(queryClient);
 
     expect(queryClient.getQueryCache().getAll()).toEqual([]);
     expect([...storage.items.keys()]).toEqual([elsewhere]);
+    expect(readSessionOrderDraft(market.id)).toBeNull();
+    expect(readSessionOrderRequest(account, market.id)).toBeNull();
   });
 
   it('leaves the tab nobody’s for what goes before SessionCacheGuard hears the session name nobody — even with a reset for the account under way (ADR-0092 8-32·8-36)', () => {

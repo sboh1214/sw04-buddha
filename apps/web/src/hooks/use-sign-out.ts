@@ -2,10 +2,13 @@
 
 import { type QueryClient, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
+import { dismissAccountToastsExcept } from '@/components/market/order-toasts';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { signOut } from '@/lib/auth-client';
 import { clearAllSessionCommentDrafts } from '@/lib/comment-drafts';
+import { clearSessionOrderDrafts } from '@/lib/order-drafts';
+import { clearSessionOrderRequests } from '@/lib/order-requests';
 import { clearSessionPostDrafts } from '@/lib/post-drafts';
 import { clearSessionProfileDrafts } from '@/lib/profile-drafts';
 import { accountForgottenInTab } from '@/lib/session-account';
@@ -79,6 +82,12 @@ export function forgetAccountInTab(queryClient: QueryClient): void {
   clearSessionPostDrafts();
   clearAllSessionCommentDrafts();
   clearSessionProfileDrafts();
+  // The order panel's (#66, ADR-0140): a visitor's input kept for the sign-in, which whoever signs
+  // in next here would get, and an order request this account sent and holds no answer for.
+  clearSessionOrderDrafts();
+  clearSessionOrderRequests();
+  // And the toasts its orders left where no panel showed them, which stay until closed (결정 2-25).
+  dismissAccountToastsExcept(null);
 }
 
 /**
