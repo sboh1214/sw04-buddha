@@ -14,6 +14,7 @@ import { type ReactNode } from 'react';
 import { DateTimeText } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { type Market } from '@/lib/api';
+import { JUDGING_RECORD_ANCHOR, ORDER_COLUMN_TOP } from '@/lib/market-detail';
 import {
   MARKET_RESULT_LABEL,
   PAUSE_REASON_LABEL,
@@ -37,7 +38,14 @@ export type JudgingRecordMarket = Pick<
 type Judgement = Market['judgingRecord']['versions'][number];
 type Pause = Market['judgingRecord']['pauses'][number];
 
-/** Public allowlisted facts only. Both responsive copies read the same live market snapshot. */
+/**
+ * Public allowlisted facts only. Both responsive copies read the same live market snapshot.
+ *
+ * Each copy carries `data-anchor` (`JUDGING_RECORD_ANCHOR`): the place `…#judging-record` opens,
+ * which 거래·정산 이력's 정산 줄 links to (#124, ADR-0143). The detail scrolls to the copy its
+ * width draws; the margin (the order column's own top) keeps the heading clear of the sticky
+ * header.
+ */
 export function MarketJudgingRecord({
   market,
   testId,
@@ -48,7 +56,11 @@ export function MarketJudgingRecord({
   const record = market?.judgingRecord;
   const zone = market?.judgementTimeZone ?? null;
   return (
-    <Card.Root data-testid={testId}>
+    <Card.Root
+      data-testid={testId}
+      data-anchor={JUDGING_RECORD_ANCHOR}
+      scrollMarginTop={ORDER_COLUMN_TOP}
+    >
       <Card.Header>
         <Stack gap="2">
           <Heading as="h2" size="md">

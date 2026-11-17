@@ -14,7 +14,7 @@ import {
   type SocialProvider,
 } from '@/lib/auth-client';
 import { MY_SETTINGS_PATH } from '@/lib/my';
-import { ProfileUnavailable } from './profile-unavailable';
+import { ProfileUnavailable } from '@/components/my/profile-unavailable';
 import { SettingsSection } from './section';
 
 const PROVIDER_LABEL: Record<string, string> = {

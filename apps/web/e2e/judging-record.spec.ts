@@ -507,6 +507,16 @@ test.describe('공개 판정 기록 (#24)', () => {
       await expect(recordOf(page)).toContainText(NO_FILL_CANCEL_REASON);
       await expect(recordOf(page)).toContainText(copy.judgingCancelledAt);
       await expect(recordOf(page)).not.toContainText(copy.judgingSettledAt);
+      // 거래·정산 이력's 판정 기록 link (#124, ADR-0143 결정 11-8): the detail opened at
+      // `#judging-record` scrolls to the copy of the record this width draws. A new document: the
+      // tab is on this very detail, and a goto that changes only the hash is a same-document
+      // navigation — nothing mounts again, and the detail scrolls only when it mounts (the way
+      // the 정산 줄's link and a pasted address both reach it).
+      await page.goto('about:blank');
+      await page.goto(`/markets/${quiet.slug}#judging-record`);
+      await expect(recordOf(page)).toContainText(NO_FILL_CANCEL_REASON);
+      await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+      await expect(recordOf(page)).toBeInViewport();
     } finally {
       await leaveNoPauseDecision(admin, quiet.id);
     }

@@ -28,6 +28,8 @@ import {
 import {
   MY_ORDERS_LIVE_KEY,
   MY_ORDER_DETAIL_KEY,
+  MY_ORDER_HISTORY_KEY,
+  SETTLEMENTS_KEY,
   marketBookKey,
   myOrderKey,
   sellableKey,
@@ -521,6 +523,54 @@ export function wroteAnOrder(event: UserPositionEvent): boolean {
 }
 
 /**
+ * Whether this event announces a settlement record 정산 목록 does not hold yet (#124, ADR-0143):
+ * the other half of `wroteAnOrder`. A settlement retires the holding and writes its record in one
+ * transaction (ADR-0118), and the event carries neither the record's result nor its payout, cost
+ * or times — so the record cannot be built from it and the list is asked for. A trade writes none.
+ */
+export function wroteASettlement(event: UserPositionEvent): boolean {
+  return event.settled;
+}
+
+/**
+ * The 정산 기록 lists a settling `user:position` reads again (#124, ADR-0143): every filter's entry
+ * of the account this socket is (`mySettlementsKey`'s last part), and no entry another account's
+ * `Me` keyed — as the positions' handler patches only its own. One market's settlement sends an
+ * event per holding; `restartQueries` cancels the read the first one started and asks once more,
+ * and only a list on screen asks at all.
+ */
+export function ownSettlementKeys(client: QueryClient, accountId: string | undefined): QueryKey[] {
+  if (accountId === undefined) return [];
+  return client
+    .getQueryCache()
+    .findAll({ queryKey: SETTLEMENTS_KEY })
+    .filter((query) => query.queryKey.at(-1) === accountId)
+    .map((query) => query.queryKey);
+}
+
+/**
+ * The 거래·정산 이력 주문 lists a round of the account's live orders reads again with them (#124,
+ * ADR-0143 결정 9): every filter's entry of this account (`myOrderHistoryKey`'s last part), as
+ * `ownSettlementKeys` picks. A live order a `market:book` or a `market:status` ended — another
+ * tab's cancel, a restriction's or an admin grant's bulk cancel, a pause, a recovery approval, a
+ * close's expiry — sends no `user:` event for a buy, so `ORDERS_KEY`'s restart on `user:position`
+ * never reaches the row it now is; without this, MY's summary drops the order from its live
+ * preview and its 주문 이력 preview does not take it in until the next read. Only a list on screen
+ * asks (`refetchType` 'active'). /my/history holds no market room, so there it waits for a read.
+ */
+export function ownOrderHistoryKeys(
+  client: QueryClient,
+  accountId: string | undefined,
+): QueryKey[] {
+  if (accountId === undefined) return [];
+  return client
+    .getQueryCache()
+    .findAll({ queryKey: MY_ORDER_HISTORY_KEY })
+    .filter((query) => query.queryKey.at(-1) === accountId)
+    .map((query) => query.queryKey);
+}
+
+/**
  * Whether this event puts a market back among the ones MY marks to a live price (#67, ADR-0142):
  * the open list holds the event's contract at 0, holds no contract of that market at 1 or more,
  * and the event takes it to 1 or more. The caller then reads `['market', id]` again
@@ -852,7 +902,8 @@ export function bookRestartsSellable(
  * The keys one round of the account's orders reads again (#123, ADR-0141 결정 10): its live lists
  * and the detail of each of its live orders on any of `marketIds` (`ownLiveOrderIds`). The live
  * lists' prefix does not cover a detail, and a buy cancelled elsewhere sends no `user:` event, so
- * a detail left out stays drawn live.
+ * a detail left out stays drawn live. And the account's ended-order lists (`ownOrderHistoryKeys`,
+ * #124): the order that left the live list is a row there now.
  */
 export function ownOrdersRefreshKeys(
   client: QueryClient,
@@ -863,7 +914,11 @@ export function ownOrdersRefreshKeys(
   for (const marketId of marketIds) {
     for (const orderId of ownLiveOrderIds(client, marketId, accountId)) orderIds.add(orderId);
   }
-  return [MY_ORDERS_LIVE_KEY, ...[...orderIds].map((orderId) => myOrderKey(orderId, accountId))];
+  return [
+    MY_ORDERS_LIVE_KEY,
+    ...[...orderIds].map((orderId) => myOrderKey(orderId, accountId)),
+    ...ownOrderHistoryKeys(client, accountId),
+  ];
 }
 
 /**
@@ -873,7 +928,8 @@ export function ownOrdersRefreshKeys(
  * or of every market (`'all'`), or any order's detail (its market is not known before it
  * answers). Such a read left before the pause or the close, so it would land as fresh and draw an
  * expired or held order 대기, with no `user:` event behind it for a buy. `restartQueries` cancels
- * exactly those and asks again; a status is rare, so the request it adds is too.
+ * exactly those and asks again; a status is rare, so the request it adds is too. With a held
+ * order, the account's ended-order lists too (`ownOrderHistoryKeys`, #124).
  */
 export function ownOrdersStatusKeys(
   client: QueryClient,
@@ -892,6 +948,8 @@ export function ownOrdersStatusKeys(
   if (own.length > 0) {
     // The prefix restart takes the first reads among the lists too.
     keys.push(MY_ORDERS_LIVE_KEY);
+    // The held order may end here (만료, 취소 완료): its ended-order row (#124).
+    keys.push(...ownOrderHistoryKeys(client, accountId));
   } else {
     for (const query of cache.findAll({ queryKey: MY_ORDERS_LIVE_KEY, predicate: firstRead })) {
       const scope = query.queryKey[2];

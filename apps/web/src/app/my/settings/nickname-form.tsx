@@ -28,7 +28,7 @@ import {
   nicknameToRestore,
 } from '@/lib/profile-drafts';
 import { isRestricted } from '@/lib/restriction';
-import { ProfileUnavailable } from './profile-unavailable';
+import { ProfileUnavailable } from '@/components/my/profile-unavailable';
 import { SettingsSection } from './section';
 
 /** The field error's type for a writing restriction's refusal (#185): its link goes with it. */

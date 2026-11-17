@@ -14423,6 +14423,124 @@
         ]
       }
     },
+    "/api/v1/me/settlements": {
+      "get": {
+        "operationId": "getMySettlements",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 20,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "marketId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "period",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "7d",
+                "30d",
+                "90d"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/MySettlement"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/PageMeta"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "The account's settlement records, most recently paid first: per market and contract the result (YES, NO or VOID), the contracts held at settlement, their remaining cost, the payout per contract (100 for the winning contract, 0 for the losing one, 50 for VOID), the payout (0 included) and the settlement P&L (payout minus remaining cost), with when the result was confirmed and when this payout completed. Read from the permanent records, so a later correction never changes a line. marketId narrows to one market, period (7d, 30d, 90d) to the payouts of the last N × 24 hours",
+        "tags": [
+          "trades"
+        ]
+      }
+    },
     "/api/v1/me/markets/{id}/sellable": {
       "get": {
         "operationId": "getMySellable",
@@ -14685,6 +14803,19 @@
                 "ended"
               ]
             }
+          },
+          {
+            "name": "period",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "7d",
+                "30d",
+                "90d"
+              ]
+            }
           }
         ],
         "responses": {
@@ -14750,7 +14881,7 @@
             "session": []
           }
         ],
-        "summary": "The account's orders, newest first, rejected ones included, each with what filled and its state and reason; marketId narrows to one market, state=live to the waiting and partly filled ones, state=ended to the rest",
+        "summary": "The account's orders, newest first, rejected ones included, each with what filled and its state and reason; marketId narrows to one market, state=live to the waiting and partly filled ones, state=ended to the rest, period (7d, 30d, 90d) to the orders taken in the last N × 24 hours",
         "tags": [
           "orders"
         ]
@@ -15092,6 +15223,19 @@
               "format": "uuid",
               "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
             }
+          },
+          {
+            "name": "period",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "7d",
+                "30d",
+                "90d"
+              ]
+            }
           }
         ],
         "responses": {
@@ -15157,7 +15301,7 @@
             "session": []
           }
         ],
-        "summary": "The account's fills, newest first, each as its own order took it: the order, outcome, side, quantity, price per contract and Coin, the recorded YES price and the fee (0). The counterparty is never named; marketId narrows to one market, orderId to one of the account’s orders (own leg only: another account’s order id reads an empty list)",
+        "summary": "The account's fills, newest first, each as its own order took it: the order, outcome, side, quantity, price per contract and Coin, the recorded YES price and the fee (0), and on a sell its realized P&L (net proceeds minus the cost released; null on a buy and on a sell with no record). The counterparty is never named; marketId narrows to one market, orderId to one of the account’s orders (own leg only: another account’s order id reads an empty list), period (7d, 30d, 90d) to the fills of the last N × 24 hours",
         "tags": [
           "orders"
         ]
@@ -40089,6 +40233,77 @@
         ],
         "additionalProperties": false
       },
+      "MySettlement": {
+        "type": "object",
+        "properties": {
+          "marketId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "marketSlug": {
+            "type": "string"
+          },
+          "marketTitle": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "YES",
+              "NO"
+            ]
+          },
+          "result": {
+            "$ref": "#/components/schemas/MarketResult"
+          },
+          "qty": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "costBasisCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
+          "payoutPerContractCoin": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "payoutCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
+          "settlementPnlCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
+          "resolvedAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "settledAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "marketId",
+          "marketSlug",
+          "marketTitle",
+          "outcome",
+          "result",
+          "qty",
+          "costBasisCoin",
+          "payoutPerContractCoin",
+          "payoutCoin",
+          "settlementPnlCoin",
+          "resolvedAt",
+          "settledAt"
+        ],
+        "additionalProperties": false
+      },
       "Sellable": {
         "type": "object",
         "properties": {
@@ -40569,6 +40784,14 @@
           "feeCoin": {
             "$ref": "#/components/schemas/CoinAmount"
           },
+          "realizedPnlCoin": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CoinAmount"
+              }
+            ]
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time",
@@ -40588,6 +40811,7 @@
           "amountCoin",
           "yesPriceCoin",
           "feeCoin",
+          "realizedPnlCoin",
           "createdAt"
         ],
         "additionalProperties": false

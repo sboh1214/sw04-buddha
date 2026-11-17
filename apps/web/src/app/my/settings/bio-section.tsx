@@ -30,7 +30,7 @@ import {
   keepSessionProfileDraft,
 } from '@/lib/profile-drafts';
 import { type Refusal, refusalOf } from '@/lib/restriction';
-import { ProfileUnavailable } from './profile-unavailable';
+import { ProfileUnavailable } from '@/components/my/profile-unavailable';
 import { SettingsSection } from './section';
 
 /**

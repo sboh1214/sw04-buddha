@@ -40,6 +40,12 @@ const draw = (market: JudgingRecordMarket = EMPTY) =>
   renderWithQueries(<MarketJudgingRecord market={market} testId={ID} />);
 
 describe('public judging record (#24)', () => {
+  it('carries the anchor 거래·정산 이력 links to, on its own card (#124, ADR-0143)', () => {
+    const card = byTestId(draw(), ID);
+    expect(card?.attributes['data-anchor']).toBe('judging-record');
+    expect(card?.attributes.id).toBeUndefined();
+  });
+
   it.each([
     ['closed', true, false, copy.marketStatusJudgementDelayed],
     ['provisional', false, true, copy.marketStatusDisputeUnderReview],

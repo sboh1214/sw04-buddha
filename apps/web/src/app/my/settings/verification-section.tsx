@@ -20,7 +20,7 @@ import {
   realNameSaveFailure,
   type RealNameFormValues,
 } from '@/lib/phone-verification';
-import { ProfileUnavailable } from './profile-unavailable';
+import { ProfileUnavailable } from '@/components/my/profile-unavailable';
 import { SettingsSection } from './section';
 
 /**

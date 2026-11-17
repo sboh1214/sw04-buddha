@@ -3140,7 +3140,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** The account's fills, newest first, each as its own order took it: the order, outcome, side, quantity, price per contract and Coin, the recorded YES price and the fee (0). The counterparty is never named; marketId narrows to one market, orderId to one of the account’s orders (own leg only: another account’s order id reads an empty list) */
+        /** The account's fills, newest first, each as its own order took it: the order, outcome, side, quantity, price per contract and Coin, the recorded YES price and the fee (0), and on a sell its realized P&L (net proceeds minus the cost released; null on a buy and on a sell with no record). The counterparty is never named; marketId narrows to one market, orderId to one of the account’s orders (own leg only: another account’s order id reads an empty list), period (7d, 30d, 90d) to the fills of the last N × 24 hours */
         get: operations["getMyFills"];
         put?: never;
         post?: never;
@@ -3293,7 +3293,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** The account's orders, newest first, rejected ones included, each with what filled and its state and reason; marketId narrows to one market, state=live to the waiting and partly filled ones, state=ended to the rest */
+        /** The account's orders, newest first, rejected ones included, each with what filled and its state and reason; marketId narrows to one market, state=live to the waiting and partly filled ones, state=ended to the rest, period (7d, 30d, 90d) to the orders taken in the last N × 24 hours */
         get: operations["getMyOrders"];
         put?: never;
         post?: never;
@@ -3656,6 +3656,23 @@ export type paths = {
         put?: never;
         /** Delete every recorded search of the account; answers the (empty) recent searches */
         post: operations["clearMySearchHistory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/settlements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The account's settlement records, most recently paid first: per market and contract the result (YES, NO or VOID), the contracts held at settlement, their remaining cost, the payout per contract (100 for the winning contract, 0 for the losing one, 50 for VOID), the payout (0 included) and the settlement P&L (payout minus remaining cost), with when the result was confirmed and when this payout completed. Read from the permanent records, so a later correction never changes a line. marketId narrows to one market, period (7d, 30d, 90d) to the payouts of the last N × 24 hours */
+        get: operations["getMySettlements"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -6597,6 +6614,7 @@ export type components = {
             outcome: "YES" | "NO";
             priceCoin: number;
             qty: number;
+            realizedPnlCoin: components["schemas"]["CoinAmount"] | null;
             /** @enum {string} */
             side: "buy" | "sell";
             yesPriceCoin: number;
@@ -6660,6 +6678,24 @@ export type components = {
             kind: components["schemas"]["RestrictionEndChangeKind"];
             /** Format: date-time */
             originalEndsAt: string | null;
+        };
+        MySettlement: {
+            costBasisCoin: components["schemas"]["CoinAmount"];
+            /** Format: uuid */
+            marketId: string;
+            marketSlug: string;
+            marketTitle: string;
+            /** @enum {string} */
+            outcome: "YES" | "NO";
+            payoutCoin: components["schemas"]["CoinAmount"];
+            payoutPerContractCoin: number;
+            qty: number;
+            /** Format: date-time */
+            resolvedAt: string | null;
+            result: components["schemas"]["MarketResult"];
+            /** Format: date-time */
+            settledAt: string;
+            settlementPnlCoin: components["schemas"]["CoinAmount"];
         };
         NextPath: string;
         Nickname: string;
@@ -23372,6 +23408,7 @@ export interface operations {
                 limit?: number;
                 marketId?: string;
                 orderId?: string;
+                period?: "7d" | "30d" | "90d";
             };
             header?: never;
             path?: never;
@@ -23916,6 +23953,7 @@ export interface operations {
                 cursor?: string;
                 limit?: number;
                 marketId?: string;
+                period?: "7d" | "30d" | "90d";
                 state?: "live" | "ended";
             };
             header?: never;
@@ -25388,6 +25426,60 @@ export interface operations {
             };
             /** @description FORBIDDEN */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getMySettlements: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                marketId?: string;
+                period?: "7d" | "30d" | "90d";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["MySettlement"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };

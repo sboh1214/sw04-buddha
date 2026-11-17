@@ -41,6 +41,7 @@ import {
   ORDERS_KEY,
   POSITIONS_KEY,
   SELLABLE_KEY,
+  SETTLEMENTS_KEY,
   TICKS_KEY,
   WATCHLIST_PAGES_KEY,
   marketBookKey,
@@ -64,8 +65,10 @@ import {
   chunkIds,
   ownOrdersRefreshKeys,
   ownOrdersStatusKeys,
+  ownSettlementKeys,
   positionReopensMarket,
   tickRestartsMarket,
+  wroteASettlement,
   wroteAnOrder,
 } from '@/lib/market-live';
 import { restartQueries, setResnapshotOwed } from '@/lib/query-client';
@@ -184,6 +187,8 @@ const PRIVATE_SNAPSHOT_KEYS = [
   WATCHLIST_PAGES_KEY,
   // The order panel's 매도 가능액 (#66, ADR-0140): a missed `user:position` is a holding it lacks.
   SELLABLE_KEY,
+  // 정산 기록 (#124, ADR-0143): a missed settling `user:position` is a record the list lacks.
+  SETTLEMENTS_KEY,
 ] as const;
 
 /**
@@ -520,7 +525,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     /**
      * The account's live orders and its live orders' details read again (#123, ADR-0141 결정 10):
      * the live lists, and the detail of each live order on every market signalled since the last
-     * round (`ownOrdersRefreshKeys`). Leading and trailing like `refreshBook`, one window for every
+     * round, and its ended-order lists (#124), where the order that left the live list now is
+     * (`ownOrdersRefreshKeys`). Leading and trailing like `refreshBook`, one window for every
      * market (`ownOrders`, a `MarketWindow`): MY lists many markets, and a bot market signals many
      * times a second. A market refused inside the window is kept for the trailing round, which
      * offers nothing of its own. Through `invalidateOwn`, so a read already on its way does not
@@ -819,7 +825,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // or hold the account's live orders there — 만료 at the close, 일시 중단 and 복구 대기 — and no
         // `user:` event says so for a buy. Only where the tab holds such an order, or where a first
         // read of the account's orders is still on its way (it left before this status, so it
-        // would land as fresh): `ownOrdersStatusKeys`.
+        // would land as fresh): `ownOrdersStatusKeys` — with a held order, the ended-order lists
+        // too (#124, ADR-0143 결정 9): the order this status ends is a row there now.
         for (const key of ownOrdersStatusKeys(queryClient, event.marketId, identity ?? undefined)) {
           void restartQueries(queryClient, key);
         }
@@ -963,6 +970,14 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // stays at its default `'active'`, so every tab not showing 주문 이력 pays nothing and
         // is merely marked stale.
         if (wroteAnOrder(event)) void restartQueries(queryClient, ORDERS_KEY);
+        // 정산 기록 (#124, ADR-0143): the other half — a settlement wrote this holding's record, which
+        // the event cannot build (no result, payout or times). Only this account's lists
+        // (`ownSettlementKeys`), and only one on screen asks.
+        if (wroteASettlement(event)) {
+          for (const key of ownSettlementKeys(queryClient, identity ?? undefined)) {
+            void restartQueries(queryClient, key);
+          }
+        }
         // The order panel's 매도 가능액 on that market (#66, ADR-0140): the holding moved, and so
         // may the part its resting sells lock. Only a mounted panel's query is asked again.
         // Read again here, so it leaves the book window (#67).

@@ -125,7 +125,8 @@ export class MeOrdersController {
     summary:
       "The account's orders, newest first, rejected ones included, each with what filled and " +
       'its state and reason; marketId narrows to one market, state=live to the waiting and ' +
-      'partly filled ones, state=ended to the rest',
+      'partly filled ones, state=ended to the rest, period (7d, 30d, 90d) to the orders ' +
+      'taken in the last N × 24 hours',
   })
   @ApiPageOf(orderSchema)
   @ApiErrors('UNAUTHENTICATED', 'VALIDATION_ERROR')
@@ -211,9 +212,12 @@ export class MeOrdersController {
     operationId: 'getMyFills',
     summary:
       "The account's fills, newest first, each as its own order took it: the order, outcome, " +
-      'side, quantity, price per contract and Coin, the recorded YES price and the fee (0). ' +
-      'The counterparty is never named; marketId narrows to one market, orderId to one of the ' +
-      'account’s orders (own leg only: another account’s order id reads an empty list)',
+      'side, quantity, price per contract and Coin, the recorded YES price and the fee (0), ' +
+      'and on a sell its realized P&L (net proceeds minus the cost released; null on a buy ' +
+      'and on a sell with no record). The counterparty is never named; marketId narrows to ' +
+      'one market, orderId to one of the account’s orders (own leg only: another account’s ' +
+      'order id reads an empty list), period (7d, 30d, 90d) to the fills of the last N × 24 ' +
+      'hours',
   })
   @ApiPageOf(myFillSchema)
   @ApiErrors('UNAUTHENTICATED', 'VALIDATION_ERROR')

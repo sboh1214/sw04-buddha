@@ -10,8 +10,10 @@ import {
   ORDERS_KEY,
   isPrivateQueryKey,
   marketBookKey,
+  myFillHistoryKey,
   myMarketFillsKey,
   myOrderFillsKey,
+  myOrderHistoryKey,
   myOrderKey,
   myOrdersLiveKey,
 } from './market-keys';
@@ -88,6 +90,7 @@ function fill(id: string, qty: number, over: Partial<MyFill> = {}): MyFill {
     amountCoin: String(40 * qty),
     yesPriceCoin: 60,
     feeCoin: '0',
+    realizedPnlCoin: null,
     createdAt: `2026-11-16T00:0${id}:00.000Z`,
     ...over,
   };
@@ -121,7 +124,7 @@ describe('the keys (#123): under the orders root, lower-cased ids, the account l
     expect(hashKey(myOrderKey(ORDER, A))).not.toBe(hashKey(myOrderKey(ORDER, B)));
   });
 
-  it('sits under ORDERS_KEY — private, reset, re-read by user:position — and never the history list', () => {
+  it('sits under ORDERS_KEY — private, reset, re-read by user:position — apart from the history lists', () => {
     for (const key of [
       myOrdersLiveKey(A),
       myOrderKey(ORDER, A),
@@ -135,9 +138,12 @@ describe('the keys (#123): under the orders root, lower-cased ids, the account l
     expect(partialMatchKey(myOrderKey(ORDER, A), MY_ORDER_DETAIL_KEY)).toBe(true);
     expect(partialMatchKey(myOrderFillsKey(ORDER, A), MY_ORDER_FILLS_KEY)).toBe(true);
     expect(partialMatchKey(myMarketFillsKey(MARKET, A), MY_MARKET_FILLS_KEY)).toBe(true);
-    // The history list's `['orders']` takes none of the live join.
-    expect(partialMatchKey(ORDERS_KEY, MY_ORDERS_LIVE_KEY)).toBe(false);
-    expect(partialMatchKey(ORDERS_KEY, MY_ORDER_DETAIL_KEY)).toBe(false);
+    // The history's lists (#124) are under the root too, and take none of the live join.
+    for (const key of [myOrderHistoryKey({}, A), myFillHistoryKey({}, A)]) {
+      expect(partialMatchKey(key, ORDERS_KEY)).toBe(true);
+      expect(partialMatchKey(key, MY_ORDERS_LIVE_KEY)).toBe(false);
+      expect(partialMatchKey(key, MY_ORDER_DETAIL_KEY)).toBe(false);
+    }
   });
 });
 

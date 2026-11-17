@@ -774,6 +774,17 @@ describe('excluded features in stored data (#113)', () => {
         .sort(),
     ).toEqual(['fill_marks', 'watch_notes']);
     expect(personalTables().map((table) => table.name)).not.toContain('categories');
+    // #124 (migration 0076): a sale's record has no account column — its fill names the seller —
+    // and is one person's all the same, as the planted `fill_marks` above.
+    const realizations = TABLES.find((table) => table.name === 'fill_realizations');
+    expect(realizations?.columns.map((column) => column.name)).toEqual([
+      'fillId',
+      'proceedsCoin',
+      'costReleasedCoin',
+      'realizedPnlCoin',
+    ]);
+    expect(realizations?.columns.some((column) => holdsAccount(column.name))).toBe(false);
+    expect(personalTables().map((table) => table.name)).toContain('fill_realizations');
   });
 
   it('keeps no buy input or fill price as a personal probability (N02 §10, N04 §5)', () => {
@@ -785,7 +796,9 @@ describe('excluded features in stored data (#113)', () => {
         'balances',
         'orders',
         'fills',
+        'fill_realizations',
         'positions',
+        'position_settlements',
         'payment_events',
       ]),
     );

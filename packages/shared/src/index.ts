@@ -4,6 +4,7 @@ export * from './accounting.js';
 export * from './admin-accounts.js';
 export * from './api/envelope.js';
 export * from './api/pagination.js';
+export * from './api/period.js';
 export * from './api/path-param.js';
 export * from './api/uuid.js';
 export * from './approvals.js';

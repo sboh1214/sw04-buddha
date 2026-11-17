@@ -2950,6 +2950,17 @@ export function detailCopyTestId(page: Page, testId: string): string {
 }
 
 /**
+ * No page scroll sideways at this width (R16): the widest row still wraps inside it. Read once,
+ * with no retry — draw what is to be measured first. 보유 계약 (#67) and 거래·정산 이력 (#124).
+ */
+export async function expectNoSideScroll(page: Page): Promise<void> {
+  const fits = await page.evaluate(
+    () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+  );
+  expect(fits).toBe(true);
+}
+
+/**
  * How long a spec waits for a confirmed market to read 지급 완료 (ADR-0046), counted from its
  * confirmation: the worker that confirms the 잠정 결과 at its dispute deadline queues
  * `market.finalize` with no delay (#152, ADR-0103) and settles in well under a second, so this is

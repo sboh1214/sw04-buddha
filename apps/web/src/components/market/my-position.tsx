@@ -3,7 +3,7 @@
 import { Alert, Badge, Button, Card, DataList, Heading, Skeleton, Stack } from '@chakra-ui/react';
 import { type MarketStatus, parseCoinAmount } from '@buddha/shared';
 import { type ReactNode } from 'react';
-import { ProfileUnavailable } from '@/app/my/settings/profile-unavailable';
+import { ProfileUnavailable } from '@/components/my/profile-unavailable';
 import { AccountBlockLine } from '@/components/position/account-block-line';
 import { HoldingRow, type SellAccount } from '@/components/position/holding-rows';
 import { CoinText } from '@/components/ui/coin-text';

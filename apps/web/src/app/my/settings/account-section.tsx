@@ -12,7 +12,7 @@ import { useMe } from '@/hooks/use-me';
 import { useAuthEmailMismatch, useAuthSessionChanged } from '@/hooks/use-session-changed';
 import { authClient, authErrorMessage } from '@/lib/auth-client';
 import { MY_SETTINGS_PATH } from '@/lib/my';
-import { ProfileUnavailable } from './profile-unavailable';
+import { ProfileUnavailable } from '@/components/my/profile-unavailable';
 import { SettingsSection } from './section';
 
 const schema = z.object({ newEmail: z.email(copy.errEmailInvalid) });

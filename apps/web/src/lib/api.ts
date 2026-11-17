@@ -179,6 +179,11 @@ export type Order = components['schemas']['Order'];
 /** One of the caller's own fills (`GET /me/fills`), its own side only (#119; #123's views). */
 export type MyFill = components['schemas']['MyFill'];
 /**
+ * One of the caller's own settlement records (`GET /me/settlements`, #124, ADR-0143): what a
+ * holding was when its market settled and what it was paid — a zero payout's included.
+ */
+export type MySettlement = components['schemas']['MySettlement'];
+/**
  * 주문 패널 (#66, ADR-0140): a quote (`POST /markets/:id/quote`, public) and its body, an order's
  * body and answer (`POST /markets/:id/orders`), and the caller's 매도 가능액 on one market
  * (`GET /me/markets/:id/sellable`, owner only).

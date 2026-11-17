@@ -22,9 +22,11 @@ import {
   completeOnboarding,
   createConfiguredOpenMarket,
   TEST_MM_TRADING_LIQUIDITY,
+  createFillRecord,
   createMarket,
   createMarketPause,
   createModerationAction,
+  createOrder,
   createStartGrant,
   createUser,
   fundMarketMakerFunds,
@@ -607,6 +609,8 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
       amountCoin: '80',
       yesPriceCoin: 60,
       feeCoin: '0',
+      // A buy realises nothing (#124): the key is there, null.
+      realizedPnlCoin: null,
       createdAt: incoming.order.createdAt,
     });
     expect(Object.keys(aFill!).sort()).toEqual(Object.keys(myFillSchema.shape).sort());
@@ -694,6 +698,19 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
     expect(await balanceOf(t.db, b.id)).toMatchObject({
       availableCoin: START_COIN - 120n + 70n,
     });
+
+    // What the sale realised (#124, N02 §8): B's two YES cost 120, so the one sold at 70 released
+    // 60 and realised +10 — on B's own sell line, the resting side of the fill. A's line of the
+    // same fill is a buy and carries none: never the other side's figure.
+    const [bSold] = dataOf<MyFill[]>(await read(`/me/fills?orderId=${sell.order.id}`, b));
+    expect(bSold).toMatchObject({
+      side: 'sell',
+      priceCoin: 70,
+      amountCoin: '70',
+      realizedPnlCoin: '10',
+    });
+    const [aBought] = dataOf<MyFill[]>(await read(`/me/fills?orderId=${taken.order.id}`, a));
+    expect(aBought).toMatchObject({ id: bSold!.id, side: 'buy', realizedPnlCoin: null });
   });
 
   it('publishes market:book after COMMIT for an order that rested or filled, and none for one that changed no live order (#179)', async () => {
@@ -1301,6 +1318,337 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
     errorOf(await read(`/me/orders/${randomUUID()}`, a), 404, 'NOT_FOUND');
     errorOf(await read('/me/orders', null), 401, 'UNAUTHENTICATED');
     errorOf(await read('/me/fills', null), 401, 'UNAUTHENTICATED');
+  });
+
+  it('filters the owner’s orders by a recent period on the time they came in, the cursor as it was (#124)', async () => {
+    const DAY_MS = 24 * 60 * 60 * 1_000;
+    const now = Date.now();
+    const mine = (input: Omit<Parameters<typeof createOrder>[1], 'marketId' | 'userId'>) =>
+      createOrder(t.db, { userId: a.id, marketId: market.id, ...input });
+    // In arrival order, oldest first. A minute outside the last 7 × 24 hours: 5 at 40, 2 filled
+    // and the other 3 cancelled by the owner.
+    const outside = await mine({
+      status: 'cancelled',
+      limitPriceCoin: 40,
+      qty: 5,
+      filledQty: 2,
+      createdAt: new Date(now - 7 * DAY_MS - 60_000),
+    });
+    // A minute inside: 3, one filled and the rest expired at the close.
+    const inside = await mine({
+      status: 'expired',
+      qty: 3,
+      filledQty: 1,
+      createdAt: new Date(now - 7 * DAY_MS + 60_000),
+    });
+    const live = await mine({ createdAt: new Date(now - 60 * 60_000) });
+    // A Coin-amount order: 150 offered, 122 spent on two contracts, 28 given back.
+    const budget = await mine({
+      timeInForce: 'ioc',
+      limitPriceCoin: 99,
+      budgetCoin: 150n,
+      filledQty: 2,
+      filledAmountCoin: 122n,
+      status: 'cancelled',
+      createdAt: new Date(now - 30 * 60_000),
+    });
+    const rejected = await mine({ timeInForce: 'ioc', createdAt: new Date(now - 60_000) });
+    const others = await createOrder(t.db, { userId: b.id, marketId: market.id });
+
+    type OrderPage = { data: Order[]; meta: { nextCursor: string | null } };
+    const page = async (query: string, who = a) => {
+      const res = await read(`/me/orders${query}`, who);
+      expect(res.statusCode, res.body).toBe(200);
+      const body = JSON.parse(res.body) as OrderPage;
+      for (const order of body.data) orderSchema.parse(order);
+      return body;
+    };
+    const ids = async (query: string) => (await page(query)).data.map((order) => order.id);
+
+    expect(await ids('')).toEqual([rejected.id, budget.id, live.id, inside.id, outside.id]);
+    expect(await ids('?state=ended')).toEqual([rejected.id, budget.id, inside.id, outside.id]);
+    // The window is counted back from the read, by the order's own time: the one a minute
+    // outside goes, live or ended alike, and is back within 30 and 90 days.
+    expect(await ids('?state=ended&period=7d')).toEqual([rejected.id, budget.id, inside.id]);
+    expect(await ids('?period=7d')).toEqual([rejected.id, budget.id, live.id, inside.id]);
+    expect(await ids('?state=live&period=7d')).toEqual([live.id]);
+    for (const period of ['30d', '90d']) {
+      expect(await ids(`?state=ended&period=${period}`)).toEqual([
+        rejected.id,
+        budget.id,
+        inside.id,
+        outside.id,
+      ]);
+    }
+    expect(await ids(`?state=ended&period=7d&marketId=${randomUUID()}`)).toEqual([]);
+
+    // One a page: every order of the window once, in order, and the list ends there.
+    const walked: string[] = [];
+    const cursors: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const next: OrderPage = await page(
+        `?state=ended&period=7d&limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+      );
+      expect(next.data).toHaveLength(1);
+      walked.push(next.data[0]!.id);
+      cursor = next.meta.nextCursor;
+      if (cursor !== null) cursors.push(cursor);
+    } while (cursor !== null);
+    expect(walked).toEqual([rejected.id, budget.id, inside.id]);
+    // The cursor is the arrival key alone, as before the period: no window is carried in it —
+    // so a cursor from a read without a period goes on in a read with one, and the other way.
+    expect(cursors).toEqual([String(rejected.arrivalSeq), String(budget.arrivalSeq)]);
+    const plain = await page('?state=ended&limit=1');
+    expect(plain.meta.nextCursor).toBe(cursors[0]);
+    const from = `&cursor=${encodeURIComponent(plain.meta.nextCursor!)}`;
+    expect(await ids(`?state=ended&period=7d${from}`)).toEqual([budget.id, inside.id]);
+    expect(await ids(`?state=ended${from}`)).toEqual([budget.id, inside.id, outside.id]);
+
+    // What an ended line carries (N02 §7): what filled beside what was cancelled, and a
+    // Coin-amount order's unspent Coin in place of a cancelled quantity.
+    const ended = (await page('?state=ended')).data;
+    expect(ended.map((order) => order.status)).toEqual([
+      'rejected',
+      'cancelled',
+      'expired',
+      'cancelled',
+    ]);
+    expect(ended[1]).toMatchObject({
+      id: budget.id,
+      qty: null,
+      budgetCoin: '150',
+      filledQty: 2,
+      filledAmountCoin: '122',
+      cancelledQty: 0,
+      unspentCoin: '28',
+      cancelReason: 'ioc_remainder',
+    });
+    expect(ended[2]).toMatchObject({ id: inside.id, qty: 3, filledQty: 1, cancelledQty: 2 });
+    expect(ended[3]).toMatchObject({
+      id: outside.id,
+      qty: 5,
+      filledQty: 2,
+      filledAmountCoin: '80',
+      cancelledQty: 3,
+      unspentCoin: null,
+      cancelReason: 'by_owner',
+    });
+
+    // B reads its own order alone, whatever period it asks with.
+    expect((await page('?period=7d', b)).data.map((order) => order.id)).toEqual([others.id]);
+    for (const period of ['all', '1d', '7', '']) {
+      errorOf(await read(`/me/orders?period=${period}`, a), 400, 'VALIDATION_ERROR');
+      errorOf(await read(`/me/fills?period=${period}`, a), 400, 'VALIDATION_ERROR');
+    }
+  });
+
+  it('carries a sale’s realised P&L on the seller’s own line alone, on either side of the fill, and filters the fills by a recent period (#124)', async () => {
+    const DAY_MS = 24 * 60 * 60 * 1_000;
+    const now = Date.now();
+    const second = await createMarket(t.db);
+    /** Seven digits each, no other number of these answers: the incoming and the resting sale. */
+    const INCOMING_PNL = 1_234_567n;
+    const RESTING_PNL = -2_345_678n;
+    // In id order, oldest first; A is the seller of every trade, B its buyer.
+    // A minute outside the last 7 × 24 hours: A's immediate sell.
+    const old = await createFillRecord(t.db, {
+      marketId: market.id,
+      incomingOwnerId: a.id,
+      restingOwnerId: b.id,
+      side: 'sell',
+      priceCoin: 50,
+      qty: 4,
+      createdAt: new Date(now - 7 * DAY_MS - 60_000),
+      realization: { realizedPnlCoin: 15n },
+    });
+    // A minute inside: A's resting sell, met by B's immediate buy — at a loss.
+    const restingSale = await createFillRecord(t.db, {
+      marketId: market.id,
+      incomingOwnerId: b.id,
+      restingOwnerId: a.id,
+      side: 'buy',
+      kind: 'trade',
+      priceCoin: 30,
+      qty: 2,
+      createdAt: new Date(now - 7 * DAY_MS + 60_000),
+      realization: { realizedPnlCoin: RESTING_PNL },
+    });
+    // A pair mint: B's immediate YES buy at 60 against A's resting NO bid at 40. Nothing sold.
+    const mint = await createFillRecord(t.db, {
+      marketId: market.id,
+      incomingOwnerId: b.id,
+      restingOwnerId: a.id,
+      priceCoin: 60,
+      createdAt: new Date(now - 60 * 60_000),
+    });
+    // A's immediate sell on another market, at a gain.
+    const incomingSale = await createFillRecord(t.db, {
+      marketId: second.id,
+      incomingOwnerId: a.id,
+      restingOwnerId: b.id,
+      side: 'sell',
+      priceCoin: 90,
+      qty: 100_000,
+      createdAt: new Date(now - 30 * 60_000),
+      realization: { realizedPnlCoin: INCOMING_PNL },
+    });
+    // A sale with no record: one the backfill left out.
+    const unrecorded = await createFillRecord(t.db, {
+      marketId: market.id,
+      incomingOwnerId: a.id,
+      restingOwnerId: b.id,
+      side: 'sell',
+      priceCoin: 45,
+      createdAt: new Date(now - 60_000),
+    });
+
+    type FillPage = { data: MyFill[]; meta: { nextCursor: string | null } };
+    const page = async (who: TestUser, query = '') => {
+      const res = await read(`/me/fills${query}`, who);
+      expect(res.statusCode, res.body).toBe(200);
+      const body = JSON.parse(res.body) as FillPage;
+      for (const fill of body.data) {
+        expect(myFillSchema.parse(fill)).toEqual(fill);
+        expect(Object.keys(fill).sort()).toEqual(Object.keys(myFillSchema.shape).sort());
+      }
+      return body;
+    };
+    const lines = async (who: TestUser, query = '') =>
+      (await page(who, query)).data.map((fill) => [
+        fill.id,
+        fill.outcome,
+        fill.side,
+        fill.priceCoin,
+        fill.realizedPnlCoin,
+      ]);
+    const id = (record: { fill: { id: number } }) => String(record.fill.id);
+
+    // A, the seller: each sale's figure on its own line — the immediate sell's and the resting
+    // sell's alike, a loss with its sign — and none on the mint's buy or the unrecorded sale.
+    const aAll = [
+      [id(unrecorded), 'YES', 'sell', 45, null],
+      [id(incomingSale), 'YES', 'sell', 90, String(INCOMING_PNL)],
+      [id(mint), 'NO', 'buy', 40, null],
+      [id(restingSale), 'YES', 'sell', 30, String(RESTING_PNL)],
+      [id(old), 'YES', 'sell', 50, '15'],
+    ];
+    expect(await lines(a)).toEqual(aAll);
+    // B, the buyer of the same fills: every line a buy, and no figure on any — on the fills it
+    // took at once and on the ones its resting bids met.
+    const bAll = [
+      [id(unrecorded), 'YES', 'buy', 45, null],
+      [id(incomingSale), 'YES', 'buy', 90, null],
+      [id(mint), 'YES', 'buy', 60, null],
+      [id(restingSale), 'YES', 'buy', 30, null],
+      [id(old), 'YES', 'buy', 50, null],
+    ];
+    expect(await lines(b)).toEqual(bAll);
+    const sellerFigures = [String(INCOMING_PNL), String(RESTING_PNL), '15'];
+    for (const fill of (await page(b)).data) {
+      for (const value of Object.values(fill)) expect(sellerFigures).not.toContain(value);
+    }
+
+    // The same under every filter: one own order, one market, a period.
+    for (const [who, order, line] of [
+      [a, incomingSale.incoming, aAll[1]],
+      [a, restingSale.resting, aAll[3]],
+      [a, unrecorded.incoming, aAll[0]],
+      [a, mint.resting, aAll[2]],
+      [b, incomingSale.resting, bAll[1]],
+      [b, restingSale.incoming, bAll[3]],
+    ] as const) {
+      expect(await lines(who, `?orderId=${order.id}`)).toEqual([line]);
+    }
+    // The buyer naming the seller's order reads what an unknown id reads: nothing.
+    expect(await lines(b, `?orderId=${incomingSale.incoming.id}`)).toEqual([]);
+    expect(await lines(b, `?orderId=${restingSale.resting.id}`)).toEqual([]);
+    expect(await lines(a, `?marketId=${second.id}`)).toEqual([aAll[1]]);
+    expect(await lines(b, `?marketId=${second.id}`)).toEqual([bAll[1]]);
+    expect(await lines(a, `?marketId=${market.id}`)).toEqual([aAll[0], aAll[2], aAll[3], aAll[4]]);
+
+    // The period is counted back from the read, by the fill's time: the fill a minute outside
+    // 7 × 24 hours goes — on both sides — and is back within 30 and 90 days.
+    expect(await lines(a, '?period=7d')).toEqual(aAll.slice(0, 4));
+    expect(await lines(b, '?period=7d')).toEqual(bAll.slice(0, 4));
+    for (const period of ['30d', '90d']) {
+      expect(await lines(a, `?period=${period}`)).toEqual(aAll);
+    }
+    expect(await lines(a, `?period=7d&orderId=${old.incoming.id}`)).toEqual([]);
+    expect(await lines(a, `?period=7d&marketId=${second.id}`)).toEqual([aAll[1]]);
+
+    // One a page inside the period, across the fills A took and the fills its resting orders
+    // met (two reads merged): each fill once, in id order, and the list ends inside the window.
+    for (const [who, all] of [
+      [a, aAll],
+      [b, bAll],
+    ] as const) {
+      const walked: unknown[][] = [];
+      const cursors: string[] = [];
+      let cursor: string | null = null;
+      do {
+        const next: FillPage = await page(
+          who,
+          `?period=7d&limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+        );
+        expect(next.data).toHaveLength(1);
+        walked.push([next.data[0]!.id, next.data[0]!.realizedPnlCoin]);
+        cursor = next.meta.nextCursor;
+        if (cursor !== null) cursors.push(cursor);
+      } while (cursor !== null);
+      expect(walked).toEqual(all.slice(0, 4).map((line) => [line[0], line[4]]));
+      // The cursor is the fill id alone, as before the period.
+      expect(cursors).toEqual([id(unrecorded), id(incomingSale), id(mint)]);
+    }
+    // A cursor from a read without a period goes on in a read with one.
+    const plain = await page(a, '?limit=3');
+    expect(plain.meta.nextCursor).toBe(id(mint));
+    const from = `&cursor=${encodeURIComponent(plain.meta.nextCursor!)}`;
+    expect(await lines(a, `?period=7d${from}`)).toEqual([aAll[3]]);
+    expect(await lines(a, `?limit=3${from}`)).toEqual([aAll[3], aAll[4]]);
+  });
+
+  it('answers every fill of a sell that walked three price levels with what it realised, adding up to the position (#124)', async () => {
+    await open();
+    // A bids NO at 40 for three and B takes three YES at 60: B's cost is 180.
+    placed(await send(a, { outcome: 'NO', qty: 3 }));
+    placed(await send(b, { timeInForce: 'ioc', limitPriceCoin: 99, qty: 3 }));
+    // A bids YES at 70, 69 and 68; B's immediate sell of three, narrowed to 70 − 5, walks them.
+    for (const limitPriceCoin of [70, 69, 68]) placed(await send(a, { limitPriceCoin }));
+    const sold = placed(
+      await send(b, { side: 'sell', timeInForce: 'ioc', limitPriceCoin: 60, qty: 3 }),
+    );
+    expect(sold.order).toMatchObject({
+      status: 'filled',
+      protectedLimitPriceCoin: 65,
+      filledQty: 3,
+      filledAmountCoin: '207',
+    });
+    // One line per price level, newest first: each released 60 of the 180, so +8, +9 and +10.
+    const own = dataOf<MyFill[]>(await read(`/me/fills?orderId=${sold.order.id}`, b));
+    expect(own.map((fill) => [fill.side, fill.priceCoin, fill.qty, fill.realizedPnlCoin])).toEqual([
+      ['sell', 68, 1, '8'],
+      ['sell', 69, 1, '9'],
+      ['sell', 70, 1, '10'],
+    ]);
+    // Their sum is what the position realised (the realised P&L before settlement).
+    const realized = own.reduce((sum, fill) => sum + BigInt(fill.realizedPnlCoin!), 0n);
+    const positions = dataOf<{ outcome: string; qty: number; realizedPnlCoin: string }[]>(
+      await read('/me/positions', b),
+    );
+    expect(positions.map((row) => [row.outcome, row.qty, row.realizedPnlCoin])).toEqual([
+      ['YES', 0, String(realized)],
+    ]);
+    expect(realized).toBe(27n);
+    // The same lines by market and by period, and nothing of them on the buyer's side: A's
+    // lines of the same three fills are buys with no figure.
+    for (const query of [`?marketId=${market.id}&limit=3`, '?period=7d&limit=3']) {
+      expect(dataOf<MyFill[]>(await read(`/me/fills${query}`, b))).toEqual(own);
+    }
+    const bought = dataOf<MyFill[]>(await read('/me/fills?limit=3', a));
+    expect(bought.map((fill) => [fill.id, fill.side, fill.realizedPnlCoin])).toEqual(
+      own.map((fill) => [fill.id, 'buy', null]),
+    );
   });
 
   it('never names the 운영 마켓메이커 on a member’s fill, and pages the fills newest first', async () => {

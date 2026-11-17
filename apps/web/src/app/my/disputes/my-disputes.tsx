@@ -14,7 +14,7 @@ import { disputeRetractFailureMessage } from '@/lib/disputes';
 import { listSection } from '@/lib/query-client';
 import { watchlistRows } from '@/lib/watchlist';
 import { LoadFailed, Section, SessionEnded, useSessionEnded } from '../portfolio';
-import { ProfileUnavailable } from '../settings/profile-unavailable';
+import { ProfileUnavailable } from '@/components/my/profile-unavailable';
 
 /** What the list's body reads of `useMyDisputes` (a test draws it from a list of its own). */
 export type Disputes = Pick<

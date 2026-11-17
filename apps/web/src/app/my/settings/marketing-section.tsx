@@ -13,7 +13,7 @@ import { MARKETING_CONSENT_TEXT } from '@/legal/consent-texts';
 import { resolveLegalDocument } from '@/legal/document';
 import { type Me } from '@/lib/api';
 import { consentFailure, marketingConsentBody, marketingSwitchOn } from '@/lib/consent';
-import { ProfileUnavailable } from './profile-unavailable';
+import { ProfileUnavailable } from '@/components/my/profile-unavailable';
 import { SettingsSection } from './section';
 
 /** The marketing consent text, business facts filled in once. */
