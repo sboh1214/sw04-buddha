@@ -1,4 +1,4 @@
-import { formatCoin } from '@buddha/shared';
+import { CONTRACT_TERMS, PAYOUT_PER_CONTRACT_COIN, formatCoin } from '@buddha/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { copy } from './copy';
 import {
@@ -33,6 +33,35 @@ describe('copy', () => {
     expect(copy.marketSettledPayout).toContain('100 Coin');
     expect(copy.marketSettledPayoutVoid).not.toContain('100');
     expect(copy.marketSettledPayoutVoid).not.toContain('정답');
+    // #34 (ADR-0145; ADR-0135 결정 4): 무효 pays each contract half the winning payout — a payout,
+    // never what was spent given back — and both lines hold for any visitor of the public notice.
+    // The sentence states the terms' one amount, so a change of terms has to change it too.
+    expect(CONTRACT_TERMS.voidPayoutYesCoin).toBe(CONTRACT_TERMS.voidPayoutNoCoin);
+    expect(BigInt(CONTRACT_TERMS.voidPayoutYesCoin)).toBe(PAYOUT_PER_CONTRACT_COIN / 2n);
+    expect(copy.marketSettledPayoutVoid).toContain(`${String(PAYOUT_PER_CONTRACT_COIN / 2n)} Coin`);
+    for (const text of [copy.marketSettledPayout, copy.marketSettledPayoutVoid]) {
+      expect(text).not.toMatch(/환불|원금/);
+      expect(text).toContain('정산 때 계약을 보유한 계정은');
+    }
+  });
+
+  it('words the recap’s links and its empty line with no score, rank or refund (#34)', () => {
+    // N04 §3·§4: a P&L is trade accounting, never a score; I3: the orders link opens ended orders.
+    const recap = [
+      copy.marketHistoryFills,
+      copy.marketHistorySettlements,
+      copy.marketHistoryOrders,
+      copy.marketMyPositionEmptyEnded,
+    ];
+    expect(recap).toEqual([
+      '이 시장 체결 이력',
+      '이 시장 정산 이력',
+      '이 시장 끝난 주문',
+      '이 시장에서 보유한 계약이 없습니다.',
+    ]);
+    for (const text of recap) {
+      expect(text).not.toMatch(/환불|원금|순위|랭킹|실력|점수|스코어|수익률|승률|적중|참여/);
+    }
   });
 
   it('labels every status as ADR-0093 decision 1 item 12 words it, and VOID as 무효', () => {

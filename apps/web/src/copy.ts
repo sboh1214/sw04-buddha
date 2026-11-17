@@ -2801,6 +2801,15 @@ export const copy = {
   orderBackToHistory: '거래·정산 이력으로 돌아가기',
   marketMyOpenOrdersEmpty: '이 시장에 대기 중인 주문이 없습니다.',
   marketMyTradesEmpty: '이 시장에서 체결된 내 거래가 없습니다.',
+  // The detail's ways to MY's history of this market (#34, ADR-0145; ADR-0135 결과 4, I3), named
+  // as the wallet's '정산 이력' (ledgerSettlementHistory). The orders' list it opens holds the ended
+  // orders alone (state=ended, '끝난 주문이 없습니다.'), hence '끝난 주문'.
+  marketHistoryFills: '이 시장 체결 이력',
+  marketHistorySettlements: '이 시장 정산 이력',
+  marketHistoryOrders: '이 시장 끝난 주문',
+  // 내 포지션's empty line once trading has ended (거래 마감 to 취소): the positions list is its ground,
+  // so it says only that nothing is held; whether the account traded is marketMyTradesEmpty's.
+  marketMyPositionEmptyEnded: '이 시장에서 보유한 계약이 없습니다.',
   // 거절 사유 11의 짧은 이름(결정 4, E3): MY 목록·상태 이력·알림. 문장은 위의 orderReject*다.
   orderRejectNameInsufficientCoin: '잔액 부족',
   orderRejectNameInsufficientContracts: '보유량 부족',
@@ -4001,12 +4010,14 @@ export const copy = {
   settlementStepStatusPending: '대기',
   settlementStepStatusDone: '완료',
   settlementStepStatusFailed: '실패',
-  // 지급 완료 안내: 지급은 이미 잔고에 반영됐고 내 손익은 아래 내 포지션이 말한다. '맞힌'이 아니라
-  // 기획의 '정답'(N02 §6, 오너 결정 #14). 결과가 무효면 정답이 없으니 100 Coin을 말하지 않고 손익의
-  // 자리만 가리킨다. 무효의 지급액(50/50, ADR-0093 결정 1의 9)은 그것을 지급하는 #126이 적는다.
+  // 지급 완료 안내: '정답', the plan's word, not '맞힌' (N02 §6, owner decision #14). The status
+  // notice is in the public HTML and the same for every visitor (statusNotice), so it is a sentence
+  // true whoever reads it (#34, ADR-0145). A 무효 result has no winning side, so no 100 Coin: each
+  // contract is paid 50 Coin with a P&L by its price (ADR-0135 결정 4, N03 §6) — nothing given back.
   marketSettledPayout:
-    '정답인 계약은 100 Coin씩 지급되었고, 내 손익은 아래 내 포지션에서 볼 수 있습니다.',
-  marketSettledPayoutVoid: '내 손익은 아래 내 포지션에서 볼 수 있습니다.',
+    '정답인 계약은 100 Coin씩 지급되었습니다. 정산 때 계약을 보유한 계정은 내 포지션에서 자기 정산 내역을 볼 수 있습니다.',
+  marketSettledPayoutVoid:
+    '무효로 끝나 YES·NO 계약마다 50 Coin씩 지급되었습니다. 매입가에 따라 손익이 생깁니다. 정산 때 계약을 보유한 계정은 내 포지션에서 자기 정산 내역을 볼 수 있습니다.',
   // 관리자 이벤트 로그의 정산 행: 정산 요약(worker market-finalize).
   eventSettledAccounts: '정산 계정 수',
   eventPaidAccounts: '지급 계정 수',

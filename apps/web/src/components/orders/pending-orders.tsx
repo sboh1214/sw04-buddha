@@ -3,6 +3,7 @@
 import { Alert, Box, Button, Card, Heading, Skeleton, Stack } from '@chakra-ui/react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
+import { MarketHistoryLink } from '@/components/market/settled-recap';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
@@ -16,6 +17,7 @@ import {
   usePendingCancels,
 } from '@/hooks/use-my-orders';
 import { type Order } from '@/lib/api';
+import { marketHistoryLinks } from '@/lib/market-recap';
 import { showMoreOrders } from '@/lib/my';
 import {
   type LiveBaseline,
@@ -243,6 +245,10 @@ function rowTestIdOf(variant: 'my' | 'market', orderId: string): string {
  * of the account, the rows MY draws without their market line. A signed-in reader's only: nothing
  * for a visitor or while the session is not known (the detail's one sign-in prompt stands for it),
  * so none of it is in the server's HTML. Keyed by the account `['me']` holds (`PendingOrders`).
+ *
+ * Its last line, always there for a member, goes to this market's ended orders on MY — 만료,
+ * 취소 완료, 거절 and 전량 체결 alike (#34, ADR-0145; ADR-0135 I3: an order that ended with no fill
+ * is not in the recap, it is seen through this link).
  */
 export function MarketMyOpenOrders({ marketId }: { marketId: string }) {
   const { data: session } = useSession();
@@ -257,31 +263,38 @@ export function MarketMyOpenOrders({ marketId }: { marketId: string }) {
         </Heading>
       </Card.Header>
       <Card.Body>
-        {accountId === undefined ? (
-          me.isPending || me.isFetching ? (
-            <Skeleton height="12" />
+        <Stack gap="3">
+          {accountId === undefined ? (
+            me.isPending || me.isFetching ? (
+              <Skeleton height="12" />
+            ) : (
+              <Stack gap="2" align="flex-start">
+                <Alert.Root status="error" role="alert">
+                  <Alert.Indicator />
+                  <Alert.Content>
+                    <Alert.Description>{copy.errProfileLoad}</Alert.Description>
+                  </Alert.Content>
+                </Alert.Root>
+                <Button size="sm" variant="outline" onClick={() => void me.refetch()}>
+                  {copy.retry}
+                </Button>
+              </Stack>
+            )
           ) : (
-            <Stack gap="2" align="flex-start">
-              <Alert.Root status="error" role="alert">
-                <Alert.Indicator />
-                <Alert.Content>
-                  <Alert.Description>{copy.errProfileLoad}</Alert.Description>
-                </Alert.Content>
-              </Alert.Root>
-              <Button size="sm" variant="outline" onClick={() => void me.refetch()}>
-                {copy.retry}
-              </Button>
-            </Stack>
-          )
-        ) : (
-          <PendingOrders
-            key={accountId}
-            accountId={accountId}
-            marketId={marketId}
-            variant="market"
-            testId="market-my-open-orders"
+            <PendingOrders
+              key={accountId}
+              accountId={accountId}
+              marketId={marketId}
+              variant="market"
+              testId="market-my-open-orders"
+            />
+          )}
+          <MarketHistoryLink
+            href={marketHistoryLinks(marketId).orders}
+            label={copy.marketHistoryOrders}
+            testId="market-history-orders"
           />
-        )}
+        </Stack>
       </Card.Body>
     </Card.Root>
   );

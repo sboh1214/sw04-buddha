@@ -41,6 +41,7 @@ import {
   RoundWindow,
   SellableRotation,
   Throttle,
+  TrailingGate,
   applyBalanceEvent,
   applyPositionEvent,
   applyStatus,
@@ -1143,8 +1144,13 @@ describe('wroteASettlement and ownSettlementKeys (#124, ADR-0143 결정 9)', () 
     expect(position).toMatch(
       /if \(wroteAnOrder\(event\)\) \{\s*void restartQueries\(queryClient, ORDERS_KEY, positionRestartsOrder\);/,
     );
+    // Through the per-connection gate (#34, ADR-0145 결정 3-10), dropped with the socket.
     expect(position).toMatch(
-      /if \(wroteASettlement\(event\)\) \{\s*for \(const key of ownSettlementKeys\(queryClient, identity \?\? undefined\)\) \{\s*void restartQueries\(queryClient, key\);/,
+      /if \(wroteASettlement\(event\)\) \{\s*settlementRestart\.arm\(\(\) => \{\s*for \(const key of ownSettlementKeys\(queryClient, identity \?\? undefined\)\) \{\s*void restartQueries\(queryClient, key\);/,
+    );
+    expect(handler).toContain('const settlementRestart = new TrailingGate(SETTLEMENT_RESTART_MS);');
+    expect(handler.slice(handler.indexOf('socket.removeAllListeners();'))).toContain(
+      'settlementRestart.cancel();',
     );
     // …and a reconnect re-reads the root: a missed settling event is a record the list lacks.
     const privateKeys = handler.slice(
@@ -1153,6 +1159,57 @@ describe('wroteASettlement and ownSettlementKeys (#124, ADR-0143 결정 9)', () 
     );
     expect(privateKeys).toContain('SETTLEMENTS_KEY');
     expect(privateKeys).toContain('ORDERS_KEY');
+  });
+
+  it('restarts each list of the account once per payout, not per event (#34, ADR-0145)', () => {
+    // A YES and NO holder gets two settling events from one payout. Each used to restart the
+    // lists, cancelling the read the one before began — and the detail's list, turned on by the
+    // payout's `market:status`, joined that burst. The handler below is the provider's.
+    vi.useFakeTimers();
+    const client = new QueryClient();
+    try {
+      client.setQueryData(mySettlementsKey({}, ACCOUNT), pages);
+      client.setQueryData(mySettlementsKey({}, OTHER_ACCOUNT), pages);
+      const invalidate = vi.spyOn(client, 'invalidateQueries');
+      const restarted = () => invalidate.mock.calls.map(([filters]) => filters?.queryKey);
+      const gate = new TrailingGate(50);
+      const onPosition = (event: UserPositionEvent) => {
+        if (!wroteASettlement(event)) return;
+        gate.arm(() => {
+          for (const key of ownSettlementKeys(client, ACCOUNT)) void restartQueries(client, key);
+        });
+      };
+      onPosition(positionEvent({ outcome: 'YES', qty: 0, settled: true }));
+      // The detail's list of this market mounts between the two: read when the gate fires.
+      client.setQueryData(mySettlementsKey({ market: ID }, ACCOUNT), pages);
+      onPosition(positionEvent({ outcome: 'NO', qty: 0, settled: true }));
+      // A trade writes no record and does not arm it.
+      onPosition(positionEvent());
+      expect(restarted()).toEqual([]);
+      vi.advanceTimersByTime(49);
+      expect(restarted()).toEqual([]);
+      vi.advanceTimersByTime(1);
+      expect(restarted()).toEqual([
+        mySettlementsKey({}, ACCOUNT),
+        mySettlementsKey({ market: ID }, ACCOUNT),
+      ]);
+      // Nothing trails it: one restart per list for the whole payout.
+      vi.advanceTimersByTime(1_000);
+      expect(restarted()).toHaveLength(2);
+      // A later payout is its own burst, again once per list.
+      onPosition(positionEvent({ marketId: OTHER_ID, qty: 0, settled: true }));
+      onPosition(positionEvent({ marketId: OTHER_ID, outcome: 'NO', qty: 0, settled: true }));
+      vi.advanceTimersByTime(50);
+      expect(restarted()).toHaveLength(4);
+      // The socket torn down drops a run not made yet.
+      onPosition(positionEvent({ marketId: THIRD_ID, qty: 0, settled: true }));
+      gate.cancel();
+      vi.advanceTimersByTime(1_000);
+      expect(restarted()).toHaveLength(4);
+    } finally {
+      client.clear();
+      vi.useRealTimers();
+    }
   });
 });
 

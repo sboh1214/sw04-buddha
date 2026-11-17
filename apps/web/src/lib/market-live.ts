@@ -538,8 +538,8 @@ export function wroteASettlement(event: UserPositionEvent): boolean {
  * The 정산 기록 lists a settling `user:position` reads again (#124, ADR-0143): every filter's entry
  * of the account this socket is (`mySettlementsKey`'s last part), and no entry another account's
  * `Me` keyed — as the positions' handler patches only its own. One market's settlement sends an
- * event per holding; `restartQueries` cancels the read the first one started and asks once more,
- * and only a list on screen asks at all.
+ * event per holding; the provider restarts these once per payout (`TrailingGate`, #34), and only
+ * a list on screen asks at all.
  */
 export function ownSettlementKeys(client: QueryClient, accountId: string | undefined): QueryKey[] {
   if (accountId === undefined) return [];
@@ -891,6 +891,43 @@ export class MarketWindow {
   /** Forgets the markets kept: the socket that earned them is gone. */
   clear(): void {
     this.held.clear();
+  }
+}
+
+/**
+ * One run for a burst of calls, TRAILING only: the first call arms a timer, every call until it
+ * fires joins it, and the run happens once, `waitMs` after the first (#34, ADR-0145 결정 3-10).
+ * It gates the settling `user:position` events of one payout, which `finalizeMarket` publishes
+ * together after the commit, one per holding (a YES and NO holder gets two). When each restarted
+ * the account's 정산 기록 entries, it cancelled the read the one before began and asked again,
+ * and a cancelled read has already reached the server. The records are committed before any
+ * event goes out, so waiting loses nothing. Unlike `Throttle` it owns its timer: there is no
+ * window to read, only one pending run, and `cancel` drops it with the socket that earned it.
+ */
+export class TrailingGate {
+  private readonly waitMs: number;
+  private pending: (() => void) | null = null;
+
+  constructor(waitMs: number) {
+    this.waitMs = waitMs;
+  }
+
+  /** Runs `run` once, `waitMs` after this call, unless a run is already pending: then joins it. */
+  arm(run: () => void): void {
+    if (this.pending !== null) return;
+    const timer = setTimeout(() => {
+      this.pending = null;
+      run();
+    }, this.waitMs);
+    this.pending = () => {
+      clearTimeout(timer);
+    };
+  }
+
+  /** Drops a run not made yet. */
+  cancel(): void {
+    this.pending?.();
+    this.pending = null;
   }
 }
 
