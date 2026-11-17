@@ -456,6 +456,28 @@ test.describe('감사 근거에 고정한 Coin 보정 (#93)', () => {
       await expect(holder.getByTestId('ledger-list')).toContainText(
         copy.reconciliationCorrectionReplenishHint,
       );
+      // One name for every correction (#69, ADR-0144; ADR-0135 H1): 'Coin 보정', with its reason.
+      await expect(
+        holder
+          .getByTestId('ledger-type')
+          .filter({ hasText: copy.ledgerTypeReconciliationCorrection }),
+      ).toHaveCount(1);
+      await expect(holder.getByTestId('ledger-reason')).toHaveText(
+        `${copy.ledgerCorrectionReason}: ${userReason}`,
+      );
+      // Filtered to 'Coin 보정' (ADR-0144 결정 2-8): the correction is the only row left — the start
+      // grant and the rest are gone, so the server narrowed the list — under the note that says
+      // where the corrections with no ledger row are, and the filtered note on the totals.
+      await holder.goto('/my/wallet?kind=reconciliation-correction');
+      await expect(holder.getByTestId('ledger-correction-note')).toHaveText(
+        copy.ledgerCorrectionFilterNote,
+      );
+      await expect(holder.getByTestId('ledger-list').getByTestId('ledger-type')).toHaveText([
+        copy.ledgerTypeReconciliationCorrection,
+      ]);
+      await expect(holder.getByTestId('ledger-balance-note')).toContainText(
+        copy.ledgerBalanceAfterFilteredNote,
+      );
     } finally {
       if (pending)
         await admin

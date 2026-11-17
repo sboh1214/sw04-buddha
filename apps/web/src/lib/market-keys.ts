@@ -71,6 +71,24 @@ export const myOrdersLiveKey = (accountId: string | undefined, marketId?: string
     accountId,
   ] as const;
 
+/**
+ * The wallet's own reading of the account's live orders (#69, ADR-0144 결정 2-11): the request of
+ * `myOrdersLiveKey(accountId)` (every market, the first page) under a scope of its own, so every
+ * duty `MY_ORDERS_LIVE_KEY` carries reaches it by prefix — a `market:book` round, `market:status`,
+ * a reconnect, SessionCacheGuard's reset, the live lists' join — while the `user:position` order
+ * restart leaves it out on screen and only marks it stale off screen (`positionRestartsOrder`,
+ * market-live.ts): a fill already brings the lock with `user:balance`. A fill in a market it does
+ * not hold reads it through the book round's window instead (`walletMissesMarket`), so the wallet
+ * joins that market's room.
+ */
+export const walletLiveOrdersKey = (accountId: string | undefined) =>
+  [...MY_ORDERS_LIVE_KEY, 'wallet', accountId] as const;
+
+/** Whether `queryKey` is the wallet's live orders (`walletLiveOrdersKey`), of any account. */
+export function isWalletLiveOrdersKey(queryKey: readonly unknown[]): boolean {
+  return queryKey[0] === ORDERS_KEY[0] && queryKey[1] === 'live' && queryKey[2] === 'wallet';
+}
+
 /** `GET /me/orders/:id`. */
 export const myOrderKey = (orderId: string, accountId: string | undefined) =>
   [...MY_ORDER_DETAIL_KEY, orderId.toLowerCase(), accountId] as const;

@@ -175,7 +175,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | POST | `/api/v1/payments/charge` | Buy one charge package (mock provider: succeeds immediately). Coin is never convertible back to cash. Closed while paid Coin is off: 404 (ADR-0049) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `PRICE_MOVED`, `DUPLICATE_REQUEST`, `RATE_LIMITED` |
 | POST | `/api/v1/coupons/redeem` | Redeem a coupon code for Coin. Closed while paid Coin is off: 404 (ADR-0049) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `DUPLICATE_REQUEST`, `RATE_LIMITED` |
 | GET | `/api/v1/me/reconciliation-corrections` | The caller’s completed Coin corrections and member-facing reasons, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `RATE_LIMITED` |
-| GET | `/api/v1/me/ledger` | Ledger entries, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `RATE_LIMITED` |
+| GET | `/api/v1/me/ledger` | The account's Coin ledger, newest first, one entry per ledger event: its kind (the event's type seen from the account's side; a buyer's Coin of a fill is BUY_FILL whether the fill minted a pair or traded), the signed amount, the ledger total after it, the market (slug and title while public), the account's own order of a fill and what a correction did. kind narrows to one kind of the filter, period (7d, 30d, 90d) to the events of the last N × 24 hours, marketId to one market. No counterparty, account type or other order | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `RATE_LIMITED` |
 | GET | `/api/v1/me/payments` | Charges, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `RATE_LIMITED` |
 | GET | `/api/v1/me/payments/{id}` | One of the caller charges | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `NOT_FOUND`, `RATE_LIMITED` |
 

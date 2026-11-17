@@ -417,12 +417,32 @@ export const copy = {
   loadMore: '더 보기',
   ledgerTitle: '이용 내역',
   ledgerEmpty: '아직 내역이 없습니다.',
-  ledgerBalanceAfter: '거래 후 잔고',
+  // '반영 후 코인 합계'(#69, ADR-0144; ADR-0135 H4): 그 내역이 반영된 직후 원장이 기록한 가용 코인과
+  // 주문 잠금 코인의 합계다. 무엇의 합계인지는 목록 머리의 설명 한 줄이 말하고(줄의 폭 때문에), 걸러 볼
+  // 때는 사이 내역이 빠져 합계가 이어지지 않는다는 한 줄을 더한다.
+  ledgerBalanceAfter: '반영 후 코인 합계',
+  ledgerBalanceAfterNote:
+    '반영 후 코인 합계는 그 내역이 반영된 직후의 가용 코인과 주문 잠금 코인을 더한 값입니다.',
+  ledgerBalanceAfterFilteredNote: '걸러 볼 때는 사이 내역이 빠져 합계가 이어지지 않습니다.',
+  // 'Coin 보정'으로 거르면: 실제 잔고만 복원한 보정은 원장 행이 없어 아래 'Coin 보정 내역' 카드에만 있다.
+  ledgerCorrectionFilterNote: '실제 잔고만 복원한 보정은 아래 Coin 보정 내역에 있습니다.',
+  // 유형 필터(H5): '전체'와 화면 이름마다 하나. 낭독기에만 읽히는 이름이 '유형'이다.
+  ledgerKindAll: '전체',
+  ledgerKindLabel: '유형',
+  // 지갑의 '시장 고르기' 상자 문구. 칩·해제는 이력과 같은 말(historyMarket*)을 함께 쓴다.
+  walletMarketPickerPrompt: '내역을 볼 시장을 고르세요.',
+  // 줄의 연결(H2): 체결 행은 그 주문의 상세, 정산 지급 행은 그 시장의 정산 이력. 보정 행의 사유는 따로 쓴
+  // 사용자용 사유다(ADR-0135 결정 4).
+  ledgerOrderDetail: '주문 상세',
+  ledgerSettlementHistory: '정산 이력',
+  ledgerCorrectionReason: '사유',
   ledgerTypeDeposit: '충전',
-  // 원장의 담보·체결·대사 정정 유형(#116, ADR-0109): 지갑 화면(#69)이 이름을 정할 때까지의 임시 이름이다.
-  ledgerTypePairMintCollateral: '쌍 발행 담보',
-  ledgerTypeTradeFill: '체결 대금',
-  ledgerTypeReconciliationCorrection: '대사 정정',
+  // 체결 행의 화면 이름(#69, ADR-0144; ADR-0135 H1): Coin이 나간 체결(쌍 발행 담보와 체결 대금의 매수
+  // 쪽)은 '매수 체결', 들어온 체결 대금은 '매도 체결'이다. 응답도 둘을 가르지 않는다(결과 4).
+  ledgerKindBuyFill: '매수 체결',
+  ledgerKindSellFill: '매도 체결',
+  // 대사 정정 유형의 화면 이름(H1). 원장 보충인지는 줄의 효과 한 줄이 가른다.
+  ledgerTypeReconciliationCorrection: 'Coin 보정',
   ledgerTypeSettlement: '정산 지급',
   ledgerTypeBonus: '보너스',
   ledgerTypePaymentCancel: '결제 취소(환불)',

@@ -235,8 +235,8 @@ export const USER_INFLOW_EXCEPTIONS = [
 
 /**
  * The types a person's ledger can show: those with a user account on a side of some pair. What
- * `GET /me/ledger` answers with (`memberLedgerEntryTypeSchema`), so no treasury or bot type
- * reaches a member's response or the OpenAPI.
+ * `GET /me/ledger` reads (LEDGER_KIND_SOURCES below maps each, with the person's side, to the
+ * kind it answers with), so no treasury or bot type reaches a member's response or the OpenAPI.
  */
 export const MEMBER_LEDGER_ENTRY_TYPES = [
   'START_GRANT',
@@ -252,6 +252,115 @@ export const MEMBER_LEDGER_ENTRY_TYPES = [
 ] as const satisfies readonly LedgerEntryType[];
 export type MemberLedgerEntryType = (typeof MEMBER_LEDGER_ENTRY_TYPES)[number];
 export const memberLedgerEntryTypeSchema = z.enum(MEMBER_LEDGER_ENTRY_TYPES);
+
+/** The side of an event a person's account stands on: `from` pays, `to` is paid. */
+export type LedgerAccountSide = 'from' | 'to';
+
+/**
+ * What the wallet calls an event of a person's ledger (#69, ADR-0144; ADR-0135 H1·H5·결과 4): the
+ * stored type and the side the person's account stands on, one kind for each pair of them. The
+ * first five, in this order, are the wallet's filter (LEDGER_FILTER_KINDS); the kept paid-Coin and
+ * coupon types and 탈퇴 소멸 are kinds too — the kept payment answers carry the same entry — but no
+ * filter offers them. 재지급 (#74) and 보상 (#144) add theirs after the first five.
+ */
+export const LEDGER_ENTRY_KINDS = [
+  'BUY_FILL',
+  'SELL_FILL',
+  'SETTLEMENT_PAYOUT',
+  'START_GRANT',
+  'RECONCILIATION_CORRECTION',
+  'CLOSURE_FORFEIT',
+  'DEPOSIT',
+  'BONUS',
+  'PAYMENT_CANCEL',
+  'PAYMENT_CANCEL_REVERSAL',
+] as const;
+export type LedgerEntryKind = (typeof LEDGER_ENTRY_KINDS)[number];
+export const ledgerEntryKindSchema = z.enum(LEDGER_ENTRY_KINDS);
+
+/** One (type, side) a kind is made of. */
+export interface LedgerKindSource {
+  readonly type: MemberLedgerEntryType;
+  readonly side: LedgerAccountSide;
+}
+
+/**
+ * The one table of kinds (#69, ADR-0144): the answer's `kind`, the filter's SQL and the wallet's
+ * labels all come from it. 매수 체결 is the buyer's Coin of a fill — a pair mint's collateral and a
+ * trade's payment alike, which the answer never tells apart (ADR-0135 결과 4, ADR-0112 결정 2);
+ * 매도 체결 the seller's. Every other kind is its own type, on the side a user account takes in
+ * the type's rule (LEDGER_ENTRY_RULES). Each kind stands on one side, so the filter reads one of
+ * the account's two indexes; the shared test keeps the table equal to the rules.
+ */
+export const LEDGER_KIND_SOURCES: { readonly [K in LedgerEntryKind]: readonly LedgerKindSource[] } =
+  {
+    BUY_FILL: [
+      { type: 'PAIR_MINT_COLLATERAL', side: 'from' },
+      { type: 'TRADE_FILL', side: 'from' },
+    ],
+    SELL_FILL: [{ type: 'TRADE_FILL', side: 'to' }],
+    SETTLEMENT_PAYOUT: [{ type: 'SETTLEMENT_PAYOUT', side: 'to' }],
+    START_GRANT: [{ type: 'START_GRANT', side: 'to' }],
+    RECONCILIATION_CORRECTION: [{ type: 'RECONCILIATION_CORRECTION', side: 'to' }],
+    CLOSURE_FORFEIT: [{ type: 'CLOSURE_FORFEIT', side: 'from' }],
+    DEPOSIT: [{ type: 'DEPOSIT', side: 'to' }],
+    BONUS: [{ type: 'BONUS', side: 'to' }],
+    PAYMENT_CANCEL: [{ type: 'PAYMENT_CANCEL', side: 'from' }],
+    PAYMENT_CANCEL_REVERSAL: [{ type: 'PAYMENT_CANCEL_REVERSAL', side: 'to' }],
+  };
+
+/**
+ * The kind of an event of `type` seen from the `side` a person's account stands on. Throws for a
+ * pair no rule lets a user account take (START_GRANT from a person, a treasury type …): a broken
+ * row, never a kind made up for it.
+ */
+export function ledgerEntryKind(type: LedgerEntryType, side: LedgerAccountSide): LedgerEntryKind {
+  const kind = LEDGER_ENTRY_KINDS.find((candidate) =>
+    LEDGER_KIND_SOURCES[candidate].some((source) => source.type === type && source.side === side),
+  );
+  if (kind === undefined) throw new Error(`no ledger kind for ${type} on the ${side} side`);
+  return kind;
+}
+
+/** The wallet's kind filter (ADR-0135 H5): '전체' is no value, then these five in this order. */
+export const LEDGER_FILTER_KINDS = [
+  'BUY_FILL',
+  'SELL_FILL',
+  'SETTLEMENT_PAYOUT',
+  'START_GRANT',
+  'RECONCILIATION_CORRECTION',
+] as const satisfies readonly LedgerEntryKind[];
+export type LedgerFilterKind = (typeof LEDGER_FILTER_KINDS)[number];
+
+/**
+ * The kinds no filter offers — listed under '전체' only: the kept paid-Coin and coupon kinds,
+ * inactive while sales are closed (D4·D13), and 탈퇴 소멸, which no open account holds. A kind
+ * added to LEDGER_ENTRY_KINDS lands in the filter unless it is named here (the shared test).
+ */
+export const LEDGER_FILTER_EXCLUDED = [
+  'CLOSURE_FORFEIT',
+  'DEPOSIT',
+  'BONUS',
+  'PAYMENT_CANCEL',
+  'PAYMENT_CANCEL_REVERSAL',
+] as const satisfies readonly LedgerEntryKind[];
+
+/**
+ * What one kind reads (#69, ADR-0144 결정 2-3): the one side of the person's account it stands
+ * on and its types there. `GET /me/ledger?kind=` turns it into `<side>_account_id = $account AND
+ * type IN (…)`. Throws for a kind whose sources stand on two sides, which no kind does.
+ */
+export function ledgerKindBranch(kind: LedgerEntryKind): {
+  side: LedgerAccountSide;
+  types: MemberLedgerEntryType[];
+} {
+  const sources = LEDGER_KIND_SOURCES[kind];
+  const side = sources[0]!.side;
+  if (sources.some((source) => source.side !== side)) {
+    throw new Error(`ledger kind ${kind} stands on both sides`);
+  }
+  return { side, types: sources.map((source) => source.type) };
+}
 
 /** What a caller asks one event to be, before any account is looked up. */
 export interface LedgerEntryShape {

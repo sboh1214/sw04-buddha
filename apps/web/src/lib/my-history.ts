@@ -44,23 +44,37 @@ export interface HistorySearchParams {
 const { marketId: marketParam, period: periodParam } = mySettlementsQuerySchema.shape;
 
 /** A repeated parameter's first value is the one the screen's controls wrote. */
-function first(value: string | string[] | undefined): string | undefined {
+export function firstParam(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
 /**
- * The address as the screen's filters. A value the API would refuse is dropped, never sent: an
- * unknown `kind` is 주문, an unknown `period` the whole history, and a `market` that is no uuid no
- * market filter at all — so a hand-edited link opens a list rather than a 400.
+ * The address's `period` and `market` as a list's filters — MY's filtered lists all take them in
+ * this one form (the history's three, and the wallet's ledger since #69, ADR-0144). A value the
+ * API would refuse is dropped, never sent: an unknown `period` is the whole history, and a
+ * `market` that is no uuid no market filter at all — so a hand-edited link opens a list rather
+ * than a 400.
  */
-export function historyFiltersFromSearchParams(searchParams: HistorySearchParams): HistoryFilters {
-  const kind = first(searchParams.kind);
-  const period = periodParam.safeParse(first(searchParams.period));
-  const market = marketParam.safeParse(first(searchParams.market));
+export function listFiltersFromSearchParams(
+  searchParams: Pick<HistorySearchParams, 'period' | 'market'>,
+): HistoryListFilters {
+  const period = periodParam.safeParse(firstParam(searchParams.period));
+  const market = marketParam.safeParse(firstParam(searchParams.market));
   return {
-    kind: HISTORY_KINDS.find((known) => known === kind) ?? DEFAULT_HISTORY_KIND,
     ...(period.success && period.data !== undefined ? { period: period.data } : {}),
     ...(market.success && market.data !== undefined ? { market: market.data } : {}),
+  };
+}
+
+/**
+ * The address as the screen's filters: an unknown `kind` is 주문, and `period` and `market` as
+ * every MY list reads them (`listFiltersFromSearchParams`).
+ */
+export function historyFiltersFromSearchParams(searchParams: HistorySearchParams): HistoryFilters {
+  const kind = firstParam(searchParams.kind);
+  return {
+    kind: HISTORY_KINDS.find((known) => known === kind) ?? DEFAULT_HISTORY_KIND,
+    ...listFiltersFromSearchParams(searchParams),
   };
 }
 

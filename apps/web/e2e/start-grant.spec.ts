@@ -125,7 +125,7 @@ test.describe('시작 Coin (#70)', () => {
     const ledger = await dataOf<LedgerEntry[]>(await page.request.get('/api/v1/me/ledger'));
     expect(ledger).toHaveLength(1);
     expect(ledger[0]).toMatchObject({
-      type: 'START_GRANT',
+      kind: 'START_GRANT',
       amountCoin: amount,
       balanceAfterCoin: amount,
       refType: 'start_grant',

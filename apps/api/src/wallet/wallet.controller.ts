@@ -19,6 +19,7 @@ import {
   cursorQuerySchema,
   ledgerEntrySchema,
   memberReconciliationCorrectionSchema,
+  myLedgerQuerySchema,
   paymentProviderInfoSchema,
   paymentSchema,
   redeemCouponBodySchema,
@@ -29,6 +30,7 @@ import {
   type CursorQuery,
   type LedgerEntry,
   type MemberReconciliationCorrection,
+  type MyLedgerQuery,
   type Payment,
   type PaymentProviderInfo,
   type RedeemCouponBody,
@@ -239,17 +241,31 @@ export class MeWalletController {
     return new ApiPage(items, { nextCursor });
   }
 
+  /**
+   * 지갑의 Coin 원장 (#69, ADR-0144; ADR-0135 G3·H1~H5·결과 4): the session's own events alone,
+   * one row per ledger row. Signed in is enough: a read, so a restricted account (N02 §9) and one
+   * not onboarded read theirs. No `@ApiQuery`: the query DTO has no component id, so swagger
+   * lists its keys itself (cursor-query.ts).
+   */
   @Get('ledger')
-  @ApiOperation({ operationId: 'getMyLedger', summary: 'Ledger entries, newest first' })
-  @ApiQuery(CURSOR_QUERY_PARAMS[0])
-  @ApiQuery(CURSOR_QUERY_PARAMS[1])
+  @ApiOperation({
+    operationId: 'getMyLedger',
+    summary:
+      "The account's Coin ledger, newest first, one entry per ledger event: its kind (the " +
+      "event's type seen from the account's side; a buyer's Coin of a fill is BUY_FILL " +
+      'whether the fill minted a pair or traded), the signed amount, the ledger total after ' +
+      "it, the market (slug and title while public), the account's own order of a fill and " +
+      'what a correction did. kind narrows to one kind of the filter, period (7d, 30d, 90d) to ' +
+      'the events of the last N × 24 hours, marketId to one market. No counterparty, account ' +
+      'type or other order',
+  })
   @ApiPageOf(ledgerEntrySchema)
   @ApiErrors('UNAUTHENTICATED', 'VALIDATION_ERROR')
   async getLedger(
     @CurrentUser() user: SessionUser,
-    @Query({ schema: cursorQuerySchema }) query: CursorQuery,
+    @Query({ schema: myLedgerQuerySchema }) query: MyLedgerQuery,
   ): Promise<ApiPage<LedgerEntry>> {
-    const { items, nextCursor } = await this.wallet.listLedger(user.id, query.cursor, query.limit);
+    const { items, nextCursor } = await this.wallet.listLedger(user.id, query);
     return new ApiPage(items, { nextCursor });
   }
 

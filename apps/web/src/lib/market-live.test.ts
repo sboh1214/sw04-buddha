@@ -14,24 +14,31 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { QueryClient, QueryObserver } from '@tanstack/react-query';
 import fc from 'fast-check';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { SRC } from '@/test/screen-text';
 import { positionFixture } from '@/test/positions';
 import { type Market, type MarketSummary, type Me, type Order, type Position } from './api';
 import {
   MY_ORDERS_LIVE_KEY,
+  ORDERS_KEY,
+  isWalletLiveOrdersKey,
   marketBookKey,
   myFillHistoryKey,
+  myMarketFillsKey,
+  myOrderFillsKey,
   myOrderHistoryKey,
   myOrderKey,
   myOrdersLiveKey,
   mySettlementsKey,
   sellableKey,
+  walletLiveOrdersKey,
 } from './market-keys';
 import {
+  BALANCE_HISTORY_INVALIDATE_MS,
   BalanceOrder,
   type MarketPages,
   MarketWindow,
+  RoundWindow,
   SellableRotation,
   Throttle,
   applyBalanceEvent,
@@ -52,9 +59,12 @@ import {
   ownOrdersStatusKeys,
   ownSettlementKeys,
   positionReopensMarket,
+  positionRestartsOrder,
+  walletMissesMarket,
   wroteASettlement,
   wroteAnOrder,
 } from './market-live';
+import { restartQueries } from './query-client';
 
 const ID = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
 const OTHER_ID = '9c858901-8a57-4791-81fe-4c455b099bc9';
@@ -1130,8 +1140,8 @@ describe('wroteASettlement and ownSettlementKeys (#124, ADR-0143 결정 9)', () 
       'utf8',
     );
     const position = handler.slice(handler.indexOf("'user:position': (raw: unknown) => {"));
-    expect(position).toContain(
-      'if (wroteAnOrder(event)) void restartQueries(queryClient, ORDERS_KEY);',
+    expect(position).toMatch(
+      /if \(wroteAnOrder\(event\)\) \{\s*void restartQueries\(queryClient, ORDERS_KEY, positionRestartsOrder\);/,
     );
     expect(position).toMatch(
       /if \(wroteASettlement\(event\)\) \{\s*for \(const key of ownSettlementKeys\(queryClient, identity \?\? undefined\)\) \{\s*void restartQueries\(queryClient, key\);/,
@@ -1905,5 +1915,260 @@ describe('a user:position keeps the holding’s market values (#67, ADR-0142)', 
     // And a REST answer is where they come from (`joinPositions`).
     const answer = { ...row, marketTradeCount: 10, version: 1 };
     expect(joinPositions(patch.positions, [answer])[0]?.marketTradeCount).toBe(10);
+  });
+});
+
+describe('the wallet’s live orders (#69, ADR-0144 결정 2-11)', () => {
+  const ACCOUNT = 'account-a';
+  const buy = { id: OTHER_ID, marketId: ID, status: 'open', side: 'buy' } as Order;
+  const pages = (...items: Order[]) => ({
+    pages: [{ items, nextCursor: null }],
+    pageParams: [undefined],
+  });
+
+  it('is left out of the user:position order restart while on screen, and only it', async () => {
+    const wallet = walletLiveOrdersKey(ACCOUNT);
+    const shown = () => true;
+    expect(wallet).toEqual(['orders', 'live', 'wallet', ACCOUNT]);
+    expect(isWalletLiveOrdersKey(wallet)).toBe(true);
+    expect(positionRestartsOrder({ queryKey: wallet, isActive: shown })).toBe(false);
+    expect(
+      positionRestartsOrder({ queryKey: walletLiveOrdersKey('account-b'), isActive: shown }),
+    ).toBe(false);
+    // Off screen it is reached: marked stale only, so a return inside `staleTime` reads it.
+    expect(positionRestartsOrder({ queryKey: wallet, isActive: () => false })).toBe(true);
+    const others = [
+      myOrdersLiveKey(ACCOUNT),
+      myOrdersLiveKey(ACCOUNT, ID),
+      myOrderKey(OTHER_ID, ACCOUNT),
+      myOrderFillsKey(OTHER_ID, ACCOUNT),
+      myMarketFillsKey(ID, ACCOUNT),
+      myOrderHistoryKey({}, ACCOUNT),
+      myFillHistoryKey({ period: '7d' }, ACCOUNT),
+    ];
+    for (const queryKey of others) {
+      for (const isActive of [shown, () => false]) {
+        expect(positionRestartsOrder({ queryKey, isActive }), JSON.stringify(queryKey)).toBe(true);
+      }
+    }
+    // Through `restartQueries`, as the provider calls it: every other entry is asked again, and
+    // the wallet's entry on screen is not touched.
+    const client = new QueryClient();
+    const read = vi.fn(() => new Promise<never>(() => undefined));
+    try {
+      for (const queryKey of [wallet, ...others]) client.setQueryData(queryKey, pages());
+      const stop = new QueryObserver(client, {
+        queryKey: wallet,
+        queryFn: read,
+        staleTime: Number.POSITIVE_INFINITY,
+      }).subscribe(() => undefined);
+      try {
+        await restartQueries(client, ORDERS_KEY, positionRestartsOrder);
+        expect(client.getQueryState(wallet)?.isInvalidated).toBe(false);
+        expect(read).not.toHaveBeenCalled();
+        for (const queryKey of others) {
+          expect(client.getQueryState(queryKey)?.isInvalidated, JSON.stringify(queryKey)).toBe(
+            true,
+          );
+        }
+      } finally {
+        stop();
+      }
+    } finally {
+      client.clear();
+    }
+  });
+
+  it('is marked stale off screen by a fill, so a return inside staleTime reads it once', async () => {
+    // The wallet was left; a fill in a market its list does not hold arrives meanwhile (a buy
+    // another tab placed). `walletMissesMarket` looks at the entry on screen only, so the
+    // restart is what makes the return read it — and join that market's room.
+    const client = new QueryClient();
+    const wallet = walletLiveOrdersKey(ACCOUNT);
+    const read = vi.fn(() => new Promise<never>(() => undefined));
+    try {
+      client.setQueryData(wallet, pages(buy));
+      await restartQueries(client, ORDERS_KEY, positionRestartsOrder);
+      // Marked only: nothing on screen asks, so no request now.
+      expect(client.getQueryState(wallet)?.isInvalidated).toBe(true);
+      expect(client.getQueryState(wallet)?.fetchStatus).toBe('idle');
+      // The wallet mounts again inside `staleTime` (30 s, the app's default): one read.
+      const stop = new QueryObserver(client, {
+        queryKey: wallet,
+        queryFn: read,
+        staleTime: 30_000,
+      }).subscribe(() => undefined);
+      try {
+        expect(read).toHaveBeenCalledTimes(1);
+      } finally {
+        stop();
+      }
+    } finally {
+      client.clear();
+    }
+  });
+
+  it('is seen by the market:book round, which reads it by the live lists’ prefix', () => {
+    const client = new QueryClient();
+    try {
+      client.setQueryData(walletLiveOrdersKey(ACCOUNT), pages(buy));
+      expect(ownLiveOrderIds(client, ID, ACCOUNT)).toEqual([OTHER_ID]);
+      expect(bookRestartsOwnOrders(client, ID, ACCOUNT)).toBe(true);
+      expect(bookRestartsOwnOrders(client, ID, 'account-b')).toBe(false);
+      expect(ownOrdersRefreshKeys(client, [ID], ACCOUNT)[0]).toEqual(MY_ORDERS_LIVE_KEY);
+    } finally {
+      client.clear();
+    }
+  });
+
+  it('is asked for by a fill in a market it does not hold, while it is on screen', () => {
+    const client = new QueryClient();
+    const wallet = walletLiveOrdersKey(ACCOUNT);
+    const elsewhere = '3f2504e0-4f89-11d3-9a0c-0305e82c33ff';
+    try {
+      client.setQueryData(wallet, pages(buy));
+      // Not on screen: nothing (it is read whole when mounted).
+      expect(walletMissesMarket(client, elsewhere, ACCOUNT)).toBe(false);
+      const stop = new QueryObserver(client, {
+        queryKey: wallet,
+        queryFn: () => new Promise<never>(() => undefined),
+        staleTime: Number.POSITIVE_INFINITY,
+      }).subscribe(() => undefined);
+      try {
+        // The market of a buy it holds: the wallet is in that room already.
+        expect(walletMissesMarket(client, ID, ACCOUNT)).toBe(false);
+        expect(walletMissesMarket(client, ID.toUpperCase(), ACCOUNT)).toBe(false);
+        // A market it does not hold, or holds only an ended order of: one read is asked for.
+        expect(walletMissesMarket(client, elsewhere, ACCOUNT)).toBe(true);
+        client.setQueryData(wallet, pages({ ...buy, status: 'filled' }));
+        expect(walletMissesMarket(client, ID, ACCOUNT)).toBe(true);
+        // Another account's entry, or no account: nothing.
+        expect(walletMissesMarket(client, elsewhere, 'account-b')).toBe(false);
+        expect(walletMissesMarket(client, elsewhere, undefined)).toBe(false);
+      } finally {
+        stop();
+      }
+    } finally {
+      client.clear();
+    }
+  });
+
+  it('is asked for through the book round’s window, never a request per fill', () => {
+    const handler = readFileSync(
+      path.join(SRC, 'components/realtime/realtime-provider.tsx'),
+      'utf8',
+    );
+    const position = handler.slice(handler.indexOf("'user:position': (raw: unknown) => {"));
+    expect(position).toMatch(
+      /void restartQueries\(queryClient, ORDERS_KEY, positionRestartsOrder\);\s*if \(walletMissesMarket\(queryClient, event\.marketId, identity\)\) \{\s*refreshOwnOrders\(event\.marketId\);/,
+    );
+  });
+
+  it('is restarted by a status while its first read is on its way, as every market’s list', () => {
+    const client = new QueryClient();
+    void client.prefetchQuery({
+      queryKey: walletLiveOrdersKey(ACCOUNT),
+      queryFn: () => new Promise<never>(() => undefined),
+    });
+    void client.prefetchQuery({
+      queryKey: walletLiveOrdersKey('account-b'),
+      queryFn: () => new Promise<never>(() => undefined),
+    });
+    expect(ownOrdersStatusKeys(client, ID, ACCOUNT)).toEqual([walletLiveOrdersKey(ACCOUNT)]);
+    client.clear();
+  });
+});
+
+describe('the balance-history window (#69, ADR-0144 결정 6)', () => {
+  const W = BALANCE_HISTORY_INVALIDATE_MS;
+  const MINUTE = 60_000;
+
+  /**
+   * The provider's `refreshBalanceHistory` on a virtual clock: the same `RoundWindow` it holds,
+   * each step done as the provider does it — a round on `'run'`, the one timer armed on `wait`
+   * and `fired` when it is due, nothing on `null`. The times rounds ran at.
+   */
+  function rounds(events: readonly number[]): number[] {
+    const gate = new RoundWindow(W);
+    let pendingAt: number | null = null;
+    const ran: number[] = [];
+    const take = (now: number, step: ReturnType<RoundWindow['offer']>) => {
+      if (step === null) return;
+      if (step === 'run') {
+        ran.push(now);
+        return;
+      }
+      // The provider arms one timer per `wait`; a second one here would be a window bug.
+      expect(pendingAt).toBeNull();
+      pendingAt = now + step.wait;
+    };
+    let next = 0;
+    while (next < events.length || pendingAt !== null) {
+      const event = events[next] ?? Number.POSITIVE_INFINITY;
+      if (pendingAt !== null && pendingAt <= event) {
+        const at = pendingAt;
+        pendingAt = null;
+        take(at, gate.fired(at));
+      } else {
+        take(event, gate.offer(event));
+        next += 1;
+      }
+    }
+    return ran;
+  }
+
+  /** The most rounds any closed 60 s window holds. */
+  const busiestMinute = (ran: readonly number[]) =>
+    Math.max(
+      0,
+      ...ran.map((start) => ran.filter((at) => at >= start && at <= start + MINUTE).length),
+    );
+
+  /** Every event has a round at or after it, within the window: no update is lost. */
+  const noneLost = (events: readonly number[], ran: readonly number[]) =>
+    events.every((event) => ran.some((at) => at >= event && at <= event + W));
+
+  const every = (gap: number, span = MINUTE * 2) =>
+    Array.from({ length: Math.floor(span / gap) + 1 }, (_, at) => at * gap);
+
+  it('runs at most 7 rounds in any minute, and loses no event, at 100 ms, 1 s and 5 s', () => {
+    for (const gap of [100, 1_000, 5_000]) {
+      const events = every(gap);
+      const ran = rounds(events);
+      expect(busiestMinute(ran), `${String(gap)} ms`).toBeLessThanOrEqual(
+        Math.floor(MINUTE / W) + 1,
+      );
+      expect(noneLost(events, ran), `${String(gap)} ms`).toBe(true);
+    }
+  });
+
+  it('holds for any stream of events', () => {
+    fc.assert(
+      fc.property(fc.array(fc.integer({ min: 0, max: MINUTE * 3 }), { maxLength: 200 }), (raw) => {
+        const events = [...raw].sort((a, b) => a - b);
+        const ran = rounds(events);
+        return busiestMinute(ran) <= 7 && noneLost(events, ran);
+      }),
+    );
+  });
+
+  it('reads a lone event at once (the leading edge)', () => {
+    expect(rounds([0])).toEqual([0]);
+    // After a quiet longer than the window, the next event is read the moment it lands.
+    expect(rounds([0, 3_000, W * 3])).toEqual([0, W, W * 3]);
+  });
+
+  it('arms one trailing round, and arms again once disarmed (a resnapshot read it all)', () => {
+    const gate = new RoundWindow(W);
+    expect(gate.offer(0)).toBe('run');
+    expect(gate.offer(1_000)).toEqual({ wait: W - 1_000 });
+    // Armed: later events inside the window ride on that round.
+    expect(gate.offer(2_000)).toBeNull();
+    expect(gate.fired(W)).toBe('run');
+    expect(gate.offer(W + 1)).toEqual({ wait: W - 1 });
+    // The caller cancelled its timer: without `disarm` the window would wait on a round that
+    // never comes and drop every event after.
+    gate.disarm();
+    expect(gate.offer(W + 2)).toEqual({ wait: W - 2 });
   });
 });

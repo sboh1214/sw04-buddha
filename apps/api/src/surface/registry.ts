@@ -329,7 +329,8 @@ export const OWNER_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
       '본인 표시 시간대 저장·해제(ADR-0063): 세션 계정의 프로필만 바꾸고, 본인확인처럼 본문의 expectedAccountId가 세션 계정이어야 한다',
   },
   'GET /me/ledger': {
-    reason: '본인 Coin 원장(N04 §3 지갑)',
+    reason:
+      '본인 Coin 원장(N04 §3 지갑, #69, ADR-0144, ADR-0135 H1~H5·G3·결과 4): 세션 계정의 원장 계정 행만 최근 순으로, 원장 한 행에 한 줄 — 화면 유형(원장 유형 × 본인 쪽: 매수 체결·매도 체결·정산 지급·시작 지급·Coin 보정과 보존 유형, 쌍 발행 담보와 체결 대금을 가르지 않는다), 본인 쪽 부호의 증감, 그 행 직후 원장 합계, 시장(id, 공개 상태일 때만 슬러그·제목), 체결 행의 본인 쪽 주문(본인이 아니면 null), 보정 행의 효과와 사용자용 사유, 시각. kind는 화면 유형 하나로, period는 원장 행 시각의 최근 7·30·90일(N×24시간)로, marketId는 시장 하나(market_id)로 좁힌다. 다른 계정의 시장 id·커서로 불러도 호출자 본인 행만 오거나 빈 목록이다. 상대 계정·주문·계정 유형과 쌍 발행 여부, 원장 원래 유형, 내부 memo와 감사 근거는 싣지 않는다. 계정 제한 중에도, 온보딩 전에도 읽는다(N02 §9)',
   },
   'GET /me/reconciliation-corrections': {
     reason:

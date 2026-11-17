@@ -35,9 +35,13 @@ describe('recentPeriodPredicate (#124)', () => {
     expect(RECENT_PERIODS).toHaveLength(3);
   });
 
-  it('filters the column it is given: a fill’s time, a settlement’s payout time', () => {
+  it('filters the column it is given: a fill’s time, a settlement’s payout time, a ledger event’s', () => {
     expect(render(recentPeriodPredicate(schema.fills.createdAt, '7d')!).sql).toBe(
       `"fills"."created_at" > now() - $1::int * interval '1 hour'`,
+    );
+    // The wallet (#69, ADR-0144): the ledger row's time, the one its list is ordered by.
+    expect(render(recentPeriodPredicate(schema.ledgerEntries.createdAt, '90d')!).sql).toBe(
+      `"ledger_entries"."created_at" > now() - $1::int * interval '1 hour'`,
     );
     expect(render(recentPeriodPredicate(schema.positionSettlements.settledAt, '30d')!).sql).toBe(
       `"position_settlements"."settled_at" > now() - $1::int * interval '1 hour'`,

@@ -24,6 +24,7 @@ import {
   myOrderFillsKey,
   myOrderKey,
   myOrdersLiveKey,
+  walletLiveOrdersKey,
 } from '@/lib/market-keys';
 import {
   type CursorPage,
@@ -105,6 +106,28 @@ export function useLiveOrders(accountId: string | undefined, marketId?: string) 
   const { data: session, isPending: sessionPending } = useSession();
   const query = useInfiniteQuery({
     ...liveOrdersQueryOptions(accountId, marketId, session),
+    select: liveRowsOnly,
+  });
+  return gated(query, session, sessionPending);
+}
+
+/**
+ * The wallet's reading of the account's live orders (#69, ADR-0144 결정 2-11): the request of
+ * every market's first page (`liveOrdersQueryOptions(accountId)`) under the wallet's own key
+ * (`walletLiveOrdersKey`), which the `user:position` order restart leaves out.
+ */
+export function walletLiveOrdersQueryOptions(accountId: string | undefined, session?: SessionLike) {
+  return {
+    ...liveOrdersQueryOptions(accountId, undefined, session),
+    queryKey: walletLiveOrdersKey(accountId),
+  };
+}
+
+/** The wallet's live orders (`walletLiveOrdersQueryOptions`), ended rows out as `useLiveOrders`. */
+export function useWalletLiveOrders(accountId: string | undefined) {
+  const { data: session, isPending: sessionPending } = useSession();
+  const query = useInfiniteQuery({
+    ...walletLiveOrdersQueryOptions(accountId, session),
     select: liveRowsOnly,
   });
   return gated(query, session, sessionPending);

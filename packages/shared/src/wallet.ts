@@ -1,8 +1,10 @@
 import * as z from 'zod';
 import { cursorQuerySchema } from './api/pagination.js';
 import { coinAmountSchema } from './api/coin-amount.js';
+import { uuidParamSchema } from './api/path-param.js';
+import { recentPeriodSchema } from './api/period.js';
 import { ledgerRefTypeSchema, paymentStatusSchema } from './enums.js';
-import { memberLedgerEntryTypeSchema } from './ledger.js';
+import { LEDGER_FILTER_KINDS, ledgerEntryKindSchema } from './ledger.js';
 
 export const balanceSchema = z
   .object({ availableCoin: coinAmountSchema, lockedCoin: coinAmountSchema })
@@ -46,15 +48,30 @@ export const paymentSchema = z
   .meta({ id: 'Payment' });
 export type Payment = z.infer<typeof paymentSchema>;
 
+/**
+ * What a Coin correction's ledger row did (#69, ADR-0144): `ledger_only` — the ledger replenished
+ * to the balance already held (원장 보충: `replenish_ledger` with no balance change) — or
+ * `ledger_amount`, the ledger and the balance moved by the amount (and every legacy row, which has
+ * no correction record). `GET /me/reconciliation-corrections` already says the same.
+ */
+export const LEDGER_CORRECTION_EFFECTS = ['ledger_only', 'ledger_amount'] as const;
+export type LedgerCorrectionEffect = (typeof LEDGER_CORRECTION_EFFECTS)[number];
+
+/**
+ * One event of the caller's own Coin ledger (#116; the wallet's, #69, ADR-0144). One row per
+ * ledger row, never merged or split (ADR-0135 H3). Owner only, and anonymous on the other side: no
+ * counterparty account, order or account type, and nothing that tells a pair mint's collateral
+ * from a trade's payment (ADR-0135 결과 4) — both are `BUY_FILL`, both refer to their fill.
+ */
 export const ledgerEntrySchema = z
   .object({
     /** ledger_entries.id (bigserial) as a decimal string, like every other 64-bit id. */
     id: z.string(),
     /**
-     * A type a person's ledger can hold (MEMBER_LEDGER_ENTRY_TYPES, #116): no treasury or bot type
-     * ever reaches a member.
+     * The wallet's kind (LEDGER_KIND_SOURCES): the stored type and the caller's side of it. The
+     * stored type itself is not answered (ADR-0135 결과 4) — a field change, not a renamed word.
      */
-    type: memberLedgerEntryTypeSchema,
+    kind: ledgerEntryKindSchema,
     /**
      * Signed from the caller's own ledger account: `+` credits it, `−` debits it (PLAN 5.6). Never
      * the other side of the move: no counterparty, no account id (#116).
@@ -69,11 +86,42 @@ export const ledgerEntrySchema = z
     /** The event's source (#116: every event names one — a payment, a grant, a fill …). */
     refType: ledgerRefTypeSchema,
     refId: z.string(),
+    /**
+     * A correction's member-facing reason; null on a market's event (a settlement's memo names
+     * the market as it was titled, which a market no longer public may not show); otherwise the
+     * event's own memo (a kept coupon's …).
+     */
     memo: z.string().nullable(),
+    /** The event's market (`ledger_entries.market_id`); null for a grant, a correction … */
+    marketId: z.uuid().nullable(),
+    /** The market's slug and title while it is public (`isPublicMarketStatus`), else null. */
+    marketSlug: z.string().nullable(),
+    marketTitle: z.string().nullable(),
+    /**
+     * A fill's event only: the caller's own order of the fill — the incoming one when the caller
+     * sent it, the resting one when the caller's order rested; null otherwise. Never the other
+     * side's order.
+     */
+    orderId: z.uuid().nullable(),
+    /** A correction's event only (LEDGER_CORRECTION_EFFECTS); null for every other kind. */
+    correctionEffect: z.enum(LEDGER_CORRECTION_EFFECTS).nullable(),
     createdAt: z.iso.datetime(),
   })
   .meta({ id: 'LedgerEntry' });
 export type LedgerEntry = z.infer<typeof ledgerEntrySchema>;
+
+/**
+ * `GET /me/ledger` (no `.meta`: query DTO; #69, ADR-0144): newest first, one kind of the filter
+ * (LEDGER_FILTER_KINDS; omitted = every kind, there is no `all` value), the events within
+ * `period` (#124's format, by the event's time — the time the list is ordered by) and one
+ * market's. The cursor carries no filter.
+ */
+export const myLedgerQuerySchema = cursorQuerySchema.extend({
+  kind: z.enum(LEDGER_FILTER_KINDS).optional(),
+  period: recentPeriodSchema.optional(),
+  marketId: uuidParamSchema.optional(),
+});
+export type MyLedgerQuery = z.infer<typeof myLedgerQuerySchema>;
 
 /**
  * What `POST /payments/charge` answers with: the payment and the balance it produced.

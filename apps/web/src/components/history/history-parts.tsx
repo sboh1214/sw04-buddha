@@ -28,12 +28,19 @@ export function HistoryMarketLink({ slug, title }: { slug: string; title: string
 
 /**
  * '이 시장만 보기' (ADR-0135 G3): the list this row is in, narrowed to the row's market with the
- * period kept (`myHistoryPath`). The list leaves it out once it is narrowed to that market.
+ * period kept (`myHistoryPath`). The list leaves it out once it is narrowed to that market. The
+ * wallet's rows draw it too (#69, ADR-0144), with their own test id and address (`myWalletPath`).
  */
-export function OnlyMarketLink({ href }: { href: string }) {
+export function OnlyMarketLink({
+  href,
+  testId = 'history-only-market',
+}: {
+  href: string;
+  testId?: string;
+}) {
   return (
     <ChakraLink asChild fontSize="sm" colorPalette="brand" color="colorPalette.fg">
-      <NextLink href={href as Route} data-testid="history-only-market">
+      <NextLink href={href as Route} data-testid={testId}>
         {copy.historyOnlyMarket}
       </NextLink>
     </ChakraLink>

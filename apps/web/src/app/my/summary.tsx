@@ -35,7 +35,10 @@ import { LedgerRow } from './wallet/ledger-list';
 import { StartGrantPendingNotice } from './wallet/start-grant-notice';
 import { WatchlistBody } from './watchlist/watchlist';
 
-/** The previews read the tab's unfiltered lists: one cache entry for both (ADR-0143 결정 11-12). */
+/**
+ * The previews read the tab's unfiltered lists: one cache entry for both (ADR-0143 결정 11-12;
+ * the wallet's too, ADR-0144 결정 2-10).
+ */
 const NO_HISTORY_FILTERS = {};
 
 /** The summary's account restriction banner: the holdings' '매도' point at it (D13, #67). */
@@ -231,17 +234,20 @@ function WatchlistPreview() {
 /**
  * 지갑's preview: the balance as the wallet's own card states it — with the wallet's notice while
  * the start Coin waits for its amount (`StartGrantPendingNotice`, owner decision 2026-10-18) — and
- * the newest ledger rows. A failed `GET /me` is reported once, by 잔고 요약 above, so the balance
- * here is a dash then, and there is no notice.
+ * the newest ledger rows. A failed `GET /me` leaves the balance here a dash, and no notice.
  *
- * The rows are the wallet tab's own query (`useLedger`), so its failure rung is `readFailed`, not
- * `isError`: a 더 보기 that failed on the wallet tab leaves that query in `error` with its pages
- * kept, and on `isError` this preview — which has no 더 보기 — swapped its rows for an error on the
- * way back, and through the refetch that follows (ADR-0075 5-18).
+ * The rows are the wallet tab's own query (`useLedger`) — its unfiltered entry for the account
+ * `GET /me` names (#69, ADR-0144 결정 2-10), so it reads once that account is known, and until then
+ * the rows wait as #124's previews above do (`ProfileUnavailable`: a skeleton, then the profile's
+ * error and its retry — a disabled query would otherwise stay pending) — drawn in the preview's
+ * shape (`LedgerRow variant="preview"`: no total, no links, no reason). Its failure rung is
+ * `readFailed`, not `isError`: a 더 보기 that failed on the wallet tab leaves that query in `error`
+ * with its pages kept, and on `isError` this preview — which has no 더 보기 — swapped its rows for
+ * an error on the way back, and through the refetch that follows (ADR-0075 5-18).
  */
 function WalletPreview() {
   const me = useMe();
-  const ledger = useLedger();
+  const ledger = useLedger(NO_HISTORY_FILTERS, me.data?.id);
   const entries = (ledger.data?.pages[0]?.items ?? []).slice(0, MY_PREVIEW_ROWS);
 
   return (
@@ -282,16 +288,18 @@ function WalletPreview() {
           <Heading as="h4" size="sm">
             {copy.ledgerTitle}
           </Heading>
-          {ledger.isPending ? (
+          {me.data === undefined ? (
+            <ProfileUnavailable height="24" />
+          ) : ledger.isPending ? (
             <Skeleton height="24" />
           ) : readFailed(ledger) ? (
             <LoadFailed message={copy.errUnknown} onRetry={() => void ledger.refetch()} />
           ) : entries.length === 0 ? (
             <Text color="fg.muted">{copy.ledgerEmpty}</Text>
           ) : (
-            <Stack gap="3" divideY="1px">
+            <Stack as="ul" listStyleType="none" m="0" p="0" gap="3" divideY="1px">
               {entries.map((entry) => (
-                <LedgerRow key={entry.id} entry={entry} />
+                <LedgerRow key={entry.id} entry={entry} variant="preview" />
               ))}
             </Stack>
           )}
