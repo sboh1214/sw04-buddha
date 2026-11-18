@@ -16,12 +16,20 @@ import { QueryClient, QueryObserver } from '@tanstack/react-query';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { SRC } from '@/test/screen-text';
+import { positionFixture } from '@/test/positions';
 import { type Market, type MarketSummary, type Me, type Order, type Position } from './api';
-import { MY_ORDERS_LIVE_KEY, marketBookKey, myOrderKey, myOrdersLiveKey } from './market-keys';
+import {
+  MY_ORDERS_LIVE_KEY,
+  marketBookKey,
+  myOrderKey,
+  myOrdersLiveKey,
+  sellableKey,
+} from './market-keys';
 import {
   BalanceOrder,
   type MarketPages,
   MarketWindow,
+  SellableRotation,
   Throttle,
   applyBalanceEvent,
   applyPositionEvent,
@@ -30,6 +38,7 @@ import {
   applyTick,
   applyToPages,
   bookRestartsOwnOrders,
+  bookRestartsSellable,
   chunkIds,
   joinMarket,
   joinMarketPages,
@@ -37,6 +46,7 @@ import {
   ownLiveOrderIds,
   ownOrdersRefreshKeys,
   ownOrdersStatusKeys,
+  positionReopensMarket,
   wroteAnOrder,
 } from './market-live';
 
@@ -133,21 +143,13 @@ const statusEvent = (patch: Partial<MarketStatusEvent> = {}): MarketStatusEvent 
   ...patch,
 });
 
-const position: Position = {
+const position: Position = positionFixture({
   marketId: ID,
-  marketSlug: 'rate-cut-2026',
-  marketTitle: '기준금리 인하?',
-  marketStatus: 'open',
   marketLastPrice: 50,
-  resolvedResult: null,
-  outcome: 'YES',
   qty: 10,
-  costBasisCoin: '5000',
-  realizedPnlCoin: '0',
-  settled: false,
   version: 3,
   updatedAt: '2026-09-06T00:00:00.000Z',
-};
+});
 
 const otherPosition: Position = { ...position, marketId: OTHER_ID, outcome: 'NO', version: 1 };
 
@@ -1075,6 +1077,76 @@ describe('wroteAnOrder', () => {
   });
 });
 
+describe('positionReopensMarket (#67, ADR-0142 결정 2-2)', () => {
+  /** The contract sold out of: the open list keeps the row at 0 (F4). */
+  const soldOut: Position = { ...position, qty: 0 };
+
+  it('answers for a sold-out market bought back, the one whose tick MY missed', () => {
+    // THE HAZARD: `useHoldings` joins and reads only the markets held at 1 or more, so a sold-out
+    // market's room is left. The buy back's `market:tick` goes by, this event carries no price,
+    // and the `['market', id]` entry — inside `staleTime` — is taken as fresh by the observer
+    // mounted again: the holding valued at the price from before its own fill.
+    expect(positionReopensMarket([soldOut, otherPosition], positionEvent())).toBe(true);
+    // The other contract of that market at 0 as well: still a market MY was not in.
+    const otherSide: Position = { ...soldOut, outcome: 'NO', version: 1 };
+    expect(positionReopensMarket([soldOut, otherSide], positionEvent())).toBe(true);
+  });
+
+  it('costs nothing for a market already held at 1 or more', () => {
+    // An ordinary buy on a held contract: MY is in the room and the tick arrives.
+    expect(positionReopensMarket([position, otherPosition], positionEvent())).toBe(false);
+    // YES bought back while NO is held: the market never left the screen.
+    const heldNo: Position = { ...position, outcome: 'NO', qty: 5, version: 1 };
+    expect(positionReopensMarket([soldOut, heldNo], positionEvent())).toBe(false);
+    // A holding in ANOTHER market does not stand in for this one.
+    expect(positionReopensMarket([soldOut, { ...otherPosition, qty: 5 }], positionEvent())).toBe(
+      true,
+    );
+  });
+
+  it('leaves a row the list does not hold to the list’s own refetch', () => {
+    // `applyPositionEvent` answers `refetch` there, and that answer carries the market's price
+    // with its fill count — `markToLiveMarket` takes the later pair, so no second request.
+    expect(positionReopensMarket(undefined, positionEvent())).toBe(false);
+    expect(positionReopensMarket([], positionEvent())).toBe(false);
+    expect(positionReopensMarket([otherPosition], positionEvent())).toBe(false);
+    expect(positionReopensMarket([soldOut], positionEvent({ outcome: 'NO' }))).toBe(false);
+  });
+
+  it('answers once per change: not for a duplicate, a sell or a settlement', () => {
+    expect(positionReopensMarket([soldOut], positionEvent({ version: 3 }))).toBe(false);
+    expect(positionReopensMarket([soldOut], positionEvent({ version: 2 }))).toBe(false);
+    expect(positionReopensMarket([soldOut], positionEvent({ qty: 0 }))).toBe(false);
+    expect(positionReopensMarket([soldOut], positionEvent({ settled: true }))).toBe(false);
+    expect(positionReopensMarket([{ ...soldOut, settled: true }], positionEvent())).toBe(false);
+    // The patched list no longer answers: the next event on the holding is an ordinary one.
+    const patch = applyPositionEvent([soldOut], positionEvent());
+    if (patch.kind !== 'replace') throw new Error(`expected replace, got ${patch.kind}`);
+    expect(positionReopensMarket(patch.positions, positionEvent({ qty: 20, version: 5 }))).toBe(
+      false,
+    );
+  });
+
+  it('is wired into user:position: read before the patch, one market restart after it', () => {
+    // The provider is a component this runner cannot mount, so its wiring is pinned in source.
+    const provider = readFileSync(
+      path.join(SRC, 'components', 'realtime', 'realtime-provider.tsx'),
+      'utf8',
+    );
+    const handler = provider.slice(provider.indexOf("'user:position': (raw: unknown) => {"));
+    const read = handler.indexOf('if (positionReopensMarket(held, event)) reopensMarket = true;');
+    const write = handler.indexOf('queryClient.setQueryData<Position[]>(query.queryKey');
+    expect(read).toBeGreaterThan(-1);
+    // Before the patch: afterwards the row reads 1 or more and nothing would answer.
+    expect(read).toBeLessThan(write);
+    expect(handler).toContain(
+      'if (reopensMarket) void restartQueries(queryClient, marketKey(event.marketId));',
+    );
+    // Only behind the decision: an unconditional restart is a request per own trade on screen.
+    expect(handler.split('restartQueries(queryClient, marketKey(').length - 1).toBe(1);
+  });
+});
+
 describe('joinPositions', () => {
   /** The row as a REST answer that left BEFORE the trade carries it: one version behind. */
   const stale: Position = { ...position, qty: 10, costBasisCoin: '5000', version: 3 };
@@ -1504,5 +1576,230 @@ describe('the account’s own live orders on a market signal (#123, ADR-0141 결
     );
     expect(source).toMatch(/ownOrdersPending = null;\s*refreshOwnOrders\(\);/);
     expect(source).toMatch(/ownOrdersPending = null;\s*ownOrders\.clear\(\);/);
+  });
+});
+
+describe('SellableRotation: the 매도 가능액 read again for market:book (#67, ADR-0142)', () => {
+  const A = '11111111-1111-4111-8111-111111111111';
+  const B = '22222222-2222-4222-8222-222222222222';
+  const C = '33333333-3333-4333-8333-333333333333';
+
+  it('reads one market per gap, the longest waiting first, whatever the number held', () => {
+    const rotation = new SellableRotation(6_000);
+    rotation.mark(A, 0);
+    rotation.mark(B, 10);
+    rotation.mark(A, 20);
+    rotation.mark(C, 30);
+    expect(rotation.next(100)).toEqual({ marketId: A });
+    expect(rotation.next(200)).toEqual({ wait: 5_900 });
+    expect(rotation.next(6_100)).toEqual({ marketId: B });
+    expect(rotation.next(12_100)).toEqual({ marketId: C });
+    expect(rotation.next(18_100)).toBeNull();
+    // Ten a minute at most: a market signalled every second still waits its turn.
+    const busy = new SellableRotation(6_000);
+    let reads = 0;
+    for (let now = 0; now < 60_000; now += 1_000) {
+      busy.mark(now % 2000 === 0 ? A : B, now);
+      const round = busy.next(now);
+      if (round !== null && 'marketId' in round) reads += 1;
+    }
+    expect(reads).toBeLessThanOrEqual(10);
+  });
+
+  it('skips a market read again by another path since its signal, and one dropped', () => {
+    const rotation = new SellableRotation(6_000);
+    rotation.mark(A, 0);
+    rotation.mark(B, 0);
+    rotation.mark(C, 0);
+    rotation.drop(B.toUpperCase());
+    // A's entry answered after its signal (a user:position, a focus): not read again.
+    expect(rotation.next(100, (id) => id === A)).toEqual({ marketId: C });
+    expect(rotation.size).toBe(0);
+  });
+
+  it('compares on the last signal: a read between two signals does not skip the second', () => {
+    const rotation = new SellableRotation(6_000);
+    rotation.mark(B, 0);
+    expect(rotation.next(0)).toEqual({ marketId: B });
+    // A waits its turn; a focus reads its entry at 2 s, and a new book change comes at 3 s.
+    rotation.mark(A, 1_000);
+    rotation.mark(A, 3_000);
+    const readAt = 2_000;
+    const readSince = (_id: string, markedAt: number) => readAt > markedAt;
+    expect(rotation.next(6_000, readSince)).toEqual({ marketId: A });
+    // With no second signal, the focus read covered it.
+    const once = new SellableRotation(6_000);
+    once.mark(A, 1_000);
+    expect(once.next(6_000, readSince)).toBeNull();
+  });
+
+  it('never skips a mark made while a read was in flight: its answer is the older book', () => {
+    // A read leaves at 0, the book changes at 5 ms, the answer lands at 15 ms: answered after the
+    // signal, taken before the change.
+    const answeredAt = 15;
+    const readSince = (_id: string, markedAt: number) => answeredAt > markedAt;
+    const rotation = new SellableRotation(6_000);
+    rotation.mark(A, 5, true);
+    expect(rotation.next(6_000, readSince)).toEqual({ marketId: A });
+    // The last signal's flag: one with no read in flight is covered by a later answer, which left
+    // after it and so saw the earlier change as well.
+    const later = new SellableRotation(6_000);
+    later.mark(A, 5, true);
+    later.mark(A, 10);
+    expect(later.next(6_000, readSince)).toBeNull();
+  });
+
+  it('keeps its line while the caller waits, and clears on a reconnect', () => {
+    const rotation = new SellableRotation(6_000);
+    rotation.mark(A, 0);
+    expect(rotation.next(0)).toEqual({ marketId: A });
+    rotation.mark(B, 1_000);
+    rotation.mark(C, 2_000);
+    // Hidden meanwhile: nothing is asked; shown again, the oldest goes first at the same gap.
+    expect(rotation.next(60_000)).toEqual({ marketId: B });
+    expect(rotation.next(61_000)).toEqual({ wait: 5_000 });
+    rotation.clear();
+    expect(rotation.next(70_000)).toBeNull();
+  });
+});
+
+describe('bookRestartsSellable (#67, ADR-0142, R5)', () => {
+  const ACCOUNT_A = 'a1e1c0de-0000-4000-8000-000000000001';
+  const held = (outcome: 'YES' | 'NO', qty: number) => ({
+    outcome,
+    qty,
+    unlockedQty: qty,
+    restingSellQty: 0,
+    quote: null,
+  });
+  const sellable = ([yes, no]: [number, number]) => ({
+    marketId: ID,
+    contracts: [held('YES', yes), held('NO', no)],
+  });
+
+  it('reads again only a holding there, of the account on screen', () => {
+    const client = new QueryClient();
+    try {
+      expect(bookRestartsSellable(client, ID, ACCOUNT_A)).toBe(false);
+      client.setQueryData(sellableKey(ID, ACCOUNT_A), sellable([0, 0]));
+      // A member who holds nothing there (the detail's 0s) adds no request.
+      expect(bookRestartsSellable(client, ID, ACCOUNT_A)).toBe(false);
+      client.setQueryData(sellableKey(ID, ACCOUNT_A), sellable([0, 2]));
+      expect(bookRestartsSellable(client, ID, ACCOUNT_A)).toBe(true);
+      expect(bookRestartsSellable(client, ID.toUpperCase(), ACCOUNT_A)).toBe(true);
+      // Every contract in resting sells: a restriction's or an admin grant's bulk cancel unlocks
+      // them and publishes `market:book` alone, so this one is read again too.
+      client.setQueryData(sellableKey(ID, ACCOUNT_A), {
+        marketId: ID,
+        contracts: [
+          { outcome: 'YES', qty: 2, unlockedQty: 0, restingSellQty: 2, quote: null },
+          held('NO', 0),
+        ],
+      });
+      expect(bookRestartsSellable(client, ID, ACCOUNT_A)).toBe(true);
+      // A visitor, or another account's entry.
+      expect(bookRestartsSellable(client, ID, undefined)).toBe(false);
+      expect(bookRestartsSellable(client, ID, 'someone-else')).toBe(false);
+    } finally {
+      client.clear();
+    }
+  });
+
+  it('marks a first read still on its way, which answers with the book before the change (P2)', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const key = sellableKey(ID, ACCOUNT_A);
+    let answer: (value: unknown) => void = () => undefined;
+    try {
+      const first = client.fetchQuery({
+        queryKey: key,
+        queryFn: () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      });
+      // No answer yet, so whether the account holds anything there is not known: marked, and
+      // the handler's `inFlight` reads the same state, so the answer cannot clear the mark.
+      expect(client.getQueryState(key)?.fetchStatus).toBe('fetching');
+      expect(client.getQueryData(key)).toBeUndefined();
+      expect(bookRestartsSellable(client, ID, ACCOUNT_A)).toBe(true);
+      // Another account's first read is not this account's.
+      expect(bookRestartsSellable(client, ID, 'someone-else')).toBe(false);
+      answer(sellable([0, 0]));
+      await first;
+      // Answered with nothing held: no request any more.
+      expect(bookRestartsSellable(client, ID, ACCOUNT_A)).toBe(false);
+    } finally {
+      client.clear();
+    }
+  });
+
+  it('does not mark a failed first read with nothing in flight', () => {
+    const client = new QueryClient();
+    try {
+      client
+        .getQueryCache()
+        .build(client, { queryKey: sellableKey(ID, ACCOUNT_A) })
+        .setState({ status: 'error', fetchStatus: 'idle', error: new Error('down') });
+      expect(bookRestartsSellable(client, ID, ACCOUNT_A)).toBe(false);
+    } finally {
+      client.clear();
+    }
+  });
+});
+
+describe('market:book never moves a price or a holding (#67: 봇 호가는 참고 평가를 바꾸지 않는다)', () => {
+  it('writes neither the market row nor the positions, only the book and the windows', () => {
+    const provider = readFileSync(
+      path.join(SRC, 'components', 'realtime', 'realtime-provider.tsx'),
+      'utf8',
+    );
+    const start = provider.indexOf("'market:book': (raw: unknown) => {");
+    const handler = provider.slice(start, provider.indexOf("'user:balance':", start));
+    expect(handler).toContain('refreshBook(parsed.data.marketId);');
+    expect(handler).toContain('bookRestartsSellable(queryClient, parsed.data.marketId');
+    const writes = ['marketKey(', 'POSITIONS_KEY', 'positionsKey', 'setQueryData', 'TICKS_KEY'];
+    for (const write of writes) {
+      expect(handler, write).not.toContain(write);
+    }
+  });
+
+  it('reads the sellable again on market:status, and patches only this account’s positions', () => {
+    const provider = readFileSync(
+      path.join(SRC, 'components', 'realtime', 'realtime-provider.tsx'),
+      'utf8',
+    );
+    const status = provider.slice(
+      provider.indexOf("'market:status': (raw: unknown) => {"),
+      provider.indexOf("'market:trade':"),
+    );
+    expect(status).toContain(
+      'void restartQueries(queryClient, marketSellableKey(event.marketId));',
+    );
+    const position = provider.slice(provider.indexOf("'user:position': (raw: unknown) => {"));
+    expect(position).toContain('if (query.queryKey[2] !== identity) continue;');
+  });
+});
+
+describe('a user:position keeps the holding’s market values (#67, ADR-0142)', () => {
+  it('patches the holding and leaves the market’s price, time, fill count and status key', () => {
+    // The event carries none of them; `market:tick` writes them on `['market', id]`.
+    const row = {
+      ...position,
+      marketLastFillAt: '2026-09-06T12:00:00.000Z',
+      marketTradeCount: 9,
+      marketStatusEventId: '7',
+    };
+    const patch = applyPositionEvent([row], positionEvent());
+    if (patch.kind !== 'replace') throw new Error(`expected replace, got ${patch.kind}`);
+    expect(patch.positions[0]).toMatchObject({
+      qty: 14,
+      marketLastPrice: row.marketLastPrice,
+      marketLastFillAt: '2026-09-06T12:00:00.000Z',
+      marketTradeCount: 9,
+      marketStatusEventId: '7',
+    });
+    // And a REST answer is where they come from (`joinPositions`).
+    const answer = { ...row, marketTradeCount: 10, version: 1 };
+    expect(joinPositions(patch.positions, [answer])[0]?.marketTradeCount).toBe(10);
   });
 });

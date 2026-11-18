@@ -7,6 +7,7 @@ import {
   type RestrictionKind,
 } from '@buddha/shared';
 import { useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'next/navigation';
 import {
   type ReactNode,
   createContext,
@@ -20,6 +21,7 @@ import {
   useSyncExternalStore,
 } from 'react';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
+import { type AccountBlock, useAccountBlock } from '@/hooks/use-account-block';
 import { useInstantReached } from '@/hooks/use-instant-reached';
 import { useOrderBook } from '@/hooks/use-markets';
 import { ME_QUERY_KEY, refreshOwnMe, useMe } from '@/hooks/use-me';
@@ -31,7 +33,6 @@ import {
   useQuote,
   useSellable,
 } from '@/hooks/use-orders-place';
-import { useMyRestriction } from '@/hooks/use-reports';
 import {
   type Market,
   type Me,
@@ -77,6 +78,7 @@ import {
   orderTermsOf,
   panelOwnerChanged,
   panelSignedIn,
+  parseSellIntent,
   placeBodyOf,
   placeOutcomeOf,
   quoteRefused,
@@ -88,6 +90,7 @@ import {
   sendUnlocked,
   sideMovedSinceQuote,
   stepBusy,
+  withoutSellIntent,
 } from '@/lib/order-panel';
 import {
   clearSessionOrderRequest,
@@ -114,7 +117,7 @@ import { dismissAccountToasts } from './order-toasts';
  * `market:status` takes the area away, and a request sent before it still ends — in a toast.
  */
 
-export type AccountBlock = 'admin' | 'restricted' | null;
+export type { AccountBlock } from '@/hooks/use-account-block';
 
 export interface OrderPanelContextValue {
   marketId: string;
@@ -128,6 +131,14 @@ export interface OrderPanelContextValue {
   mdUp: boolean | null;
   sheet: OrderSheetState;
   openSheet: (contract: Outcome) => void;
+  /**
+   * A holding's '매도' (#67, ADR-0142; ADR-0135 F6): the contract and 매도 chosen — below md in
+   * the sheet, which gives the focus back to `origin` when it closes; from md up in the column,
+   * which is scrolled to and whose 매도 takes the focus.
+   */
+  openSell: (contract: Outcome, origin?: HTMLElement) => void;
+  /** Where the sheet gives the focus back on close: a holding's '매도' that opened it, or none. */
+  sheetFinalFocus: () => HTMLElement | null;
   closeSheet: () => void;
   me: Me | undefined;
   /** For a member: `me` and the restriction have answered. Always true for a visitor. */
@@ -188,6 +199,28 @@ const mdUpOnServer = () => null;
 
 /** D13's restriction: the account restriction alone (the writing restriction takes no order). */
 const ACCOUNT_RESTRICTION_KIND: readonly RestrictionKind[] = ['account'];
+
+/**
+ * From md up, a holding's '매도' brings the column's panel into view and gives its 매도 the focus —
+ * or, where 매도 is off (D13), the chosen contract's button. Once the press has rendered.
+ */
+function focusColumnSell(contract: Outcome): void {
+  requestAnimationFrame(() => {
+    const panel = document.querySelector<HTMLElement>(
+      '[data-testid="order-panel"][data-place="column"]',
+    );
+    if (panel === null) return;
+    panel.scrollIntoView({ block: 'nearest' });
+    const sell = panel.querySelector<HTMLButtonElement>('[data-testid="order-side-sell"]');
+    const target =
+      sell !== null && !sell.disabled
+        ? sell
+        : panel.querySelector<HTMLButtonElement>(
+            `[data-testid="order-contract-${contract === 'YES' ? 'yes' : 'no'}"]`,
+          );
+    target?.focus({ preventScroll: true });
+  });
+}
 
 export function OrderPanelProvider({
   marketId,
@@ -252,10 +285,9 @@ export function OrderPanelProvider({
   const book = bookQuery.data;
   const meQuery = useMe();
   const me = member ? meQuery.data : undefined;
-  // The restriction of the account on screen, under its id: `me` can name another account before
-  // the session does, and the last account's restriction is never read as this one's (결정 2-26).
-  const restrictionOwner = me?.id ?? null;
-  const restriction = useMyRestriction(restrictionOwner);
+  // D13 (결정 2-11·2-26): the restriction of the account on screen, under its id, and its end on
+  // the server's clock (`now`) — `useAccountBlock`, which MY's holdings share (#67, ADR-0142).
+  const { account, restrictionEndsAt, restrictionSettled } = useAccountBlock(me, now);
   // The holding of the account on screen, under its id: never another account's (결정 2-22).
   const sellableQuery = useSellable(marketId, me?.id);
   // A restriction read that failed does not hold the panel: the server refuses for it anyway.
@@ -264,7 +296,7 @@ export function OrderPanelProvider({
     meAnswered: meQuery.data !== undefined,
     meFailed: meQuery.isError,
     meFetching: meQuery.isFetching,
-    restrictionSettled: restriction.data !== undefined || restriction.isError,
+    restrictionSettled,
   });
   const accountKnown = accountView === 'ready';
   // `GET /me` failed without ever answering: said, with 다시 시도, never a skeleton for good.
@@ -273,24 +305,6 @@ export function OrderPanelProvider({
   const retryAccount = useCallback(() => {
     void refetchMe();
   }, [refetchMe]);
-  const admin = me?.profile.role === 'admin';
-  // A term account restriction ends by itself at its `endsAt` (#45-12), on the server's clock
-  // (`now`) as the close below: from that instant it holds nothing, and the restriction is read
-  // again — nothing is published when a term runs out (결정 2-11).
-  const heldRestriction = member ? (restriction.data?.accountRestriction ?? null) : null;
-  const refreshRestriction = useCallback(() => {
-    void queryClient.invalidateQueries({
-      queryKey: myRestrictionKey(restrictionOwner),
-      exact: true,
-    });
-  }, [queryClient, restrictionOwner]);
-  const restrictionEnded = useInstantReached(
-    heldRestriction?.endsAt ?? null,
-    now,
-    refreshRestriction,
-  );
-  const restrictedDetails = restrictionEnded ? null : heldRestriction;
-  const account: AccountBlock = admin ? 'admin' : restrictedDetails !== null ? 'restricted' : null;
   // 확인's own check reads the restriction from the cache, after its await: judged on the same
   // clock — the server's `now` plus the time since this screen took it (`tickingNow`).
   const [clockAnchor] = useState(now);
@@ -548,6 +562,16 @@ export function OrderPanelProvider({
   // Whether this sign-in cycle's draft was looked for (로그인 뒤 복원, below): once per cycle.
   const restoreChecked = useRef(false);
 
+  // A holding's '매도' from MY (#67, ADR-0142; F6): `?order=sell&contract=yes|no`, read once at the
+  // mount. The page never reads it, so the server's HTML is the same with it or without.
+  const searchParams = useSearchParams();
+  const [sellIntent] = useState(() => parseSellIntent(searchParams));
+  const sellIntentDone = useRef(false);
+  // That entry is the reader's new choice, not the return after a sign-in that D4 brings a draft
+  // back for (ADR-0135 D4): a draft left from before is dropped, as `fate === 'drop'` is, and not
+  // brought back on a later mount either.
+  const skipRestore = useRef(sellIntent !== null);
+
   // The session and `me` a refusal says are out of date (`authRefreshOf`), read again.
   const refetchSession = session.refetch;
   const refreshAuth = useCallback(
@@ -721,6 +745,11 @@ export function OrderPanelProvider({
     });
     if (fate === 'wait') return;
     restoreChecked.current = true;
+    if (skipRestore.current) {
+      skipRestore.current = false;
+      clearSessionOrderDraft(marketId);
+      return;
+    }
     const input = readSessionOrderDraft(marketId);
     if (input === null) return;
     clearSessionOrderDraft(marketId);
@@ -733,9 +762,41 @@ export function OrderPanelProvider({
   const edit = useCallback((patch: Partial<OrderInput>) => {
     dispatch({ type: 'edit', patch });
   }, []);
+  // The element the sheet gives the focus back to on close: a holding's '매도' that opened it
+  // (`openSell`), or none — the entry bar's own triggers are the dialog's (`triggerValue`).
+  const sheetOrigin = useRef<HTMLElement | null>(null);
+  const sheetFinalFocus = useCallback(() => sheetOrigin.current, []);
   const openSheet = useCallback((contract: Outcome) => {
+    sheetOrigin.current = null;
     dispatch({ type: 'openSheet', outcome: contract });
   }, []);
+  const openSell = useCallback((contract: Outcome, origin?: HTMLElement) => {
+    const wide = window.matchMedia(MD_UP_MEDIA_QUERY).matches;
+    sheetOrigin.current = wide ? null : (origin ?? null);
+    dispatch({ type: 'openSell', outcome: contract, sheet: !wide });
+    if (wide) focusColumnSell(contract);
+  }, []);
+
+  // ---- 매도 진입 from MY's address (#67, ADR-0142) ----
+  // Once, past the gates the sign-in restore waits on (a member, the account known, the width
+  // known, the market's status read): a visitor's, or one on a market not 거래 중 — 일시 중단
+  // included, which has no order area (ADR-0135 D1) — is dropped. A request in flight is
+  // `openSell`'s: it keeps the terms and opens the sheet alone, as `openSheet` does. Either way
+  // the query is written out of the address in place — `history.replaceState`, not the Next
+  // router's replace, which would read the page's RSC again — so a reload or a back does not open
+  // it again.
+  useEffect(() => {
+    if (sellIntent === null || sellIntentDone.current || viewer === 'unknown') return;
+    if (viewer === 'member' && (!accountKnown || mdUp === null || market === undefined)) return;
+    sellIntentDone.current = true;
+    window.history.replaceState(
+      null,
+      '',
+      withoutSellIntent(window.location.pathname, window.location.search, window.location.hash),
+    );
+    if (viewer !== 'member' || market?.status !== 'open') return;
+    openSell(sellIntent);
+  }, [sellIntent, viewer, accountKnown, mdUp, market, openSell]);
   const closeSheet = useCallback(() => {
     dispatch({ type: 'closeSheet' });
   }, []);
@@ -871,13 +932,15 @@ export function OrderPanelProvider({
     mdUp,
     sheet,
     openSheet,
+    openSell,
+    sheetFinalFocus,
     closeSheet,
     me,
     accountKnown,
     accountFailed,
     retryAccount,
     account,
-    restrictionEndsAt: restrictedDetails?.endsAt ?? null,
+    restrictionEndsAt,
     sellable,
     check,
     quote,

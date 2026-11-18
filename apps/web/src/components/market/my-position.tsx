@@ -3,20 +3,25 @@
 import { Alert, Badge, Button, Card, DataList, Heading, Skeleton, Stack } from '@chakra-ui/react';
 import { type MarketStatus, parseCoinAmount } from '@buddha/shared';
 import { type ReactNode } from 'react';
+import { ProfileUnavailable } from '@/app/my/settings/profile-unavailable';
+import { AccountBlockLine } from '@/components/position/account-block-line';
+import { HoldingRow, type SellAccount } from '@/components/position/holding-rows';
 import { CoinText } from '@/components/ui/coin-text';
 import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
+import { useMe } from '@/hooks/use-me';
 import {
-  averageCostCoin,
-  markPriceCoin,
+  type LiveMarketReading,
   markToLiveMarket,
   positionListStatusFor,
-  unrealizedPnlCoin,
   usePositions,
 } from '@/hooks/use-portfolio';
+import { useSellableReadings } from '@/hooks/use-sellable-readings';
 import { type Position } from '@/lib/api';
 import { MARKET_RESULT_LABEL, formatContracts } from '@/lib/market-admin';
 import { sessionListSection } from '@/lib/query-client';
+import { POSITION_ACCOUNT_LINE_ID, positionAccountLine } from '@/lib/sellable-view';
+import { useOrderPanel } from './order-panel-provider';
 
 /**
  * 내 포지션 on the market detail (PLAN 11.3): what this visitor holds in THIS market, marked to
@@ -57,30 +62,51 @@ export interface MyPositionProps {
    */
   status?: MarketStatus;
   /**
-   * The market's live YES price, which is what 현재가 and 평가손익 are marked to; `null` is the
-   * row saying 체결 없음.
+   * The market's live row — its price with the fill's time and count, and its status with its
+   * key — which 최근 체결가, 참고 평가 and 미실현 손익 are marked to (`markToLiveMarket`, #67).
    *
    * `Position.marketLastPrice` is a join taken when the positions list was fetched, and only
    * this account's own trades ever move that list; somebody else's trade arrives as a
-   * `market:tick` and writes the `['market', id]` cache instead. Without this prop the
-   * price in the header above and the valuation in this card drifted apart on a market
-   * anyone else was trading — the same reading, from two different prices, one screen apart.
-   * `undefined` (the row not loaded) keeps the snapshot the list carried, which is exactly
-   * what MY's 보유 계약 does for a market it has no cache entry for.
+   * `market:tick` and writes the `['market', id]` cache instead. Without this the price in the
+   * header above and the valuation in this card drifted apart on a market anyone else was
+   * trading. `undefined` (the row not loaded) keeps the snapshot the list carried, as MY does for
+   * a market it has no cache entry for.
    */
-  lastPrice?: number | null;
+  live?: LiveMarketReading;
   'data-testid'?: string;
 }
 
 export function MyPosition({
   marketId,
   status = 'open',
-  lastPrice,
+  live,
   'data-testid': testId = 'market-my-position',
 }: MyPositionProps) {
   const listStatus = positionListStatusFor(status);
-  const positions = usePositions(listStatus);
+  const accountId = useMe().data?.id;
+  const positions = usePositions(listStatus, accountId);
   const rows = (positions.data ?? []).filter((row) => row.marketId === marketId);
+  const panel = useOrderPanel();
+  // The same 매도 가능액 entry as the order panel's (`sellableKey`): no request of its own.
+  const marked = listStatus === 'open' ? rows.map((row) => markToLiveMarket(row, live)) : rows;
+  const sellable = useSellableReadings({
+    accountId: listStatus === 'open' ? accountId : undefined,
+    marketIds: listStatus === 'open' && rows.some((row) => row.qty >= 1) ? [marketId] : [],
+    positions: marked,
+    list: positions,
+  });
+  // D13's line: the order column's where it is drawn, else the card's own above the rows (375,
+  // or a market with no order area), so an off '매도' always has its reason on screen.
+  const accountLine = positionAccountLine({
+    account: panel.account,
+    orderArea: panel.orderArea,
+    mdUp: panel.mdUp,
+  });
+  const sellAccount: SellAccount = {
+    account: panel.account,
+    accountKnown: panel.accountKnown && panel.me !== undefined,
+    describedBy: accountLine.describedBy,
+  };
   // Four states, not three. A refetch that fails after the list has answered KEEPS the rows and
   // reports `isRefetchError`, which this ladder folded into the ordinary reading — and on this
   // card that silence is a false sentence, not merely a stale one. `user:position` can neither
@@ -127,7 +153,10 @@ export function MyPosition({
               </Button>
             </Alert.Root>
           )}
-          {section.body === 'pending' ? (
+          {accountId === undefined ? (
+            // The list is keyed by MY's account, which `GET /me` names (#67, ADR-0142).
+            <ProfileUnavailable height="12" />
+          ) : section.body === 'pending' ? (
             <Skeleton height="12" />
           ) : section.body === 'failed' ? (
             <Stack gap="2" align="flex-start">
@@ -143,55 +172,54 @@ export function MyPosition({
             </Stack>
           ) : section.body === 'empty' ? (
             <EmptyState message={copy.marketMyPositionEmpty} />
+          ) : listStatus === 'settled' ? (
+            <Stack gap="4">
+              {/* A finished market is never marked to a price (see `SettledPositionRows`). */}
+              {rows.map((row) => (
+                <SettledPositionRows key={row.outcome} position={row} />
+              ))}
+            </Stack>
           ) : (
             <Stack gap="4">
-              {rows.map((row) =>
-                listStatus === 'settled' ? (
-                  // A finished market is never marked to a price (see `SettledPositionRows`),
-                  // so the live one is not passed down here — there is nothing to value.
-                  <SettledPositionRows key={row.outcome} position={row} />
-                ) : (
-                  <PositionRows key={row.outcome} position={markToLiveMarket(row, { lastPrice })} />
-                ),
+              {accountLine.ownLine && (
+                <AccountBlockLine
+                  id={POSITION_ACCOUNT_LINE_ID}
+                  account={panel.account}
+                  restrictionEndsAt={panel.restrictionEndsAt}
+                  testId="market-position-account-blocked"
+                />
               )}
+              <Stack gap="4" divideY="1px">
+                {/* MY's row, field for field (F7): the same cells in the same places, without the
+                    market's title — this IS that market's page. A sold-out contract is '보유 없음'
+                    with its 실현 손익 (ADR-0135 결과 4). The '매도' opens this page's own panel. */}
+                {[...marked]
+                  .sort((a, b) => (a.outcome === 'YES' ? 0 : 1) - (b.outcome === 'YES' ? 0 : 1))
+                  .map((row) => (
+                    <HoldingRow
+                      key={row.outcome}
+                      position={row}
+                      sellable={sellable.reading(row.marketId, row.outcome, row.qty)}
+                      onRetrySellable={() => {
+                        sellable.retry(row.marketId);
+                      }}
+                      sellTarget={{
+                        kind: 'panel',
+                        onSell: (origin) => {
+                          panel.openSell(row.outcome, origin);
+                        },
+                      }}
+                      sellAccount={sellAccount}
+                      layout="detail"
+                      testId={`market-position-${row.outcome === 'YES' ? 'yes' : 'no'}`}
+                    />
+                  ))}
+              </Stack>
             </Stack>
           )}
         </Stack>
       </Card.Body>
     </Card.Root>
-  );
-}
-
-function PositionRows({ position }: { position: Position }) {
-  const yes = position.outcome === 'YES';
-  const average = averageCostCoin(position);
-  // Both `undefined` for a market with no fill to mark to (체결 없음, N02 §5).
-  const mark = markPriceCoin(position);
-  const unrealized = unrealizedPnlCoin(position);
-  const realized = parseCoinAmount(position.realizedPnlCoin);
-  return (
-    <Stack gap="2" data-testid={`market-position-${yes ? 'yes' : 'no'}`}>
-      <Badge colorPalette={yes ? 'yes' : 'no'} variant="subtle" alignSelf="flex-start">
-        {yes ? copy.yes : copy.no}
-      </Badge>
-      <DataList.Root orientation="horizontal" size="sm">
-        <Item label={copy.positionQty}>{formatContracts(position.qty)}</Item>
-        {/* A row the account has sold out of stays in the list so its realised PnL keeps
-            showing; it holds nothing, so there is no average to divide out. */}
-        <Item label={copy.positionAvgPrice}>
-          {average === undefined ? EMPTY : <CoinText amount={average} />}
-        </Item>
-        <Item label={copy.positionCurrentPrice}>
-          {mark === undefined ? copy.noFills : <CoinText amount={mark} />}
-        </Item>
-        <Item label={copy.positionPnl}>
-          {unrealized === undefined ? EMPTY : <Signed amount={unrealized} />}
-        </Item>
-        <Item label={copy.positionRealizedPnl}>
-          <Signed amount={realized} />
-        </Item>
-      </DataList.Root>
-    </Stack>
   );
 }
 

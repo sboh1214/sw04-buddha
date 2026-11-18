@@ -44,16 +44,19 @@ const RESTRICTION_TITLES: Readonly<Record<RestrictionKind, string>> = {
 export function SanctionBanner({
   testId,
   kinds = RESTRICTION_KINDS,
+  id,
 }: {
   testId: string;
   kinds?: readonly RestrictionKind[];
+  /** What a control it explains points at (`aria-describedby`): MY 요약's '매도' (D13, #67). */
+  id?: string;
 }) {
   const restriction = useMyRestriction();
   const format = useFormatDateTime();
   const shown = restrictionsShown(restriction.data, undefined, kinds);
   if (shown.length === 0) return null;
   return (
-    <Alert.Root status="info" data-testid={testId}>
+    <Alert.Root id={id} status="info" data-testid={testId}>
       <Alert.Indicator />
       <Alert.Content>
         <Stack gap="2">

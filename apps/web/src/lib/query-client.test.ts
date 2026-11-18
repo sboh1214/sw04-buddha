@@ -1,10 +1,18 @@
-import { InfiniteQueryObserver, QueryObserver, type InfiniteData } from '@tanstack/react-query';
-import { describe, expect, it, vi } from 'vitest';
+import {
+  InfiniteQueryObserver,
+  QueryObserver,
+  type InfiniteData,
+  type QueryClient,
+  type QueryKey,
+  onlineManager,
+} from '@tanstack/react-query';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ME_QUERY_KEY } from '@/hooks/use-me';
 import { positionsKey } from '@/hooks/use-portfolio';
 import { postImageUploader } from '@/hooks/use-posts';
+import { positionFixture } from '@/test/positions';
 import { ApiError, type Position, api } from './api';
-import { POSITIONS_KEY } from './market-keys';
+import { CATEGORIES_QUERY_KEY, MARKET_KEY, POSITIONS_KEY, marketKey } from './market-keys';
 import { MY_ACTIONS_KEY, MY_REPORTS_KEY, MY_RESTRICTION_KEY, myRestrictionKey } from './moderation';
 import {
   ME_KEY,
@@ -15,8 +23,13 @@ import {
   moreFailed,
   profileView,
   readFailed,
+  restartQueries,
   sessionListSection,
+  setResnapshotOwed,
 } from './query-client';
+
+/** The account a positions list is keyed by (#67, ADR-0142). */
+const TEST_ACCOUNT = 'a1e1c0de-0000-4000-8000-000000000001';
 
 /**
  * `cancelFirstFetch`'s predicate, driven through the REAL client this app ships.
@@ -25,21 +38,12 @@ import {
  * MOUNTED list loses nothing either way, because the invalidation's own `cancelRefetch` was
  * going to cancel that refetch anyway. It is the UNMOUNTED one that pays.
  */
-const position: Position = {
-  marketId: '3f2504e0-4f89-11d3-9a0c-0305e82c3301',
-  marketSlug: 'rate-cut-2026',
-  marketTitle: '기준금리 인하?',
-  marketStatus: 'open',
+const position: Position = positionFixture({
   marketLastPrice: 50,
-  resolvedResult: null,
-  outcome: 'YES',
   qty: 10,
-  costBasisCoin: '5000',
-  realizedPnlCoin: '0',
-  settled: false,
   version: 3,
   updatedAt: '2026-09-06T00:00:00.000Z',
-};
+});
 
 describe('cancelFirstFetch', () => {
   it('keeps an answer already on the wire for a list nobody is watching', async () => {
@@ -51,7 +55,7 @@ describe('cancelFirstFetch', () => {
     const queryClient = getQueryClient();
     let land: (rows: Position[]) => void = () => undefined;
     const observer = new QueryObserver<Position[]>(queryClient, {
-      queryKey: positionsKey('settled'),
+      queryKey: positionsKey('settled', TEST_ACCOUNT),
       queryFn: () =>
         new Promise<Position[]>((resolve) => {
           land = resolve;
@@ -73,7 +77,9 @@ describe('cancelFirstFetch', () => {
 
       land([{ ...position, qty: 99, version: 4 }]);
       await second;
-      expect(queryClient.getQueryData<Position[]>(positionsKey('settled'))?.[0]?.qty).toBe(99);
+      expect(
+        queryClient.getQueryData<Position[]>(positionsKey('settled', TEST_ACCOUNT))?.[0]?.qty,
+      ).toBe(99);
     } finally {
       queryClient.clear();
     }
@@ -88,7 +94,7 @@ describe('cancelFirstFetch', () => {
     const queryClient = getQueryClient();
     let land: (rows: Position[]) => void = () => undefined;
     const observer = new QueryObserver<Position[]>(queryClient, {
-      queryKey: positionsKey('open'),
+      queryKey: positionsKey('open', TEST_ACCOUNT),
       queryFn: () =>
         new Promise<Position[]>((resolve) => {
           land = resolve;
@@ -103,14 +109,20 @@ describe('cancelFirstFetch', () => {
 
       // A refetch over rows that are already there — the case the predicate must skip.
       const second = observer.refetch();
-      expect(queryClient.getQueryState(positionsKey('open'))?.fetchStatus).toBe('fetching');
+      expect(queryClient.getQueryState(positionsKey('open', TEST_ACCOUNT))?.fetchStatus).toBe(
+        'fetching',
+      );
 
       cancelFirstFetch(queryClient, POSITIONS_KEY);
 
-      expect(queryClient.getQueryState(positionsKey('open'))?.fetchStatus).toBe('fetching');
+      expect(queryClient.getQueryState(positionsKey('open', TEST_ACCOUNT))?.fetchStatus).toBe(
+        'fetching',
+      );
       land([{ ...position, qty: 99 }]);
       await second;
-      expect(queryClient.getQueryData<Position[]>(positionsKey('open'))?.[0]?.qty).toBe(99);
+      expect(
+        queryClient.getQueryData<Position[]>(positionsKey('open', TEST_ACCOUNT))?.[0]?.qty,
+      ).toBe(99);
     } finally {
       unsubscribe();
       queryClient.clear();
@@ -684,5 +696,198 @@ describe('a 더 보기 that failed (owner decision 2026-10-20 7, ADR-0075)', () 
 describe('ME_KEY', () => {
   it("is `['me']` as hooks/use-me.ts keys it, named again here for the server side of this file (ADR-0079 7-23)", () => {
     expect(ME_KEY).toEqual(ME_QUERY_KEY);
+  });
+});
+
+/**
+ * A reconnect used to read each snapshot key TWICE (#67, ADR-0142 결정 2-21, measured: 98 market
+ * rows for 50 held on `/my/positions`): the browser's `online` refetched every observer past its
+ * `staleTime`, and the socket's `connect` then restarted all of them (`resnapshot()`), the first
+ * answer already landed and so joined by nothing. While the provider says a resnapshot is owed
+ * (`setResnapshotOwed`), `online` leaves those keys to it. Driven through the real client: the
+ * `refetchOnReconnect` default is the client's, and the restart is the provider's `restartQueries`.
+ */
+describe('a reconnect reads a snapshot key once (ADR-0142 결정 2-21)', () => {
+  const OWED = [MARKET_KEY, POSITIONS_KEY, ME_QUERY_KEY] as const;
+  const MARKET = 'b7c9a1d2-6f34-4e58-9b0a-2d1e5f8c7a46';
+
+  beforeEach(() => {
+    // Only the clock: the reads below resolve on real timers.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-17T00:00:00.000Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    onlineManager.setOnline(true);
+  });
+
+  /** Lets every read started so far land. */
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+  /** Past the client's 30-second `staleTime`, so every entry held is stale. */
+  const age = () => vi.setSystemTime(Date.now() + 31_000);
+
+  /**
+   * A mounted observer of `queryKey`, counting its reads. Held fresh before it subscribes (so the
+   * mount reads nothing) unless `seed` is false. Each answer is a new row (a new `id`, so the market
+   * join takes it), an empty list for a positions key.
+   */
+  function watch(
+    client: QueryClient,
+    queryKey: QueryKey,
+    options: { seed?: boolean; refetchOnReconnect?: boolean } = {},
+  ) {
+    const isList = queryKey[0] === POSITIONS_KEY[0];
+    const reads = { count: 0 };
+    if (options.seed !== false) client.setQueryData(queryKey, isList ? [] : { id: 'seed' });
+    const observer = new QueryObserver<unknown>(client, {
+      queryKey,
+      queryFn: () => {
+        reads.count += 1;
+        return Promise.resolve(isList ? [] : { id: `read-${String(reads.count)}` });
+      },
+      retry: false,
+      ...(options.refetchOnReconnect === undefined
+        ? {}
+        : { refetchOnReconnect: options.refetchOnReconnect }),
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    return { reads, unsubscribe };
+  }
+
+  it('leaves an owed key to the resnapshot: none on online, one on the restart', async () => {
+    const client = getQueryClient();
+    const market = watch(client, marketKey(MARKET));
+    try {
+      setResnapshotOwed(client, OWED);
+      age();
+      client.getQueryCache().onOnline();
+      await settle();
+      expect(market.reads.count).toBe(0);
+      await restartQueries(client, MARKET_KEY);
+      await settle();
+      // Two before this change: the `online` read had landed, so the restart read once more.
+      expect(market.reads.count).toBe(1);
+    } finally {
+      market.unsubscribe();
+      setResnapshotOwed(client, null);
+      client.clear();
+    }
+  });
+
+  it('reads on online as before when nothing is owed, or the key is not owed, or the debt is paid', async () => {
+    const client = getQueryClient();
+    const market = watch(client, marketKey(MARKET));
+    const restriction = watch(client, myRestrictionKey(TEST_ACCOUNT));
+    const categories = watch(client, CATEGORIES_QUERY_KEY);
+    try {
+      // Nothing owed: a tab that never connected, or `online` with the socket still up.
+      age();
+      client.getQueryCache().onOnline();
+      await settle();
+      expect([market.reads.count, restriction.reads.count, categories.reads.count]).toEqual([
+        1, 1, 1,
+      ]);
+      // Owed, but not these two keys: they are read; the market is left to the resnapshot.
+      setResnapshotOwed(client, OWED);
+      age();
+      client.getQueryCache().onOnline();
+      await settle();
+      expect([market.reads.count, restriction.reads.count, categories.reads.count]).toEqual([
+        1, 2, 2,
+      ]);
+      // Paid (the provider's `connect`, after its `resnapshot()`): back to the first case.
+      setResnapshotOwed(client, null);
+      age();
+      client.getQueryCache().onOnline();
+      await settle();
+      expect([market.reads.count, restriction.reads.count, categories.reads.count]).toEqual([
+        2, 3, 3,
+      ]);
+    } finally {
+      market.unsubscribe();
+      restriction.unsubscribe();
+      categories.unsubscribe();
+      client.clear();
+    }
+  });
+
+  it('still resumes, once, a first read paused while offline', async () => {
+    // That is the retryer's `continue()` on `online`, not the reconnect refetch the debt turns off.
+    const client = getQueryClient();
+    client.mount();
+    onlineManager.setOnline(false);
+    setResnapshotOwed(client, OWED);
+    const market = watch(client, marketKey(MARKET), { seed: false });
+    try {
+      await settle();
+      expect(client.getQueryState(marketKey(MARKET))?.fetchStatus).toBe('paused');
+      expect(market.reads.count).toBe(0);
+      onlineManager.setOnline(true);
+      await settle();
+      await settle();
+      expect(market.reads.count).toBe(1);
+      expect(client.getQueryState(marketKey(MARKET))?.status).toBe('success');
+    } finally {
+      market.unsubscribe();
+      setResnapshotOwed(client, null);
+      client.unmount();
+      client.clear();
+    }
+  });
+
+  it('reads 50 held markets, both positions lists and me once each on a reconnect, not twice', async () => {
+    const client = getQueryClient();
+    const markets = Array.from({ length: 50 }, (_, index) =>
+      watch(client, marketKey(`market-${String(index)}`)),
+    );
+    const lists = [
+      watch(client, positionsKey('open', TEST_ACCOUNT)),
+      watch(client, positionsKey('settled', TEST_ACCOUNT)),
+    ];
+    const me = watch(client, ME_QUERY_KEY);
+    const all = [...markets, ...lists, me];
+    const total = () => all.reduce((sum, observer) => sum + observer.reads.count, 0);
+    /** `online`, then the socket's `connect` restarting each owed root. */
+    const reconnect = async () => {
+      age();
+      client.getQueryCache().onOnline();
+      await settle();
+      for (const root of OWED) await restartQueries(client, root);
+      await settle();
+    };
+    try {
+      setResnapshotOwed(client, OWED);
+      await reconnect();
+      expect(total()).toBe(50 + 2 + 1);
+      expect(markets.every((observer) => observer.reads.count === 1)).toBe(true);
+      // Without the debt, each was read twice (the measured 98 + 4 + 2 had two markets fresh).
+      setResnapshotOwed(client, null);
+      await reconnect();
+      expect(total()).toBe(50 + 2 + 1 + 2 * (50 + 2 + 1));
+    } finally {
+      for (const observer of all) observer.unsubscribe();
+      client.clear();
+    }
+  });
+
+  it("leaves a hook's own `refetchOnReconnect: false` alone, owed or not", async () => {
+    const client = getQueryClient();
+    const own = watch(client, ['admin', 'trading-anomalies'], { refetchOnReconnect: false });
+    const market = watch(client, marketKey(MARKET), { refetchOnReconnect: false });
+    try {
+      age();
+      client.getQueryCache().onOnline();
+      await settle();
+      setResnapshotOwed(client, OWED);
+      age();
+      client.getQueryCache().onOnline();
+      await settle();
+      expect([own.reads.count, market.reads.count]).toEqual([0, 0]);
+    } finally {
+      own.unsubscribe();
+      market.unsubscribe();
+      setResnapshotOwed(client, null);
+      client.clear();
+    }
   });
 });

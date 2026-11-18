@@ -311,8 +311,9 @@ export interface SellableFigures {
  * The sellable figures of one holding (#177 15항 '매도 가능액': the unlocked quantity quoted like
  * an immediate sell with 가격 보호), with the holder as the walk's owner (ADR-0111 결정 8: #179
  * decides), so a member's figure is their own immediate sell's, a stop at their own bid
- * included. The unlocked quantity may pass ORDER_QTY_MAX: it is quoted in one walk, and
- * splitting the sale is #67's. RangeError for a malformed holding, market or book.
+ * included. The unlocked quantity may pass ORDER_QTY_MAX: it is quoted in one walk, and the sale
+ * is not split — the screen says a sell takes ORDER_QTY_MAX at once (ADR-0142). RangeError for a
+ * malformed holding, market or book.
  */
 export function sellableOf(
   book: readonly BookOrder[],

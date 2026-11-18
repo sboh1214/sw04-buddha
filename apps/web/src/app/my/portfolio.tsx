@@ -13,7 +13,7 @@ import {
   Stack,
   Text,
 } from '@chakra-ui/react';
-import { type OrderStatus, parseCoinAmount } from '@buddha/shared';
+import { type OrderStatus, isLiveOrderStatus, parseCoinAmount } from '@buddha/shared';
 import { useQueries } from '@tanstack/react-query';
 import type { Route } from 'next';
 import NextLink from 'next/link';
@@ -21,32 +21,38 @@ import { usePathname } from 'next/navigation';
 import { type ReactNode } from 'react';
 import { OrderDetail } from '@/components/orders/order-detail';
 import { PendingOrders } from '@/components/orders/pending-orders';
+import { AccountBlockLine } from '@/components/position/account-block-line';
+import {
+  HoldingMarketGroup,
+  NO_HOLDING_DISPLAY,
+  type SellAccount,
+} from '@/components/position/holding-rows';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { CoinText } from '@/components/ui/coin-text';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { listSection, listView, profileView } from '@/lib/query-client';
+import { useAccountBlock } from '@/hooks/use-account-block';
 import { useMarketSocket } from '@/hooks/use-market-socket';
-import { marketQueryOptions } from '@/hooks/use-markets';
+import { holdingMarketQueryOptions } from '@/hooks/use-markets';
 import { useMe } from '@/hooks/use-me';
 import {
   type ListState,
-  averageCostCoin,
-  combinedListState,
+  dedupeAcrossLists,
+  heldGroups,
   holdingDisplay,
   listState,
-  markPriceCoin,
   markToLiveMarket,
   orderAveragePriceBp,
   priceIsStale,
   portfolioTotals,
-  positionValueCoin,
   realizedPnlAcross,
-  unrealizedPnlCoin,
+  realizedPnlState,
   useOrders,
   usePositions,
 } from '@/hooks/use-portfolio';
+import { useSellableReadings } from '@/hooks/use-sellable-readings';
 import { type Market, type Order, type Position } from '@/lib/api';
 import {
   MARKET_RESULT_LABEL,
@@ -55,14 +61,7 @@ import {
   formatContracts,
   formatPricePerContract,
 } from '@/lib/market-admin';
-import { marketStatusLabel } from '@/lib/market-status';
-import {
-  MY_ORDERS_PATH,
-  isPendingOrder,
-  myOrderPath,
-  orderHistoryEmpty,
-  showMoreOrders,
-} from '@/lib/my';
+import { MY_ORDERS_PATH, myOrderPath, orderHistoryEmpty, showMoreOrders } from '@/lib/my';
 import { orderReasonName, orderStatusLabel } from '@/lib/order-reasons';
 import { ProfileUnavailable } from './settings/profile-unavailable';
 
@@ -74,12 +73,12 @@ import { ProfileUnavailable } from './settings/profile-unavailable';
  * the same bodies (`limit`), so a preview cannot read differently from its tab.
  *
  * Not one number here is computed in this file: `markPriceCoin`, `positionValueCoin`,
- * `unrealizedPnlCoin`, `averageCostCoin` and `portfolioTotals` (use-portfolio.ts) own the
+ * `unrealizedPnlCoin`, `averageCostBp` and `portfolioTotals` (use-portfolio.ts) own the
  * arithmetic, in `bigint` over the wire's decimal strings. The rule is not tidiness — a NO
  * contract is worth the COMPLEMENT of the market's YES price, and a second copy of that formula
  * is a silent error that produces a plausible number wrong by 100 − 2·price per contract. The
  * same helpers draw 내 포지션 on the detail (my-position.tsx), so the two screens cannot disagree
- * about one row.
+ * about one row — and since #67 the same row component (`HoldingRow`, holding-rows.tsx).
  *
  * Each section holds its own query and therefore its own ladder — skeleton, error + 다시 시도,
  * empty, rows — because they fail independently: a failed 주문 이력 must not blank the holdings.
@@ -140,38 +139,61 @@ export function SessionEnded() {
 }
 
 /**
- * The open holdings, each marked to its market's LIVE price and status.
+ * The holdings of MY's account, each marked to its market's LIVE price and status (#67, ADR-0142).
  *
- * Every market this screen values is joined for as long as it is mounted, so the gateway pushes
- * `market:tick` for all of them and the queries below re-render with the new price. One
- * `['market', id]` entry per held market — the SAME entry the detail screen and the home grid
- * keep, so this costs one request per market at most and the socket's existing tick handler is
- * what keeps it fresh afterwards. `useQueries` rather than a hook per row because the totals and
- * the rows have to be read against ONE price: computed per row, 총 평가 금액 would be a sum of
- * prices no row on screen was ever drawn with. A screen that shows both (the summary) calls this
- * once and hands the result to both.
+ * Both lists are keyed by the account (`accountId`, `Me`'s id) and wait for it. The open rows are
+ * marked and kept whole for the totals (`markedAll`: every open row, sold-out ones included, with
+ * the contracts the settled list already holds left out — `dedupeAcrossLists`), and grouped for
+ * the screen (`groups`: held at 1 or more, one per market, the latest change first — F4·F7).
+ *
+ * Every market held at 1 or more is joined for as long as this is mounted, so the gateway pushes
+ * `market:tick` for each and the `['market', id]` entries below — the SAME entries the detail and
+ * the home grid keep — re-render with the new price; one request per market at most. A sold-out
+ * row needs no price (its value is 0), so its market is neither joined nor read — and a tick
+ * published meanwhile is missed, so the `user:position` that takes it back to 1 or more marks the
+ * entry stale and the observer mounted again here reads it (`positionReopensMarket`). `useQueries`
+ * rather than a hook per row because the totals and the rows have to be read against ONE price.
+ * Each row is read through `holdingMarketQueryOptions`: the detail's entry and request, without
+ * the detail's 5-second settlement poll (MY draws no payout-delay record), and re-read on focus
+ * only for a 거래 마감 or 잠정 결과 market (or one with no row yet) — the rest come with the
+ * positions list that focus re-reads (ADR-0142 결정 2-22).
+ *
+ * 매도 가능 and 매도 잠금 read `GET /me/markets/:id/sellable` for the groups drawn: all of them on
+ * `/my/positions`, the preview's `groupLimit` on `/my` (`useSellableReadings`), through MY's queue
+ * (`SELLABLE_PACE`: 10 at once, 20 a minute), so a cold screen of many markets stays in budget.
  */
-export function useHoldings() {
-  const open = usePositions('open');
-  const held = open.data ?? [];
+export function useHoldings(accountId: string | undefined, groupLimit?: number) {
+  const open = usePositions('open', accountId);
+  const settled = usePositions('settled', accountId);
+  const openRows = dedupeAcrossLists(open.data ?? [], settled.data);
   // Distinct: one market carries at most a YES row and a NO row, and both mark to one price.
+  const held = openRows.filter((row) => row.qty >= 1);
   const marketIds = [...new Set(held.map((row) => row.marketId))];
   useMarketSocket(marketIds);
-  const markets = useQueries({ queries: marketIds.map((id) => marketQueryOptions(id)) });
+  const markets = useQueries({ queries: marketIds.map((id) => holdingMarketQueryOptions(id)) });
   const live = new Map<string, Market>();
   for (const market of markets) {
     if (market.data !== undefined) live.set(market.data.id, market.data);
   }
-  // Price AND status, both marked from the row the socket keeps live: a `market:status` moves
-  // `['market', id]` and publishes no `user:position`, so a holding in a market that has just
-  // closed would otherwise keep announcing 거래 중 here until an unrelated refetch.
-  const positions = held.map((row) => {
-    const market = live.get(row.marketId);
-    return markToLiveMarket(row, { lastPrice: market?.lastPrice, status: market?.status });
+  // The price with its time, and the status, from the row the socket keeps live — each ordered
+  // against the list's own copy on its key (`markToLiveMarket`).
+  const markedAll = openRows.map((row) => markToLiveMarket(row, live.get(row.marketId)));
+  const groups = heldGroups(markedAll);
+  const drawn = groupLimit === undefined ? groups : groups.slice(0, groupLimit);
+  const sellable = useSellableReadings({
+    accountId,
+    marketIds: drawn.map((group) => group.marketId),
+    positions: drawn.flatMap((group) => group.rows),
+    list: open,
+    // One read per held market: through MY's queue, so 50 of them never go at once (ADR-0142).
+    paced: true,
   });
   return {
     open,
-    positions,
+    settled,
+    markedAll,
+    groups,
+    sellable,
     /**
      * Each market's display flags as its live row reads them — '판정 지연' (`judgementDelayed`, #22,
      * ADR-0098; a held 잠정 결과 past its deadline too, #175) and '이의 검토 중' (`disputeUnderReview`,
@@ -180,7 +202,7 @@ export function useHoldings() {
      * holding shows. A market with no live row yet reads its status alone (`holdingDisplay`).
      */
     display: new Map(
-      positions.map((row) => [
+      markedAll.map((row) => [
         row.marketId,
         holdingDisplay(live.get(row.marketId), row.marketStatus),
       ]),
@@ -201,18 +223,61 @@ export function useHoldings() {
 }
 
 type Holdings = ReturnType<typeof useHoldings>;
-type SettledList = ReturnType<typeof usePositions>;
 type OrderList = ReturnType<typeof useOrders>;
 
-/** `/my/positions`: 보유 계약, today the old 보유 포지션 list as it was. */
+/** The account line's id on MY: the '매도' it turns off point at it (D13). */
+const PORTFOLIO_ACCOUNT_LINE_ID = 'portfolio-account-blocked';
+
+/**
+ * D13 on MY (#67, ADR-0142): whether MY's account may order, for the holdings' '매도' — off while
+ * `me` or its restriction has not answered, so it never flashes on — and the element that says why.
+ * `describedBy` is the caller's: the tab draws the account line, the summary its banner.
+ */
+export function useSellAccount(
+  describedBy: (account: SellAccount['account']) => string | undefined,
+) {
+  const me = useMe();
+  const block = useAccountBlock(me.data);
+  const sellAccount: SellAccount = {
+    account: block.account,
+    accountKnown: me.data !== undefined && block.restrictionSettled,
+    describedBy: describedBy(block.account),
+  };
+  return { ...block, sellAccount };
+}
+
+/**
+ * `/my/positions`: 보유 계약 (#67, ADR-0142) — 잔고 요약 above the list as on `/my` (ADR-0135 결과
+ * 4), D13's account line once, then every market held at 1 contract or more.
+ */
 export function MyPositions() {
   const ended = useSessionEnded();
-  const holdings = useHoldings();
+  const accountId = useMe().data?.id;
+  const holdings = useHoldings(accountId);
+  // The line is drawn for a blocked account alone: before that, nothing to point at.
+  const block = useSellAccount((account) =>
+    account === null ? undefined : PORTFOLIO_ACCOUNT_LINE_ID,
+  );
   if (ended) return <SessionEnded />;
   return (
-    <Section title={copy.myPositions} testId="portfolio-positions">
-      <PositionsBody holdings={holdings} />
-    </Section>
+    <Stack gap="6">
+      <BalanceSummary holdings={holdings} />
+      <Section title={copy.myPositions} testId="portfolio-positions">
+        {accountId === undefined ? (
+          <ProfileUnavailable height="24" />
+        ) : (
+          <Stack gap="4">
+            <AccountBlockLine
+              id={PORTFOLIO_ACCOUNT_LINE_ID}
+              account={block.account}
+              restrictionEndsAt={block.restrictionEndsAt}
+              testId="portfolio-account-blocked"
+            />
+            <PositionsBody holdings={holdings} sellAccount={block.sellAccount} />
+          </Stack>
+        )}
+      </Section>
+    </Stack>
   );
 }
 
@@ -272,13 +337,18 @@ export function MyOrderDetail({ orderId }: { orderId: string }) {
 /** `/my/history`: 거래·정산 이력, the old 정산 이력 and the rest of the old 주문 이력. */
 export function MyHistory() {
   const ended = useSessionEnded();
-  const settled = usePositions('settled');
+  const accountId = useMe().data?.id;
+  const settled = usePositions('settled', accountId);
   const orders = useOrders();
   if (ended) return <SessionEnded />;
   return (
     <Stack gap="6">
       <Section title={copy.portfolioSettled} testId="portfolio-settled">
-        <SettledBody settled={settled} />
+        {accountId === undefined ? (
+          <ProfileUnavailable height="24" />
+        ) : (
+          <SettledBody settled={settled} />
+        )}
       </Section>
       <Section title={copy.portfolioOrders} testId="my-order-history">
         <OrdersBody orders={orders} kind="history" />
@@ -288,20 +358,18 @@ export function MyHistory() {
 }
 
 /**
- * 잔고 요약: the balance, and the totals over the holdings.
+ * 잔고 요약: 가용 코인 and 주문 잠금 코인 (H6), and the totals over the holdings — 총 참고 평가, 총
+ * 미실현 손익, 총 실현 손익 (ADR-0135 결과 4) and no 총 자산 line (F5). `/my` and `/my/positions`
+ * draw it once each, the same.
  *
- * 총 평가 금액/평가손익 come from the open holdings alone — settlement writes no price, so a
+ * 총 참고 평가/미실현 손익 come from the open holdings alone — settlement writes no price, so a
  * settled market's `lastPrice` is the last price something traded at, not the 100/0 it resolved
- * to, and marking those rows to it would be fiction. 총 실현 손익 spans BOTH lists, because
- * selling books the profit where the row already is (`realizedPnlAcross`).
+ * to, and marking those rows to it would be fiction. 총 실현 손익 is 실현 + 정산 (결정 4) and spans
+ * BOTH lists, because selling books the profit where the row already is (`realizedPnlAcross`).
+ * Every open row counts, a sold-out one too (`markedAll`): the screen draws only the held ones
+ * (F4), and a drawn row's 참고 평가 adds up to the total because a sold-out row's is 0.
  */
-export function BalanceSummary({
-  holdings,
-  settled,
-}: {
-  holdings: Holdings;
-  settled: SettledList;
-}) {
+export function BalanceSummary({ holdings }: { holdings: Holdings }) {
   const me = useMe();
   const balanceView = profileView({
     isLoggedIn: me.isLoggedIn,
@@ -309,10 +377,12 @@ export function BalanceSummary({
     isFetching: me.isFetching,
     hasProfile: me.data !== undefined,
   });
-  const { open } = holdings;
-  const openTotals = portfolioTotals(holdings.positions);
+  const { open, settled } = holdings;
+  const openTotals = portfolioTotals(holdings.markedAll);
   const settledTotals = portfolioTotals(settled.data);
-  const realizedState = combinedListState(listState(open), listState(settled));
+  // Both lists, and neither behind the other nor stale (`realizedPnlState`): a settlement read
+  // open-first drops the row from both for a moment, and a failed refetch would keep it dropped.
+  const realizedState = realizedPnlState(open, settled);
 
   return (
     <Section title={copy.portfolioBalance} testId="portfolio-balance">
@@ -356,6 +426,10 @@ export function BalanceSummary({
               label={copy.portfolioRealizedPnl}
               state={realizedState}
               testId="portfolio-realized"
+              onRetry={() => {
+                void open.refetch();
+                void settled.refetch();
+              }}
             >
               <Signed amount={realizedPnlAcross(openTotals, settledTotals)} />
             </Total>
@@ -367,15 +441,27 @@ export function BalanceSummary({
 }
 
 /**
- * 보유 계약's list. `stale` is the state the ladder used to fold into `ready`: a refetch that
- * fails after the rows exist keeps them and reports `isRefetchError`, and on THIS list that
- * silence has a shape — a settlement asks for both lists (`applyPositionEvent` answers `refetch`
- * when a row must MOVE), so a failed refresh leaves the holding here, out of 정산 이력, and inside
- * 총 평가 금액 where it no longer belongs. The rows stay on screen and the notice says so; see
- * `listView`.
+ * 보유 계약's list (#67, ADR-0142): the markets held at 1 contract or more, each a group of its
+ * held contracts (`HoldingMarketGroup`), the latest change first — `limit` groups on `/my`. A
+ * sold-out contract is not here (F4): its 실현 손익 is in 총 실현 손익. So an account that has
+ * traded and holds nothing says '보유한 계약이 없습니다.'.
+ *
+ * `stale` is the state the ladder used to fold into `ready`: a refetch that fails after the rows
+ * exist keeps them and reports `isRefetchError`, and on THIS list that silence has a shape — a
+ * settlement asks for both lists (`applyPositionEvent` answers `refetch` when a row must MOVE), so
+ * a failed refresh leaves the holding here, out of 정산 이력, and inside 총 참고 평가 where it no
+ * longer belongs. The rows stay on screen and the notice says so; see `listView`.
  */
-export function PositionsBody({ holdings, limit }: { holdings: Holdings; limit?: number }) {
-  const { open, positions } = holdings;
+export function PositionsBody({
+  holdings,
+  sellAccount,
+  limit,
+}: {
+  holdings: Holdings;
+  sellAccount: SellAccount;
+  limit?: number;
+}) {
+  const { open, groups } = holdings;
   const openView = listView(open);
   return (
     <>
@@ -409,7 +495,7 @@ export function PositionsBody({ holdings, limit }: { holdings: Holdings; limit?:
         <Skeleton height="24" />
       ) : openView === 'failed' ? (
         <LoadFailed message={copy.errUnknown} onRetry={() => void open.refetch()} />
-      ) : positions.length === 0 ? (
+      ) : groups.length === 0 ? (
         <EmptyState
           message={copy.portfolioPositionsEmpty}
           action={
@@ -419,12 +505,20 @@ export function PositionsBody({ holdings, limit }: { holdings: Holdings; limit?:
           }
         />
       ) : (
-        <Stack gap="2">
-          {positions.slice(0, limit).map((row) => (
-            <OpenPositionRow
-              key={`${row.marketId}-${row.outcome}`}
-              position={row}
-              display={holdings.display.get(row.marketId) ?? NO_HOLDING_DISPLAY}
+        <Stack gap="3">
+          {groups.slice(0, limit).map((group) => (
+            <HoldingMarketGroup
+              key={group.marketId}
+              group={group}
+              display={holdings.display.get(group.marketId) ?? NO_HOLDING_DISPLAY}
+              sellables={(outcome) => {
+                const row = group.rows.find((r) => r.outcome === outcome);
+                return holdings.sellable.reading(group.marketId, outcome, row?.qty ?? 0);
+              }}
+              onRetrySellable={() => {
+                holdings.sellable.retry(group.marketId);
+              }}
+              sellAccount={sellAccount}
             />
           ))}
         </Stack>
@@ -434,7 +528,7 @@ export function PositionsBody({ holdings, limit }: { holdings: Holdings; limit?:
 }
 
 /** 정산 이력's list, with the same `stale` notice for the same reason (see `PositionsBody`). */
-export function SettledBody({ settled, limit }: { settled: SettledList; limit?: number }) {
+export function SettledBody({ settled, limit }: { settled: Holdings['settled']; limit?: number }) {
   const settledView = listView(settled);
   const rows = settled.data ?? [];
   return (
@@ -468,8 +562,8 @@ export function SettledBody({ settled, limit }: { settled: SettledList; limit?: 
 }
 
 /**
- * One side of the old 주문 이력: `pending` is 대기 주문 (`isPendingOrder`), `history` every
- * other state.
+ * One side of the old 주문 이력: `pending` is 대기 주문 (`isLiveOrderStatus`, the shared live
+ * statuses since #67), `history` every other state.
  *
  * Both read the ONE `GET /me/orders` list and split it here — the route's `state` filter (#119)
  * waits for the tabs' own issues: a page can hold none of one side's rows while older pages still
@@ -495,7 +589,7 @@ export function OrdersBody({
   limit?: number;
 }) {
   const all = orders.data?.pages.flatMap((page) => page.items) ?? [];
-  const rows = all.filter((order) => isPendingOrder(order.status) === (kind === 'pending'));
+  const rows = all.filter((order) => isLiveOrderStatus(order.status) === (kind === 'pending'));
   const section = listSection(orders, rows.length);
   const testId = kind === 'pending' ? 'my-orders' : 'my-order-history';
   const more = showMoreOrders(orders.hasNextPage, rows.length, limit) && (
@@ -575,70 +669,6 @@ function OrderHistoryEmpty({ pendingOnly }: { pendingOnly: boolean }) {
         </Text>
       }
     />
-  );
-}
-
-/** A holding's status displays, from its market's live row (`useHoldings`). */
-type HoldingDisplay = Pick<Market, 'judgementDelayed' | 'disputeUnderReview'>;
-
-/** A market with no live row yet: its holding reads its status alone. */
-const NO_HOLDING_DISPLAY: HoldingDisplay = { judgementDelayed: false, disputeUnderReview: false };
-
-/**
- * 보유 계약 한 줄. Every figure is the shared arithmetic, and the market's own status rides
- * along whenever it is no longer `open`: a holding in a 마감 or 결과 확인 중 market cannot be
- * traded out of, and the row is the only place that says so.
- */
-function OpenPositionRow({
-  position,
-  display,
-}: {
-  position: Position;
-  /** The live market row's '판정 지연' and '이의 검토 중' (`useHoldings`), for the status badge. */
-  display: HoldingDisplay;
-}) {
-  const yes = position.outcome === 'YES';
-  const average = averageCostCoin(position);
-  // All three `undefined` together, for a market with no fill to mark to (체결 없음, N02 §5).
-  const mark = markPriceCoin(position);
-  const value = positionValueCoin(position);
-  const unrealized = unrealizedPnlCoin(position);
-  return (
-    <Stack
-      gap="2"
-      borderWidth="1px"
-      borderRadius="l2"
-      p="3"
-      data-testid={`portfolio-position-${position.marketId}-${position.outcome}`}
-    >
-      <HStack gap="2" flexWrap="wrap">
-        <MarketLink slug={position.marketSlug} title={position.marketTitle} />
-        <Badge colorPalette={yes ? 'yes' : 'no'} variant="subtle">
-          {yes ? copy.yes : copy.no}
-        </Badge>
-        {position.marketStatus !== 'open' && (
-          <Badge colorPalette={MARKET_STATUS_PALETTE[position.marketStatus]} variant="subtle">
-            {marketStatusLabel({ status: position.marketStatus, ...display })}
-          </Badge>
-        )}
-      </HStack>
-      <DataList.Root orientation="horizontal" size="sm">
-        <Item label={copy.positionQty}>{formatContracts(position.qty)}</Item>
-        {/* A row sold out of keeps its realised PnL visible at qty 0, and then has no average. */}
-        <Item label={copy.positionAvgPrice}>
-          {average === undefined ? EMPTY : <CoinText amount={average} />}
-        </Item>
-        <Item label={copy.positionCurrentPrice}>
-          {mark === undefined ? copy.noFills : <CoinText amount={mark} />}
-        </Item>
-        <Item label={copy.positionValue}>
-          {value === undefined ? EMPTY : <CoinText amount={value} />}
-        </Item>
-        <Item label={copy.positionPnl}>
-          {unrealized === undefined ? EMPTY : <Signed amount={unrealized} />}
-        </Item>
-      </DataList.Root>
-    </Stack>
   );
 }
 
@@ -843,16 +873,20 @@ export function LoadFailed({ message, onRetry }: { message: string; onRetry: () 
  * A summary figure that depends on a list the balance card does not own: a skeleton while that
  * list loads, and a dash if it failed. Never a 0 Coin — the section below already carries the error
  * and its 다시 시도, and a zero here would read as "you hold nothing" instead of "not known".
+ * `onRetry` puts a 다시 시도 beside the dash, for a figure whose list no section on the screen
+ * reports on — 총 실현 손익 reads 정산 이력, which `/my/positions` does not draw.
  */
 function Total({
   label,
   state,
   testId,
+  onRetry,
   children,
 }: {
   label: string;
   state: ListState;
   testId: string;
+  onRetry?: () => void;
   children: ReactNode;
 }) {
   return (
@@ -861,8 +895,15 @@ function Total({
         children
       ) : state === 'pending' ? (
         <Skeleton height="5" width="20" />
-      ) : (
+      ) : onRetry === undefined ? (
         EMPTY
+      ) : (
+        <HStack gap="2">
+          <Text as="span">{EMPTY}</Text>
+          <Button size="2xs" variant="outline" onClick={onRetry} data-testid={`${testId}-retry`}>
+            {copy.retry}
+          </Button>
+        </HStack>
       )}
     </Item>
   );

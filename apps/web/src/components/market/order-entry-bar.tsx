@@ -63,6 +63,9 @@ export function OrderEntryBar() {
       // The pressed contract is also the dialog's trigger value, so the trigger zag gives the
       // focus back to is the one that was pressed — a restored input's contract too (D4).
       triggerValue={sheet.contract}
+      // A holding's '매도' that opened it (#67, ADR-0142): the focus goes back to that button. None
+      // for the bar's own triggers, whose return is the trigger value's above.
+      finalFocusEl={panel.sheetFinalFocus}
       onOpenChange={(details) => {
         if (!details.open) panel.closeSheet();
       }}

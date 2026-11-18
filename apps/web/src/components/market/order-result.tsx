@@ -16,6 +16,7 @@ import {
 import { formatCoin, parseCoinAmount } from '@buddha/shared';
 import NextLink from 'next/link';
 import { useEffect, useId, useRef } from 'react';
+import { RestrictedText } from '@/components/position/account-block-line';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { type Order, type PlaceOrderBody } from '@/lib/api';
@@ -38,7 +39,6 @@ import {
   insufficientContractsLine,
   orderStatusLabel,
   rejectReasonText,
-  restrictedLineParts,
 } from '@/lib/order-reasons';
 import { useOrderPanel } from './order-panel-provider';
 
@@ -76,23 +76,6 @@ function RequestSummary({ request }: { request: PendingOrderRequest }) {
     <Text fontSize="sm" color="fg.muted" data-testid="order-request-summary">
       {requestSummary(request.body)}
     </Text>
-  );
-}
-
-/**
- * D13's restriction line with its end unbroken: '(2026. 11. 23. 오후 12:35까지)' never splits
- * between the year and the month (ADR-0140 결정 2-23). The order panel's account line too.
- */
-export function RestrictedText({ endsAtText }: { endsAtText: string | null }) {
-  const [head, end, tail] = restrictedLineParts(endsAtText);
-  return (
-    <>
-      {head}
-      <Text as="span" whiteSpace="nowrap">
-        {end}
-      </Text>
-      {tail}
-    </>
   );
 }
 

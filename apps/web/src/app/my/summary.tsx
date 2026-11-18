@@ -5,10 +5,11 @@ import { parseCoinAmount } from '@buddha/shared';
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { SanctionBanner, WarningBanner } from '@/components/moderation/sanction-banner';
+import { AccountBlockLine } from '@/components/position/account-block-line';
 import { CoinText } from '@/components/ui/coin-text';
 import { copy } from '@/copy';
 import { useMe } from '@/hooks/use-me';
-import { useOrders, usePositions } from '@/hooks/use-portfolio';
+import { useOrders } from '@/hooks/use-portfolio';
 import { useLedger } from '@/hooks/use-wallet';
 import { useWatchlist } from '@/hooks/use-watchlist';
 import { MY_PREVIEW_ROWS, MY_TABS, MY_WALLET_PATH, type MyTabKey } from '@/lib/my';
@@ -25,13 +26,20 @@ import {
   SessionEnded,
   SettledBody,
   useHoldings,
+  useSellAccount,
   useSessionEnded,
 } from './portfolio';
 import { MyAuthoredPreview } from './posts/my-authored';
 import { MyProposalsPreview } from './proposals/my-proposals';
 import { LedgerRow } from './wallet/ledger-list';
 import { StartGrantPendingNotice } from './wallet/start-grant-notice';
+import { ProfileUnavailable } from './settings/profile-unavailable';
 import { WatchlistBody } from './watchlist/watchlist';
+
+/** The summary's account restriction banner: the holdings' '매도' point at it (D13, #67). */
+const SUMMARY_SANCTION_ID = 'my-sanction-banner';
+/** An admin's account line above the holdings' preview (D13, #67). */
+const SUMMARY_ACCOUNT_LINE_ID = 'my-preview-positions-account-blocked';
 
 function tab(key: MyTabKey) {
   const found = MY_TABS.find((item) => item.key === key);
@@ -51,7 +59,11 @@ function tab(key: MyTabKey) {
  * the tab bar's previews, its newest proposals with 전체 보기 to `/my/proposals`.
  *
  * The holdings, 정산 이력 and the orders are read once here and handed to every card that shows
- * them, so the summary card and the previews are drawn from one price and one list.
+ * them, so the summary card and the previews are drawn from one price and one list. The holdings'
+ * preview is the first `MY_PREVIEW_ROWS` market groups (up to six contract rows, #67, ADR-0142),
+ * and only those read their 매도 가능액. D13 says why their '매도' is off where the summary
+ * already does: the account restriction's banner above, which the buttons point at; an admin,
+ * who has no banner, gets the account line above the preview.
  *
  * Above them, the way to the member's own public profile (`ViewOwnProfileLink`, owner decision
  * 2026-10-21 answer 7), as from MY 설정's 프로필 card — and above that, while a writing or an
@@ -63,9 +75,16 @@ function tab(key: MyTabKey) {
 export function MySummary() {
   const ended = useSessionEnded();
   const me = useMe();
-  const holdings = useHoldings();
-  const settled = usePositions('settled');
+  const holdings = useHoldings(me.data?.id, MY_PREVIEW_ROWS);
   const orders = useOrders();
+  const block = useSellAccount((account) =>
+    account === 'restricted'
+      ? SUMMARY_SANCTION_ID
+      : account === 'admin'
+        ? SUMMARY_ACCOUNT_LINE_ID
+        : undefined,
+  );
+  const settled = holdings.settled;
   if (ended) return <SessionEnded />;
 
   const positions = tab('positions');
@@ -73,12 +92,31 @@ export function MySummary() {
   const history = tab('history');
   return (
     <Stack gap="6">
-      <SanctionBanner testId="my-sanction-banner" />
+      <SanctionBanner testId="my-sanction-banner" id={SUMMARY_SANCTION_ID} />
       <WarningBanner testId="my-warning-banner" />
       <ViewOwnProfileLink />
-      <BalanceSummary holdings={holdings} settled={settled} />
+      <BalanceSummary holdings={holdings} />
       <Section title={positions.label} testId="my-preview-positions" href={positions.href}>
-        <PositionsBody holdings={holdings} limit={MY_PREVIEW_ROWS} />
+        {me.data === undefined ? (
+          <ProfileUnavailable height="24" />
+        ) : (
+          <Stack gap="4">
+            {/* An admin only: a restriction is the banner's to say (ADR-0142, R14). */}
+            {block.account === 'admin' && (
+              <AccountBlockLine
+                id={SUMMARY_ACCOUNT_LINE_ID}
+                account={block.account}
+                restrictionEndsAt={null}
+                testId="portfolio-account-blocked"
+              />
+            )}
+            <PositionsBody
+              holdings={holdings}
+              sellAccount={block.sellAccount}
+              limit={MY_PREVIEW_ROWS}
+            />
+          </Stack>
+        )}
       </Section>
       <Section title={pending.label} testId="my-preview-orders" href={pending.href}>
         {/* The tab's live list under the same key, its first rows (#123, ADR-0141). */}
@@ -94,7 +132,11 @@ export function MySummary() {
             <Heading as="h4" size="sm">
               {copy.portfolioSettled}
             </Heading>
-            <SettledBody settled={settled} limit={MY_PREVIEW_ROWS} />
+            {me.data === undefined ? (
+              <ProfileUnavailable height="24" />
+            ) : (
+              <SettledBody settled={settled} limit={MY_PREVIEW_ROWS} />
+            )}
           </Stack>
           <Stack gap="3">
             <Heading as="h4" size="sm">

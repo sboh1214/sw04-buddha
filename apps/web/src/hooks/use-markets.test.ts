@@ -36,6 +36,8 @@ import { getQueryClient, restartQueries } from '@/lib/query-client';
 import { handleMarketStats } from '@/lib/market-stats-event';
 import { LIVE_REFRESH_MS } from '@/lib/ticks';
 import {
+  holdingMarketQueryOptions,
+  holdingMarketRefetchOnFocus,
   marketQueryOptions,
   marketSearchInfiniteQueryOptions,
   marketsInfiniteQueryOptions,
@@ -892,6 +894,66 @@ describe('marketQueryOptions', () => {
       focusManager.setFocused(undefined);
       vi.useRealTimers();
       queryClient.clear();
+    }
+  });
+});
+
+/**
+ * MY's holdings read the detail's entry with two observer options of their own (#67, ADR-0142
+ * 결정 2-22): no settlement poll, and a focus re-read only where a label moves with time.
+ */
+describe('holdingMarketQueryOptions', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('is the detail’s entry and request', async () => {
+    const holding = holdingMarketQueryOptions(ID.toUpperCase());
+    expect(holding.queryKey).toEqual(marketQueryOptions(ID).queryKey);
+    const spy = vi.spyOn(api, 'GET').mockResolvedValue({
+      data: { data: detail },
+      response: new Response(null, { status: 200 }),
+    } as never);
+    expect(await holding.queryFn()).toEqual(detail);
+    expect(await marketQueryOptions(ID).queryFn()).toEqual(detail);
+    expect(spy.mock.calls[0]).toEqual(spy.mock.calls[1]);
+    expect(spy.mock.calls[0]).toEqual([
+      '/api/v1/markets/{idOrSlug}',
+      { params: { path: { idOrSlug: ID } } },
+    ]);
+  });
+
+  it('never polls, the detail still does while a payout is pending', () => {
+    expect(holdingMarketQueryOptions(ID).refetchInterval).toBe(false);
+    for (const status of ['resolved', 'settling'] as const) {
+      expect(
+        marketQueryOptions(ID).refetchInterval({ state: { data: { ...detail, status } } }),
+      ).toBe(5_000);
+    }
+    // The detail keeps the client's focus re-read: no option of its own.
+    expect('refetchOnWindowFocus' in marketQueryOptions(ID)).toBe(false);
+    expect(holdingMarketQueryOptions(ID).refetchOnWindowFocus).toBe(holdingMarketRefetchOnFocus);
+  });
+
+  it('re-reads on focus a missing or failed row, and a 거래 마감 or 잠정 결과 one only', () => {
+    const focus = (data: Market | undefined, status = data === undefined ? 'pending' : 'success') =>
+      holdingMarketRefetchOnFocus({ state: { data, status } });
+    expect(focus(undefined)).toBe(true);
+    expect(focus(undefined, 'error')).toBe(true);
+    expect(focus({ ...detail, status: 'open' }, 'error')).toBe(true);
+    for (const status of ['closed', 'provisional'] as const) {
+      expect(focus({ ...detail, status }), status).toBe(true);
+    }
+    for (const status of [
+      'scheduled',
+      'open',
+      'paused',
+      'resolved',
+      'settling',
+      'settled',
+      'cancelled',
+    ] as const) {
+      expect(focus({ ...detail, status }), status).toBe(false);
     }
   });
 });

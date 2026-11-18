@@ -14,10 +14,14 @@ import { describe, expect, it } from 'vitest';
 import { type Order, type Position } from '@/lib/api';
 import { ORDERS_KEY, POSITIONS_KEY } from '@/lib/market-keys';
 import { applyPositionEvent } from '@/lib/market-live';
+import { positionFixture } from '@/test/positions';
 import {
+  type LiveMarketReading,
   type OrdersPage,
-  averageCostCoin,
+  averageCostBp,
   combinedListState,
+  dedupeAcrossLists,
+  heldGroups,
   holdingDisplay,
   listState,
   liveMarketStatus,
@@ -32,30 +36,16 @@ import {
   positionsKey,
   positionsQueryOptions,
   realizedPnlAcross,
+  realizedPnlState,
   unrealizedPnlCoin,
 } from './use-portfolio';
 
 /** Whatever better-auth hands back; only "is it there" is read. */
 const SESSION = { user: { id: 'a1e1c0de-0000-4000-8000-000000000001' } };
+/** The account MY shows (`Me`'s id), which keys its holdings (#67, ADR-0142). */
+const ACCOUNT = 'a1e1c0de-0000-4000-8000-000000000001';
 
-function position(overrides: Partial<Position> = {}): Position {
-  return {
-    marketId: '3f2504e0-4f89-11d3-9a0c-0305e82c3301',
-    marketSlug: 'rate-cut-2026',
-    marketTitle: '기준금리 인하?',
-    marketStatus: 'open',
-    marketLastPrice: 63,
-    resolvedResult: null,
-    outcome: 'YES',
-    qty: 100,
-    costBasisCoin: '5000',
-    realizedPnlCoin: '0',
-    settled: false,
-    version: 1,
-    updatedAt: '2026-09-07T00:00:00.000Z',
-    ...overrides,
-  };
-}
+const position = positionFixture;
 
 function order(id: string, overrides: Partial<Order> = {}): Order {
   return {
@@ -147,7 +137,7 @@ describe('markPriceCoin / positionValueCoin / unrealizedPnlCoin', () => {
 
     expect(positionValueCoin(sold)).toBe(0n);
     expect(unrealizedPnlCoin(sold)).toBe(0n);
-    expect(averageCostCoin(sold)).toBeUndefined();
+    expect(averageCostBp(sold)).toBeUndefined();
   });
 
   it('renders a loss with the typographic minus sign, not an ASCII hyphen', () => {
@@ -219,13 +209,51 @@ describe('a market with no fill (체결 없음)', () => {
   });
 });
 
-describe('averageCostCoin', () => {
-  it('rounds half-up in bigint, the way applySell releases cost', () => {
-    // 100 / 3 = 33.33 → 33; 101 / 2 = 50.5 → 51. Both round the same way the API does, so the
-    // 평단 on screen and the cost a sell releases can never drift apart by a Coin.
-    expect(averageCostCoin(position({ qty: 3, costBasisCoin: '100' }))).toBe(33n);
-    expect(averageCostCoin(position({ qty: 2, costBasisCoin: '101' }))).toBe(51n);
-    expect(averageCostCoin(position({ qty: 100, costBasisCoin: '5000' }))).toBe(50n);
+describe('averageCostBp', () => {
+  it('reads to two decimals, half-up in bigint, and has none for nothing held', () => {
+    // 100 / 3 = 33.333… → 33.33 Coin (ADR-0135 결과 4: 소수 둘째 자리), where a whole-Coin average
+    // said 33. 101 / 2 = 50.50; 5000 / 100 = 50.00.
+    expect(averageCostBp(position({ qty: 3, costBasisCoin: '100' }))).toBe(3333);
+    expect(averageCostBp(position({ qty: 2, costBasisCoin: '101' }))).toBe(5050);
+    expect(averageCostBp(position({ qty: 100, costBasisCoin: '5000' }))).toBe(5000);
+    expect(averageCostBp(position({ qty: 0, costBasisCoin: '0' }))).toBeUndefined();
+  });
+
+  it('rounds half-up at the boundary: x.xx5 goes up, below it stays', () => {
+    // 2 / 3 = 0.6666… → 0.67; 1 / 8 = 0.125 → 0.13 (half-up); 1 / 3 = 0.3333… → 0.33.
+    expect(averageCostBp(position({ qty: 3, costBasisCoin: '2' }))).toBe(67);
+    expect(averageCostBp(position({ qty: 8, costBasisCoin: '1' }))).toBe(13);
+    expect(averageCostBp(position({ qty: 3, costBasisCoin: '1' }))).toBe(33);
+  });
+
+  it('moves inside a Coin after a partial sell, and never reaches a PnL (33.33 → 33.50)', () => {
+    // N02 §8 and ADR-0135 결과 4: bought 1 each at 33, 33 and 34 — cost 100, average 33.33. A sell
+    // of one at 45 releases the average cost in whole Coin (`applySell`): 100 / 3 → 33, so 67 is
+    // left on two contracts, an average of 33.50, and 45 − 33 = 12 is realised.
+    const before = position({ qty: 3, costBasisCoin: '100', marketLastPrice: 45 });
+    const after = position({
+      qty: 2,
+      costBasisCoin: '67',
+      realizedPnlCoin: '12',
+      marketLastPrice: 45,
+    });
+    expect(averageCostBp(before)).toBe(3333);
+    expect(averageCostBp(after)).toBe(3350);
+    // 미실현 손익 is 참고 평가 − 잔여 원가 (F1), never average × qty: 90 − 67 = 23.
+    expect(unrealizedPnlCoin(after)).toBe(23n);
+    // Sold out at 50 later, 실현 is Σ received − Σ cost, 45 + 50 + 50 − 100 = 45, whatever the
+    // average said on the way: the server's accounting (`applySell`, packages/shared
+    // accounting.test.ts, #119) — the screen only reads it. A sold-out row has no average, and the
+    // card's total counts its 실현 with nothing to value.
+    const soldOut = position({ qty: 0, costBasisCoin: '0', realizedPnlCoin: '45' });
+    expect(averageCostBp(soldOut)).toBeUndefined();
+    const soldNo = position({ outcome: 'NO', qty: 0, costBasisCoin: '0', realizedPnlCoin: '-5' });
+    expect(portfolioTotals([soldOut, soldNo])).toEqual({
+      valueCoin: 0n,
+      costBasisCoin: 0n,
+      unrealizedPnlCoin: 0n,
+      realizedPnlCoin: 40n,
+    });
   });
 });
 
@@ -357,54 +385,250 @@ describe('holdingDisplay', () => {
   });
 });
 
+/** A live `['market', id]` row's reading, the position fixture's market unless overridden. */
+function liveRow(overrides: Partial<LiveMarketReading> = {}): LiveMarketReading {
+  return {
+    lastPrice: 63,
+    lastFillAt: '2026-09-06T23:00:00.000Z',
+    tradeCount: 5,
+    status: 'open',
+    statusEventId: '10',
+    ...overrides,
+  };
+}
+
 describe('markToLiveMarket', () => {
-  it('marks the row to the price the market cache holds, not the one the list was fetched at', () => {
+  it('marks the row to the live price and its time, which a later fill count carries', () => {
     // `marketLastPrice` is a join taken when the list was fetched and nothing refreshes it on
     // somebody else's trade — that arrives as a `market:tick` on the market cache instead.
-    const row = position({ marketLastPrice: 50 });
-    expect(markToLiveMarket(row, { lastPrice: 63 }).marketLastPrice).toBe(63);
-    expect(unrealizedPnlCoin(markToLiveMarket(row, { lastPrice: 63 }))).toBe(63n * 100n - 5_000n);
+    const row = position({ marketLastPrice: 50, marketTradeCount: 5 });
+    const live = liveRow({ lastPrice: 63, lastFillAt: '2026-09-07T01:00:00.000Z', tradeCount: 6 });
+    const marked = markToLiveMarket(row, live);
+    expect(marked.marketLastPrice).toBe(63);
+    expect(marked.marketLastFillAt).toBe('2026-09-07T01:00:00.000Z');
+    expect(marked.marketTradeCount).toBe(6);
+    expect(unrealizedPnlCoin(marked)).toBe(63n * 100n - 5_000n);
+  });
+
+  it('takes the live pair on an equal fill count too', () => {
+    const row = position({ marketLastPrice: 50, marketTradeCount: 5 });
+    const marked = markToLiveMarket(row, liveRow({ lastPrice: 52, tradeCount: 5 }));
+    expect(marked.marketLastPrice).toBe(52);
+  });
+
+  it('keeps the holding’s price when the live row was read before its fills (M1, A-M4-33)', () => {
+    // A live row read before the first fill says 체결 없음; the positions list read after the
+    // fills says 33 at its time. The count orders them: the live row is behind, so the holding is
+    // never covered with '체결 없음', and the time stays the 33's.
+    const row = position({
+      marketLastPrice: 33,
+      marketLastFillAt: '2026-09-07T01:00:00.000Z',
+      marketTradeCount: 2,
+    });
+    const before = liveRow({ lastPrice: null, lastFillAt: null, tradeCount: 0 });
+    expect(markToLiveMarket(row, before)).toBe(row);
+    expect(positionValueCoin(markToLiveMarket(row, before))).toBe(3300n);
+  });
+
+  it('never mixes one reading’s price with the other’s time', () => {
+    const row = position({
+      marketLastPrice: 40,
+      marketLastFillAt: '2026-09-07T01:00:00.000Z',
+      marketTradeCount: 3,
+    });
+    const behind = markToLiveMarket(
+      row,
+      liveRow({ lastPrice: 70, lastFillAt: '2026-09-07T00:00:00.000Z', tradeCount: 2 }),
+    );
+    expect([behind.marketLastPrice, behind.marketLastFillAt]).toEqual([
+      40,
+      '2026-09-07T01:00:00.000Z',
+    ]);
+    const ahead = markToLiveMarket(
+      row,
+      liveRow({ lastPrice: 70, lastFillAt: '2026-09-07T02:00:00.000Z', tradeCount: 4 }),
+    );
+    expect([ahead.marketLastPrice, ahead.marketLastFillAt]).toEqual([
+      70,
+      '2026-09-07T02:00:00.000Z',
+    ]);
   });
 
   it('marks the STATUS too, which no user event ever moves', () => {
-    // A transition publishes `market:status` and nothing else — no `user:position` — so a
-    // holding in a market that has just closed kept announcing 거래 중 until an unrelated
-    // positions refetch. Refetching the lists on that event would be two private requests per
-    // signed-in tab to move one denormalized enum.
-    const row = position({ marketStatus: 'open' });
-    expect(markToLiveMarket(row, { status: 'closed' }).marketStatus).toBe('closed');
-    expect(markToLiveMarket(row, { status: 'closed' }).marketLastPrice).toBe(row.marketLastPrice);
+    // A transition publishes `market:status` and nothing else — no `user:position`.
+    const row = position({ marketStatus: 'open', marketStatusEventId: '10' });
+    const closed = markToLiveMarket(row, liveRow({ status: 'closed', statusEventId: '11' }));
+    expect(closed.marketStatus).toBe('closed');
+    expect(closed.marketLastPrice).toBe(row.marketLastPrice);
   });
 
-  it('runs the status through `liveMarketStatus` rather than a `??`, wiring included', () => {
-    // The guard has to be reached THROUGH this function, not merely exist beside it: a row the
-    // list fetched as 마감 must survive a `['market', id]` entry left at 거래 중 by a failed
-    // refetch, and an open holding must not be badged with a terminal status while it is still
-    // valued at the last traded price. Both are `markToLiveMarket`'s callers' actual arguments (portfolio.tsx).
-    const closed = position({ marketStatus: 'closed', marketLastPrice: 50 });
-    expect(markToLiveMarket(closed, { status: 'open', lastPrice: 50 })).toBe(closed);
-    const open = position({ marketStatus: 'open', marketLastPrice: 50 });
-    expect(markToLiveMarket(open, { status: 'cancelled', lastPrice: 50 })).toBe(open);
-    expect(markToLiveMarket(open, { status: 'settled', lastPrice: 50 })).toBe(open);
-    // And the one way back a holding goes, through the same wiring: resumed after the list read.
-    const paused = position({ marketStatus: 'paused', marketLastPrice: 50 });
-    expect(markToLiveMarket(paused, { status: 'open', lastPrice: 50 }).marketStatus).toBe('open');
+  it('orders the status on the two transition keys when both rows have one', () => {
+    // The live row's key behind the holding's: an older reading, refused — OPEN ↔ PAUSED included,
+    // which the value alone cannot order.
+    const paused = position({ marketStatus: 'paused', marketStatusEventId: '12' });
+    expect(markToLiveMarket(paused, liveRow({ status: 'open', statusEventId: '11' }))).toBe(paused);
+    expect(
+      markToLiveMarket(paused, liveRow({ status: 'open', statusEventId: '13' })).marketStatus,
+    ).toBe('open');
+    const open = position({ marketStatus: 'open', marketStatusEventId: '13' });
+    expect(markToLiveMarket(open, liveRow({ status: 'paused', statusEventId: '12' }))).toBe(open);
   });
 
-  it('takes the live row saying 체결 없음 as it is, and only an absent row as no reading', () => {
-    // `null` is the market cache SAYING there is no fill; `undefined` is no cache entry at all.
-    const row = position({ marketLastPrice: null });
-    expect(markToLiveMarket(row, { lastPrice: null })).toBe(row);
-    expect(markToLiveMarket(row, { lastPrice: 63 }).marketLastPrice).toBe(63);
-    expect(markToLiveMarket(position({ marketLastPrice: 63 }), {}).marketLastPrice).toBe(63);
+  it('falls back to the value order without a key, and refuses a status that moves lists', () => {
+    const closed = position({ marketStatus: 'closed', marketStatusEventId: null });
+    expect(markToLiveMarket(closed, liveRow({ status: 'open', statusEventId: null }))).toBe(closed);
+    const paused = position({ marketStatus: 'paused', marketStatusEventId: null });
+    expect(
+      markToLiveMarket(paused, liveRow({ status: 'open', statusEventId: '1' })).marketStatus,
+    ).toBe('open');
+    // With keys or without, 지급 완료 and 취소 move the row to the other list: the REST answer's.
+    const open = position({ marketStatus: 'open', marketStatusEventId: '10' });
+    expect(markToLiveMarket(open, liveRow({ status: 'settled', statusEventId: '99' }))).toBe(open);
+    const cancelled = liveRow({ status: 'cancelled', statusEventId: null });
+    expect(markToLiveMarket(open, cancelled)).toBe(open);
   });
 
-  it('keeps the row itself when there is nothing newer to mark it to', () => {
-    // The same reference, so an untouched row does not re-render; an absent field is a market
-    // this tab holds no cache entry for, which is not a reason to invent one.
-    const row = position({ marketLastPrice: 63, marketStatus: 'open' });
-    expect(markToLiveMarket(row, {})).toBe(row);
-    expect(markToLiveMarket(row, { lastPrice: 63, status: 'open' })).toBe(row);
+  it('keeps the row itself when there is nothing newer, or no live row at all', () => {
+    const row = position();
+    expect(markToLiveMarket(row, undefined)).toBe(row);
+    expect(markToLiveMarket(row, liveRow())).toBe(row);
+  });
+});
+
+describe('dedupeAcrossLists', () => {
+  it('leaves out an open row the settled list holds too, so 실현 손익 counts once (M3)', () => {
+    // A settlement's `user:position` reads both lists again, and the settled answer can land first.
+    const openRow = position({ qty: 0, costBasisCoin: '0', realizedPnlCoin: '250' });
+    const other = position({
+      marketId: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+      realizedPnlCoin: '5',
+    });
+    const settledRow = position({ settled: true, marketStatus: 'settled', realizedPnlCoin: '250' });
+    const open = dedupeAcrossLists([openRow, other], [settledRow]);
+    expect(open).toEqual([other]);
+    expect(realizedPnlAcross(portfolioTotals(open), portfolioTotals([settledRow]))).toBe(255n);
+    // The other contract of the same market is another key.
+    const no = position({ outcome: 'NO' });
+    expect(dedupeAcrossLists([no], [settledRow])).toEqual([no]);
+    expect(dedupeAcrossLists([openRow], undefined)).toEqual([openRow]);
+  });
+});
+
+describe('realizedPnlState', () => {
+  /** A list that has answered, idle and fresh unless overridden. */
+  const list = (overrides: Partial<Parameters<typeof realizedPnlState>[0]> = {}) => ({
+    data: [] as Position[],
+    isPending: false,
+    isFetching: false,
+    isRefetchError: false,
+    dataUpdatedAt: 1_000,
+    ...overrides,
+  });
+
+  it('holds 총 실현 손익 while the settled list is behind the open one (open first)', () => {
+    // A settlement reads both lists again. The open answer lands first: the contract has left it,
+    // and the settled list still lacks it — in neither, the sum would drop its 실현 손익.
+    const row = position({ realizedPnlCoin: '250' });
+    const settledRow = position({ settled: true, marketStatus: 'settled', realizedPnlCoin: '250' });
+    const open = list({ data: [], dataUpdatedAt: 2_000 });
+    const settledBehind = list({ data: [], isFetching: true, dataUpdatedAt: 1_000 });
+    expect(realizedPnlAcross(portfolioTotals([]), portfolioTotals([]))).toBe(0n);
+    expect(realizedPnlState(open, settledBehind)).toBe('pending');
+    // The settled answer lands: the row is there, and the figure is drawn again.
+    const settledNow = list({ data: [settledRow], dataUpdatedAt: 2_100 });
+    expect(realizedPnlState(open, settledNow)).toBe('ready');
+    expect(realizedPnlAcross(portfolioTotals([]), portfolioTotals([settledRow]))).toBe(250n);
+    // The other order is `dedupeAcrossLists`': the open list behind is no reason to wait.
+    const openBehind = list({ data: [row], isFetching: true, dataUpdatedAt: 1_000 });
+    expect(realizedPnlState(openBehind, settledNow)).toBe('ready');
+    // A settled read that is fetching but not behind (a focus refetch with the open idle): drawn.
+    expect(realizedPnlState(list(), list({ isFetching: true, dataUpdatedAt: 1_000 }))).toBe(
+      'ready',
+    );
+  });
+
+  it('reports a failed refetch of either list as unknown, never a short sum', () => {
+    const failed = list({ isRefetchError: true });
+    expect(realizedPnlState(list({ dataUpdatedAt: 2_000 }), failed)).toBe('failed');
+    expect(realizedPnlState(failed, list())).toBe('failed');
+  });
+
+  it('keeps the first-load ladder of the two lists', () => {
+    expect(realizedPnlState(list(), list())).toBe('ready');
+    expect(realizedPnlState(list({ data: undefined, isPending: true }), list())).toBe('pending');
+    expect(realizedPnlState(list(), list({ data: undefined }))).toBe('failed');
+  });
+});
+
+describe('heldGroups', () => {
+  const A = '11111111-1111-4111-8111-111111111111';
+  const B = '22222222-2222-4222-8222-222222222222';
+
+  it('keeps the rows held at 1 or more, one group per market, YES before NO (F4·F7)', () => {
+    const groups = heldGroups([
+      position({ marketId: A, outcome: 'NO', qty: 1 }),
+      position({ marketId: A, outcome: 'YES', qty: 2 }),
+      position({ marketId: B, outcome: 'YES', qty: 0, realizedPnlCoin: '12' }),
+    ]);
+    expect(groups.map((g) => [g.marketId, g.rows.map((r) => r.outcome)])).toEqual([
+      [A, ['YES', 'NO']],
+    ]);
+  });
+
+  it('draws a YES-only and a NO-only market as one row each', () => {
+    const groups = heldGroups([
+      position({ marketId: A, outcome: 'YES', updatedAt: '2026-09-07T02:00:00.000Z' }),
+      position({ marketId: B, outcome: 'NO', updatedAt: '2026-09-07T01:00:00.000Z' }),
+    ]);
+    expect(groups.map((g) => g.rows.map((r) => r.outcome))).toEqual([['YES'], ['NO']]);
+  });
+
+  it('orders the groups by their newest change, then by market id', () => {
+    const groups = heldGroups([
+      position({ marketId: A, outcome: 'YES', updatedAt: '2026-09-07T01:00:00.000Z' }),
+      position({ marketId: B, outcome: 'YES', updatedAt: '2026-09-07T00:00:00.000Z' }),
+      // B's NO changed last: a resting sell moves `updatedAt` too, and its market goes to the top.
+      position({ marketId: B, outcome: 'NO', updatedAt: '2026-09-07T03:00:00.000Z' }),
+    ]);
+    expect(groups.map((g) => g.marketId)).toEqual([B, A]);
+    expect(groups[0]?.updatedAt).toBe('2026-09-07T03:00:00.000Z');
+    const tie = heldGroups([
+      position({ marketId: B, updatedAt: '2026-09-07T00:00:00.000Z' }),
+      position({ marketId: A, updatedAt: '2026-09-07T00:00:00.000Z' }),
+    ]);
+    expect(tie.map((g) => g.marketId)).toEqual([A, B]);
+  });
+
+  it('draws fewer rows than the totals count, and the drawn values add up to the total (M4)', () => {
+    // The totals take every open row; a sold-out row is not drawn but its 실현 손익 counts, and
+    // its value is 0, so Σ(drawn values) = 총 참고 평가 still holds.
+    const markedAll = [
+      position({
+        marketId: A,
+        outcome: 'YES',
+        qty: 2,
+        costBasisCoin: '67',
+        realizedPnlCoin: '12',
+        marketLastPrice: 45,
+      }),
+      position({
+        marketId: A,
+        outcome: 'NO',
+        qty: 0,
+        costBasisCoin: '0',
+        realizedPnlCoin: '-10',
+        marketLastPrice: 45,
+      }),
+    ];
+    const drawn = heldGroups(markedAll).flatMap((g) => g.rows);
+    const totals = portfolioTotals(markedAll);
+    expect(drawn).toHaveLength(1);
+    expect(totals.realizedPnlCoin).toBe(2n);
+    expect(drawn.reduce((sum, row) => sum + priced(positionValueCoin(row)), 0n)).toBe(
+      totals.valueCoin,
+    );
+    expect(totals.valueCoin).toBe(90n);
+    expect(totals.unrealizedPnlCoin).toBe(23n);
   });
 });
 
@@ -495,6 +719,17 @@ describe('liveMarketStatus', () => {
     expect(liveMarketStatus('settled', 'cancelled')).toBe('cancelled');
   });
 
+  it('orders on the transition keys when both are given (#67, ADR-0142)', () => {
+    // The value says OPEN ↔ PAUSED either way; the keys say which came later.
+    expect(liveMarketStatus('paused', 'open', { held: '5', live: '4' })).toBe('paused');
+    expect(liveMarketStatus('paused', 'open', { held: '5', live: '6' })).toBe('open');
+    expect(liveMarketStatus('closed', 'open', { held: '5', live: '6' })).toBe('open');
+    // One side without a key: the value order, as before.
+    expect(liveMarketStatus('closed', 'open', { held: '5', live: null })).toBe('closed');
+    // A list move is refused whatever the keys say.
+    expect(liveMarketStatus('open', 'settled', { held: '5', live: '9' })).toBe('open');
+  });
+
   it('classifies every pair, so a new status cannot fall through by default', () => {
     // The whole table, like `positionListStatusFor`'s: a status added to MARKET_STATUSES fails
     // this with whatever it was silently given, which is a decision that has to be made rather
@@ -571,18 +806,22 @@ describe('positionListStatusFor', () => {
 });
 
 describe('positionsQueryOptions', () => {
-  it('sends no request until the session says somebody is signed in', () => {
-    expect(positionsQueryOptions('open').enabled).toBe(false);
-    expect(positionsQueryOptions('open', null).enabled).toBe(false);
-    expect(positionsQueryOptions('open', SESSION).enabled).toBe(true);
+  it('sends no request until the account MY shows is known', () => {
+    expect(positionsQueryOptions('open', undefined).enabled).toBe(false);
+    expect(positionsQueryOptions('open', ACCOUNT).enabled).toBe(true);
+  });
+
+  it('keys each list by the account, so another account’s rows are never drawn (#67)', () => {
+    expect(positionsQueryOptions('open', ACCOUNT).queryKey).toEqual(['positions', 'open', ACCOUNT]);
+    expect(positionsKey('open', 'other')).not.toEqual(positionsKey('open', ACCOUNT));
   });
 
   it('keys the two lists apart under the one root the socket invalidates', async () => {
     // `user:position` invalidates POSITIONS_KEY once; react-query matches by key prefix, so
     // that must reach both the open holdings and the settled history — and nothing else.
-    const open = positionsQueryOptions('open', SESSION);
-    const settled = positionsQueryOptions('settled', SESSION);
-    expect(open.queryKey).toEqual(positionsKey('open'));
+    const open = positionsQueryOptions('open', ACCOUNT);
+    const settled = positionsQueryOptions('settled', ACCOUNT);
+    expect(open.queryKey).toEqual(positionsKey('open', ACCOUNT));
     expect(open.queryKey).not.toEqual(settled.queryKey);
 
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });

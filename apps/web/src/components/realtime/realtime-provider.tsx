@@ -47,24 +47,28 @@ import {
   marketFillsKey,
   marketKey,
   marketSellableKey,
+  sellableKey,
 } from '@/lib/market-keys';
 import {
   BalanceOrder,
   MarketWindow,
   type MarketPages,
+  SellableRotation,
   Throttle,
   applyPositionEvent,
   applyStatus,
   applyTick,
   applyToPages,
   bookRestartsOwnOrders,
+  bookRestartsSellable,
   chunkIds,
   ownOrdersRefreshKeys,
   ownOrdersStatusKeys,
+  positionReopensMarket,
   tickRestartsMarket,
   wroteAnOrder,
 } from '@/lib/market-live';
-import { restartQueries } from '@/lib/query-client';
+import { restartQueries, setResnapshotOwed } from '@/lib/query-client';
 import { handleMarketStats } from '@/lib/market-stats-event';
 import { refreshThemeResultsOnStatus } from '@/lib/themes';
 import { type CachedSeries, appendTick } from '@/lib/ticks';
@@ -135,6 +139,14 @@ const BOOK_INVALIDATE_MS = 3_000;
  * order's 상세. The count a tab spends is measured before the PR (ADR-0141 결과 3).
  */
 const OWN_ORDERS_INVALIDATE_MS = 10_000;
+
+/**
+ * One market's 매도 가능액 read again every 6 s for `market:book` (#67, ADR-0142,
+ * `SellableRotation`): 10 a minute at most whatever the number of held markets, and only for a
+ * holding with unlocked contracts there (`bookRestartsSellable`). Paused while the tab is hidden.
+ * The count a tab spends is measured before the PR (ADR-0142 결과 3).
+ */
+const SELLABLE_ROTATION_MS = 6_000;
 
 /**
  * At most one first-fetch restart per market per second (`tickRestartsMarket`).
@@ -334,6 +346,13 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     // reason `identity` is a dependency — a sign-in or a sign-out must produce a NEW socket.
     if (identity === undefined) return;
     const rooms = registry.current;
+    // What a resnapshot re-reads for this socket's account — one list for `resnapshot()` and for
+    // the debt below (#67, ADR-0142 결정 2-21), so the two can never name different keys.
+    const snapshotKeys =
+      identity === null ? SNAPSHOT_KEYS : [...SNAPSHOT_KEYS, ...PRIVATE_SNAPSHOT_KEYS];
+    // A socket rebuilt for another account: its first connect resnapshots (the tab's is not its
+    // first), so `online` leaves those keys to it until then (`setResnapshotOwed`).
+    if (bootstrapped.current) setResnapshotOwed(queryClient, snapshotKeys);
     const socket = io(`${API_URL}${REALTIME_NAMESPACE}`, {
       withCredentials: true,
       // websocket first, polling only as the fallback: the upgrade dance costs a round trip
@@ -369,6 +388,10 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     // keeping each market signalled inside it for the next round.
     const ownOrders = new MarketWindow(OWN_ORDERS_INVALIDATE_MS);
     let ownOrdersPending: (() => void) | null = null;
+    // The account's 매도 가능액 on `market:book` (`refreshSellable`): one market per gap, per
+    // connection like the windows above.
+    const sellableRotation = new SellableRotation(SELLABLE_ROTATION_MS);
+    let sellablePending: (() => void) | null = null;
 
     /**
      * PLAN 8's "클라이언트 재연결 시 스냅샷 재요청", once per gap rather than once per event.
@@ -403,10 +426,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       // instead of once per connection — which was exactly the route Q-M4-7 names, and the one a
       // Redis blip opens. An event whose id is not past the watermark committed before a balance
       // this tab has already applied, so refusing it can lose nothing.
-      const keys = identity === null ? SNAPSHOT_KEYS : [...SNAPSHOT_KEYS, ...PRIVATE_SNAPSHOT_KEYS];
-      for (const queryKey of keys) {
+      for (const queryKey of snapshotKeys) {
         void restartQueries(queryClient, queryKey);
       }
+      // Every 매도 가능액 was just read again (`SELLABLE_KEY`): nothing waits in the window.
+      sellableRotation.clear();
     };
 
     /**
@@ -521,9 +545,45 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       };
     };
 
+    /**
+     * The account's 매도 가능액 read again for `market:book` (#67, ADR-0142): the markets signalled
+     * wait in `sellableRotation` and one is read every `SELLABLE_ROTATION_MS`, the longest waiting
+     * first, skipping one read since by another path (its entry answered after the signal, and no
+     * read was in flight at the signal — `SellableRotation.mark`). Paused while the tab is hidden:
+     * the line keeps its order, and the tab shown again goes on from the oldest at the same gap — a
+     * focus refetch past `staleTime` reads some of them first, and those are skipped.
+     */
+    const refreshSellable = () => {
+      if (sellablePending !== null) return;
+      if (document.visibilityState === 'hidden') return;
+      const account = identity ?? undefined;
+      const round = sellableRotation.next(Date.now(), (marketId, markedAt) => {
+        const state = queryClient.getQueryState(sellableKey(marketId, account));
+        return state !== undefined && state.dataUpdatedAt > markedAt;
+      });
+      if (round === null) return;
+      const wait = 'wait' in round ? round.wait : SELLABLE_ROTATION_MS;
+      if ('marketId' in round) void restartQueries(queryClient, marketSellableKey(round.marketId));
+      if ('marketId' in round && sellableRotation.size === 0) return;
+      const timer = setTimeout(() => {
+        sellablePending = null;
+        refreshSellable();
+      }, wait);
+      sellablePending = () => {
+        clearTimeout(timer);
+      };
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') refreshSellable();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
     socket.on('connect', () => {
       rooms.resubscribe();
       if (bootstrapped.current) resnapshot();
+      // The keys were just re-read: `online` reads them again from here on (ADR-0142 결정 2-21).
+      // After `resnapshot()`, never before it: an `online` landing in between would read twice.
+      setResnapshotOwed(queryClient, null);
       // The tab's FIRST connect must not invalidate. Every connect after it re-snapshots,
       // whether this socket reconnected or a new one replaced it — the ADR's "두 번째
       // connect부터" is per tab (ADR-0031).
@@ -543,6 +603,18 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       // with the rooms' current state, which is an ack (A-M4-8) and a read on the anonymous
       // path (A-M4-3): two recorded refusals, not a client-side refetch.
       bootstrapped.current = true;
+    });
+
+    /**
+     * A connected socket dropped and will reconnect (#67, ADR-0142 결정 2-21): its `connect`
+     * resnapshots, so from here until then the browser's `online` leaves the snapshot keys to it
+     * instead of reading each of them once more first (`setResnapshotOwed`). Only while
+     * `socket.active`: a socket the SERVER disconnected is destroyed before this event and never
+     * reconnects, so nothing would pay the debt and `online` keeps its read. Not on the teardown's
+     * own `disconnect()`, which runs after `removeAllListeners()`.
+     */
+    socket.on('disconnect', () => {
+      if (bootstrapped.current && socket.active) setResnapshotOwed(queryClient, snapshotKeys);
     });
 
     // The gateway lost its Redis subscription and re-armed it, so whatever was published in
@@ -751,6 +823,13 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         for (const key of ownOrdersStatusKeys(queryClient, event.marketId, identity ?? undefined)) {
           void restartQueries(queryClient, key);
         }
+        // The first kind once more (#67, ADR-0142): a pause, a close or a recovery ends or holds
+        // resting sells there, and none of them publishes a `user:` event — so the 매도 잠금 and
+        // the 매도 가능 of that market are read again, and it leaves the book window. A status is
+        // rare, so the request it adds is too. (An account restriction's or an admin grant's bulk
+        // cancel publishes `market:book` alone: the book window below takes those.)
+        sellableRotation.drop(event.marketId);
+        void restartQueries(queryClient, marketSellableKey(event.marketId));
       },
 
       'market:trade': (raw: unknown) => {
@@ -773,6 +852,18 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // The detail reads the book, and its budget (ADR-0138) leaves nothing for this.
         if (bookRestartsOwnOrders(queryClient, parsed.data.marketId, identity ?? undefined)) {
           refreshOwnOrders(parsed.data.marketId);
+        }
+        // And the account's 매도 가능액 there (#67, ADR-0142), through the window: a bid that came or
+        // went prices an immediate sell differently, and a restriction's or an admin grant's bulk
+        // cancel unlocks resting sells with this signal alone (`bookRestartsSellable` counts a
+        // holding all in resting sells too). Never `['market', id]` or `['positions']` — a book
+        // change is no fill, so 최근 체결가 and 참고 평가 stay where they are (N02 §5). A read in
+        // flight now answers with the book before this change, so its answer cannot clear the mark.
+        if (bookRestartsSellable(queryClient, parsed.data.marketId, identity ?? undefined)) {
+          const key = sellableKey(parsed.data.marketId, identity ?? undefined);
+          const inFlight = queryClient.getQueryState(key)?.fetchStatus === 'fetching';
+          sellableRotation.mark(parsed.data.marketId, Date.now(), inFlight);
+          refreshSellable();
         }
       },
 
@@ -826,25 +917,41 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         const parsed = userPositionEventSchema.safeParse(raw);
         if (!parsed.success) return;
         const event = parsed.data;
-        // Every cached variant of the list — `['positions']` and `['positions', status]` both
-        // hang off this root — and at most ONE refetch for all of them: the event carries no
+        // Every cached variant of the list — `['positions', status, accountId]` hangs off this
+        // root — and a refetch of each one that cannot take the event: the event carries no
         // marketSlug, marketTitle or marketLastPrice, so a row the cache does not hold cannot
         // be built and has to be asked for instead. Walked rather than written through
         // `setQueriesData` because the reducer answers a KIND, not a value, and reading that
         // decision out of an updater would hide a side effect inside a pure cache write.
-        let refetch = false;
+        //
+        // Only this account's entries (`positionsKey`'s last part, #67, ADR-0142) — as #123's
+        // `ownOrdersRefreshKeys` reads its own: an entry another account's `Me` keyed is never
+        // patched or read again with this socket's event.
+        const refetchKeys: (readonly unknown[])[] = [];
+        let reopensMarket = false;
         for (const query of queryClient.getQueryCache().findAll({ queryKey: POSITIONS_KEY })) {
+          if (query.queryKey[2] !== identity) continue;
           const held = queryClient.getQueryData<Position[]>(query.queryKey);
-          // WHICH list this is, read off the key `positionsKey` built (`['positions', status]`).
+          // Read off the list as it stood BEFORE the patch below: 0 → 1 or more is the change.
+          if (positionReopensMarket(held, event)) reopensMarket = true;
+          // WHICH list this is, read off the key `positionsKey` built (`['positions', status, …]`).
           // Without it the reducer cannot tell an absence that is a GAP from one that is the
           // list's own definition, and every ordinary trade restarted both lists — see
           // `applyPositionEvent`. An unsuffixed root answers `undefined` and keeps the old path.
           const patch = applyPositionEvent(held, event, listStatusOf(query.queryKey));
-          if (patch.kind === 'refetch') refetch = true;
+          if (patch.kind === 'refetch') refetchKeys.push(query.queryKey);
           if (patch.kind === 'replace') {
             queryClient.setQueryData<Position[]>(query.queryKey, patch.positions);
           }
         }
+        // The first kind of the RULE above (#67, ADR-0142 결정 2-2): the event carries no price.
+        // MY left this market's room when the holding was sold out, so the buy back's
+        // `market:tick` went by, and the `['market', id]` entry it kept is inside `staleTime` —
+        // the observer `useHoldings` mounts again would take it as fresh and value the holding at
+        // the price from before its own fill. Marked stale here, that mount reads the market once
+        // (an entry on screen is read now). Once per sold-out market bought back
+        // (`positionReopensMarket`), never for a market already held at 1 or more.
+        if (reopensMarket) void restartQueries(queryClient, marketKey(event.marketId));
         // The order lists have no reducer and no event of their own (#123's 대기 주문, 주문 상세 and
         // their fills, 내 거래 too, all under `['orders']`): an `Order` carries its id, status,
         // filledQty, filledAmountCoin and the market's slug and title, none of which any
@@ -858,15 +965,15 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         if (wroteAnOrder(event)) void restartQueries(queryClient, ORDERS_KEY);
         // The order panel's 매도 가능액 on that market (#66, ADR-0140): the holding moved, and so
         // may the part its resting sells lock. Only a mounted panel's query is asked again.
+        // Read again here, so it leaves the book window (#67).
+        sellableRotation.drop(event.marketId);
         void restartQueries(queryClient, marketSellableKey(event.marketId));
-        if (refetch) {
-          // `restartQueries`, not a bare invalidation: a list that has answered nothing yet
-          // would otherwise subscribe to the request it already has instead of issuing one,
-          // and that request left before the trade this event announces — 보유 없음 on a
-          // market the account just bought into. Lists that DO hold rows are refetched exactly
-          // as before.
-          void restartQueries(queryClient, POSITIONS_KEY);
-        }
+        // `restartQueries`, not a bare invalidation: a list that has answered nothing yet
+        // would otherwise subscribe to the request it already has instead of issuing one,
+        // and that request left before the trade this event announces — 보유 없음 on a
+        // market the account just bought into. Lists that DO hold rows are refetched exactly
+        // as before.
+        for (const queryKey of refetchKeys) void restartQueries(queryClient, queryKey);
       },
     } satisfies Record<RealtimeEventType, (raw: unknown) => void>;
 
@@ -876,6 +983,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       rooms.detach(socket);
       socket.removeAllListeners();
       socket.disconnect();
+      // No socket of this effect will resnapshot now; a rebuilt one sets its own debt.
+      setResnapshotOwed(queryClient, null);
       // A trailing fills refetch belongs to the socket that earned it: firing it after the
       // teardown would invalidate on behalf of a connection this tab no longer has.
       for (const cancel of fillsPending.values()) cancel();
@@ -885,6 +994,10 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       ownOrdersPending?.();
       ownOrdersPending = null;
       ownOrders.clear();
+      sellablePending?.();
+      sellablePending = null;
+      sellableRotation.clear();
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [identity, queryClient]);
 

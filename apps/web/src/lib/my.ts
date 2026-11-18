@@ -1,4 +1,4 @@
-import { type OrderStatus, PAID_COIN_SALES_ENABLED } from '@buddha/shared';
+import { type OrderStatus, PAID_COIN_SALES_ENABLED, isLiveOrderStatus } from '@buddha/shared';
 import type { Route } from 'next';
 import { copy } from '@/copy';
 import { walletPackageId } from './charge-guide';
@@ -115,14 +115,6 @@ export function myLoginPath(
 }
 
 /**
- * 대기 주문 (owner decision 2026-10-13): an order still resting on the book, filled or not in
- * part. Every other state is done and belongs to 거래·정산 이력.
- */
-export function isPendingOrder(status: OrderStatus): boolean {
-  return status === 'open' || status === 'partially_filled';
-}
-
-/**
  * Whether one side of the split order list offers 더 보기. The screens read `GET /me/orders`
  * without its state filter (#119; the split moves to the server with #123, #124), so a page
  * can hold fewer of a side's rows than it wants: the full tab keeps the button while
@@ -148,6 +140,7 @@ export function showMoreOrders(
 export function orderHistoryEmpty(
   orders: readonly { status: OrderStatus }[],
 ): 'none' | 'pendingOnly' | null {
-  if (orders.some((order) => !isPendingOrder(order.status))) return null;
+  // 대기 주문 (owner decision 2026-10-13) is an order still resting, the shared live statuses (#67).
+  if (orders.some((order) => !isLiveOrderStatus(order.status))) return null;
   return orders.length === 0 ? 'none' : 'pendingOnly';
 }

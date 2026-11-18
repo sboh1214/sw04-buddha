@@ -2931,13 +2931,30 @@ export const copy = {
   // 상세 차트 아래 한 줄, 모든 공개 상태(ADR-0135 결정 1의 3, A4). 카드에는 두지 않는다.
   marketPriceNotice: '시장가격은 실제 발생 확률의 보장이 아닙니다.',
 
-  // 포지션 한 줄 (상세의 내 포지션과 MY 목록이 같이 쓴다)
+  // 보유 행 (상세의 내 포지션과 MY 보유 계약이 같이 쓴다, #67, ADR-0142). 칸 이름은 기획 용어다(N02
+  // §8, ADR-0135 결과 4 '#67 칸 이름'). 늘 펼친 두 묶음의 이름은 오너가 정했다(F7). 순위·실력·점수
+  // 낱말은 두지 않는다(N04 §1·§3).
   positionQty: '보유 수량',
-  positionAvgPrice: '평단',
-  positionCurrentPrice: '현재가',
-  positionValue: '평가 금액',
-  positionPnl: '평가손익',
+  positionLockedQty: '매도 잠금',
+  positionAvgPrice: '평균 매입가',
+  positionCostBasis: '잔여 원가',
+  positionCurrentPrice: '최근 체결가',
+  positionValue: '참고 평가',
+  positionPnl: '미실현 손익',
   positionRealizedPnl: '실현 손익',
+  positionSellable: '매도 가능',
+  positionGroupHolding: '보유·원가',
+  positionGroupMark: '평가·매도',
+  // 매도 가능 칸: 호가 깊이가 모자라 보유의 일부만 즉시 팔 수 있을 때(ADR-0135 결정 4).
+  positionSellablePartial: '일부 수량만 가능',
+  // 상세의 내 포지션에서 전량 매도한 계약(ADR-0135 결과 4 '#67·#34'). 실현 손익 칸과 함께 보인다.
+  positionNoHolding: '보유 없음',
+  // 보유 행의 매도 버튼: 시장 상세의 주문 패널로 가며 계약과 매도를 미리 고른다(F6). 버튼 이름은
+  // '<시장> <YES|NO> 매도'로 읽힌다.
+  positionSell: '매도',
+  // 주문 상한을 넘는 보유: 나눠 내지 않는다(ADR-0135 결과 4). '한 번에 1,000,000계약까지 팔 수 있습니다'.
+  positionSellCapBefore: '한 번에',
+  positionSellCapAfter: '까지 팔 수 있습니다',
 
   // 주문 이력 한 줄. 수량·평균가는 체결 쪽 라벨(fillQty/fillAvgPrice)을 그대로 쓴다.
   orderStatus: '상태',
@@ -2955,10 +2972,13 @@ export const copy = {
   // 옛 포트폴리오(PLAN 11.3)의 잔고 요약·목록. #16이 MY 요약과 보유 계약·대기 주문·거래·정산 이력
   // 탭으로 옮겼다. 합계는 행 라벨과 헷갈리지 않도록 '총'을 붙인다.
   portfolioBalance: '잔고 요약',
-  portfolioValue: '총 평가 금액',
-  portfolioUnrealizedPnl: '총 평가손익',
+  // 두 평가 합계는 보유 행의 칸 이름을 따른다(ADR-0135 결과 4 '#67 칸 이름'). 총 실현 손익은 실현 +
+  // 정산이다(결정 4). 총 자산 줄은 없다(F5).
+  portfolioValue: '총 참고 평가',
+  portfolioUnrealizedPnl: '총 미실현 손익',
   portfolioRealizedPnl: '총 실현 손익',
-  portfolioPositionsEmpty: '아직 보유한 포지션이 없습니다.',
+  // 보유 1계약 이상만 보이므로(F4) 거래했던 계정도 이 문구를 본다(ADR-0142).
+  portfolioPositionsEmpty: '보유한 계약이 없습니다.',
   portfolioSettled: '정산 이력',
   portfolioSettledEmpty: '아직 정산된 포지션이 없습니다.',
   portfolioOrders: '주문 이력',

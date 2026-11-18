@@ -195,16 +195,8 @@ describe('OrderPanelProvider', () => {
   });
 
   it('lets a term account restriction end at its endsAt on the server clock (결정 2-11)', () => {
-    // On screen: past its end it holds nothing, and the restriction is read again then.
-    expect(source).toMatch(
-      /useInstantReached\(\s*heldRestriction\?\.endsAt \?\? null,\s*now,\s*refreshRestriction,?\s*\)/,
-    );
-    expect(source).toContain(
-      'const restrictedDetails = restrictionEnded ? null : heldRestriction;',
-    );
-    expect(source).toMatch(
-      /void queryClient\.invalidateQueries\(\{\s*queryKey: myRestrictionKey\(restrictionOwner\),\s*exact: true,\s*\}\);/,
-    );
+    // On screen: `useAccountBlock` on the server's `now` (use-account-block.test.ts pins it).
+    expect(source).toContain('useAccountBlock(me, now);');
     // 확인's own check of the cached restriction, on the same clock.
     const start = source.indexOf('const openConfirm = useCallback(');
     const open = source.slice(start, source.indexOf('\n  }, [', start));
@@ -216,9 +208,9 @@ describe('OrderPanelProvider', () => {
 
   it('reads the restriction of the account on screen, under its id, never the last one’s (결정 2-26)', () => {
     // `me` may name B while the session (and SessionCacheGuard's reset) still says A: the
-    // restriction is B's own entry, on screen and in 확인's check alike.
-    expect(source).toContain('const restrictionOwner = me?.id ?? null;');
-    expect(source).toContain('const restriction = useMyRestriction(restrictionOwner);');
+    // restriction is B's own entry, on screen (`useAccountBlock(me, …)`, a member's `me` only)
+    // and in 확인's check alike.
+    expect(source).toContain('const me = member ? meQuery.data : undefined;');
     const start = source.indexOf('const openConfirm = useCallback(');
     const open = source.slice(start, source.indexOf('\n  }, [', start));
     expect(open).toMatch(
@@ -226,6 +218,33 @@ describe('OrderPanelProvider', () => {
     );
     // No read of the bare key, which says nobody's.
     expect(source).not.toContain('MY_RESTRICTION_KEY');
+  });
+
+  it('reads a holding’s sell intent once, past the restore’s gates, and drops the draft (#67)', () => {
+    expect(source).toContain('const [sellIntent] = useState(() => parseSellIntent(searchParams));');
+    const start = source.indexOf('if (sellIntent === null || sellIntentDone.current');
+    const effect = source.slice(start, source.indexOf('\n  }, [', start));
+    // A member with the account and the width known and the market read: the restore's gates.
+    expect(effect).toContain('(!accountKnown || mdUp === null || market === undefined)');
+    // Written out of the address in place, never with the router (no RSC read again).
+    expect(effect).toContain('window.history.replaceState(');
+    expect(source).not.toMatch(/router\.replace\(/);
+    // Opened only on a 거래 중 market, for a member: a paused one has no order area (D1).
+    expect(effect).toContain("if (viewer !== 'member' || market?.status !== 'open') return;");
+    // A request in flight is the reducer's (`openSell` keeps its terms), not dropped here.
+    expect(effect).not.toContain('stepBusy');
+    // That entry brings no draft back (D4 is the return after a sign-in), and drops it.
+    const restore = source.slice(source.indexOf('if (skipRestore.current) {'));
+    expect(restore.slice(0, restore.indexOf('}'))).toContain('clearSessionOrderDraft(marketId);');
+  });
+
+  it('gives the sheet’s focus back to the holding’s 매도 that opened it (#67)', () => {
+    expect(source).toContain('sheetOrigin.current = wide ? null : (origin ?? null);');
+    // The bar's own triggers are the dialog's: no origin of ours then.
+    const openSheet = source.slice(source.indexOf('const openSheet = useCallback('));
+    expect(openSheet.slice(0, openSheet.indexOf('}, []);'))).toContain(
+      'sheetOrigin.current = null;',
+    );
   });
 
   it('spaces book-driven quote reads from their start and keeps a held-back move (결정 2-13)', () => {

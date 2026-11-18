@@ -168,6 +168,9 @@ const position = {
   marketTitle: summary.title,
   marketStatus: 'open',
   marketLastPrice: 52,
+  marketLastFillAt: at,
+  marketTradeCount: 3,
+  marketStatusEventId: '12',
   resolvedResult: null,
   outcome: 'YES',
   qty: 10,
@@ -230,7 +233,17 @@ describe('read DTOs', () => {
       marketSchema.parse({ ...market, ...untraded, lastPrice24hAgo: null }).lastPrice24hAgo,
     ).toBeNull();
     expect(marketSchema.parse({ ...market, lastPrice: null }).lastPrice).toBeNull();
-    expect(positionSchema.parse({ ...position, marketLastPrice: null }).marketLastPrice).toBeNull();
+    expect(
+      positionSchema.parse({ ...position, marketLastPrice: null, marketLastFillAt: null })
+        .marketLastPrice,
+    ).toBeNull();
+    // #67 (ADR-0142): the holding's market time and ordering keys are required too.
+    const { marketLastFillAt: _fillAt, ...positionWithoutTime } = position;
+    expect(positionSchema.safeParse(positionWithoutTime).success).toBe(false);
+    const { marketTradeCount: _count, ...positionWithoutCount } = position;
+    expect(positionSchema.safeParse(positionWithoutCount).success).toBe(false);
+    const { marketStatusEventId: _key, ...positionWithoutKey } = position;
+    expect(positionSchema.safeParse(positionWithoutKey).success).toBe(false);
     // The field stays required, so a mapper that forgot it fails instead of reading as untraded.
     const { lastPrice: _price, ...withoutPrice } = summary;
     expect(marketSummarySchema.safeParse(withoutPrice).success).toBe(false);

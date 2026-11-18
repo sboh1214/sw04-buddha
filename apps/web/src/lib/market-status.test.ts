@@ -86,7 +86,7 @@ describe("the screens that read '판정 지연' and '이의 검토 중'", () => 
     'components/market/market-card.tsx',
     'components/post/market-picker.tsx',
     'app/community/write/write-screen.tsx',
-    'app/my/portfolio.tsx',
+    'components/position/holding-rows.tsx',
     'components/post/post-card.tsx',
     'components/authored/authored-comment-card.tsx',
     'app/community/posts/[postId]/post-screen.tsx',

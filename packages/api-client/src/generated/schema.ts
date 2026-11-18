@@ -6840,11 +6840,15 @@ export type components = {
             costBasisCoin: components["schemas"]["CoinAmount"];
             /** Format: uuid */
             marketId: string;
+            /** Format: date-time */
+            marketLastFillAt: string | null;
             marketLastPrice: number | null;
             marketSlug: string;
             /** @enum {string} */
             marketStatus: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
+            marketStatusEventId: string | null;
             marketTitle: string;
+            marketTradeCount: number;
             /** @enum {string} */
             outcome: "YES" | "NO";
             qty: number;

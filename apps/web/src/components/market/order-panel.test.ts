@@ -14,6 +14,7 @@ const result = read('./order-result.tsx');
 const entryBar = read('./order-entry-bar.tsx');
 const emptyState = read('../ui/empty-state.tsx');
 const signInPrompt = read('./sign-in-prompt.tsx');
+const accountLine = read('../position/account-block-line.tsx');
 
 /** The source of one function, from its declaration to the next top-level one. */
 function fn(source: string, name: string): string {
@@ -69,9 +70,17 @@ describe('order panel drawing (결정 2-23)', () => {
     expect(emptyState).toContain('tabIndex={messageRef === undefined ? undefined : -1}');
   });
 
+  it('gives the sheet’s focus back to a holding’s 매도 that opened it (#67, ADR-0142)', () => {
+    // Ark's own return to the pressed trigger (`triggerValue`) stays for the bar's buttons.
+    expect(entryBar).toContain('triggerValue={sheet.contract}');
+    expect(entryBar).toContain('finalFocusEl={panel.sheetFinalFocus}');
+  });
+
   it('keeps a restriction’s end unbroken in the account line and the refusal card', () => {
-    expect(fn(result, 'RestrictedText')).toContain('whiteSpace="nowrap"');
-    expect(fn(panel, 'AccountLine')).toContain('<RestrictedText');
+    expect(fn(accountLine, 'RestrictedText')).toContain('whiteSpace="nowrap"');
+    // The account line is `AccountBlockLine` since #67 (ADR-0142), MY's holdings draw it too.
+    expect(fn(panel, 'AccountLine')).toContain('<AccountBlockLine');
+    expect(fn(accountLine, 'AccountBlockLine')).toContain('<RestrictedText');
     expect(fn(result, 'OrderErrorCard')).toContain('<RestrictedText');
     expect(panel).not.toContain('restrictedLine(');
   });
