@@ -21,8 +21,11 @@ import { type Market, type MarketSummary, type Me, type Order, type Position } f
 import {
   MY_ORDERS_LIVE_KEY,
   marketBookKey,
+  myFillHistoryKey,
+  myOrderHistoryKey,
   myOrderKey,
   myOrdersLiveKey,
+  mySettlementsKey,
   sellableKey,
 } from './market-keys';
 import {
@@ -44,9 +47,12 @@ import {
   joinMarketPages,
   joinPositions,
   ownLiveOrderIds,
+  ownOrderHistoryKeys,
   ownOrdersRefreshKeys,
   ownOrdersStatusKeys,
+  ownSettlementKeys,
   positionReopensMarket,
+  wroteASettlement,
   wroteAnOrder,
 } from './market-live';
 
@@ -1077,6 +1083,69 @@ describe('wroteAnOrder', () => {
   });
 });
 
+describe('wroteASettlement and ownSettlementKeys (#124, ADR-0143 결정 9)', () => {
+  const ACCOUNT = 'a1e1c0de-0000-4000-8000-0000000000aa';
+  const OTHER_ACCOUNT = 'a1e1c0de-0000-4000-8000-0000000000ff';
+  const pages = { pages: [{ items: [], nextCursor: null }], pageParams: [undefined] };
+
+  it('asks for 정산 기록 on a settlement and never on a trade, which writes no record', () => {
+    // The other half of `wroteAnOrder`: a settlement retires the holding and writes its record in
+    // one transaction, and the event carries no result, payout, cost or time to build a line from.
+    expect(wroteASettlement(positionEvent({ settled: true }))).toBe(true);
+    expect(wroteASettlement(positionEvent())).toBe(false);
+    expect(wroteASettlement(positionEvent({ qty: 0, settled: true }))).toBe(true);
+    expect(wroteASettlement(positionEvent({ qty: 0, settled: false }))).toBe(false);
+    // Exactly one of the two is asked for by any event.
+    for (const settled of [true, false]) {
+      const event = positionEvent({ settled });
+      expect(wroteASettlement(event)).not.toBe(wroteAnOrder(event));
+    }
+  });
+
+  it("reads again every filter's list of this account, and no other account's", () => {
+    const client = new QueryClient();
+    try {
+      client.setQueryData(mySettlementsKey({}, ACCOUNT), pages);
+      client.setQueryData(mySettlementsKey({ period: '7d', market: ID }, ACCOUNT), pages);
+      client.setQueryData(mySettlementsKey({}, OTHER_ACCOUNT), pages);
+      // The history's orders and fills are another root: a settlement writes neither.
+      client.setQueryData(myOrderHistoryKey({}, ACCOUNT), pages);
+      expect(ownSettlementKeys(client, ACCOUNT)).toEqual([
+        mySettlementsKey({}, ACCOUNT),
+        mySettlementsKey({ period: '7d', market: ID }, ACCOUNT),
+      ]);
+      expect(ownSettlementKeys(client, OTHER_ACCOUNT)).toEqual([
+        mySettlementsKey({}, OTHER_ACCOUNT),
+      ]);
+      // No account known (a visitor's socket, `['me']` not read): nothing.
+      expect(ownSettlementKeys(client, undefined)).toEqual([]);
+    } finally {
+      client.clear();
+    }
+  });
+
+  it('is what the socket restarts on a settling user:position, beside the order lists’ rule', () => {
+    const handler = readFileSync(
+      path.join(SRC, 'components/realtime/realtime-provider.tsx'),
+      'utf8',
+    );
+    const position = handler.slice(handler.indexOf("'user:position': (raw: unknown) => {"));
+    expect(position).toContain(
+      'if (wroteAnOrder(event)) void restartQueries(queryClient, ORDERS_KEY);',
+    );
+    expect(position).toMatch(
+      /if \(wroteASettlement\(event\)\) \{\s*for \(const key of ownSettlementKeys\(queryClient, identity \?\? undefined\)\) \{\s*void restartQueries\(queryClient, key\);/,
+    );
+    // …and a reconnect re-reads the root: a missed settling event is a record the list lacks.
+    const privateKeys = handler.slice(
+      handler.indexOf('const PRIVATE_SNAPSHOT_KEYS = ['),
+      handler.indexOf('] as const;', handler.indexOf('const PRIVATE_SNAPSHOT_KEYS = [')),
+    );
+    expect(privateKeys).toContain('SETTLEMENTS_KEY');
+    expect(privateKeys).toContain('ORDERS_KEY');
+  });
+});
+
 describe('positionReopensMarket (#67, ADR-0142 결정 2-2)', () => {
   /** The contract sold out of: the open list keeps the row at 0 (F4). */
   const soldOut: Position = { ...position, qty: 0 };
@@ -1576,6 +1645,41 @@ describe('the account’s own live orders on a market signal (#123, ADR-0141 결
     );
     expect(source).toMatch(/ownOrdersPending = null;\s*refreshOwnOrders\(\);/);
     expect(source).toMatch(/ownOrdersPending = null;\s*ownOrders\.clear\(\);/);
+  });
+
+  it('reads the account’s ended-order lists with its live orders (#124, ADR-0143 결정 9)', () => {
+    // A buy another tab cancelled, or a restriction, a pause, a recovery approval or a close ended,
+    // sends `market:book` or `market:status` and no `user:` event: the round that drops it from
+    // the live list must ask for the ended list it now belongs to, or MY's two previews both miss it.
+    const client = new QueryClient();
+    const pages = { pages: [{ items: [], nextCursor: null }], pageParams: [undefined] };
+    listed(client, live());
+    client.setQueryData(myOrderHistoryKey({}, ACCOUNT), pages);
+    client.setQueryData(myOrderHistoryKey({ period: '7d', market: ID }, ACCOUNT), pages);
+    // Another account's entry, and the history's fills (a cancel writes no fill), are left alone.
+    client.setQueryData(myOrderHistoryKey({}, 'account-b'), pages);
+    client.setQueryData(myFillHistoryKey({}, ACCOUNT), pages);
+    const own = [
+      myOrderHistoryKey({}, ACCOUNT),
+      myOrderHistoryKey({ period: '7d', market: ID }, ACCOUNT),
+    ];
+    expect(ownOrderHistoryKeys(client, ACCOUNT)).toEqual(own);
+    expect(ownOrderHistoryKeys(client, undefined)).toEqual([]);
+    expect(ownOrdersRefreshKeys(client, [ID], ACCOUNT)).toEqual([
+      MY_ORDERS_LIVE_KEY,
+      myOrderKey(OTHER_ID, ACCOUNT),
+      ...own,
+    ]);
+    expect(ownOrdersStatusKeys(client, ID, ACCOUNT)).toEqual([
+      MY_ORDERS_LIVE_KEY,
+      ...own,
+      myOrderKey(OTHER_ID, ACCOUNT),
+    ]);
+    // A status on a market the tab holds no live order on restarts no ended list: nothing it
+    // knows of ended there.
+    expect(ownOrdersStatusKeys(client, THIRD_ID, ACCOUNT)).toEqual([]);
+    // Signed out, or `['me']` not read: the live lists only, as before.
+    expect(ownOrdersRefreshKeys(client, [ID], undefined)).toEqual([MY_ORDERS_LIVE_KEY]);
   });
 });
 

@@ -1,8 +1,9 @@
-import { sql } from 'drizzle-orm';
+import { desc, sql } from 'drizzle-orm';
 import {
   bigint,
   check,
   foreignKey,
+  index,
   integer,
   pgTable,
   primaryKey,
@@ -50,6 +51,15 @@ export const positionSettlements = pgTable(
   },
   (t) => [
     primaryKey({ columns: [t.marketId, t.userId, t.outcome] }),
+    // A person's own settlements, newest first (`GET /me/settlements`, #124): the primary key
+    // starts with the market, so without this a read by user scans the whole table. Its order
+    // is `settled_at DESC, market_id DESC`, then YES before NO: a market's two records share
+    // one `settled_at`, so at most two rows are left to order after the index.
+    index('position_settlements_user_id_settled_at_idx').on(
+      t.userId,
+      desc(t.settledAt),
+      desc(t.marketId),
+    ),
     foreignKey({
       name: 'position_settlements_judgement_fk',
       columns: [t.marketId, t.judgementVersion],

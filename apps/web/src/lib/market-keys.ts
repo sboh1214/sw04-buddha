@@ -9,6 +9,7 @@ import type {
   PublicMarketStatus,
   WatchlistSort,
 } from '@buddha/shared';
+import type { HistoryListFilters } from './my-history';
 import type { TickRange } from './ticks';
 
 /**
@@ -55,7 +56,7 @@ export const ORDERS_KEY = ['orders'] as const;
  * owner and a cancel acts on the rows drawn, and `['me']` can turn from A to B in place before the
  * session does (ADR-0090 결정 4-2). Ids lower-cased like `marketKey`, so `/my/orders/<UPPER>` and
  * the answer's own id name one entry. `accountId` undefined: the query is off, nothing read.
- * The history list's `['orders']` itself is #124's and none of these.
+ * The history's two lists under this root are below (`myOrderHistoryKey`, `myFillHistoryKey`).
  */
 export const MY_ORDERS_LIVE_KEY = [...ORDERS_KEY, 'live'] as const;
 export const MY_ORDER_DETAIL_KEY = [...ORDERS_KEY, 'detail'] as const;
@@ -81,6 +82,47 @@ export const myOrderFillsKey = (orderId: string, accountId: string | undefined) 
 /** `GET /me/fills?marketId=`: the account's fills on one market (상세의 내 거래). */
 export const myMarketFillsKey = (marketId: string, accountId: string | undefined) =>
   [...MY_MARKET_FILLS_KEY, marketId.toLowerCase(), accountId] as const;
+
+/**
+ * 거래·정산 이력's 주문 and 체결 (#124, ADR-0143): two more shapes under `ORDERS_KEY`, so the
+ * `user:position` re-read of `['orders']` (a trade wrote an order and its fills), a reconnect's and
+ * an order's own answer reach them by prefix — and neither is the live list's nor a detail's, whose
+ * joins (query-client.ts) never match them. The filters are one object (`marketsKey` says why) and
+ * the account the screen shows is last, as above. MY's summary previews read the unfiltered entry
+ * the tab holds, so a page size is never part of a key.
+ */
+export const MY_ORDER_HISTORY_KEY = [...ORDERS_KEY, 'history'] as const;
+export const MY_FILL_HISTORY_KEY = [...ORDERS_KEY, 'history-fills'] as const;
+
+/** The filters as a key holds them: what is on only, the market lower-cased like `marketKey`. */
+function historyKeyFilters(filters: HistoryListFilters): HistoryListFilters {
+  return {
+    ...(filters.market === undefined ? {} : { market: filters.market.toLowerCase() }),
+    ...(filters.period === undefined ? {} : { period: filters.period }),
+  };
+}
+
+/** `GET /me/orders?state=ended`: the account's ended orders, those the filters leave. */
+export const myOrderHistoryKey = (filters: HistoryListFilters, accountId: string | undefined) =>
+  [...MY_ORDER_HISTORY_KEY, historyKeyFilters(filters), accountId] as const;
+
+/** `GET /me/fills`: the account's fills, those the filters leave. */
+export const myFillHistoryKey = (filters: HistoryListFilters, accountId: string | undefined) =>
+  [...MY_FILL_HISTORY_KEY, historyKeyFilters(filters), accountId] as const;
+
+/**
+ * 정산 기록 (#124, ADR-0143; `GET /me/settlements`): the account's settlement records, private. A
+ * root of its own, under neither of the two above: a settling `user:position` deliberately leaves
+ * `['orders']` alone (`wroteAnOrder` — a settlement writes no order), so under it these would never
+ * be read again when one lands; and every entry under `['positions']` is read as a `Position[]` by
+ * the socket's handler and joined by row version (query-client.ts), which a page of records is not.
+ */
+export const SETTLEMENTS_KEY = ['settlements'] as const;
+
+/** `GET /me/settlements`: the account's settlement records, those the filters leave. */
+export const mySettlementsKey = (filters: HistoryListFilters, accountId: string | undefined) =>
+  [...SETTLEMENTS_KEY, historyKeyFilters(filters), accountId] as const;
+
 /**
  * 매도 가능액 (#179, `GET /me/markets/:id/sellable`): the caller's holding on one market, its
  * resting sells and the rest, read by the order panel (#66, ADR-0140). Owner only, so private.
@@ -393,6 +435,9 @@ export const PRIVATE_QUERY_ROOTS: ReadonlySet<string> = new Set([
   // 매도 가능액 (#66, ADR-0140): the caller's holding and resting sells on one market, read with
   // the member's cookie (`SELLABLE_KEY`) for the order panel.
   'sellable',
+  // 정산 기록 (#124, ADR-0143): the account's settlement records (`SETTLEMENTS_KEY`) — what it held
+  // and was paid, nobody else's to see (N04 §7). The history's orders and fills are under 'orders'.
+  'settlements',
 ]);
 
 export function isPrivateQueryKey(queryKey: readonly unknown[]): boolean {

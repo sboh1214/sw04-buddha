@@ -8272,6 +8272,13 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           'fills.yes_price_coin',
           'fills_price_coin_check',
           'fills_yes_price_coin_check',
+          // #124 (migration 0076): what a member's sale realised on a trade fill.
+          'fill_realizations.proceeds_coin',
+          'fill_realizations.cost_released_coin',
+          'fill_realizations.realized_pnl_coin',
+          'fill_realizations_proceeds_coin_check',
+          'fill_realizations_cost_released_coin_check',
+          'fill_realizations_realized_pnl_coin_check',
           // #116 (migration 0060): one positive amount per event, and each side's total after it.
           'ledger_entries.amount_coin',
           'ledger_entries.from_balance_after_coin',
@@ -10878,7 +10885,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
             'write_limit_events', 'link_uses', 'link_flags', 'retention_purges',
             'themes', 'theme_markets', 'theme_notices', 'tags', 'market_tags', 'categories',
             'market_sources', 'market_rule_versions', 'market_judgement_delays', 'orders',
-            'fills')
+            'fills', 'fill_realizations')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
@@ -10895,6 +10902,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       // fill is a permanent fact.
       expect(privs('orders')).toEqual(['INSERT', 'SELECT', 'UPDATE']);
       expect(privs('fills')).toEqual(['INSERT', 'SELECT']);
+      // Migration 0076 (#124): what a sale realised is a permanent fact like its fill.
+      expect(privs('fill_realizations')).toEqual(['INSERT', 'SELECT']);
       expect(privs('payments')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       // Migration 0028 (#183): the real name changes in place and the row goes with the account;
       // a code's wrong entries, its use and what the provider said (0030) are written in place,

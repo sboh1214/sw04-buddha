@@ -156,6 +156,36 @@ describe('tuple cursors (ADR-0065)', () => {
     expect(decodeTupleCursor(`1_0_253402300800000_${uuid}`, RECOMMENDED, 'uuid')).toBeUndefined();
   });
 
+  it('round-trips the settlement cursor: the payout time, the contract key and the market', () => {
+    // `GET /me/settlements` (#124): ordered by `settled_at`, the market and YES before NO, and
+    // written `<settledMs>_<0|1>_<marketId>` — the id last, as every tuple cursor. The API
+    // builds its predicate in the order of the sort, not of this string.
+    const SETTLEMENT = ['millis', 'group'] as const;
+    for (const contractKey of ['1', '0']) {
+      const cursor = encodeTupleCursor(['1788408306789', contractKey], uuid);
+      expect(cursor).toBe(`1788408306789_${contractKey}_${uuid}`);
+      expect(decodeTupleCursor(cursor, SETTLEMENT, 'uuid')).toEqual({
+        values: ['1788408306789', contractKey],
+        id: uuid,
+      });
+    }
+    // A cursor of another shape is no cursor: the first page is served.
+    for (const other of [
+      `1788408306789_${uuid}`, // the `(created_at, id)` keyset
+      '42', // the orders' and fills' id cursor
+      `1788408306789_2_${uuid}`, // no such contract key
+      `1788408306789_YES_${uuid}`,
+      `x_1_${uuid}`,
+      `1788408306789_1_42`,
+      `1788408306789_1_`,
+      `253402300800000_1_${uuid}`, // past year 9999
+      '',
+    ]) {
+      expect(decodeTupleCursor(other, SETTLEMENT, 'uuid'), other).toBeUndefined();
+    }
+    expect(decodeTupleCursor(undefined, SETTLEMENT, 'uuid')).toBeUndefined();
+  });
+
   it('applies the id shape like decodeKeyset', () => {
     expect(decodeTupleCursor('0_not-a-uuid', ['int'], 'uuid')).toBeUndefined();
     expect(decodeTupleCursor('0_not-a-uuid', ['int'], 'text')).toBeDefined();

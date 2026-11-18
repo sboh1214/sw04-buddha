@@ -17,7 +17,7 @@ import {
   authErrorMessage,
 } from '@/lib/auth-client';
 import { newPasswordSchema, passwordSchema, type NewPasswordValues } from '@/lib/password';
-import { ProfileUnavailable } from './profile-unavailable';
+import { ProfileUnavailable } from '@/components/my/profile-unavailable';
 import { SettingsSection } from './section';
 
 const changeSchema = z

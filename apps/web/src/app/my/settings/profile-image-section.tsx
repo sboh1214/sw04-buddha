@@ -19,7 +19,7 @@ import {
   profileItemSaveGoesToStep,
 } from '@/lib/profile';
 import { type Refusal, isRestricted } from '@/lib/restriction';
-import { ProfileUnavailable } from './profile-unavailable';
+import { ProfileUnavailable } from '@/components/my/profile-unavailable';
 import { SettingsSection } from './section';
 
 /**

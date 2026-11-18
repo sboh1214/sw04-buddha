@@ -32,6 +32,7 @@ import {
 import { transitionMarket } from './market-transitions.js';
 import {
   balances,
+  fillRealizations,
   fills,
   ledgerAccounts,
   ledgerEntries,
@@ -978,6 +979,151 @@ describe.skipIf(!hasTestDb())('contracts (#118, docker test profile)', () => {
       });
       expect(await balanceOf(t.db, buyer)).toMatchObject({ lockedCoin: 0n });
       await expectFullCollateral(market.id);
+    });
+
+    /** Every record of what a sale realised (#124), in fill order. */
+    const realizations = () =>
+      t.db.select().from(fillRealizations).orderBy(fillRealizations.fillId);
+
+    it('records what a person’s sale realised as the before/after difference of its row, once (#124)', async () => {
+      // 7 YES for 340 (4 at 55, 3 at 40): 2 sold at 60 release round(340 × 2 / 7) = 97 and
+      // realise +23; the other 5 at 45 release the 243 left and realise −18.
+      const market = await createMarket(t.db);
+      const seller = await member(1_000n);
+      const x = await member(1_000n);
+      const buyer = await member(1_000n);
+      for (const [qty, yesPriceCoin] of [
+        [4, 55],
+        [3, 40],
+      ] as const) {
+        await mintTestPairs(t.db, {
+          marketId: market.id,
+          yesHolderId: seller,
+          noHolderId: x,
+          qty,
+          yesPriceCoin,
+        });
+      }
+      // A pair mint sells nothing: no record.
+      expect(await realizations()).toEqual([]);
+      await lock(market.id, seller, contracts('YES', 7));
+      await lock(market.id, buyer, coin(345n));
+      const row = async () => (await positionOf(t.db, seller, market.id, 'YES'))!;
+      const start = await row();
+      expect(start).toMatchObject({ qty: 7, costBasisCoin: 340n, realizedPnlCoin: 0n });
+
+      const sale = (qty: number, priceCoin: number) => ({
+        marketId: market.id,
+        outcome: 'YES' as const,
+        qty,
+        priceCoin,
+        buyer: { ownerId: buyer, limitPriceCoin: priceCoin },
+        sellerId: seller,
+      });
+      const firstId = await tradeRecordId(sale(2, 60));
+      expect(await fill({ ...sale(2, 60), fillId: firstId })).toMatchObject({ outcome: 'filled' });
+      const between = await row();
+      const first = {
+        fillId: Number(firstId),
+        proceedsCoin: 120n,
+        costReleasedCoin: start.costBasisCoin - between.costBasisCoin,
+        realizedPnlCoin: between.realizedPnlCoin - start.realizedPnlCoin,
+      };
+      expect(first).toMatchObject({ costReleasedCoin: 97n, realizedPnlCoin: 23n });
+      expect(await realizations()).toEqual([first]);
+
+      const secondId = await tradeRecordId(sale(5, 45));
+      expect(await fill({ ...sale(5, 45), fillId: secondId })).toMatchObject({
+        outcome: 'filled',
+      });
+      const end = await row();
+      const second = {
+        fillId: Number(secondId),
+        proceedsCoin: 225n,
+        costReleasedCoin: between.costBasisCoin - end.costBasisCoin,
+        realizedPnlCoin: end.realizedPnlCoin - between.realizedPnlCoin,
+      };
+      expect(second).toMatchObject({ costReleasedCoin: 243n, realizedPnlCoin: -18n });
+      expect(await realizations()).toEqual([first, second]);
+      // The records of the position add up to it: every sale of it has one.
+      expect(end).toMatchObject({ qty: 0, costBasisCoin: 0n, realizedPnlCoin: 5n });
+      expect(first.realizedPnlCoin + second.realizedPnlCoin).toBe(end.realizedPnlCoin);
+      expect(first.costReleasedCoin + second.costReleasedCoin).toBe(start.costBasisCoin);
+      // The buyer's side of the same fills has none: one record per fill, the seller's.
+      expect(await positionOf(t.db, buyer, market.id, 'YES')).toMatchObject({
+        qty: 7,
+        costBasisCoin: 345n,
+        realizedPnlCoin: 0n,
+      });
+
+      // A replay returns before anything is written: no second record, none changed.
+      expect(await fill({ ...sale(2, 60), fillId: firstId })).toEqual({ outcome: 'duplicate' });
+      expect(await fill({ ...sale(5, 45), fillId: secondId })).toEqual({ outcome: 'duplicate' });
+      expect(await realizations()).toEqual([first, second]);
+      await expectFullCollateral(market.id);
+    });
+
+    it('records nothing for the 운영 마켓메이커’s sale, its burn or a fill that is rolled back (#124)', async () => {
+      const { marketId, mm } = await marketWithMarketMaker(1_000n);
+      const a = await member(1_000n);
+      await mintTestPairs(t.db, { marketId, yesHolderId: mm, noHolderId: a, qty: 2 });
+      // The 운영 마켓메이커 sells a YES to a: its burns move its cost with no fill, so its sales
+      // are not recorded (and migration 0076 would refuse the row).
+      await lock(marketId, mm, contracts('YES', 1));
+      await lock(marketId, a, coin(45n));
+      const sold = await fill({
+        marketId,
+        outcome: 'YES',
+        qty: 1,
+        priceCoin: 45,
+        buyer: { ownerId: a, limitPriceCoin: 45 },
+        sellerId: mm,
+      });
+      expect(sold.outcome).toBe('filled');
+      expect(await realizations()).toEqual([]);
+
+      // a sells one of its two NO (cost 100) to the 운영 마켓메이커 at 40: a person's sale, recorded
+      // whoever buys — 40 for 50 of cost.
+      const toBot = {
+        marketId,
+        outcome: 'NO' as const,
+        qty: 1,
+        priceCoin: 40,
+        buyer: { ownerId: mm, limitPriceCoin: 40 },
+        sellerId: a,
+      };
+      await lock(marketId, a, contracts('NO', 2));
+      await lock(marketId, mm, coin(80n));
+      const soldId = await tradeRecordId(toBot);
+      expect(await fill({ ...toBot, fillId: soldId })).toMatchObject({ outcome: 'filled' });
+      const recorded = [
+        {
+          fillId: Number(soldId),
+          proceedsCoin: 40n,
+          costReleasedCoin: 50n,
+          realizedPnlCoin: -10n,
+        },
+      ];
+      expect(await realizations()).toEqual(recorded);
+
+      // The same sale again in a transaction that fails afterwards: its record goes with it.
+      const againId = await tradeRecordId(toBot);
+      const before = await snapshot();
+      await expect(
+        t.db.transaction(async (tx) => {
+          const done = await applyTradeFill(tx, { ...toBot, fillId: againId });
+          expect(done.outcome).toBe('filled');
+          expect(await tx.select().from(fillRealizations)).toHaveLength(2);
+          throw new Error('rolled back');
+        }),
+      ).rejects.toThrow('rolled back');
+      expect(await snapshot()).toEqual(before);
+      expect(await realizations()).toEqual(recorded);
+
+      // The 운영 마켓메이커 burns the pair it now holds unlocked (1 YES, 1 NO): not a fill, no record.
+      expect((await burn(marketId, 1)).outcome).toBe('burned');
+      expect(await realizations()).toEqual(recorded);
+      await expectFullCollateral(marketId);
     });
 
     it('fills between a person and the 운영 마켓메이커 both ways, and refuses what it must', async () => {

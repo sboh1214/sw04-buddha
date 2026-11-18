@@ -4,6 +4,7 @@ import type { BotMatchSnapshot } from './market-maker/risk-matching.js';
 import * as z from 'zod';
 import { marketJudgingRecordSchema } from './market-judging-record.js';
 import { cursorQuerySchema } from './api/pagination.js';
+import { recentPeriodSchema } from './api/period.js';
 import { coinAmountSchema, serializeCoinAmount } from './api/coin-amount.js';
 import { uuidParamSchema } from './api/path-param.js';
 import {
@@ -13,6 +14,7 @@ import {
   MARKET_SEARCH_TERM_MAX,
   MARKET_SLUG_PATTERN,
   MARKET_SLUG_STEM_MAX,
+  PAYOUT_PER_CONTRACT_COIN,
   PRICE_MAX,
   PRICE_MIN,
   TICKS_MAX_POINTS,
@@ -480,6 +482,11 @@ export type PlaceOrderResult = z.infer<typeof placeOrderResultSchema>;
  * recorded YES price (#177 15항), the fee (0, #73 15항). Owner only. The counterparty stays
  * anonymous — no other order, account or account type (ADR-0107 결정 5 '#179·#119') — and so does
  * whether it was a pair mint or a trade (#177 4항).
+ *
+ * `realizedPnlCoin` (#124, ADR-0143): what this fill realised for the caller — net proceeds minus
+ * the cost it released (N02 §8), negative for a sale below cost — on a sell whose record exists.
+ * null on a buy, and on a sell with no record (one made before the records that the backfill
+ * left out): never the other side's figure, and never a start grant or a regrant (N04 §3).
  */
 export const myFillSchema = z
   .object({
@@ -495,6 +502,7 @@ export const myFillSchema = z
     amountCoin: coinAmountSchema,
     yesPriceCoin: priceSchema,
     feeCoin: coinAmountSchema,
+    realizedPnlCoin: coinAmountSchema.nullable(),
     createdAt: z.iso.datetime(),
   })
   .meta({ id: 'MyFill' });
@@ -506,24 +514,71 @@ export type MyOrderState = (typeof MY_ORDER_STATES)[number];
 
 /**
  * `GET /me/orders` (no `.meta`: query DTO): newest first by arrival, rejected orders included;
- * one market's, and the live or the ended ones.
+ * one market's, the live or the ended ones, and those taken within `period` (#124: by the time
+ * the order came in, the time the list is ordered by).
  */
 export const myOrdersQuerySchema = cursorQuerySchema.extend({
   marketId: uuidParamSchema.optional(),
   state: z.enum(MY_ORDER_STATES).optional(),
+  period: recentPeriodSchema.optional(),
 });
 export type MyOrdersQuery = z.infer<typeof myOrdersQuerySchema>;
 
 /**
  * `GET /me/fills` (no `.meta`: query DTO): newest first, one market's when named, one of the
  * caller's own orders' when `orderId` is (#123, ADR-0141: the owner's side of a fill only; another
- * account's order id answers the empty list an unknown id does).
+ * account's order id answers the empty list an unknown id does), those filled within `period`
+ * (#124: by the fill's time).
  */
 export const myFillsQuerySchema = cursorQuerySchema.extend({
   marketId: uuidParamSchema.optional(),
   orderId: uuidParamSchema.optional(),
+  period: recentPeriodSchema.optional(),
 });
 export type MyFillsQuery = z.infer<typeof myFillsQuerySchema>;
+
+/**
+ * One of the caller's own settlement records (#124, ADR-0143; `GET /me/settlements`): what a
+ * holding of one contract was when its market settled and what it was paid — a losing contract's
+ * zero payout included (N05 §4, ADR-0118). Every figure is the permanent record's
+ * (`position_settlements`), so a later change of the market row never changes a line: `result`
+ * is the record's, not the market's, and VOID pays 50 per contract — a payout with its own P&L,
+ * not the price paid given back (N03 §6). `settlementPnlCoin` is the payout minus the remaining
+ * cost (N02 §8); start grants and regrants are in no figure (N04 §3). `settledAt` is when this
+ * account's payout completed, the time the list is ordered and filtered by; `resolvedAt` is the
+ * market's 결과 확정 (N03 §5: the two are shown apart), the one value read from the market row.
+ * Owner only: no account, ledger entry id, judgement or rule version, fee or total.
+ */
+export const mySettlementSchema = z
+  .object({
+    marketId: z.uuid(),
+    marketSlug: z.string(),
+    marketTitle: z.string(),
+    outcome: outcomeSchema,
+    result: marketResultSchema,
+    /** The contracts held at settlement, 1 or more: a holding of none leaves no record. */
+    qty: z.number().int().min(1),
+    /** The cost remaining at settlement. */
+    costBasisCoin: coinAmountSchema,
+    /** 100 for the winning contract, 0 for the losing one, 50 for VOID. */
+    payoutPerContractCoin: z.number().int().min(0).max(Number(PAYOUT_PER_CONTRACT_COIN)),
+    payoutCoin: coinAmountSchema,
+    settlementPnlCoin: coinAmountSchema,
+    resolvedAt: z.iso.datetime().nullable(),
+    settledAt: z.iso.datetime(),
+  })
+  .meta({ id: 'MySettlement' });
+export type MySettlement = z.infer<typeof mySettlementSchema>;
+
+/**
+ * `GET /me/settlements` (no `.meta`: query DTO): newest payout first, one market's when named,
+ * those paid within `period`.
+ */
+export const mySettlementsQuerySchema = cursorQuerySchema.extend({
+  marketId: uuidParamSchema.optional(),
+  period: recentPeriodSchema.optional(),
+});
+export type MySettlementsQuery = z.infer<typeof mySettlementsQuerySchema>;
 
 /**
  * 최근 체결 한 건, public and anonymous (ADR-0107 결정 6 '남은 것'의 #60 3·6·17·20항, ADR-0116):

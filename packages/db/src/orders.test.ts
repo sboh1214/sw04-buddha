@@ -28,7 +28,15 @@ import {
   type OrderRow,
   type PlaceOrderResult,
 } from './orders.js';
-import { balances, fills, ledgerEntries, markets, orders, positions } from './schema/index.js';
+import {
+  balances,
+  fillRealizations,
+  fills,
+  ledgerEntries,
+  markets,
+  orders,
+  positions,
+} from './schema/index.js';
 import { contractBook, positionOf } from './test/contracts.js';
 import {
   createConfiguredOpenMarket,
@@ -911,6 +919,127 @@ describe.skipIf(!hasTestDb())('order intake (#119, docker test profile)', () => 
         costBasisCoin: 65n,
         realizedPnlCoin: 15n,
       });
+      expect(await checkOrderInvariants(t.db)).toEqual([]);
+    });
+  });
+
+  describe('what a sale realised (#124)', () => {
+    /** Every `fill_realizations` row, in fill order. */
+    const realizations = () =>
+      t.db.select().from(fillRealizations).orderBy(fillRealizations.fillId);
+
+    it('records one row per fill of a sell that walks three price levels, adding up to its position', async () => {
+      // 3 YES for 100 (one pair at 34, two at 33), sold at once into bids of 40, 39 and 38: the
+      // cost released is 33, then round(67 / 2) = 34, then the 33 left — by the order of the fills.
+      const m = await market();
+      const s = await member();
+      const other = await member();
+      await mintTestPairs(t.db, {
+        marketId: m,
+        yesHolderId: s,
+        noHolderId: other,
+        qty: 1,
+        yesPriceCoin: 34,
+      });
+      await mintTestPairs(t.db, {
+        marketId: m,
+        yesHolderId: s,
+        noHolderId: other,
+        qty: 2,
+        yesPriceCoin: 33,
+      });
+      const r = await member();
+      for (const price of [40, 39, 38]) await order(r, m, 'YES', 'buy', 'gtc', price, 1);
+      // Mints and resting buys sell nothing.
+      expect(await realizations()).toEqual([]);
+      const before = (await positionOf(t.db, s, m, 'YES'))!;
+      expect(before).toMatchObject({ qty: 3, costBasisCoin: 100n, realizedPnlCoin: 0n });
+
+      // Narrowed to the best bid 40 − 5 ticks: it walks all three.
+      const sold = await order(s, m, 'YES', 'sell', 'ioc', 30, 3);
+      expect(sold.order).toMatchObject({ status: 'filled', filledQty: 3, filledAmountCoin: 117n });
+      expect(sold.fills.map((f) => [f.kind, f.priceCoin, f.qty])).toEqual([
+        ['trade', 40, 1],
+        ['trade', 39, 1],
+        ['trade', 38, 1],
+      ]);
+      const rows = await realizations();
+      expect(rows).toEqual([
+        {
+          fillId: sold.fills[0]!.id,
+          proceedsCoin: 40n,
+          costReleasedCoin: 33n,
+          realizedPnlCoin: 7n,
+        },
+        {
+          fillId: sold.fills[1]!.id,
+          proceedsCoin: 39n,
+          costReleasedCoin: 34n,
+          realizedPnlCoin: 5n,
+        },
+        {
+          fillId: sold.fills[2]!.id,
+          proceedsCoin: 38n,
+          costReleasedCoin: 33n,
+          realizedPnlCoin: 5n,
+        },
+      ]);
+      // Σ per fill is what the position gained and gave up, to the Coin.
+      const after = (await positionOf(t.db, s, m, 'YES'))!;
+      const sum = (pick: (row: (typeof rows)[number]) => bigint) =>
+        rows.reduce((total, row) => total + pick(row), 0n);
+      expect(sum((row) => row.realizedPnlCoin)).toBe(
+        after.realizedPnlCoin - before.realizedPnlCoin,
+      );
+      expect(sum((row) => row.costReleasedCoin)).toBe(before.costBasisCoin - after.costBasisCoin);
+      expect(sum((row) => row.proceedsCoin)).toBe(sold.order.filledAmountCoin);
+      expect(after).toMatchObject({ qty: 0, costBasisCoin: 0n, realizedPnlCoin: 17n });
+      expect(await checkOrderInvariants(t.db)).toEqual([]);
+    });
+
+    it('records a resting sell when it is met, and nothing for a buy, a pair mint or a rejected order', async () => {
+      const m = await market();
+      // S holds 2 YES for 100 and offers one at 70; A takes it at once: the fill is A's buy, the
+      // seller its resting side.
+      const s = await yesHolder(m, 2);
+      const a = await member();
+      await order(s, m, 'YES', 'sell', 'gtc', 70, 1);
+      expect(await realizations()).toEqual([]);
+      const taken = await order(a, m, 'YES', 'buy', 'ioc', 70, 1);
+      expect(taken.fills.map((f) => [f.kind, f.side, f.restingOwnerId])).toEqual([
+        ['trade', 'buy', s],
+      ]);
+      const recorded = [
+        {
+          fillId: taken.fills[0]!.id,
+          proceedsCoin: 70n,
+          costReleasedCoin: 50n,
+          realizedPnlCoin: 20n,
+        },
+      ];
+      expect(await realizations()).toEqual(recorded);
+      expect(await positionOf(t.db, s, m, 'YES')).toMatchObject({
+        qty: 1,
+        costBasisCoin: 50n,
+        realizedPnlCoin: 20n,
+      });
+
+      // A pair mint through the intake: two buys, nothing sold.
+      const b = await member();
+      await order(b, m, 'NO', 'buy', 'gtc', 45, 1);
+      const minted = await order(a, m, 'YES', 'buy', 'ioc', 55, 1);
+      expect(minted.fills.map((f) => f.kind)).toEqual(['pair_mint']);
+      // Rejected sells: no bid to meet (호가 부족), and no contract to sell (보유량 부족).
+      const noQuote = await order(s, m, 'YES', 'sell', 'ioc', 40, 1);
+      expect(noQuote.order).toMatchObject({ status: 'rejected', rejectReason: 'no_quote' });
+      const nothingHeld = await order(b, m, 'YES', 'sell', 'ioc', 40, 1);
+      expect(nothingHeld.order).toMatchObject({
+        status: 'rejected',
+        rejectReason: 'insufficient_contracts',
+      });
+      expect(noQuote.fills).toEqual([]);
+      expect(nothingHeld.fills).toEqual([]);
+      expect(await realizations()).toEqual(recorded);
       expect(await checkOrderInvariants(t.db)).toEqual([]);
     });
   });

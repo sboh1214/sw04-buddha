@@ -22,6 +22,7 @@ import {
   dataOf,
   documentSurvived,
   expect,
+  expectNoSideScroll,
   freshEmail,
   holdOrderCancel,
   markDocument,
@@ -110,6 +111,8 @@ const MY_FILL_KEYS = [
   'outcome',
   'priceCoin',
   'qty',
+  // A sell line's 실현 손익 (#124, ADR-0143): the caller's own side's, null on a buy line.
+  'realizedPnlCoin',
   'side',
   'yesPriceCoin',
 ];
@@ -257,6 +260,11 @@ test.describe('주문 접수 (#119)', () => {
       await expect(filledRow).toContainText('60.00 Coin');
       const refusedRow = history.getByTestId(`portfolio-order-${refused.id}`);
       await expect(refusedRow).toContainText(copy.orderStatusRejected);
+      // #124 (ADR-0143): the refusal by its reason's name, with nothing filled.
+      await expect(refusedRow.getByTestId('portfolio-order-reason')).toHaveText(
+        copy.orderRejectNameNoQuote,
+      );
+      await expect(refusedRow.getByTestId('history-order-filled')).toHaveText('0계약');
       await otherPage.goto('/my/orders');
       const restingRow = otherPage
         .getByTestId('my-orders')
@@ -682,6 +690,9 @@ test.describe('대기 주문과 주문 상세 (#123)', () => {
         'href',
         `/my/orders/${noBid.id}`,
       );
+      // #124 (ADR-0143 결정 6, N02 §7): what filled and what the cancel left, side by side.
+      await expect(historyRow.getByTestId('history-order-filled')).toHaveText('1계약');
+      await expect(historyRow.getByTestId('history-order-cancelled')).toHaveText('1계약');
 
       // --- B at A's order: no order at all, and its fills are never asked for.
       const fillReads: string[] = [];
@@ -950,13 +961,188 @@ test.describe('보유 계약 (#67)', () => {
   });
 });
 
-/** No page scroll sideways at this width (R16): the widest row still wraps inside it. */
-async function expectNoSideScroll(page: Page): Promise<void> {
-  const fits = await page.evaluate(
-    () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
-  );
-  expect(fits).toBe(true);
-}
+/**
+ * 거래·정산 이력 (#124, ADR-0143; ADR-0135 G1~G4): the account's fills as 체결 draws them — one
+ * line per fill, 실현 손익 on the sell line alone, from the record its fill wrote — and the two
+ * filters every list shares: 기간 (the four choices, the whole history first) and one market, by a
+ * row's '이 시장만 보기' and by the 시장 고르기 box, kept through a change of 기록 종류; and
+ * another account under the same address sees none of it. No settlement here (settlement.spec.ts
+ * draws 정산), and the period's far edge is the API suite's. A sends three orders, B three.
+ */
+test.describe('거래·정산 이력 (#124)', () => {
+  test('거래·정산 이력의 체결과 필터 (#124)', async ({ admin, browser, page }) => {
+    // A title long enough to press on the chip at 375.
+    const market = await createOpenMarket(admin, {
+      group: '거래·정산 이력의 체결과 필터를 보는 아주 긴 제목의 시장',
+    });
+    const other = await createOpenMarket(admin);
+    const wide = (page.viewportSize()?.width ?? 0) >= 768;
+    const bContext = await browser.newContext();
+    try {
+      const bPage = await bContext.newPage();
+      await signUp(page, freshEmail());
+      await signUp(bPage, freshEmail());
+      const a = page.request;
+      const b = bPage.request;
+      const order = (context: APIRequestContext, marketId: string, t: OrderTerms) =>
+        placeOrder(context, marketId, crypto.randomUUID(), t);
+
+      // --- A buys YES 3 at 33, 33 and 34 (B's NO bids met as YES asks: two fills of one order),
+      // then sells one at 45 to B's bid: 45 − 33 of its cost = 12 (보유 계약's own figures, #67).
+      await order(b, market.id, terms('NO', 'buy', 'gtc', 67, 2));
+      await order(b, market.id, terms('NO', 'buy', 'gtc', 66, 1));
+      const bought = (await order(a, market.id, terms('YES', 'buy', 'ioc', 99, 3))).order;
+      expect(bought).toMatchObject({ status: 'filled', filledQty: 3, filledAmountCoin: '100' });
+      await order(b, market.id, terms('YES', 'buy', 'gtc', 45, 1));
+      const sold = (await order(a, market.id, terms('YES', 'sell', 'ioc', 1, 1))).order;
+      expect(sold).toMatchObject({ status: 'filled', filledQty: 1, filledAmountCoin: '45' });
+      // …and one order on the other market: an immediate sell of a contract A does not hold.
+      const refused = (await order(a, other.id, terms('YES', 'sell', 'ioc', 1, 1))).order;
+      expect(refused.status).toBe('rejected');
+
+      const fills = await dataOf<MyFill[]>(await a.get('/api/v1/me/fills'));
+      expect(fills.map((fill) => fill.side)).toEqual(['sell', 'buy', 'buy']);
+      const [sale, ...buys] = fills;
+      expect(sale).toMatchObject({ orderId: sold.id, priceCoin: 45, realizedPnlCoin: '12' });
+      for (const buy of buys) {
+        expect(buy).toMatchObject({ orderId: bought.id, realizedPnlCoin: null });
+      }
+
+      // --- 체결: a line per fill, newest first; 실현 손익 on the sell line alone.
+      await page.goto('/my/history?kind=fills');
+      await expect(page.getByTestId('history-kind-fills')).toHaveAttribute('aria-current', 'true');
+      const fillList = page.getByTestId('my-fill-history');
+      const fillRows = fillList.locator('[data-fill-side]');
+      await expect(fillRows).toHaveCount(fills.length);
+      const saleRow = fillList.getByTestId(`history-fill-${sale?.id ?? ''}`);
+      await expect(saleRow).toContainText(market.title);
+      await expect(saleRow).toContainText(copy.sell);
+      await expect(saleRow.getByTestId('history-fill-price')).toHaveText('45.00 Coin');
+      await expect(saleRow.getByTestId('history-fill-qty')).toHaveText('1계약');
+      await expect(saleRow.getByTestId('history-fill-amount')).toHaveText('45 Coin');
+      await expect(saleRow.getByTestId('history-fill-pnl')).toHaveText(
+        formatCoin(parseCoinAmount(sale?.realizedPnlCoin ?? '0')),
+      );
+      await expect(saleRow.getByTestId('history-fill-pnl')).toHaveText('12 Coin');
+      await expect(saleRow.getByTestId('history-fill-at')).toHaveText(
+        formatKst(sale?.createdAt ?? ''),
+      );
+      await expect(saleRow.getByTestId('history-fill-detail')).toHaveAttribute(
+        'href',
+        `/my/orders/${sold.id}`,
+      );
+      // The two price levels of the one buy: both lines, neither with a 실현 손익 cell.
+      for (const [index, price] of [
+        [0, '34.00 Coin'],
+        [1, '33.00 Coin'],
+      ] as const) {
+        const buyRow = fillList.getByTestId(`history-fill-${buys[index]?.id ?? ''}`);
+        await expect(buyRow).toContainText(copy.buy);
+        await expect(buyRow.getByTestId('history-fill-price')).toHaveText(price);
+        await expect(buyRow.getByTestId('history-fill-pnl')).toHaveCount(0);
+        await expect(buyRow.getByTestId('history-fill-detail')).toHaveAttribute(
+          'href',
+          `/my/orders/${bought.id}`,
+        );
+      }
+      if (!wide) await expectNoSideScroll(page);
+
+      // --- 기간: four choices, the whole history first; 최근 7일 writes the address and keeps
+      // the fills just made.
+      const period = page.getByTestId('history-period');
+      await expect(period.locator('option')).toHaveText([
+        copy.historyPeriodAll,
+        copy.historyPeriod7d,
+        copy.historyPeriod30d,
+        copy.historyPeriod90d,
+      ]);
+      await expect(period).toHaveValue('');
+      await period.selectOption('7d');
+      await expect(page).toHaveURL('/my/history?kind=fills&period=7d');
+      await expect(period).toHaveValue('7d');
+      await expect(fillRows).toHaveCount(fills.length);
+
+      // --- 기록 종류 keeps the filter: 주문 under 최근 7일 holds both markets' ended orders.
+      await page.getByTestId('history-kind-orders').click();
+      await expect(page).toHaveURL('/my/history?period=7d');
+      await expect(period).toHaveValue('7d');
+      const orderList = page.getByTestId('my-order-history');
+      const refusedRow = orderList.getByTestId(`portfolio-order-${refused.id}`);
+      await expect(refusedRow).toContainText(copy.orderStatusRejected);
+      await expect(orderList.getByTestId(`portfolio-order-${sold.id}`)).toBeVisible();
+      await expect(orderList.getByTestId(`portfolio-order-${bought.id}`)).toBeVisible();
+
+      // --- '이 시장만 보기' on the first market's row: the address names the market, the other
+      // market's row leaves, the chip names the market and the rows offer the link no more.
+      await orderList
+        .getByTestId(`portfolio-order-${sold.id}`)
+        .getByTestId('history-only-market')
+        .click();
+      await expect(page).toHaveURL(`/my/history?period=7d&market=${market.id}`);
+      const chip = page.getByTestId('history-market-chip');
+      await expect(chip).toContainText(`${copy.historyMarketChip}: ${market.title}`);
+      await expect(refusedRow).toHaveCount(0);
+      await expect(orderList.getByTestId(`portfolio-order-${sold.id}`)).toBeVisible();
+      await expect(orderList.getByTestId('history-only-market')).toHaveCount(0);
+      await expect(page.getByTestId('history-market-pick')).toHaveCount(0);
+      // The long title stays inside a phone's width, on 주문 and on 체결.
+      if (!wide) await expectNoSideScroll(page);
+      await page.getByTestId('history-kind-fills').click();
+      await expect(page).toHaveURL(`/my/history?kind=fills&period=7d&market=${market.id}`);
+      await expect(chip).toContainText(market.title);
+      await expect(fillRows).toHaveCount(fills.length);
+      if (!wide) await expectNoSideScroll(page);
+
+      // --- Another account under the same address: none of A's lines, and its own empty list.
+      await bPage.goto(`/my/history?kind=fills&period=7d&market=${other.id}`);
+      await expect(bPage.getByTestId('my-fill-history-empty')).toHaveText(
+        copy.historyFilteredEmpty,
+      );
+      await bPage.goto(`/my/history?period=7d&market=${market.id}`);
+      const bOrders = bPage.getByTestId('my-order-history');
+      await expect(bOrders.locator('[data-testid^="portfolio-order-"]').first()).toBeVisible();
+      for (const mine of [bought, sold]) {
+        await expect(bPage.getByTestId(`portfolio-order-${mine.id}`)).toHaveCount(0);
+      }
+      await bPage.goto(`/my/history?kind=fills&market=${market.id}`);
+      await expect(
+        bPage.getByTestId('my-fill-history').locator('[data-fill-side]').first(),
+      ).toBeVisible();
+      // B's side of the same fills: its own orders' lines, and no 실현 손익 of A's sale on its buy.
+      const bFills = await dataOf<MyFill[]>(await b.get(`/api/v1/me/fills?marketId=${market.id}`));
+      expect(bFills.map((fill) => fill.id).sort()).toEqual(fills.map((fill) => fill.id).sort());
+      const bSideOfSale = bFills.find((fill) => fill.id === sale?.id);
+      expect(bSideOfSale).toMatchObject({ side: 'buy', realizedPnlCoin: null });
+      const bSaleRow = bPage.getByTestId(`history-fill-${sale?.id ?? ''}`);
+      await expect(bSaleRow).toHaveAttribute('data-fill-side', 'buy');
+      await expect(bSaleRow.getByTestId('history-fill-pnl')).toHaveCount(0);
+
+      // --- The chip's 해제 gives the market back; 시장 고르기 picks the other one by its title.
+      await page.getByTestId('history-market-clear').click();
+      await expect(page).toHaveURL('/my/history?kind=fills&period=7d');
+      await expect(chip).toHaveCount(0);
+      await page.getByTestId('history-market-pick').click();
+      await page.getByTestId('history-market-picker-input').fill(other.title);
+      await page.getByTestId('history-market-picker-submit').click();
+      await page.getByRole('button', { name: `${other.title} ${copy.marketPickerPick}` }).click();
+      await expect(page).toHaveURL(`/my/history?kind=fills&period=7d&market=${other.id}`);
+      await expect(chip).toContainText(other.title);
+      // A filled nothing there: a filter that left no line says so, not that there is no history.
+      await expect(page.getByTestId('my-fill-history-empty')).toHaveText(copy.historyFilteredEmpty);
+      await page.getByTestId('history-kind-orders').click();
+      await expect(page).toHaveURL(`/my/history?period=7d&market=${other.id}`);
+      await expect(refusedRow).toBeVisible();
+      await expect(orderList.getByTestId(`portfolio-order-${sold.id}`)).toHaveCount(0);
+      // A reload draws the same lists from the address alone.
+      await page.reload();
+      await expect(refusedRow).toBeVisible();
+      await expect(period).toHaveValue('7d');
+      await expect(chip).toContainText(other.title);
+    } finally {
+      await bContext.close();
+    }
+  });
+});
 
 /** What a public book carries (#179): no order, account, account type or count (결정 5). */
 const BOOK_KEYS = ['contracts', 'marketId', 'marketRejectReason'];
@@ -1613,9 +1799,13 @@ test.describe('시장 마감과 주문 만료 (#120)', () => {
 
       // --- MY: A's 거래·정산 이력 holds the order as 만료.
       await page.goto('/my/history');
-      await expect(
-        page.getByTestId('my-order-history').getByTestId(`portfolio-order-${resting.id}`),
-      ).toContainText(copy.orderStatusExpired);
+      const expiredRow = page
+        .getByTestId('my-order-history')
+        .getByTestId(`portfolio-order-${resting.id}`);
+      await expect(expiredRow).toContainText(copy.orderStatusExpired);
+      // #124 (ADR-0143 결정 6): the fill it kept beside the rest the close ended.
+      await expect(expiredRow.getByTestId('history-order-filled')).toHaveText('1계약');
+      await expect(expiredRow.getByTestId('history-order-cancelled')).toHaveText('2계약');
       // …and its 주문 상세 (#123, ADR-0141) says 만료 and why: the trading ended.
       await page.goto(`/my/orders/${resting.id}`);
       await expect(page.getByTestId('order-detail-status')).toHaveText(copy.orderStatusExpired);

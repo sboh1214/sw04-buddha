@@ -7,6 +7,7 @@ import {
   MARKET_TEXT_MAX,
   TICKS_MAX_POINTS,
 } from './constants.js';
+import { RECENT_PERIODS, RECENT_PERIOD_HOURS } from './api/period.js';
 import { findExcludedIdentifier } from './guards/excluded.js';
 import { STORABLE_INSTANT_MIN, STORABLE_INSTANT_TOO_EARLY } from './market-rules.js';
 import { TIME_ITEMS } from './market-times.js';
@@ -31,6 +32,8 @@ import {
   myFillSchema,
   myFillsQuerySchema,
   myOrdersQuerySchema,
+  mySettlementSchema,
+  mySettlementsQuerySchema,
   orderSchema,
   placeOrderResultSchema,
   positionSchema,
@@ -894,9 +897,20 @@ describe('own order and fill DTOs (#119)', () => {
       amountCoin: '400',
       yesPriceCoin: 60,
       feeCoin: '0',
+      realizedPnlCoin: null,
       createdAt: at,
     };
     expect(myFillSchema.parse(own)).toEqual(own);
+    // #124: a sell's realised P&L, negative below cost; null on a buy and on a sell with no
+    // record — the key is always there.
+    for (const realizedPnlCoin of ['12', '-10', '0']) {
+      const sell = { ...own, side: 'sell', realizedPnlCoin };
+      expect(myFillSchema.parse(sell)).toEqual(sell);
+    }
+    expect(myFillSchema.safeParse({ ...own, realizedPnlCoin: 12 }).success).toBe(false);
+    expect(myFillSchema.safeParse({ ...own, realizedPnlCoin: '1.5' }).success).toBe(false);
+    const { realizedPnlCoin: _dropped, ...withoutPnl } = own;
+    expect(myFillSchema.safeParse(withoutPnl).success).toBe(false);
     const parsed = myFillSchema.parse({
       ...own,
       kind: 'pair_mint',
@@ -926,6 +940,96 @@ describe('own order and fill DTOs (#119)', () => {
       limit: 20,
     });
     expect(myFillsQuerySchema.safeParse({ orderId: 'x' }).success).toBe(false);
+  });
+
+  it('filter the own lists by a recent period: 7, 30 or 90 days, omitted for all (#124)', () => {
+    expect([...RECENT_PERIODS]).toEqual(['7d', '30d', '90d']);
+    // N days are N × 24 hours, whatever the calendar says.
+    expect(RECENT_PERIOD_HOURS).toEqual({ '7d': 168, '30d': 720, '90d': 2160 });
+    for (const schema of [myOrdersQuerySchema, myFillsQuerySchema, mySettlementsQuerySchema]) {
+      for (const period of RECENT_PERIODS) {
+        expect(schema.parse({ period })).toEqual({ period, limit: 20 });
+      }
+      expect(schema.parse({})).not.toHaveProperty('period');
+      // No `all` value, no free number of days, no date.
+      for (const period of ['all', '', '1d', '7', '7D', '365d', '2026-11-01']) {
+        expect(schema.safeParse({ period }).success, period).toBe(false);
+      }
+    }
+    expect(myOrdersQuerySchema.parse({ marketId, state: 'ended', period: '30d' })).toEqual({
+      marketId,
+      state: 'ended',
+      period: '30d',
+      limit: 20,
+    });
+    expect(mySettlementsQuerySchema.parse({ marketId, period: '90d', limit: '1' })).toEqual({
+      marketId,
+      period: '90d',
+      limit: 1,
+    });
+    expect(mySettlementsQuerySchema.safeParse({ marketId: 'x' }).success).toBe(false);
+  });
+
+  it('parse an own settlement record: a zero payout and a VOID one, nothing of the books', () => {
+    const lost = {
+      marketId,
+      marketSlug: summary.slug,
+      marketTitle: summary.title,
+      outcome: 'NO',
+      result: 'YES',
+      qty: 3,
+      costBasisCoin: '120',
+      payoutPerContractCoin: 0,
+      payoutCoin: '0',
+      settlementPnlCoin: '-120',
+      resolvedAt: at,
+      settledAt: at,
+    };
+    expect(mySettlementSchema.parse(lost)).toEqual(lost);
+    const voided = {
+      ...lost,
+      result: 'VOID',
+      payoutPerContractCoin: 50,
+      payoutCoin: '150',
+      settlementPnlCoin: '30',
+      resolvedAt: null,
+    };
+    expect(mySettlementSchema.parse(voided)).toEqual(voided);
+    expect(Object.keys(mySettlementSchema.shape).sort()).toEqual(Object.keys(lost).sort());
+    // What the record and the books hold beside these never reaches the line.
+    const parsed = mySettlementSchema.parse({
+      ...lost,
+      userId: 'u',
+      ledgerEntryId: 7,
+      realizedPnlBeforeCoin: '5',
+      judgementVersion: 1,
+      ruleVersion: 1,
+      feeCoin: '0',
+    });
+    for (const hidden of [
+      'userId',
+      'ledgerEntryId',
+      'realizedPnlBeforeCoin',
+      'judgementVersion',
+      'ruleVersion',
+      'feeCoin',
+    ]) {
+      expect(parsed, hidden).not.toHaveProperty(hidden);
+    }
+    for (const bad of [
+      { result: 'CANCELLED' },
+      { outcome: 'VOID' },
+      { qty: 0 },
+      { payoutPerContractCoin: 101 },
+      { payoutPerContractCoin: -1 },
+      { payoutCoin: 0 },
+      { settledAt: null },
+      { marketSlug: null },
+    ]) {
+      expect(mySettlementSchema.safeParse({ ...lost, ...bad }).success, JSON.stringify(bad)).toBe(
+        false,
+      );
+    }
   });
 });
 

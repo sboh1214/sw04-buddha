@@ -134,6 +134,7 @@ import {
   noticeImages,
   notices,
   phoneVerifications,
+  positionSettlements,
   positions,
   postComments,
   postImages,
@@ -750,6 +751,108 @@ export async function createPosition(db: Db, input: CreatePositionInput) {
     })
     .returning();
   return row!;
+}
+
+export interface CreateSettlementRecordInput {
+  /** A SETTLING market with a YES or NO result (`createMarket`, `status: 'settling'`). */
+  marketId: string;
+  /** The holder: an account that is not closed, with no position of `outcome` there yet. */
+  userId: string;
+  /** The losing contract: the one the market's result is not. */
+  outcome: Outcome;
+  /** The contracts held at settlement, 1 or more. */
+  qty: number;
+  /** The remaining cost. Default 0. */
+  costBasisCoin?: bigint;
+  /** What the position had realised by its sales before settlement. Default 0. */
+  realizedPnlBeforeCoin?: bigint;
+  /** When the record says it was paid. Default: the database clock. A past time may be given. */
+  settledAt?: Date;
+}
+
+/**
+ * One permanent settlement record of a losing holding (#126, `position_settlements`), written
+ * straight to the table for the reads of #124 (`GET /me/settlements`): the live holding first
+ * (`createPosition`), then — in one transaction under the market lock, as migration 0064 asks —
+ * the record that snapshots it (payout 0, settlement P&L minus the cost) and the holding's
+ * retirement (settled, quantity and cost 0, realised P&L the record's before plus its own). The
+ * record carries the market row's result, judgement version and rule version.
+ *
+ * A losing contract only: a record with a payout names its exact SETTLEMENT_PAYOUT ledger entry
+ * at the record's instant, which only the real settlement writes (`settleMarketPositions`) — a
+ * zero payout names none, so `settledAt` is free. No ledger entry, balance or collateral moves
+ * and the market stays SETTLING, so never pair it with a check of the settlement's books
+ * (`reconcileMarketSettlement`) on that market.
+ */
+export async function createSettlementRecord(db: Db, input: CreateSettlementRecordInput) {
+  const costBasisCoin = input.costBasisCoin ?? 0n;
+  const realizedPnlBeforeCoin = input.realizedPnlBeforeCoin ?? 0n;
+  const [market] = await db
+    .select({
+      status: markets.status,
+      result: markets.resolvedResult,
+      judgementVersion: markets.judgementVersion,
+      ruleVersion: markets.ruleVersion,
+    })
+    .from(markets)
+    .where(eq(markets.id, input.marketId));
+  if (market?.status !== 'settling' || market.result === null) {
+    throw new Error('createSettlementRecord: the market must be SETTLING with a result');
+  }
+  if (market.result === 'VOID' || market.result === input.outcome) {
+    throw new Error('createSettlementRecord: only a losing contract (a zero payout) is made here');
+  }
+  const result = market.result;
+  await createPosition(db, {
+    userId: input.userId,
+    marketId: input.marketId,
+    outcome: input.outcome,
+    qty: input.qty,
+    costBasisCoin,
+    realizedPnlCoin: realizedPnlBeforeCoin,
+  });
+  return db.transaction(async (tx) => {
+    await lockMarket(tx, input.marketId);
+    const settledAt = input.settledAt ?? (await clockTimestamp(tx));
+    const [record] = await tx
+      .insert(positionSettlements)
+      .values({
+        marketId: input.marketId,
+        userId: input.userId,
+        outcome: input.outcome,
+        judgementVersion: market.judgementVersion,
+        ruleVersion: market.ruleVersion,
+        result,
+        qty: input.qty,
+        costBasisCoin,
+        realizedPnlBeforeCoin,
+        payoutPerContractCoin: 0,
+        payoutCoin: 0n,
+        settlementPnlCoin: -costBasisCoin,
+        ledgerEntryId: null,
+        settledAt,
+      })
+      .returning();
+    // The retirement 0064's deferred trigger looks for at COMMIT.
+    await tx
+      .update(positions)
+      .set({
+        qty: 0,
+        lockedQty: 0,
+        costBasisCoin: 0n,
+        realizedPnlCoin: realizedPnlBeforeCoin - costBasisCoin,
+        settled: true,
+        updatedAt: settledAt,
+      })
+      .where(
+        and(
+          eq(positions.userId, input.userId),
+          eq(positions.marketId, input.marketId),
+          eq(positions.outcome, input.outcome),
+        ),
+      );
+    return record!;
+  });
 }
 
 export interface CreateFillInput {

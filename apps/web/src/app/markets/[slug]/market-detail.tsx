@@ -20,7 +20,7 @@ import { formatCoin, isPreCloseMarketStatus, parseCoinAmount } from '@buddha/sha
 import { useQueryClient } from '@tanstack/react-query';
 import type { Route } from 'next';
 import NextLink from 'next/link';
-import { Fragment, type ReactNode, useState } from 'react';
+import { Fragment, type ReactNode, useEffect, useState } from 'react';
 import { MarketJudgingRecord } from '@/components/market/market-judging-record';
 import { CountdownBadge } from '@/components/market/countdown-badge';
 import { MyPosition } from '@/components/market/my-position';
@@ -52,6 +52,7 @@ import {
   DETAIL_VIEW_ITEMS,
   type DetailView,
   type DetailWidth,
+  JUDGING_RECORD_ANCHOR,
   ORDER_COLUMN_MAX_H,
   ORDER_COLUMN_TOP,
   type PersonalAreaView,
@@ -60,6 +61,7 @@ import {
   copyTestId,
   delta24h,
   detailViewOf,
+  drawnAnchor,
   marketRefreshNotice,
   nextReviewWaitAt,
   perWidth,
@@ -136,6 +138,23 @@ const DETAIL_COLUMNS = {
   lg: 'minmax(0, 1fr) 360px',
 };
 
+/**
+ * `/markets/<slug>#judging-record` (#124, ADR-0143 결정 11-8): the way 거래·정산 이력's 정산 줄 opens the
+ * detail at 공개 판정 기록. The record is in the DOM once per width, so the address names a
+ * `data-anchor`, not an id, and the copy this width draws is the one scrolled to (`drawnAnchor`).
+ * Once, when the market's row — which carries the record — is there (`ready`): the sections above
+ * it are laid out by then, so the place holds. Nothing happens under any other address.
+ */
+function useJudgingRecordAnchor(ready: boolean) {
+  useEffect(() => {
+    if (!ready || window.location.hash !== `#${JUDGING_RECORD_ANCHOR}`) return;
+    const copies = [
+      ...document.querySelectorAll<HTMLElement>(`[data-anchor="${JUDGING_RECORD_ANCHOR}"]`),
+    ].map((element) => ({ element, drawn: element.getClientRects().length > 0 }));
+    drawnAnchor(copies)?.element.scrollIntoView({ block: 'start' });
+  }, [ready]);
+}
+
 export interface MarketDetailProps {
   /** The row's canonical lower-cased uuid — the key the page seeded and the socket writes. */
   marketId: string;
@@ -192,6 +211,7 @@ export function MarketDetail({
     signedIn: session.data != null,
   });
   const data = market.data;
+  useJudgingRecordAnchor(data !== undefined);
   // Read off the live row, so a `market:status` that closes the market takes the order column,
   // the 매수 bar and an open sheet away with it (ADR-0048).
   const orderArea = showsOrderArea(data?.status);

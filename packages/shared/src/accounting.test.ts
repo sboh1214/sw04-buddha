@@ -91,6 +91,116 @@ describe('applySell', () => {
     );
   });
 
+  /**
+   * What each sale of a run realised and released, as @buddha/db `applyTradeFill` records it per
+   * fill (#124, `fill_realizations`): the before/after difference of the state it wrote.
+   */
+  function sales(start: PositionState, sells: readonly [qty: number, proceedsCoin: bigint][]) {
+    let state = start;
+    const rows = sells.map(([qty, proceedsCoin]) => {
+      const next = applySell(state, qty, proceedsCoin);
+      const row = {
+        released: state.costBasisCoin - next.costBasisCoin,
+        realized: next.realizedPnlCoin - state.realizedPnlCoin,
+      };
+      state = next;
+      return row;
+    });
+    return { rows, end: state };
+  }
+
+  it('realises per fill by the order of the fills: 100 over 3 at 40 each is +7, +6, +7', () => {
+    // Path-dependent: the first sale releases round(100/3) = 33, the second round(67/2) = 34
+    // (half-up), the last what is left — so a backfill replays the fills in order (#124).
+    const { rows, end } = sales({ qty: 3, costBasisCoin: 100n, realizedPnlCoin: 0n }, [
+      [1, 40n],
+      [1, 40n],
+      [1, 40n],
+    ]);
+    expect(rows).toEqual([
+      { released: 33n, realized: 7n },
+      { released: 34n, realized: 6n },
+      { released: 33n, realized: 7n },
+    ]);
+    expect(end).toEqual({ qty: 0, costBasisCoin: 0n, realizedPnlCoin: 20n });
+  });
+
+  it('realises 340 over 7 as +23 on 2 at 60, then −18 on the other 5 at 45', () => {
+    const { rows, end } = sales({ qty: 7, costBasisCoin: 340n, realizedPnlCoin: 0n }, [
+      [2, 120n],
+      [5, 225n],
+    ]);
+    // 340 × 2 / 7 = 97.14… → 97; the rest releases the 243 left.
+    expect(rows).toEqual([
+      { released: 97n, realized: 23n },
+      { released: 243n, realized: -18n },
+    ]);
+    expect(end).toEqual({ qty: 0, costBasisCoin: 0n, realizedPnlCoin: 5n });
+  });
+
+  it('rounds the released cost half-up at the exact half, and down just below it', () => {
+    // 5 × 1 / 2 = 2.5 → 3; 5 × 1 / 3 = 1.67 → 2; 4 × 1 / 3 = 1.33 → 1; 1 × 1 / 2 = 0.5 → 1.
+    const released = (costBasisCoin: bigint, qty: number) =>
+      sales({ qty, costBasisCoin, realizedPnlCoin: 0n }, [[1, 0n]]).rows[0]!.released;
+    expect(released(5n, 2)).toBe(3n);
+    expect(released(5n, 3)).toBe(2n);
+    expect(released(4n, 3)).toBe(1n);
+    expect(released(1n, 2)).toBe(1n);
+    expect(released(0n, 2)).toBe(0n);
+  });
+
+  it('adds up per fill to the position: Σ realised is the P&L, Σ released the cost sold', () => {
+    // Any run of buys and sells: the per-fill figures are differences of one running state, so
+    // their sums are the position's — to the Coin, whatever the rounding of each sale (#124).
+    fc.assert(
+      fc.property(
+        fc.array(
+          fc.record({
+            buy: fc.boolean(),
+            qty: fc.integer({ min: 1, max: 1_000 }),
+            priceCoin: fc.integer({ min: 1, max: 99 }),
+          }),
+          { minLength: 1, maxLength: 40 },
+        ),
+        (steps) => {
+          let state = empty;
+          let bought = 0n;
+          let realized = 0n;
+          let released = 0n;
+          for (const step of steps) {
+            const amount = BigInt(step.priceCoin) * BigInt(step.qty);
+            if (step.buy || state.qty === 0) {
+              state = applyBuy(state, step.qty, amount);
+              bought += amount;
+              continue;
+            }
+            const qty = Math.min(step.qty, state.qty);
+            const proceeds = BigInt(step.priceCoin) * BigInt(qty);
+            const next = applySell(state, qty, proceeds);
+            const cost = state.costBasisCoin - next.costBasisCoin;
+            expect(cost).toBeGreaterThanOrEqual(0n);
+            expect(next.realizedPnlCoin - state.realizedPnlCoin).toBe(proceeds - cost);
+            // What a fill's record holds, summed on its own — not the state's own differences.
+            realized += proceeds - cost;
+            released += cost;
+            state = next;
+          }
+          expect(realized).toBe(state.realizedPnlCoin);
+          // Every Coin of cost is either still in the position or was released by a sale.
+          expect(released + state.costBasisCoin).toBe(bought);
+          // Sold out: the sales released the whole cost.
+          if (state.qty > 0) {
+            const proceeds = BigInt(state.qty);
+            const last = applySell(state, state.qty, proceeds);
+            expect(released + state.costBasisCoin - last.costBasisCoin).toBe(bought);
+            expect(last.costBasisCoin).toBe(0n);
+          }
+        },
+      ),
+      { numRuns: 500 },
+    );
+  });
+
   it('refuses to sell more than is held, or a non-positive amount', () => {
     const held: PositionState = { qty: 10, costBasisCoin: 500n, realizedPnlCoin: 0n };
     expect(() => applySell(held, 15, 700n)).toThrow(RangeError);

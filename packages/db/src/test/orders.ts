@@ -42,7 +42,7 @@ import {
   type PlaceOrderInput,
   type PlaceOrderResult,
 } from '../orders.js';
-import { fills, markets, orders, profiles, user } from '../schema/index.js';
+import { fillRealizations, fills, markets, orders, profiles, user } from '../schema/index.js';
 import { clockTimestamp, lockMarket } from '../tx-helpers.js';
 import { contractBook } from './contracts.js';
 import { TEST_PRICE_PROTECTION_TICKS, createUser, setReleaseSetting } from './factories.js';
@@ -210,6 +210,13 @@ export interface CreateFillRecordInput {
   qty?: number;
   /** The orders' and the fill's instant. Default: the database clock. */
   createdAt?: Date;
+  /**
+   * The seller's `fill_realizations` row (#124, migration 0076) with this realised P&L, the cost
+   * released being the fill's amount less it (so at most the amount). A trade fill with a member
+   * on the selling side only — the incoming owner of a sell, the resting owner of a buy. Default:
+   * no row, as a fill the backfill left out. No position moves, as with the rest of the record.
+   */
+  realization?: { realizedPnlCoin: bigint };
 }
 
 export interface FillRecord {
@@ -225,7 +232,7 @@ export interface FillRecord {
  * the price, the YES price and the amount (price × qty) — and the resting order then filled. No
  * asset and no market statistic moves (#121: the intake's alone; pair with `createMarket`'s
  * statistics when a read needs both). `String(fill.id)` is the key a test's ledger events of the
- * fill use.
+ * fill use. With `realization`, the seller's record of what the fill realised (#124) too.
  */
 export async function createFillRecord(db: Db, input: CreateFillRecordInput): Promise<FillRecord> {
   const outcome = input.outcome ?? 'YES';
@@ -303,6 +310,15 @@ export async function createFillRecord(db: Db, input: CreateFillRecordInput): Pr
         createdAt: new Date(at),
       })
       .returning();
+    if (input.realization) {
+      const proceedsCoin = fill!.amountCoin - fill!.feeCoin;
+      await tx.insert(fillRealizations).values({
+        fillId: fill!.id,
+        proceedsCoin,
+        costReleasedCoin: proceedsCoin - input.realization.realizedPnlCoin,
+        realizedPnlCoin: input.realization.realizedPnlCoin,
+      });
+    }
     const [restingFilled] = await tx
       .update(orders)
       .set({

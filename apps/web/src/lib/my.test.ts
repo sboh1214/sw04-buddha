@@ -1,14 +1,10 @@
-import {
-  LIVE_ORDER_STATUSES,
-  ORDER_STATUSES,
-  type OrderStatus,
-  isLiveOrderStatus,
-} from '@buddha/shared';
+import { LIVE_ORDER_STATUSES, ORDER_STATUSES, isLiveOrderStatus } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import {
   MY_TABS,
   isMyTabCurrent,
+  liveOrdersReading,
   myLoginPath,
   orderHistoryEmpty,
   showMoreOrders,
@@ -150,21 +146,27 @@ describe('showMoreOrders', () => {
   });
 });
 
-describe('orderHistoryEmpty', () => {
-  const order = (status: OrderStatus) => ({ status });
-
+describe('orderHistoryEmpty (#124, ADR-0143 결정 11-11)', () => {
   it('says an account that never ordered has no orders', () => {
-    expect(orderHistoryEmpty([])).toBe('none');
+    expect(orderHistoryEmpty(0, 'none')).toBe('none');
   });
 
-  it('says none has finished when every order is still 대기 — never that there are none', () => {
-    expect(orderHistoryEmpty([order('open')])).toBe('pendingOnly');
-    expect(orderHistoryEmpty([order('open'), order('partially_filled')])).toBe('pendingOnly');
+  it('says none has finished when a 대기 order is there — never that there are none', () => {
+    expect(orderHistoryEmpty(0, 'some')).toBe('pendingOnly');
   });
 
-  it('has nothing to say while a finished order is there to show', () => {
-    for (const status of ORDER_STATUSES.filter((s) => !isLiveOrderStatus(s))) {
-      expect(orderHistoryEmpty([order('open'), order(status)]), status).toBeNull();
+  it('says neither wording while 대기 주문 is still read', () => {
+    expect(orderHistoryEmpty(0, 'pending')).toBe('pending');
+  });
+
+  it('says only that none has ended when 대기 주문 could not be read', () => {
+    // '아직 주문 내역이 없습니다.' would be a claim about orders nobody read.
+    expect(orderHistoryEmpty(0, 'failed')).toBe('endedNone');
+  });
+
+  it('has nothing to say while an ended order is there to show', () => {
+    for (const live of ['some', 'none', 'pending', 'failed'] as const) {
+      expect(orderHistoryEmpty(1, live), live).toBeNull();
     }
   });
 
@@ -173,5 +175,18 @@ describe('orderHistoryEmpty', () => {
     expect(
       `${copy.portfolioOrderHistoryEmpty} ${copy.portfolioPendingOrdersHintBefore} ${copy.myOrders}${copy.portfolioPendingOrdersHintAfter}`,
     ).toBe('끝난 주문이 없습니다. 대기 중인 주문은 대기 주문에서 볼 수 있습니다.');
+  });
+});
+
+describe('liveOrdersReading', () => {
+  it("is 대기 주문's ladder: read, failed, or what it holds", () => {
+    expect(liveOrdersReading('pending', false)).toBe('pending');
+    expect(liveOrdersReading('failed', false)).toBe('failed');
+    expect(liveOrdersReading('ready', true)).toBe('some');
+    expect(liveOrdersReading('ready', false)).toBe('none');
+    // A refresh that failed keeps the rows it had, and still answers by them; with none it is
+    // as unsure as a failed read, so it never says the account has never ordered.
+    expect(liveOrdersReading('stale', true)).toBe('some');
+    expect(liveOrdersReading('stale', false)).toBe('failed');
   });
 });

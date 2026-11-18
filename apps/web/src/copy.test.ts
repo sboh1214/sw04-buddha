@@ -157,6 +157,53 @@ describe('copy', () => {
     expect(copy.supplementRejectMeaningChange).toContain('거래를 멈추고 검토');
   });
 
+  it('words 거래·정산 이력 with no refund, no principal and nothing beside a P&L (#124)', () => {
+    // N03 §6: a 무효 payout is a payout with its own P&L, not what was paid given back. N04 §3: a
+    // P&L is trade accounting — no rank, skill, score or rate of return stands beside one.
+    const historyKeys = Object.entries(copy).filter(([key]) => key.startsWith('history'));
+    expect(historyKeys.length).toBeGreaterThan(20);
+    for (const [key, text] of historyKeys) {
+      expect(text, key).not.toMatch(/환불|원금/);
+      expect(text, key).not.toMatch(/순위|랭킹|실력|점수|스코어|수익률|승률|적중/);
+    }
+    // The words the owner fixed (ADR-0135 G1~G3·결과 4) and the issue's own column names.
+    expect([copy.historyKindOrders, copy.historyKindFills, copy.historyKindSettlements]).toEqual([
+      '주문',
+      '체결',
+      '정산',
+    ]);
+    expect([
+      copy.historyPeriodAll,
+      copy.historyPeriod7d,
+      copy.historyPeriod30d,
+      copy.historyPeriod90d,
+    ]).toEqual(['전체 기간', '최근 7일', '최근 30일', '최근 90일']);
+    expect(copy.historyOnlyMarket).toBe('이 시장만 보기');
+    expect([
+      copy.historySettlementQty,
+      copy.historyPayoutPerContract,
+      copy.historyPayout,
+      copy.historySettlementPnl,
+      copy.historyResolvedAt,
+      copy.historySettledAt,
+    ]).toEqual([
+      '정산 때 보유 수량',
+      '계약당 지급',
+      '지급액',
+      '정산 손익',
+      '결과 확정',
+      '지급 완료',
+    ]);
+    // The three empty lines: each list's own, and one for a filter that left nothing.
+    expect(copy.historyFillsEmpty).toBe('아직 체결 내역이 없습니다.');
+    expect(copy.historySettlementsEmpty).toBe('아직 정산 기록이 없습니다.');
+    expect(copy.historyFilteredEmpty).toBe('조건에 맞는 기록이 없습니다.');
+    // The P&L names the lists draw are names alone.
+    for (const name of [copy.positionRealizedPnl, copy.historySettlementPnl]) {
+      expect(name).toMatch(/^(실현|정산) 손익$/);
+    }
+  });
+
   it('has no empty strings (every key renders something)', () => {
     for (const [key, text] of Object.entries(copy)) {
       expect(text.trim(), key).not.toBe('');

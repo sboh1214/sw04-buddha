@@ -96,7 +96,9 @@ describe('MY 설정’s better-auth writes name the account on screen (ADR-0092)
     // 시도 (`ProfileUnavailable`, ADR-0091's password card) — no row, 연결 or 해제 for nobody.
     // Before, the rows and 해제 stood while 연결 stayed off with no reason and no retry.
     const card = source('../app/my/settings/linked-accounts.tsx');
-    expect(card).toContain("import { ProfileUnavailable } from './profile-unavailable';");
+    expect(card).toContain(
+      "import { ProfileUnavailable } from '@/components/my/profile-unavailable';",
+    );
     const linked = declaration(card, 'LinkedAccounts');
     expect(linked).toContain('{mePending || !me ? (\n        <ProfileUnavailable />');
     // The rows are past it: the list's own states come only once the profile is there.
@@ -105,7 +107,7 @@ describe('MY 설정’s better-auth writes name the account on screen (ADR-0092)
     );
     expect(linked).not.toContain('accountId === undefined');
     // The failure the card shows is the shared one, with its retry of `GET /me`.
-    const unavailable = source('../app/my/settings/profile-unavailable.tsx');
+    const unavailable = source('../components/my/profile-unavailable.tsx');
     expect(unavailable).toContain('<Alert.Description>{copy.errProfileLoad}</Alert.Description>');
     expect(unavailable).toContain('onClick={() => void refetch()}');
   });

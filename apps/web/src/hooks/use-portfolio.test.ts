@@ -17,7 +17,6 @@ import { applyPositionEvent } from '@/lib/market-live';
 import { positionFixture } from '@/test/positions';
 import {
   type LiveMarketReading,
-  type OrdersPage,
   averageCostBp,
   combinedListState,
   dedupeAcrossLists,
@@ -29,7 +28,6 @@ import {
   priceIsStale,
   markToLiveMarket,
   orderAveragePriceBp,
-  ordersInfiniteQueryOptions,
   portfolioTotals,
   positionListStatusFor,
   positionValueCoin,
@@ -40,8 +38,6 @@ import {
   unrealizedPnlCoin,
 } from './use-portfolio';
 
-/** Whatever better-auth hands back; only "is it there" is read. */
-const SESSION = { user: { id: 'a1e1c0de-0000-4000-8000-000000000001' } };
 /** The account MY shows (`Me`'s id), which keys its holdings (#67, ADR-0142). */
 const ACCOUNT = 'a1e1c0de-0000-4000-8000-000000000001';
 
@@ -836,42 +832,6 @@ describe('positionsQueryOptions', () => {
       expect(queryClient.getQueryState(settled.queryKey)?.isInvalidated).toBe(true);
       // A different root: 'positions' and 'orders' never partial-match each other.
       expect(queryClient.getQueryState(ORDERS_KEY)?.isInvalidated).toBe(false);
-    } finally {
-      queryClient.clear();
-    }
-  });
-});
-
-describe('ordersInfiniteQueryOptions', () => {
-  it('stops paging on a null cursor and waits for the session', () => {
-    const options = ordersInfiniteQueryOptions(SESSION);
-
-    expect(options.queryKey).toEqual(ORDERS_KEY);
-    expect(options.initialPageParam).toBeUndefined();
-    expect(options.getNextPageParam({ items: [], nextCursor: null })).toBeUndefined();
-    expect(options.getNextPageParam({ items: [], nextCursor: 'cursor-2' })).toBe('cursor-2');
-    expect(ordersInfiniteQueryOptions().enabled).toBe(false);
-  });
-
-  it('accumulates `{ items, nextCursor }` pages until the cursor runs out', async () => {
-    const options = ordersInfiniteQueryOptions(SESSION);
-    const first: OrdersPage = { items: [order('o1')], nextCursor: 'cursor-2' };
-    const last: OrdersPage = { items: [order('o2')], nextCursor: null };
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    try {
-      // The real queryFn needs a cookie and a server; what is worth pinning is that the page
-      // shape and the two page-param rules compose into a list that ends by itself.
-      const data = await queryClient.fetchInfiniteQuery({
-        queryKey: options.queryKey,
-        initialPageParam: options.initialPageParam,
-        getNextPageParam: options.getNextPageParam,
-        queryFn: ({ pageParam }: { pageParam: string | undefined }) =>
-          Promise.resolve(pageParam === undefined ? first : last),
-        pages: 3,
-      });
-
-      expect(data.pageParams).toEqual([undefined, 'cursor-2']);
-      expect(data.pages.flatMap((page) => page.items).map((row) => row.id)).toEqual(['o1', 'o2']);
     } finally {
       queryClient.clear();
     }

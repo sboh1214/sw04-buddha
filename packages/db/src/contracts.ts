@@ -30,7 +30,7 @@ import {
   type LedgerEntryRow,
 } from './ledger.js';
 import { ledgerHeldMarketIds } from './ledger-held-markets.js';
-import { fills, markets, positions } from './schema/index.js';
+import { fillRealizations, fills, markets, positions } from './schema/index.js';
 import { clockTimestamp, lockMarket } from './tx-helpers.js';
 
 /*
@@ -660,11 +660,12 @@ export type TradeFillResult =
  * (TRADE_FILL, `fill(fillId)`, ref `fill`, the market named), the buyer gets back its better-price
  * difference, and qty contracts leave the seller's lock for the buyer's holding — the seller's row
  * by `applySell` (its cost released, its PnL realized), the buyer's by `applyBuy`. The collateral
- * does not move. `refused` for the same owner on both sides (self-trade, and the 운영 마켓메이커's
- * one bundle, #73 11항), an unknown owner, a price off the grid, a limit below it or a market not
- * OPEN (마감 뒤 막음, #120); `insufficient_contracts` when the seller's lock is short (no contract
- * moves unlocked);
- * `insufficient_coin` when the buyer's is.
+ * does not move. A person's sale also leaves its `fill_realizations` row (#124): the proceeds,
+ * the cost released and the P&L realised, as that same `applySell` moved the seller's row.
+ * `refused` for the same owner on both sides (self-trade, and the 운영 마켓메이커's one bundle,
+ * #73 11항), an unknown owner, a price off the grid, a limit below it or a market not OPEN (마감
+ * 뒤 막음, #120); `insufficient_contracts` when the seller's lock is short (no contract moves
+ * unlocked); `insufficient_coin` when the buyer's is.
  */
 export async function applyTradeFill(tx: Tx, input: TradeFillInput): Promise<TradeFillResult> {
   assertId('fillId', input.fillId);
@@ -733,6 +734,19 @@ export async function applyTradeFill(tx: Tx, input: TradeFillInput): Promise<Tra
     { ...sellerNext, lockedQty: sellerRow.lockedQty - qty },
     at,
   );
+  // What this sale realised, for a person's seller only (#124, ADR-0143): the before/after
+  // difference of the state just written, never worked out again, so the records of a position
+  // add up to its realised P&L to the Coin. The 운영 마켓메이커's sales are left out: its pair
+  // burns move cost and realised P&L without a fill, so its records would not add up (and
+  // migration 0076 refuses one). A replay returned above, so a fill is recorded once.
+  if (sellerHolder.kind === 'user') {
+    await tx.insert(fillRealizations).values({
+      fillId: Number(input.fillId),
+      proceedsCoin: paid,
+      costReleasedCoin: sellerRow.costBasisCoin - sellerNext.costBasisCoin,
+      realizedPnlCoin: sellerNext.realizedPnlCoin - sellerRow.realizedPnlCoin,
+    });
+  }
   const buyerPosition = await writeBuy(
     tx,
     buyerRow,

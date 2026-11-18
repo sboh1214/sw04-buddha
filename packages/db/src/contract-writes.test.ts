@@ -21,6 +21,17 @@ const POSITION_WRITERS: Record<string, string> = {
   'packages/db/src/test/factories.ts': 'test fixture',
 };
 
+/**
+ * Who writes `fill_realizations` (#124, ADR-0143), and why. A record is the before/after
+ * difference of the one computation that moved the seller's position, so it is written where
+ * that position is: a second writer would work the figures out again, and they could disagree.
+ */
+const REALIZATION_WRITERS: Record<string, string> = {
+  [CONTRACTS]: 'a person’s sale in applyTradeFill, beside the seller’s position',
+  // `createFillRecord`'s `realization`: a record for reads, with no position behind it.
+  'packages/db/src/test/orders.ts': 'test fixture',
+};
+
 /** Who else records PAIR_MINT_COLLATERAL, TRADE_FILL or PAIR_BURN_RETURN, and why. */
 const CONTRACT_RECORDERS: Record<string, string> = {
   [CONTRACTS]: 'the three contract events',
@@ -75,6 +86,14 @@ const POSITION_WRITES = [
   /\b(?:insert\s+into|update|delete\s+from|merge\s+into)\s+\$\{\s*(?:schema\.)?positions\s*\}/i,
 ];
 
+/** A write of a fill's realization record, spelled the same ways as `POSITION_WRITES`. */
+const REALIZATION_WRITES = [
+  /\.(?:insert|update|delete)\(\s*(?:schema\.)?fillRealizations\b/,
+  /\b(?:insert\s+into|delete\s+from|merge\s+into)\s+(?:public\.)?"?fill_realizations\b/i,
+  /\bupdate\s+(?:only\s+)?(?:public\.)?"?fill_realizations"?(?:\s+(?:as\s+)?"?\w+"?)?\s+set\b/i,
+  /\b(?:insert\s+into|update|delete\s+from|merge\s+into)\s+\$\{\s*(?:schema\.)?fillRealizations\s*\}/i,
+];
+
 /** A record of a contract event: its type written as the input's literal. */
 const CONTRACT_RECORDS = /\btype:\s*['"`](?:PAIR_MINT_COLLATERAL|TRADE_FILL|PAIR_BURN_RETURN)['"`]/;
 
@@ -89,6 +108,8 @@ const NAMES_CONTRACT_TYPE = /\b(?:PAIR_MINT_COLLATERAL|TRADE_FILL|PAIR_BURN_RETU
 const RECORDS_LEDGER = /\brecordLedgerEntry\s*\(|\bLedgerEntryInput\b/;
 
 const writesPositions = (text: string) => POSITION_WRITES.some((pattern) => pattern.test(text));
+const writesRealizations = (text: string) =>
+  REALIZATION_WRITES.some((pattern) => pattern.test(text));
 const recordsContracts = (text: string) => CONTRACT_RECORDS.test(text);
 const mayRecordContracts = (text: string) =>
   NAMES_CONTRACT_TYPE.test(text) && RECORDS_LEDGER.test(text);
@@ -101,6 +122,7 @@ describe('one writer of contracts (#118, static)', () => {
       expect.arrayContaining([
         CONTRACTS,
         ...Object.keys(POSITION_WRITERS),
+        ...Object.keys(REALIZATION_WRITERS),
         ...Object.keys(CONTRACT_RECORDERS),
         'packages/db/src/ledger.ts',
       ]),
@@ -113,6 +135,27 @@ describe('one writer of contracts (#118, static)', () => {
     // are not scanned: a test's own rows go through `createPosition` or raw SQL on purpose.
     const writers = sourceFiles().filter((file) => writesPositions(read(file)));
     expect(writers.sort()).toEqual(Object.keys(POSITION_WRITERS).sort());
+  });
+
+  it('writes a fill’s realization record nowhere else (#124)', () => {
+    // What a sale realised is recorded by the processing that realised it, for a person's
+    // seller only; the API and the worker read the records and never write one. Migration
+    // 0076's backfill is SQL outside the scanned trees and runs once (migration-0076.test.ts).
+    const writers = sourceFiles().filter((file) => writesRealizations(read(file)));
+    expect(writers.sort()).toEqual(Object.keys(REALIZATION_WRITERS).sort());
+    // Written once in contracts.ts: inside `applyTradeFill`, for a seller whose Coin account is
+    // a person's — never by the pair mint (nothing is sold) nor the 운영 마켓메이커's burn.
+    const contracts = read(CONTRACTS);
+    expect(contracts.match(/\.insert\(\s*fillRealizations\b/g)).toHaveLength(1);
+    // Both markers must be found, in this order: a missing one would widen the slice silently.
+    const start = contracts.indexOf('export async function applyTradeFill');
+    const end = contracts.indexOf('// ---- d. the 운영 마켓메이커');
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const tradeFill = contracts.slice(start, end);
+    expect(tradeFill).toMatch(
+      /if \(sellerHolder\.kind === 'user'\) \{\s+await tx\.insert\(fillRealizations\)/,
+    );
   });
 
   it('records the three contract events nowhere else', () => {
@@ -155,6 +198,30 @@ describe('one writer of contracts (#118, static)', () => {
       'sql`merge into ${schema.positions} as p using x on true when matched then do nothing`',
     ]) {
       expect(writesPositions(text), text).toBe(true);
+    }
+    for (const text of [
+      'tx.insert(fillRealizations).values(row)',
+      'await tx\n  .insert(schema.fillRealizations)',
+      'db.update(fillRealizations).set({ realizedPnlCoin: 0n })',
+      'db.delete(schema.fillRealizations)',
+      'sql`INSERT INTO fill_realizations (fill_id) VALUES (1)`',
+      'sql`insert into "fill_realizations" (fill_id) values ($1)`',
+      'sql`UPDATE fill_realizations r SET realized_pnl_coin = 0`',
+      "client.query('delete from public.fill_realizations')",
+      'sql`insert into ${schema.fillRealizations} (fill_id) values (1)`',
+      'sql`MERGE INTO fill_realizations r USING fills f ON true WHEN MATCHED THEN DELETE`',
+    ]) {
+      expect(writesRealizations(text), text).toBe(true);
+    }
+    for (const text of [
+      'tx.select().from(fillRealizations)',
+      '.leftJoin(fillRealizations, eq(fillRealizations.fillId, fills.id))',
+      'eq(schema.fillRealizations.fillId, id)',
+      '// an insert of fill_realizations is refused for a pair mint',
+      'sql`select * from ${schema.fillRealizations}`',
+      'LEFT JOIN fill_realizations fr ON fr.fill_id = f.id',
+    ]) {
+      expect(writesRealizations(text), text).toBe(false);
     }
     for (const text of [
       'tx.select().from(positions).for("update")',

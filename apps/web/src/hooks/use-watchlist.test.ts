@@ -163,7 +163,7 @@ describe('the watchlist queries', () => {
     const queryClient = getQueryClient();
     try {
       // The real queryFn needs a cookie and a server; what is pinned is that the page shape and
-      // the two page-param rules compose into a list that ends by itself (use-portfolio.test.ts).
+      // the two page-param rules compose into a list that ends by itself (use-my-history.test.ts).
       const data = await queryClient.fetchInfiniteQuery({
         queryKey: options.queryKey,
         initialPageParam: options.initialPageParam,

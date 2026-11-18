@@ -1,4 +1,4 @@
-import { type OrderStatus, PAID_COIN_SALES_ENABLED, isLiveOrderStatus } from '@buddha/shared';
+import { PAID_COIN_SALES_ENABLED } from '@buddha/shared';
 import type { Route } from 'next';
 import { copy } from '@/copy';
 import { walletPackageId } from './charge-guide';
@@ -115,12 +115,11 @@ export function myLoginPath(
 }
 
 /**
- * Whether one side of the split order list offers 더 보기. The screens read `GET /me/orders`
- * without its state filter (#119; the split moves to the server with #123, #124), so a page
- * can hold fewer of a side's rows than it wants: the full tab keeps the button while
- * there is a next page, and a /my preview (`limit`, MY_PREVIEW_ROWS) keeps it until it has that
- * many rows — not only while it has none, which left a preview short of its rows with no way to
- * load the rest.
+ * Whether a list of orders offers 더 보기: the full tab while there is a next page, and a /my
+ * preview (`limit`, MY_PREVIEW_ROWS) until it holds that many rows. 대기 주문 (#123) and the three
+ * history lists (#124) read the server's own filtered lists, a page of 20 each, so a preview holds
+ * its three rows from the first page and offers none; the rule stays for a list a cache write left
+ * short of them.
  */
 export function showMoreOrders(
   hasNextPage: boolean,
@@ -131,16 +130,48 @@ export function showMoreOrders(
 }
 
 /**
- * Why 거래·정산 이력's 주문 이력 has no row (owner decision 2026-10-13), read off every order the
- * account has — so only once the list has no further page. `none`: it has never ordered (아직 주문
- * 내역이 없습니다). `pendingOnly`: every order it has is still 대기, so none has finished (끝난 주문이
- * 없습니다) and 대기 주문 is where they are; "no orders" would be false about it. `null` while a
- * finished order is there to show.
+ * What 대기 주문's live list says, for the history's empty 주문 목록: `some` and `none` once it
+ * answered, `pending` while it is read, `failed` when that read did not come.
+ */
+export type LiveOrdersReading = 'some' | 'none' | 'pending' | 'failed';
+
+/**
+ * The live list's reading from its ladder (`listView`) and whether it holds a row (or a page still
+ * to read). A refresh that failed keeps the rows it had, so it still answers by them; with none it
+ * is as unsure as a failed read (an order placed since may rest there), so it says `failed`.
+ */
+export function liveOrdersReading(
+  view: 'pending' | 'failed' | 'stale' | 'ready',
+  holdsRows: boolean,
+): LiveOrdersReading {
+  if (view === 'pending' || view === 'failed') return view;
+  if (holdsRows) return 'some';
+  return view === 'stale' ? 'failed' : 'none';
+}
+
+/**
+ * Why 거래·정산 이력's 주문 목록 has no row with no filter on (owner decision 2026-10-13; #124,
+ * ADR-0143): the server's ended list (`state=ended`) holds none, and the live list says which of
+ * the owner's two wordings is true. `none`: it has never ordered (아직 주문 내역이 없습니다).
+ * `pendingOnly`: every order it has is still 대기, so none has finished (끝난 주문이 없습니다) and
+ * 대기 주문 is where they are; "no orders" would be false about it. `pending`: the live list is
+ * still read — a skeleton, neither wording yet. `endedNone`: the live list could not be read, so
+ * only what IS known is said — no order has ended — and never that the account has none. `null`
+ * while an ended order is there to show.
  */
 export function orderHistoryEmpty(
-  orders: readonly { status: OrderStatus }[],
-): 'none' | 'pendingOnly' | null {
-  // 대기 주문 (owner decision 2026-10-13) is an order still resting, the shared live statuses (#67).
-  if (orders.some((order) => !isLiveOrderStatus(order.status))) return null;
-  return orders.length === 0 ? 'none' : 'pendingOnly';
+  ended: number,
+  live: LiveOrdersReading,
+): 'none' | 'pendingOnly' | 'pending' | 'endedNone' | null {
+  if (ended > 0) return null;
+  switch (live) {
+    case 'some':
+      return 'pendingOnly';
+    case 'none':
+      return 'none';
+    case 'pending':
+      return 'pending';
+    case 'failed':
+      return 'endedNone';
+  }
 }

@@ -15,15 +15,17 @@ import { LIVE_REFRESH_MS } from './ticks';
 import {
   DEFAULT_DETAIL_VIEW,
   DETAIL_SLOTS,
+  DETAIL_TOP_PADDING_MD_PX,
   DETAIL_VIEWS,
   DETAIL_VIEW_ITEMS,
   type DetailWidth,
   INITIAL_ORDER_SHEET,
+  JUDGING_RECORD_ANCHOR,
+  LONG_DELAY_SEPARATOR,
   MD_UP_MEDIA_QUERY,
-  ORDER_ENTRY_CONTRACTS,
   ORDER_COLUMN_MAX_H,
   ORDER_COLUMN_TOP,
-  DETAIL_TOP_PADDING_MD_PX,
+  ORDER_ENTRY_CONTRACTS,
   ORDER_ENTRY_SCROLL_PADDING,
   backgroundText,
   closeOrderSheet,
@@ -32,8 +34,9 @@ import {
   copyTestId,
   delta24h,
   detailViewOf,
+  drawnAnchor,
   drawnOrder,
-  LONG_DELAY_SEPARATOR,
+  judgingRecordPath,
   longDelayText,
   marketRefreshNotice,
   nextReviewWaitAt,
@@ -45,9 +48,9 @@ import {
   perWidth,
   personalAreaView,
   ruleText,
+  shownJudgementDelay,
   showsOrderArea,
   showsScheduledOpen,
-  shownJudgementDelay,
   sourceView,
   statusNotice,
   viewDisplay,
@@ -232,6 +235,45 @@ describe('the detail sections (#122, ADR-0061 decision 1, item 16)', () => {
     expect(judging).toMatch(/<MarketJudgingRecord\s+market=\{data\}/);
     expect(judging).toContain("testId={copyTestId('market-judging-record', width)}");
     expect(judging).not.toContain('ComingSoonSection');
+  });
+});
+
+describe('the judging record anchor (#124, ADR-0143 결정 11-8)', () => {
+  it('is the address 정산 줄 opens, on the market’s slug', () => {
+    expect(JUDGING_RECORD_ANCHOR).toBe('judging-record');
+    expect(judgingRecordPath('rate-cut-2026')).toBe('/markets/rate-cut-2026#judging-record');
+  });
+
+  it('scrolls to the copy this width draws, never the one in a hidden wrapper', () => {
+    const md = { name: 'md', drawn: false };
+    const base = { name: 'base', drawn: true };
+    // DOM order is md first (`DETAIL_SLOTS`); below md that copy has no box.
+    expect(drawnAnchor([md, base])).toBe(base);
+    expect(
+      drawnAnchor([
+        { ...md, drawn: true },
+        { ...base, drawn: false },
+      ])?.name,
+    ).toBe('md');
+    expect(drawnAnchor([md, { ...base, drawn: false }])).toBeUndefined();
+    expect(drawnAnchor([])).toBeUndefined();
+  });
+
+  it('is a data-anchor on each copy, never an id, and the detail scrolls once the row is there', () => {
+    const record = readFileSync(
+      path.join(SRC, 'components/market/market-judging-record.tsx'),
+      'utf8',
+    );
+    expect(record).toContain('data-anchor={JUDGING_RECORD_ANCHOR}');
+    // Two copies are in the document: an id would name the first, which may not be drawn.
+    expect(record).not.toMatch(/\bid=\{?["'`]?judging-record/);
+    expect(record).not.toContain('id={JUDGING_RECORD_ANCHOR}');
+    const detail = readFileSync(path.join(SRC, 'app/markets/[slug]/market-detail.tsx'), 'utf8');
+    expect(detail).toContain('useJudgingRecordAnchor(data !== undefined);');
+    expect(detail).toContain(
+      'if (!ready || window.location.hash !== `#${JUDGING_RECORD_ANCHOR}`) return;',
+    );
+    expect(detail).toContain("drawnAnchor(copies)?.element.scrollIntoView({ block: 'start' });");
   });
 });
 

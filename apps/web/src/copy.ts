@@ -2980,7 +2980,6 @@ export const copy = {
   // 보유 1계약 이상만 보이므로(F4) 거래했던 계정도 이 문구를 본다(ADR-0142).
   portfolioPositionsEmpty: '보유한 계약이 없습니다.',
   portfolioSettled: '정산 이력',
-  portfolioSettledEmpty: '아직 정산된 포지션이 없습니다.',
   portfolioOrders: '주문 이력',
   // 옛 주문 이력이 둘로 나뉘었다(대기·부분 체결은 대기 주문, 나머지는 거래·정산 이력). 빈 목록 문구도
   // 제 쪽만 말하고, 거래·정산 이력 쪽은 상황별 둘이다(오너 결정 2026-10-13): 주문이 아예 없으면 '아직 주문
@@ -2992,6 +2991,46 @@ export const copy = {
   portfolioOrderHistoryEmpty: '끝난 주문이 없습니다.',
   portfolioPendingOrdersHintBefore: '대기 중인 주문은',
   portfolioPendingOrdersHintAfter: '에서 볼 수 있습니다.',
+
+  // --- 거래·정산 이력 (#124, ADR-0143; ADR-0135 G1~G4·결과 4) ---
+  // 기록 종류 셋을 탭으로 나눠 한 번에 하나만 보인다(G1·G2: '거래 유형' = 기록 종류). 탭 묶음 이름은
+  // 화면 낭독기에만 읽힌다.
+  historyKindLabel: '기록 종류',
+  historyKindOrders: '주문',
+  historyKindFills: '체결',
+  historyKindSettlements: '정산',
+  // 기간(G3 (a)): 처음은 전체 기간. '최근 N일'은 서버가 읽는 순간부터 N×24시간이고(결과 4) 거르는
+  // 시각은 줄을 세우는 시각이다(주문은 접수, 체결은 체결, 정산은 지급 완료).
+  historyPeriodLabel: '기간',
+  historyPeriodAll: '전체 기간',
+  historyPeriod7d: '최근 7일',
+  historyPeriod30d: '최근 30일',
+  historyPeriod90d: '최근 90일',
+  // 시장(G3 (가)+(나)): 필터 줄의 '시장 고르기' 상자와 줄마다의 '이 시장만 보기'. 고른 시장은 칩
+  // '시장: <제목>'으로 보이고, 제목을 읽지 못했거나 공개되지 않은 시장이면 '고른 시장'이다.
+  historyMarketPick: '시장 고르기',
+  historyMarketChip: '시장',
+  historyMarketUnknown: '고른 시장',
+  historyMarketClear: '시장 필터 해제',
+  historyMarketPickerPrompt: '이력을 볼 시장을 고르세요.',
+  historyOnlyMarket: '이 시장만 보기',
+  // 체결 줄: 체결가·수량·금액은 주문 상세의 이름(orderFillPrice·fillQty·orderAmount)을 그대로 쓰고,
+  // 실현 손익은 보유 행의 이름(positionRealizedPnl)이다. 매도 줄에만 칸이 있다.
+  historyFillTime: '체결 시각',
+  // 정산 줄: 결과(marketResolvedResult)·잔여 원가(positionCostBasis)는 있던 이름이다. 지급액이 0인
+  // 줄도 그대로 보이고, 무효는 계약당 50 Coin의 지급이다(N03 §6).
+  historySettlementQty: '정산 때 보유 수량',
+  historyPayoutPerContract: '계약당 지급',
+  historyPayout: '지급액',
+  historySettlementPnl: '정산 손익',
+  // 두 시각을 각각 보인다(N03 §5, 결과 4). 지급 완료는 그 계정의 정산 기록이 쓰인 시각이다.
+  historyResolvedAt: '결과 확정',
+  historySettledAt: '지급 완료',
+  historyJudgingRecord: '판정 기록',
+  // 빈 상태: 필터가 없으면 종류마다 제 문구(주문의 두 문구는 위의 오너 결정 그대로), 필터가 있으면 하나.
+  historyFillsEmpty: '아직 체결 내역이 없습니다.',
+  historySettlementsEmpty: '아직 정산 기록이 없습니다.',
+  historyFilteredEmpty: '조건에 맞는 기록이 없습니다.',
   /**
    * Shown when the session ends while a private screen is still mounted — never a load failure,
    * because nothing failed to load. The reader is told what actually happened and given the way

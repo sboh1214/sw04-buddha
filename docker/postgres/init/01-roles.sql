@@ -12,7 +12,8 @@
 --                   market_watch_events, retention_purges, tags, market_rule_versions,
 --                   market_judgements, market_judgement_delays, ledger_accounts, fills, position_settlements, reconciliation_results,
 --                   reconciliation_recoveries, market_conflict_declarations, market_liquidity_versions, treasury_issuances,
---                   market_maker_allocations, market_maker_runs, market_maker_recalls, market_maker_controls, fill_classifications): INSERT/SELECT only;
+--                   market_maker_allocations, market_maker_runs, market_maker_recalls, market_maker_controls, fill_classifications,
+--                   fill_realizations): INSERT/SELECT only;
 --                   reconciliation_corrections: no INSERT, UPDATE, DELETE (only its guarded function writes);
 --                   market_maker_supply_pending, market_maker_supply_states,
 --                   market_maker_supply_intervals: SELECT only, written by their observer triggers;
@@ -31,7 +32,7 @@
 --                   applied later by migrations with REVOKE
 --                   (0001, 0015, 0020, 0021, 0023, 0026, 0030, 0031, 0032, 0033, 0034, 0035,
 --                   0036, 0039, 0040, 0041, 0044, 0045, 0049, 0053, 0054, 0055, 0056, 0058,
---                   0060, 0062, 0064, 0065, 0066, 0067, 0069, 0070, 0072, 0073, 0075),
+--                   0060, 0062, 0064, 0065, 0066, 0067, 0069, 0070, 0072, 0073, 0075, 0076),
 --                   see bottom.
 
 CREATE ROLE buddha_migrate LOGIN PASSWORD 'buddha';
@@ -110,4 +111,7 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO buddha_app;
 -- observation triggers coalesce pending book changes and write final observations.
 -- 0073 (market_maker_controls: UPDATE, DELETE): completed two-person controls are permanent.
 -- 0075 (fill_classifications: UPDATE, DELETE): approved individual fill classifications are permanent.
+-- 0076 (#124: fill_realizations: UPDATE, DELETE): what a member's sale realised on a trade fill
+-- is a permanent fact like its fill; a trigger refuses both to every role, and another binds a
+-- row to its fill at INSERT (a trade fill, its net proceeds, a member on the selling side).
 -- Default privileges are applied at CREATE time, so a REVOKE afterwards sticks.

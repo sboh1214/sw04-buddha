@@ -102,6 +102,7 @@ import {
   createSupplementedMarket,
   createSupplementRequest,
   createSearch,
+  createSettlementRecord,
   createStartGrant,
   createTheme,
   createThemeMarket,
@@ -281,6 +282,16 @@ interface Fixture {
    * (`createOrder`), so no step here may cancel it: B's cancels are refused before they reach it.
    */
   openOrderId: string;
+  /**
+   * A's sale (#124): the fill of A's immediate sell to B's resting bid, on a closed market of its
+   * own, with the record of what it realised — A's figure, which B reads the same fill without.
+   */
+  soldFillId: string;
+  /**
+   * SETTLING, where A held the losing contract (#124): A's settlement record — a zero payout —
+   * is what `GET /me/settlements` is called with.
+   */
+  settledMarket: MarketRow;
   /** Page cursors made from A's rows: a page from there holds A's newest row and the older ones. */
   cursors: {
     ledger: string;
@@ -288,6 +299,8 @@ interface Fixture {
     orders: string;
     /** Past A's fill (#119). */
     fills: string;
+    /** Past A's settlement record (#124): its payout time, the YES key and its market. */
+    settlements: string;
     payments: string;
     watchlist: string;
     posts: string;
@@ -327,6 +340,11 @@ const AMOUNTS = {
   costBasis: 2_718_281n,
   realizedPnl: 3_141_593n,
   startGrant: 5_317_029n,
+  /** What A's sale realised (#124): on A's own fill line, never on the buyer's. */
+  fillPnl: 6_283_185n,
+  /** A's settlement record (#124): the contracts held at settlement and their remaining cost. */
+  settlementQty: 1_618_033,
+  settlementCost: 5_772_156n,
 } as const;
 
 /**
@@ -713,6 +731,19 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
     status: 200,
     own: ['position qty', 'cost basis', 'realized pnl'],
   },
+  // B's settlement records, paged from A's on A's settled market within a period that holds A's
+  // payout: B was paid nothing there, so nothing of A's may come back (#124, N04 §7). A's own
+  // carry the quantity it held and its remaining cost (and the P&L, minus that cost).
+  'GET /me/settlements': {
+    query: {
+      cursor: (fixture) => fixture.cursors.settlements,
+      limit: LIMIT,
+      marketId: (fixture) => fixture.settledMarket.id,
+      period: () => '90d',
+    },
+    status: 200,
+    own: ['settlement qty', 'settlement cost'],
+  },
   // B's sellable figure on A's market (#179): B's own holding, none — never A's, whose answer
   // holds A's quantity (the path names a market, never an account).
   'GET /me/markets/:id/sellable': {
@@ -728,6 +759,7 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
       limit: LIMIT,
       marketId: (fixture) => fixture.market.id,
       state: () => 'ended',
+      period: () => '90d',
     },
     status: 200,
     own: ['filled order id', 'filled order key'],
@@ -752,6 +784,7 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
       limit: LIMIT,
       marketId: (fixture) => fixture.market.id,
       orderId: (fixture) => fixture.filledOrderId,
+      period: () => '90d',
     },
     status: 200,
     own: ['filled order id'],
@@ -1563,6 +1596,37 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       costBasisCoin: AMOUNTS.costBasis,
       realizedPnlCoin: AMOUNTS.realizedPnl,
     });
+    // A's sale (#124): A's immediate sell of 70,000 YES at 90 to B's resting bid, on a closed
+    // market of its own — so the public fills of `market` stay the one above — with the record of
+    // what it realised. The figure is the seller's: B, the buyer of the same fill, reads the fill
+    // and never the figure (the owner-only case narrows B to A's order and reads nothing, so the
+    // check of B's whole list below is what would catch a join that forgot the side).
+    const soldMarket = await createMarket(t.db, { status: 'closed', createdBy: admin.id });
+    const sale = await createFillRecord(t.db, {
+      marketId: soldMarket.id,
+      incomingOwnerId: a.id,
+      restingOwnerId: b.id,
+      side: 'sell',
+      priceCoin: 90,
+      qty: 70_000,
+      realization: { realizedPnlCoin: AMOUNTS.fillPnl },
+    });
+    // A's settlement record (#124): the losing contract of a market being paid, written straight
+    // to the table — a zero payout names no ledger entry, so A's balance and ledger above stay as
+    // they are (a real payout would need the pair mints' collateral, and a holder of the other
+    // contract). Its quantity and remaining cost are A's alone.
+    const settledMarket = await createMarket(t.db, {
+      status: 'settling',
+      resolvedResult: 'YES',
+      createdBy: admin.id,
+    });
+    const settlement = await createSettlementRecord(t.db, {
+      marketId: settledMarket.id,
+      userId: a.id,
+      outcome: 'NO',
+      qty: AMOUNTS.settlementQty,
+      costBasisCoin: AMOUNTS.settlementCost,
+    });
 
     // A's watches (#89), each with its `watch` event: a closed market nobody else watches, whose
     // id and slug are sentinels (a public list of A's watches), and the market every public call
@@ -2153,12 +2217,19 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       filledOrderId: filled.id,
       filledOrderKey: filledKey,
       openOrderId: open.id,
+      soldFillId: String(sale.fill.id),
+      settledMarket,
       cursors: {
         ledger: cursorAfter(entry),
         // Past the later of A's two orders by arrival, so the page holds both.
         orders: encodeTupleCursor([], String(Math.max(open.arrivalSeq, filled.arrivalSeq) + 1)),
         // Past A's fill, so the page holds it.
         fills: encodeTupleCursor([], String(record.fill.id + 1)),
+        // Past A's record: the next millisecond, so the page holds it.
+        settlements: encodeTupleCursor(
+          [String(settlement.settledAt.getTime() + 1), '1'],
+          settledMarket.id,
+        ),
         payments: cursorAfter(payment!),
         watchlist: cursorAfter({ createdAt: watch.watch.watchedAt, id: watched.id }),
         posts: cursorAfter(hiddenPost),
@@ -2295,6 +2366,9 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         amount('position qty', AMOUNTS.positionQty),
         amount('cost basis', AMOUNTS.costBasis),
         amount('realized pnl', AMOUNTS.realizedPnl),
+        amount('fill realized pnl', AMOUNTS.fillPnl),
+        amount('settlement qty', AMOUNTS.settlementQty),
+        amount('settlement cost', AMOUNTS.settlementCost),
       ],
     };
   }
@@ -2857,6 +2931,39 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     expect(shown).toEqual(
       shown.map(({ route }) => ({ route, status: 200, missing: [], shownAnyway: [] })),
     );
+
+    // A's sale (#124): what it realised is on A's own line of the fill. B is the buyer of that
+    // same fill, and reading its own fills — no order named, so the fill is there — reads the
+    // line with no figure, and nothing else of A's: the figure is joined for the seller alone.
+    const fillsAs = async (cookie: string) => {
+      const res = await call(routeOf('GET /me/fills'), { query: { limit: LIMIT() }, cookie });
+      const { data } = parse(res.body) as {
+        data: { id: string; side: string; realizedPnlCoin: string | null }[];
+      };
+      const sale = data.find((fill) => fill.id === f.soldFillId);
+      return {
+        status: res.statusCode,
+        leaks: leaked(res.body),
+        sale: sale && { side: sale.side, realizedPnlCoin: sale.realizedPnlCoin },
+      };
+    };
+    const aSale = await fillsAs(f.a.cookie);
+    expect(aSale).toMatchObject({
+      status: 200,
+      sale: { side: 'sell', realizedPnlCoin: String(AMOUNTS.fillPnl) },
+    });
+    expect(aSale.leaks).toContain('fill realized pnl');
+    expect(await fillsAs(f.b.cookie)).toEqual({
+      status: 200,
+      leaks: [],
+      sale: { side: 'buy', realizedPnlCoin: null },
+    });
+    // B was paid nothing anywhere: its settlement records, with no filter at all, are none.
+    const paidToB = await call(routeOf('GET /me/settlements'), { cookie: f.b.cookie });
+    expect({ status: paidToB.statusCode, body: parse(paidToB.body) }).toMatchObject({
+      status: 200,
+      body: { data: [] },
+    });
 
     // B's refused writes changed nothing of A's: A's record and code stay, B has no code (its
     // record is its own onboarding's, #58), and nobody was texted (ADR-0070).

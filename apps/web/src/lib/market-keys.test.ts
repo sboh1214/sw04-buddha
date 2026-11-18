@@ -19,21 +19,26 @@ import {
   DEFAULT_SEARCH_FILTERS,
   HOME_MARKET_STATUS,
   MARKETS_KEY,
-  MARKET_RELATED_KEY,
-  MARKET_SEARCH_KEY,
   MARKET_BOOK_KEY,
   MARKET_FILLS_KEY,
   MARKET_KEY,
+  MARKET_RELATED_KEY,
+  MARKET_SEARCH_KEY,
+  MY_FILL_HISTORY_KEY,
+  MY_ORDERS_LIVE_KEY,
+  MY_ORDER_DETAIL_KEY,
+  MY_ORDER_HISTORY_KEY,
+  type MarketFilters,
+  type MarketSearch,
   ORDERS_KEY,
   POSITIONS_KEY,
   PRIVATE_QUERY_ROOTS,
   SEARCH_HISTORY_KEY,
   SELLABLE_KEY,
+  SETTLEMENTS_KEY,
   TICKS_KEY,
   WATCHLIST_KEY,
   WATCHLIST_PAGES_KEY,
-  type MarketFilters,
-  type MarketSearch,
   dehydratePublic,
   isPrivateQueryKey,
   marketBookKey,
@@ -42,10 +47,13 @@ import {
   marketSearchKey,
   marketSellableKey,
   marketsKey,
+  myFillHistoryKey,
   myMarketFillsKey,
   myOrderFillsKey,
+  myOrderHistoryKey,
   myOrderKey,
   myOrdersLiveKey,
+  mySettlementsKey,
   publicListQuery,
   relatedMarketsKey,
   relatedMarketsQuery,
@@ -56,6 +64,11 @@ import {
   watchStateKey,
   watchlistPagesKey,
 } from './market-keys';
+import {
+  DEFAULT_HISTORY_FILTERS,
+  historyFiltersFromSearchParams,
+  historyListFilters,
+} from './my-history';
 
 /** The account a positions list is keyed by (#67, ADR-0142). */
 const TEST_ACCOUNT = 'a1e1c0de-0000-4000-8000-000000000001';
@@ -292,6 +305,75 @@ describe('key prefix isolation', () => {
   });
 });
 
+describe("the history's keys (#124, ADR-0143 결정 8)", () => {
+  const A = 'account-a';
+  const B = 'account-b';
+
+  it('names the list, its two filters as one object and the account last', () => {
+    expect(myOrderHistoryKey({}, A)).toEqual(['orders', 'history', {}, A]);
+    expect(myFillHistoryKey({ period: '7d' }, A)).toEqual([
+      'orders',
+      'history-fills',
+      { period: '7d' },
+      A,
+    ]);
+    expect(mySettlementsKey({ market: ID.toUpperCase(), period: '90d' }, A)).toEqual([
+      'settlements',
+      { market: ID, period: '90d' },
+      A,
+    ]);
+  });
+
+  it('keys every filter and every account apart, and an absent filter as none', () => {
+    const keys = [
+      myOrderHistoryKey({}, A),
+      myOrderHistoryKey({}, B),
+      myOrderHistoryKey({ period: '7d' }, A),
+      myOrderHistoryKey({ period: '30d' }, A),
+      myOrderHistoryKey({ market: ID }, A),
+      myOrderHistoryKey({ market: ID, period: '7d' }, A),
+      myFillHistoryKey({}, A),
+      mySettlementsKey({}, A),
+    ].map((key) => hashKey(key));
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(hashKey(mySettlementsKey({ market: undefined, period: undefined }, A))).toBe(
+      hashKey(mySettlementsKey({}, A)),
+    );
+    // An account not known yet is its own entry, which the hooks never read (`enabled`).
+    expect(hashKey(myOrderHistoryKey({}, undefined))).not.toBe(hashKey(myOrderHistoryKey({}, A)));
+  });
+
+  it("gives MY's summary preview the entry the tab holds: no page size, no kind, no limit", () => {
+    // The preview passes no filter (`NO_HISTORY_FILTERS`), the tab what its address normalised to.
+    const SETTLEMENTS_TAB = historyFiltersFromSearchParams({ kind: 'settlements' });
+    expect(hashKey(myOrderHistoryKey({}, A))).toBe(
+      hashKey(myOrderHistoryKey(historyListFilters(DEFAULT_HISTORY_FILTERS), A)),
+    );
+    expect(hashKey(mySettlementsKey({}, A))).toBe(
+      hashKey(mySettlementsKey(historyListFilters(SETTLEMENTS_TAB), A)),
+    );
+  });
+
+  it("puts 주문 and 체결 under ['orders'] and 정산 under its own root", () => {
+    // A trade's `user:position` and an order's own answer restart `['orders']`: both lists then.
+    expect(partialMatchKey(myOrderHistoryKey({}, A), ORDERS_KEY)).toBe(true);
+    expect(partialMatchKey(myFillHistoryKey({}, A), ORDERS_KEY)).toBe(true);
+    expect(partialMatchKey(myOrderHistoryKey({}, A), MY_ORDER_HISTORY_KEY)).toBe(true);
+    expect(partialMatchKey(myFillHistoryKey({}, A), MY_FILL_HISTORY_KEY)).toBe(true);
+    // 'history' is not a prefix of 'history-fills': keys match element-wise.
+    expect(partialMatchKey(myFillHistoryKey({}, A), MY_ORDER_HISTORY_KEY)).toBe(false);
+    // Neither takes the live list's or a detail's join (query-client.ts).
+    for (const key of [myOrderHistoryKey({}, A), myFillHistoryKey({}, A)]) {
+      expect(partialMatchKey(key, MY_ORDERS_LIVE_KEY)).toBe(false);
+      expect(partialMatchKey(key, MY_ORDER_DETAIL_KEY)).toBe(false);
+    }
+    // 정산: a settling event leaves `['orders']` alone, and `['positions']` is `Position[]`.
+    expect(partialMatchKey(mySettlementsKey({}, A), SETTLEMENTS_KEY)).toBe(true);
+    expect(partialMatchKey(mySettlementsKey({}, A), ORDERS_KEY)).toBe(false);
+    expect(partialMatchKey(mySettlementsKey({}, A), POSITIONS_KEY)).toBe(false);
+  });
+});
+
 describe('isPrivateQueryKey', () => {
   it('covers the root of every session-dependent key in the app', () => {
     // Asserted against the real constants rather than a copy of the strings: a new personal
@@ -326,6 +408,11 @@ describe('isPrivateQueryKey', () => {
       ['myOrderKey', myOrderKey(ID, 'user-1')],
       ['myOrderFillsKey', myOrderFillsKey(ID, 'user-1')],
       ['myMarketFillsKey', myMarketFillsKey(ID, 'user-1')],
+      // 거래·정산 이력 (#124): the ended orders, the fills and the settlement records.
+      ['myOrderHistoryKey', myOrderHistoryKey({}, 'user-1')],
+      ['myFillHistoryKey', myFillHistoryKey({ period: '7d' }, 'user-1')],
+      ['SETTLEMENTS_KEY', SETTLEMENTS_KEY],
+      ['mySettlementsKey', mySettlementsKey({ market: ID }, 'user-1')],
     ];
     for (const [name, key] of sessionKeys) expect(isPrivateQueryKey(key), name).toBe(true);
   });
@@ -348,6 +435,8 @@ describe('isPrivateQueryKey', () => {
     // (ADR-0104): a 판정 이의's links and reason are the submitter's and the operators' alone (#173
     // item 13), read with the member's cookie — the root M5's dispute stage held, with new keys.
     // 'sellable' came with #66 (ADR-0140): a member's holding and resting sells on one market.
+    // 'settlements' came with #124 (ADR-0143): the account's settlement records — what it held and
+    // was paid is nobody else's to see (N04 §7); this PR changed the list too.
     expect([...PRIVATE_QUERY_ROOTS].sort()).toEqual(
       [
         'admin',
@@ -366,6 +455,7 @@ describe('isPrivateQueryKey', () => {
         'proposals',
         'disputes',
         'sellable',
+        'settlements',
       ].sort(),
     );
   });
@@ -418,6 +508,9 @@ describe('dehydratePublic', () => {
         { id: ID, query: '금리', searchedAt: '' },
       ]);
       queryClient.setQueryData(myAuthoredKey('posts'), { pages: [], pageParams: [] });
+      queryClient.setQueryData(myOrderHistoryKey({}, 'user-1'), { pages: [], pageParams: [] });
+      queryClient.setQueryData(myFillHistoryKey({}, 'user-1'), { pages: [], pageParams: [] });
+      queryClient.setQueryData(mySettlementsKey({}, 'user-1'), { pages: [], pageParams: [] });
       queryClient.setQueryData(marketKey(ID), { id: ID });
 
       const roots = dehydratePublic(queryClient).queries.map((query) => query.queryKey[0]);

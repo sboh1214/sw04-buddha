@@ -166,6 +166,28 @@ export function copyTestId(testId: string, width: DetailWidth): string {
   return `${testId}-${width}`;
 }
 
+/**
+ * 공개 판정 기록's place in the detail's address (#124, ADR-0143 결정 11-8): `#judging-record`, which
+ * 거래·정산 이력's 정산 줄 opens (`judgingRecordPath`). Both copies of the record carry it as
+ * `data-anchor`, never as an `id` — the detail holds one copy per width (`DETAIL_SLOTS`), and an
+ * id twice in a document names the first, which may be the one not drawn.
+ */
+export const JUDGING_RECORD_ANCHOR = 'judging-record';
+
+/** A market's detail, opened at its 공개 판정 기록. */
+export function judgingRecordPath(slug: string): string {
+  return `/markets/${slug}#${JUDGING_RECORD_ANCHOR}`;
+}
+
+/**
+ * Which element a hash scroll goes to: the first of the anchor's copies that is drawn. A copy
+ * inside the other width's `display: none` wrapper has no box (`drawn` false), and scrolling to it
+ * would move nothing. `undefined` when none is drawn yet.
+ */
+export function drawnAnchor<T extends { drawn: boolean }>(copies: readonly T[]): T | undefined {
+  return copies.find((item) => item.drawn);
+}
+
 /** The two views of the mobile switch (N02 §4 '호가·거래 내역을 전환'). */
 export const DETAIL_VIEWS = ['book', 'history'] as const;
 export type DetailView = (typeof DETAIL_VIEWS)[number];

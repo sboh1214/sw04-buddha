@@ -35,6 +35,7 @@ import {
   createNotice,
   createPosition,
   createPost,
+  createSettlementRecord,
   createProvisionalMarket,
   createReport,
   createStartGrant,
@@ -1081,9 +1082,26 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
         qty: 10,
         costBasisCoin: 610n,
       });
+      // A settlement record of a losing contract (#124): the history a restricted account keeps
+      // reading (N02 §9) — its orders, its fills and what it was paid.
+      const settling = await createMarket(t.db, { status: 'settling', resolvedResult: 'YES' });
+      await createSettlementRecord(t.db, {
+        marketId: settling.id,
+        userId: member.id,
+        outcome: 'NO',
+        qty: 4,
+        costBasisCoin: 160n,
+      });
       const trading = async () => {
         const answers = [];
-        for (const url of ['/me', '/me/ledger', '/me/positions', '/me/orders']) {
+        for (const url of [
+          '/me',
+          '/me/ledger',
+          '/me/positions',
+          '/me/orders',
+          '/me/fills',
+          '/me/settlements',
+        ]) {
           const res = await read(url, member);
           expect(res.statusCode, `${url} ${res.body}`).toBe(200);
           answers.push(res.body);
@@ -1100,6 +1118,13 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
         };
       };
       const before = await trading();
+      // The fill and the settlement record are in the answers compared below.
+      for (const index of [4, 5]) {
+        expect(
+          (JSON.parse(before.answers[index]!) as { data: unknown[] }).data,
+          String(index),
+        ).toHaveLength(1);
+      }
       const indefinite = await restrict(null);
       expect(await trading()).toEqual(before);
       await change(indefinite.id, 'shorten', {

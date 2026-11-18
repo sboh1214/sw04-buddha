@@ -2,7 +2,6 @@
 
 import {
   Alert,
-  Badge,
   Button,
   Card,
   DataList,
@@ -13,12 +12,13 @@ import {
   Stack,
   Text,
 } from '@chakra-ui/react';
-import { type OrderStatus, isLiveOrderStatus, parseCoinAmount } from '@buddha/shared';
+import { parseCoinAmount } from '@buddha/shared';
 import { useQueries } from '@tanstack/react-query';
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { usePathname } from 'next/navigation';
 import { type ReactNode } from 'react';
+import { ProfileUnavailable } from '@/components/my/profile-unavailable';
 import { OrderDetail } from '@/components/orders/order-detail';
 import { PendingOrders } from '@/components/orders/pending-orders';
 import { AccountBlockLine } from '@/components/position/account-block-line';
@@ -27,12 +27,10 @@ import {
   NO_HOLDING_DISPLAY,
   type SellAccount,
 } from '@/components/position/holding-rows';
-import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { CoinText } from '@/components/ui/coin-text';
 import { EmptyState } from '@/components/ui/empty-state';
-import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
-import { listSection, listView, profileView } from '@/lib/query-client';
+import { listView, profileView } from '@/lib/query-client';
 import { useAccountBlock } from '@/hooks/use-account-block';
 import { useMarketSocket } from '@/hooks/use-market-socket';
 import { holdingMarketQueryOptions } from '@/hooks/use-markets';
@@ -44,33 +42,22 @@ import {
   holdingDisplay,
   listState,
   markToLiveMarket,
-  orderAveragePriceBp,
   priceIsStale,
   portfolioTotals,
   realizedPnlAcross,
   realizedPnlState,
-  useOrders,
   usePositions,
 } from '@/hooks/use-portfolio';
 import { useSellableReadings } from '@/hooks/use-sellable-readings';
-import { type Market, type Order, type Position } from '@/lib/api';
-import {
-  MARKET_RESULT_LABEL,
-  MARKET_STATUS_LABEL,
-  MARKET_STATUS_PALETTE,
-  formatContracts,
-  formatPricePerContract,
-} from '@/lib/market-admin';
-import { MY_ORDERS_PATH, myOrderPath, orderHistoryEmpty, showMoreOrders } from '@/lib/my';
-import { orderReasonName, orderStatusLabel } from '@/lib/order-reasons';
-import { ProfileUnavailable } from './settings/profile-unavailable';
+import { type Market } from '@/lib/api';
 
 /**
- * The old `/portfolio`'s four sections, moved into MY (#16) without being redrawn: 잔고 요약 on
- * the summary (`/my`), 보유 포지션 as 보유 계약 (`/my/positions`), 주문 이력 split by state into
- * 대기 주문 (`/my/orders`) and, with 정산 이력, 거래·정산 이력 (`/my/history`). Every one of them
- * is personal and client-only. The summary shows the first `MY_PREVIEW_ROWS` of each list through
- * the same bodies (`limit`), so a preview cannot read differently from its tab.
+ * The old `/portfolio`'s sections, moved into MY (#16): 잔고 요약 on the summary (`/my`), 보유
+ * 포지션 as 보유 계약 (`/my/positions`) and the live half of 주문 이력 as 대기 주문 (`/my/orders`,
+ * #123). The ended half and 정산 이력 are 거래·정산 이력's three lists since #124 (ADR-0143:
+ * history/history-screen.tsx, components/history). Every one of them is personal and client-only.
+ * The summary shows the first `MY_PREVIEW_ROWS` of each list through the same bodies (`limit`), so
+ * a preview cannot read differently from its tab.
  *
  * Not one number here is computed in this file: `markPriceCoin`, `positionValueCoin`,
  * `unrealizedPnlCoin`, `averageCostBp` and `portfolioTotals` (use-portfolio.ts) own the
@@ -86,16 +73,6 @@ import { ProfileUnavailable } from './settings/profile-unavailable';
 
 /** The repo's placeholder for a figure that does not exist (admin-market-detail.tsx). */
 const EMPTY = '—';
-
-/** Colour only reinforces the label: brand once it is done, `no` only for a refusal. */
-const ORDER_STATUS_PALETTE: Record<OrderStatus, 'brand' | 'gray' | 'orange' | 'no'> = {
-  open: 'gray',
-  partially_filled: 'orange',
-  filled: 'brand',
-  cancelled: 'gray',
-  expired: 'gray',
-  rejected: 'no',
-};
 
 /**
  * Whether the session ended while this screen stayed mounted — another tab signed out, the
@@ -223,7 +200,6 @@ export function useHoldings(accountId: string | undefined, groupLimit?: number) 
 }
 
 type Holdings = ReturnType<typeof useHoldings>;
-type OrderList = ReturnType<typeof useOrders>;
 
 /** The account line's id on MY: the '매도' it turns off point at it (D13). */
 const PORTFOLIO_ACCOUNT_LINE_ID = 'portfolio-account-blocked';
@@ -332,29 +308,6 @@ export function MyOrderDetail({ orderId }: { orderId: string }) {
   if (ended) return <SessionEnded />;
   if (accountId === undefined) return <ProfileUnavailable height="48" />;
   return <OrderDetail key={accountId} orderId={orderId} accountId={accountId} />;
-}
-
-/** `/my/history`: 거래·정산 이력, the old 정산 이력 and the rest of the old 주문 이력. */
-export function MyHistory() {
-  const ended = useSessionEnded();
-  const accountId = useMe().data?.id;
-  const settled = usePositions('settled', accountId);
-  const orders = useOrders();
-  if (ended) return <SessionEnded />;
-  return (
-    <Stack gap="6">
-      <Section title={copy.portfolioSettled} testId="portfolio-settled">
-        {accountId === undefined ? (
-          <ProfileUnavailable height="24" />
-        ) : (
-          <SettledBody settled={settled} />
-        )}
-      </Section>
-      <Section title={copy.portfolioOrders} testId="my-order-history">
-        <OrdersBody orders={orders} kind="history" />
-      </Section>
-    </Stack>
-  );
 }
 
 /**
@@ -527,271 +480,6 @@ export function PositionsBody({
   );
 }
 
-/** 정산 이력's list, with the same `stale` notice for the same reason (see `PositionsBody`). */
-export function SettledBody({ settled, limit }: { settled: Holdings['settled']; limit?: number }) {
-  const settledView = listView(settled);
-  const rows = settled.data ?? [];
-  return (
-    <>
-      {settledView === 'stale' && (
-        <Alert.Root status="warning" role="status" data-testid="portfolio-settled-stale" mb="4">
-          <Alert.Indicator />
-          <Alert.Content>
-            <Alert.Description>{copy.marketRefreshFailed}</Alert.Description>
-          </Alert.Content>
-          <Button size="xs" variant="outline" ml="auto" onClick={() => void settled.refetch()}>
-            {copy.retry}
-          </Button>
-        </Alert.Root>
-      )}
-      {settledView === 'pending' ? (
-        <Skeleton height="24" />
-      ) : settledView === 'failed' ? (
-        <LoadFailed message={copy.errUnknown} onRetry={() => void settled.refetch()} />
-      ) : rows.length === 0 ? (
-        <EmptyState message={copy.portfolioSettledEmpty} />
-      ) : (
-        <Stack gap="2">
-          {rows.slice(0, limit).map((row) => (
-            <SettledPositionRow key={`${row.marketId}-${row.outcome}`} position={row} />
-          ))}
-        </Stack>
-      )}
-    </>
-  );
-}
-
-/**
- * One side of the old 주문 이력: `pending` is 대기 주문 (`isLiveOrderStatus`, the shared live
- * statuses since #67), `history` every other state.
- *
- * Both read the ONE `GET /me/orders` list and split it here — the route's `state` filter (#119)
- * waits for the tabs' own issues: a page can hold none of one side's rows while older pages still
- * do. So an empty side says it is empty only once the list has no further page, and offers 더 보기
- * until then (a /my preview until it has its rows, `showMoreOrders`) — which is also the only
- * moment 거래·정산 이력 can tell an account that never ordered from one whose every order is still 대기
- * (`orderHistoryEmpty`). 대기 주문 itself is the server's live list since #123 (`PendingOrders`,
- * ADR-0141); the history's split moves to the server with #124.
- *
- * The list has no reducer and no event of its own — `restartQueries(queryClient, ORDERS_KEY)`
- * (realtime-provider.tsx) is the ONLY path a new order arrives by, so a failed refresh is a list
- * one row short. On an account with no prior orders it is worse than short: the section
- * positively says it has none about an order the balance already shows. Hence `listSection`,
- * which keeps the empty rung and puts the notice ABOVE it rather than in place of it.
- */
-export function OrdersBody({
-  orders,
-  kind,
-  limit,
-}: {
-  orders: OrderList;
-  kind: 'pending' | 'history';
-  limit?: number;
-}) {
-  const all = orders.data?.pages.flatMap((page) => page.items) ?? [];
-  const rows = all.filter((order) => isLiveOrderStatus(order.status) === (kind === 'pending'));
-  const section = listSection(orders, rows.length);
-  const testId = kind === 'pending' ? 'my-orders' : 'my-order-history';
-  const more = showMoreOrders(orders.hasNextPage, rows.length, limit) && (
-    <>
-      {/* A 더 보기 that failed: the rows stay, the message above the button that asks again (owner
-          decision 2026-10-20 7). */}
-      <LoadMoreFailed
-        list={orders}
-        message={copy.errUnknown}
-        data-testid={`${testId}-more-failed`}
-      />
-      <Button
-        alignSelf="center"
-        size="sm"
-        variant="ghost"
-        mt="1"
-        loading={orders.isFetchingNextPage}
-        onClick={() => void orders.fetchNextPage()}
-        data-testid={`${testId}-more`}
-      >
-        {copy.loadMore}
-      </Button>
-    </>
-  );
-  return (
-    <>
-      {section.stale && (
-        <Alert.Root status="warning" role="status" data-testid={`${testId}-stale`} mb="4">
-          <Alert.Indicator />
-          <Alert.Content>
-            <Alert.Description>{copy.marketRefreshFailed}</Alert.Description>
-          </Alert.Content>
-          <Button size="xs" variant="outline" ml="auto" onClick={() => void orders.refetch()}>
-            {copy.retry}
-          </Button>
-        </Alert.Root>
-      )}
-      {section.body === 'pending' ? (
-        <Skeleton height="24" />
-      ) : section.body === 'failed' ? (
-        <LoadFailed message={copy.errUnknown} onRetry={() => void orders.refetch()} />
-      ) : section.body === 'empty' && !orders.hasNextPage ? (
-        kind === 'pending' ? (
-          <EmptyState message={copy.portfolioPendingOrdersEmpty} />
-        ) : (
-          <OrderHistoryEmpty pendingOnly={orderHistoryEmpty(all) === 'pendingOnly'} />
-        )
-      ) : (
-        <Stack gap="2">
-          {rows.slice(0, limit).map((order) => (
-            <OrderRow key={order.id} order={order} />
-          ))}
-          {more}
-        </Stack>
-      )}
-    </>
-  );
-}
-
-/**
- * 거래·정산 이력's 주문 이력 with no row, in the owner's two wordings (`orderHistoryEmpty`): an
- * account that has never ordered is told so, and one with only 대기 orders is told none has
- * finished and where those are — a link to 대기 주문, the line's one next step.
- */
-function OrderHistoryEmpty({ pendingOnly }: { pendingOnly: boolean }) {
-  if (!pendingOnly) return <EmptyState message={copy.portfolioOrdersEmpty} />;
-  return (
-    <EmptyState
-      message={copy.portfolioOrderHistoryEmpty}
-      action={
-        <Text color="fg.muted">
-          {copy.portfolioPendingOrdersHintBefore}{' '}
-          <ChakraLink asChild colorPalette="brand" color="colorPalette.fg">
-            <NextLink href={MY_ORDERS_PATH}>{copy.myOrders}</NextLink>
-          </ChakraLink>
-          {copy.portfolioPendingOrdersHintAfter}
-        </Text>
-      }
-    />
-  );
-}
-
-/**
- * 정산 이력 한 줄: 결과 and 실현 손익 only.
- *
- * No 평가 금액 and no 평가손익 — the holding is gone and the payout has already landed in the
- * balance, so `realizedPnlCoin` is the whole story. 결과 is a word rather than a coloured badge
- * because the row already carries the account's own side as one; two colours side by side would
- * be read as agreement or disagreement, which is exactly what the PnL states in numbers.
- */
-function SettledPositionRow({ position }: { position: Position }) {
-  const yes = position.outcome === 'YES';
-  const result = position.resolvedResult;
-  return (
-    <Stack
-      gap="2"
-      borderWidth="1px"
-      borderRadius="l2"
-      p="3"
-      data-testid={`portfolio-settled-${position.marketId}-${position.outcome}`}
-    >
-      <HStack gap="2" flexWrap="wrap">
-        <MarketLink slug={position.marketSlug} title={position.marketTitle} />
-        <Badge colorPalette={yes ? 'yes' : 'no'} variant="subtle">
-          {yes ? copy.yes : copy.no}
-        </Badge>
-        {position.marketStatus !== 'settled' && (
-          <Badge colorPalette={MARKET_STATUS_PALETTE[position.marketStatus]} variant="subtle">
-            {MARKET_STATUS_LABEL[position.marketStatus]}
-          </Badge>
-        )}
-      </HStack>
-      <DataList.Root orientation="horizontal" size="sm">
-        {/* YES·NO·무효; a cancelled market ended with no result at all, so it has none to name. */}
-        <Item label={copy.marketResolvedResult}>
-          {result === null ? EMPTY : MARKET_RESULT_LABEL[result]}
-        </Item>
-        <Item label={copy.positionQty}>{formatContracts(position.qty)}</Item>
-        <Item label={copy.positionRealizedPnl}>
-          <Signed amount={parseCoinAmount(position.realizedPnlCoin)} />
-        </Item>
-      </DataList.Root>
-    </Stack>
-  );
-}
-
-/**
- * 주문 이력 한 줄. `filledQty` and `filledAmountCoin` are what the order actually did (#119: Coin at
- * its own side's prices) and the 평균가 is the one over the other (`orderAveragePriceBp`); a refused
- * or unfilled order has none of them, so the state badge is what explains the row. A market sent
- * back to a draft (#78 되돌리기, ADR-0099) reaches the row with no slug or title, and its line says
- * only '공개되지 않은 시장' — no title or link — until the market is public again.
- *
- * An ended order's reason by its short name (ADR-0140 넘긴 것 #123: 거절's eleven, 취소 완료's
- * seven) and 상세, the way to its 주문 상세 (#123, ADR-0141) — 대기 주문 lets an ended order go at
- * once. #124 rebuilds the history's rows and keeps the link.
- */
-export function OrderRow({ order }: { order: Order }) {
-  const yes = order.outcome === 'YES';
-  const average = orderAveragePriceBp(order);
-  const reason = orderReasonName(order);
-  const formatDateTime = useFormatDateTime();
-  return (
-    <Stack
-      gap="2"
-      borderWidth="1px"
-      borderRadius="l2"
-      p="3"
-      data-testid={`portfolio-order-${order.id}`}
-    >
-      <HStack gap="2" flexWrap="wrap">
-        {order.marketSlug === null || order.marketTitle === null ? (
-          <Text fontWeight="semibold" color="fg.muted" data-testid="portfolio-order-market-hidden">
-            {copy.postMarketNotPublic}
-          </Text>
-        ) : (
-          <MarketLink slug={order.marketSlug} title={order.marketTitle} />
-        )}
-        <Badge colorPalette={yes ? 'yes' : 'no'} variant="subtle">
-          {yes ? copy.yes : copy.no}
-        </Badge>
-        <Text fontSize="sm">{order.side === 'buy' ? copy.buy : copy.sell}</Text>
-      </HStack>
-      <DataList.Root orientation="horizontal" size="sm">
-        <Item label={copy.orderStatus}>
-          <Badge colorPalette={ORDER_STATUS_PALETTE[order.status]} variant="subtle">
-            {orderStatusLabel(order.status)}
-          </Badge>
-        </Item>
-        {reason !== null && (
-          <Item label={copy.orderReason} testId="portfolio-order-reason">
-            {reason}
-          </Item>
-        )}
-        <Item label={copy.fillQty}>{formatContracts(order.filledQty)}</Item>
-        <Item label={copy.fillAvgPrice}>
-          {average === undefined ? EMPTY : formatPricePerContract(average)}
-        </Item>
-        <Item label={copy.orderAmount}>
-          {average === undefined ? (
-            EMPTY
-          ) : (
-            <CoinText amount={parseCoinAmount(order.filledAmountCoin)} />
-          )}
-        </Item>
-        <Item label={copy.orderCreatedAt}>{formatDateTime(order.createdAt)}</Item>
-      </DataList.Root>
-      <ChakraLink
-        asChild
-        fontSize="sm"
-        colorPalette="brand"
-        color="colorPalette.fg"
-        alignSelf="flex-start"
-      >
-        <NextLink href={myOrderPath(order.id)} data-testid="portfolio-order-detail">
-          {copy.orderDetail}
-        </NextLink>
-      </ChakraLink>
-    </Stack>
-  );
-}
-
 /**
  * One card with its own heading, so each section is a landmark a screen reader can jump to. A
  * preview on the summary passes `href`, its tab, for the 전체 보기 beside the heading. `headingAs`
@@ -836,19 +524,6 @@ export function Section({
       </Card.Header>
       <Card.Body>{children}</Card.Body>
     </Card.Root>
-  );
-}
-
-/**
- * The whole market is the destination, and `as Route` rather than a bare template literal: the
- * `/markets/[slug]` route lands with the detail screen, and typedRoutes only accepts the literal
- * once that directory exists in the generated route map (market-card.tsx does the same).
- */
-function MarketLink({ slug, title }: { slug: string; title: string }) {
-  return (
-    <ChakraLink asChild fontWeight="semibold">
-      <NextLink href={`/markets/${slug}` as Route}>{title}</NextLink>
-    </ChakraLink>
   );
 }
 

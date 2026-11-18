@@ -1,5 +1,12 @@
 import type { APIRequestContext, APIResponse, Page, Request } from '@playwright/test';
-import type { AdminMarket, LedgerEntry, PlaceOrderResult, Position } from '@buddha/shared';
+import type {
+  AdminMarket,
+  LedgerEntry,
+  MySettlement,
+  PlaceOrderResult,
+  Position,
+} from '@buddha/shared';
+import { formatCoin } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { formatKst } from '../src/lib/datetime';
 import {
@@ -12,6 +19,7 @@ import {
   detailCopyTestId,
   documentSurvived,
   expect,
+  expectNoSideScroll,
   judgementEvidenceLink,
   freshEmail,
   judgeMarket,
@@ -270,11 +278,15 @@ test.describe('정산', () => {
       test.slow();
       await skipUnlessResolvable(admin);
       // Fresh accounts keep payouts from other tests out of the exact wallet delta below.
-      const noContext = await browser.newContext({ baseURL });
-      const yesContext = await browser.newContext({ baseURL });
+      // The holders' pages at this project's width (#124): their history is laid out below.
+      const viewport = page.viewportSize();
+      const noContext = await browser.newContext({ baseURL, viewport });
+      const yesContext = await browser.newContext({ baseURL, viewport });
       try {
         const noPage = await noContext.newPage();
         const yesPage = await yesContext.newPage();
+        expect(yesPage.viewportSize()?.width).toBe(viewport?.width);
+        expect(noPage.viewportSize()?.width).toBe(viewport?.width);
         await signUp(noPage, freshEmail());
         await signUp(yesPage, freshEmail());
         const noHolder = noPage.request;
@@ -347,11 +359,63 @@ test.describe('정산', () => {
           if (payout > 0n)
             expect(payouts[0]).toMatchObject({ amountCoin: payout.toString(), refType: 'market' });
         }
+        // 거래·정산 이력's 정산 (#124, ADR-0143 결정 6): each holder's settlement record as its own
+        // history draws it — the winning contract at 100, the losing one kept with a payout of 0,
+        // 무효 at 50 each — every figure the record's (`GET /me/settlements`), both times, the way
+        // to the judging record, and never called a refund. A fresh account holds one record.
+        const resultLabel =
+          result === 'VOID' ? copy.marketResultVoid : result === 'YES' ? copy.yes : copy.no;
+        for (const [holderPage, outcome, cost] of [
+          [yesPage, 'YES', 60n],
+          [noPage, 'NO', 140n],
+        ] as const) {
+          const each = result === 'VOID' ? 50n : result === outcome ? 100n : 0n;
+          const payout = each * 2n;
+          const records = await dataOf<MySettlement[]>(
+            await holderPage.request.get('/api/v1/me/settlements'),
+          );
+          expect(records).toHaveLength(1);
+          const record = records[0];
+          expect(record).toMatchObject({
+            marketId: market.id,
+            outcome,
+            result,
+            qty: 2,
+            costBasisCoin: cost.toString(),
+            payoutPerContractCoin: Number(each),
+            payoutCoin: payout.toString(),
+            settlementPnlCoin: (payout - cost).toString(),
+          });
+          expect(record?.resolvedAt).not.toBeNull();
+          await holderPage.goto('/my/history?kind=settlements');
+          const list = holderPage.getByTestId('my-settlement-history');
+          const row = list.getByTestId(`history-settlement-${market.id}-${outcome}`);
+          await expect(row).toContainText(market.title);
+          await expect(row.getByTestId('history-settlement-result')).toHaveText(resultLabel);
+          await expect(row.getByTestId('history-settlement-qty')).toHaveText('2계약');
+          await expect(row.getByTestId('history-settlement-cost')).toHaveText(formatCoin(cost));
+          await expect(row.getByTestId('history-settlement-each')).toHaveText(formatCoin(each));
+          await expect(row.getByTestId('history-settlement-payout')).toHaveText(formatCoin(payout));
+          await expect(row.getByTestId('history-settlement-pnl')).toHaveText(
+            formatCoin(payout - cost),
+          );
+          await expect(row.getByTestId('history-settlement-resolved-at')).toHaveText(
+            formatKst(record?.resolvedAt ?? ''),
+          );
+          await expect(row.getByTestId('history-settlement-settled-at')).toHaveText(
+            formatKst(record?.settledAt ?? ''),
+          );
+          await expect(row.getByTestId('history-settlement-judging')).toHaveAttribute(
+            'href',
+            `/markets/${market.slug}#judging-record`,
+          );
+          await expect(list).not.toContainText('환불');
+          await expect(list).not.toContainText('원금');
+          if ((viewport?.width ?? 0) < 768) await expectNoSideScroll(holderPage);
+        }
         await page.goto(`/markets/${market.slug}`);
         await expect(page.getByTestId('market-status-badge')).toHaveText(copy.marketStatusSettled);
-        await expect(page.getByTestId('market-detail-result')).toHaveText(
-          result === 'VOID' ? copy.marketResultVoid : result === 'YES' ? copy.yes : copy.no,
-        );
+        await expect(page.getByTestId('market-detail-result')).toHaveText(resultLabel);
         if (result === 'YES') {
           // 보유 계약 (#67, ADR-0142; F4): a paid-out market's holding has left MY's list — once.
           await yesPage.goto('/my/positions');

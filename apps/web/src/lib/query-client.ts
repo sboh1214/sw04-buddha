@@ -174,7 +174,8 @@ function makeQueryClient() {
   // the four above: a cancel's answer is written into both (use-my-orders.ts), and a GET that left
   // before it — a focus, a 더 보기, an invalidation already on its way — must not put 대기 back,
   // nor a fill's smaller 체결 수량 (`orderRank`). `['orders', 'live']` and `['orders', 'detail']`,
-  // never the root: `['orders']` itself is the history list, which keeps its own reading (#124).
+  // never the root: the history's lists (`['orders', 'history', …]` and `['orders',
+  // 'history-fills', …]`, #124) keep their own reading.
   client.setQueryDefaults(MY_ORDERS_LIVE_KEY, {
     structuralSharing: (held, incoming) =>
       replaceEqualDeep(

@@ -8,15 +8,16 @@ import {
   parseCoinAmount,
   statusSupersedes,
 } from '@buddha/shared';
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { type Market, type Order, type Position, api, unwrap } from '@/lib/api';
 import { useSession } from '@/lib/use-session';
-import { ORDERS_KEY, POSITIONS_KEY } from '@/lib/market-keys';
+import { POSITIONS_KEY } from '@/lib/market-keys';
 import { type LiveMarket, statusRank } from '@/lib/market-live';
 
 /**
- * The account's two private lists and the arithmetic MY renders (PLAN 11.3's portfolio, which
- * #16 moved into MY: 잔고 요약 · 보유 포지션(현재가 기준 평가손익) · 정산 이력 · 주문 이력).
+ * The account's two position lists and the arithmetic MY renders (PLAN 11.3's portfolio, which
+ * #16 moved into MY: 잔고 요약 · 보유 포지션(현재가 기준 평가손익) · 정산 이력 · 주문 이력). The order
+ * lists are #123's (use-my-orders.ts) and the history's (#124, use-my-history.ts).
  *
  * The balance summary is deliberately NOT a query of its own: it comes from `useMe()`, which
  * the nav chip already keeps live off `user:balance`. A second query for the same balance
@@ -61,14 +62,6 @@ export function listStatusOf(queryKey: readonly unknown[]): PositionStatus | und
     ? (status as PositionStatus)
     : undefined;
 }
-
-/**
- * Just enough of better-auth's `useSession().data` to answer "is anybody signed in":
- * `undefined` while the session is still loading, `null` once it says nobody is. Taken as a
- * parameter rather than read here so the gate is a value a test can pin — the hooks below
- * pass what `useSession()` gave them.
- */
-type SessionLike = { user: unknown } | null;
 
 /**
  * `GET /me/positions?status=`. A plain query, not an infinite one: the route answers `{ data }`
@@ -141,44 +134,6 @@ export function positionListStatusFor(marketStatus: MarketStatus): PositionStatu
  */
 function lifecycleStep(status: MarketStatus): number {
   return statusRank(status === 'paused' ? 'open' : status);
-}
-
-/** One cursor page of `GET /me/orders`, the page shape every infinite list in this app holds. */
-export interface OrdersPage {
-  items: Order[];
-  nextCursor: string | null;
-}
-
-/**
- * `GET /me/orders?cursor=` — newest first, one page per 더 보기 press (the `useLedger` idiom,
- * use-wallet.ts). Unlike the positions lists this one really is unbounded: an account
- * accumulates an order per trade forever.
- */
-export function ordersInfiniteQueryOptions(session?: SessionLike) {
-  return {
-    queryKey: ORDERS_KEY,
-    queryFn: async ({ pageParam }: { pageParam: string | undefined }): Promise<OrdersPage> => {
-      const { data, meta } = unwrap(
-        await api.GET('/api/v1/me/orders', {
-          params: { query: pageParam ? { cursor: pageParam } : {} },
-        }),
-      );
-      return { items: data, nextCursor: meta.nextCursor };
-    },
-    initialPageParam: undefined as string | undefined,
-    getNextPageParam: (last: OrdersPage) => last.nextCursor ?? undefined,
-    enabled: session != null,
-  };
-}
-
-export function useOrders() {
-  const { data: session, isPending: sessionPending } = useSession();
-  const query = useInfiniteQuery(ordersInfiniteQueryOptions(session));
-  return {
-    ...query,
-    isPending: sessionPending || (session != null && query.isPending),
-    isLoggedIn: session != null,
-  };
 }
 
 // ---- the arithmetic the portfolio renders ------------------------------------------------

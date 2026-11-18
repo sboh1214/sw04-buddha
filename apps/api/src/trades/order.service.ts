@@ -38,6 +38,7 @@ import {
 } from '@buddha/shared';
 import { and, desc, eq, inArray, lt, notInArray } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
+import { recentPeriodPredicate } from '../common/period.js';
 import { DB } from '../infra/db/db.provider.js';
 import { assertCanTrade } from '../moderation/restrictions.js';
 import { assertOnboarded } from '../onboarding/onboarded.guard.js';
@@ -46,7 +47,7 @@ import { RELEASE_SETTINGS_REGISTRY } from '../release-settings/release-settings.
 import { balanceEvent, type Page } from '../wallet/wallet.service.js';
 import { priceProtectionClosed } from './price-protection-closed.js';
 
-const { fills, markets, orders, profiles } = schema;
+const { fillRealizations, fills, markets, orders, profiles } = schema;
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 type Reader = Db | Tx;
@@ -319,8 +320,10 @@ export class OrderService {
 
   /**
    * `GET /me/orders`: the account's orders, newest first by arrival (`arrival_seq`, the index
-   * `orders_user_id_arrival_seq_idx`), rejected ones included; one market's, and the live or the
-   * ended ones, when asked. Reads the order rows alone: what filled is stored on them.
+   * `orders_user_id_arrival_seq_idx`), rejected ones included; one market's, the live or the
+   * ended ones, and those taken within a recent period (#124: `created_at`, a predicate only —
+   * the cursor is the arrival key as before), when asked. Reads the order rows alone: what
+   * filled is stored on them.
    */
   async listMine(userId: string, query: MyOrdersQuery): Promise<Page<Order>> {
     const cursor = decodeTupleCursor(query.cursor, [], 'int');
@@ -337,6 +340,7 @@ export class OrderService {
             : query.state === 'live'
               ? inArray(orders.status, LIVE)
               : notInArray(orders.status, LIVE),
+          recentPeriodPredicate(orders.createdAt, query.period),
           cursor === undefined ? undefined : lt(orders.arrivalSeq, Number(cursor.id)),
         ),
       )
@@ -389,6 +393,11 @@ export class OrderService {
    * other side's order, owner and account type are never selected. `orderId` narrows each read
    * by its own side's order column, beside its own side's owner (#123, ADR-0141): never by the
    * other side's, so a counterparty asking with this account's order id reads nothing.
+   *
+   * `realizedPnlCoin` (#124, ADR-0143) is the fill's `fill_realizations` row, joined in each read
+   * only when that read's own order is a sell: a trade fill has one seller, so the row is the
+   * caller's exactly then. Without the side in the join the buyer of the same fill would read the
+   * seller's figure. `period` filters by the fill's time, a predicate beside the id cursor.
    */
   async listMyFills(userId: string, query: MyFillsQuery): Promise<Page<MyFill>> {
     const cursor = decodeTupleCursor(query.cursor, [], 'int');
@@ -407,16 +416,22 @@ export class OrderService {
           qty: fills.qty,
           yesPriceCoin: fills.yesPriceCoin,
           feeCoin: fills.feeCoin,
+          realizedPnlCoin: fillRealizations.realizedPnlCoin,
           createdAt: fills.createdAt,
         })
         .from(fills)
         .innerJoin(orders, eq(orders.id, order))
         .innerJoin(markets, eq(markets.id, fills.marketId))
+        .leftJoin(
+          fillRealizations,
+          and(eq(fillRealizations.fillId, fills.id), eq(orders.side, 'sell')),
+        )
         .where(
           and(
             eq(owner, userId),
             query.orderId === undefined ? undefined : eq(order, query.orderId),
             query.marketId === undefined ? undefined : eq(fills.marketId, query.marketId),
+            recentPeriodPredicate(fills.createdAt, query.period),
             cursor === undefined ? undefined : lt(fills.id, Number(cursor.id)),
           ),
         )
@@ -444,6 +459,8 @@ export class OrderService {
           amountCoin: serializeCoinAmount(BigInt(priceCoin) * BigInt(row.qty)),
           yesPriceCoin: row.yesPriceCoin,
           feeCoin: serializeCoinAmount(row.feeCoin),
+          realizedPnlCoin:
+            row.realizedPnlCoin === null ? null : serializeCoinAmount(row.realizedPnlCoin),
           createdAt: row.createdAt.toISOString(),
         };
       }),

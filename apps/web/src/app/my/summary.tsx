@@ -4,12 +4,14 @@ import { Link as ChakraLink, HStack, Heading, Skeleton, Stack, Text } from '@cha
 import { parseCoinAmount } from '@buddha/shared';
 import type { Route } from 'next';
 import NextLink from 'next/link';
+import { OrderHistoryList } from '@/components/history/order-history-list';
+import { SettlementHistoryList } from '@/components/history/settlement-history-list';
 import { SanctionBanner, WarningBanner } from '@/components/moderation/sanction-banner';
+import { ProfileUnavailable } from '@/components/my/profile-unavailable';
 import { AccountBlockLine } from '@/components/position/account-block-line';
 import { CoinText } from '@/components/ui/coin-text';
 import { copy } from '@/copy';
 import { useMe } from '@/hooks/use-me';
-import { useOrders } from '@/hooks/use-portfolio';
 import { useLedger } from '@/hooks/use-wallet';
 import { useWatchlist } from '@/hooks/use-watchlist';
 import { MY_PREVIEW_ROWS, MY_TABS, MY_WALLET_PATH, type MyTabKey } from '@/lib/my';
@@ -20,11 +22,9 @@ import {
   BalanceSummary,
   LivePendingOrders,
   LoadFailed,
-  OrdersBody,
   PositionsBody,
   Section,
   SessionEnded,
-  SettledBody,
   useHoldings,
   useSellAccount,
   useSessionEnded,
@@ -33,8 +33,10 @@ import { MyAuthoredPreview } from './posts/my-authored';
 import { MyProposalsPreview } from './proposals/my-proposals';
 import { LedgerRow } from './wallet/ledger-list';
 import { StartGrantPendingNotice } from './wallet/start-grant-notice';
-import { ProfileUnavailable } from './settings/profile-unavailable';
 import { WatchlistBody } from './watchlist/watchlist';
+
+/** The previews read the tab's unfiltered lists: one cache entry for both (ADR-0143 결정 11-12). */
+const NO_HISTORY_FILTERS = {};
 
 /** The summary's account restriction banner: the holdings' '매도' point at it (D13, #67). */
 const SUMMARY_SANCTION_ID = 'my-sanction-banner';
@@ -58,8 +60,11 @@ function tab(key: MyTabKey) {
  * 내 제안 (#77, ADR-0089) closes the summary: not a tab (ADR-0069 decision 4 #77 위치), so after
  * the tab bar's previews, its newest proposals with 전체 보기 to `/my/proposals`.
  *
- * The holdings, 정산 이력 and the orders are read once here and handed to every card that shows
- * them, so the summary card and the previews are drawn from one price and one list. The holdings'
+ * The holdings are read once here and handed to every card that shows them, so the summary card
+ * and the preview are drawn from one price and one list. 거래·정산 이력's preview keeps its two
+ * halves (#124, ADR-0143 결정 11-12): 정산 이력 — the first `MY_PREVIEW_ROWS` settlement records — and
+ * 주문 이력 — the first ended orders — each the tab's own list with no filter, under the tab's key,
+ * cut on the screen; 체결 has no preview. The holdings'
  * preview is the first `MY_PREVIEW_ROWS` market groups (up to six contract rows, #67, ADR-0142),
  * and only those read their 매도 가능액. D13 says why their '매도' is off where the summary
  * already does: the account restriction's banner above, which the buttons point at; an admin,
@@ -76,7 +81,6 @@ export function MySummary() {
   const ended = useSessionEnded();
   const me = useMe();
   const holdings = useHoldings(me.data?.id, MY_PREVIEW_ROWS);
-  const orders = useOrders();
   const block = useSellAccount((account) =>
     account === 'restricted'
       ? SUMMARY_SANCTION_ID
@@ -84,7 +88,6 @@ export function MySummary() {
         ? SUMMARY_ACCOUNT_LINE_ID
         : undefined,
   );
-  const settled = holdings.settled;
   if (ended) return <SessionEnded />;
 
   const positions = tab('positions');
@@ -135,14 +138,30 @@ export function MySummary() {
             {me.data === undefined ? (
               <ProfileUnavailable height="24" />
             ) : (
-              <SettledBody settled={settled} limit={MY_PREVIEW_ROWS} />
+              <SettlementHistoryList
+                key={me.data.id}
+                accountId={me.data.id}
+                filters={NO_HISTORY_FILTERS}
+                limit={MY_PREVIEW_ROWS}
+                testId="my-preview-settlements"
+              />
             )}
           </Stack>
           <Stack gap="3">
             <Heading as="h4" size="sm">
               {copy.portfolioOrders}
             </Heading>
-            <OrdersBody orders={orders} kind="history" limit={MY_PREVIEW_ROWS} />
+            {me.data === undefined ? (
+              <ProfileUnavailable height="24" />
+            ) : (
+              <OrderHistoryList
+                key={me.data.id}
+                accountId={me.data.id}
+                filters={NO_HISTORY_FILTERS}
+                limit={MY_PREVIEW_ROWS}
+                testId="my-preview-order-history"
+              />
+            )}
           </Stack>
         </Stack>
       </Section>
