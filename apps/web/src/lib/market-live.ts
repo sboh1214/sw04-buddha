@@ -11,14 +11,21 @@ import {
   statusSupersedes,
   supersedes,
 } from '@buddha/shared';
-import { type InfiniteData } from '@tanstack/react-query';
+import {
+  type InfiniteData,
+  type Query,
+  type QueryClient,
+  type QueryKey,
+} from '@tanstack/react-query';
 import {
   type Market,
   type MarketJudgementDelay,
   type MarketSummary,
   type Me,
+  type Order,
   type Position,
 } from './api';
+import { MY_ORDERS_LIVE_KEY, MY_ORDER_DETAIL_KEY, marketBookKey, myOrderKey } from './market-keys';
 
 /**
  * The reducers every realtime writer shares (PLAN 8, 11.5), in two contracts.
@@ -656,6 +663,99 @@ export class Throttle {
 }
 
 /**
+ * One leading-and-trailing window shared by every market, that keeps each market offered inside
+ * it (#123, ADR-0141 결정 10, `refreshOwnOrders`): a refused market waits for the next round
+ * instead of being dropped behind the market that scheduled the trailing one — the user may
+ * have left MY for that other market's order detail meanwhile. Clock-free like `Throttle`: the
+ * caller owns the clock and the trailing timer, which offers nothing new when it fires.
+ */
+export class MarketWindow {
+  private readonly throttle: Throttle;
+  private readonly held = new Set<string>();
+
+  constructor(windowMs: number) {
+    this.throttle = new Throttle(windowMs);
+  }
+
+  /**
+   * Keeps `marketId` (lower-cased) for the next round. The markets that round reads, every one
+   * offered since the last round, when the window lets it through now; else how long until it
+   * will.
+   */
+  offer(marketId: string | undefined, now: number): { markets: string[] } | { wait: number } {
+    if (marketId !== undefined) this.held.add(marketId.toLowerCase());
+    if (!this.throttle.take('all', now)) return { wait: this.throttle.retryDelay('all', now) };
+    const markets = [...this.held];
+    this.held.clear();
+    return { markets };
+  }
+
+  /** Forgets the markets kept: the socket that earned them is gone. */
+  clear(): void {
+    this.held.clear();
+  }
+}
+
+/**
+ * The keys one round of the account's orders reads again (#123, ADR-0141 결정 10): its live lists
+ * and the detail of each of its live orders on any of `marketIds` (`ownLiveOrderIds`). The live
+ * lists' prefix does not cover a detail, and a buy cancelled elsewhere sends no `user:` event, so
+ * a detail left out stays drawn live.
+ */
+export function ownOrdersRefreshKeys(
+  client: QueryClient,
+  marketIds: Iterable<string>,
+  accountId: string | undefined,
+): QueryKey[] {
+  const orderIds = new Set<string>();
+  for (const marketId of marketIds) {
+    for (const orderId of ownLiveOrderIds(client, marketId, accountId)) orderIds.add(orderId);
+  }
+  return [MY_ORDERS_LIVE_KEY, ...[...orderIds].map((orderId) => myOrderKey(orderId, accountId))];
+}
+
+/**
+ * The keys of the account's orders a `market:status` restarts (#123, ADR-0141 결정 10): with a
+ * live order of the account held on that market, the live lists and those orders' details; and,
+ * held or not, each of the account's FIRST reads still on its way — a live list of that market
+ * or of every market (`'all'`), or any order's detail (its market is not known before it
+ * answers). Such a read left before the pause or the close, so it would land as fresh and draw an
+ * expired or held order 대기, with no `user:` event behind it for a buy. `restartQueries` cancels
+ * exactly those and asks again; a status is rare, so the request it adds is too.
+ */
+export function ownOrdersStatusKeys(
+  client: QueryClient,
+  marketId: string,
+  accountId: string | undefined,
+): QueryKey[] {
+  if (accountId === undefined) return [];
+  const market = marketId.toLowerCase();
+  const own = ownLiveOrderIds(client, marketId, accountId);
+  const firstRead = (query: Query) =>
+    query.state.data === undefined &&
+    query.state.fetchStatus === 'fetching' &&
+    query.queryKey.at(-1) === accountId;
+  const cache = client.getQueryCache();
+  const keys: QueryKey[] = [];
+  if (own.length > 0) {
+    // The prefix restart takes the first reads among the lists too.
+    keys.push(MY_ORDERS_LIVE_KEY);
+  } else {
+    for (const query of cache.findAll({ queryKey: MY_ORDERS_LIVE_KEY, predicate: firstRead })) {
+      const scope = query.queryKey[2];
+      if (scope === market || scope === 'all') keys.push(query.queryKey);
+    }
+  }
+  const details = new Set(own.map((orderId) => orderId.toLowerCase()));
+  for (const orderId of details) keys.push(myOrderKey(orderId, accountId));
+  for (const query of cache.findAll({ queryKey: MY_ORDER_DETAIL_KEY, predicate: firstRead })) {
+    const orderId = query.queryKey[2];
+    if (typeof orderId === 'string' && !details.has(orderId)) keys.push(query.queryKey);
+  }
+  return keys;
+}
+
+/**
  * `ids` in slices of at most `size`, in order; empty in, empty out.
  *
  * The realtime protocol caps a `subscribe`/`unsubscribe` MESSAGE at `REALTIME_SUBSCRIBE_MAX`
@@ -687,4 +787,60 @@ export function applyStats<T extends LiveMarket>(
   if (!held || held.id !== event.marketId || !supersedes(event.statsRevision, held.statsRevision))
     return undefined;
   return { ...held, traderCount: event.traderCount, statsRevision: event.statsRevision };
+}
+
+/** One page of an order list as the live lists hold it (`OrderPages`, lib/my-orders.ts). */
+interface HeldOrderPages {
+  pages?: readonly { items?: readonly Order[] }[];
+}
+
+/**
+ * The ids of `accountId`'s live orders on `marketId` this tab holds (#123, ADR-0141 결정 10): in
+ * a live list of that account (`['orders', 'live', …, accountId]`) or an order's detail of it
+ * (`['orders', 'detail', id, accountId]`). Empty for no account.
+ */
+export function ownLiveOrderIds(
+  client: QueryClient,
+  marketId: string,
+  accountId: string | undefined,
+): string[] {
+  if (accountId === undefined) return [];
+  const market = marketId.toLowerCase();
+  const own = (order: Order) =>
+    order.marketId.toLowerCase() === market &&
+    (order.status === 'open' || order.status === 'partially_filled');
+  const ids = new Set<string>();
+  const cache = client.getQueryCache();
+  for (const query of cache.findAll({ queryKey: MY_ORDERS_LIVE_KEY })) {
+    if (query.queryKey.at(-1) !== accountId) continue;
+    const data = query.state.data as HeldOrderPages | undefined;
+    for (const page of data?.pages ?? []) {
+      for (const order of page.items ?? []) if (own(order)) ids.add(order.id);
+    }
+  }
+  for (const query of cache.findAll({ queryKey: MY_ORDER_DETAIL_KEY })) {
+    if (query.queryKey.at(-1) !== accountId) continue;
+    const order = query.state.data as Order | undefined;
+    if (order !== undefined && own(order)) ids.add(order.id);
+  }
+  return [...ids];
+}
+
+/**
+ * Whether a `market:book` in `marketId` reads the account's orders again (ADR-0141 결정 10): the
+ * tab holds a live order of `accountId` there (`ownLiveOrderIds`) and no screen of it reads that
+ * market's book — the market detail does, and there the 50-a-minute budget the book already spends
+ * (ADR-0138) leaves nothing for it, so the detail's 내 대기 주문 waits for a fill's `user:position`,
+ * a `market:status`, a focus or a reconnect. The signal says only that some order there changed,
+ * the account's or anybody's: on MY and an order's detail it is how a cancel by an account
+ * restriction, an admin role or another tab is seen.
+ */
+export function bookRestartsOwnOrders(
+  client: QueryClient,
+  marketId: string,
+  accountId: string | undefined,
+): boolean {
+  if (ownLiveOrderIds(client, marketId, accountId).length === 0) return false;
+  const book = client.getQueryCache().find({ queryKey: marketBookKey(marketId), exact: true });
+  return (book?.getObserversCount() ?? 0) === 0;
 }

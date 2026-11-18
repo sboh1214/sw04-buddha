@@ -201,9 +201,11 @@ test.describe('시장 이해관계와 관리자 거래 배제 (#143)', () => {
       expect(
         await dataOf<Order>(await member.request.get(`/api/v1/me/orders/${cancellable.id}`)),
       ).toMatchObject({ status: 'cancelled', cancelReason: 'admin_role' });
+      // Kept as it was, now marked as waiting for the ledger recovery its market's pause asks for
+      // (#123, ADR-0141: `awaitingRecovery`, the cancel's 409 condition).
       expect(
         await dataOf<Order>(await member.request.get(`/api/v1/me/orders/${preserved.id}`)),
-      ).toEqual(preserved);
+      ).toEqual({ ...preserved, awaitingRecovery: true });
       const after = await meOf(member.request);
       expect(BigInt(after.balance.availableCoin)).toBe(BigInt(before.balance.availableCoin) + 100n);
       expect(BigInt(after.balance.lockedCoin)).toBe(BigInt(before.balance.lockedCoin) - 100n);

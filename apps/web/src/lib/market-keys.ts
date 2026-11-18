@@ -46,6 +46,41 @@ export const CATEGORIES_QUERY_KEY = ['categories'] as const;
  */
 export const POSITIONS_KEY = ['positions'] as const;
 export const ORDERS_KEY = ['orders'] as const;
+
+/**
+ * 대기 주문과 주문 상세 (#123, ADR-0141): four shapes under `ORDERS_KEY`, so every duty that root
+ * carries reaches them by prefix — `PRIVATE_QUERY_ROOTS`, SessionCacheGuard's reset, the
+ * `user:position` re-read of `['orders']` and a reconnect's (realtime-provider.tsx). Each ends in
+ * the account the screen shows (`Me`'s id, ADR-0091, as `searchHistoryKey`): an answer names no
+ * owner and a cancel acts on the rows drawn, and `['me']` can turn from A to B in place before the
+ * session does (ADR-0090 결정 4-2). Ids lower-cased like `marketKey`, so `/my/orders/<UPPER>` and
+ * the answer's own id name one entry. `accountId` undefined: the query is off, nothing read.
+ * The history list's `['orders']` itself is #124's and none of these.
+ */
+export const MY_ORDERS_LIVE_KEY = [...ORDERS_KEY, 'live'] as const;
+export const MY_ORDER_DETAIL_KEY = [...ORDERS_KEY, 'detail'] as const;
+export const MY_ORDER_FILLS_KEY = [...ORDERS_KEY, 'fills'] as const;
+export const MY_MARKET_FILLS_KEY = [...ORDERS_KEY, 'market-fills'] as const;
+
+/** `GET /me/orders?state=live`, every market's (`'all'`) or one market's. */
+export const myOrdersLiveKey = (accountId: string | undefined, marketId?: string) =>
+  [
+    ...MY_ORDERS_LIVE_KEY,
+    marketId === undefined ? 'all' : marketId.toLowerCase(),
+    accountId,
+  ] as const;
+
+/** `GET /me/orders/:id`. */
+export const myOrderKey = (orderId: string, accountId: string | undefined) =>
+  [...MY_ORDER_DETAIL_KEY, orderId.toLowerCase(), accountId] as const;
+
+/** `GET /me/fills?orderId=`: one order's fills, its own side only. */
+export const myOrderFillsKey = (orderId: string, accountId: string | undefined) =>
+  [...MY_ORDER_FILLS_KEY, orderId.toLowerCase(), accountId] as const;
+
+/** `GET /me/fills?marketId=`: the account's fills on one market (상세의 내 거래). */
+export const myMarketFillsKey = (marketId: string, accountId: string | undefined) =>
+  [...MY_MARKET_FILLS_KEY, marketId.toLowerCase(), accountId] as const;
 /**
  * 매도 가능액 (#179, `GET /me/markets/:id/sellable`): the caller's holding on one market, its
  * resting sells and the rest, read by the order panel (#66, ADR-0140). Owner only, so private.

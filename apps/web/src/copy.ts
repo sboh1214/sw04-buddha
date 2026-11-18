@@ -2504,10 +2504,9 @@ export const copy = {
   marketMyPosition: '내 포지션',
   marketMyPositionEmpty: '아직 이 시장에 참여하지 않았습니다.',
   // 상세의 배치 틀 (#122, ADR-0067). 배경은 시장의 설명(description)이다. 내 거래와 내 대기
-  // 주문(#123, ADR-0116 결정 10의 18)은 내용을 아직 만들 수 없어 제목과 comingSoon('준비
-  // 중입니다.')으로 보이는 자리다(ADR-0061 결정 3의 #122 행). 호가창은 #122가(ADR-0138), 공개 판정
-  // 기록은 #24가 채웠다. 자리의 제목은 그 결정의 글 그대로다(오너 결정 2026-10-17). 내 거래와 내
-  // 대기 주문은 로그인한 본인에게만 보인다(ADR-0061 결정 1의 18).
+  // 주문은 #123이(ADR-0141), 호가창은 #122가(ADR-0138), 공개 판정 기록은 #24가 채웠다. 자리의
+  // 제목은 그 결정의 글 그대로다(오너 결정 2026-10-17). 내 거래와 내 대기 주문은 로그인한 본인에게만
+  // 보인다(ADR-0061 결정 1의 18).
   marketBackground: '배경',
   marketOrderBook: '호가창',
   // 호가창 (#122, ADR-0138; ADR-0135 B1·B2·B3). YES·NO는 copy.yes·copy.no다. 쪽 이름은 호가의
@@ -2735,6 +2734,73 @@ export const copy = {
   orderCancelAdminRole: '관리자 권한',
   orderCancelRestricted: '계정 제한',
   orderCancelAccountClosed: '탈퇴',
+  // 대기 주문과 주문 상세(#123, ADR-0141; ADR-0135 E1~E5·B4·결정 4). 취소는 한 번 확인받고(E1), 일괄
+  // 취소는 없다(E2). '취소 요청 중'은 화면 상태이고 '취소 완료'가 아니다(결정 4). 상대 계정은 어디에도
+  // 없다(B4). 규칙 버전은 보이지 않고 시장 링크만 둔다(E4). 낱말은 승인 스크린샷으로 보인다.
+  orderCancel: '주문 취소',
+  orderCancelTitle: '이 주문을 취소할까요?',
+  orderCancelIrreversible: '취소하면 되돌릴 수 없습니다. 다시 거래하려면 새로 주문해야 합니다.',
+  // 확인을 열어 둔 사이 주문이 끝났을 때: 뒤에 그 상태 이름이 붙는다.
+  orderCancelEndedMeanwhile: '그 사이 주문이 끝났습니다:',
+  orderCancelling: '취소 요청 중',
+  // 취소 확인의 첫 칸(E1의 '시장').
+  orderMarket: '시장',
+  // 원장 장애 복구를 기다리는 시장의 대기 주문(ADR-0113 결정 11): 취소가 꺼지고 조건 줄 자리에 놓인다.
+  orderHeldMarket: '거래가 멈춘 시장입니다. 복구되어 주문이 정리될 때까지 취소할 수 없습니다.',
+  orderOrderedQty: '주문 수량',
+  orderRemainingQty: '남은 수량',
+  orderAcceptedAt: '접수 시각',
+  orderProtectedLimit: '보호 한도',
+  orderFilledAmountLabel: '체결 대금',
+  orderReason: '사유',
+  orderDetail: '주문 상세',
+  orderDetailShort: '상세',
+  orderTimeline: '상태 이력',
+  orderFills: '체결 목록',
+  orderFillsEmpty: '아직 체결이 없습니다.',
+  orderFillTime: '시각',
+  orderFillPrice: '체결가',
+  orderTimelineAccepted: '접수',
+  orderTimelineFill: '체결',
+  // 체결 목록이 덜 읽혔을 때 맨 앞 줄: '이전 체결 3계약 — 체결 목록에서 더 보기'.
+  orderTimelineEarlierHead: '이전 체결',
+  orderTimelineEarlierTail: '— 체결 목록에서 더 보기',
+  // 만료는 사유 칸이 없다: 거래가 끝난 시장에서만 생긴다(#120, ADR-0115).
+  orderExpiredReason: '거래가 끝나 남은 수량이 만료되었습니다.',
+  orderNotFound: '주문을 찾을 수 없습니다.',
+  orderCancelUnknown: '취소 결과를 확인하지 못했습니다. 주문 상태를 다시 읽었습니다.',
+  // 끝난 주문의 알림 한 줄: '<시장> <계약> 주문 · <상태>(<사유>)', 본인 취소면 '체결 1계약 · 취소 2계약'.
+  orderNoticeOrder: '주문',
+  orderNoticeFilled: '체결',
+  orderNoticeCancelled: '취소',
+  // 여러 건이 함께 끝났을 때: '주문 3건이 끝났습니다. …'. 확인할 수 있는 수보다 많으면 건수 없이.
+  orderEndedManyHead: '주문',
+  orderEndedManyTail: '건이 끝났습니다. 거래·정산 이력에서 확인하세요.',
+  orderEndedSome: '주문 여러 건이 끝났습니다. 거래·정산 이력에서 확인하세요.',
+  orderBackToPending: '대기 주문으로 돌아가기',
+  orderBackToHistory: '거래·정산 이력으로 돌아가기',
+  marketMyOpenOrdersEmpty: '이 시장에 대기 중인 주문이 없습니다.',
+  marketMyTradesEmpty: '이 시장에서 체결된 내 거래가 없습니다.',
+  // 거절 사유 11의 짧은 이름(결정 4, E3): MY 목록·상태 이력·알림. 문장은 위의 orderReject*다.
+  orderRejectNameInsufficientCoin: '잔액 부족',
+  orderRejectNameInsufficientContracts: '보유량 부족',
+  orderRejectNameNotOpenYet: '개장 전',
+  orderRejectNameClosed: '마감',
+  orderRejectNamePaused: '일시 중단',
+  orderRejectNameNoQuote: '호가 부족',
+  orderRejectNamePriceLimit: '가격 한도',
+  orderRejectNameBudgetTooSmall: '금액 부족',
+  orderRejectNameSelfTrade: '자기 체결',
+  orderRejectNameLedgerHold: '계정 확인 중',
+  orderRejectNameAdminRoleRevoked: '관리자 권한',
+  // 취소 사유 7의 짧은 이름(결정 4). '탈퇴'는 탈퇴가 로그인도 끝내 회원 화면에 닿지 않지만 이름은 둔다.
+  orderCancelNameByOwner: '본인 취소',
+  orderCancelNameIocRemainder: '즉시 거래 잔량',
+  orderCancelNameSelfTrade: '자기 체결',
+  orderCancelNamePaused: '일시 중단',
+  orderCancelNameAdminRole: '관리자 권한',
+  orderCancelNameRestricted: '계정 제한',
+  orderCancelNameAccountClosed: '탈퇴',
   // 행 없는 오류(orders.controller.ts).
   orderForbidden: '이 주문을 보낼 수 없습니다. 화면을 새로 고친 뒤 다시 시도하세요.',
   // 처음 가입한 계정과 약관 개정에 다시 동의해야 하는 계정 모두에 맞는 말(errPostOnboarding과 같은 꼴).

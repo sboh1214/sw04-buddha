@@ -12,6 +12,7 @@ import { safeNextPath } from './next-path';
 
 export const MY_PATH = '/my';
 export const MY_ORDERS_PATH = '/my/orders';
+export const MY_HISTORY_PATH = '/my/history';
 export const MY_WALLET_PATH = '/my/wallet';
 export const MY_SETTINGS_PATH = '/my/settings';
 
@@ -33,13 +34,22 @@ export type MyTabKey =
 export const MY_TABS: readonly { key: MyTabKey; href: Route; label: string }[] = [
   { key: 'positions', href: '/my/positions', label: copy.myPositions },
   { key: 'orders', href: MY_ORDERS_PATH, label: copy.myOrders },
-  { key: 'history', href: '/my/history', label: copy.myHistory },
+  { key: 'history', href: MY_HISTORY_PATH, label: copy.myHistory },
   { key: 'wallet', href: MY_WALLET_PATH, label: copy.myWallet },
   { key: 'posts', href: '/my/posts', label: copy.myPosts },
   { key: 'watchlist', href: '/my/watchlist', label: copy.myWatchlist },
   { key: 'notifications', href: '/my/notifications', label: copy.myNotifications },
   { key: 'settings', href: MY_SETTINGS_PATH, label: copy.mySettings },
 ];
+
+/**
+ * 주문 상세 (#123, ADR-0141): one order's page under 대기 주문 (ADR-0135 결과 4 #123 '주소'), so the
+ * tab strip reads 대기 주문 there whatever the order's state (`isMyTabCurrent`). Its id as given:
+ * the page reads it, and the server answers a malformed one as it answers another account's.
+ */
+export function myOrderPath(orderId: string): Route {
+  return `${MY_ORDERS_PATH}/${orderId}` as Route;
+}
 
 /** How many rows each tab's preview on the `/my` summary shows before its 전체 보기. */
 export const MY_PREVIEW_ROWS = 3;

@@ -162,10 +162,12 @@ const POST_ID = '0b6f6c1e-3f7a-4c51-9d0e-6a1f2b3c4d5e';
 const POST_PAGE = `/community/posts/${POST_ID}`;
 
 describe('the pages exempt for a login-only action (오너 결정 2026-10-20)', () => {
-  it('lists exactly the post page and MY 설정 (#41), each entry with its reason', () => {
+  it('lists exactly the post page, MY 설정 (#41) and the two order pages (#123, E5), each entry with its reason', () => {
     expect(ONBOARDING_EXEMPT_PAGES.map((page) => page.route)).toEqual([
       '/community/posts/[postId]',
       '/my/settings',
+      '/my/orders',
+      '/my/orders/[orderId]',
     ]);
     for (const page of ONBOARDING_EXEMPT_PAGES) expect(page.reason.trim()).not.toBe('');
   });
@@ -265,6 +267,18 @@ describe('MY 설정 for an account facing a re-consent (#41, 오너 결정 2026-
     expect(needsOnboarding('/my/settings', RECONSENT)).toBe(false);
     // MY's other screens still send it on.
     for (const path of ['/my', '/my/wallet', '/my/posts']) {
+      expect(needsOnboarding(path, RECONSENT), path).toBe(true);
+    }
+  });
+
+  it('keeps a re-consent alone on MY 대기 주문 and an order’s 상세, and sends it on from the market (#123, E5)', () => {
+    for (const path of ['/my/orders', '/my/orders/x', `/my/orders/${POST_ID}`]) {
+      expect(isOnboardingExemptPage(path), path).toBe(true);
+      expect(needsOnboarding(path, RECONSENT), path).toBe(false);
+      // Not for an account that never finished.
+      expect(needsOnboarding(path, FRESH), path).toBe(true);
+    }
+    for (const path of ['/markets/x', '/my/orders/x/y', '/my/ordersx', '/my/history']) {
       expect(needsOnboarding(path, RECONSENT), path).toBe(true);
     }
   });

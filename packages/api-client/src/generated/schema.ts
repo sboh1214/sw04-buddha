@@ -3140,7 +3140,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** The account's fills, newest first, each as its own order took it: the order, outcome, side, quantity, price per contract and Coin, the recorded YES price and the fee (0). The counterparty is never named; marketId narrows to one market */
+        /** The account's fills, newest first, each as its own order took it: the order, outcome, side, quantity, price per contract and Coin, the recorded YES price and the fee (0). The counterparty is never named; marketId narrows to one market, orderId to one of the account’s orders (own leg only: another account’s order id reads an empty list) */
         get: operations["getMyFills"];
         put?: never;
         post?: never;
@@ -3310,7 +3310,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** One of the account’s orders; another account’s is NOT_FOUND */
+        /** One of the account’s orders; another account’s is NOT_FOUND. awaitingRecovery: a live one whose market waits for a ledger recovery (its cancel is MARKET_NOT_OPEN until then) */
         get: operations["getMyOrder"];
         put?: never;
         post?: never;
@@ -6702,6 +6702,7 @@ export type components = {
         /** @enum {string} */
         OpenItem: "title" | "description" | "yesCondition" | "noCondition" | "eventDeadline" | "primarySource" | "fallbackSources" | "fallbackCondition" | "longDelayDays" | "delayHandling" | "scheduledOpenAt" | "closeAt" | "scheduledJudgementAt" | "judgementTimeZone" | "timeOrder" | "leadClose" | "category" | "tags" | "priceProtection" | "liquidity";
         Order: {
+            awaitingRecovery: boolean;
             budgetCoin: components["schemas"]["CoinAmount"] | null;
             cancelledQty: number;
             /** @enum {string|null} */
@@ -23366,6 +23367,7 @@ export interface operations {
                 cursor?: string;
                 limit?: number;
                 marketId?: string;
+                orderId?: string;
             };
             header?: never;
             path?: never;

@@ -187,12 +187,27 @@ describe('the detail sections (#122, ADR-0061 decision 1, item 16)', () => {
   it('draws 토론 as its posts now, no longer a 준비 중 slot (#47, ADR-0075)', () => {
     // ADR-0067 left 토론 its title and 준비 중; #47 fills the slot with the section of this market's
     // posts, which reads them by the market's id — and the server's `now`, which its 판정 이의 note
-    // times the deadline from (#175). The other 준비 중 slots are untouched.
+    // times the deadline from (#175).
     const source = readFileSync(path.join(SRC, 'app/markets/[slug]/market-detail.tsx'), 'utf8');
     expect(source).toContain('discussion: <MarketDiscussion marketId={marketId} now={now} />');
     expect(source).not.toContain('copy.marketDiscussion');
-    for (const slot of ['market-my-trades', 'market-my-open-orders']) {
-      expect(source, slot).toContain(`testId="${slot}"`);
+  });
+
+  it('draws 내 거래 and 내 대기 주문 as the account’s own now, no longer 준비 중 slots (#123, ADR-0141)', () => {
+    // The last two 준비 중 slots: 내 대기 주문 under 내 포지션, 내 거래 under 최근 체결 for a member.
+    // Each is its own card with the slot's test id (components/orders), read in the browser only.
+    const source = readFileSync(path.join(SRC, 'app/markets/[slug]/market-detail.tsx'), 'utf8');
+    expect(source).not.toContain('ComingSoonSection');
+    expect(source).not.toContain('copy.comingSoon');
+    expect(source).toContain('<MarketMyOpenOrders marketId={marketId} />');
+    expect(source).toContain('{member && <MyMarketTrades marketId={marketId} />}');
+    for (const [file, slot] of [
+      ['components/orders/pending-orders.tsx', 'market-my-open-orders'],
+      ['components/orders/my-market-trades.tsx', 'market-my-trades'],
+    ] as const) {
+      const card = readFileSync(path.join(SRC, file), 'utf8');
+      expect(card, slot).toContain(`<Card.Root data-testid="${slot}">`);
+      expect(card, slot).not.toContain('copy.comingSoon');
     }
   });
 

@@ -743,13 +743,15 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
     status: 404,
     own: ['filled order id', 'filled order key'],
   },
-  // B's fills, paged from A's on A's market: none. A's own name A's order and side alone — the
-  // counterparty, its order and its account type never (ADR-0107 결정 5 '#179·#119').
+  // B's fills, paged from A's on A's market and narrowed to A's order: none (the order id narrows
+  // B's own side only, #123). A's own name A's order and side alone — the counterparty, its
+  // order and its account type never (ADR-0107 결정 5 '#179·#119').
   'GET /me/fills': {
     query: {
       cursor: (fixture) => fixture.cursors.fills,
       limit: LIMIT,
       marketId: (fixture) => fixture.market.id,
+      orderId: (fixture) => fixture.filledOrderId,
     },
     status: 200,
     own: ['filled order id'],

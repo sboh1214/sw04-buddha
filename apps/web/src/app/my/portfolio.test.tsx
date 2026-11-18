@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { type Order } from '@/lib/api';
-import { renderWithQueries } from '@/test/render';
+import { byTestId, renderWithQueries } from '@/test/render';
 import { OrderRow } from './portfolio';
 
 const ORDER: Order = {
@@ -26,6 +26,7 @@ const ORDER: Order = {
   cancelReason: null,
   createdAt: '2026-11-05T00:00:00.000Z',
   endedAt: '2026-11-05T00:00:00.000Z',
+  awaitingRecovery: false,
 };
 
 /**
@@ -48,5 +49,41 @@ describe('OrderRow market line', () => {
     expect(html).toContain(copy.postMarketNotPublic);
     expect(html).toContain('data-testid="portfolio-order-market-hidden"');
     expect(html).not.toContain('/markets/');
+  });
+});
+
+/**
+ * 거래·정산 이력 한 줄's reason and 상세 (#123, ADR-0141; ADR-0140 넘긴 것 #123): an ended order's
+ * reason by its short name — E3's names among them — and the way to its 주문 상세.
+ */
+describe('OrderRow reason and detail link', () => {
+  it('names a 거절 reason and a 취소 reason short, and links the order’s detail', () => {
+    const rejected = renderWithQueries(
+      <OrderRow order={{ ...ORDER, rejectReason: 'ledger_hold' }} />,
+    );
+    expect(byTestId(rejected, 'portfolio-order-reason')?.text).toBe('계정 확인 중');
+    expect(byTestId(rejected, 'portfolio-order-detail')?.attributes.href).toBe(
+      `/my/orders/${ORDER.id}`,
+    );
+    const cancelled = renderWithQueries(
+      <OrderRow
+        order={{
+          ...ORDER,
+          status: 'cancelled',
+          rejectReason: null,
+          cancelReason: 'admin_role',
+        }}
+      />,
+    );
+    expect(byTestId(cancelled, 'portfolio-order-reason')?.text).toBe('관리자 권한');
+  });
+
+  it('draws no reason for 전량 체결 and 만료', () => {
+    for (const status of ['filled', 'expired'] as const) {
+      const html = renderWithQueries(
+        <OrderRow order={{ ...ORDER, status, rejectReason: null, cancelReason: null }} />,
+      );
+      expect(byTestId(html, 'portfolio-order-reason'), status).toBeUndefined();
+    }
   });
 });

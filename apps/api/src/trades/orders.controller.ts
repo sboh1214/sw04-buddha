@@ -156,7 +156,9 @@ export class MeOrdersController {
   @Get('orders/:id')
   @ApiOperation({
     operationId: 'getMyOrder',
-    summary: 'One of the account’s orders; another account’s is NOT_FOUND',
+    summary:
+      'One of the account’s orders; another account’s is NOT_FOUND. awaitingRecovery: a live ' +
+      'one whose market waits for a ledger recovery (its cancel is MARKET_NOT_OPEN until then)',
   })
   @ApiData(orderSchema)
   @ApiErrors('UNAUTHENTICATED', 'NOT_FOUND', 'VALIDATION_ERROR')
@@ -210,7 +212,8 @@ export class MeOrdersController {
     summary:
       "The account's fills, newest first, each as its own order took it: the order, outcome, " +
       'side, quantity, price per contract and Coin, the recorded YES price and the fee (0). ' +
-      'The counterparty is never named; marketId narrows to one market',
+      'The counterparty is never named; marketId narrows to one market, orderId to one of the ' +
+      'account’s orders (own leg only: another account’s order id reads an empty list)',
   })
   @ApiPageOf(myFillSchema)
   @ApiErrors('UNAUTHENTICATED', 'VALIDATION_ERROR')

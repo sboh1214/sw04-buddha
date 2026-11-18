@@ -176,6 +176,11 @@ test.describe('주문 패널 (#66)', () => {
       await expect(panel.getByTestId('order-result-reason')).toContainText('즉시 거래 잔량');
       await expect(panel.getByTestId('order-result-filled-qty')).toContainText('1계약');
       await expect(panel.getByTestId('order-result-cancelled')).toContainText('1계약');
+      // The way to the order's 주문 상세 (#123, ADR-0141).
+      await expect(panel.getByTestId('order-result-detail')).toHaveAttribute(
+        'href',
+        /^\/my\/orders\/[0-9a-f-]{36}$/,
+      );
       expect(sent.bodies).toHaveLength(1);
       expect(sent.bodies[0]).toMatchObject({
         outcome: 'YES',
@@ -822,6 +827,7 @@ test.describe('주문 패널 (#66)', () => {
       cancelReason: null,
       createdAt: new Date().toISOString(),
       endedAt: new Date().toISOString(),
+      awaitingRecovery: false,
     };
     const answers: Order[] = [
       base,

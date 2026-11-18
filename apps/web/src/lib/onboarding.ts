@@ -144,7 +144,9 @@ export interface OnboardingExemptPage {
  * email, password, linked sign-ins, real name, time zone, theme — write what the server takes with
  * a session alone (ADR-0078 7-24). The re-consent step links to it (`settingsLinkOnStep`, answer 2).
  * ADR-0061's watchlist is not one: its server asks for a session alone, and its screens keep the
- * onboarding prompt (#89 — the owner wrote the screen in).
+ * onboarding prompt (#89 — the owner wrote the screen in). MY 대기 주문 and an order's 주문 상세
+ * are (#123, ADR-0135 E5): a re-consent alone keeps its own orders in view and cancellable, the
+ * two pages one entry each (`isRoutePage` matches one page); the market detail is not.
  */
 export const ONBOARDING_EXEMPT_PAGES: readonly OnboardingExemptPage[] = [
   {
@@ -156,6 +158,16 @@ export const ONBOARDING_EXEMPT_PAGES: readonly OnboardingExemptPage[] = [
     route: '/my/settings',
     reason:
       'a member facing a re-consent clears the 소개, drops interest categories and deletes the image of their public profile with a session alone (owner decisions 2026-10-21 answer 2, #41, and 2026-10-22, #141), and keeps the account cards; a new 소개, a category added, a new image, a nickname change (owner decision 2026-10-22 answer 1) and the marketing switch go to the step',
+  },
+  {
+    route: '/my/orders',
+    reason:
+      'a member facing a re-consent sees its waiting orders and cancels them with a session alone (ADR-0135 E5, #123, ADR-0141): the cancel and the order reads ask no onboarding (ADR-0113), and a new order still goes to the step from the market detail',
+  },
+  {
+    route: '/my/orders/[orderId]',
+    reason:
+      'a member facing a re-consent reads its own order — its state history, fills and quantities — and cancels it if it waits, with a session alone (ADR-0135 E5, #123, ADR-0141); the market detail it links to still goes to the step',
   },
 ];
 

@@ -80,6 +80,7 @@ function order(id: string, overrides: Partial<Order> = {}): Order {
     cancelReason: null,
     createdAt: '2026-09-07T00:00:00.000Z',
     endedAt: '2026-09-07T00:00:00.000Z',
+    awaitingRecovery: false,
     ...overrides,
   };
 }

@@ -453,6 +453,12 @@ export const orderSchema = z
     createdAt: z.iso.datetime(),
     /** When it left the live states (대기·부분 체결); null while it rests. */
     endedAt: z.iso.datetime().nullable(),
+    /**
+     * A live order whose market waits for a ledger-failure recovery (`ledgerHeldMarketSql`'s
+     * judgment): its lock stays and the owner's cancel is refused until the recovery approval
+     * ends it (#123, ADR-0141). Always false for an ended order.
+     */
+    awaitingRecovery: z.boolean(),
   })
   .meta({ id: 'Order' });
 export type Order = z.infer<typeof orderSchema>;
@@ -508,9 +514,14 @@ export const myOrdersQuerySchema = cursorQuerySchema.extend({
 });
 export type MyOrdersQuery = z.infer<typeof myOrdersQuerySchema>;
 
-/** `GET /me/fills` (no `.meta`: query DTO): newest first, one market's when named. */
+/**
+ * `GET /me/fills` (no `.meta`: query DTO): newest first, one market's when named, one of the
+ * caller's own orders' when `orderId` is (#123, ADR-0141: the owner's side of a fill only; another
+ * account's order id answers the empty list an unknown id does).
+ */
 export const myFillsQuerySchema = cursorQuerySchema.extend({
   marketId: uuidParamSchema.optional(),
+  orderId: uuidParamSchema.optional(),
 });
 export type MyFillsQuery = z.infer<typeof myFillsQuerySchema>;
 

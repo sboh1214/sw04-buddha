@@ -86,7 +86,8 @@ export function forgetAccountInTab(queryClient: QueryClient): void {
   // in next here would get, and an order request this account sent and holds no answer for.
   clearSessionOrderDrafts();
   clearSessionOrderRequests();
-  // And the toasts its orders left where no panel showed them, which stay until closed (결정 2-25).
+  // And the toasts its orders left: those that stay until closed where no panel showed them (결정
+  // 2-25), and 대기 주문's notices of an order's end or a failed cancel (#123, ADR-0141 결정 2-6).
   dismissAccountToastsExcept(null);
 }
 

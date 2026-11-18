@@ -17,6 +17,7 @@ import { profilePath } from '@/lib/profile';
 import { ComingSoonTab } from './coming-soon';
 import {
   BalanceSummary,
+  LivePendingOrders,
   LoadFailed,
   OrdersBody,
   PositionsBody,
@@ -61,6 +62,7 @@ function tab(key: MyTabKey) {
  */
 export function MySummary() {
   const ended = useSessionEnded();
+  const me = useMe();
   const holdings = useHoldings();
   const settled = usePositions('settled');
   const orders = useOrders();
@@ -79,7 +81,12 @@ export function MySummary() {
         <PositionsBody holdings={holdings} limit={MY_PREVIEW_ROWS} />
       </Section>
       <Section title={pending.label} testId="my-preview-orders" href={pending.href}>
-        <OrdersBody orders={orders} kind="pending" limit={MY_PREVIEW_ROWS} />
+        {/* The tab's live list under the same key, its first rows (#123, ADR-0141). */}
+        <LivePendingOrders
+          accountId={me.data?.id}
+          testId="my-preview-orders"
+          limit={MY_PREVIEW_ROWS}
+        />
       </Section>
       <Section title={history.label} testId="my-preview-history" href={history.href}>
         <Stack gap="5">

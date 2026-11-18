@@ -151,6 +151,7 @@ const order = {
   cancelReason: null,
   createdAt: at,
   endedAt: at,
+  awaitingRecovery: false,
 };
 const fill = {
   id: '7',
@@ -836,6 +837,10 @@ describe('own order and fill DTOs (#119)', () => {
     expect(orderSchema.parse(rejected)).toEqual(rejected);
     const live = { ...order, timeInForce: 'gtc', status: 'open', filledQty: 0, endedAt: null };
     expect(orderSchema.parse(live).endedAt).toBeNull();
+    // The recovery flag is required (#123): a live order in a held market says so.
+    expect(orderSchema.parse({ ...live, awaitingRecovery: true }).awaitingRecovery).toBe(true);
+    const { awaitingRecovery: _omitted, ...noFlag } = live;
+    expect(orderSchema.safeParse(noFlag).success).toBe(false);
     expect(orderSchema.safeParse({ ...order, status: 'expired' }).success).toBe(true);
     expect(orderSchema.safeParse({ ...order, rejectReason: 'too_late' }).success).toBe(false);
     expect(orderSchema.safeParse({ ...order, cancelReason: 'by_owner' }).success).toBe(true);
@@ -901,6 +906,13 @@ describe('own order and fill DTOs (#119)', () => {
     expect(myOrdersQuerySchema.safeParse({ state: 'open' }).success).toBe(false);
     expect(myOrdersQuerySchema.safeParse({ marketId: 'x' }).success).toBe(false);
     expect(myFillsQuerySchema.parse({ marketId })).toEqual({ marketId, limit: 20 });
+    // One own order's fills (#123): a uuid, with or without the market.
+    expect(myFillsQuerySchema.parse({ orderId: marketId, marketId })).toEqual({
+      orderId: marketId,
+      marketId,
+      limit: 20,
+    });
+    expect(myFillsQuerySchema.safeParse({ orderId: 'x' }).success).toBe(false);
   });
 });
 

@@ -1319,7 +1319,11 @@ test.describe('시장 상세 · 상태와 로그인', () => {
     const openOrders = page.getByTestId('market-my-open-orders');
     await expect(openOrders).toBeVisible();
     await expect(openOrders).toContainText(copy.marketMyOpenOrders);
-    await expect(openOrders).toContainText(copy.comingSoon);
+    // No longer 준비 중 (#123, ADR-0141): this account's live orders here — none.
+    await expect(openOrders.getByTestId('market-my-open-orders-empty')).toHaveText(
+      copy.marketMyOpenOrdersEmpty,
+    );
+    await expect(openOrders).not.toContainText(copy.comingSoon);
     // 내 대기 주문 is under 내 포지션 (N02 §4 '내 포지션·대기 주문') and before 토론, at both widths.
     await expectInOrder(page, ['market-my-position', 'market-my-open-orders', 'market-discussion']);
     // 내 거래 is in 거래 내역: beside 최근 체결 from md up, behind the switch below md.
@@ -1329,7 +1333,10 @@ test.describe('시장 상세 · 상태와 로그인', () => {
     const myTrades = page.getByTestId('market-activity-history').getByTestId('market-my-trades');
     await expect(myTrades).toBeVisible();
     await expect(myTrades).toContainText(copy.marketMyTrades);
-    await expect(myTrades).toContainText(copy.comingSoon);
+    await expect(myTrades.getByTestId('market-my-trades-empty')).toHaveText(
+      copy.marketMyTradesEmpty,
+    );
+    await expect(myTrades).not.toContainText(copy.comingSoon);
     // …after 최근 체결 in it, and the two personal slots in the order the owner approved (ADR-0067).
     await expectInOrder(page, [
       'market-fills',

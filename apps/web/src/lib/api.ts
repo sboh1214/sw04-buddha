@@ -176,6 +176,8 @@ export type PriceTick = components['schemas']['PriceTick'];
 export type PriceSeries = components['schemas']['PriceSeries'];
 export type Position = components['schemas']['Position'];
 export type Order = components['schemas']['Order'];
+/** One of the caller's own fills (`GET /me/fills`), its own side only (#119; #123's views). */
+export type MyFill = components['schemas']['MyFill'];
 /**
  * 주문 패널 (#66, ADR-0140): a quote (`POST /markets/:id/quote`, public) and its body, an order's
  * body and answer (`POST /markets/:id/orders`), and the caller's 매도 가능액 on one market

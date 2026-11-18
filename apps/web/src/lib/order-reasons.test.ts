@@ -9,11 +9,16 @@ import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import {
   blockText,
+  cancelReasonName,
   cancelReasonText,
+  detailReasonText,
+  expiredReasonText,
   failureText,
   insufficientCoinLine,
   insufficientContractsLine,
+  orderReasonName,
   orderStatusLabel,
+  rejectReasonName,
   rejectReasonText,
   restrictedLine,
   restrictedLineParts,
@@ -74,6 +79,70 @@ describe('the six states and their reasons', () => {
     expect(new Set(texts).size).toBe(7);
     expect(cancelReasonText('ioc_remainder')).toContain('즉시 거래 잔량');
     expect(cancelReasonText('self_trade')).toContain('자기 체결');
+  });
+});
+
+describe('the short names MY and the order detail say (#123, ADR-0141)', () => {
+  it('names every 거절 reason by its own key, E3’s two among them, never the sentence cut', () => {
+    expect(ORDER_REJECT_REASONS.map(rejectReasonName)).toEqual([
+      '잔액 부족',
+      '보유량 부족',
+      '개장 전',
+      '마감',
+      '일시 중단',
+      '호가 부족',
+      '가격 한도',
+      '금액 부족',
+      '자기 체결',
+      '계정 확인 중',
+      '관리자 권한',
+    ]);
+    for (const reason of ORDER_REJECT_REASONS) {
+      // Each sentence opens with its name: the two never disagree.
+      expect(rejectReasonText(reason).startsWith(rejectReasonName(reason)), reason).toBe(true);
+    }
+  });
+
+  it('names every 취소 reason, 탈퇴 too though no member screen meets it', () => {
+    expect(ORDER_CANCEL_REASONS.map(cancelReasonName)).toEqual([
+      '본인 취소',
+      '즉시 거래 잔량',
+      '자기 체결',
+      '일시 중단',
+      '관리자 권한',
+      '계정 제한',
+      '탈퇴',
+    ]);
+    expect(cancelReasonName('account_closed')).toBe(copy.orderCancelNameAccountClosed);
+  });
+
+  it('gives an ended order its one reason name, and none to 전량 체결 or 만료', () => {
+    expect(orderReasonName({ rejectReason: 'ledger_hold', cancelReason: null })).toBe(
+      '계정 확인 중',
+    );
+    expect(orderReasonName({ rejectReason: null, cancelReason: 'admin_role' })).toBe('관리자 권한');
+    expect(orderReasonName({ rejectReason: null, cancelReason: null })).toBeNull();
+  });
+
+  it('says the detail’s reason line: 거절’s sentence, 취소’s name or sentence, 만료’s line', () => {
+    const none = { rejectReason: null, cancelReason: null } as const;
+    expect(detailReasonText({ ...none, status: 'rejected', rejectReason: 'closed' })).toBe(
+      copy.orderRejectClosed,
+    );
+    expect(detailReasonText({ ...none, status: 'cancelled', cancelReason: 'by_owner' })).toBe(
+      '본인 취소',
+    );
+    expect(detailReasonText({ ...none, status: 'cancelled', cancelReason: 'ioc_remainder' })).toBe(
+      copy.orderCancelIocRemainder,
+    );
+    expect(detailReasonText({ ...none, status: 'cancelled', cancelReason: 'self_trade' })).toBe(
+      copy.orderCancelSelfTrade,
+    );
+    expect(detailReasonText({ ...none, status: 'expired' })).toBe(expiredReasonText());
+    expect(expiredReasonText()).toBe('거래가 끝나 남은 수량이 만료되었습니다.');
+    for (const status of ['open', 'partially_filled', 'filled'] as const) {
+      expect(detailReasonText({ ...none, status })).toBeNull();
+    }
   });
 });
 

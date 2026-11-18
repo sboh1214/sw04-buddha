@@ -19,6 +19,8 @@ import type { Route } from 'next';
 import NextLink from 'next/link';
 import { usePathname } from 'next/navigation';
 import { type ReactNode } from 'react';
+import { OrderDetail } from '@/components/orders/order-detail';
+import { PendingOrders } from '@/components/orders/pending-orders';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { CoinText } from '@/components/ui/coin-text';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -54,7 +56,15 @@ import {
   formatPricePerContract,
 } from '@/lib/market-admin';
 import { marketStatusLabel } from '@/lib/market-status';
-import { MY_ORDERS_PATH, isPendingOrder, orderHistoryEmpty, showMoreOrders } from '@/lib/my';
+import {
+  MY_ORDERS_PATH,
+  isPendingOrder,
+  myOrderPath,
+  orderHistoryEmpty,
+  showMoreOrders,
+} from '@/lib/my';
+import { orderReasonName, orderStatusLabel } from '@/lib/order-reasons';
+import { ProfileUnavailable } from './settings/profile-unavailable';
 
 /**
  * The old `/portfolio`'s four sections, moved into MY (#16) without being redrawn: 잔고 요약 on
@@ -77,19 +87,6 @@ import { MY_ORDERS_PATH, isPendingOrder, orderHistoryEmpty, showMoreOrders } fro
 
 /** The repo's placeholder for a figure that does not exist (admin-market-detail.tsx). */
 const EMPTY = '—';
-
-/**
- * PLAN Appendix A: every order state gets plain Korean, and the badge always carries the word. 만료
- * is #119's sixth state (ADR-0107 결정 1 #177 7항); the reasons and the other names are #123's.
- */
-const ORDER_STATUS_LABEL: Record<OrderStatus, string> = {
-  open: copy.orderStatusOpen,
-  partially_filled: copy.orderStatusPartiallyFilled,
-  filled: copy.orderStatusFilled,
-  cancelled: copy.orderStatusCancelled,
-  expired: copy.orderStatusExpired,
-  rejected: copy.orderStatusRejected,
-};
 
 /** Colour only reinforces the label: brand once it is done, `no` only for a refusal. */
 const ORDER_STATUS_PALETTE: Record<OrderStatus, 'brand' | 'gray' | 'orange' | 'no'> = {
@@ -219,16 +216,57 @@ export function MyPositions() {
   );
 }
 
-/** `/my/orders`: 대기 주문, the open and partially filled rows of the old 주문 이력. */
+/**
+ * `/my/orders`: 대기 주문 (#123, ADR-0141) — the server's live list (`state=live`), every market's,
+ * with 주문 취소 and '취소 요청 중' on each row (`PendingOrders`). The list is the account's MY
+ * shows (`Me`'s id, ADR-0091), so it waits for `GET /me` and is keyed by it.
+ */
 export function MyOrders() {
   const ended = useSessionEnded();
-  const orders = useOrders();
+  const accountId = useMe().data?.id;
   if (ended) return <SessionEnded />;
   return (
     <Section title={copy.myOrders} testId="my-orders">
-      <OrdersBody orders={orders} kind="pending" />
+      <LivePendingOrders accountId={accountId} testId="my-orders" />
     </Section>
   );
+}
+
+/**
+ * The live list for MY's account, or `GET /me`'s wait or failure while that account is not known
+ * (`ProfileUnavailable`). Shared by the tab and the summary's preview (`limit`), one key for both.
+ */
+export function LivePendingOrders({
+  accountId,
+  testId,
+  limit,
+}: {
+  accountId: string | undefined;
+  testId: string;
+  limit?: number;
+}) {
+  if (accountId === undefined) return <ProfileUnavailable height="24" />;
+  return (
+    <PendingOrders
+      key={accountId}
+      accountId={accountId}
+      variant="my"
+      testId={testId}
+      {...(limit === undefined ? {} : { limit })}
+    />
+  );
+}
+
+/**
+ * `/my/orders/<id>`: 주문 상세 (#123, ADR-0141) — one of the account's orders in any state
+ * (`OrderDetail`), under 대기 주문's tab. Keyed by MY's account like the lists.
+ */
+export function MyOrderDetail({ orderId }: { orderId: string }) {
+  const ended = useSessionEnded();
+  const accountId = useMe().data?.id;
+  if (ended) return <SessionEnded />;
+  if (accountId === undefined) return <ProfileUnavailable height="48" />;
+  return <OrderDetail key={accountId} orderId={orderId} accountId={accountId} />;
 }
 
 /** `/my/history`: 거래·정산 이력, the old 정산 이력 and the rest of the old 주문 이력. */
@@ -438,8 +476,8 @@ export function SettledBody({ settled, limit }: { settled: SettledList; limit?: 
  * do. So an empty side says it is empty only once the list has no further page, and offers 더 보기
  * until then (a /my preview until it has its rows, `showMoreOrders`) — which is also the only
  * moment 거래·정산 이력 can tell an account that never ordered from one whose every order is still 대기
- * (`orderHistoryEmpty`). The split itself moves to the server with the tabs' own issues (#123,
- * #124).
+ * (`orderHistoryEmpty`). 대기 주문 itself is the server's live list since #123 (`PendingOrders`,
+ * ADR-0141); the history's split moves to the server with #124.
  *
  * The list has no reducer and no event of its own — `restartQueries(queryClient, ORDERS_KEY)`
  * (realtime-provider.tsx) is the ONLY path a new order arrives by, so a failed refresh is a list
@@ -654,10 +692,15 @@ function SettledPositionRow({ position }: { position: Position }) {
  * or unfilled order has none of them, so the state badge is what explains the row. A market sent
  * back to a draft (#78 되돌리기, ADR-0099) reaches the row with no slug or title, and its line says
  * only '공개되지 않은 시장' — no title or link — until the market is public again.
+ *
+ * An ended order's reason by its short name (ADR-0140 넘긴 것 #123: 거절's eleven, 취소 완료's
+ * seven) and 상세, the way to its 주문 상세 (#123, ADR-0141) — 대기 주문 lets an ended order go at
+ * once. #124 rebuilds the history's rows and keeps the link.
  */
 export function OrderRow({ order }: { order: Order }) {
   const yes = order.outcome === 'YES';
   const average = orderAveragePriceBp(order);
+  const reason = orderReasonName(order);
   const formatDateTime = useFormatDateTime();
   return (
     <Stack
@@ -683,9 +726,14 @@ export function OrderRow({ order }: { order: Order }) {
       <DataList.Root orientation="horizontal" size="sm">
         <Item label={copy.orderStatus}>
           <Badge colorPalette={ORDER_STATUS_PALETTE[order.status]} variant="subtle">
-            {ORDER_STATUS_LABEL[order.status]}
+            {orderStatusLabel(order.status)}
           </Badge>
         </Item>
+        {reason !== null && (
+          <Item label={copy.orderReason} testId="portfolio-order-reason">
+            {reason}
+          </Item>
+        )}
         <Item label={copy.fillQty}>{formatContracts(order.filledQty)}</Item>
         <Item label={copy.fillAvgPrice}>
           {average === undefined ? EMPTY : formatPricePerContract(average)}
@@ -699,6 +747,17 @@ export function OrderRow({ order }: { order: Order }) {
         </Item>
         <Item label={copy.orderCreatedAt}>{formatDateTime(order.createdAt)}</Item>
       </DataList.Root>
+      <ChakraLink
+        asChild
+        fontSize="sm"
+        colorPalette="brand"
+        color="colorPalette.fg"
+        alignSelf="flex-start"
+      >
+        <NextLink href={myOrderPath(order.id)} data-testid="portfolio-order-detail">
+          {copy.orderDetail}
+        </NextLink>
+      </ChakraLink>
     </Stack>
   );
 }
