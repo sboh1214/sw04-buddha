@@ -25,6 +25,7 @@ import {
   TICKS_KEY,
   WATCHLIST_PAGES_KEY,
 } from './market-keys';
+import { LEDGER_KEY, type LedgerPages, keepNewerHead } from './ledger-join';
 import { type MarketPages, joinMarket, joinMarketPages, joinPositions } from './market-live';
 import { MY_ACTIONS_KEY, MY_RESTRICTION_KEY } from './moderation';
 import { type OrderPages, joinOrder, joinOrderPages } from './order-join';
@@ -187,6 +188,20 @@ function makeQueryClient() {
     structuralSharing: (held, incoming) =>
       replaceEqualDeep(held, joinOrder(held as Order | undefined, incoming as Order)),
   });
+  // 이용 내역 (#69, ADR-0144 결정 6), for the reason of the joins above: a balance-history round
+  // reads the first page alone and merges it into what is held (`mergeLedgerHead`), so a read that
+  // left before that merge — a 더 보기 built from the older pages, a focus or a reconnect's read —
+  // must not drop the merged rows when it lands. Rows are immutable and never deleted, so the held
+  // rows the answer lacks are put back in their places (`keepNewerHead`) — a late-committed row
+  // can sit between two older ones; none below the answer's last row, so a row that aged out of
+  // `period` stays out; and an answer older than every held row is dropped rather than leave a gap.
+  client.setQueryDefaults(LEDGER_KEY, {
+    structuralSharing: (held, incoming) =>
+      replaceEqualDeep(
+        held,
+        keepNewerHead(held as LedgerPages | undefined, incoming as LedgerPages),
+      ),
+  });
   // A post's comment pages (#48, ADR-0074), for another reason: the writer's own 댓글 or 대댓글 that
   // its read toward its place left at the end of what is held (`withNewComment`) must stay there
   // through every read of the pages until a read brings the page that holds it (오너 결정
@@ -325,10 +340,14 @@ export function getQueryClient(): QueryClient {
  * seed rather than with a request; it is not a third helper here because the pair these two
  * enforce is cancel-then-ASK.
  */
-export function cancelFirstFetch(queryClient: QueryClient, queryKey: readonly unknown[]): void {
+export function cancelFirstFetch(
+  queryClient: QueryClient,
+  queryKey: readonly unknown[],
+  predicate?: (query: Query) => boolean,
+): void {
   void queryClient.cancelQueries({
     queryKey,
-    predicate: (query) => query.state.data === undefined,
+    predicate: (query) => query.state.data === undefined && (predicate?.(query) ?? true),
   });
 }
 
@@ -344,13 +363,18 @@ export function cancelFirstFetch(queryClient: QueryClient, queryKey: readonly un
  *
  * `refetchType` is left at its default `'active'` (query-core `invalidateQueries`), so only
  * mounted observers ask again and the rest merely go stale — PLAN 11.5's "refetch 남발 금지".
+ * `predicate`, when given, narrows both halves to the entries it keeps (`positionRestartsOrder`).
  */
 export function restartQueries(
   queryClient: QueryClient,
   queryKey: readonly unknown[],
+  predicate?: (query: Query) => boolean,
 ): Promise<void> {
-  cancelFirstFetch(queryClient, queryKey);
-  return queryClient.invalidateQueries({ queryKey });
+  cancelFirstFetch(queryClient, queryKey, predicate);
+  return queryClient.invalidateQueries({
+    queryKey,
+    ...(predicate === undefined ? {} : { predicate }),
+  });
 }
 
 /** What a section that renders a LIST can say about the query behind it. */

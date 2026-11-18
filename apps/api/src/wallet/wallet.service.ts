@@ -12,19 +12,24 @@ import {
 import {
   decodeKeyset,
   encodeKeyset,
-  memberLedgerEntryTypeSchema,
+  isPublicMarketStatus,
+  ledgerEntryKind,
   serializeCoinAmount,
   type Balance,
   type ChargeBody,
   type ChargeResult,
+  type LedgerCorrectionEffect,
   type LedgerEntry,
   type MemberReconciliationCorrection,
+  type MyLedgerQuery,
   type Payment,
   type PaymentStatus,
+  type ReconciliationCorrectionMode,
   type UserBalanceEvent,
 } from '@buddha/shared';
 import { ChargePackageService } from './charge-package.service.js';
-import { and, desc, eq, getTableColumns, or, sql } from 'drizzle-orm';
+import { fillIdsOf, ledgerPageIdsSql } from './ledger-page.js';
+import { and, desc, eq, getTableColumns, inArray, sql } from 'drizzle-orm';
 import { assertExpectedAccount } from '../auth/expected-account.js';
 import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
@@ -51,21 +56,47 @@ function paymentRefused(reason?: string): AppError {
 /** The handle `db.transaction` hands its callback; @buddha/db exports no alias for it. */
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
+/** What `toLedgerEntry` may link an event to; each one null (or left out) when it has none. */
+export interface LedgerEntryLinks {
+  /** The event's market as read with it (LEFT JOIN): its slug and title shown while public. */
+  market?: Pick<typeof schema.markets.$inferSelect, 'slug' | 'title' | 'status'> | null;
+  /** A fill's event: the caller's own order of the fill (`ownFillOrders`), else null. */
+  orderId?: string | null;
+  /** A correction's event: the member's correction record (none for a legacy row). */
+  correction?: {
+    id: string;
+    userReason: string | null;
+    mode: ReconciliationCorrectionMode;
+    balanceDeltaCoin: bigint;
+  } | null;
+}
+
 /**
  * One ledger event as the person whose user ledger account is `accountId` sees it (#116): signed
- * from that account's side, its total after it — never the other side of the move.
+ * from that account's side, its total after it — never the other side of the move. Its kind is the
+ * stored type seen from that side (`ledgerEntryKind`, #69, ADR-0144): a pair mint's collateral and
+ * a trade's payment are both 매수 체결, and the stored type is not answered (ADR-0135 결과 4).
+ *
+ * `links` are what the wallet's list reads beside the row (#69); the kept payment answers — a
+ * charge, a coupon (ADR-0049) — call this without them, so their links are null.
  */
 export function toLedgerEntry(
   row: LedgerRow,
   accountId: number,
-  correction: { id: string; userReason: string | null } | null = null,
+  links: LedgerEntryLinks = {},
 ): LedgerEntry {
   const seen = ledgerEntryForAccount(row, accountId);
+  const side = row.toAccountId === accountId ? 'to' : 'from';
   const corrected = row.type === 'RECONCILIATION_CORRECTION';
+  const correction = links.correction ?? null;
+  const market = links.market ?? null;
+  // The slug and title only while the market is public, as an order's (`toOrder`, ADR-0099).
+  const shown = market !== null && isPublicMarketStatus(market.status) ? market : null;
   return {
     id: row.id.toString(),
-    // A person's account takes only these (MEMBER_LEDGER_ENTRY_TYPES; migration 0060's pairs).
-    type: memberLedgerEntryTypeSchema.parse(row.type),
+    // A person's account takes only these (LEDGER_KIND_SOURCES; migration 0060's pairs): any
+    // other pair is a broken row, and throws.
+    kind: ledgerEntryKind(row.type, side),
     amountCoin: serializeCoinAmount(seen.amountCoin),
     balanceAfterCoin: serializeCoinAmount(seen.balanceAfterCoin),
     // The column is a plain varchar; the DTO narrows it to the known ref types.
@@ -75,9 +106,29 @@ export function toLedgerEntry(
     // explicit legacy reference, without inventing a completed approval or a public reason.
     refType: corrected ? 'reconciliation_correction' : (row.refType as LedgerEntry['refType']),
     refId: corrected ? (correction?.id ?? `legacy:${row.id}`) : row.refId,
-    memo: corrected ? (correction?.userReason ?? null) : row.memo,
+    // A market's event carries no memo: a settlement's names the market's title as it was, which
+    // a market no longer public may not show (marketTitle is null then).
+    memo: corrected ? (correction?.userReason ?? null) : row.marketId === null ? row.memo : null,
+    marketId: row.marketId,
+    marketSlug: shown?.slug ?? null,
+    marketTitle: shown?.title ?? null,
+    // The caller's own side of the fill only; a fill neither of whose orders is the caller's
+    // names none, and the other side's order is never put in its place.
+    orderId: row.refType === 'fill' ? (links.orderId ?? null) : null,
+    correctionEffect: corrected ? correctionEffectOf(correction) : null,
     createdAt: row.createdAt.toISOString(),
   };
+}
+
+/**
+ * What a correction's ledger row did: `ledger_only` for a replenishment of the ledger to the
+ * balance already held (no balance change), `ledger_amount` for every other — a legacy row, with
+ * no record, included.
+ */
+function correctionEffectOf(correction: LedgerEntryLinks['correction']): LedgerCorrectionEffect {
+  return correction?.mode === 'replenish_ledger' && correction.balanceDeltaCoin === 0n
+    ? 'ledger_only'
+    : 'ledger_amount';
 }
 
 /**
@@ -610,57 +661,92 @@ export class WalletService {
 
   /**
    * The events of the caller's own user ledger account, either side (#116), newest first,
-   * keyset-paginated over (created_at, id). Actual-only restorations have no ledger row and
-   * appear solely in the completed correction history.
+   * keyset-paginated over (created_at, id) — one row per ledger row (ADR-0135 H3). Actual-only
+   * restorations have no ledger row and appear solely in the completed correction history.
+   *
+   * The wallet's list (#69, ADR-0144): one kind of the filter (`kind`), the events of the last N ×
+   * 24 hours (`period`, by the time the list is ordered by) and one market's (`marketId`), each a
+   * predicate of the account's own walks (`ledgerPageIdsSql`) — so another account's market or a
+   * cursor cut from another account's row reads the caller's own rows, or none. Each row comes
+   * with its market (public slug and title), its correction record and, for a fill, the caller's
+   * own order of it (`ownFillOrders`). The cursor carries no filter.
    */
-  async listLedger(
-    userId: string,
-    cursor: string | undefined,
-    limit: number,
-  ): Promise<Page<LedgerEntry>> {
-    const keyset = decodeKeyset(cursor, 'int');
+  async listLedger(userId: string, query: MyLedgerQuery): Promise<Page<LedgerEntry>> {
+    const keyset = decodeKeyset(query.cursor, 'int');
     const account = await findLedgerAccount(this.db, { kind: 'user', userId });
     if (!account) return { items: [], nextCursor: null };
+    const entries = schema.ledgerEntries;
+    const corrections = schema.reconciliationCorrections;
+    const { markets } = schema;
+    const pageIds = ledgerPageIdsSql(account.id, query, keyset, query.limit + 1);
     const rows = await this.db
       .select({
-        entry: schema.ledgerEntries,
+        entry: entries,
+        market: { slug: markets.slug, title: markets.title, status: markets.status },
         correction: {
-          id: schema.reconciliationCorrections.id,
-          userReason: schema.reconciliationCorrections.userReason,
+          id: corrections.id,
+          userReason: corrections.userReason,
+          mode: corrections.mode,
+          balanceDeltaCoin: corrections.balanceDeltaCoin,
         },
       })
-      .from(schema.ledgerEntries)
+      .from(entries)
+      .leftJoin(markets, eq(markets.id, entries.marketId))
       .leftJoin(
-        schema.reconciliationCorrections,
-        and(
-          eq(schema.reconciliationCorrections.ledgerEntryId, schema.ledgerEntries.id),
-          eq(schema.reconciliationCorrections.userId, userId),
-        ),
+        corrections,
+        and(eq(corrections.ledgerEntryId, entries.id), eq(corrections.userId, userId)),
       )
-      .where(
-        and(
-          // Each side has its own (account, created_at, id) index (migration 0060).
-          or(
-            eq(schema.ledgerEntries.fromAccountId, account.id),
-            eq(schema.ledgerEntries.toAccountId, account.id),
-          ),
-          keyset
-            ? keysetPredicate(
-                schema.ledgerEntries.createdAt,
-                schema.ledgerEntries.id,
-                keyset,
-                'bigint',
-              )
-            : undefined,
-        ),
-      )
-      .orderBy(desc(schema.ledgerEntries.createdAt), desc(schema.ledgerEntries.id))
-      .limit(limit + 1);
+      .where(sql`${entries.id} = ANY (${pageIds})`)
+      .orderBy(desc(entries.createdAt), desc(entries.id));
+    const orders = await this.ownFillOrders(
+      userId,
+      rows.slice(0, query.limit).map((row) => row.entry),
+    );
     return page(
       rows,
-      limit,
+      query.limit,
       (row) => ({ createdAt: row.entry.createdAt, id: row.entry.id.toString() }),
-      (row) => toLedgerEntry(row.entry, account.id, row.correction),
+      (row) =>
+        toLedgerEntry(row.entry, account.id, {
+          market: row.market,
+          correction: row.correction,
+          orderId: row.entry.refType === 'fill' ? (orders.get(row.entry.refId) ?? null) : null,
+        }),
+    );
+  }
+
+  /**
+   * The caller's own order of each fill the events refer to, by the fill's id as `ref_id` writes
+   * it (#69, ADR-0144 결정 2-4): one read of `fills` by primary key, after the page, for the ids
+   * `fillIdsOf` picks in JS — never a cast of `ref_id` in SQL. The incoming order when the caller
+   * sent it, the resting one when the caller's order rested (a fill's two owners differ,
+   * `fills_orders_check`), null when neither is the caller's: never the other side's order.
+   */
+  private async ownFillOrders(
+    userId: string,
+    rows: readonly { refType: string; refId: string }[],
+  ): Promise<Map<string, string | null>> {
+    const ids = fillIdsOf(rows);
+    if (ids.length === 0) return new Map();
+    const fills = await this.db
+      .select({
+        id: schema.fills.id,
+        incomingOwnerId: schema.fills.incomingOwnerId,
+        incomingOrderId: schema.fills.incomingOrderId,
+        restingOwnerId: schema.fills.restingOwnerId,
+        restingOrderId: schema.fills.restingOrderId,
+      })
+      .from(schema.fills)
+      .where(inArray(schema.fills.id, ids));
+    return new Map(
+      fills.map((fill) => [
+        String(fill.id),
+        fill.incomingOwnerId === userId
+          ? fill.incomingOrderId
+          : fill.restingOwnerId === userId
+            ? fill.restingOrderId
+            : null,
+      ]),
     );
   }
 

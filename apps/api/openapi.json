@@ -1249,25 +1249,62 @@
         "operationId": "getMyLedger",
         "parameters": [
           {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
-          },
-          {
             "name": "cursor",
             "required": false,
             "in": "query",
-            "description": "Opaque; `meta.nextCursor` of the previous page.",
             "schema": {
               "type": "string",
               "minLength": 1,
               "maxLength": 200
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 20,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "kind",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "BUY_FILL",
+                "SELL_FILL",
+                "SETTLEMENT_PAYOUT",
+                "START_GRANT",
+                "RECONCILIATION_CORRECTION"
+              ]
+            }
+          },
+          {
+            "name": "period",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "7d",
+                "30d",
+                "90d"
+              ]
+            }
+          },
+          {
+            "name": "marketId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
             }
           }
         ],
@@ -1334,7 +1371,7 @@
             "session": []
           }
         ],
-        "summary": "Ledger entries, newest first",
+        "summary": "The account's Coin ledger, newest first, one entry per ledger event: its kind (the event's type seen from the account's side; a buyer's Coin of a fill is BUY_FILL whether the fill minted a pair or traded), the signed amount, the ledger total after it, the market (slug and title while public), the account's own order of a fill and what a correction did. kind narrows to one kind of the filter, period (7d, 30d, 90d) to the events of the last N × 24 hours, marketId to one market. No counterparty, account type or other order",
         "tags": [
           "wallet"
         ]
@@ -29962,15 +29999,15 @@
           "id": {
             "type": "string"
           },
-          "type": {
+          "kind": {
             "type": "string",
             "enum": [
-              "START_GRANT",
-              "PAIR_MINT_COLLATERAL",
-              "TRADE_FILL",
+              "BUY_FILL",
+              "SELL_FILL",
               "SETTLEMENT_PAYOUT",
-              "CLOSURE_FORFEIT",
+              "START_GRANT",
               "RECONCILIATION_CORRECTION",
+              "CLOSURE_FORFEIT",
               "DEPOSIT",
               "BONUS",
               "PAYMENT_CANCEL",
@@ -30004,6 +30041,34 @@
             "nullable": true,
             "type": "string"
           },
+          "marketId": {
+            "nullable": true,
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "marketSlug": {
+            "nullable": true,
+            "type": "string"
+          },
+          "marketTitle": {
+            "nullable": true,
+            "type": "string"
+          },
+          "orderId": {
+            "nullable": true,
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "correctionEffect": {
+            "nullable": true,
+            "type": "string",
+            "enum": [
+              "ledger_only",
+              "ledger_amount"
+            ]
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time",
@@ -30012,12 +30077,17 @@
         },
         "required": [
           "id",
-          "type",
+          "kind",
           "amountCoin",
           "balanceAfterCoin",
           "refType",
           "refId",
           "memo",
+          "marketId",
+          "marketSlug",
+          "marketTitle",
+          "orderId",
+          "correctionEffect",
           "createdAt"
         ],
         "additionalProperties": false

@@ -9,7 +9,7 @@ import { QueryObserver, hydrate } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 import { ME_QUERY_KEY, storeBalanceEvent } from '@/hooks/use-me';
 import { positionsKey } from '@/hooks/use-portfolio';
-import { BALANCE_HISTORY_KEYS } from '@/hooks/use-wallet';
+import { balanceHistoryRound } from '@/hooks/use-wallet';
 import { MEMBER_CORRECTIONS_KEY } from '@/hooks/use-reconciliation-corrections';
 import { memberCorrection } from '@/test/reconciliation-corrections';
 import { positionFixture } from '@/test/positions';
@@ -403,7 +403,9 @@ describe('the me cache', () => {
         expect(order.accept(restoration)).toBe(true);
         // The event id is reserved from the ledger sequence without a synthetic ledger row.
         storeBalanceEvent(client, restoration);
-        await Promise.all(BALANCE_HISTORY_KEYS.map((key) => restartQueries(client, key)));
+        // The provider's round for that event (its window's leading edge): the correction read
+        // already on its way left before the restoration, and is asked again.
+        balanceHistoryRound(client);
         oldMe(before);
         oldHistory(empty);
         await vi.waitFor(() => {

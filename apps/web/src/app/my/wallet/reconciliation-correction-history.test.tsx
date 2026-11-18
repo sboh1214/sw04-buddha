@@ -9,43 +9,54 @@ import { LedgerRow } from './ledger-list';
 describe('member correction history', () => {
   const ledger: LedgerEntry = {
     id: memberCorrection.eventId,
-    type: 'RECONCILIATION_CORRECTION',
+    kind: 'RECONCILIATION_CORRECTION',
     amountCoin: '10',
     balanceAfterCoin: '110',
     refType: 'reconciliation_correction',
     refId: memberCorrection.id,
     memo: null,
     createdAt: memberCorrection.createdAt,
+    marketId: null,
+    marketSlug: null,
+    marketTitle: null,
+    orderId: null,
+    correctionEffect: 'ledger_amount',
   };
-  it('labels a matching ledger replenishment without describing its ledger credit as an actual increase', () => {
+  it("names a ledger replenishment 'Coin 보정' and says, from the server's effect, that it added no Coin", () => {
+    // One name for every correction (ADR-0135 H1·H5); what the row did is its effect line, which
+    // the server decides (`correctionEffect`, ADR-0144) — the same on a deep page and a filter.
     const html = renderWithQueries(
-      <LedgerRow
-        entry={ledger}
-        correction={{ ...memberCorrection, mode: 'replenish_ledger', balanceDeltaCoin: '0' }}
-      />,
+      <LedgerRow entry={{ ...ledger, correctionEffect: 'ledger_only' }} />,
     );
-    expect(byTestId(html, 'ledger-type')?.text).toBe(copy.reconciliationCorrectionReplenish);
+    expect(byTestId(html, 'ledger-type')?.text).toBe(copy.ledgerTypeReconciliationCorrection);
+    expect(copy.ledgerTypeReconciliationCorrection).toBe('Coin 보정');
+    expect(html).not.toContain(copy.reconciliationCorrectionReplenish);
     expect(byTestId(html, 'ledger-correction-effect')?.text).toBe(
       copy.reconciliationCorrectionReplenishHint,
     );
     expect(byTestId(html, 'ledger-amount')?.text).toContain('+10 Coin');
   });
-  it('does not guess the actual effect of a legacy or unrelated correction ledger entry', () => {
-    for (const correction of [
-      undefined,
-      {
-        ...memberCorrection,
-        eventId: 'another-event',
-        mode: 'replenish_ledger' as const,
-        balanceDeltaCoin: '0',
-      },
-    ]) {
-      const html = renderWithQueries(<LedgerRow entry={ledger} correction={correction} />);
+  it('does not guess the actual effect of a legacy or a ledger-amount correction entry', () => {
+    // `ledger_amount` is every correction that is not a pure replenishment, a legacy row with no
+    // record included; null never reaches a correction, and reads the same.
+    for (const correctionEffect of ['ledger_amount', null] as const) {
+      const html = renderWithQueries(<LedgerRow entry={{ ...ledger, correctionEffect }} />);
       expect(byTestId(html, 'ledger-correction-effect')?.text).toBe(
         copy.reconciliationCorrectionLedgerAmountHint,
       );
       expect(html).not.toContain(copy.reconciliationCorrectionReplenishHint);
     }
+  });
+  it('shows the member-facing reason the correction was given, and no reason for a legacy row', () => {
+    const reason = renderWithQueries(
+      <LedgerRow entry={{ ...ledger, memo: memberCorrection.userReason }} />,
+    );
+    expect(byTestId(reason, 'ledger-reason')?.text).toBe(
+      `${copy.ledgerCorrectionReason}: ${memberCorrection.userReason}`,
+    );
+    expect(byTestId(renderWithQueries(<LedgerRow entry={ledger} />), 'ledger-reason')).toBe(
+      undefined,
+    );
   });
   it('shows exactly the restored balance change and only the separately written member reason', () => {
     // Even a malformed object with internal fields cannot add those fields to this renderer.

@@ -297,7 +297,7 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     expect(replay.statusCode).toBe(200);
     const replayed = replay.json<{ data: ChargeResult }>().data;
     expect(replayed.ledgerEntry).toEqual(charged.ledgerEntry);
-    expect(replayed.ledgerEntry).toMatchObject({ type: 'DEPOSIT', amountCoin: '10000' });
+    expect(replayed.ledgerEntry).toMatchObject({ kind: 'DEPOSIT', amountCoin: '10000' });
     // The payment and the balance as they are now; the replay bought nothing.
     expect(replayed.payment).toMatchObject({ id: charged.payment.id, status: 'refunded' });
     expect(replayed.balance.availableCoin).toBe('0');

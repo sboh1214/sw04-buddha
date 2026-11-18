@@ -93,11 +93,17 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
         code: 'WELCOME-2026',
         amountCoin: '5000',
         balance: { availableCoin: expected.toString() },
+        // The wallet's entry (#69): its kind, the memo kept, and no market, order or correction.
         ledgerEntry: {
-          type: 'BONUS',
+          kind: 'BONUS',
           amountCoin: '5000',
           refType: 'coupon',
           memo: '쿠폰 WELCOME-2026',
+          marketId: null,
+          marketSlug: null,
+          marketTitle: null,
+          orderId: null,
+          correctionEffect: null,
         },
       },
     });

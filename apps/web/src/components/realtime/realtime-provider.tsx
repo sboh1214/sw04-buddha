@@ -29,7 +29,7 @@ import { type Socket, io } from 'socket.io-client';
 import { type SessionIdentity } from '@/components/auth/session-cache-guard';
 import { refreshMyMarketDisputeOnStatus } from '@/hooks/use-disputes';
 import { ME_QUERY_KEY, storeBalanceEvent } from '@/hooks/use-me';
-import { BALANCE_HISTORY_KEYS } from '@/hooks/use-wallet';
+import { BALANCE_HISTORY_KEYS, balanceHistoryRound } from '@/hooks/use-wallet';
 import { listStatusOf } from '@/hooks/use-portfolio';
 import { type Market, type Position } from '@/lib/api';
 import { useSession } from '@/lib/use-session';
@@ -51,9 +51,12 @@ import {
   sellableKey,
 } from '@/lib/market-keys';
 import {
+  BALANCE_HISTORY_INVALIDATE_MS,
   BalanceOrder,
   MarketWindow,
+  OWN_ORDERS_INVALIDATE_MS,
   type MarketPages,
+  RoundWindow,
   SellableRotation,
   Throttle,
   applyPositionEvent,
@@ -67,7 +70,9 @@ import {
   ownOrdersStatusKeys,
   ownSettlementKeys,
   positionReopensMarket,
+  positionRestartsOrder,
   tickRestartsMarket,
+  walletMissesMarket,
   wroteASettlement,
   wroteAnOrder,
 } from '@/lib/market-live';
@@ -134,14 +139,6 @@ const FILLS_INVALIDATE_MS = 1_000;
  * would pass and which counts the order POSTs too.
  */
 const BOOK_INVALIDATE_MS = 3_000;
-
-/**
- * At most one read of the account's live orders every 10 s for `market:book` (#123, ADR-0141 결정
- * 10), for every market at once, leading and trailing — 12 a minute at most, times the pages read.
- * Only where no screen reads that market's book (`bookRestartsOwnOrders`): MY's 대기 주문 and an
- * order's 상세. The count a tab spends is measured before the PR (ADR-0141 결과 3).
- */
-const OWN_ORDERS_INVALIDATE_MS = 10_000;
 
 /**
  * One market's 매도 가능액 read again every 6 s for `market:book` (#67, ADR-0142,
@@ -393,6 +390,17 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     // keeping each market signalled inside it for the next round.
     const ownOrders = new MarketWindow(OWN_ORDERS_INVALIDATE_MS);
     let ownOrdersPending: (() => void) | null = null;
+    // The account's balance histories on `user:balance` (`refreshBalanceHistory`): one window for
+    // the account, its one trailing timer, and the head reads' signal, aborted with the socket.
+    const balanceHistory = new RoundWindow(BALANCE_HISTORY_INVALIDATE_MS);
+    let balanceHistoryPending: (() => void) | null = null;
+    const balanceHistoryReads = new AbortController();
+    /** Cancels the trailing balance-history round armed, if any, and tells the window so. */
+    const cancelBalanceHistory = () => {
+      balanceHistoryPending?.();
+      balanceHistoryPending = null;
+      balanceHistory.disarm();
+    };
     // The account's 매도 가능액 on `market:book` (`refreshSellable`): one market per gap, per
     // connection like the windows above.
     const sellableRotation = new SellableRotation(SELLABLE_ROTATION_MS);
@@ -434,6 +442,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       for (const queryKey of snapshotKeys) {
         void restartQueries(queryClient, queryKey);
       }
+      // The balance histories were just read whole (`BALANCE_HISTORY_KEYS`): no round is owed.
+      cancelBalanceHistory();
       // Every 매도 가능액 was just read again (`SELLABLE_KEY`): nothing waits in the window.
       sellableRotation.clear();
     };
@@ -547,6 +557,33 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         refreshOwnOrders();
       }, round.wait);
       ownOrdersPending = () => {
+        clearTimeout(timer);
+      };
+    };
+
+    /**
+     * The account's balance histories read again for `user:balance` (#69, ADR-0144 결정 6): one
+     * round per window for the account, leading and trailing — `refreshBook`'s shape, for its
+     * reason: 이용 내역 has no other writer for a payout, a grant or a correction, so a refused
+     * round that is dropped would leave the list a row short. The round is `balanceHistoryRound`
+     * (use-wallet.ts): a head read of each ledger entry on screen, and the correction history and
+     * 결제 내역 restarted. A lone event is read at once (the leading edge); events while fills
+     * keep arriving are read together at most a window later. The window's steps are
+     * `RoundWindow`'s (market-live.ts), which the budget tests drive; this only does them.
+     */
+    const refreshBalanceHistory = (fired = false) => {
+      const now = Date.now();
+      const step = fired ? balanceHistory.fired(now) : balanceHistory.offer(now);
+      if (step === null) return;
+      if (step === 'run') {
+        balanceHistoryRound(queryClient, balanceHistoryReads.signal);
+        return;
+      }
+      const timer = setTimeout(() => {
+        balanceHistoryPending = null;
+        refreshBalanceHistory(true);
+      }, step.wait);
+      balanceHistoryPending = () => {
         clearTimeout(timer);
       };
     };
@@ -889,31 +926,34 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // self-contradicting rather than merely behind, which is what makes it worth a request.
         //
         // Both kinds of the RULE above, and the first one literally: the event carries the ID of
-        // the row it cannot draw (a `LedgerEntry` is type, amount, 잔고 후, memo and instant; a
+        // the row it cannot draw (a `LedgerEntry` is kind, amount, 잔고 후, memo and instant; a
         // `UserBalanceEvent` is two figures, that id and a `ts`), and a /my/wallet on its first
         // fetch could not take it either. Not 남발: the accept gate is `ledger_entries.id`, the
         // account's own commit order, so a late or duplicate delivery spends nothing. A #93
         // actual-balance restoration reserves an id from the same sequence for its permanent
         // correction record, without creating a synthetic ledger entry.
         //
-        // Whatever `storeBalanceEvent` makes of `['me']` below — including the tab whose
-        // `GET /me` is in flight, which on /my/wallet is precisely the tab whose FIRST
-        // `GET /me/ledger` is in flight too. `restartQueries` for that reason: `['ledger']` is
-        // never seeded and never SSR'd, so a bare invalidation would hand back the request that
-        // left before the payout committed.
+        // Through a window (`refreshBalanceHistory`, #69, ADR-0144 결정 6), never once per event:
+        // a fill sends one of these, and a member filled every few seconds spent every loaded
+        // ledger page, the corrections and more on each — 78 a minute measured on /my/wallet. A
+        // round reads each ledger entry's first page only and merges it by id
+        // (`balanceHistoryRound`, use-wallet.ts); an entry still on its FIRST fetch is restarted,
+        // because `['ledger']` is never seeded nor SSR'd and a bare invalidation would hand back
+        // the request that left before the payout committed. A late answer cannot drop a merged
+        // row (`keepNewerHead`, query-client.ts). The card does not wait: the figure is written
+        // below at once.
         //
         // 결제 내역 sits beside 원장 on /my/wallet (while paid Coin is on sale, ADR-0049) and
         // contradicts it the same way when left behind: an admin refund claws the Coin back (a
         // 결제 취소(환불) row) while the payment still says 완료. The event names no payment, so
-        // the list is asked again — the same kind as the ledger's, and on the same accepted event,
-        // so it costs a request only where 결제 내역 is on screen. Unseeded as well, hence
-        // `restartQueries` again. Only as far as the Coin goes: a refund's claw-back is the one
-        // step that moves a balance, so the list lands on 환불 처리 중, and its finish (환불 완료)
-        // publishes nothing; the list's own bounded poll while a row is still moving
-        // (`paymentsPoll`, use-wallet.ts) carries that row the rest of the way.
-        // The separately listed correction history follows this same accepted event, including
-        // restoration without a ledger row and replenishment with no actual balance increase.
-        for (const queryKey of BALANCE_HISTORY_KEYS) void restartQueries(queryClient, queryKey);
+        // the round restarts the list — it costs a request only where 결제 내역 is on screen. Only
+        // as far as the Coin goes: a refund's claw-back is the one step that moves a balance, so
+        // the list lands on 환불 처리 중, and its finish (환불 완료) publishes nothing; the list's
+        // own bounded poll while a row is still moving (`paymentsPoll`, use-wallet.ts) carries
+        // that row the rest of the way. The separately listed correction history follows this
+        // same accepted event, including restoration without a ledger row and replenishment with
+        // no actual balance increase.
+        refreshBalanceHistory();
         // The balance chip and the 잔고 요약: the figure at once, and `GET /me` asked again where
         // the event cannot say the rest (a first load it interrupted, a start Coin that waits).
         storeBalanceEvent(queryClient, parsed.data);
@@ -969,7 +1009,17 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // A SETTLING event is excluded because a settlement writes no order row at all, so the request could only answer what the list already holds. `refetchType`
         // stays at its default `'active'`, so every tab not showing 주문 이력 pays nothing and
         // is merely marked stale.
-        if (wroteAnOrder(event)) void restartQueries(queryClient, ORDERS_KEY);
+        // All but the wallet's live orders on screen (`positionRestartsOrder`, #69, ADR-0144 결정
+        // 2-11): the wallet reads them for the lock alone, which this fill's `user:balance` already
+        // carries (an entry off screen is only marked stale). Unless the wallet does not hold this
+        // market (a buy another tab placed, heard of first by this fill): then one read, through
+        // the book round's window, so it joins that room.
+        if (wroteAnOrder(event)) {
+          void restartQueries(queryClient, ORDERS_KEY, positionRestartsOrder);
+          if (walletMissesMarket(queryClient, event.marketId, identity)) {
+            refreshOwnOrders(event.marketId);
+          }
+        }
         // 정산 기록 (#124, ADR-0143): the other half — a settlement wrote this holding's record, which
         // the event cannot build (no result, payout or times). Only this account's lists
         // (`ownSettlementKeys`), and only one on screen asks.
@@ -1009,6 +1059,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       ownOrdersPending?.();
       ownOrdersPending = null;
       ownOrders.clear();
+      cancelBalanceHistory();
+      balanceHistoryReads.abort();
       sellablePending?.();
       sellablePending = null;
       sellableRotation.clear();

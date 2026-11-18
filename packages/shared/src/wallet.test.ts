@@ -6,6 +6,7 @@ import {
   adminUserQuerySchema,
   auditFailureSchema,
   ledgerEntrySchema,
+  myLedgerQuerySchema,
   paymentSchema,
 } from './wallet.js';
 
@@ -26,89 +27,103 @@ describe('the admin balance adjustment (#116)', () => {
 describe('response schemas', () => {
   const createdAt = '2026-09-04T04:05:06.000Z';
 
-  it('parses a ledger entry, including a null reference and memo', () => {
-    expect(
-      ledgerEntrySchema.parse({
-        id: '12',
-        type: 'DEPOSIT',
-        amountCoin: '10000',
-        balanceAfterCoin: '10000',
-        refType: 'payment',
-        refId: 'p1',
-        memo: null,
-        createdAt,
-      }),
-    ).toMatchObject({ type: 'DEPOSIT', amountCoin: '10000' });
+  it('parses a ledger entry by its kind, with its market, order and correction links', () => {
+    const entry = {
+      id: '12',
+      kind: 'DEPOSIT',
+      amountCoin: '10000',
+      balanceAfterCoin: '10000',
+      refType: 'payment',
+      refId: 'p1',
+      memo: null,
+      marketId: null,
+      marketSlug: null,
+      marketTitle: null,
+      orderId: null,
+      correctionEffect: null,
+      createdAt,
+    };
+    expect(ledgerEntrySchema.parse(entry)).toEqual(entry);
 
-    // A coupon redemption is a BONUS entry pointing at the redemption row.
+    // A coupon redemption is a BONUS entry pointing at the redemption row, with its memo.
     expect(
       ledgerEntrySchema.parse({
+        ...entry,
         id: '13',
-        type: 'BONUS',
-        amountCoin: '5000',
-        balanceAfterCoin: '15000',
+        kind: 'BONUS',
         refType: 'coupon',
         refId: 'r1',
         memo: '쿠폰 WELCOME',
-        createdAt,
       }).refType,
     ).toBe('coupon');
 
-    expect(
-      ledgerEntrySchema.safeParse({
-        id: '12',
-        type: 'UNKNOWN',
-        amountCoin: '1',
-        balanceAfterCoin: '1',
-        refType: 'payment',
-        refId: 'p1',
-        memo: null,
-        createdAt,
-      }).success,
-    ).toBe(false);
-
-    // A member's ledger holds only the types a person's account takes part in (#116): no
-    // treasury or bot type parses, though the ledger stores them.
-    for (const type of ['TREASURY_MINT', 'BOT_ALLOCATION', 'BOT_RECALL', 'PAIR_BURN_RETURN']) {
+    // A buyer's fill: its market and the caller's own order.
+    const fill = {
+      ...entry,
+      id: '15',
+      kind: 'BUY_FILL',
+      amountCoin: '-60',
+      balanceAfterCoin: '940',
+      refType: 'fill',
+      refId: '7',
+      marketId: '3f1a5b6c-1111-4222-8333-444455556666',
+      marketSlug: 'market-1',
+      marketTitle: '시장',
+      orderId: '3f1a5b6c-1111-4222-8333-444455556667',
+    };
+    expect(ledgerEntrySchema.parse(fill)).toEqual(fill);
+    // A correction says what it did.
+    for (const correctionEffect of ['ledger_only', 'ledger_amount']) {
       expect(
-        ledgerEntrySchema.safeParse({
-          id: '14',
-          type,
-          amountCoin: '1',
-          balanceAfterCoin: '1',
-          refType: 'approval_request',
-          refId: 'a1',
-          memo: null,
-          createdAt,
-        }).success,
-        type,
-      ).toBe(false);
+        ledgerEntrySchema.parse({ ...entry, kind: 'RECONCILIATION_CORRECTION', correctionEffect })
+          .correctionEffect,
+      ).toBe(correctionEffect);
+    }
+    expect(ledgerEntrySchema.safeParse({ ...entry, correctionEffect: 'other' }).success).toBe(
+      false,
+    );
+
+    // No stored type is a kind (결과 4): neither the pair mint's nor the trade's, nor a treasury
+    // or bot type, nor an unknown one.
+    for (const kind of [
+      'UNKNOWN',
+      'PAIR_MINT_COLLATERAL',
+      'TRADE_FILL',
+      'TREASURY_MINT',
+      'BOT_ALLOCATION',
+      'BOT_RECALL',
+      'PAIR_BURN_RETURN',
+    ]) {
+      expect(ledgerEntrySchema.safeParse({ ...entry, kind }).success, kind).toBe(false);
+    }
+    // The stored type is no field of the answer: what parses carries none.
+    expect(Object.keys(ledgerEntrySchema.shape)).not.toContain('type');
+    expect(ledgerEntrySchema.parse({ ...entry, type: 'TRADE_FILL' })).not.toHaveProperty('type');
+    // Every field is required (nullable, never absent).
+    for (const key of Object.keys(entry)) {
+      const { [key]: _dropped, ...without } = entry as Record<string, unknown>;
+      expect(ledgerEntrySchema.safeParse(without).success, key).toBe(false);
     }
     // Every event names its source (#116, migration 0060: ref_type and ref_id NOT NULL).
+    expect(ledgerEntrySchema.safeParse({ ...entry, refType: null, refId: null }).success).toBe(
+      false,
+    );
+  });
+
+  it('takes a kind of the filter, a period and a market on the ledger query', () => {
+    const marketId = '3f1a5b6c-1111-4222-8333-444455556666';
     expect(
-      ledgerEntrySchema.safeParse({
-        id: '13',
-        type: 'START_GRANT',
-        amountCoin: '1',
-        balanceAfterCoin: '1',
-        refType: null,
-        refId: null,
-        memo: null,
-        createdAt,
-      }).success,
-    ).toBe(false);
-    expect(
-      ledgerEntrySchema.parse({
-        id: '15',
-        type: 'TRADE_FILL',
-        amountCoin: '-60',
-        balanceAfterCoin: '940',
-        refType: 'fill',
-        refId: 'f1',
-        memo: null,
-        createdAt,
-      }).type,
-    ).toBe('TRADE_FILL');
+      myLedgerQuerySchema.parse({ kind: 'SELL_FILL', period: '30d', marketId, limit: '5' }),
+    ).toEqual({ kind: 'SELL_FILL', period: '30d', marketId, limit: 5 });
+    // Omitted is every kind and the whole history: there is no `all` value.
+    expect(myLedgerQuerySchema.parse({})).toEqual({ limit: 20 });
+    for (const kind of ['DEPOSIT', 'BONUS', 'CLOSURE_FORFEIT', 'TRADE_FILL', 'ALL', '']) {
+      expect(myLedgerQuerySchema.safeParse({ kind }).success, kind).toBe(false);
+    }
+    for (const period of ['all', '1d', '']) {
+      expect(myLedgerQuerySchema.safeParse({ period }).success, period).toBe(false);
+    }
+    expect(myLedgerQuerySchema.safeParse({ marketId: 'not-a-uuid' }).success).toBe(false);
   });
 
   it('parses a payment with its KRW price and package, and an audit failure', () => {

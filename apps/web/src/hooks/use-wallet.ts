@@ -2,12 +2,15 @@
 
 import {
   type InfiniteData,
+  type QueryClient,
+  type QueryKey,
   useInfiniteQuery,
   useMutation,
   useQueryClient,
 } from '@tanstack/react-query';
 import { useQuery } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
+import type { LedgerFilterKind, RecentPeriod } from '@buddha/shared';
 import {
   api,
   isApiError,
@@ -22,19 +25,34 @@ import {
 } from '@/lib/api';
 import { useSession } from '@/lib/use-session';
 import { IdempotencyKeys } from '@/lib/idempotency';
+import {
+  LEDGER_KEY,
+  type LedgerPage,
+  type LedgerPages,
+  headCoversLedger,
+  ledgerHeadDate,
+  mergeLedgerHead,
+} from '@/lib/ledger-join';
 import { type PaymentsPoll, endedFetches, paymentsPoll } from '@/lib/payments';
+import { restartQueries } from '@/lib/query-client';
+import { type WalletListFilters, walletListFilters } from '@/lib/wallet';
 import { ME_QUERY_KEY } from './use-me';
 import { MEMBER_CORRECTIONS_KEY } from './use-reconciliation-corrections';
 
-/** PLAN 11.5 key rules. Ledger and payments hang off their own roots. */
-export const LEDGER_QUERY_KEY = ['ledger'] as const;
+/**
+ * PLAN 11.5 key rules. Ledger and payments hang off their own roots; the ledger's entries are
+ * `myLedgerKey`'s, one per filter and account.
+ */
+export const LEDGER_QUERY_KEY = LEDGER_KEY;
 export const CHARGE_PACKAGES_QUERY_KEY = ['charge-packages'] as const;
 export const PAYMENTS_QUERY_KEY = ['payments'] as const;
 
 /**
- * The account's histories a balance change can add to or move, which the realtime
- * `user:balance` handler restarts (and a resnapshot with them): 원장 gains the change's row, and
- * 결제 내역 follows the payment behind it — an admin refund's claw-back (완료 → 환불 처리 중).
+ * The account's histories a balance change can add to or move: 원장 gains the change's row, and
+ * 결제 내역 follows the payment behind it — an admin refund's claw-back (완료 → 환불 처리 중), and
+ * the correction history its correction. A resnapshot restarts them whole, every loaded page
+ * (`PRIVATE_SNAPSHOT_KEYS`). A live `user:balance` reaches them through the provider's window
+ * instead (`balanceHistoryRound`: a head read per ledger entry on screen, the other two restarted).
  */
 export const BALANCE_HISTORY_KEYS = [
   LEDGER_QUERY_KEY,
@@ -47,22 +65,152 @@ interface Page<T> {
   nextCursor: string | null;
 }
 
-async function fetchLedgerPage(cursor: string | undefined): Promise<Page<LedgerEntry>> {
+/**
+ * 이용 내역's key (#69, ADR-0144 결정 2-10): the filters as one object — what is on only, the market
+ * lower-cased — and the account the screen shows (`Me`'s id) last, as #124's history keys
+ * (market-keys.ts): an answer names no owner. Under `LEDGER_QUERY_KEY`, so `user:balance`'s round
+ * (`balanceHistoryRound`: finds every entry by this prefix, then a head read on screen, a restart
+ * of that entry alone on a first fetch, stale otherwise), the resnapshot's restart
+ * (`BALANCE_HISTORY_KEYS`), a charge's refresh and SessionCacheGuard's reset reach every filtered
+ * entry. MY 요약's preview reads the unfiltered entry the tab holds.
+ */
+export const myLedgerKey = (filters: WalletListFilters, accountId: string | undefined) =>
+  [...LEDGER_QUERY_KEY, walletListFilters(filters), accountId] as const;
+
+/** The filters and the cursor as `GET /me/ledger` takes them: only what is set. */
+export function ledgerQuery(
+  filters: WalletListFilters,
+  cursor: string | undefined,
+): { kind?: LedgerFilterKind; period?: RecentPeriod; marketId?: string; cursor?: string } {
+  return {
+    ...(filters.kind === undefined ? {} : { kind: filters.kind }),
+    ...(filters.period === undefined ? {} : { period: filters.period }),
+    ...(filters.market === undefined ? {} : { marketId: filters.market.toLowerCase() }),
+    ...(cursor === undefined ? {} : { cursor }),
+  };
+}
+
+async function fetchLedgerPage(
+  filters: WalletListFilters,
+  cursor: string | undefined,
+  signal?: AbortSignal,
+): Promise<LedgerPage> {
   const result = await api.GET('/api/v1/me/ledger', {
-    params: { query: cursor ? { cursor } : {} },
+    params: { query: ledgerQuery(filters, cursor) },
+    ...(signal === undefined ? {} : { signal }),
   });
   const { data, meta } = unwrap(result);
   return { items: data, nextCursor: meta.nextCursor };
 }
 
-/** Ledger history, oldest pages appended as the reader asks for more (PLAN 7 cursor). */
-export function useLedger() {
-  return useInfiniteQuery({
-    queryKey: LEDGER_QUERY_KEY,
-    queryFn: ({ pageParam }: { pageParam: string | undefined }) => fetchLedgerPage(pageParam),
+/**
+ * A balance-history round's read of one ledger entry (#69, ADR-0144 결정 6): its first page under
+ * the key's own filters (`myLedgerKey`'s second part), no cursor, merged into what the entry holds
+ * (`mergeLedgerHead`, with the key's `period`) — one request however many pages are loaded.
+ * Written only over data the entry still holds: after a session reset or a removal nothing is
+ * written, and the key ends in the account, so no other account's entry is touched.
+ *
+ * Dated from when the request left (`ledgerHeadDate`), so `dataUpdatedAt` says how fresh the list
+ * is and a focus inside `staleTime` reads nothing more — never earlier than a full read that
+ * landed while this one was on its way. Except for a `period` entry holding rows below the head
+ * (`headCoversLedger` false: they may have aged out since their read) once the last read that
+ * vouched for the whole list is `PERIOD_REVALIDATE_MS` old: it keeps the date it had, and the next
+ * focus, mount or reconnect past `staleTime` reads it whole — no request of the round's own.
+ */
+export async function readLedgerHead(
+  queryClient: QueryClient,
+  queryKey: QueryKey,
+  signal?: AbortSignal,
+): Promise<void> {
+  const filters = (queryKey[1] ?? {}) as WalletListFilters;
+  const requestStart = Date.now();
+  const head = await fetchLedgerPage(filters, undefined, signal);
+  const held = queryClient.getQueryData<LedgerPages>(queryKey);
+  const query = queryClient.getQueryCache().find<LedgerPages>({ queryKey, exact: true });
+  if (held === undefined || query === undefined) return;
+  const merged = mergeLedgerHead(held, head, filters.period);
+  const covered = headCoversLedger(merged, head, filters.period);
+  const heldAt = query.state.dataUpdatedAt;
+  // A write since this function's last one is a full read (a refetch, a charge's): it vouched for
+  // the list as of when it landed.
+  const last = headDates.get(query);
+  const vouchedAt = last?.wroteAt === heldAt ? last.vouchedAt : heldAt;
+  const updatedAt = ledgerHeadDate({ covered, requestStart, heldAt, vouchedAt });
+  queryClient.setQueryData<LedgerPages>(queryKey, merged, { updatedAt });
+  headDates.set(query, {
+    wroteAt: query.state.dataUpdatedAt,
+    vouchedAt: covered ? updatedAt : vouchedAt,
+  });
+}
+
+/**
+ * Per ledger entry, the date `readLedgerHead` last gave it and the last read that vouched for its
+ * whole list then (`ledgerHeadDate`'s `vouchedAt`). By the query object, so an entry removed (a
+ * session reset, garbage collection) takes its memory along and a new one starts afresh.
+ */
+const headDates = new WeakMap<object, { wroteAt: number; vouchedAt: number }>();
+
+/**
+ * One balance-history round (#69, ADR-0144 결정 6; the provider's `refreshBalanceHistory` window
+ * runs it for `user:balance`):
+ *
+ * - each ledger entry on screen with data: a head read (`readLedgerHead`). One that failed is
+ *   read again in full, through the query's own fetch — what every event did before, once per
+ *   failure — or the round's update could stay missing until a focus with nothing said. On the
+ *   way or with a 5xx that fetch has the queries' `retry`; a 4xx (a 429) has none, one request,
+ *   and a refusal again lands on the query as a refresh that failed over the rows kept, so the
+ *   list says so (`ledger-stale`, 다시 시도) instead of standing a row short in silence;
+ * - one on screen still on its FIRST fetch: restarted (`restartQueries`, that entry alone — a
+ *   prefix would reach the filtered entries too), one page — that request left before the
+ *   event's row, and a bare invalidation would wait on it;
+ * - one not on screen: marked stale only, read in full when it is mounted again;
+ * - the correction history and 결제 내역: restarted, as every `user:balance` did before.
+ *
+ * A reconnect does not come here: it restarts every loaded page (`PRIVATE_SNAPSHOT_KEYS`), since
+ * what it missed can be more than a page.
+ */
+export function balanceHistoryRound(queryClient: QueryClient, signal?: AbortSignal): void {
+  for (const query of queryClient.getQueryCache().findAll({ queryKey: LEDGER_QUERY_KEY })) {
+    const { queryKey } = query;
+    const exact = { queryKey, exact: true };
+    if (!query.isActive()) {
+      void queryClient.invalidateQueries({ ...exact, refetchType: 'none' });
+      continue;
+    }
+    if (query.state.data === undefined) {
+      void restartQueries(queryClient, queryKey, (each) => each === query);
+      continue;
+    }
+    readLedgerHead(queryClient, queryKey, signal).catch(() => {
+      if (signal?.aborted === true) return;
+      void queryClient.invalidateQueries(exact);
+    });
+  }
+  void restartQueries(queryClient, PAYMENTS_QUERY_KEY);
+  void restartQueries(queryClient, MEMBER_CORRECTIONS_KEY);
+}
+
+/**
+ * 이용 내역: the account's own ledger rows, newest first, 20 a page, those the filters leave; older
+ * pages appended as the reader asks for more (PLAN 7 cursor). Waits for the session and for the
+ * account the screen shows (`accountId`): pending through the session's lookup, as #124's lists
+ * (`use-my-history.ts`). Private (`['ledger']`), never read on the server.
+ */
+export function useLedger(filters: WalletListFilters, accountId: string | undefined) {
+  const { data: session, isPending: sessionPending } = useSession();
+  const query = useInfiniteQuery({
+    queryKey: myLedgerKey(filters, accountId),
+    queryFn: ({ pageParam }: { pageParam: string | undefined }) =>
+      fetchLedgerPage(filters, pageParam),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last: Page<LedgerEntry>) => last.nextCursor ?? undefined,
+    enabled: session != null && accountId !== undefined,
   });
+  return {
+    ...query,
+    isPending: sessionPending || (session != null && query.isPending),
+    isLoggedIn: session != null,
+  };
 }
 
 /** What the poll reads of a query: its data and how many of its fetches have ended. */

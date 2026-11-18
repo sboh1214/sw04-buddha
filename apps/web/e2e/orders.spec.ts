@@ -816,14 +816,32 @@ test.describe('보유 계약 (#67)', () => {
       await expect(page.getByTestId('portfolio-locked')).toHaveText(formatCoin(10n));
       await expect(positions.getByTestId('portfolio-available')).toHaveCount(0);
       await expect(positions.getByTestId('portfolio-locked')).toHaveCount(0);
+      // The detail's 내 포지션 too, while the buy still rests.
       await page.goto(`/markets/${market.slug}`);
       await expect(page.getByTestId('market-my-position')).toContainText(
         copy.marketMyPositionEmpty,
       );
+      // #69 수용 기준 1 (ADR-0144): the wallet's card shows the same two figures — one `['me']`.
+      // In the buy's market room first (the wallet's live-orders watch joins it): a `market:book`
+      // sent before the join is lost, and nothing else re-reads the list here.
+      const walletJoined = subscribed(page, market.id);
+      await page.goto('/my/wallet');
+      await walletJoined;
+      await expect(page.getByTestId('wallet-available')).toHaveText(formatCoin(available));
+      await expect(page.getByTestId('wallet-locked')).toHaveText(formatCoin(10n));
+      // ADR-0144 결정 2-11: the buy cancelled out of band, as from another tab. A lock-only change
+      // publishes no `user:balance` (ADR-0112 결정 8); the card moves through the wallet's watch
+      // (`useWalletLockWatch`), past the live-orders refresh window.
       const cancelled = await a.post(`/api/v1/me/orders/${resting.id}/cancel`, {
         data: { expectedAccountId: aId },
       });
       expect(cancelled.status()).toBe(200);
+      await expect(page.getByTestId('wallet-locked')).toHaveText(formatCoin(0n), {
+        timeout: 15_000,
+      });
+      await expect(page.getByTestId('wallet-available')).toHaveText(formatCoin(available + 10n), {
+        timeout: 15_000,
+      });
 
       // --- 1단계: YES 3 at 33, 33 and 34 — C's NO bids at 67 and 66 met as YES asks.
       await order(c, terms('NO', 'buy', 'gtc', 67, 2));
@@ -1138,6 +1156,93 @@ test.describe('거래·정산 이력 (#124)', () => {
       await expect(refusedRow).toBeVisible();
       await expect(period).toHaveValue('7d');
       await expect(chip).toContainText(other.title);
+
+      // --- 지갑 (#69, ADR-0144): the same fills as A's ledger rows, newest first — 매도 체결 +45,
+      // then the buy's two price levels as 매수 체결 −34 and −66, each to its own order's detail —
+      // under the start grant, each fill with its market.
+      await page.goto('/my/wallet');
+      const ledger = page.getByTestId('ledger-list');
+      const kinds = ledger.getByTestId('ledger-type');
+      await expect(kinds).toHaveText([
+        copy.ledgerKindSellFill,
+        copy.ledgerKindBuyFill,
+        copy.ledgerKindBuyFill,
+        copy.ledgerTypeStartGrant,
+      ]);
+      const amounts = ledger.getByTestId('ledger-amount');
+      for (const [index, amount] of [
+        '+45 Coin',
+        `${MINUS_SIGN}34 Coin`,
+        `${MINUS_SIGN}66 Coin`,
+      ].entries()) {
+        await expect(amounts.nth(index)).toHaveText(amount);
+      }
+      const orderLinks = ledger.getByTestId('ledger-order-link');
+      for (const [index, mine] of [sold, bought, bought].entries()) {
+        await expect(orderLinks.nth(index)).toHaveAttribute('href', `/my/orders/${mine.id}`);
+      }
+      await expect(ledger.getByTestId('ledger-market').first()).toContainText(market.title);
+      await expect(ledger.getByTestId('ledger-market').first().locator('a')).toHaveAttribute(
+        'href',
+        `/markets/${market.slug}`,
+      );
+      await expect(ledger.getByTestId('ledger-balance-note')).toHaveText(
+        copy.ledgerBalanceAfterNote,
+      );
+      // 유형: '전체' and the five names; 매도 체결 writes the address and leaves one row.
+      const kind = page.getByTestId('wallet-kind');
+      await expect(kind.locator('option')).toHaveText([
+        copy.ledgerKindAll,
+        copy.ledgerKindBuyFill,
+        copy.ledgerKindSellFill,
+        copy.ledgerTypeSettlement,
+        copy.ledgerTypeStartGrant,
+        copy.ledgerTypeReconciliationCorrection,
+      ]);
+      await kind.selectOption('SELL_FILL');
+      await expect(page).toHaveURL('/my/wallet?kind=sell-fill');
+      await expect(kinds).toHaveText([copy.ledgerKindSellFill]);
+      await expect(ledger.getByTestId('ledger-balance-note')).toContainText(
+        copy.ledgerBalanceAfterFilteredNote,
+      );
+      // 기간 keeps the kind; back to '전체' keeps the period.
+      await page.getByTestId('wallet-period').selectOption('7d');
+      await expect(page).toHaveURL('/my/wallet?kind=sell-fill&period=7d');
+      await kind.selectOption('');
+      await expect(page).toHaveURL('/my/wallet?period=7d');
+      await expect(kinds).toHaveCount(4);
+      // '이 시장만 보기': the start grant has no market and leaves; the chip names the market.
+      await ledger.getByTestId('ledger-only-market').first().click();
+      await expect(page).toHaveURL(`/my/wallet?period=7d&market=${market.id}`);
+      await expect(kinds).toHaveText([
+        copy.ledgerKindSellFill,
+        copy.ledgerKindBuyFill,
+        copy.ledgerKindBuyFill,
+      ]);
+      await expect(page.getByTestId('wallet-market-chip')).toContainText(market.title);
+      await expect(ledger.getByTestId('ledger-only-market')).toHaveCount(0);
+      if (!wide) {
+        // The long title's chip takes a line of its own at 375, and nothing runs off the side.
+        const line = await page.getByTestId('wallet-filters').boundingBox();
+        expect(line?.height ?? 0).toBeGreaterThan(48);
+        await expectNoSideScroll(page);
+      }
+
+      // --- B's wallet: its pair mints and its trade's payment are all 매수 체결 (ADR-0135 H1), and
+      // it sold nothing.
+      await bPage.goto('/my/wallet');
+      const bKinds = bPage.getByTestId('ledger-list').getByTestId('ledger-type');
+      await expect(bKinds).toHaveText([
+        copy.ledgerKindBuyFill,
+        copy.ledgerKindBuyFill,
+        copy.ledgerKindBuyFill,
+        copy.ledgerTypeStartGrant,
+      ]);
+      expect(
+        (await bPage.getByTestId('ledger-amount').allTextContents()).slice(0, 3).sort(),
+      ).toEqual([`${MINUS_SIGN}134 Coin`, `${MINUS_SIGN}45 Coin`, `${MINUS_SIGN}66 Coin`].sort());
+      await bPage.goto('/my/wallet?kind=sell-fill');
+      await expect(bPage.getByTestId('ledger-empty')).toHaveText(copy.historyFilteredEmpty);
     } finally {
       await bContext.close();
     }

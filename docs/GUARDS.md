@@ -326,6 +326,16 @@ SMS는 모두 `apps/api/src/sms/templates.ts`에서 만들고 `SMS_TEMPLATES`에
 - **화면 문구.** `copy.test.ts`가 `history`로 시작하는 문구 키 전부에 '환불'·'원금'과 순위·랭킹·실력·점수·스코어·수익률·승률·적중이 없는지, 기록 종류·기간·빈 목록·정산 칸의 낱말이 정한 그대로인지 본다. 줄 컴포넌트 시험(`components/history/*.test.tsx`)은 매도 줄의 손익이 `realizedPnlCoin` 그대로이고 null은 '—'(0이 아니다), 매수 줄에는 칸이 없음, 지급 0 줄이 '0 Coin'으로 남음, 무효 줄에 '환불'·'원금'이 없음을 본다.
 - **모듈 층.** `components`·`hooks`·`lib` 아래 비시험 파일은 `@/app/`을 가져오지 않는다(`ProfileUnavailable`을 `components/my/`로 옮겨 0곳이 됐다). 자동 검사는 없다 — 리뷰가 본다.
 
+## 지갑 원장 읽기 (#69, ADR-0144)
+
+- **화면 유형 표 하나.** 본인 원장 응답의 `kind`, `GET /me/ledger?kind=`의 SQL 술어, 웹의 라벨이 모두 `packages/shared/src/ledger.ts`의 `LEDGER_KIND_SOURCES`(원장 유형 × 본인 쪽 → 화면 유형)에서 나온다. `ledger.test.ts`가 정의역(회원 유형 가운데 `LEDGER_ENTRY_RULES`에서 사용자 계정이 서는 쪽, 지금 11 조합)에서 화면 유형으로 가는 사상이 전사이고 서로 겹치지 않는지, 정의역 밖의 조합에서 `ledgerEntryKind`가 던지는지, 화면 유형마다 한쪽만 읽는지(`ledgerKindBranch`) 본다. 웹의 `LEDGER_KIND_LABEL`은 `Record<LedgerEntryKind, string>`이라 화면 유형이 늘면 타입 검사가 라벨을 요구한다(`apps/web/src/lib/wallet.test.ts`가 이름이 서로 다른지 본다). 술어 생성은 `apps/api/src/wallet/ledger-page.test.ts`가 본다.
+- **응답에 원래 유형이 없다.** `LedgerEntry`에는 `type`이 없고 `kind`만 있다(ADR-0135 결과 4 — 쌍 발행 담보와 체결 대금을 가르지 않는다). `packages/shared/src/wallet.test.ts`가 스키마에 `type`이 없는지, `wallet.controller.test.ts`가 응답 글자에 `PAIR_MINT_COLLATERAL`·`TRADE_FILL`과 키 `type`이 없는지, `private-data.test.ts`가 A·B 두 답에 그 글자가 없는지 본다.
+- **본인 쪽 주문만.** `orderId`는 체결 행에서 본인이 들어온 쪽이면 들어온 주문, 기다린 쪽이면 기다린 주문이고 둘 다 아니면 null이다. 다른 쪽 주문으로 대신하지 않는다. `private-data.test.ts`의 `OWNER_CASES` `GET /me/ledger`(표지 'traded order id')와 같은 파일의 원장 교차 계정 시험(A·B가 같은 체결의 자기 쪽 주문만 받는다), `wallet.controller.test.ts`의 봇 상대 체결이 본다.
+- **`ref_id`를 SQL에서 캐스트하지 않는다.** `ledger_entries.ref_id`는 text이고 숫자가 아닌 값(시작 지급의 uuid, 정산의 시장 uuid, 결제 uuid, 보정의 감사 id)이 섞인다. PostgreSQL은 술어의 평가 순서를 보장하지 않아 JOIN 안의 `::bigint`는 계획에 따라 22P02(500)를 낸다. 체결 행의 주문은 페이지를 읽은 뒤 `ref_type = 'fill'`이고 양의 bigint 꼴인 id만 JS에서 모아(`fillIdsOf`) `fills`를 PK로 한 번 더 읽는다. `ledger-page.test.ts`가 모으는 규칙을, `wallet.controller.test.ts`가 uuid 참조와 체결 참조가 섞인 계정의 필터 없는 목록이 500 없이 읽히는지 본다. 자동 정적 검사는 없다 — 리뷰가 본다.
+- **필터 선택지에 보존 유형이 없다.** `LEDGER_FILTER_KINDS`는 `LEDGER_ENTRY_KINDS`에서 `LEDGER_FILTER_EXCLUDED`(보존한 결제·쿠폰 유형과 탈퇴 소멸)를 뺀 것과 차례까지 같다(`ledger.test.ts`). 그래서 재지급(#74)·보상(#144)이 화면 유형을 더하면 제외 목록에 적지 않는 한 필터에 들어간다. 쿼리 스키마는 필터 밖의 `kind`(`DEPOSIT`·`TRADE_FILL`·빈 값)를 400으로 거절한다.
+- **등록.** `OWNER_ROUTES`의 `GET /me/ledger` 사유가 싣는 것·필터·싣지 않는 것을 적고, `OWNER_CASES`는 `kind`·`period`·`marketId`·커서 키를 모두 가진다(쿼리 키 빠짐 검사). 계정 제한 중의 읽기는 `account-restrictions.controller.test.ts`가 본다.
+- **웹의 본인 전용.** 이용 내역은 서버에서 읽지 않는다(페이지는 `?market=`의 공개 제목만 읽는다). 키는 `['ledger', 필터, 계정]`이라 `PRIVATE_QUERY_ROOTS`의 `ledger`와 SessionCacheGuard의 초기화가 접두로 닿는다(`hooks/use-wallet.test.ts`).
+
 ## 대사 관측·보류·보정·복구 (#93, ADR-0119)
 
 `reconciliation_results`와 `reconciliation_recoveries`는 불변 기록이고, `reconciliation_holds`는 대상마다 활성 보류 하나만 허용한다. DB 검사와 `reconciliation.test.ts`는 대상·시작 시각 불변, 최신 실패 근거의 단조 증가, 실제 승인 종류/대상·요청자와 다른 승인자·최신 `recovery` 통과의 연결, 보류 종료와 복구 기록의 원자성을 확인한다. 과거 통과나 다른 대상의 통과, 위조한 승인 연결로 보류를 풀 수 없다. 일반 통과는 보류를 끝내지 않는다.

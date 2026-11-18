@@ -30,9 +30,11 @@ import {
   MY_ORDER_DETAIL_KEY,
   MY_ORDER_HISTORY_KEY,
   SETTLEMENTS_KEY,
+  isWalletLiveOrdersKey,
   marketBookKey,
   myOrderKey,
   sellableKey,
+  walletLiveOrdersKey,
 } from './market-keys';
 
 /**
@@ -720,6 +722,73 @@ export class BalanceOrder {
 }
 
 /**
+ * At most one read of the account's live orders every 10 s for `market:book` (#123, ADR-0141 결정
+ * 10), for every market at once, leading and trailing — 12 a minute at most, times the pages read.
+ * Only where no screen reads that market's book (`bookRestartsOwnOrders`): MY's 대기 주문, an
+ * order's 상세 and the wallet's live buys (#69). The count a tab spends is measured before the PR
+ * (ADR-0141 결과 3). Here rather than in the provider so the budget tests import it.
+ */
+export const OWN_ORDERS_INVALIDATE_MS = 10_000;
+
+/**
+ * At most one balance-history round every 10 s for `user:balance` (#69, ADR-0144 결정 6), for the
+ * account at once, leading and trailing: each loaded ledger entry's first page (a head read, not
+ * every page loaded), the correction history and 결제 내역. A fill sends one `user:balance`, so
+ * without the window a member filled every few seconds spent L ledger pages and two more reads
+ * per fill — 78 a minute in the 2026-11-17 measurement. The card itself moves on the event at once
+ * (`storeBalanceEvent`); the list follows by at most this window.
+ */
+export const BALANCE_HISTORY_INVALIDATE_MS = 10_000;
+
+/**
+ * Whether the `user:position` order restart (`ORDERS_KEY`, realtime-provider.tsx) reaches `query`:
+ * every entry under `['orders']` but the wallet's live orders (`walletLiveOrdersKey`, #69,
+ * ADR-0144 결정 2-11) while that entry is on screen. The wallet reads those only for 주문 잠금
+ * 코인, which a fill already brings with `user:balance`; a buy a fill ended leaves its list on the
+ * next `market:book` round, and a fill in a market the list does not hold asks for one such round
+ * (`walletMissesMarket`). A wallet entry NOT on screen is still reached: the restart's default
+ * `refetchType` ('active') only marks it stale, no request, so a return to the wallet inside
+ * `staleTime` reads it once — or a fill in a market it does not hold, heard while it was away,
+ * would leave it out of that market's room (`walletMissesMarket` looks at the entry on screen
+ * only) and its cancel or expiry unheard.
+ */
+export function positionRestartsOrder(query: Pick<Query, 'queryKey' | 'isActive'>): boolean {
+  return !isWalletLiveOrdersKey(query.queryKey) || !query.isActive();
+}
+
+/**
+ * Whether a fill's `user:position` in `marketId` asks for the wallet's live orders after all (#69,
+ * ADR-0144 결정 2-11): `accountId`'s wallet entry (`walletLiveOrdersKey`) is on screen and holds no
+ * live order there, so the wallet is not in that market's room. A buy placed in another tab rests
+ * without a `user:` event; its first fill is then the only thing this tab hears of it, and without
+ * one read the wallet would never join the room where its cancel or expiry is signalled. The
+ * provider asks through the `market:book` round's window (`refreshOwnOrders`), so the read is one
+ * of those rounds — never a request of its own per fill. False for no account, an entry not on
+ * screen (the order restart marks it stale, `positionRestartsOrder`; it is read whole when
+ * mounted), or a market already listed.
+ */
+export function walletMissesMarket(
+  client: QueryClient,
+  marketId: string,
+  accountId: string | undefined,
+): boolean {
+  if (accountId === undefined) return false;
+  const query = client
+    .getQueryCache()
+    .find({ queryKey: walletLiveOrdersKey(accountId), exact: true });
+  if (query?.isActive() !== true) return false;
+  const market = marketId.toLowerCase();
+  const data = query.state.data as HeldOrderPages | undefined;
+  return !(data?.pages ?? []).some((page) =>
+    (page.items ?? []).some(
+      (order) =>
+        order.marketId.toLowerCase() === market &&
+        (order.status === 'open' || order.status === 'partially_filled'),
+    ),
+  );
+}
+
+/**
  * At most one action per key per window, used to bound the `market:trade` → fills
  * invalidation: a busy market can publish a fill per trade, and each one would otherwise cost
  * a request. `now` is a parameter so the caller owns the clock and the tests need no timers.
@@ -751,6 +820,43 @@ export class Throttle {
     const previous = this.last.get(key);
     if (previous === undefined) return 0;
     return Math.max(0, this.windowMs - (now - previous));
+  }
+}
+
+/**
+ * One leading-and-trailing window with at most one trailing round armed (#69, ADR-0144 결정 6:
+ * the provider's `refreshBalanceHistory`). Clock-free like `Throttle`: the caller owns the clock
+ * and the one timer, and does what each step says — so the budget tests drive this very class on
+ * a virtual clock instead of a copy of the provider's logic.
+ *
+ * `offer(now)` for an event: `'run'` — run the round now (the leading edge); `{ wait }` — arm the
+ * one timer for that long and call `fired` from it (the trailing edge, so the last event of a
+ * burst is read after it); `null` — the armed timer's round will cover this event. `disarm` when
+ * the caller cancelled that timer (a resnapshot read everything; the socket is gone).
+ */
+export class RoundWindow {
+  private readonly throttle: Throttle;
+  private armed = false;
+
+  constructor(windowMs: number) {
+    this.throttle = new Throttle(windowMs);
+  }
+
+  offer(now: number): 'run' | { wait: number } | null {
+    if (this.throttle.take('all', now)) return 'run';
+    if (this.armed) return null;
+    this.armed = true;
+    return { wait: this.throttle.retryDelay('all', now) };
+  }
+
+  /** The armed timer fired at `now`: no longer armed, and what `offer` answers then. */
+  fired(now: number): 'run' | { wait: number } | null {
+    this.armed = false;
+    return this.offer(now);
+  }
+
+  disarm(): void {
+    this.armed = false;
   }
 }
 
@@ -953,7 +1059,8 @@ export function ownOrdersStatusKeys(
   } else {
     for (const query of cache.findAll({ queryKey: MY_ORDERS_LIVE_KEY, predicate: firstRead })) {
       const scope = query.queryKey[2];
-      if (scope === market || scope === 'all') keys.push(query.queryKey);
+      // The wallet's entry reads every market, as 'all' does (`walletLiveOrdersKey`).
+      if (scope === market || scope === 'all' || scope === 'wallet') keys.push(query.queryKey);
     }
   }
   const details = new Set(own.map((orderId) => orderId.toLowerCase()));

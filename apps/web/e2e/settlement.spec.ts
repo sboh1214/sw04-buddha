@@ -353,7 +353,7 @@ test.describe('정산', () => {
             await context.get('/api/v1/me/ledger?limit=100'),
           );
           const payouts = ledger.filter(
-            (entry) => entry.type === 'SETTLEMENT_PAYOUT' && entry.refId === market.id,
+            (entry) => entry.kind === 'SETTLEMENT_PAYOUT' && entry.refId === market.id,
           );
           expect(payouts).toHaveLength(payout > 0n ? 1 : 0);
           if (payout > 0n)
@@ -412,6 +412,28 @@ test.describe('정산', () => {
           await expect(list).not.toContainText('환불');
           await expect(list).not.toContainText('원금');
           if ((viewport?.width ?? 0) < 768) await expectNoSideScroll(holderPage);
+          if (result === 'VOID') {
+            // 지갑 (#69, ADR-0144): the void market's payout is '정산 지급' — the newest row, linked
+            // to that market's settlement records — and nothing on the wallet calls it a refund.
+            await holderPage.goto('/my/wallet');
+            const ledger = holderPage.getByTestId('ledger-list');
+            await expect(ledger.getByTestId('ledger-type').first()).toHaveText(
+              copy.ledgerTypeSettlement,
+            );
+            await expect(ledger.getByTestId('ledger-amount').first()).toHaveText(
+              `+${formatCoin(payout)}`,
+            );
+            // The market is linked although it has ended (acceptance criterion 4: 종료 시장 포함).
+            await expect(ledger.getByTestId('ledger-market').first().locator('a')).toHaveAttribute(
+              'href',
+              `/markets/${market.slug}`,
+            );
+            await expect(ledger.getByTestId('ledger-settlement-link')).toHaveAttribute(
+              'href',
+              `/my/history?kind=settlements&market=${market.id}`,
+            );
+            await expect(holderPage.locator('main')).not.toContainText('환불');
+          }
         }
         await page.goto(`/markets/${market.slug}`);
         await expect(page.getByTestId('market-status-badge')).toHaveText(copy.marketStatusSettled);

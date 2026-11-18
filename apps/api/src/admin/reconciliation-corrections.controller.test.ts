@@ -302,12 +302,19 @@ describe.skipIf(!hasTestInfra)('Coin correction approval and member privacy (int
         .data.find((row) => row.id === String(entry!.id)),
     ).toEqual({
       id: String(entry!.id),
-      type: 'RECONCILIATION_CORRECTION',
+      kind: 'RECONCILIATION_CORRECTION',
       amountCoin: '10',
       balanceAfterCoin: '110',
       refType: 'reconciliation_correction',
       refId: `legacy:${entry!.id}`,
       memo: null,
+      // A user's correction names no market (#69); a legacy row has no record, so its effect is
+      // the ledger's amount (ADR-0144).
+      marketId: null,
+      marketSlug: null,
+      marketTitle: null,
+      orderId: null,
+      correctionEffect: 'ledger_amount',
       createdAt: entry!.createdAt.toISOString(),
     });
     expect(response.body).not.toContain(internalRef);
@@ -381,6 +388,29 @@ describe.skipIf(!hasTestInfra)('Coin correction approval and member privacy (int
     expect(ledger.body).toContain(userReason);
     for (const secret of [internalReason, approvalReason, asker.id, approver.id, asked.id])
       expect(ledger.body).not.toContain(secret);
+    // The wallet's 'Coin 보정' filter (#69, ADR-0144): the row a replenishment wrote, saying it
+    // replenished the ledger alone, with its member-facing reason; no other kind holds it.
+    const byKind = async (kind: string) => {
+      const res = await t.app.inject({
+        method: 'GET',
+        url: `/api/v1/me/ledger?kind=${kind}`,
+        headers: { cookie: member.cookie },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      return res.json<{ data: Record<string, unknown>[] }>().data;
+    };
+    const corrected = await byKind('RECONCILIATION_CORRECTION');
+    expect(corrected).toEqual([
+      expect.objectContaining({
+        kind: 'RECONCILIATION_CORRECTION',
+        amountCoin: '10',
+        memo: userReason,
+        marketId: null,
+        orderId: null,
+        correctionEffect: 'ledger_only',
+      }),
+    ]);
+    expect(await byKind('BUY_FILL')).toEqual([]);
     expect(publish).toHaveBeenCalledTimes(1);
   });
 

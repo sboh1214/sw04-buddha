@@ -1101,6 +1101,8 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
           '/me/orders',
           '/me/fills',
           '/me/settlements',
+          // The wallet's filters (#69, ADR-0144): a read, so every one stays open.
+          `/me/ledger?kind=BUY_FILL&period=90d&marketId=${market.id}`,
         ]) {
           const res = await read(url, member);
           expect(res.statusCode, `${url} ${res.body}`).toBe(200);

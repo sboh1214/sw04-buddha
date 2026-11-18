@@ -1,20 +1,25 @@
 import { readFileSync } from 'node:fs';
-import { QueryClient } from '@tanstack/react-query';
-import { describe, expect, it } from 'vitest';
-import { ApiError, type Payment, isForAnotherAccount } from '@/lib/api';
-import { restartQueries } from '@/lib/query-client';
+import { QueryClient, QueryObserver } from '@tanstack/react-query';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiError, type LedgerEntry, type Payment, api, isForAnotherAccount } from '@/lib/api';
+import { PERIOD_REVALIDATE_MS } from '@/lib/ledger-join';
+import { getQueryClient, restartQueries } from '@/lib/query-client';
 import { PAYMENT_POLL_INTERVAL_MS, PAYMENT_POLL_LIMIT, paymentsPoll } from '@/lib/payments';
 import { ME_QUERY_KEY } from './use-me';
 import { MEMBER_CORRECTIONS_KEY } from './use-reconciliation-corrections';
 import {
   BALANCE_HISTORY_KEYS,
   CHARGE_PACKAGES_QUERY_KEY,
+  balanceHistoryRound,
   LEDGER_QUERY_KEY,
   PAYMENTS_QUERY_KEY,
   isChargeInProgress,
   isCouponRejection,
   isStaleCatalogue,
+  ledgerQuery,
+  myLedgerKey,
   paymentsRefetchInterval,
+  readLedgerHead,
 } from './use-wallet';
 
 const apiError = (status: number, code: string, details?: unknown) =>
@@ -133,9 +138,10 @@ describe('isCouponRejection', () => {
 });
 
 describe('BALANCE_HISTORY_KEYS', () => {
-  it('refreshes ledger, payments and correction history together with a balance event', async () => {
-    // What the `user:balance` handler restarts: an admin refund moves a payment as well as the
-    // balance, and 결제 내역 must not go on saying 완료 beside the ledger.
+  it('names ledger, payments and correction history for the reconnect snapshot', async () => {
+    // What a resnapshot restarts whole (`PRIVATE_SNAPSHOT_KEYS`): an admin refund moves a payment
+    // as well as the balance, and 결제 내역 must not go on saying 완료 beside the ledger. A live
+    // `user:balance` goes through `balanceHistoryRound` instead (the round's tests below).
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const page = { pages: [{ items: [], nextCursor: null }], pageParams: [undefined] };
     const held = [
@@ -152,6 +158,352 @@ describe('BALANCE_HISTORY_KEYS', () => {
       expect(invalidated).toEqual([true, true, true, false, false]);
     } finally {
       queryClient.clear();
+    }
+  });
+});
+
+describe('myLedgerKey', () => {
+  const MARKET = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+
+  it("hangs every filter's and every account's entry off ['ledger'], the account last", async () => {
+    // `user:balance`'s round finds each entry by this prefix, and the resnapshot's restart
+    // (BALANCE_HISTORY_KEYS), a charge's refresh and SessionCacheGuard's reset reach it by it
+    // (#69, ADR-0144 결정 2-10).
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const page = { pages: [{ items: [], nextCursor: null }], pageParams: [undefined] };
+    const keys = [
+      myLedgerKey({}, 'a'),
+      myLedgerKey({ kind: 'BUY_FILL' }, 'a'),
+      myLedgerKey({ period: '7d', market: MARKET }, 'a'),
+      myLedgerKey({}, 'b'),
+    ];
+    for (const key of keys) queryClient.setQueryData(key, page);
+    try {
+      expect(new Set(keys.map((key) => JSON.stringify(key))).size).toBe(keys.length);
+      for (const key of keys) {
+        expect(key.slice(0, 1)).toEqual([...LEDGER_QUERY_KEY]);
+        expect(key[2]).toBe(key === keys[3] ? 'b' : 'a');
+      }
+      await restartQueries(queryClient, LEDGER_QUERY_KEY);
+      expect(keys.map((key) => queryClient.getQueryState(key)?.isInvalidated)).toEqual([
+        true,
+        true,
+        true,
+        true,
+      ]);
+    } finally {
+      queryClient.clear();
+    }
+  });
+
+  it('keys what is set only, the market lower-cased: the preview reads the tab’s unfiltered entry', () => {
+    expect(myLedgerKey({}, 'a')).toEqual(['ledger', {}, 'a']);
+    expect(myLedgerKey({ market: MARKET.toUpperCase() }, 'a')).toEqual(
+      myLedgerKey({ market: MARKET }, 'a'),
+    );
+    expect(myLedgerKey({ kind: undefined, period: undefined }, 'a')).toEqual(myLedgerKey({}, 'a'));
+  });
+
+  it('asks the API for the filters set, by its own names, and the cursor', () => {
+    expect(ledgerQuery({}, undefined)).toEqual({});
+    expect(
+      ledgerQuery({ kind: 'SELL_FILL', period: '30d', market: MARKET.toUpperCase() }, '1_2'),
+    ).toEqual({ kind: 'SELL_FILL', period: '30d', marketId: MARKET, cursor: '1_2' });
+  });
+});
+
+describe('the balance-history round (#69, ADR-0144 결정 6)', () => {
+  const MARKET = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+  const row = (id: number): LedgerEntry =>
+    ({
+      id: String(id),
+      createdAt: new Date(Date.UTC(2026, 10, 17, 0, 0, id)).toISOString(),
+    }) as LedgerEntry;
+  const pagesOf = (...ids: number[][]) => ({
+    pages: ids.map((page) => ({ items: page.map(row), nextCursor: null })),
+    pageParams: ids.map((_, at) => (at === 0 ? undefined : `c${String(at)}`)),
+  });
+  const answer = (items: LedgerEntry[]) =>
+    vi.spyOn(api, 'GET').mockResolvedValue({
+      data: { data: items, meta: { nextCursor: 'next' } },
+      response: new Response(null, { status: 200 }),
+    } as never);
+  type Call = [string, { params: { query: unknown } }];
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('reads one page with the key’s filters and no cursor, and merges it into what is held', async () => {
+    const get = answer([row(5), row(4), row(3)]);
+    const client = new QueryClient();
+    const key = myLedgerKey({ kind: 'BUY_FILL', market: MARKET }, 'a');
+    client.setQueryData(key, pagesOf([3, 2], [1]));
+    try {
+      await readLedgerHead(client, key);
+      const calls = get.mock.calls as unknown as Call[];
+      expect(calls.map(([route, init]) => [route, init.params.query])).toEqual([
+        ['/api/v1/me/ledger', { kind: 'BUY_FILL', marketId: MARKET }],
+      ]);
+      const held = client.getQueryData<ReturnType<typeof pagesOf>>(key);
+      expect(held?.pages.map((page) => page.items.map((item) => item.id))).toEqual([
+        ['5', '4', '3', '2'],
+        ['1'],
+      ]);
+      // After a session reset (or a removal) the answer writes nothing and makes no entry.
+      client.removeQueries({ queryKey: key });
+      await readLedgerHead(client, key);
+      expect(client.getQueryCache().find({ queryKey: key, exact: true })).toBeUndefined();
+    } finally {
+      client.clear();
+    }
+  });
+
+  it('dates an old `period` entry fresh only when its head vouches for all it keeps', async () => {
+    // The head (r5..r3) has more to load, as every head here (`answer`'s cursor).
+    answer([row(5), row(4), row(3)]);
+    const client = new QueryClient();
+    const recent = myLedgerKey({ period: '7d' }, 'a');
+    const whole = myLedgerKey({}, 'a');
+    const short = myLedgerKey({ period: '30d' }, 'a');
+    client.setQueryData(recent, pagesOf([3, 2], [1]), { updatedAt: 1_000 });
+    client.setQueryData(whole, pagesOf([3, 2], [1]), { updatedAt: 1_000 });
+    client.setQueryData(short, pagesOf([4, 3]), { updatedAt: 1_000 });
+    try {
+      for (const key of [recent, whole, short]) await readLedgerHead(client, key);
+      const ids = (key: readonly unknown[]) =>
+        client
+          .getQueryData<ReturnType<typeof pagesOf>>(key)
+          ?.pages.map((page) => page.items.map((item) => item.id));
+      // Merged alike: the head's rows on top, r2 and r1 kept (none has aged out of 7 days).
+      expect(ids(recent)).toEqual([['5', '4', '3', '2'], ['1']]);
+      expect(ids(whole)).toEqual(ids(recent));
+      // '최근 7일' keeps r2 and r1 below the head, which may have left the window since their
+      // read, and its last whole read is far past `PERIOD_REVALIDATE_MS`: its date stays, so a
+      // focus past `staleTime` reads it whole. Unfiltered, rows never leave; and a period entry
+      // holding nothing below the head is vouched for: both fresh.
+      expect(client.getQueryState(recent)?.dataUpdatedAt).toBe(1_000);
+      expect(client.getQueryState(whole)?.dataUpdatedAt).toBeGreaterThan(1_000);
+      expect(client.getQueryState(short)?.dataUpdatedAt).toBeGreaterThan(1_000);
+      // The query's own `period` was sent.
+      expect(
+        (api.GET as unknown as { mock: { calls: Call[] } }).mock.calls.map(
+          ([, init]) => init.params.query,
+        ),
+      ).toEqual([{ period: '7d' }, {}, { period: '30d' }]);
+    } finally {
+      client.clear();
+    }
+  });
+
+  it('holds a `period` entry’s date once its last whole read is 5 minutes old', async () => {
+    // The head (r5..r3, a cursor) keeps r2 and r1 below it: not vouched for.
+    answer([row(5), row(4), row(3)]);
+    const now = vi.spyOn(Date, 'now');
+    const client = new QueryClient();
+    const key = myLedgerKey({ period: '7d' }, 'a');
+    const date = () => client.getQueryState(key)?.dataUpdatedAt;
+    const at = async (ms: number) => {
+      now.mockReturnValue(ms);
+      await readLedgerHead(client, key);
+    };
+    const T = 10_000_000;
+    // A whole read landed at T (not this function's write).
+    client.setQueryData(key, pagesOf([3, 2], [1]), { updatedAt: T });
+    try {
+      // Rounds every 10 s under the cap date it fresh: a focus inside `staleTime` reads nothing.
+      for (let ms = T + 10_000; ms < T + PERIOD_REVALIDATE_MS; ms += 10_000) {
+        await at(ms);
+        expect(date()).toBe(ms);
+      }
+      // Measured from the whole read, not from the last fresh date: past the cap it stays, so the
+      // next focus past `staleTime` reads it whole — once per cap, not once per `staleTime`.
+      const last = T + PERIOD_REVALIDATE_MS - 10_000;
+      await at(T + PERIOD_REVALIDATE_MS);
+      expect(date()).toBe(last);
+      await at(T + PERIOD_REVALIDATE_MS + 60_000);
+      expect(date()).toBe(last);
+      // That whole read (another write) starts the cap again.
+      const whole = T + PERIOD_REVALIDATE_MS + 90_000;
+      client.setQueryData(key, pagesOf([3, 2], [1]), { updatedAt: whole });
+      await at(whole + 10_000);
+      expect(date()).toBe(whole + 10_000);
+      await at(whole + PERIOD_REVALIDATE_MS);
+      expect(date()).toBe(whole + 10_000);
+    } finally {
+      client.clear();
+    }
+  });
+
+  it('reads each entry on screen by its head, restarts a first read, and marks the rest', async () => {
+    const get = answer([row(9), row(8)]);
+    const client = new QueryClient();
+    const shown = myLedgerKey({}, 'a');
+    const filtered = myLedgerKey({ kind: 'SETTLEMENT_PAYOUT' }, 'a');
+    const hidden = myLedgerKey({ period: '7d' }, 'a');
+    const first = myLedgerKey({ kind: 'SELL_FILL' }, 'a');
+    client.setQueryData(shown, pagesOf([8, 7], [6], [5]));
+    client.setQueryData(filtered, pagesOf([4]));
+    client.setQueryData(hidden, pagesOf([8]));
+    // 결제 내역, the correction history and `['me']`, on screen with data as on /my/wallet.
+    for (const key of [PAYMENTS_QUERY_KEY, MEMBER_CORRECTIONS_KEY, ME_QUERY_KEY]) {
+      client.setQueryData(key, pagesOf([1]));
+    }
+    const counted = () => vi.fn(() => new Promise<never>(() => undefined));
+    const fns = new Map<readonly unknown[], ReturnType<typeof counted>>();
+    const observe = (queryKey: readonly unknown[]) => {
+      const queryFn = counted();
+      fns.set(queryKey, queryFn);
+      return new QueryObserver(client, {
+        queryKey,
+        queryFn,
+        staleTime: Number.POSITIVE_INFINITY,
+      }).subscribe(() => undefined);
+    };
+    const stops = [
+      shown,
+      filtered,
+      first,
+      PAYMENTS_QUERY_KEY,
+      MEMBER_CORRECTIONS_KEY,
+      ME_QUERY_KEY,
+    ].map(observe);
+    const calls = (queryKey: readonly unknown[]) => fns.get(queryKey)?.mock.calls.length;
+    try {
+      get.mockClear();
+      // `first` began its first read on subscribing; only the round's own requests count below.
+      for (const queryFn of fns.values()) queryFn.mockClear();
+      balanceHistoryRound(client);
+      await vi.waitFor(() => {
+        expect(
+          client.getQueryData<ReturnType<typeof pagesOf>>(shown)?.pages[0]?.items,
+        ).toHaveLength(3);
+      });
+      // One `GET /me/ledger` per entry on screen with data, whatever its loaded pages: 2, not 5.
+      const ledgerCalls = (get.mock.calls as unknown as Call[]).filter(
+        ([route]) => route === '/api/v1/me/ledger',
+      );
+      expect(ledgerCalls.map(([, init]) => init.params.query)).toEqual([
+        {},
+        { kind: 'SETTLEMENT_PAYOUT' },
+      ]);
+      // The entry not on screen is only marked; it is read whole when mounted again.
+      expect(client.getQueryState(hidden)?.isInvalidated).toBe(true);
+      expect(client.getQueryState(hidden)?.fetchStatus).toBe('idle');
+      // The first read on its way is asked again (restarted): one request of its own fetch.
+      expect(calls(first)).toBe(1);
+      // A head read never marks the merged entry stale, nor runs the entry's own fetch.
+      expect(client.getQueryState(shown)?.isInvalidated).toBe(false);
+      expect(calls(shown)).toBe(0);
+      expect(calls(filtered)).toBe(0);
+      // 결제 내역 and the correction history are restarted, once each; `['me']` is not touched —
+      // the figure comes from the event (`storeBalanceEvent`), never from this round.
+      expect(calls(PAYMENTS_QUERY_KEY)).toBe(1);
+      expect(calls(MEMBER_CORRECTIONS_KEY)).toBe(1);
+      expect(calls(ME_QUERY_KEY)).toBe(0);
+      expect(client.getQueryState(ME_QUERY_KEY)?.isInvalidated).toBe(false);
+    } finally {
+      for (const stop of stops) stop();
+      client.clear();
+    }
+  });
+
+  it('reads an entry again in full when its head read failed on the way or with a 5xx', async () => {
+    vi.spyOn(api, 'GET').mockRejectedValue(new TypeError('Failed to fetch'));
+    const client = new QueryClient();
+    const shown = myLedgerKey({}, 'a');
+    client.setQueryData(shown, pagesOf([8]));
+    const full = vi.fn(() => new Promise<never>(() => undefined));
+    const stop = new QueryObserver(client, {
+      queryKey: shown,
+      queryFn: full,
+      staleTime: Number.POSITIVE_INFINITY,
+    }).subscribe(() => undefined);
+    try {
+      balanceHistoryRound(client);
+      // The query's own fetch (and `retry`), as every event did before: the round's update is
+      // not left missing until a focus.
+      await vi.waitFor(() => {
+        expect(full).toHaveBeenCalledTimes(1);
+      });
+      expect(client.getQueryState(shown)?.fetchStatus).toBe('fetching');
+      expect(client.getQueryData<ReturnType<typeof pagesOf>>(shown)?.pages[0]?.items).toHaveLength(
+        1,
+      );
+    } finally {
+      stop();
+      client.clear();
+    }
+  });
+
+  it('reads an entry a 4xx refused once more, unretried, and says so if refused again', async () => {
+    const refused = apiError(429, 'RATE_LIMITED');
+    vi.spyOn(api, 'GET').mockResolvedValue({
+      error: { error: { code: 'RATE_LIMITED', message: 'slow down' } },
+      response: new Response(null, { status: 429 }),
+    } as never);
+    // The app's own client: its `retry` never retries a 4xx (query-client.ts).
+    const client = getQueryClient();
+    const shown = myLedgerKey({}, 'a');
+    client.setQueryData(shown, pagesOf([8]));
+    const full = vi.fn(() => Promise.reject(refused));
+    const observer = new QueryObserver(client, {
+      queryKey: shown,
+      queryFn: full,
+      staleTime: Number.POSITIVE_INFINITY,
+    });
+    const stop = observer.subscribe(() => undefined);
+    try {
+      balanceHistoryRound(client);
+      // One request of the query's own fetch, and no retry: a refresh that failed over the rows
+      // kept, which the list draws as `ledger-stale` with 다시 시도 — never a silent row short.
+      await vi.waitFor(() => {
+        expect(observer.getCurrentResult().isRefetchError).toBe(true);
+      });
+      expect(full).toHaveBeenCalledTimes(1);
+      expect(observer.getCurrentResult().error).toBe(refused);
+      expect(client.getQueryData<ReturnType<typeof pagesOf>>(shown)?.pages[0]?.items).toHaveLength(
+        1,
+      );
+    } finally {
+      stop();
+      client.clear();
+    }
+  });
+
+  it('restarts a first read alone, never the filtered entries its key is a prefix of', async () => {
+    const get = answer([row(9), row(4)]);
+    const client = new QueryClient();
+    const first = myLedgerKey({}, 'a');
+    const filtered = myLedgerKey({ kind: 'SETTLEMENT_PAYOUT' }, 'a');
+    client.setQueryData(filtered, pagesOf([4]));
+    const full = vi.fn(() => new Promise<never>(() => undefined));
+    const observe = (queryKey: readonly unknown[]) =>
+      new QueryObserver(client, {
+        queryKey,
+        queryFn: full,
+        staleTime: Number.POSITIVE_INFINITY,
+      }).subscribe(() => undefined);
+    const stops = [observe(first), observe(filtered)];
+    try {
+      full.mockClear();
+      get.mockClear();
+      balanceHistoryRound(client);
+      await vi.waitFor(() => {
+        expect(
+          client.getQueryData<ReturnType<typeof pagesOf>>(filtered)?.pages[0]?.items,
+        ).toHaveLength(2);
+      });
+      // The unfiltered first read is asked again; the filtered entry gets its head read only.
+      expect(full).toHaveBeenCalledTimes(1);
+      expect(client.getQueryState(first)?.fetchStatus).toBe('fetching');
+      expect(client.getQueryState(filtered)?.fetchStatus).toBe('idle');
+      expect((get.mock.calls as unknown as Call[]).map(([, init]) => init.params.query)).toEqual([
+        { kind: 'SETTLEMENT_PAYOUT' },
+      ]);
+    } finally {
+      for (const stop of stops) stop();
+      client.clear();
     }
   });
 });

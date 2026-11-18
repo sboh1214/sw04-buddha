@@ -3,15 +3,23 @@ import { LEDGER_ACCOUNT_KINDS, LEDGER_ENTRY_TYPES, type LedgerEntryType } from '
 import {
   isLedgerDirectionAllowed,
   LEDGER_BURN_TYPES,
+  LEDGER_ENTRY_KINDS,
   LEDGER_ENTRY_RULES,
+  LEDGER_FILTER_EXCLUDED,
+  LEDGER_FILTER_KINDS,
   LEDGER_GRANT_TYPES,
+  LEDGER_KIND_SOURCES,
   LEDGER_MINT_TYPES,
+  ledgerEntryKind,
+  ledgerEntryKindSchema,
   ledgerEntryShapeError,
+  ledgerKindBranch,
   MEMBER_LEDGER_ENTRY_TYPES,
   memberLedgerEntryTypeSchema,
   PRESERVED_LEDGER_TYPES,
   USER_INFLOW_EXCEPTIONS,
   USER_INFLOW_TYPES,
+  type LedgerEntryKind,
   type LedgerSide,
 } from './ledger.js';
 
@@ -250,5 +258,89 @@ describe('ledgerEntryShapeError', () => {
     ],
   ] as const)('refuses %s', (_name, shape) => {
     expect(ledgerEntryShapeError(shape)).toEqual(expect.any(String));
+  });
+});
+
+describe('the wallet kinds (#69, ADR-0144)', () => {
+  /** Every (type, side) a user account takes in a member type's rule: the kinds' domain. */
+  const userSides = MEMBER_LEDGER_ENTRY_TYPES.flatMap((type) =>
+    (['from', 'to'] as const)
+      .filter((side) =>
+        LEDGER_ENTRY_RULES[type].pairs.some(
+          ([from, to]) => (side === 'from' ? from : to) === 'user',
+        ),
+      )
+      .map((side) => `${type}/${side}`),
+  );
+
+  it('maps each (type, side) a user account takes to exactly one kind, and every kind is one', () => {
+    expect(userSides).toHaveLength(11);
+    const sources = LEDGER_ENTRY_KINDS.flatMap((kind) =>
+      LEDGER_KIND_SOURCES[kind].map((source) => `${source.type}/${source.side}`),
+    );
+    // Onto and without overlap: the sources, together, are the domain once each.
+    expect([...sources].sort()).toEqual([...userSides].sort());
+    expect(new Set(sources).size).toBe(sources.length);
+    for (const kind of LEDGER_ENTRY_KINDS) {
+      expect(LEDGER_KIND_SOURCES[kind].length, kind).toBeGreaterThan(0);
+      for (const source of LEDGER_KIND_SOURCES[kind]) {
+        expect(ledgerEntryKind(source.type, source.side)).toBe(kind);
+      }
+    }
+    // A pair mint's collateral and a trade's payment are one kind, the buyer's (결과 4, H1).
+    expect(ledgerEntryKind('PAIR_MINT_COLLATERAL', 'from')).toBe('BUY_FILL');
+    expect(ledgerEntryKind('TRADE_FILL', 'from')).toBe('BUY_FILL');
+    expect(ledgerEntryKind('TRADE_FILL', 'to')).toBe('SELL_FILL');
+    expect(ledgerEntryKindSchema.options).toEqual([...LEDGER_ENTRY_KINDS]);
+  });
+
+  it('throws for a pair no rule lets a user account take', () => {
+    for (const [type, side] of [
+      ['START_GRANT', 'from'],
+      ['PAIR_MINT_COLLATERAL', 'to'],
+      ['SETTLEMENT_PAYOUT', 'from'],
+      ['CLOSURE_FORFEIT', 'to'],
+      ['RECONCILIATION_CORRECTION', 'from'],
+      ['TREASURY_MINT', 'to'],
+      ['BOT_ALLOCATION', 'from'],
+      ['PAIR_BURN_RETURN', 'to'],
+    ] as const) {
+      expect(() => ledgerEntryKind(type, side), `${type}/${side}`).toThrow();
+    }
+  });
+
+  it('offers every kind in the filter but the excluded ones, in the kinds’ order (H5)', () => {
+    // A kind #74 or #144 adds lands in the filter unless it is excluded by name: never silently
+    // outside it.
+    expect([...LEDGER_FILTER_KINDS]).toEqual(
+      LEDGER_ENTRY_KINDS.filter(
+        (kind) => !(LEDGER_FILTER_EXCLUDED as readonly LedgerEntryKind[]).includes(kind),
+      ),
+    );
+    expect([...LEDGER_FILTER_KINDS]).toEqual([
+      'BUY_FILL',
+      'SELL_FILL',
+      'SETTLEMENT_PAYOUT',
+      'START_GRANT',
+      'RECONCILIATION_CORRECTION',
+    ]);
+    // The excluded are the kept paid-Coin and coupon types and 탈퇴 소멸.
+    expect([...LEDGER_FILTER_EXCLUDED].sort()).toEqual(
+      [...PRESERVED_LEDGER_TYPES, 'CLOSURE_FORFEIT'].sort(),
+    );
+  });
+
+  it('reads each kind on one side of the account, with its types there', () => {
+    for (const kind of LEDGER_ENTRY_KINDS) {
+      const branch = ledgerKindBranch(kind);
+      expect(branch.types.map((type) => `${type}/${branch.side}`)).toEqual(
+        LEDGER_KIND_SOURCES[kind].map((source) => `${source.type}/${source.side}`),
+      );
+    }
+    expect(ledgerKindBranch('BUY_FILL')).toEqual({
+      side: 'from',
+      types: ['PAIR_MINT_COLLATERAL', 'TRADE_FILL'],
+    });
+    expect(ledgerKindBranch('SELL_FILL')).toEqual({ side: 'to', types: ['TRADE_FILL'] });
   });
 });

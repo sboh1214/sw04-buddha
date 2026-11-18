@@ -50,6 +50,16 @@ const NAMING_RECORDERS: Record<string, string> = {
     'reads mint and burn events to reconcile the supply; records SETTLEMENT_PAYOUT only',
 };
 
+/**
+ * Files that spell a contract type as `type: '…'` in a table of their own and cannot record a
+ * ledger event at all: `@buddha/shared` has no `@buddha/db` dependency (pinned below), so it
+ * cannot reach `recordLedgerEntry`. The literal there is a reading's key, not a record.
+ */
+const TYPE_TABLES: Record<string, string> = {
+  'packages/shared/src/ledger.ts':
+    'the screen kind table of the wallet (#69, ADR-0144): which (type, side) is 매수·매도 체결',
+};
+
 /** The trees the static guard scans, each `<group>/<name>/src` (ledger-writes.test.ts's). */
 const SCANNED_GROUPS = ['apps', 'packages'];
 
@@ -162,8 +172,22 @@ describe('one writer of contracts (#118, static)', () => {
     // `recordLedgerEntry` takes any type; the shape rules let a person pay collateral or a fill.
     // So that no Coin moves for a contract without the contract moving with it, only contracts.ts
     // writes these types — always `debitFrom: 'locked'` for the two a lock pays.
-    const recorders = sourceFiles().filter((file) => recordsContracts(read(file)));
+    const recorders = sourceFiles().filter(
+      (file) => recordsContracts(read(file)) && !(file in TYPE_TABLES),
+    );
     expect(recorders.sort()).toEqual(Object.keys(CONTRACT_RECORDERS).sort());
+    // A table left out above must still spell a contract type (or it is stale here) and must sit
+    // in a package that cannot record: shared depends on nothing of this repository's.
+    for (const file of Object.keys(TYPE_TABLES)) {
+      expect(recordsContracts(read(file)), file).toBe(true);
+      expect(RECORDS_LEDGER.test(read(file)), file).toBe(false);
+    }
+    const shared = JSON.parse(read('packages/shared/package.json')) as {
+      dependencies?: Record<string, string>;
+    };
+    expect(
+      Object.keys(shared.dependencies ?? {}).filter((name) => name.startsWith('@buddha/')),
+    ).toEqual([]);
     // However the type is written: a file that names one of the three and records anything.
     const naming = sourceFiles().filter((file) => mayRecordContracts(read(file)));
     expect(naming.sort()).toEqual(

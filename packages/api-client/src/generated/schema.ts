@@ -3174,7 +3174,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Ledger entries, newest first */
+        /** The account's Coin ledger, newest first, one entry per ledger event: its kind (the event's type seen from the account's side; a buyer's Coin of a fill is BUY_FILL whether the fill minted a pair or traded), the signed amount, the ledger total after it, the market (slug and title while public), the account's own order of a fill and what a correction did. kind narrows to one kind of the filter, period (7d, 30d, 90d) to the events of the last N × 24 hours, marketId to one market. No counterparty, account type or other order */
         get: operations["getMyLedger"];
         put?: never;
         post?: never;
@@ -5882,15 +5882,23 @@ export type components = {
         LedgerEntry: {
             amountCoin: components["schemas"]["CoinAmount"];
             balanceAfterCoin: components["schemas"]["CoinAmount"];
+            /** @enum {string|null} */
+            correctionEffect: "ledger_only" | "ledger_amount" | null;
             /** Format: date-time */
             createdAt: string;
             id: string;
+            /** @enum {string} */
+            kind: "BUY_FILL" | "SELL_FILL" | "SETTLEMENT_PAYOUT" | "START_GRANT" | "RECONCILIATION_CORRECTION" | "CLOSURE_FORFEIT" | "DEPOSIT" | "BONUS" | "PAYMENT_CANCEL" | "PAYMENT_CANCEL_REVERSAL";
+            /** Format: uuid */
+            marketId: string | null;
+            marketSlug: string | null;
+            marketTitle: string | null;
             memo: string | null;
+            /** Format: uuid */
+            orderId: string | null;
             refId: string;
             /** @enum {string} */
             refType: "payment" | "fill" | "market" | "coupon" | "start_grant" | "account_closure" | "approval_request" | "audit_failure" | "reconciliation_correction";
-            /** @enum {string} */
-            type: "START_GRANT" | "PAIR_MINT_COLLATERAL" | "TRADE_FILL" | "SETTLEMENT_PAYOUT" | "CLOSURE_FORFEIT" | "RECONCILIATION_CORRECTION" | "DEPOSIT" | "BONUS" | "PAYMENT_CANCEL" | "PAYMENT_CANCEL_REVERSAL";
         };
         LiftRestrictionBody: {
             expectedAccountId: string;
@@ -23538,9 +23546,11 @@ export interface operations {
     getMyLedger: {
         parameters: {
             query?: {
-                /** @description Opaque; `meta.nextCursor` of the previous page. */
                 cursor?: string;
+                kind?: "BUY_FILL" | "SELL_FILL" | "SETTLEMENT_PAYOUT" | "START_GRANT" | "RECONCILIATION_CORRECTION";
                 limit?: number;
+                marketId?: string;
+                period?: "7d" | "30d" | "90d";
             };
             header?: never;
             path?: never;

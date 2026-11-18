@@ -288,6 +288,12 @@ interface Fixture {
    */
   soldFillId: string;
   /**
+   * The closed market of A's buy from B (#69): A's ledger row of that fill — its TRADE_FILL, a
+   * 매수 체결 — names it and A's own order of the fill ('traded order id'); B's row of the same
+   * fill names B's.
+   */
+  tradedMarketId: string;
+  /**
    * SETTLING, where A held the losing contract (#124): A's settlement record — a zero payout —
    * is what `GET /me/settlements` is called with.
    */
@@ -705,10 +711,20 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
     body: (fixture) => ({ timeZone: 'Europe/Paris', expectedAccountId: fixture.a.id }),
     status: 403,
   },
+  // B's ledger, paged from A's and filtered to A's kind, A's market and a period that holds A's
+  // row (#69): B's row of that fill is a 매도 체결, so nothing of A's may come back. A's own is its
+  // 매수 체결 with A's order; the memo and the start grant are shown on A's unfiltered read
+  // (the fill test below).
   'GET /me/ledger': {
-    query: { cursor: (fixture) => fixture.cursors.ledger, limit: LIMIT },
+    query: {
+      cursor: (fixture) => fixture.cursors.ledger,
+      limit: LIMIT,
+      kind: () => 'BUY_FILL',
+      marketId: (fixture) => fixture.tradedMarketId,
+      period: () => '90d',
+    },
     status: 200,
-    own: ['ledger memo', 'start grant id', 'start grant amount'],
+    own: ['traded order id'],
   },
   // The correction controller suite also seeds real two-person corrections and checks both the
   // positive own history and the other member's empty page, including private reason sentinels.
@@ -2218,6 +2234,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       filledOrderKey: filledKey,
       openOrderId: open.id,
       soldFillId: String(sale.fill.id),
+      tradedMarketId: tradedMarket.id,
       settledMarket,
       cursors: {
         ledger: cursorAfter(entry),
@@ -2331,6 +2348,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('account id', account!.id),
         text('ledger memo', memo),
         text('filled order id', filled.id),
+        // A's order of its buy from B (#69): on A's ledger row of the fill, never on B's.
+        text('traded order id', trade.incomingOrderId),
         text('open order id', open.id),
         text('filled order key', filledKey),
         text('open order key', openKey),
@@ -2919,8 +2938,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
           route: key,
           status: own.statusCode,
           missing: ownerCase.own.filter((label) => !held.includes(label)),
-          // GET /me and GET /me/ledger read the start grant: its amount and id are A's, its hash
-          // is nobody's.
+          // GET /me reads the start grant (GET /me/ledger's unfiltered read is in the fill test
+          // below): its amount and id are A's, its hash is nobody's.
           shownAnyway: held.filter((label) => NEVER_SHOWN.includes(label)),
         });
       }
@@ -3218,47 +3237,90 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
   it('lists the fill between A and B on both ledgers, each from its own side, naming no account', async () => {
     // One event, two readers (#116): `/me/ledger` reads either side of the caller's account and
     // signs the amount from it — A paid (−) and is left with its total, B was paid (+) and is
-    // left with its own — and never names the other side's account or its owner.
+    // left with its own — and never names the other side's account or its owner. Each one's kind
+    // is its side's (#69): A's a 매수 체결 with A's order, B's a 매도 체결 with B's, and neither
+    // says the stored type nor the other side's order.
     const [fill] = await t.db
       .select()
       .from(schema.ledgerEntries)
       .where(eq(schema.ledgerEntries.type, 'TRADE_FILL'));
+    const [orders] = await t.db
+      .select({
+        incoming: schema.fills.incomingOrderId,
+        resting: schema.fills.restingOrderId,
+      })
+      .from(schema.fills)
+      .where(eq(schema.fills.id, Number(fill!.refId)));
     const ledger = routeOf('GET /me/ledger');
-    const fillSeenBy = async (cookie: string) => {
+    const readAs = async (cookie: string) => {
       const res = await call(ledger, { query: { limit: LIMIT() }, cookie });
       expect(res.statusCode).toBe(200);
-      const rows = res
-        .json<{ data: { id: string }[] }>()
-        .data.filter((row) => row.id === String(fill!.id));
+      return res.body;
+    };
+    const fillIn = (body: string) => {
+      const rows = (parse(body) as { data: { id: string }[] }).data.filter(
+        (row) => row.id === String(fill!.id),
+      );
       expect(rows).toHaveLength(1);
       return rows[0]!;
     };
-    const asA = await fillSeenBy(f.a.cookie);
-    const asB = await fillSeenBy(f.b.cookie);
+    const aBody = await readAs(f.a.cookie);
+    const bBody = await readAs(f.b.cookie);
+    const asA = fillIn(aBody);
+    const asB = fillIn(bBody);
     expect(asA).toMatchObject({
-      type: 'TRADE_FILL',
+      kind: 'BUY_FILL',
       amountCoin: '-1234',
       balanceAfterCoin: String(AMOUNTS.available + AMOUNTS.locked),
+      marketId: f.tradedMarketId,
+      orderId: orders!.incoming,
     });
     expect(asB).toMatchObject({
-      type: 'TRADE_FILL',
+      kind: 'SELL_FILL',
       amountCoin: '1234',
       balanceAfterCoin: String(fill!.toBalanceAfterCoin),
+      marketId: f.tradedMarketId,
+      orderId: orders!.resting,
     });
     for (const seen of [asA, asB]) {
       expect(Object.keys(seen).sort()).toEqual([
         'amountCoin',
         'balanceAfterCoin',
+        'correctionEffect',
         'createdAt',
         'id',
+        'kind',
+        'marketId',
+        'marketSlug',
+        'marketTitle',
         'memo',
+        'orderId',
         'refId',
         'refType',
-        'type',
       ]);
       expect(JSON.stringify(seen)).not.toContain(f.a.id);
       expect(JSON.stringify(seen)).not.toContain(f.b.id);
     }
+    // Neither answer says the stored type, and neither holds the other side's order.
+    for (const body of [aBody, bBody]) {
+      expect(body).not.toContain('TRADE_FILL');
+      expect(body).not.toContain('PAIR_MINT');
+    }
+    expect(aBody).not.toContain(orders!.resting);
+    expect(bBody).not.toContain(orders!.incoming);
+    // Unfiltered, A's own read shows what the filtered case (OWNER_CASES) leaves out — the memo,
+    // the start grant — and A's order; nothing nobody is shown. B's holds nothing of A's.
+    const held = leaked(aBody);
+    expect(held).toEqual(
+      expect.arrayContaining([
+        'ledger memo',
+        'start grant id',
+        'start grant amount',
+        'traded order id',
+      ]),
+    );
+    expect(held.filter((label) => NEVER_SHOWN.includes(label))).toEqual([]);
+    expect(leaked(bBody)).toEqual([]);
   });
 
   // ---- the market room --------------------------------------------------------------------
