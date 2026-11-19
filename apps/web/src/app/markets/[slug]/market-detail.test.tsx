@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { ProbabilityDisplay } from '@/components/market/probability-display';
 import { copy } from '@/copy';
 import { type Market, type MarketJudgementDelay } from '@/lib/api';
+import { delta24h } from '@/lib/market-detail';
 import { marketKey } from '@/lib/market-keys';
 import { applyTick } from '@/lib/market-live';
 import { getQueryClient } from '@/lib/query-client';
@@ -269,5 +271,48 @@ describe('StatusNotice: 판정 지연 기록 (#142)', () => {
       'const reviewPassed = delay !== null && (delay.nextReviewPassed || reviewCame);',
     );
     expect(component.slice(0, component.indexOf('\n}\n'))).not.toContain('Date.now()');
+  });
+});
+
+/**
+ * A judged market's 요약 (#34 수용 기준 2, ADR-0145; ADR-0135 C5): the last price stays a price —
+ * no result beside it and no 24시간 badge — and the result is the status notice's own row.
+ */
+describe('a settled market’s price and result (#34)', () => {
+  it('keeps the result out of the price block and in the status notice', () => {
+    const settled: Market = {
+      ...delayed,
+      status: 'settled',
+      judgementDelayed: false,
+      resolvedResult: 'YES',
+      lastPrice24hAgo: 40,
+      resolvedAt: '2026-11-15T01:00:00.000Z',
+      settledAt: '2026-11-16T02:00:00.000Z',
+    };
+    // The positive control: the notice draws the result row.
+    expect(byTestId(notice(settled), 'market-detail-result')?.text).toBe(copy.yes);
+    // The block as `MarketSummary` composes it from the row.
+    const source = readFileSync(new URL('./market-detail.tsx', import.meta.url), 'utf8');
+    expect(source).toContain('delta24hPp={delta24h(market)}');
+    // The whole block, not one prop: nothing in it reads the result or its label.
+    const start = source.indexOf('function MarketSummary(');
+    expect(start).toBeGreaterThan(-1);
+    const summary = source.slice(start, source.indexOf('\n}\n', start));
+    expect(summary).toContain('<ProbabilityDisplay');
+    for (const result of ['resolvedResult', 'MARKET_RESULT_LABEL', 'marketResolvedResult']) {
+      expect(summary, result).not.toContain(result);
+    }
+    const price = renderWithQueries(
+      <ProbabilityDisplay
+        lastPrice={settled.lastPrice}
+        delta24hPp={delta24h(settled)}
+        lastFillAt={settled.lastFillAt}
+      />,
+    );
+    expect(byTestId(price, 'market-probability-value')).toBeDefined();
+    expect(byTestId(price, 'market-probability-delta')).toBeUndefined();
+    expect(byTestId(price, 'market-detail-result')).toBeUndefined();
+    expect(price).not.toContain(copy.marketResolvedResult);
+    expect(price).not.toContain(copy.marketDelta24h);
   });
 });

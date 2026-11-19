@@ -108,6 +108,74 @@ async function dataOf<T>(response: APIResponse): Promise<T> {
   return (JSON.parse(body) as { data: T }).data;
 }
 
+/** A result as the detail and the history name it: YES·NO·무효. */
+function resultLabelOf(result: MySettlement['result']): string {
+  return result === 'VOID' ? copy.marketResultVoid : result === 'YES' ? copy.yes : copy.no;
+}
+
+/**
+ * 종료 시장의 복기 (#34, ADR-0145; ADR-0135 I1·I3, 결과 4) on a holder's own detail of the market
+ * that has just paid out: 내 포지션's block for the contract held — every settlement figure the
+ * record's (`GET /me/settlements`), the quantity held then rather than the row's 0, 실현 손익 the
+ * row's cumulative one (`GET /me/positions?status=settled`), both times — and nothing of the other
+ * holder's contract, no '환불' in the card (other cards name 지급 완료 too, hence the scope), the
+ * one fill in 내 거래 with its way to MY's fills, and the round trip through MY's settlement records
+ * of this market back to the detail's result (수용 기준 3·7·8·9).
+ */
+async function expectDetailRecap(
+  holderPage: Page,
+  market: { id: string; slug: string; title: string },
+  outcome: 'YES' | 'NO',
+  record: MySettlement,
+): Promise<void> {
+  const narrow = (holderPage.viewportSize()?.width ?? 0) < 768;
+  const positions = await dataOf<Position[]>(
+    await holderPage.request.get('/api/v1/me/positions?status=settled'),
+  );
+  const position = positions.find((row) => row.marketId === market.id && row.outcome === outcome);
+  expect(position).toBeDefined();
+  await holderPage.goto(`/markets/${market.slug}`);
+  const card = holderPage.getByTestId('market-my-position');
+  const own = outcome === 'YES' ? 'yes' : 'no';
+  const block = card.getByTestId(`market-settled-${own}`);
+  const field = (name: string) => block.getByTestId(`market-settled-${name}`);
+  await expect(field('result')).toHaveText(resultLabelOf(record.result));
+  await expect(field('qty')).toHaveText(`${String(record.qty)}${copy.unitContracts}`);
+  await expect(field('cost')).toHaveText(formatCoin(BigInt(record.costBasisCoin)));
+  await expect(field('each')).toHaveText(formatCoin(BigInt(record.payoutPerContractCoin)));
+  await expect(field('payout')).toHaveText(formatCoin(BigInt(record.payoutCoin)));
+  await expect(field('settlement-pnl')).toHaveText(formatCoin(BigInt(record.settlementPnlCoin)));
+  await expect(field('realized')).toHaveText(formatCoin(BigInt(position?.realizedPnlCoin ?? '')));
+  await expect(field('resolved-at')).toHaveText(formatKst(record.resolvedAt ?? ''));
+  await expect(field('settled-at')).toHaveText(formatKst(record.settledAt));
+  await expect(card.getByTestId(`market-settled-${own === 'yes' ? 'no' : 'yes'}`)).toHaveCount(0);
+  await expect(card).not.toContainText('환불');
+  // 내 거래: the one fill, and the way to this market's fills (behind '거래 내역' below md).
+  if (narrow) {
+    await holderPage
+      .getByTestId('market-activity-switch')
+      .getByText(copy.marketTradeHistory, { exact: true })
+      .click();
+  }
+  const trades = holderPage.getByTestId('market-my-trades');
+  await expect(trades.getByTestId('market-my-trade-detail')).toHaveCount(1);
+  await expect(trades.getByTestId('market-history-fills')).toHaveAttribute(
+    'href',
+    `/my/history?kind=fills&market=${market.id}`,
+  );
+  if (narrow) await expectNoSideScroll(holderPage);
+  // The round trip: this market's records on MY, and from the record's line back to the result.
+  await card.getByTestId('market-history-settlements').click();
+  const line = holderPage
+    .getByTestId('my-settlement-history')
+    .getByTestId(`history-settlement-${market.id}-${outcome}`);
+  await expect(line).toBeVisible();
+  await line.getByRole('link', { name: market.title }).click();
+  await expect(holderPage.getByTestId('market-detail-result')).toHaveText(
+    resultLabelOf(record.result),
+  );
+}
+
 test.describe('정산', () => {
   test('AC 7: 한 관리자의 판정 등록 → 다른 관리자의 승인 → 잠정 결과 → 이의 기한 뒤 결과 확정 → 정산 → 상세 배지', async ({
     browser,
@@ -434,10 +502,16 @@ test.describe('정산', () => {
             );
             await expect(holderPage.locator('main')).not.toContainText('환불');
           }
+          if (record !== undefined) await expectDetailRecap(holderPage, market, outcome, record);
         }
         await page.goto(`/markets/${market.slug}`);
         await expect(page.getByTestId('market-status-badge')).toHaveText(copy.marketStatusSettled);
         await expect(page.getByTestId('market-detail-result')).toHaveText(resultLabel);
+        // A visitor (수용 기준 5): the one sign-in prompt, and nothing of anyone's recap.
+        await expect(page.getByTestId('market-personal-signed-out')).toHaveCount(1);
+        await expect(page.locator('[data-testid^="market-settled-"]')).toHaveCount(0);
+        await expect(page.getByTestId('market-my-trades')).toHaveCount(0);
+        await expect(page.locator('[data-testid^="market-history-"]')).toHaveCount(0);
         if (result === 'YES') {
           // 보유 계약 (#67, ADR-0142; F4): a paid-out market's holding has left MY's list — once.
           await yesPage.goto('/my/positions');

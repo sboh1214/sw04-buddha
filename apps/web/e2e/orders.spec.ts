@@ -1940,6 +1940,11 @@ test.describe('시장 마감과 주문 만료 (#120)', () => {
       await expectClosedRow(
         page.getByTestId('market-my-position').getByTestId('market-position-no'),
       );
+      // Before the payout (#34 수용 기준 8, ADR-0145; ADR-0135 F2): the holding row, and nothing
+      // of a settlement — no record's block, no '지급 완료' in the card.
+      const position = page.getByTestId('market-my-position');
+      await expect(position.locator('[data-testid^="market-settled-"]')).toHaveCount(0);
+      await expect(position).not.toContainText(copy.historySettledAt);
     } finally {
       await bContext.close();
       await visitorContext.close();

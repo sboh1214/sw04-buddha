@@ -1,14 +1,13 @@
 'use client';
 
-import { Alert, Badge, Button, Card, DataList, Heading, Skeleton, Stack } from '@chakra-ui/react';
-import { type MarketStatus, parseCoinAmount } from '@buddha/shared';
-import { type ReactNode } from 'react';
+import { Alert, Button, Card, Heading, Skeleton, Stack } from '@chakra-ui/react';
+import { type MarketStatus } from '@buddha/shared';
 import { ProfileUnavailable } from '@/components/my/profile-unavailable';
 import { AccountBlockLine } from '@/components/position/account-block-line';
 import { HoldingRow, type SellAccount } from '@/components/position/holding-rows';
-import { CoinText } from '@/components/ui/coin-text';
 import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
+import { useMarketSettlements } from '@/hooks/use-market-recap';
 import { useMe } from '@/hooks/use-me';
 import {
   type LiveMarketReading,
@@ -17,11 +16,17 @@ import {
   usePositions,
 } from '@/hooks/use-portfolio';
 import { useSellableReadings } from '@/hooks/use-sellable-readings';
-import { type Position } from '@/lib/api';
-import { MARKET_RESULT_LABEL, formatContracts } from '@/lib/market-admin';
-import { sessionListSection } from '@/lib/query-client';
+import { type MySettlement } from '@/lib/api';
+import {
+  positionEmptyCopy,
+  recapViewOf,
+  recordsReadingOf,
+  settledRecapOf,
+} from '@/lib/market-recap';
+import { refreshFailed, sessionListSection } from '@/lib/query-client';
 import { POSITION_ACCOUNT_LINE_ID, positionAccountLine } from '@/lib/sellable-view';
 import { useOrderPanel } from './order-panel-provider';
+import { SettledRecap } from './settled-recap';
 
 /**
  * 내 포지션 on the market detail (PLAN 11.3): what this visitor holds in THIS market, marked to
@@ -42,13 +47,13 @@ import { useOrderPanel } from './order-panel-provider';
  * WHICH of the two lists it reads follows the market's own status through
  * `positionListStatusFor`: a finished market moved its holders' rows to the settled list, so
  * asking only for `'open'` would answer "아직 이 시장에 참여하지 않았습니다" to an account that
- * did hold and was paid out — while MY, reading the same rows, listed it under 정산
- * 이력 at the same moment. A finished market therefore shows 결과 · 실현 손익 (PLAN 11.3),
- * field for field the 정산 이력 row, so the two screens cannot say different things.
+ * did hold and was paid out. A paid-out market adds the account's settlement records of it
+ * (`useMarketSettlements`, #34, ADR-0145; ADR-0135 I1) and draws the recap (`SettledRecap`): each
+ * record's columns with the result, the two times, and the row's 실현 손익 — the same figures, by
+ * the same names, as the record's line in MY's 정산 이력. Every status before that keeps the
+ * holding rows, marked to the last price with no expected payout (ADR-0135 F2), and never a
+ * record: the query is off until the market is `settled` (`recapViewOf`).
  */
-
-/** The repo's placeholder for a figure that does not exist (admin-market-detail.tsx). */
-const EMPTY = '—';
 
 export interface MyPositionProps {
   /** The market's canonical lower-cased uuid — `Position.marketId` carries the same string. */
@@ -86,6 +91,11 @@ export function MyPosition({
   const accountId = useMe().data?.id;
   const positions = usePositions(listStatus, accountId);
   const rows = (positions.data ?? []).filter((row) => row.marketId === marketId);
+  // A paid-out market's settlement records (ADR-0145): no request before `settled`.
+  const { query: records, mountedAt } = useMarketSettlements(marketId, status, accountId);
+  const recordRows: MySettlement[] = (
+    records.data?.pages.flatMap((page) => page.items) ?? []
+  ).filter((record) => record.marketId.toLowerCase() === marketId.toLowerCase());
   const panel = useOrderPanel();
   // The same 매도 가능액 entry as the order panel's (`sellableKey`): no request of its own.
   const marked = listStatus === 'open' ? rows.map((row) => markToLiveMarket(row, live)) : rows;
@@ -124,6 +134,21 @@ export function MyPosition({
   // sign-in prompt for every personal area rather than a card of this one's own (owner decision
   // 2026-10-17). The rung is the card's own half of that rule.
   if (section.body === 'signedOut') return null;
+  const view = recapViewOf({
+    status,
+    list: listStatus,
+    positions: section.body,
+    // Only a list read on this mount decides; a failed read over an older one is a failure.
+    records: recordsReadingOf(records, mountedAt, recordRows.length),
+  });
+  // A records refresh that failed after a read on this mount keeps the recap and says so with the
+  // rows' own notice — on a paid-out market alone, where the records are read; with no such read
+  // the card is `recordsFailed` and its own 다시 시도.
+  const recordsStale = status === 'settled' && view !== 'recordsFailed' && refreshFailed(records);
+  const retry = () => {
+    void positions.refetch();
+    if (recordsStale) void records.refetch();
+  };
 
   return (
     <Card.Root data-testid={testId}>
@@ -137,18 +162,13 @@ export function MyPosition({
           {/* Above the body, never in place of it: the rows are real and worth keeping on
                 screen, and the empty rung is the one that needs the label most. The same shape
                 as 최근 체결's stale notice (recent-fills.tsx). */}
-          {section.stale && (
+          {(section.stale || recordsStale) && (
             <Alert.Root status="warning" role="status" data-testid="market-my-position-stale">
               <Alert.Indicator />
               <Alert.Content>
                 <Alert.Description>{copy.marketRefreshFailed}</Alert.Description>
               </Alert.Content>
-              <Button
-                size="xs"
-                variant="outline"
-                ml="auto"
-                onClick={() => void positions.refetch()}
-              >
+              <Button size="xs" variant="outline" ml="auto" onClick={retry}>
                 {copy.retry}
               </Button>
             </Alert.Root>
@@ -156,9 +176,9 @@ export function MyPosition({
           {accountId === undefined ? (
             // The list is keyed by MY's account, which `GET /me` names (#67, ADR-0142).
             <ProfileUnavailable height="12" />
-          ) : section.body === 'pending' ? (
+          ) : view === 'pending' ? (
             <Skeleton height="12" />
-          ) : section.body === 'failed' ? (
+          ) : view === 'failed' ? (
             <Stack gap="2" align="flex-start">
               <Alert.Root status="error" role="alert">
                 <Alert.Indicator />
@@ -170,15 +190,31 @@ export function MyPosition({
                 {copy.retry}
               </Button>
             </Stack>
-          ) : section.body === 'empty' ? (
-            <EmptyState message={copy.marketMyPositionEmpty} />
-          ) : listStatus === 'settled' ? (
-            <Stack gap="4">
-              {/* A finished market is never marked to a price (see `SettledPositionRows`). */}
-              {rows.map((row) => (
-                <SettledPositionRows key={row.outcome} position={row} />
-              ))}
+          ) : view === 'recordsFailed' ? (
+            // No figure at all rather than a recap without its payout.
+            <Stack gap="2" align="flex-start" data-testid="market-settled-failed">
+              <Alert.Root status="error" role="alert">
+                <Alert.Indicator />
+                <Alert.Content>
+                  <Alert.Description>{copy.errUnknown}</Alert.Description>
+                </Alert.Content>
+              </Alert.Root>
+              <Button size="sm" variant="outline" onClick={() => void records.refetch()}>
+                {copy.retry}
+              </Button>
             </Stack>
+          ) : view === 'empty' ? (
+            <EmptyState
+              message={positionEmptyCopy(status)}
+              data-testid="market-my-position-empty"
+            />
+          ) : view === 'recap' || view === 'ended' ? (
+            // A finished market is never marked to a price: its last price is not its result. A
+            // cancelled market has no records (ADR-0117), so its rows, if any, are sold-out lines.
+            <SettledRecap
+              entries={settledRecapOf(rows, view === 'recap' ? recordRows : [])}
+              marketId={marketId}
+            />
           ) : (
             <Stack gap="4">
               {accountLine.ownLine && (
@@ -220,59 +256,5 @@ export function MyPosition({
         </Stack>
       </Card.Body>
     </Card.Root>
-  );
-}
-
-/**
- * 결과 · 실현 손익 for a market that has finished (PLAN 11.3) — the same three fields, in the
- * same order, as MY's 정산 이력 row, so one account's row cannot read differently on
- * the two screens. It carries no market link or status badge: this IS that market's page, and
- * the header badge and the status notice above have already said what it became.
- *
- * No 현재가 and no 평가손익. Settlement closes the row out (`settle` leaves qty and cost basis at
- * 0), the Coin has already landed in the balance, and `marketLastPrice` on a finished market is
- * only the last price something TRADED at — so marking such a row to it would print a plausible
- * number that is not a result. `realizedPnlCoin` is the whole story.
- */
-function SettledPositionRows({ position }: { position: Position }) {
-  const yes = position.outcome === 'YES';
-  const result = position.resolvedResult;
-  return (
-    <Stack gap="2" data-testid={`market-settled-${yes ? 'yes' : 'no'}`}>
-      <Badge colorPalette={yes ? 'yes' : 'no'} variant="subtle" alignSelf="flex-start">
-        {yes ? copy.yes : copy.no}
-      </Badge>
-      <DataList.Root orientation="horizontal" size="sm">
-        {/* YES·NO·무효; a cancelled market ended with no result at all, so it has none to name. */}
-        <Item label={copy.marketResolvedResult}>
-          {result === null ? EMPTY : MARKET_RESULT_LABEL[result]}
-        </Item>
-        <Item label={copy.positionQty}>{formatContracts(position.qty)}</Item>
-        <Item label={copy.positionRealizedPnl}>
-          <Signed amount={parseCoinAmount(position.realizedPnlCoin)} />
-        </Item>
-      </DataList.Root>
-    </Stack>
-  );
-}
-
-/**
- * A gain or a loss. `formatCoin` already writes a loss with U+2212 (PLAN 11.1-6), so the colour
- * only repeats what the sign and the row's label already say — which is the rule, not a
- * nicety: at 0 it stays on the ordinary foreground rather than claiming a direction.
- */
-function Signed({ amount }: { amount: bigint }) {
-  if (amount === 0n) return <CoinText amount={amount} />;
-  return (
-    <CoinText amount={amount} colorPalette={amount > 0n ? 'yes' : 'no'} color="colorPalette.fg" />
-  );
-}
-
-function Item({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <DataList.Item>
-      <DataList.ItemLabel>{label}</DataList.ItemLabel>
-      <DataList.ItemValue>{children}</DataList.ItemValue>
-    </DataList.Item>
   );
 }

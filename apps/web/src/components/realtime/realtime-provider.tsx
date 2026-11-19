@@ -59,6 +59,7 @@ import {
   RoundWindow,
   SellableRotation,
   Throttle,
+  TrailingGate,
   applyPositionEvent,
   applyStatus,
   applyTick,
@@ -158,6 +159,14 @@ const SELLABLE_ROTATION_MS = 6_000;
  * somebody else's trade, so a dropped invalidation there leaves 체결 내역 a row short.
  */
 const MARKET_RESTART_MS = 1_000;
+
+/**
+ * How long a settling `user:position` waits for the rest of its payout before the account's
+ * 정산 기록 are read again (`TrailingGate`, #34, ADR-0145 결정 3-10). The worker sends a payout's
+ * events together after one commit, so they land within a few ms; 50 ms takes them all and is
+ * well under what a screen can show.
+ */
+const SETTLEMENT_RESTART_MS = 50;
 
 /** The public caches a reconnect re-reads; any of them may have moved during the gap. */
 const SNAPSHOT_KEYS = [
@@ -405,6 +414,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     // connection like the windows above.
     const sellableRotation = new SellableRotation(SELLABLE_ROTATION_MS);
     let sellablePending: (() => void) | null = null;
+    // The account's 정산 기록 on a settling `user:position`: one restart per payout, per
+    // connection like the windows above (`TrailingGate`, #34, ADR-0145 결정 3-10).
+    const settlementRestart = new TrailingGate(SETTLEMENT_RESTART_MS);
 
     /**
      * PLAN 8's "클라이언트 재연결 시 스냅샷 재요청", once per gap rather than once per event.
@@ -1022,11 +1034,15 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         }
         // 정산 기록 (#124, ADR-0143): the other half — a settlement wrote this holding's record, which
         // the event cannot build (no result, payout or times). Only this account's lists
-        // (`ownSettlementKeys`), and only one on screen asks.
+        // (`ownSettlementKeys`), and only one on screen asks. Once per payout, not per holding
+        // (`settlementRestart`, #34): the keys are read when the gate fires, so a list mounted
+        // in between (the detail's, turned on by the payout's `market:status`) is included.
         if (wroteASettlement(event)) {
-          for (const key of ownSettlementKeys(queryClient, identity ?? undefined)) {
-            void restartQueries(queryClient, key);
-          }
+          settlementRestart.arm(() => {
+            for (const key of ownSettlementKeys(queryClient, identity ?? undefined)) {
+              void restartQueries(queryClient, key);
+            }
+          });
         }
         // The order panel's 매도 가능액 on that market (#66, ADR-0140): the holding moved, and so
         // may the part its resting sells lock. Only a mounted panel's query is asked again.
@@ -1064,6 +1080,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       sellablePending?.();
       sellablePending = null;
       sellableRotation.clear();
+      settlementRestart.cancel();
       document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [identity, queryClient]);

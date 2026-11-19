@@ -16,6 +16,8 @@ import {
 import { parseCoinAmount } from '@buddha/shared';
 import NextLink from 'next/link';
 import { type ReactNode } from 'react';
+import { EMPTY, SignedCoin } from '@/components/history/history-parts';
+import { MarketHistoryLink } from '@/components/market/settled-recap';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { CoinText } from '@/components/ui/coin-text';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -25,6 +27,7 @@ import { useMe } from '@/hooks/use-me';
 import { useMyMarketFills } from '@/hooks/use-my-orders';
 import { type MyFill } from '@/lib/api';
 import { formatContracts } from '@/lib/market-admin';
+import { marketHistoryLinks } from '@/lib/market-recap';
 import { myOrderPath } from '@/lib/my';
 import { formatContractPrice } from '@/lib/order-confirm';
 import { sessionListSection } from '@/lib/query-client';
@@ -36,6 +39,9 @@ import { sessionListSection } from '@/lib/query-client';
  * 주문 상세. No counterparty, nor whether it was the 운영 유동성 (B4). A signed-in reader's only:
  * the detail draws it for a member, and it draws nothing for one signed out. Below md it is behind
  * the '거래 내역' switch with 최근 체결.
+ *
+ * Once it has a fill, its last line goes to this market's fills on MY (#34, ADR-0145; ADR-0135
+ * 결과 4 '#34 이력 연결') — on every status, an open market's too.
  */
 export function MyMarketTrades({ marketId }: { marketId: string }) {
   const me = useMe();
@@ -120,6 +126,13 @@ export function MyMarketTrades({ marketId }: { marketId: string }) {
                 <TradeRow key={fill.id} fill={fill} />
               ))}
               {more}
+              {rows.length > 0 && (
+                <MarketHistoryLink
+                  href={marketHistoryLinks(marketId).fills}
+                  label={copy.marketHistoryFills}
+                  testId="market-history-fills"
+                />
+              )}
             </Stack>
           )}
         </Stack>
@@ -128,8 +141,14 @@ export function MyMarketTrades({ marketId }: { marketId: string }) {
   );
 }
 
-/** One fill of the account's, as its own order took it. */
-function TradeRow({ fill }: { fill: MyFill }) {
+/**
+ * One fill of the account's, as its own order took it. A sell line adds its 실현 손익 (N02 §8: 순매도
+ * 수령액 − 처분 원가) — the record the server kept for that fill (`MyFill.realizedPnlCoin`, #124), as
+ * the history's fill line draws it: '—' for a sell with no record (one the backfill left out), and
+ * no such cell on a buy. Lines are never summed: a backfill gap would make a sum disagree with the
+ * position's (ADR-0145). Props alone, so a static render draws it.
+ */
+export function TradeRow({ fill }: { fill: MyFill }) {
   const formatDateTime = useFormatDateTime();
   const yes = fill.outcome === 'YES';
   return (
@@ -155,6 +174,15 @@ function TradeRow({ fill }: { fill: MyFill }) {
         <Item label={copy.orderAmount}>
           <CoinText amount={parseCoinAmount(fill.amountCoin)} />
         </Item>
+        {fill.side === 'sell' && (
+          <Item label={copy.positionRealizedPnl} testId="market-my-trade-realized">
+            {fill.realizedPnlCoin === null ? (
+              EMPTY
+            ) : (
+              <SignedCoin amount={parseCoinAmount(fill.realizedPnlCoin)} />
+            )}
+          </Item>
+        )}
       </DataList.Root>
       <ChakraLink
         asChild
@@ -171,11 +199,21 @@ function TradeRow({ fill }: { fill: MyFill }) {
   );
 }
 
-function Item({ label, children }: { label: string; children: ReactNode }) {
+function Item({
+  label,
+  testId,
+  children,
+}: {
+  label: string;
+  testId?: string;
+  children: ReactNode;
+}) {
   return (
     <DataList.Item>
       <DataList.ItemLabel>{label}</DataList.ItemLabel>
-      <DataList.ItemValue fontVariantNumeric="tabular-nums">{children}</DataList.ItemValue>
+      <DataList.ItemValue fontVariantNumeric="tabular-nums" data-testid={testId}>
+        {children}
+      </DataList.ItemValue>
     </DataList.Item>
   );
 }

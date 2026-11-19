@@ -238,6 +238,26 @@ test.describe('거래 없는 시장의 취소 (#20)', () => {
     await expect(page.getByTestId('market-status-notice')).toContainText(
       copy.marketCancelledNotice,
     );
+    // The member who only ordered (#34, ADR-0145; N02 §1, ADR-0135 I3): no position to recap — the
+    // ended market's empty line, an empty 내 거래 with no way to fills — and the order that ended
+    // is found through '이 시장 끝난 주문' on MY.
+    const position = page.getByTestId('market-my-position');
+    await expect(position.getByTestId('market-my-position-empty')).toHaveText(
+      copy.marketMyPositionEmptyEnded,
+    );
+    await expect(page.locator('[data-testid^="market-settled-"]')).toHaveCount(0);
+    if ((page.viewportSize()?.width ?? 0) < 768) {
+      await page
+        .getByTestId('market-activity-switch')
+        .getByText(copy.marketTradeHistory, { exact: true })
+        .click();
+    }
+    const trades = page.getByTestId('market-my-trades');
+    await expect(trades.getByTestId('market-my-trades-empty')).toHaveText(copy.marketMyTradesEmpty);
+    await expect(page.getByTestId('market-history-fills')).toHaveCount(0);
+    await page.getByTestId('market-my-open-orders').getByTestId('market-history-orders').click();
+    const ended = page.getByTestId('my-order-history').getByTestId(`portfolio-order-${resting.id}`);
+    await expect(ended.getByTestId('history-order-status')).toHaveText(copy.orderStatusExpired);
 
     // --- the twin: one fill with a person on it, so 거래 마감, waiting for its judgement.
     const closed = await adminMarketOf(admin, traded.id);
