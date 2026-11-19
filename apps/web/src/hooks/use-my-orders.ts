@@ -34,6 +34,7 @@ import {
   type NoticeLog,
   ORDER_FILLS_PAGE,
   type OrderPages,
+  WALLET_LIVE_ORDERS_PAGE,
   cancelOutcomeOf,
   endedManyText,
   endedNotice,
@@ -68,11 +69,15 @@ function gated<T extends { isPending: boolean }>(
   };
 }
 
-/** One page of `GET /me/orders?state=live`, every market's or one market's. */
+/**
+ * One page of `GET /me/orders?state=live`, every market's or one market's, `limit` at a time (the
+ * lists' 20; the wallet's watch asks for more, `walletLiveOrdersQueryOptions`).
+ */
 export function liveOrdersQueryOptions(
   accountId: string | undefined,
   marketId: string | undefined,
   session?: SessionLike,
+  limit: number = LIVE_ORDERS_PAGE,
 ) {
   return {
     queryKey: myOrdersLiveKey(accountId, marketId),
@@ -82,7 +87,7 @@ export function liveOrdersQueryOptions(
           params: {
             query: {
               state: 'live',
-              limit: LIVE_ORDERS_PAGE,
+              limit,
               ...(marketId === undefined ? {} : { marketId: marketId.toLowerCase() }),
               ...(pageParam === undefined ? {} : { cursor: pageParam }),
             },
@@ -112,13 +117,15 @@ export function useLiveOrders(accountId: string | undefined, marketId?: string) 
 }
 
 /**
- * The wallet's reading of the account's live orders (#69, ADR-0144 결정 2-11): the request of
- * every market's first page (`liveOrdersQueryOptions(accountId)`) under the wallet's own key
- * (`walletLiveOrdersKey`), which the `user:position` order restart leaves out.
+ * The wallet's reading of the account's live orders (#69, ADR-0144 결정 2-11): every market's first
+ * page under the wallet's own key (`walletLiveOrdersKey`), which the `user:position` order restart
+ * leaves out — a page of `WALLET_LIVE_ORDERS_PAGE` (100, #302, ADR-0146), not the lists' 20, so a
+ * buy that ends past the 20 newest still moves the lock. Only that page is ever read: the watch
+ * asks for no next one.
  */
 export function walletLiveOrdersQueryOptions(accountId: string | undefined, session?: SessionLike) {
   return {
-    ...liveOrdersQueryOptions(accountId, undefined, session),
+    ...liveOrdersQueryOptions(accountId, undefined, session, WALLET_LIVE_ORDERS_PAGE),
     queryKey: walletLiveOrdersKey(accountId),
   };
 }

@@ -7,6 +7,7 @@ import type {
   Order,
   OrderBook,
   OrderQuote,
+  PlaceOrderResult,
   Position,
   PriceSeries,
   Sellable,
@@ -976,6 +977,93 @@ test.describe('보유 계약 (#67)', () => {
     } finally {
       await cContext.close();
     }
+  });
+});
+
+/**
+ * 지갑의 주문 잠금 코인, 대기 매수가 20건을 넘을 때 (#302, ADR-0146; ADR-0144 결정 2-11): A rests 25
+ * GTC buys of 10 Coin — the two oldest on market X, the 23 newer on market Y — so the 20 newest are
+ * all Y's and X's two lie past them, where the wallet's watch of #69 (a page of 20) neither looked
+ * nor sat in X's room. The wallet reads them 100 long and joins X's room; then the oldest is
+ * cancelled out of band, as from another tab, and an admin's pause of X cancels the second (일시
+ * 중단, as an account restriction's or a close's expiry ends a buy: a `market:book` and no
+ * `user:balance`, ADR-0112 결정 8). Each time the card moves with no focus, reload or fill. A sends
+ * 25 orders, more than the 20 a minute the suite's test value allows (ADR-0107 결정 3), so the
+ * last five wait out the account's window (a fixed minute from the first) — about a minute.
+ */
+test.describe('지갑의 주문 잠금 (#302)', () => {
+  test('대기 매수가 20건을 넘어도 첫 20건 밖 매수의 취소·일시 중단을 지갑의 주문 잠금 코인이 따라간다 (#302)', async ({
+    admin,
+    page,
+  }) => {
+    test.slow(); // the account's order window: a real minute between the 20th order and the 21st
+    const x = await createOpenMarket(admin);
+    const y = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    const a = page.request;
+    const aId = (await meOf(a)).id;
+    const available = parseCoinAmount((await meOf(a)).balance.availableCoin);
+    // An order the account's limit refuses (429, nothing written — the guard runs before the
+    // intake) waits out what is left of A's window as the refusal says it, then goes again: the
+    // window is a fixed minute from A's first order, and a refusal does not extend it
+    // (order-rate-limit.guard.ts, redis-throttler.storage.ts; rounded up, so never short).
+    const buy = async (marketId: string) => {
+      const send = () =>
+        sendOrder(a, marketId, crypto.randomUUID(), terms('YES', 'buy', 'gtc', 10, 1));
+      let sent = await send();
+      if (sent.status() === 429) {
+        const { error } = (await sent.json()) as {
+          error: { details: { retryAfterSeconds: number } };
+        };
+        await page.waitForTimeout(error.details.retryAfterSeconds * 1_000);
+        sent = await send();
+      }
+      return (await dataOf<PlaceOrderResult>(sent)).order;
+    };
+    const oldest = await buy(x.id);
+    const second = await buy(x.id);
+    for (let n = 0; n < 23; n += 1) await buy(y.id);
+    for (const order of [oldest, second]) expect(order.status).toBe('open');
+    const me = await meOf(a);
+    expect(me.balance.lockedCoin).toBe('250');
+    // The list a page of 20 sees holds none of X's buys: what #69 watched.
+    const newest = await dataOf<Order[]>(await a.get('/api/v1/me/orders?state=live&limit=20'));
+    expect(newest.map((order) => order.marketId)).not.toContain(x.id);
+
+    // The wallet asks the live orders 100 long and sits in X's room before anything moves: a
+    // `market:book` sent before the join is lost.
+    const hundred = page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return (
+        url.pathname === '/api/v1/me/orders' &&
+        url.searchParams.get('state') === 'live' &&
+        url.searchParams.get('limit') === '100'
+      );
+    });
+    const joinedX = subscribed(page, x.id);
+    await page.goto('/my/wallet');
+    await hundred;
+    await joinedX;
+    await expect(page.getByTestId('wallet-locked')).toHaveText(formatCoin(250n));
+    await expect(page.getByTestId('wallet-available')).toHaveText(formatCoin(available - 250n));
+
+    // The oldest buy cancelled out of band, as from another tab: the card follows (수용 기준 1).
+    const cancelled = await a.post(`/api/v1/me/orders/${oldest.id}/cancel`, {
+      data: { expectedAccountId: aId },
+    });
+    expect(cancelled.status()).toBe(200);
+    await expect(page.getByTestId('wallet-locked')).toHaveText(formatCoin(240n));
+    await expect(page.getByTestId('wallet-available')).toHaveText(formatCoin(available - 240n));
+
+    // An admin's pause of X cancels the second (일시 중단): the same (수용 기준 2).
+    await pauseMarket(admin, x.id);
+    expect(await dataOf<Order>(await a.get(`/api/v1/me/orders/${second.id}`))).toMatchObject({
+      status: 'cancelled',
+      cancelReason: 'paused',
+    });
+    await expect(page.getByTestId('wallet-locked')).toHaveText(formatCoin(230n));
+    await expect(page.getByTestId('wallet-available')).toHaveText(formatCoin(available - 230n));
+    await expect(page).toHaveURL(/\/my\/wallet$/);
   });
 });
 

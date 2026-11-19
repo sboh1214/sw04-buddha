@@ -1,4 +1,4 @@
-import { type OrderStatus } from '@buddha/shared';
+import { type OrderStatus, PAGE_LIMIT_MAX } from '@buddha/shared';
 import { type InfiniteData, type QueryClient } from '@tanstack/react-query';
 import { copy } from '@/copy';
 import { ACCOUNT_CLOSURE_KEY } from './account-closure';
@@ -34,6 +34,15 @@ export type FillPages = InfiniteData<CursorPage<MyFill>, string | undefined>;
 
 /** A page of the live list, 20 at a time (the API's default page). */
 export const LIVE_ORDERS_PAGE = 20;
+/**
+ * The wallet's one page of the live orders (#302, ADR-0146): the most the API gives in a page
+ * (`PAGE_LIMIT_MAX`, 100), so the lock watch (`useWalletLockWatch`) compares the account's newest
+ * 100 live buys and sits in the rooms of their markets — still one request a reading, as the 20 of
+ * #69 were. Its markets join in one `subscribe` message (`REALTIME_SUBSCRIBE_MAX`, 100) and stay
+ * under a socket's rooms (`REALTIME_ROOMS_MAX`, 200). An account with more live orders than this
+ * has its oldest ones out of the watch (ADR-0146 결과 5).
+ */
+export const WALLET_LIVE_ORDERS_PAGE = PAGE_LIMIT_MAX;
 /** An order's fills, 100 at a time: most orders fill in fewer, so the history reads them whole. */
 export const ORDER_FILLS_PAGE = 100;
 /** 내 거래 on the detail, 20 at a time. */

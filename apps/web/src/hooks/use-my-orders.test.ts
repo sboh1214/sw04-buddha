@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { PAGE_LIMIT_MAX, REALTIME_ROOMS_MAX, REALTIME_SUBSCRIBE_MAX } from '@buddha/shared';
 import { InfiniteQueryObserver, type QueryClient, QueryObserver } from '@tanstack/react-query';
 import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -11,16 +12,19 @@ import {
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { ApiError, type Me, type Order, api } from '@/lib/api';
-import { myOrderKey, myOrdersLiveKey } from '@/lib/market-keys';
+import { myOrderKey, myOrdersLiveKey, walletLiveOrdersKey } from '@/lib/market-keys';
 import {
   ENDED_CHECK_MAX,
+  LIVE_ORDERS_PAGE,
   type OrderPages,
+  WALLET_LIVE_ORDERS_PAGE,
   endedCandidates,
   endedManyText,
   endedNotice,
   watchedReading,
 } from '@/lib/my-orders';
 import { getQueryClient } from '@/lib/query-client';
+import { liveBuysReading, lockWatchStep } from '@/lib/wallet';
 import { SRC, scriptKindOf, screenSources } from '@/test/screen-text';
 import { ME_QUERY_KEY } from './use-me';
 import {
@@ -30,6 +34,7 @@ import {
   fetchMyOrder,
   liveOrdersQueryOptions,
   noticeEndedOnDetail,
+  walletLiveOrdersQueryOptions,
 } from './use-my-orders';
 import { forgetAccountInTab } from './use-sign-out';
 
@@ -561,5 +566,102 @@ describe('watchedReading: the reading a list or the detail watches from (결정 
     const after = { data: undefined, isFetchedAfterMount: true, isFetching: false, isStale: true };
     expect(watchedReading(after)).toBe(true);
     expect(watchedReading({ ...after, isFetchedAfterMount: false })).toBe(false);
+  });
+});
+
+/**
+ * `GET /me/orders?state=live` over `live` (newest first, as the API orders them): each request's
+ * page is the first `limit` rows, with a cursor when more are left; the calls it took.
+ */
+function liveServer(live: Order[]) {
+  return vi.spyOn(api, 'GET').mockImplementation(((
+    _path: string,
+    init: { params: { query: { limit: number } } },
+  ) => {
+    const { limit } = init.params.query;
+    const items = live.slice(0, limit);
+    const nextCursor = live.length > limit ? `cursor-${String(limit)}` : null;
+    return Promise.resolve({
+      data: { data: items, meta: { nextCursor } },
+      response: new Response(null),
+    });
+  }) as never);
+}
+
+/** `count` live buys of A, newest first: `buy-<count>` the newest, `buy-1` the oldest. */
+function liveBuys(count: number): Order[] {
+  return Array.from({ length: count }, (_, at) =>
+    order(`buy-${String(count - at)}`, { side: 'buy' }),
+  );
+}
+
+describe('the wallet reads 100 live orders a page (#302, ADR-0146)', () => {
+  const SESSION = { user: {} };
+
+  /** The live buys one reading of `options` compares (`liveBuysReading`). */
+  async function buysOf(options: ReturnType<typeof liveOrdersQueryOptions>): Promise<string> {
+    return liveBuysReading((await options.queryFn({ pageParam: undefined })).items);
+  }
+
+  it('asks every market’s live orders 100 long under its own key; the lists still 20', async () => {
+    const get = liveServer([]);
+    await walletLiveOrdersQueryOptions(A, SESSION).queryFn({ pageParam: undefined });
+    await liveOrdersQueryOptions(A, undefined, SESSION).queryFn({ pageParam: undefined });
+    await liveOrdersQueryOptions(A, MARKET, SESSION).queryFn({ pageParam: 'cursor-2' });
+    expect(get.mock.calls).toEqual([
+      ['/api/v1/me/orders', { params: { query: { state: 'live', limit: 100 } } }],
+      ['/api/v1/me/orders', { params: { query: { state: 'live', limit: 20 } } }],
+      [
+        '/api/v1/me/orders',
+        { params: { query: { state: 'live', limit: 20, marketId: MARKET, cursor: 'cursor-2' } } },
+      ],
+    ]);
+    const wallet = walletLiveOrdersQueryOptions(A, SESSION);
+    expect(wallet.queryKey).toEqual(walletLiveOrdersKey(A));
+    expect(wallet.enabled).toBe(true);
+    expect(walletLiveOrdersQueryOptions(A).enabled).toBe(false);
+    expect(walletLiveOrdersQueryOptions(undefined, SESSION).enabled).toBe(false);
+  });
+
+  it('is the most a page may hold, and its markets fit one subscribe message', () => {
+    expect(WALLET_LIVE_ORDERS_PAGE).toBe(100);
+    expect(WALLET_LIVE_ORDERS_PAGE).toBe(PAGE_LIMIT_MAX);
+    expect(LIVE_ORDERS_PAGE).toBe(20);
+    // Every market of the page joins in one message, and the wallet's rooms leave a socket room.
+    expect(WALLET_LIVE_ORDERS_PAGE).toBeLessThanOrEqual(REALTIME_SUBSCRIBE_MAX);
+    expect(WALLET_LIVE_ORDERS_PAGE).toBeLessThan(REALTIME_ROOMS_MAX);
+  });
+
+  it('sees the oldest of 25 live buys end, which a page of 20 did not (#302 수용 기준 1)', async () => {
+    const live = liveBuys(25);
+    liveServer(live);
+    const wallet = walletLiveOrdersQueryOptions(A, SESSION);
+    const list = liveOrdersQueryOptions(A, undefined, SESSION);
+    const before = { wallet: await buysOf(wallet), list: await buysOf(list) };
+    expect(before.wallet.split(',')).toHaveLength(25);
+    // The oldest buy is cancelled in another tab (or expired, or cancelled by a restriction).
+    expect(live.pop()?.id).toBe('buy-1');
+    const after = { wallet: await buysOf(wallet), list: await buysOf(list) };
+    const watched = (buys: string) => ({ accountId: A, buys });
+    // The wallet's watch reads `['me']` again …
+    expect(lockWatchStep(watched(before.wallet), A, after.wallet, true).read).toBe(true);
+    // … where a first page of 20, what #69 watched, saw the same newest 20 and read nothing.
+    expect(after.list).toBe(before.list);
+    expect(lockWatchStep(watched(before.list), A, after.list, true).read).toBe(false);
+    // A newer buy that ends is seen as before.
+    live.shift();
+    expect(lockWatchStep(watched(after.wallet), A, await buysOf(wallet), true).read).toBe(true);
+  });
+
+  it('still misses a buy past the newest 100 — the limit left (ADR-0146 결과 5)', async () => {
+    const live = liveBuys(101);
+    liveServer(live);
+    const wallet = walletLiveOrdersQueryOptions(A, SESSION);
+    const before = await buysOf(wallet);
+    expect(before.split(',')).toHaveLength(100);
+    expect(live.pop()?.id).toBe('buy-1');
+    expect(lockWatchStep({ accountId: A, buys: before }, A, await buysOf(wallet), true).read).toBe(
+      false,
+    );
   });
 });

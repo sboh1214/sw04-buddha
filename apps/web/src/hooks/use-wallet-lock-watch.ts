@@ -18,19 +18,20 @@ import { useWalletLiveOrders } from './use-my-orders';
  * alone publishes no `user:` event (ADR-0112 결정 8), so a buy cancelled in another tab, by an
  * account restriction or the admin role, or expired at the close would leave the card behind.
  *
- * The wallet reads the account's live orders — every market's first page, under its own key
- * (`useWalletLiveOrders`, `['orders', 'live', 'wallet', accountId]`) — and sits in the room of
- * every market on it (`useMarketSocket`, 대기 주문's way). The key is under `['orders', 'live']`, so
- * the provider's `market:book` round reads it again through its window (`bookRestartsOwnOrders` →
- * `refreshOwnOrders`, ADR-0141 결정 10), and `market:status`, a reconnect and the session reset
- * reach it by prefix (the `market:status` first-read branch takes its `'wallet'` scope beside
- * `'all'`). The `user:position` order restart leaves it out while it is on screen, and only marks
- * it stale off screen (`positionRestartsOrder`): a fill's own `user:balance` already carries the
- * lock, and a read per fill of a buy already listed bought nothing but requests (ADR-0144 결정 6,
- * the 2026-11-17 measurement). A fill in a market the list does not hold — a buy another tab
- * placed, which rests without a `user:` event — is the one this tab may hear of first, so it asks
- * for one book round (`walletMissesMarket`): the wallet then joins that room, where the buy's
- * cancel or expiry is signalled.
+ * The wallet reads the account's live orders — every market's first page of 100
+ * (`WALLET_LIVE_ORDERS_PAGE`, #302, ADR-0146; the lists' 20 left a buy past the newest 20 out),
+ * under its own key (`useWalletLiveOrders`, `['orders', 'live', 'wallet', accountId]`) — and sits
+ * in the room of every market on it (`useMarketSocket`, 대기 주문's way). The key is under
+ * `['orders', 'live']`, so the provider's `market:book` round reads it again through its window
+ * (`bookRestartsOwnOrders` → `refreshOwnOrders`, ADR-0141 결정 10), and `market:status`, a reconnect
+ * and the session reset reach it by prefix (the `market:status` first-read branch takes its
+ * `'wallet'` scope beside `'all'`). The `user:position` order restart leaves it out while it is on
+ * screen, and only marks it stale off screen (`positionRestartsOrder`): a fill's own `user:balance`
+ * already carries the lock, and a read per fill of a buy already listed bought nothing but requests
+ * (ADR-0144 결정 6, the 2026-11-17 measurement). A fill in a market the list does not hold — a buy
+ * another tab placed, which rests without a `user:` event — is the one this tab may hear of first,
+ * so it asks for one book round (`walletMissesMarket`): the wallet then joins that room, where the
+ * buy's cancel or expiry is signalled.
  *
  * Each new reading's live buy ids are compared with the last one watched (`lockWatchStep`, from a
  * baseline made by `watchedReading`'s rule); when they differ `['me']` is read again once
