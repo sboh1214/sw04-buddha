@@ -32,6 +32,7 @@ import {
   MY_ORDER_HISTORY_KEY,
   SETTLEMENTS_KEY,
   holdingMarketIdsOf,
+  isOrderHistoryKey,
   isWalletLiveOrdersKey,
   marketBookKey,
   myOrderKey,
@@ -922,9 +923,41 @@ export const OWN_ORDERS_INVALIDATE_MS = 10_000;
 export const BALANCE_HISTORY_INVALIDATE_MS = 10_000;
 
 /**
+ * The window of 거래·정산 이력's re-read for the account's fills (#301, ADR-0148): one round per
+ * 10 s, leading and trailing (`RoundWindow`), the balance history's (`BALANCE_HISTORY_INVALIDATE_MS`)
+ * and the book round's (`OWN_ORDERS_INVALIDATE_MS`) length. A round re-reads every loaded page of
+ * the account's history lists on screen once, so the steady state is at most 7 rounds × the pages
+ * loaded in any 60 s, whatever the fill rate.
+ */
+export const ORDER_HISTORY_INVALIDATE_MS = 10_000;
+
+/**
+ * The account's 거래·정산 이력 lists (#301, ADR-0148): every filter's entry of both lists
+ * (`isOrderHistoryKey`) keyed by `accountId` — what a history round restarts, ONCE, under
+ * `ORDERS_KEY` with this predicate. Not a restart per key: a key matches by prefix, and a filter
+ * object `{}` (the MY summary's unfiltered preview) or `{ market }` is a prefix of
+ * `{ market, period }`, so a filtered list on screen would be read once per cached broader entry
+ * (codex review: 12 reads for 3 pages). One on screen is read; one off screen was already marked
+ * stale by the fill's own `ORDERS_KEY` restart. None without an account.
+ */
+export function ownHistoryQuery(
+  accountId: string | undefined,
+): (query: Pick<Query, 'queryKey'>) => boolean {
+  return (query) =>
+    accountId !== undefined &&
+    isOrderHistoryKey(query.queryKey) &&
+    query.queryKey.at(-1) === accountId;
+}
+
+/**
  * Whether the `user:position` order restart (`ORDERS_KEY`, realtime-provider.tsx) reaches `query`:
- * every entry under `['orders']` but the wallet's live orders (`walletLiveOrdersKey`, #69,
- * ADR-0144 결정 2-11) while that entry is on screen. The wallet reads those only for 주문 잠금
+ * every entry under `['orders']` but two kinds while they are on screen — the wallet's live orders
+ * (`walletLiveOrdersKey`, #69, ADR-0144 결정 2-11, below) and 거래·정산 이력's two lists
+ * (`isOrderHistoryKey`, #301, ADR-0148): read once per fill, every loaded page of each, they cost
+ * 'pages × fills a minute' (36 at 3 pages and 12 fills, measured for #124), so a fill offers them to
+ * the history window (`ORDER_HISTORY_INVALIDATE_MS`, `refreshOrderHistory`) instead — one round
+ * per 10 s, the first fill of a quiet spell read at once. Off screen they are still reached and
+ * only marked stale, so a return within `staleTime` reads them. The wallet reads those only for 주문 잠금
  * 코인, which a fill already brings with `user:balance`; a buy a fill ended leaves its list on the
  * next `market:book` round, and a fill in a market the list does not hold asks for one such round
  * (`walletMissesMarket`). A wallet entry NOT on screen is still reached: the restart's default
@@ -934,7 +967,8 @@ export const BALANCE_HISTORY_INVALIDATE_MS = 10_000;
  * only) and its cancel or expiry unheard.
  */
 export function positionRestartsOrder(query: Pick<Query, 'queryKey' | 'isActive'>): boolean {
-  return !isWalletLiveOrdersKey(query.queryKey) || !query.isActive();
+  if (!query.isActive()) return true;
+  return !isWalletLiveOrdersKey(query.queryKey) && !isOrderHistoryKey(query.queryKey);
 }
 
 /**

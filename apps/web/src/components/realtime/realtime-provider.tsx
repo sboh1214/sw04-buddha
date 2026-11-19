@@ -55,6 +55,7 @@ import {
   BalanceOrder,
   MarketWindow,
   OWN_ORDERS_INVALIDATE_MS,
+  ORDER_HISTORY_INVALIDATE_MS,
   type MarketPages,
   RoundWindow,
   SellableRotation,
@@ -71,6 +72,7 @@ import {
   forgetHoldingReads,
   holdingChunksToRead,
   holdingMarketsFirstReads,
+  ownHistoryQuery,
   ownOrdersRefreshKeys,
   ownOrdersStatusKeys,
   ownSettlementKeys,
@@ -415,6 +417,16 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       balanceHistoryPending = null;
       balanceHistory.disarm();
     };
+    // The account's 거래·정산 이력 on its fills' `user:position` (`refreshOrderHistory`, #301): the
+    // same one window and one trailing timer, per connection.
+    const orderHistory = new RoundWindow(ORDER_HISTORY_INVALIDATE_MS);
+    let orderHistoryPending: (() => void) | null = null;
+    /** Cancels the trailing order-history round armed, if any, and tells the window so. */
+    const cancelOrderHistory = () => {
+      orderHistoryPending?.();
+      orderHistoryPending = null;
+      orderHistory.disarm();
+    };
     // The account's 매도 가능액 on `market:book` (`refreshSellable`): one market per gap, per
     // connection like the windows above.
     const sellableRotation = new SellableRotation(SELLABLE_ROTATION_MS);
@@ -465,6 +477,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       }
       // The balance histories were just read whole (`BALANCE_HISTORY_KEYS`): no round is owed.
       cancelBalanceHistory();
+      // So were 거래·정산 이력's lists (`ORDERS_KEY`).
+      cancelOrderHistory();
       // Every 매도 가능액 was just read again (`SELLABLE_KEY`): nothing waits in the window.
       sellableRotation.clear();
     };
@@ -605,6 +619,33 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         refreshBalanceHistory(true);
       }, step.wait);
       balanceHistoryPending = () => {
+        clearTimeout(timer);
+      };
+    };
+
+    /**
+     * The account's 거래·정산 이력 read again for its fills (#301, ADR-0148): one round per window
+     * for the account, leading and trailing — `refreshBalanceHistory`'s shape, for its reason: a
+     * fill is the one writer of a new fill row and of an order it ended, and no event builds
+     * either, so a refused round that is dropped would leave a list a row short. A round restarts
+     * every filter's entry of the account's two lists, once each (`ownHistoryQuery`): one on screen
+     * reads its loaded pages once, one off screen is marked stale. A lone fill is read at once;
+     * fills that keep arriving are read together at most a window later — 'pages × 7' a minute at
+     * most, where every fill used to read them all.
+     */
+    const refreshOrderHistory = (fired = false) => {
+      const now = Date.now();
+      const step = fired ? orderHistory.fired(now) : orderHistory.offer(now);
+      if (step === null) return;
+      if (step === 'run') {
+        void restartQueries(queryClient, ORDERS_KEY, ownHistoryQuery(identity ?? undefined));
+        return;
+      }
+      const timer = setTimeout(() => {
+        orderHistoryPending = null;
+        refreshOrderHistory(true);
+      }, step.wait);
+      orderHistoryPending = () => {
         clearTimeout(timer);
       };
     };
@@ -1062,6 +1103,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           if (walletMissesMarket(queryClient, event.marketId, identity)) {
             refreshOwnOrders(event.marketId);
           }
+          // 거래·정산 이력 on screen, left out above: through its window (#301, ADR-0148).
+          refreshOrderHistory();
         }
         // 정산 기록 (#124, ADR-0143): the other half — a settlement wrote this holding's record, which
         // the event cannot build (no result, payout or times). Only this account's lists
@@ -1108,6 +1151,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       ownOrders.clear();
       cancelBalanceHistory();
       balanceHistoryReads.abort();
+      cancelOrderHistory();
       sellablePending?.();
       sellablePending = null;
       sellableRotation.clear();
