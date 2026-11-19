@@ -26,10 +26,12 @@ import {
   type Position,
 } from './api';
 import {
+  HOLDING_MARKETS_KEY,
   MY_ORDERS_LIVE_KEY,
   MY_ORDER_DETAIL_KEY,
   MY_ORDER_HISTORY_KEY,
   SETTLEMENTS_KEY,
+  holdingMarketIdsOf,
   isWalletLiveOrdersKey,
   marketBookKey,
   myOrderKey,
@@ -200,12 +202,13 @@ export function applyTick<T extends LiveMarket>(
  * claimed: `realtime-provider.tsx` states the rule and enumerates all of them. This is the
  * strictest of them, because a tick arrives many times a second while the others are rare.
  *
- * THE HAZARD: MY opens one UNSEEDED `['market', id]` per held market (`useQueries`,
- * app/my/portfolio.tsx) and `useMarketSocket` has already joined every one of those rooms, so a
- * tick can arrive while the opening GET is on the wire. `applyTick` above answers `undefined` for a cache
- * with no row — it will not invent one — and the request, whose snapshot predates the trade, then
- * lands with the old price and STANDS: `staleTime` is 30s, the next tick on a quiet market may be
- * an hour away, and `markToLiveMarket` (use-portfolio.ts) gives that row precedence, so 현재가 ·
+ * THE HAZARD: an UNSEEDED entry whose rooms are already joined — MY opened one `['market', id]`
+ * per held market (`useQueries`, app/my/portfolio.tsx) until #300, and its holdings chunks are
+ * unseeded the same way (`holdingMarketsFirstReads` applies this rule to them) — so a
+ * tick can arrive while the opening GET is on the wire. `applyTick` above answers `undefined` for a
+ * cache with no row — it will not invent one — and the request, whose snapshot predates the trade,
+ * then lands with the old price and STANDS: `staleTime` is 30s, the next tick on a quiet market may
+ * be an hour away, and `markToLiveMarket` (use-portfolio.ts) gives that row precedence, so 현재가 ·
  * 평가 금액 · 총 평가 금액 are all marked to a price the market has left. The detail screen never
  * meets this, because `seedMarketDetail` fills the entry before the client renders.
  *
@@ -237,6 +240,184 @@ export function tickRestartsMarket(
   if (state.data !== undefined) return false;
   if (state.fetchStatus !== 'fetching') return false;
   return throttle.take(marketId, now);
+}
+
+/**
+ * MY's holdings entries (`holdingMarketsKey`, #300, ADR-0147) whose chunk names `marketId` —
+ * every one in the cache, on screen or not.
+ */
+export function holdingMarketsHolding(client: QueryClient, marketId: string): Query[] {
+  const id = marketId.toLowerCase();
+  return client
+    .getQueryCache()
+    .findAll({ queryKey: HOLDING_MARKETS_KEY })
+    .filter((query) => holdingMarketIdsOf(query.queryKey).includes(id));
+}
+
+/**
+ * When each holdings chunk last ANSWERED from the server (its query hash → ms; #300, ADR-0147).
+ *
+ * THE HAZARD: a chunk is one cache entry for up to 50 markets, and every card reducer writes it —
+ * `market:tick`, `market:stats`, `market:status` reach it under `['markets']` by `setQueriesData`,
+ * on screen or not, while any room of its markets is joined (the detail, the home grid). Such a
+ * write is a manual `success`: it restamps `dataUpdatedAt` and clears `isInvalidated` and `error`
+ * (query-core 5.102.8, `successState`). A per-market `['market', id]` (#67) was written by its
+ * own market's events alone; a chunk is kept looking fresh, un-invalidated and un-failed by ONE
+ * busy neighbour. A quiet market's missed status or flags (MY left its room), a reconnect's
+ * re-read, a failed read — all would be forgotten by the neighbour's next tick.
+ *
+ * So the chunk's freshness is this read time, never `dataUpdatedAt`: `holdingChunkStaleTime`
+ * answers stale once it is older than the client's `staleTime` (or was forgotten), and every
+ * reason to read a chunk again forgets it (`restartHoldingChunks`, a reconnect's resnapshot, a
+ * failed read). Module state like the provider's windows; the keys are query hashes, so a cleared
+ * cache costs a fresh read and nothing else.
+ */
+const holdingReads = new Map<string, number>();
+/**
+ * When each chunk last had an answer the cache took — kept when `holdingReads` forgets, so the
+ * seed of a new chunk can order the cached chunks by how recent their rows are
+ * (`seedHoldingChunk`), not by the order the cache happens to hold them in.
+ */
+const holdingAnswers = new Map<string, number>();
+/** How long a chunk's answer stands without a reason to read again: the client's `staleTime`. */
+export const HOLDING_READ_FRESH_MS = 30_000;
+
+export function noteHoldingRead(queryHash: string, now: number): void {
+  holdingReads.set(queryHash, now);
+  holdingAnswers.set(queryHash, now);
+}
+/** Forget one chunk's read (its next mount, focus or observer reads it), or every chunk's. */
+export function forgetHoldingReads(queryHash?: string): void {
+  if (queryHash === undefined) holdingReads.clear();
+  else holdingReads.delete(queryHash);
+}
+/** Whether the chunk answered within `HOLDING_READ_FRESH_MS` and nothing asked for it since. */
+export function holdingReadFresh(queryHash: string, now: number): boolean {
+  const at = holdingReads.get(queryHash);
+  return at !== undefined && now - at < HOLDING_READ_FRESH_MS;
+}
+/**
+ * A holdings chunk's `staleTime` (a function of the query, re-read at each decision): fresh for
+ * good while its own read is fresh, stale at once otherwise — so `dataUpdatedAt`, which every card
+ * write restamps, decides nothing.
+ */
+export function holdingChunkStaleTime(query: { queryHash: string }): number {
+  return holdingReadFresh(query.queryHash, Date.now()) ? Number.POSITIVE_INFINITY : 0;
+}
+
+/**
+ * MY's holdings chunks that name `marketId`, to be read again — their read times forgotten here,
+ * so a chunk on screen reads now and one off screen at its next observer, whatever a neighbour's
+ * tick wrote meanwhile (`holdingReads`). The provider restarts each by its OWN hash
+ * (`restartHoldingChunk`): a key restart would match by PREFIX, and a chunk's id list is one key
+ * element that `partialMatchKey` reads as a prefix of any longer list it starts
+ * (['markets','holdings',[A,B]] matches [A,B,C]). What the provider asks it for:
+ *
+ *  - `market:status`: `applyStatus` moves the status and its key but puts the display flags back
+ *    to false (`NO_STATUS_DISPLAY`) and drops a repeat of the same key (an edit, a 판정 지연
+ *    record, a dispute's decision) — only the read brings '판정 지연' and '이의 검토 중' back. One
+ *    request per status event of a held market, as #67 spent one on that market's own entry.
+ *  - a sold-out market bought back (`positionReopensMarket`): the chunk that named it before the
+ *    sale may still be cached, and the observer `useHoldings` mounts on it again would take it
+ *    as fresh. The chunk on screen, which no longer names it, is left alone.
+ */
+export function holdingChunksToRead(client: QueryClient, marketId: string): Query[] {
+  const chunks = holdingMarketsHolding(client, marketId);
+  for (const query of chunks) forgetHoldingReads(query.queryHash);
+  return chunks;
+}
+
+/** Only `query` among the holdings chunks: the predicate a chunk's own restart matches by. */
+export function sameChunk(query: { queryHash: string }): (match: Query) => boolean {
+  return (match) => match.queryHash === query.queryHash;
+}
+
+/** The chunks a follow-up read is already arranged for: one per first read, never more. */
+const holdingFollowUps = new Set<string>();
+
+/**
+ * The holdings chunks a `market:tick` of `marketId` owes one more read (#300): the race
+ * `tickRestartsMarket` states — the chunk names the market, holds NO ROW for it yet (no data, or
+ * rows seeded from another chunk without it — `seedHoldingChunk`), and its read is on the wire,
+ * whose answer predates the trade and would stand. Not a restart: a chunk takes the ticks of up
+ * to 50 markets, and cancelling its read on each window could keep a slow read from ever
+ * answering. The provider reads it once more AFTER that answer lands (`afterHoldingFirstRead`);
+ * each chunk owes at most one such read, however many ticks come.
+ */
+export function holdingMarketsFirstReads(client: QueryClient, marketId: string): Query[] {
+  const id = marketId.toLowerCase();
+  return holdingMarketsHolding(client, marketId).filter((query) => {
+    const { data, fetchStatus } = query.state;
+    if (fetchStatus !== 'fetching') return false;
+    const pages = data as MarketPages | undefined;
+    if (pages?.pages.some((page) => page.items.some((row) => row.id === id))) return false;
+    if (holdingFollowUps.has(query.queryHash)) return false;
+    holdingFollowUps.add(query.queryHash);
+    return true;
+  });
+}
+
+/**
+ * The rows a NEW holdings chunk starts from (#300, codex review): the held set changed (a market
+ * bought or sold out), so the chunk has a new key and a new observer — `keepPreviousData` never
+ * reaches it, and every holding would fall back to its positions snapshot (price, and the '판정
+ * 지연'·'이의 검토 중' flags) until the answer. Its markets' rows are already in the cache, in the
+ * chunks of the sets before; each is taken through `joinMarket` (the newest by trade count,
+ * statistics revision and status key — what every card write keeps), so the answer that lands
+ * next joins over them without rolling anything back. Undefined when no cached chunk names any
+ * of `marketIds`: the chunk then starts empty, as the first one does.
+ */
+export function seedHoldingChunk(
+  client: QueryClient,
+  marketIds: readonly string[],
+): MarketPages | undefined {
+  const wanted = new Set(marketIds);
+  const rows = new Map<string, MarketSummary>();
+  // Oldest answer first: `joinMarket` lets the incoming row win a tie (the same trade count,
+  // statistics revision or status key — a same-key repeat such as a dispute's decision only a
+  // read brings), so the chunk answered last must come last (codex review: an inactive chunk
+  // holding older flags under the same status key would otherwise overwrite fresher ones).
+  const chunks = client
+    .getQueryCache()
+    .findAll({ queryKey: HOLDING_MARKETS_KEY })
+    .sort(
+      (a, b) =>
+        (holdingAnswers.get(a.queryHash) ?? Number.NEGATIVE_INFINITY) -
+        (holdingAnswers.get(b.queryHash) ?? Number.NEGATIVE_INFINITY),
+    );
+  for (const query of chunks) {
+    const pages = query.state.data as MarketPages | undefined;
+    for (const row of pages?.pages.flatMap((page) => page.items) ?? []) {
+      if (wanted.has(row.id)) rows.set(row.id, joinMarket(rows.get(row.id), row));
+    }
+  }
+  if (rows.size === 0) return undefined;
+  const items = marketIds.flatMap((id) => {
+    const row = rows.get(id);
+    return row === undefined ? [] : [row];
+  });
+  return { pages: [{ items, nextCursor: null }], pageParams: [undefined] };
+}
+
+/**
+ * Calls `again` once after the read of `query` in flight ANSWERS (`holdingMarketsFirstReads`),
+ * with the chunk's read time forgotten — the provider restarts it by its own hash there. A read
+ * that fails or is cancelled owes nothing (codex review): a cancelled one was replaced by a newer
+ * read, and a failed one is the retry policy's and the stale notice's (`priceIsStale`) — reading
+ * again at once would bypass both, a 429 included.
+ */
+export function afterHoldingFirstRead(query: Query, again: () => void): void {
+  const done = () => {
+    holdingFollowUps.delete(query.queryHash);
+  };
+  const run = () => {
+    done();
+    forgetHoldingReads(query.queryHash);
+    again();
+  };
+  const inFlight = query.promise;
+  if (inFlight === undefined) done();
+  else void inFlight.then(run, done);
 }
 
 /**

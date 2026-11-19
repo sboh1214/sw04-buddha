@@ -13,7 +13,7 @@ import {
   Text,
 } from '@chakra-ui/react';
 import { parseCoinAmount } from '@buddha/shared';
-import { useQueries } from '@tanstack/react-query';
+import { useQueries, useQueryClient } from '@tanstack/react-query';
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -33,7 +33,8 @@ import { copy } from '@/copy';
 import { listView, profileView } from '@/lib/query-client';
 import { useAccountBlock } from '@/hooks/use-account-block';
 import { useMarketSocket } from '@/hooks/use-market-socket';
-import { holdingMarketQueryOptions } from '@/hooks/use-markets';
+import { holdingMarketChunks, holdingMarketsQueryOptions } from '@/hooks/use-markets';
+import { seedHoldingChunk } from '@/lib/market-live';
 import { useMe } from '@/hooks/use-me';
 import {
   type ListState,
@@ -49,7 +50,7 @@ import {
   usePositions,
 } from '@/hooks/use-portfolio';
 import { useSellableReadings } from '@/hooks/use-sellable-readings';
-import { type Market } from '@/lib/api';
+import { type MarketSummary } from '@/lib/api';
 
 /**
  * The old `/portfolio`'s sections, moved into MY (#16): 잔고 요약 on the summary (`/my`), 보유
@@ -124,15 +125,16 @@ export function SessionEnded() {
  * the screen (`groups`: held at 1 or more, one per market, the latest change first — F4·F7).
  *
  * Every market held at 1 or more is joined for as long as this is mounted, so the gateway pushes
- * `market:tick` for each and the `['market', id]` entries below — the SAME entries the detail and
- * the home grid keep — re-render with the new price; one request per market at most. A sold-out
- * row needs no price (its value is 0), so its market is neither joined nor read — and a tick
- * published meanwhile is missed, so the `user:position` that takes it back to 1 or more marks the
- * entry stale and the observer mounted again here reads it (`positionReopensMarket`). `useQueries`
- * rather than a hook per row because the totals and the rows have to be read against ONE price.
- * Each row is read through `holdingMarketQueryOptions`: the detail's entry and request, without
- * the detail's 5-second settlement poll (MY draws no payout-delay record), and re-read on focus
- * only for a 거래 마감 or 잠정 결과 market (or one with no row yet) — the rest come with the
+ * `market:tick` for each, and its row is read 50 to a request (#300, ADR-0147): one
+ * `holdingMarketsKey` entry per chunk of held ids (`holdingMarketChunks`, `GET /markets?ids=`),
+ * kept in a card list's shape so the socket's card reducers move its price and status as they
+ * move the home grid's. A sold-out row needs no price (its value is 0), so its market is neither
+ * joined nor read — and a tick published meanwhile is missed, so the `user:position` that takes
+ * it back to 1 or more marks the entries stale and the chunk observed again here reads it
+ * (`positionReopensMarket`). `useQueries` rather than a hook per chunk because the totals and the
+ * rows have to be read against ONE price. Each chunk is read through
+ * `holdingMarketsQueryOptions`: no poll (MY draws no payout-delay record), and re-read on focus
+ * only when it holds a 거래 마감 or 잠정 결과 market (or no rows yet) — the rest come with the
  * positions list that focus re-reads (ADR-0142 결정 2-22).
  *
  * 매도 가능 and 매도 잠금 read `GET /me/markets/:id/sellable` for the groups drawn: all of them on
@@ -147,10 +149,15 @@ export function useHoldings(accountId: string | undefined, groupLimit?: number) 
   const held = openRows.filter((row) => row.qty >= 1);
   const marketIds = [...new Set(held.map((row) => row.marketId))];
   useMarketSocket(marketIds);
-  const markets = useQueries({ queries: marketIds.map((id) => holdingMarketQueryOptions(id)) });
-  const live = new Map<string, Market>();
-  for (const market of markets) {
-    if (market.data !== undefined) live.set(market.data.id, market.data);
+  const queryClient = useQueryClient();
+  const markets = useQueries({
+    queries: holdingMarketChunks(marketIds).map((ids) =>
+      holdingMarketsQueryOptions(ids, () => seedHoldingChunk(queryClient, ids)),
+    ),
+  });
+  const live = new Map<string, MarketSummary>();
+  for (const chunk of markets) {
+    for (const market of chunk.data?.pages[0]?.items ?? []) live.set(market.id, market);
   }
   // The price with its time, and the status, from the row the socket keeps live — each ordered
   // against the list's own copy on its key (`markToLiveMarket`).

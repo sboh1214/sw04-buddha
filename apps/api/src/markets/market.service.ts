@@ -357,6 +357,8 @@ export class MarketService {
    * match (#17).
    */
   async list(query: MarketListQuery): Promise<Page<MarketSummary>> {
+    if (query.ids !== undefined)
+      return { items: await this.listByIds(query.ids), nextCursor: null };
     const { markets, categories } = schema;
     const { limit } = query;
     const order = marketOrder(
@@ -390,6 +392,29 @@ export class MarketService {
       items: kept.map((row) => toMarketSummary(row.market, row.category)),
       nextCursor: hasMore && last ? order.cursorOf(last) : null,
     };
+  }
+
+  /**
+   * `GET /markets?ids=` (#300, ADR-0147): the public markets among `ids`, in the order named, a
+   * repeated id once — one statement on the primary key with the categories join, no order key
+   * and no 24-hour volume. A draft, an in-review and an unknown id are all simply absent (never a
+   * NOT_FOUND that would say one exists). Each row is `toMarketSummary` at one instant, so the
+   * display flags (판정 지연, 이의 검토 중) of every row are read at the same `nowMs`.
+   */
+  async listByIds(ids: readonly string[]): Promise<MarketSummary[]> {
+    const { markets, categories } = schema;
+    const wanted = [...new Set(ids)];
+    const rows = await this.db
+      .select(marketWithCategory)
+      .from(markets)
+      .innerJoin(categories, eq(categories.id, markets.categoryId))
+      .where(and(inArray(markets.id, wanted), isPublicMarket()));
+    const nowMs = Date.now();
+    const byId = new Map(rows.map((row) => [row.market.id, row]));
+    return wanted.flatMap((id) => {
+      const row = byId.get(id);
+      return row === undefined ? [] : [toMarketSummary(row.market, row.category, nowMs)];
+    });
   }
 
   /**

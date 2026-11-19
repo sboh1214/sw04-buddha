@@ -20,6 +20,7 @@ import {
   MARKETS_KEY,
   POSITIONS_KEY,
   dehydratePublic,
+  holdingMarketsKey,
   marketKey,
   marketsKey,
   ticksKey,
@@ -32,7 +33,9 @@ import {
   applyTick,
   applyToPages,
   BalanceOrder,
+  holdingChunksToRead,
   positionReopensMarket,
+  sameChunk,
 } from './market-live';
 import { chartLayout } from './chart';
 import { getQueryClient, restartQueries } from './query-client';
@@ -829,53 +832,77 @@ describe('the positions caches', () => {
     }
   });
 
-  it('reads the market again when a sold-out holding is bought back inside staleTime (#67)', async () => {
+  it('reads the market again when a sold-out holding is bought back inside staleTime (#67, #300)', async () => {
     // THE HAZARD (ADR-0142 결정 2-2): MY joins and reads only the markets held at 1 or more, so
-    // selling out leaves the market's room and unmounts its observer, with the `['market', id]`
-    // entry still inside `staleTime`. A buy back from another tab publishes its `market:tick`
-    // to a room this tab is not in, the `user:position` carries no price, and the observer MY
-    // mounts again took the entry as fresh: the holding, 미실현 손익 and the totals were marked to
-    // the price from before the holding's own fill until some later tick.
+    // selling out leaves the market's room, and the holdings chunk that named it (#300, ADR-0147:
+    // MY's rows are `holdingMarketsKey` entries) stays in the cache inside `staleTime`. A buy back
+    // from another tab publishes its `market:tick` to a room this tab is not in, the
+    // `user:position` carries no price, and the chunk MY observes again — the same held ids as
+    // before the sale — took the entry as fresh: the holding, 미실현 손익 and the totals were
+    // marked to the price from before the holding's own fill until some later tick.
     const queryClient = getQueryClient();
-    const afterBuy: Market = { ...snapshot, lastPrice: 70, tradeCount: 11 };
-    let reads = 0;
-    const market = {
-      queryKey: marketKey(ID),
+    const page = (...items: MarketSummary[]): MarketPages => ({
+      pages: [{ items, nextCursor: null }],
+      pageParams: [undefined],
+    });
+    const before: MarketSummary = { ...snapshot };
+    const afterBuy: MarketSummary = { ...snapshot, lastPrice: 70, tradeCount: 11 };
+    const other: MarketSummary = { ...snapshot, id: OTHER_ID };
+    const reads = { both: 0, other: 0 };
+    const both = {
+      queryKey: holdingMarketsKey([ID, OTHER_ID].sort()),
       queryFn: () => {
-        reads += 1;
-        return Promise.resolve(afterBuy);
+        reads.both += 1;
+        return Promise.resolve(page(afterBuy, other));
+      },
+      retry: false,
+    };
+    const onlyOther = {
+      queryKey: holdingMarketsKey([OTHER_ID]),
+      queryFn: () => {
+        reads.other += 1;
+        return Promise.resolve(page(other));
       },
       retry: false,
     };
     const open = positionsKey('open', TEST_ACCOUNT);
-    // Sold out: the list keeps the row at 0, and the entry is the one MY's last read left.
+    // Sold out: the list keeps the row at 0; the chunk of both markets is the one MY's last read
+    // left, and the chunk on screen now holds the other market alone.
     queryClient.setQueryData<Position[]>(open, [{ ...beforeTrade, qty: 0 }]);
-    queryClient.setQueryData<Market>(marketKey(ID), snapshot);
+    queryClient.setQueryData<MarketPages>(both.queryKey, page(before, other));
+    queryClient.setQueryData<MarketPages>(onlyOther.queryKey, page(other));
+    const onScreen = new QueryObserver<MarketPages>(queryClient, onlyOther);
+    const leave = onScreen.subscribe(() => undefined);
     try {
       // The bug, measured: a mount inside `staleTime` asks nothing and keeps the old price.
-      const stale = new QueryObserver<Market>(queryClient, market);
+      const stale = new QueryObserver<MarketPages>(queryClient, both);
       stale.subscribe(() => undefined)();
-      expect(reads).toBe(0);
-      expect(stale.getCurrentResult().data?.lastPrice).toBe(50);
+      expect(reads.both).toBe(0);
+      expect(stale.getCurrentResult().data?.pages[0]?.items[0]?.lastPrice).toBe(50);
 
       // The provider's handler shape: the decision off the list as it stood, the patch, then
-      // the restart of that one market.
+      // the restart of the chunks that name that market.
       const held = queryClient.getQueryData<Position[]>(open);
       const reopens = positionReopensMarket(held, traded);
       expect(reopens).toBe(true);
       const patch = applyPositionEvent(held, traded, 'open');
       if (patch.kind !== 'replace') throw new Error(`expected replace, got ${patch.kind}`);
       queryClient.setQueryData<Position[]>(open, patch.positions);
-      await restartQueries(queryClient, marketKey(ID));
-      // Nothing observes the market yet, so nothing is asked: it is marked stale.
-      expect(reads).toBe(0);
+      for (const query of holdingChunksToRead(queryClient, ID)) {
+        await restartQueries(queryClient, query.queryKey, sameChunk(query));
+      }
+      // Nothing observes that chunk yet, so nothing is asked: it is marked stale. The chunk on
+      // screen does not name the market and is left alone.
+      expect(reads).toEqual({ both: 0, other: 0 });
 
-      // MY's row is back at 1 or more, so `useHoldings` mounts the market's observer again.
-      const observer = new QueryObserver<Market>(queryClient, market);
+      // MY's row is back at 1 or more, so `useHoldings` observes the chunk of both again.
+      const observer = new QueryObserver<MarketPages>(queryClient, both);
       const unsubscribe = observer.subscribe(() => undefined);
       try {
-        await vi.waitFor(() => expect(observer.getCurrentResult().data?.lastPrice).toBe(70));
-        expect(reads).toBe(1);
+        await vi.waitFor(() =>
+          expect(observer.getCurrentResult().data?.pages[0]?.items[0]?.lastPrice).toBe(70),
+        );
+        expect(reads).toEqual({ both: 1, other: 0 });
         // And once: the holding is positive now, so the next buy is a patch and no request.
         const again: UserPositionEvent = { ...traded, qty: 20, version: 5 };
         expect(positionReopensMarket(queryClient.getQueryData<Position[]>(open), again)).toBe(
@@ -885,6 +912,7 @@ describe('the positions caches', () => {
         unsubscribe();
       }
     } finally {
+      leave();
       queryClient.clear();
     }
   });

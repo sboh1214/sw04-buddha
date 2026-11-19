@@ -186,6 +186,121 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     }
   });
 
+  describe('ids (#300, ADR-0147)', () => {
+    const idsUrl = (ids: readonly string[], extra = '') =>
+      `/api/v1/markets?${ids.map((id) => `ids=${id}`).join('&')}${extra}`;
+
+    it('reads the named public markets of every status, in the order named, each once', async () => {
+      const open = await market({ title: '열린 시장', lastPrice: 41 });
+      const closed = await market({ title: '마감', status: 'closed', lastPrice: 62 });
+      const settled = await market({
+        title: '지급 완료',
+        status: 'settled',
+        resolvedResult: 'YES',
+      });
+      const scheduled = await market({ title: '개장 예정', status: 'scheduled' });
+      const draft = await market({ title: '초안', status: 'draft' });
+      const review = await market({ title: '검수 중', status: 'review' });
+      const unknown = randomUUID();
+
+      const res = await get(
+        idsUrl([
+          settled.id,
+          draft.id,
+          open.id.toUpperCase(),
+          unknown,
+          closed.id,
+          review.id,
+          open.id,
+          scheduled.id,
+        ]),
+      );
+      expect(res.statusCode).toBe(200);
+      const page = res.json<ListPage>();
+      // A draft, a review and an unknown id are left out alike — never a NOT_FOUND that would say
+      // one exists; a repeated id (in any case) counts once; one page, no cursor.
+      expect(page.data.map((row) => row.id)).toEqual([
+        settled.id,
+        open.id,
+        closed.id,
+        scheduled.id,
+      ]);
+      expect(page.meta.nextCursor).toBeNull();
+      // The same row the list gives: `MarketSummary`, every key and value.
+      const all = (await get('/api/v1/markets?status=all&limit=100')).json<ListPage>().data;
+      for (const row of page.data) {
+        expect(Object.keys(row).sort()).toEqual(Object.keys(marketSummarySchema.shape).sort());
+        expect(row).toEqual(all.find((listed) => listed.id === row.id));
+      }
+      // A lone id is a list of one.
+      const one = (await get(`/api/v1/markets?ids=${closed.id}`)).json<ListPage>();
+      expect(one.data.map((row) => row.id)).toEqual([closed.id]);
+      expect(one.data[0]).toMatchObject({ status: 'closed', lastPrice: 62 });
+      // Nothing public among them: an empty page, not an error.
+      const none = await get(idsUrl([draft.id, unknown]));
+      expect(none.statusCode).toBe(200);
+      expect(none.json<ListPage>()).toEqual({ data: [], meta: { nextCursor: null } });
+    });
+
+    it('ignores status, sort and limit, and refuses category, q, cursor, 51 ids or a non-uuid', async () => {
+      const open = await market({ title: '열린 시장' });
+      const closed = await market({ title: '마감', status: 'closed' });
+      // `status=open` and `limit=1` are the list's; the ids read every public status, all of them.
+      const page = (
+        await get(idsUrl([closed.id, open.id], '&status=open&sort=newest&limit=1'))
+      ).json<ListPage>();
+      expect(page.data.map((row) => row.id)).toEqual([closed.id, open.id]);
+
+      for (const extra of ['&category=economy', '&q=%EC%8B%9C%EC%9E%A5', '&cursor=abc']) {
+        const refused = await get(idsUrl([open.id], extra));
+        expect({ extra, status: refused.statusCode }).toEqual({ extra, status: 400 });
+        expect(refused.json()).toMatchObject({
+          error: { code: 'VALIDATION_ERROR', details: [{ path: ['ids'] }] },
+        });
+      }
+      const fifty = Array.from({ length: 50 }, () => randomUUID());
+      expect((await get(idsUrl(fifty))).statusCode).toBe(200);
+      const fiftyOne = await get(idsUrl([...fifty, open.id]));
+      expect(fiftyOne.statusCode).toBe(400);
+      expect(fiftyOne.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
+      for (const bad of ['rate-cut', `${open.id},${closed.id}`, '']) {
+        const refused = await get(`/api/v1/markets?ids=${encodeURIComponent(bad)}`);
+        expect({ bad, status: refused.statusCode }).toEqual({ bad, status: 400 });
+      }
+    });
+
+    it('carries the display flags the detail does: 판정 지연 and 이의 검토 중', async () => {
+      // Closed three days ago: the factory's scheduled judgement (a day after an event deadline a
+      // day after the close) passed a day ago, so it reads '판정 지연' with no record (#173 item 11).
+      const delayed = await market({
+        title: '판정 지연',
+        status: 'closed',
+        openAt: new Date(Date.now() - 10 * DAY_MS),
+        closeAt: new Date(Date.now() - 3 * DAY_MS),
+      });
+      const disputed = await market({
+        title: '이의 검토',
+        status: 'provisional',
+        disputeHoldCount: 1,
+      });
+      const page = (await get(idsUrl([delayed.id, disputed.id]))).json<ListPage>();
+      expect(page.data[0]).toMatchObject({ id: delayed.id, judgementDelayed: true });
+      expect(page.data[1]).toMatchObject({ id: disputed.id, disputeUnderReview: true });
+      for (const row of page.data) {
+        const detail = (await get(`/api/v1/markets/${row.id}`)).json<{ data: Market }>().data;
+        expect({
+          judgementDelayed: row.judgementDelayed,
+          disputeUnderReview: row.disputeUnderReview,
+          disputeOpen: row.disputeOpen,
+        }).toEqual({
+          judgementDelayed: detail.judgementDelayed,
+          disputeUnderReview: detail.disputeUnderReview,
+          disputeOpen: detail.disputeOpen,
+        });
+      }
+    });
+  });
+
   it('lists a market past its close time until someone closes it (A-M3-31)', async () => {
     // The list filters on status alone, so a market whose close time has passed keeps its
     // `open` status until the worker's close job (or its per-minute scan) closes it — no admin

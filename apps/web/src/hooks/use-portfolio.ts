@@ -513,9 +513,24 @@ export function holdingDisplay(
  *
  * Named as the two flags rather than `isError` (which is their disjunction) so a test can state
  * WHICH state was missed instead of restating the call.
+ *
+ * And a third (#300, ADR-0147): MY's holdings chunk holds up to 50 markets, and a card write of
+ * any one of them (`setQueriesData`, a manual `success`) puts `status` back to success and clears
+ * `error` — one busy neighbour would hide a failed read of 49 others. A manual write keeps
+ * `failureCount` (`fetchFailureCount`), which only a read's own start resets, so a failure stands
+ * until a read answers: `failureCount > 0` while no read is running.
  */
-export function priceIsStale(query: { isLoadingError: boolean; isRefetchError: boolean }): boolean {
-  return query.isLoadingError || query.isRefetchError;
+export function priceIsStale(query: {
+  isLoadingError: boolean;
+  isRefetchError: boolean;
+  failureCount?: number;
+  fetchStatus?: string;
+}): boolean {
+  return (
+    query.isLoadingError ||
+    query.isRefetchError ||
+    ((query.failureCount ?? 0) > 0 && query.fetchStatus === 'idle')
+  );
 }
 
 /** What a section can say about a list it needs: it has one, it is coming, or it failed. */

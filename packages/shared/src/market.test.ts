@@ -25,6 +25,8 @@ import {
   createMarketBodySchema,
   fillSchema,
   marketEventSchema,
+  MARKET_IDS_MAX,
+  marketCategoryFilterSchema,
   marketListQuerySchema,
   marketSchema,
   marketSlugSchema,
@@ -1120,6 +1122,41 @@ describe('marketListQuerySchema', () => {
       limit: 5,
       cursor: 'abc',
     });
+  });
+
+  it('reads markets by id, 1 to 50, one id or repeated, lower-cased (#300, ADR-0147)', () => {
+    const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+    expect(MARKET_IDS_MAX).toBe(50);
+    // A lone `ids=x` arrives as a string; a repeated key as a list (Fastify's query parser).
+    expect(marketListQuerySchema.parse({ ids: id(1) }).ids).toEqual([id(1)]);
+    expect(marketListQuerySchema.parse({ ids: [id(1), id(2)] }).ids).toEqual([id(1), id(2)]);
+    expect(marketListQuerySchema.parse({ ids: id(1).toUpperCase() }).ids).toEqual([id(1)]);
+    // Repeats pass the schema; the service reads each once.
+    expect(marketListQuerySchema.parse({ ids: [id(1), id(1)] }).ids).toEqual([id(1), id(1)]);
+    const fifty = Array.from({ length: 50 }, (_, n) => id(n));
+    expect(marketListQuerySchema.parse({ ids: fifty }).ids).toHaveLength(50);
+    expect(marketListQuerySchema.safeParse({ ids: [...fifty, id(50)] }).success).toBe(false);
+    expect(marketListQuerySchema.safeParse({ ids: [] }).success).toBe(false);
+    expect(marketListQuerySchema.safeParse({ ids: 'rate-cut-2026' }).success).toBe(false);
+    // A comma list is not a form it takes: one value that is not a uuid.
+    expect(marketListQuerySchema.safeParse({ ids: `${id(1)},${id(2)}` }).success).toBe(false);
+    // Absent, nothing changes for the lists.
+    expect(marketListQuerySchema.parse({})).not.toHaveProperty('ids');
+  });
+
+  it('refuses category, q and cursor beside ids; status, sort and limit keep their defaults', () => {
+    const ids = ['00000000-0000-4000-8000-000000000001'];
+    for (const extra of [{ category: 'weather' }, { q: '비' }, { cursor: 'abc' }]) {
+      const parsed = marketListQuerySchema.safeParse({ ids, ...extra });
+      expect(parsed.success).toBe(false);
+      expect(parsed.error?.issues[0]?.path).toEqual(['ids']);
+    }
+    // Defaulted, so an explicit one cannot be told from none: allowed, and the read ignores them.
+    expect(
+      marketListQuerySchema.parse({ ids, status: 'closed', sort: 'newest', limit: '5' }),
+    ).toEqual({ ids, status: 'closed', sort: 'newest', limit: 5 });
+    // The fields the screens read off the shape are still there (nav, search, SSR).
+    expect(marketListQuerySchema.shape.category.unwrap()).toBe(marketCategoryFilterSchema);
   });
 
   it('takes every public status, or all of them at once for the search screen (ADR-0066)', () => {

@@ -3,17 +3,20 @@
 import {
   type QueryClient,
   focusManager,
+  hashKey,
   keepPreviousData,
   useInfiniteQuery,
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
+import { MARKET_IDS_MAX } from '@buddha/shared';
 import { useEffect } from 'react';
 import { type Market, type OrderBook, api, unwrap } from '@/lib/api';
 import { settlementPollInterval } from '@/lib/market-admin';
 import {
   type MarketFilters,
   type MarketSearch,
+  holdingMarketsKey,
   marketBookKey,
   marketKey,
   marketSearchKey,
@@ -23,7 +26,14 @@ import {
   relatedMarketsQuery,
   searchListQuery,
 } from '@/lib/market-keys';
-import { type MarketPage } from '@/lib/market-live';
+import {
+  type MarketPage,
+  type MarketPages,
+  chunkIds,
+  forgetHoldingReads,
+  holdingChunkStaleTime,
+  noteHoldingRead,
+} from '@/lib/market-live';
 import {
   DEFAULT_TICK_RANGE,
   LIVE_REFRESH_MS,
@@ -181,39 +191,89 @@ export function useMarket(marketId: string) {
 }
 
 /**
- * MY's holdings' market row (`useHoldings`, #67, ADR-0142 결정 2-22): the detail's entry and request
- * (`marketQueryOptions`), with two OBSERVER options of its own — the detail watching the same entry
- * keeps its poll and its focus re-read.
- *
- * - No poll. The 5-second read of a 판정 완료·지급 중 market (`settlementPollInterval`) is for the
- *   detail's payout-delay record (ADR-0121), which MY never draws: a holding's badge reads only
- *   `judgementDelayed`·`disputeUnderReview` (`holdingDisplay`), and settlement reaches the holder as
- *   `user:position`. Kept, it added 12 requests a minute per such holding to a steady 10.
- * - A focus re-read only where it can change what is shown (`holdingMarketRefetchOnFocus`).
+ * The held market ids as MY reads them (#300, ADR-0147): lower-cased, distinct, sorted, in
+ * chunks of `MARKET_IDS_MAX` — one `holdingMarketsKey` entry, and one request, per chunk. Sorted
+ * so the order the groups are drawn in (the latest change first) never makes a new entry.
  */
-export function holdingMarketQueryOptions(marketId: string) {
+export function holdingMarketChunks(marketIds: readonly string[]): string[][] {
+  const ids = [...new Set(marketIds.map((id) => id.toLowerCase()))].sort();
+  return chunkIds(ids, MARKET_IDS_MAX);
+}
+
+/**
+ * MY's holdings' market rows (`useHoldings`, #300, ADR-0147): `GET /markets?ids=` for one chunk
+ * (`holdingMarketChunks`), kept as the one page of a card list (`MarketPages`, nextCursor null)
+ * under `holdingMarketsKey` — up to 50 held markets in one request, where #67 read one
+ * `GET /markets/:idOrSlug` each (ADR-0142 결정 2-22's options, now on the chunk):
+ *
+ * - The rows are `MarketSummary`, never the detail's `Market`: a holding reads price, time, trade
+ *   count, status, status key and the two display flags, all of which the summary carries, and
+ *   the detail's entry (`['market', id]`, seeded by its server render) is no longer MY's.
+ * - No poll. MY draws no payout-delay record; settlement reaches the holder as `user:position`.
+ * - A focus re-read only where it can change what is shown (`holdingMarketsRefetchOnFocus`).
+ * - `market:status`, the first-read race and a bought-back market re-read it through the
+ *   provider (`holdingMarketsHolding`); a reconnect through `MARKETS_KEY`'s resnapshot.
+ */
+export function holdingMarketsQueryOptions(
+  marketIds: readonly string[],
+  seed?: () => MarketPages | undefined,
+) {
   return {
-    ...marketQueryOptions(marketId),
+    queryKey: holdingMarketsKey(marketIds),
+    queryFn: async ({
+      queryKey,
+      signal,
+    }: {
+      queryKey: readonly unknown[];
+      signal?: AbortSignal;
+    }): Promise<MarketPages> => {
+      const hash = hashKey(queryKey);
+      try {
+        const { data } = unwrap(
+          await api.GET('/api/v1/markets', { params: { query: { ids: [...marketIds] } }, signal }),
+        );
+        // Only an answer the cache takes stands as the chunk's read: a cancelled one (a restart,
+        // a resnapshot) would mark it fresh after a newer reason to read it (codex review).
+        if (signal?.aborted !== true) noteHoldingRead(hash, Date.now());
+        return { pages: [{ items: data, nextCursor: null }], pageParams: [undefined] };
+      } catch (error) {
+        // A failed read is a reason to read again, which a neighbour's tick must not clear; a
+        // cancelled one is not this chunk's answer either way.
+        if (signal?.aborted !== true) forgetHoldingReads(hash);
+        throw error;
+      }
+    },
+    // Fresh by the chunk's own last answer, never by `dataUpdatedAt`, which every card write of a
+    // neighbour restamps (`holdingReads`, market-live.ts).
+    staleTime: holdingChunkStaleTime,
+    // A new set of held markets is a new key and a new observer: it starts from the rows the
+    // cached chunks hold (`seedHoldingChunk`), so a holding whose market was already read keeps
+    // its live price and flags until the answer. Not a read: the chunk's own read is still owed.
+    ...(seed === undefined ? {} : { initialData: seed }),
     refetchInterval: false as const,
-    refetchOnWindowFocus: holdingMarketRefetchOnFocus,
+    refetchOnWindowFocus: holdingMarketsRefetchOnFocus,
   };
 }
 
 /**
- * Whether a held market's row is read again when the window regains focus (ADR-0142 결정 2-22):
- * when there is no row or its read failed, and when it is 거래 마감 or 잠정 결과 — the two statuses
- * whose label moves with time alone ('판정 지연' `readsJudgementDelayed`, '이의 검토 중'
- * `readsDisputeUnderReview`). Any other row's price, time, trade count and status key come with the
- * `GET /me/positions` that focus re-reads anyway, and `markToLiveMarket` takes the later of the two
- * (by trade count and status key), so the money figures are as fresh as before. Still subject to
- * `staleTime`, as every focus re-read.
+ * Whether a chunk of held markets is read again when the window regains focus (ADR-0142 결정
+ * 2-22, per chunk since #300): when it has no rows or its read failed, and when any of its markets
+ * is 거래 마감 or 잠정 결과 — the two statuses whose label moves with time alone ('판정 지연'
+ * `readsJudgementDelayed`, '이의 검토 중' `readsDisputeUnderReview`). Any other row's price, time,
+ * trade count and status key come with the `GET /me/positions` that focus re-reads anyway, and
+ * `markToLiveMarket` takes the later of the two. One request for the chunk however many of its
+ * markets are closed. Still subject to `staleTime` — the chunk's own (`holdingChunkStaleTime`).
  */
-export function holdingMarketRefetchOnFocus(query: {
-  state: { data: Market | undefined; status: string };
+export function holdingMarketsRefetchOnFocus(query: {
+  state: { data: MarketPages | undefined; status: string; fetchFailureCount: number };
 }): boolean {
-  const { data, status } = query.state;
-  if (data === undefined || status === 'error') return true;
-  return data.status === 'closed' || data.status === 'provisional';
+  const { data, status, fetchFailureCount } = query.state;
+  // A failure a neighbour's tick has since written over (`status` back to success) still counts:
+  // a manual write keeps `fetchFailureCount`, which only a read's own start resets.
+  if (data === undefined || status === 'error' || fetchFailureCount > 0) return true;
+  return data.pages.some((page) =>
+    page.items.some((market) => market.status === 'closed' || market.status === 'provisional'),
+  );
 }
 
 /**
