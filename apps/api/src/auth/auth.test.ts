@@ -5,7 +5,7 @@
  */
 import { schema } from '@buddha/db';
 import { createMarketMakerAccount, ledgerOf } from '@buddha/db/test';
-import { AUTH_USER_NAME, MARKET_MAKER_ACCOUNT_EMAIL } from '@buddha/shared';
+import { AUTH_USER_NAME, closedAccountEmail, MARKET_MAKER_ACCOUNT_EMAIL } from '@buddha/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { type Redis } from 'ioredis';
@@ -96,9 +96,10 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
   }
 
   it('passes better-auth’s schema check, which every auth request awaits (ADR-0094)', async () => {
-    // Since 1.7.3 better-auth checks @buddha/db's Drizzle tables at start and on every request,
-    // getSession included, and a mismatch fails them all: a 1.7.2 schema's NOT NULL
-    // `account.issuer` (PR #244) failed some 850 tests at once. This names the cause.
+    // Since 1.7.3 better-auth checks @buddha/db's Drizzle tables on every request, getSession
+    // included (since 1.7.22 on first use, no longer at start), and a mismatch fails them all: a
+    // 1.7.2 schema's NOT NULL `account.issuer` (PR #244) failed some 850 tests at once. This
+    // names the cause.
     const check = (await t.auth.$context).explicitSchemaCheck;
     expect(check).toBeDefined();
     await expect(Promise.resolve(check?.())).resolves.toBeUndefined();
@@ -697,6 +698,149 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     expect(t.mailer.messages).toHaveLength(1);
     expect(t.mailer.messages[0]).toMatchObject({ to: newEmail });
     expect(await redis.keys(accountBuckets)).toHaveLength(before + 1);
+  });
+
+  /** The address and its verification state of one account, by id. */
+  async function accountRow(id: string) {
+    const [row] = await t.db
+      .select({ email: schema.user.email, emailVerified: schema.user.emailVerified })
+      .from(schema.user)
+      .where(eq(schema.user.id, id));
+    return row;
+  }
+
+  const changeEmail = (own: { id: string; cookie: string }, newEmail: string) =>
+    t.app.inject({
+      method: 'POST',
+      url: '/api/auth/change-email',
+      headers: { ...browserHeaders, cookie: own.cookie },
+      payload: { newEmail, callbackURL: '/settings', expectedAccountId: own.id },
+    });
+
+  /** The `error` a refused link's redirect carries back to the web. */
+  const errorOf = (location: unknown) =>
+    new URL(String(location), 'http://localhost:3000').searchParams.get('error');
+
+  it('a change from an unverified address applies at the link and stays unverified until the resend (ADR-0151)', async () => {
+    // better-auth 1.7.16 (GHSA-hwq2-v29r-p69r): a requester who never proved the CURRENT address
+    // gets no verified address from the change. For this service that is the Kakao/Naver account
+    // without an email: the link applies the real address, the settings card then shows it
+    // 미인증 with its resend, and that link verifies it. Up to 1.7.15 the first link did both.
+    const own = await signUpTestUser(t, { email: 'it-auth-unverified-change@test.local' });
+    await t.db
+      .update(schema.user)
+      .set({ email: 'naver_778@noemail.buddha.local', emailVerified: false })
+      .where(eq(schema.user.id, own.id));
+    t.mailer.messages.length = 0;
+    const newEmail = 'it-auth-unverified-change-real@test.local';
+    expect((await changeEmail(own, newEmail)).statusCode).toBe(200);
+
+    const applied = await t.app.inject({
+      method: 'GET',
+      url: pathOf(verificationLinkFor(t.mailer, newEmail)),
+      headers: { cookie: own.cookie },
+    });
+    expect(applied.statusCode).toBe(302);
+    expect(applied.headers.location).toBe('/settings');
+    expect(await accountRow(own.id)).toEqual({ email: newEmail, emailVerified: false });
+
+    t.mailer.messages.length = 0;
+    const resend = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/send-verification-email',
+      headers: { ...browserHeaders, cookie: own.cookie },
+      payload: { email: newEmail, callbackURL: '/settings' },
+    });
+    expect(resend.statusCode).toBe(200);
+    const verified = await t.app.inject({
+      method: 'GET',
+      url: pathOf(verificationLinkFor(t.mailer, newEmail)),
+      headers: { cookie: own.cookie },
+    });
+    expect(verified.statusCode).toBe(302);
+    expect(await accountRow(own.id)).toEqual({ email: newEmail, emailVerified: true });
+  });
+
+  it('a change link signs nobody in: opened without a session it changes the address and stops (ADR-0151)', async () => {
+    // better-auth 1.7.16 (GHSA-hwq2): the link proves the inbox, not the account. Up to 1.7.15 the
+    // second link minted a session for the account in whatever browser the mail was opened in.
+    const own = await signUpTestUser(t, { email: 'it-auth-signed-out-change@test.local' });
+    t.mailer.messages.length = 0;
+    const newEmail = 'it-auth-signed-out-change-new@test.local';
+    expect((await changeEmail(own, newEmail)).statusCode).toBe(200);
+
+    const confirm = await t.app.inject({
+      method: 'GET',
+      url: pathOf(verificationLinkFor(t.mailer, own.email)),
+    });
+    expect(confirm.statusCode).toBe(302);
+    expect(sessionCookieOf(confirm.headers['set-cookie'])).toBeUndefined();
+    const verify = await t.app.inject({
+      method: 'GET',
+      url: pathOf(verificationLinkFor(t.mailer, newEmail)),
+    });
+    expect(verify.statusCode).toBe(302);
+    expect(verify.headers.location).toBe('/settings');
+    expect(sessionCookieOf(verify.headers['set-cookie'])).toBeUndefined();
+    expect(await accountRow(own.id)).toEqual({ email: newEmail, emailVerified: true });
+  });
+
+  it('a change link stops working once its address belongs to another account (GHSA-hwq2-v29r-p69r)', async () => {
+    // The advisory's attack: A asks to move from X, keeps the confirmation link unopened, leaves X,
+    // and X is registered again by B. Up to 1.7.15 the link acted on whoever held X — B — and
+    // mailed A's chosen address the link that would hand A both B's address and a session.
+    const attacker = await signUpTestUser(t, { email: 'it-auth-hwq2-released@test.local' });
+    const released = attacker.email;
+    t.mailer.messages.length = 0;
+    expect((await changeEmail(attacker, 'it-auth-hwq2-attacker@test.local')).statusCode).toBe(200);
+    const stale = verificationLinkFor(t.mailer, released);
+    // A leaves X the way a closure does (ADR-0086, `endSignIn`), and B takes X.
+    await t.db
+      .update(schema.user)
+      .set({ email: closedAccountEmail(attacker.id), emailVerified: false })
+      .where(eq(schema.user.id, attacker.id));
+    const victim = await signUpTestUser(t, { email: 'it-auth-hwq2-victim@test.local' });
+    await t.db.update(schema.user).set({ email: released }).where(eq(schema.user.id, victim.id));
+    t.mailer.messages.length = 0;
+
+    const opened = await t.app.inject({ method: 'GET', url: pathOf(stale) });
+    expect(opened.statusCode).toBe(302);
+    expect(errorOf(opened.headers.location)).toBe('INVALID_TOKEN');
+    expect(sessionCookieOf(opened.headers['set-cookie'])).toBeUndefined();
+    expect(t.mailer.messages).toHaveLength(0);
+    expect(await accountRow(victim.id)).toEqual({ email: released, emailVerified: true });
+  });
+
+  it('a sign-up link issued to an earlier holder of the address neither verifies nor signs in the next one (GHSA-hwq2-v29r-p69r)', async () => {
+    // The same binding on the plain link (better-auth 1.7.16): it names the account it was mailed
+    // for. Up to 1.7.15 it verified whoever held the address when it was opened and, with
+    // `autoSignInAfterVerification`, handed that account a session.
+    const address = 'it-auth-hwq2-signup@test.local';
+    expect((await register({ email: address })).statusCode).toBe(200);
+    const earlier = verificationLinkFor(t.mailer, address);
+    const first = await userRow(address);
+    await t.db
+      .update(schema.user)
+      .set({ email: closedAccountEmail(first!.id) })
+      .where(eq(schema.user.id, first!.id));
+    t.mailer.messages.length = 0;
+    expect((await register({ email: address })).statusCode).toBe(200);
+    const next = await userRow(address);
+    expect(next?.id).not.toBe(first!.id);
+
+    const opened = await t.app.inject({ method: 'GET', url: pathOf(earlier) });
+    expect(opened.statusCode).toBe(302);
+    expect(errorOf(opened.headers.location)).toBe('INVALID_TOKEN');
+    expect(sessionCookieOf(opened.headers['set-cookie'])).toBeUndefined();
+    expect(await userRow(address)).toMatchObject({ id: next!.id, emailVerified: false });
+    // The next holder's own link still does both.
+    const own = await t.app.inject({
+      method: 'GET',
+      url: pathOf(verificationLinkFor(t.mailer, address)),
+    });
+    expect(own.statusCode).toBe(302);
+    expect(sessionCookieOf(own.headers['set-cookie'])).toBeDefined();
+    expect(await userRow(address)).toMatchObject({ id: next!.id, emailVerified: true });
   });
 
   it('a failing mailer does not break registration; the explicit resend reports the failure', async () => {

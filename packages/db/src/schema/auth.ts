@@ -1,5 +1,5 @@
 /**
- * better-auth 1.7.7 tables (PLAN 6.1). Generated with
+ * better-auth 1.7.26 tables (PLAN 6.1). Generated with
  *   pnpm --filter @buddha/db run db:auth-schema
  * (the `auth` CLI, config in packages/db/better-auth.config.ts) and adjusted by hand:
  * every `timestamp()` got `{ withTimezone: true, mode: 'date', precision: 3 }` (repo

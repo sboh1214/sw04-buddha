@@ -20,6 +20,7 @@ import {
   RATE_LIMIT_WINDOW_SECONDS,
   currentConsentVersion,
 } from '@buddha/shared';
+import { createEmailVerificationToken } from 'better-auth/api';
 import { eq } from 'drizzle-orm';
 import { type Redis } from 'ioredis';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -596,6 +597,31 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
       });
       expect(rejected.statusCode).toBe(401);
       expect(await redis.keys(pattern)).toEqual(victimBucket);
+    });
+
+    it('spends nothing on a change link minted before better-auth 1.7.16, which the endpoint refuses (ADR-0151)', async () => {
+      // A genuine confirmation link as 1.7.15 and older minted it: signed with the secret, but
+      // naming no account (`userId`). Since 1.7.16 the endpoint answers it INVALID_TOKEN and mails
+      // nobody, so it is not counted on the address it no longer mails — the confirmations still
+      // in inboxes for the hour after the upgrade cannot refuse a fresh, genuine click.
+      const user = await signUpTestUser(t);
+      const { secret } = await t.auth.$context;
+      const token = await createEmailVerificationToken(
+        secret,
+        user.email,
+        'stranger@test.local',
+        3600,
+        { requestType: 'change-email-confirmation' },
+      );
+      t.mailer.messages.length = 0;
+      const refused = await t.app.inject({
+        method: 'GET',
+        url: `/api/auth/verify-email?token=${token}&callbackURL=%2Fsettings`,
+      });
+      expect(refused.statusCode).toBe(302);
+      expect(String(refused.headers.location)).toContain('error=INVALID_TOKEN');
+      expect(t.mailer.messages).toHaveLength(0);
+      expect(await redis.keys(`${RATE_LIMIT_KEY_PREFIX}:default:auth/verify-email:*`)).toEqual([]);
     });
   });
 

@@ -487,7 +487,7 @@ export interface RegisteredAuthRoute {
 export const AUTH_ROUTES: Readonly<Record<string, RegisteredAuthRoute>> = {
   'POST /sign-in/social': {
     reason:
-      '소셜 로그인 시작(PLAN 10.2): 제공자의 로그인 주소를 돌려준다. 제공자의 ID 토큰을 주면 그 계정으로 로그인하고 사용자를 돌려준다.',
+      '소셜 로그인 시작(PLAN 10.2): 제공자의 로그인 주소를 돌려준다. 제공자의 ID 토큰으로 로그인하는 길은 모든 제공자에서 닫았다(404 ID_TOKEN_NOT_SUPPORTED, ADR-0151).',
     answersAccount: true,
   },
   'GET /callback/:id': {
