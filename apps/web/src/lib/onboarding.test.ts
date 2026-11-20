@@ -675,6 +675,7 @@ describe('takeOnboardingAnswer', () => {
       verifiedAt: '2026-10-18T00:00:00.000Z',
     },
     startGrant: null,
+    firstOrderPlaced: false,
     onboarding: VERIFIED,
   };
   /** A snapshot read after the write, with what a concurrent write changed meanwhile. */

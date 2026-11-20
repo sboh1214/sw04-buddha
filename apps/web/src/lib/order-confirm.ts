@@ -215,7 +215,7 @@ export function quoteRows(quoted: Pick<FrozenQuote, 'terms' | 'quote'>): Confirm
 }
 
 /** A figure and its unit as one word: '65.00 Coin' never wraps between the two (결정 2-24). */
-function unbroken(figure: string): string {
+export function unbroken(figure: string): string {
   return figure.replaceAll(' ', '\u00a0');
 }
 

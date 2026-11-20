@@ -28,6 +28,7 @@ describe('meSchema', () => {
     ],
     verification: null,
     startGrant: null,
+    firstOrderPlaced: false,
     onboarding: {
       consent: false,
       verification: false,
@@ -163,6 +164,13 @@ describe('meSchema', () => {
     expect(meSchema.parse(withImage)).toEqual(withImage);
     const { imageUrl: _dropped, ...profileWithoutImage } = sample.profile;
     expect(meSchema.safeParse({ ...sample, profile: profileWithoutImage }).success).toBe(false);
+  });
+
+  it('carries whether the account has an order the server took, and requires the key (#59)', () => {
+    const placed = { ...sample, firstOrderPlaced: true };
+    expect(meSchema.parse(placed)).toEqual(placed);
+    const { firstOrderPlaced: _dropped, ...withoutIt } = sample;
+    expect(meSchema.safeParse(withoutIt).success).toBe(false);
   });
 
   it('validates PATCH /me bodies: the nickname and the account the screen shows', () => {

@@ -162,6 +162,7 @@ const me: Me = {
   linkedAccounts: [],
   verification: null,
   startGrant: null,
+  firstOrderPlaced: false,
   onboarding: {
     consent: false,
     verification: false,

@@ -6469,6 +6469,7 @@ export type components = {
             /** Format: email */
             email: string;
             emailVerified: boolean;
+            firstOrderPlaced: boolean;
             id: string;
             linkedAccounts: components["schemas"]["LinkedAccount"][];
             onboarding: components["schemas"]["Onboarding"];

@@ -50,6 +50,7 @@ const unverified: Me = {
   linkedAccounts: [],
   verification: null,
   startGrant: null,
+  firstOrderPlaced: false,
   // The consent step done (it comes first, ADR-0069 decision 4 #58): the 본인확인 is next.
   onboarding: {
     consent: true,

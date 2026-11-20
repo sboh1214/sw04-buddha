@@ -6,6 +6,7 @@ import { copy } from '@/copy';
 import { confirmNotes, confirmRows, immediateFillNotice } from '@/lib/order-confirm';
 import { coinShortfall } from '@/lib/order-panel';
 import { insufficientCoinLine } from '@/lib/order-reasons';
+import { FirstOrderGuide } from './first-order-guide';
 import { useOrderPanel } from './order-panel-provider';
 
 /**
@@ -78,6 +79,14 @@ export function OrderConfirm({
       <Heading as="h3" size="sm" tabIndex={-1} ref={headingRef} outline="none">
         {copy.orderReviewTitle}
       </Heading>
+      {/* 첫 주문 안내 (#59, ADR-0154): open until the account's first order is taken, folded after —
+          under the title, ahead of the rows, so its toggle and its opened text are never under the
+          sticky bar below (WCAG 2.4.11). */}
+      <FirstOrderGuide
+        firstOrderPlaced={me?.firstOrderPlaced}
+        timeInForce={frozen.terms.timeInForce}
+        side={frozen.terms.side}
+      />
       <DataList.Root orientation="horizontal" size="sm">
         {confirmRows(frozen).map((row) => (
           <DataList.Item key={row.id} data-testid={`order-review-${row.id}`}>
