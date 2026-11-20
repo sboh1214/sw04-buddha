@@ -18374,14 +18374,14 @@ ADR-0010이 `expo-doctor` 1.20.4를 devDependency로 고정했다. ADR-0134 결�
 
 ADR-0034의 `signIn` 버킷은 `/sign-in/email`의 시도를 핸들러 앞(`hooks.before`)에서 주소별로 세고, 비밀번호가 맞은 로그인이 `hooks.after`에서 버킷을 지운다. 성공과 실패는 `ctx.context.returned`가 `APIError`인지로 갈랐고, 코드(`apps/api/src/auth/auth.ts`)는 `better-auth/api`가 내보내는 `APIError`에 대한 `instanceof`였다.
 
-- **두 `APIError`.** `better-auth/api`의 `APIError`(`@better-auth/core`의 `error`)는 better-auth 밑의 라우터 better-call의 `APIError`를 상속한 하위 클래스다. better-call은 라우트 스키마에 맞지 않는 본문에 **자기 기본 클래스**로 400 `VALIDATION_ERROR`를 던진다(better-call 1.4.0 `dist/endpoint.mjs`). better-auth의 dispatch는 그것을 `isAPIError`(두 클래스 모두 참)로 잡아 `ctx.context.returned`에 넣고 after 훅을 돌린다. 기본 클래스의 객체는 하위 클래스에 대한 `instanceof`가 거짓이므로, 우리 훅은 그 400을 성공한 로그인으로 읽고 버킷을 지웠다.
-- **결과.** 한 주소에 틀린 비밀번호를 아홉 번 보낸 뒤 `{ "email": <그 주소>, "password": 0 }` 하나를 보내면 버킷이 비었다. 그것을 되풀이하면 그 주소에 분당 10회 한도가 걸리지 않는다. 호출자 주소의 `default` 버킷(ADR-0034·ADR-0073)은 이 판정과 무관하다.
+- **두 `APIError`.** `better-auth/api`의 `APIError`(`@better-auth/core/error`)는 better-auth 밑의 라우터 better-call의 `APIError`를 상속한 하위 클래스다. better-call은 라우트 스키마에 맞지 않는 본문에 **자기 기본 클래스**로 400 `VALIDATION_ERROR`를 던진다(better-call 1.4.0 `dist/endpoint.mjs`). better-auth의 dispatch는 그것을 `isAPIError`(두 클래스 모두 참)로 잡아 `ctx.context.returned`에 넣고 after 훅을 돌린다. 기본 클래스의 객체는 하위 클래스에 대한 `instanceof`가 거짓이므로, 우리 훅은 그 400을 성공한 로그인으로 읽고 버킷을 지웠다.
+- **영향.** 한 주소에 틀린 비밀번호를 아홉 번 보낸 뒤 `{ "email": <그 주소>, "password": 0 }` 하나를 보내면 버킷이 비었다. 그것을 되풀이하면 그 주소에 분당 10회 한도가 걸리지 않는다. 호출자 주소의 `default` 버킷(ADR-0034·ADR-0073)은 이 판정과 무관하다.
 - **발견.** better-auth 1.7.7 → 1.7.26 업그레이드를 조사하다(2026-11-20) 찾았다. 같은 통합 시험 흐름으로 1.7.7과 1.7.26 모두에서 재현했다 — 업그레이드가 들여온 것이 아니라 M6부터 있던 결함이다. better-call 1.4.6도 같은 구조다.
 
 ### 결정
 
 1. **after 훅의 판정을 `isAPIError(ctx.context.returned)`로 바꾼다.** `isAPIError`는 `better-auth/api`가 내보내고(1.7.7·1.7.26 모두), dispatch가 무엇을 `returned`에 넣을지 정할 때 쓰는 바로 그 함수다. dispatch가 거기 넣는 오류는 이 판정으로 모두 실패가 되고, 그 밖의 throw는 after 훅을 건너뛰므로 판정할 일이 없다.
-2. **세는 쪽은 그대로다.** 본문이 깨진 요청도 주소가 있으면 한 번의 시도로 센다(ADR-0034 — 시도 자체를 센다). 이제 그 시도는 지워지지 않는다.
+2. **세는 쪽은 그대로다.** 라우트 스키마에 맞지 않는 본문(400 `VALIDATION_ERROR`)도 주소가 있으면 한 번의 시도로 센다(ADR-0034 — 시도 자체를 센다). 이제 그 시도는 지워지지 않는다. 파싱되지 않는 JSON(400)이나 받지 않는 Content-Type(415)은 better-call의 라우터가 훅 앞에서 거절하므로 세지도 지우지도 않는다 — 전과 같다.
 3. **회귀 시험을 둔다.** `apps/api/src/rate-limit/rate-limit.controller.test.ts`: 틀린 비밀번호 아홉 번 → `password: 0`(400 `VALIDATION_ERROR`) → 다음 시도가 429 `RATE_LIMITED`. 수정 전 코드에서는 마지막이 401이었다.
 
 ### 결과
