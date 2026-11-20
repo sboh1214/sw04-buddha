@@ -1,5 +1,11 @@
 import { cancelStartGrant, schema } from '@buddha/db';
-import { completeOnboarding, createPhoneVerification, createStartGrant } from '@buddha/db/test';
+import {
+  completeOnboarding,
+  createMarket,
+  createOrder,
+  createPhoneVerification,
+  createStartGrant,
+} from '@buddha/db/test';
 import { errorEnvelopeSchema, meSchema, type ValidationIssue } from '@buddha/shared';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -121,6 +127,33 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
     // more, so nothing is shown — as for an account with no grant.
     await t.db.transaction((tx) => cancelStartGrant(tx, user.id));
     expect(await startGrantOf(user)).toBeNull();
+  });
+
+  it('GET /me says whether the account has an order the server took: not before one, not for a refused one (#59)', async () => {
+    const firstOrderPlaced = async (cookie: string) => {
+      const res = await t.app.inject({ method: 'GET', url: '/api/v1/me', headers: { cookie } });
+      expect(res.statusCode).toBe(200);
+      return meSchema.parse(res.json<{ data: unknown }>().data).firstOrderPlaced;
+    };
+    expect(await firstOrderPlaced(user.cookie)).toBe(false);
+    const market = await createMarket(t.db);
+    // 거절 (an IOC that met no quote, a buy above the balance): no order taken yet (ADR-0154).
+    await createOrder(t.db, { marketId: market.id, userId: user.id, timeInForce: 'ioc' });
+    await createOrder(t.db, {
+      marketId: market.id,
+      userId: user.id,
+      status: 'rejected',
+      rejectReason: 'insufficient_coin',
+    });
+    expect(await firstOrderPlaced(user.cookie)).toBe(false);
+    // Another account's order is not this one's.
+    const other = await signUpTestUser(t);
+    await createOrder(t.db, { marketId: market.id, userId: other.id });
+    expect(await firstOrderPlaced(user.cookie)).toBe(false);
+    expect(await firstOrderPlaced(other.cookie)).toBe(true);
+    // A taken order, whatever became of it after: here one cancelled by its owner.
+    await createOrder(t.db, { marketId: market.id, userId: user.id, status: 'cancelled' });
+    expect(await firstOrderPlaced(user.cookie)).toBe(true);
   });
 
   it('GET /me without a session -> 401 UNAUTHENTICATED envelope', async () => {

@@ -29418,6 +29418,9 @@
               }
             ]
           },
+          "firstOrderPlaced": {
+            "type": "boolean"
+          },
           "onboarding": {
             "$ref": "#/components/schemas/Onboarding"
           }
@@ -29431,6 +29434,7 @@
           "linkedAccounts",
           "verification",
           "startGrant",
+          "firstOrderPlaced",
           "onboarding"
         ],
         "additionalProperties": false

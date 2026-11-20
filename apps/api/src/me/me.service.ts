@@ -7,7 +7,7 @@ import {
   serializeCoinAmount,
   type Me,
 } from '@buddha/shared';
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq, ne } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { PhoneHasher } from '../identity/phone-hash.js';
 import { DB } from '../infra/db/db.provider.js';
@@ -26,7 +26,7 @@ export class MeService {
   ) {}
 
   async getMe(userId: string): Promise<Me> {
-    const [[row], accounts, onboarding, interests] = await Promise.all([
+    const [[row], accounts, onboarding, interests, [placed]] = await Promise.all([
       this.db
         .select({
           id: schema.user.id,
@@ -81,6 +81,13 @@ export class MeService {
         .from(schema.profileInterestCategories)
         .where(eq(schema.profileInterestCategories.userId, userId))
         .orderBy(asc(schema.profileInterestCategories.categoryId)),
+      // 첫 주문 안내 (#59, ADR-0154): one order of the account's that the server took — any that
+      // did not end 거절 — on its own index (`orders_user_id_arrival_seq_idx`), one row at most.
+      this.db
+        .select({ id: schema.orders.id })
+        .from(schema.orders)
+        .where(and(eq(schema.orders.userId, userId), ne(schema.orders.status, 'rejected')))
+        .limit(1),
     ]);
     // The "user" trigger (PLAN 10.4) guarantees both rows; missing means a broken account. A
     // closed account (#140) has no session to ask with; read some other way, it is no account.
@@ -149,6 +156,7 @@ export class MeService {
           ? { realName: row.realName, phone: row.phone, verifiedAt: row.verifiedAt.toISOString() }
           : null,
       startGrant,
+      firstOrderPlaced: placed !== undefined,
       onboarding: onboardingState(onboarding.progress, onboarding.consents),
     };
   }

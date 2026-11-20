@@ -2668,6 +2668,40 @@ export const copy = {
   orderUnfilledGtc: '시장 마감 때 만료',
   orderNone: '—',
   orderQuoteNotice: '현재 호가 기준 예상입니다.',
+  // 첫 주문 안내(#59, ADR-0154): 주문 확인 화면에서 그 계정의 첫 주문이 접수될 때까지(거절로 끝난 주문은
+  // 세지 않는다) 펼쳐 보이고, 그 뒤에는 '첫 주문 안내 다시 보기'로 연다(오너 답 2026-11-21 #59-1·2). 고른
+  // 주문 방식의 주제만 — 즉시 거래는 계약 지급액·부분 체결·가격 보호, 지정가는 계약 지급액·지정가 대기·부분
+  // 체결이다(#59-3). 지급액의 숫자는 CONTRACT_TERMS에서 붙인다(lib/first-order-guide.ts). 서비스 안내
+  // 페이지(#136)로 가는 링크는 두지 않는다(#59-4).
+  firstOrderGuideTitle: '첫 주문 안내',
+  firstOrderGuideShow: '첫 주문 안내 다시 보기',
+  firstOrderGuideHide: '첫 주문 안내 접기',
+  firstOrderGuidePayout: '계약 지급액',
+  // '정답인 계약은 계약마다 100 Coin, 오답인 계약은 0 Coin을 받습니다.'의 조각. 거래를 맞히기로 말하지 않고
+  // 확인 화면의 행(정답 시 총지급·오답 시 지급)과 같은 '정답·오답'을 쓴다(오너 결정 #14-5, ADR-0052).
+  firstOrderGuidePayoutWinHead: '정답인 계약은 계약마다',
+  firstOrderGuidePayoutLoseHead: ', 오답인 계약은',
+  firstOrderGuidePayoutTail: '을 받습니다.',
+  // '시장이 무효로 끝나면 YES·NO 모두 계약마다 50 Coin을 받습니다.' 무효 지급은 YES·NO가 같다(ADR-0118).
+  firstOrderGuideVoidHead: '시장이 무효로 끝나면 YES·NO 모두 계약마다',
+  firstOrderGuideResting: '지정가 대기',
+  firstOrderGuideRestingBody:
+    '지정가 주문은 한도가격에 맞는 상대 주문이 나올 때까지 호가창에서 기다립니다. 기다리는 동안 매수는 필요한 Coin이, 매도는 계약이 잠기고, 체결되지 않은 수량은 취소할 수 있습니다. 시장 마감 때까지 체결되지 않은 수량은 만료됩니다.',
+  firstOrderGuidePartial: '부분 체결',
+  firstOrderGuidePartialIoc:
+    '즉시 거래는 지금 호가로 체결할 수 있는 만큼만 체결하고, 남은 수량은 바로 취소합니다.',
+  // 지정가의 부분 체결은 방향마다: 매수는 체결된 계약이 보유가 되고, 매도는 체결된 만큼 Coin을 받는다.
+  firstOrderGuidePartialGtcBuy:
+    '일부만 체결되면 체결된 계약은 바로 보유가 되고, 남은 수량은 호가창에서 계속 기다립니다.',
+  firstOrderGuidePartialGtcSell:
+    '일부만 체결되면 체결된 계약만큼 바로 Coin을 받고, 남은 수량은 호가창에서 계속 기다립니다.',
+  firstOrderGuideProtection: '가격 보호',
+  // 앞에 copy.orderMaxBuyPrice 또는 copy.orderMinSellPrice가 붙는다.
+  firstOrderGuideProtectionBuy:
+    '보다 비싸게 사지 않습니다. 확인하는 사이 호가가 움직이면 덜 체결되거나 체결되지 않을 수 있습니다.',
+  firstOrderGuideProtectionSell:
+    '보다 싸게 팔지 않습니다. 확인하는 사이 호가가 움직이면 덜 체결되거나 체결되지 않을 수 있습니다.',
+  firstOrderGuideProtectionHead: '즉시 거래는 아래의',
   orderBudgetNotice: '입력한 금액을 다 쓰지 않을 수 있습니다.',
   orderQuoteLoading: '견적을 계산하는 중',
   orderQuoteFailed: '견적을 불러오지 못했습니다. 잠시 뒤 다시 시도하세요.',

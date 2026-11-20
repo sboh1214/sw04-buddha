@@ -87,6 +87,14 @@ export const meSchema = z
      */
     startGrant: startGrantSchema.nullable(),
     /**
+     * Whether the account has an order the server took (#59, ADR-0154): any order of its that did
+     * not end 거절 (`rejected`) — one that rests, filled or was cancelled or expired after it was
+     * taken. 확인 shows the first-order guide open while this is false and only offers it again
+     * afterwards (owner answers 2026-11-21 #59-1·2). Read from the account's orders, so it is the
+     * same on every device; owner-only, like the balance.
+     */
+    firstOrderPlaced: z.boolean(),
+    /**
      * The onboarding (#58): which steps are done and where the account resumes. What sends a
      * signed-in account that has not completed it to `/onboarding` (#57-8).
      */

@@ -48,6 +48,7 @@ const me = (id: string): Me => ({
     verifiedAt: '2026-10-18T00:00:00.000Z',
   },
   startGrant: null,
+  firstOrderPlaced: false,
   onboarding: {
     consent: true,
     verification: true,
