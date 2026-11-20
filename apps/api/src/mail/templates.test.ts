@@ -9,6 +9,8 @@ import {
   type EmailContent,
   MAIL_TEMPLATES,
   changeEmailConfirmationEmail,
+  changeEmailUnverifiedEmail,
+  changeEmailVerifiedEmail,
   devVerificationCodeEmail,
   passwordResetEmail,
   verificationEmail,
@@ -41,6 +43,41 @@ describe('mail templates', () => {
     expect(mail.html).toContain('new@example.com');
   });
 
+  it('the new address’s change link of a verified account says the click changes and verifies it (ADR-0153)', () => {
+    const mail = changeEmailVerifiedEmail({ url });
+    expect(mail.subject).toBe('[buddha] 이메일 변경을 완료해 주세요');
+    expect(mail.text).toContain('이메일 주소가 이 주소로 바뀌고 인증이 완료됩니다');
+    expect(mail.text).toContain('60분');
+    expect(changeEmailVerifiedEmail({ url, expiresInMinutes: 15 }).text).toContain('15분');
+    expect(mail.text).toContain(`새 이메일로 바꾸기: ${url}`);
+    expect(mail.html).toContain('lang="ko"');
+    expect(mail.html).toContain('>새 이메일로 바꾸기</a>');
+    expect(mail.html).toContain(
+      'href="http://localhost:3000/api/auth/verify-email?token=abc&amp;callbackURL=%2F"',
+    );
+    // Not the sign-up mail's words: nobody signs up here, and the click verifies by itself.
+    expect(mail.text).not.toContain('가입');
+    expect(mail.text).not.toContain('인증 메일 다시 보내기');
+  });
+
+  it('the new address’s change link of an unverified account says the click only changes it, and how to verify (ADR-0151·ADR-0153)', () => {
+    const mail = changeEmailUnverifiedEmail({ url });
+    expect(mail.subject).toBe('[buddha] 새 이메일로 바꾼 뒤 인증해 주세요');
+    expect(mail.text).toContain('아래 버튼을 누르면 이메일 주소가 이 주소로 바뀝니다.');
+    // The click leaves the address unverified (better-auth 1.7.16+): the settings card's resend,
+    // under the button label the web shows (apps/web copy.resendVerification), verifies it.
+    expect(mail.text).toContain('이메일 인증은 주소가 바뀐 뒤 따로 해야 합니다.');
+    // The link signs nobody in (ADR-0151 결정 3), and MY 설정 asks for a session.
+    expect(mail.text).toContain("로그인한 뒤 MY 설정에서 '인증 메일 다시 보내기'를 누르고");
+    expect(mail.text).not.toContain('인증이 완료됩니다');
+    expect(mail.text).toContain('60분');
+    expect(changeEmailUnverifiedEmail({ url, expiresInMinutes: 15 }).text).toContain('15분');
+    expect(mail.text).toContain(`새 이메일로 바꾸기: ${url}`);
+    expect(mail.html).toContain('>새 이메일로 바꾸기</a>');
+    expect(mail.html).toContain('&#39;인증 메일 다시 보내기&#39;');
+    expect(mail.text).not.toContain('가입');
+  });
+
   it('development SMS mail carries the code in subject, text and html (ADR-0070)', () => {
     const mail = devVerificationCodeEmail({ code: '012345', expiresInMinutes: 3 });
     expect(mail.subject).toContain('012345');
@@ -71,6 +108,8 @@ const EXAMPLES: {
   verification: [{ url }, { url, expiresInMinutes: 15 }],
   passwordReset: [{ url }, { url, expiresInMinutes: 15 }],
   changeEmailConfirmation: [{ url, newEmail: 'new@example.com' }],
+  changeEmailVerified: [{ url }, { url, expiresInMinutes: 15 }],
+  changeEmailUnverified: [{ url }, { url, expiresInMinutes: 15 }],
   devVerificationCode: [{ code: '012345', expiresInMinutes: 3 }],
 };
 
