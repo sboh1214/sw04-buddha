@@ -232,6 +232,42 @@ async function mailedByVerifyEmail(token: unknown, secret: string): Promise<stri
   return emailTracker(payload.updateTo);
 }
 
+/** The registered template a verification link goes out in (`verificationMailFor`). */
+type VerificationMail = 'verification' | 'changeEmailVerified' | 'changeEmailUnverified';
+
+/**
+ * Which mail `emailVerification.sendVerificationEmail` sends a link in (ADR-0153).
+ *
+ * better-auth mails three kinds of link through that one hook: the sign-up's and the resend's (a
+ * token naming the address it verifies, no `requestType`), and the link to the NEW address of a
+ * change (`requestType: 'change-email-verification'`, with `updateTo`), for which the hook's `user`
+ * is the account asking with the new address in place of its own. What a click on that last link
+ * does depends on the account (better-auth 1.7.16+, ADR-0151): one whose current address is
+ * verified gets it only after confirming at that address, and the click changes the address AND
+ * verifies it; one whose current address is not (a Kakao/Naver synthetic address, a real one not
+ * yet verified) gets it straight away, and the click only changes the address — the settings
+ * card's resend verifies it. Up to ADR-0153 all three went out as the sign-up mail ("이메일 주소를
+ * 인증해 주세요"), whose promise that last click has not kept since better-auth 1.7.16.
+ *
+ * The token is read the way `mailedByVerifyEmail` reads it, verified with the secret better-auth
+ * signed it with. It is better-auth's own, minted a moment ago, so a failure here means the secret
+ * read is not the one it signs with: the link still goes out, in the sign-up mail it went out in
+ * before, and the log says so. The hook is never handed a confirmation token (`/change-email`
+ * mails that one through `sendChangeEmailConfirmation`) nor, with `updateEmailWithoutVerification`
+ * off and better-auth sending no change token without a `requestType` (the one `/change-email`
+ * mints for an address already taken is thrown away), any other change token.
+ */
+async function verificationMailFor(
+  token: string,
+  secret: string,
+  requesterVerified: boolean,
+): Promise<VerificationMail | undefined> {
+  const payload = await verifyJWT<VerificationTokenPayload>(token, secret);
+  if (payload === null) return undefined;
+  if (payload.requestType !== 'change-email-verification') return 'verification';
+  return requesterVerified ? 'changeEmailVerified' : 'changeEmailUnverified';
+}
+
 /** Counts one attempt against `path`'s bucket for `tracker`, refusing it the way PLAN 7 does. */
 async function consumeOrRefuse(
   rateLimiter: AuthRateLimiter,
@@ -345,6 +381,9 @@ export function createAuth({
   let resendVerification = async (_email: string, _callbackURL: string): Promise<void> => {
     /* replaced below */
   };
+  // The secret better-auth signs its links with (`ctx.context.secret`), which a mail hook is not
+  // handed: `secret` here unless `BETTER_AUTH_SECRETS` names a current one. Replaced below too.
+  let linkSecret = (): Promise<string> => Promise.resolve(secret);
 
   /** Mails a registered template (MAIL_TEMPLATES) to `to`. */
   async function send(to: string, content: EmailContent) {
@@ -454,8 +493,21 @@ export function createAuth({
       // redirect), so the web calls /send-verification-email itself after a 403 and can
       // report a send failure (ADR-0023).
       autoSignInAfterVerification: true,
-      sendVerificationEmail: async ({ user, url }) => {
-        await send(user.email, MAIL_TEMPLATES.verification({ url }));
+      // The sign-up and resend link, and the change of address's link to the new address — whose
+      // mail says what that click does for this account (verificationMailFor, ADR-0153).
+      sendVerificationEmail: async ({ user, url, token }) => {
+        const mail = await verificationMailFor(token, await linkSecret(), user.emailVerified);
+        if (mail === undefined) {
+          logger.warn('verification link token did not verify with the auth secret: sign-up mail');
+        }
+        await send(
+          user.email,
+          mail === 'changeEmailVerified'
+            ? MAIL_TEMPLATES.changeEmailVerified({ url })
+            : mail === 'changeEmailUnverified'
+              ? MAIL_TEMPLATES.changeEmailUnverified({ url })
+              : MAIL_TEMPLATES.verification({ url }),
+        );
       },
     },
 
@@ -539,7 +591,8 @@ export function createAuth({
         //   address UNVERIFIED (better-auth 1.7.16+, GHSA-hwq2-v29r-p69r: a requester who never
         //   proved the current address gets no verified one from the change), and the settings
         //   card's resend (/send-verification-email) verifies it (ADR-0151)
-        // Neither link signs anybody in: with no session it changes the address and stops there.
+        // The mail to the new address says which of the two its click does (verificationMailFor,
+        // ADR-0153). Neither link signs anybody in: with no session it changes the address and stops.
         // A new address that already belongs to another user gets the same 200 without mail.
         // Because the first branch mails the CURRENT address, the `hooks.before` limit counts
         // the account asking as well as `newEmail` (CHANGE_EMAIL_ACCOUNT_BUCKET).
@@ -815,6 +868,7 @@ export function createAuth({
   resendVerification = async (email, callbackURL) => {
     await auth.api.sendVerificationEmail({ body: { email, callbackURL } });
   };
+  linkSecret = async () => (await auth.$context).secret;
 
   return auth;
 }

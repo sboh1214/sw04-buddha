@@ -13,6 +13,7 @@ import { REDIS } from '../infra/redis/redis.provider.js';
 import { RATE_LIMIT_KEY_PREFIX } from '../rate-limit/redis-throttler.storage.js';
 import { createTestApp, signUpTestUser, verificationLinkFor, type TestApp } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
+import { MAIL_TEMPLATES } from '../mail/templates.js';
 import { CREDENTIAL_PROVIDER_ID } from './auth.js';
 
 /** Header/body the browser would send through the Next.js rewrite (same-origin POST). */
@@ -74,6 +75,16 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
       payload,
     });
 
+  /**
+   * The mail `template` builds for `to` from the link last mailed there: what each link should go
+   * out in (ADR-0153) — the sign-up mail, or the change of address's mail for the new address,
+   * which says what the click does for the account asking.
+   */
+  const linkMail = (
+    to: string,
+    template: 'verification' | 'changeEmailVerified' | 'changeEmailUnverified',
+  ) => ({ to, ...MAIL_TEMPLATES[template]({ url: verificationLinkFor(t.mailer, to) }) });
+
   async function userRow(address: string) {
     const [row] = await t.db
       .select({ id: schema.user.id, emailVerified: schema.user.emailVerified })
@@ -123,7 +134,7 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     expect(await credentialAccount(user!.id)).toBeUndefined();
 
     expect(t.mailer.messages).toHaveLength(1);
-    expect(t.mailer.messages[0]).toMatchObject({ to: email });
+    expect(t.mailer.messages[0]).toEqual(linkMail(email, 'verification'));
     expect(t.mailer.messages[0]!.text).toContain(
       'http://localhost:3000/api/auth/verify-email?token=',
     );
@@ -531,9 +542,10 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
       headers: { cookie },
     });
     expect(confirm.statusCode).toBe(302);
-    // Step 2: verification mail to the NEW address; still not applied.
+    // Step 2: verification mail to the NEW address; still not applied. Its mail says the click
+    // changes the address and verifies it (ADR-0153), not the sign-up mail.
     expect(t.mailer.messages).toHaveLength(2);
-    expect(t.mailer.messages[1]).toMatchObject({ to: newEmail });
+    expect(t.mailer.messages[1]).toEqual(linkMail(newEmail, 'changeEmailVerified'));
     expect(await userRow(newEmail)).toBeUndefined();
 
     const verify = await t.app.inject({
@@ -696,7 +708,8 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(t.mailer.messages).toHaveLength(1);
-    expect(t.mailer.messages[0]).toMatchObject({ to: newEmail });
+    // The mail says the click only changes the address, and how to verify it (ADR-0153).
+    expect(t.mailer.messages[0]).toEqual(linkMail(newEmail, 'changeEmailUnverified'));
     expect(await redis.keys(accountBuckets)).toHaveLength(before + 1);
   });
 
@@ -734,6 +747,8 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     t.mailer.messages.length = 0;
     const newEmail = 'it-auth-unverified-change-real@test.local';
     expect((await changeEmail(own, newEmail)).statusCode).toBe(200);
+    // Its mail says so: the click changes the address, the settings resend verifies it (ADR-0153).
+    expect(t.mailer.messages).toEqual([linkMail(newEmail, 'changeEmailUnverified')]);
 
     const applied = await t.app.inject({
       method: 'GET',
@@ -752,6 +767,8 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
       payload: { email: newEmail, callbackURL: '/settings' },
     });
     expect(resend.statusCode).toBe(200);
+    // The resend's link is a plain one, in the sign-up mail (better-auth mints it the same way).
+    expect(t.mailer.messages).toEqual([linkMail(newEmail, 'verification')]);
     const verified = await t.app.inject({
       method: 'GET',
       url: pathOf(verificationLinkFor(t.mailer, newEmail)),
@@ -775,6 +792,8 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     });
     expect(confirm.statusCode).toBe(302);
     expect(sessionCookieOf(confirm.headers['set-cookie'])).toBeUndefined();
+    // The account is verified, whoever opened the confirmation: the mail says change and verify.
+    expect(t.mailer.messages.at(-1)).toEqual(linkMail(newEmail, 'changeEmailVerified'));
     const verify = await t.app.inject({
       method: 'GET',
       url: pathOf(verificationLinkFor(t.mailer, newEmail)),

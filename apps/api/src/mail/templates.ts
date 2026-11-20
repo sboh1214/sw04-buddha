@@ -45,7 +45,10 @@ function layout(title: string, paragraphs: string[], url: string, button: string
   );
 }
 
-/** 이메일 인증 (better-auth `emailVerification.sendVerificationEmail`) */
+/**
+ * 이메일 인증: 가입과 재발송의 링크 (better-auth `emailVerification.sendVerificationEmail`). 같은 훅이
+ * 보내는 이메일 변경의 링크는 아래 두 양식이다 (ADR-0153).
+ */
 export function verificationEmail(input: { url: string; expiresInMinutes?: number }): EmailContent {
   // better-auth default emailVerification.expiresIn is 3600 s.
   const minutes = input.expiresInMinutes ?? 60;
@@ -101,6 +104,56 @@ export function changeEmailConfirmationEmail(input: {
 }
 
 /**
+ * 이메일 변경: 새 주소로 가는 링크, 현재 주소가 인증된 계정 (better-auth
+ * `emailVerification.sendVerificationEmail`, `change-email-verification`). 현재 주소로 간 확인
+ * 메일 다음 단계이고, 누르면 주소가 바뀌고 인증된다 (ADR-0153).
+ */
+export function changeEmailVerifiedEmail(input: {
+  url: string;
+  expiresInMinutes?: number;
+}): EmailContent {
+  // better-auth default emailVerification.expiresIn is 3600 s.
+  const minutes = input.expiresInMinutes ?? 60;
+  const title = `[${SERVICE_NAME}] 이메일 변경을 완료해 주세요`;
+  const paragraphs = [
+    `${SERVICE_NAME} 계정의 이메일 주소를 이 주소로 변경하는 요청을 받았습니다.`,
+    `아래 버튼을 누르면 이메일 주소가 이 주소로 바뀌고 인증이 완료됩니다. 링크는 ${String(minutes)}분 동안만 유효합니다.`,
+    '본인이 요청한 것이 아니라면 이 메일을 무시하셔도 됩니다.',
+  ];
+  return {
+    subject: title,
+    text: `${paragraphs.join('\n\n')}\n\n새 이메일로 바꾸기: ${input.url}\n`,
+    html: layout(title, paragraphs, input.url, '새 이메일로 바꾸기'),
+  };
+}
+
+/**
+ * 이메일 변경: 새 주소로 가는 링크, 현재 주소가 미인증인 계정 (better-auth
+ * `emailVerification.sendVerificationEmail`, `change-email-verification`; 카카오·네이버의 대체 주소
+ * 포함). 누르면 주소만 바뀌고, 인증은 MY 설정의 '인증 메일 다시 보내기'로 한다 (ADR-0151·ADR-0153).
+ */
+export function changeEmailUnverifiedEmail(input: {
+  url: string;
+  expiresInMinutes?: number;
+}): EmailContent {
+  // better-auth default emailVerification.expiresIn is 3600 s.
+  const minutes = input.expiresInMinutes ?? 60;
+  const title = `[${SERVICE_NAME}] 새 이메일로 바꾼 뒤 인증해 주세요`;
+  const paragraphs = [
+    `${SERVICE_NAME} 계정의 이메일 주소를 이 주소로 변경하는 요청을 받았습니다.`,
+    `아래 버튼을 누르면 이메일 주소가 이 주소로 바뀝니다. 링크는 ${String(minutes)}분 동안만 유효합니다.`,
+    '이메일 인증은 주소가 바뀐 뒤 따로 해야 합니다.',
+    "로그인한 뒤 MY 설정에서 '인증 메일 다시 보내기'를 누르고, 새로 받은 메일의 링크를 눌러 주세요.",
+    '본인이 요청한 것이 아니라면 이 메일을 무시하셔도 됩니다.',
+  ];
+  return {
+    subject: title,
+    text: `${paragraphs.join('\n\n')}\n\n새 이메일로 바꾸기: ${input.url}\n`,
+    html: layout(title, paragraphs, input.url, '새 이메일로 바꾸기'),
+  };
+}
+
+/**
  * 개발용 SMS 발송기의 본인확인 인증번호 (SMS_PROVIDER=dev, ADR-0070): the code the development
  * sender texts to nobody, mailed to Mailpit instead (`sms-<number>@sms.buddha.local`). Never sent
  * in production, where the env schema refuses that sender.
@@ -134,5 +187,7 @@ export const MAIL_TEMPLATES = {
   verification: verificationEmail,
   passwordReset: passwordResetEmail,
   changeEmailConfirmation: changeEmailConfirmationEmail,
+  changeEmailVerified: changeEmailVerifiedEmail,
+  changeEmailUnverified: changeEmailUnverifiedEmail,
   devVerificationCode: devVerificationCodeEmail,
 } as const satisfies Record<string, (input: never) => EmailContent>;
