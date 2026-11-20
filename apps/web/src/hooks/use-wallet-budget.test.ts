@@ -186,6 +186,17 @@ describe('/my/wallet in budget (#69, ADR-0144 결정 6)', () => {
     expect(watch).not.toContain('useLiveOrders(');
   });
 
+  it('reads one page of live orders a book round, however many it holds (#302, ADR-0146)', () => {
+    // The steady bound's `book * 1`: the watch draws the first page alone and asks for no next one,
+    // and that page is 100 long (`WALLET_LIVE_ORDERS_PAGE`) — more rows, not more requests.
+    const watch = code(src('./use-wallet-lock-watch.ts'));
+    expect(watch).toContain('const rows = orders.data?.pages[0]?.items ?? [];');
+    expect(watch).not.toMatch(/fetchNextPage|hasNextPage|pages\.flatMap|pages\[1\]/);
+    expect(code(src('./use-my-orders.ts'))).toContain(
+      'liveOrdersQueryOptions(accountId, undefined, session, WALLET_LIVE_ORDERS_PAGE)',
+    );
+  });
+
   it('is what ADR-0144 records, measured before the fix and with no room cap', () => {
     const decisions = src('../../../../docs/DECISIONS.md');
     const adr = decisions.slice(decisions.indexOf('\n## ADR-0144 '));
