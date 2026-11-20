@@ -4,32 +4,32 @@ import { copy } from '../src/copy';
 import { accountIdOf, adminAccount, expect, freshEmail, signIn, signUp, test } from './helpers';
 
 /**
- * 출시 설정 (#170, ADR-0055) as the shipped build has it: twenty-eight registered items — 시작 지급액
- * (`grant.start_coin`, #70, ADR-0071), 선행 마감 최소 간격 (`market.lead_close_gap`, #22,
- * ADR-0098), 이의 기간 (`market.dispute_window`, #152, ADR-0103), 주문 접수, 주문 속도 제한 and 가격
- * 보호 폭 표준값 (`order.*`, #119, ADR-0112 — the first a flag), three MM risk-stage items
- * (`#129` risk stages), the MM human concentration N (#182), six anomaly inputs (#98), and the six retention periods
- * (`retention.*` — #184's five, ADR-0087, and #77's market proposals, ADR-0089) — which the screen
- * and the API list alike, in the registry's order. Changing and recording an item are fixed by
- * the API suite with injected test items (`createTestApp({ releaseSettings })`), paying the start
- * Coin once a value is entered by the API and worker suites, deleting what a retention period has
- * kept by the worker's suite, the lead-close gap's use by the API suite
- * (admin-markets-times.controller.test.ts) and the dispute window's by the API and worker suites
- * (admin-market-judgements.controller.test.ts, market-resolve.test.ts); a browser cannot register
- * one.
+ * 출시 설정 (#170, ADR-0055) as the shipped build has it: thirty-four registered items — 시작 지급액
+ * (`grant.start_coin`, #70, ADR-0071), the re-grant's six (`grant.regrant_*`, #74, ADR-0155: 소진
+ * 기준액, 1회 지급액, 대기기간, 주기, 주기 안 횟수, 누적 상한), 선행 마감 최소 간격 (`market.lead_close_gap`, #22, ADR-0098), 이의
+ * 기간 (`market.dispute_window`, #152, ADR-0103), 주문 접수, 주문 속도 제한 and 가격 보호 폭 표준값 (`order.*`, #119,
+ * ADR-0112 — the first a flag), three MM risk-stage items (`#129` risk stages), the MM human
+ * concentration N (#182), six anomaly inputs (#98), and the six retention periods (`retention.*` —
+ * #184's five, ADR-0087, and #77's market proposals, ADR-0089) — which the screen and the API list
+ * alike, in the registry's order. Changing and recording an item are fixed by the API suite with
+ * injected test items (`createTestApp({ releaseSettings })`), paying the start Coin once a value is
+ * entered by the API and worker suites, deleting what a retention period has kept by the worker's
+ * suite, the lead-close gap's use by the API suite (admin-markets-times.controller.test.ts) and the
+ * dispute window's by the API and worker suites (admin-market-judgements.controller.test.ts,
+ * market-resolve.test.ts); a browser cannot register one.
  *
  * Nothing here changes an item. A value entered in a run would be paid by the worker to every
  * waiting grant — or, for an approved retention period, delete the records older than it at the
  * worker's next daily run; for the lead-close gap, decide which markets with an announcement time
  * may open — and stay for the runs after it, so the spec reads the status the database holds —
  * 미정 on a fresh one, as no migration or seed writes a value (docs/SETTINGS.md) — and checks the
- * screen against it. The suite writes eight values, by its global setup before any test
+ * screen against it. The suite writes fourteen values, by its global setup before any test
  * (global-setup.ts, 시험값 while each is 미정): the dispute window's 1분, the start Coin's 1,000,000
- * (since #116, the e2e accounts' only Coin) and the three order items — intake open, 20 orders a
- * minute and a width of 5 ticks (#119, `ensureOrderSettings`), plus the three explicit MM test
- * stage settings (#129). None of the eight is 미정 here, none changes while this spec reads the
- * list, and the 미정 count comes from the other items
- * alone. The change dialogs are opened and cancelled only.
+ * (since #116, the e2e accounts' only Coin), the re-grant's six (#74, `ensureRegrantSettings`) and
+ * the three order items — intake open, 20 orders a minute and a width of 5 ticks (#119,
+ * `ensureOrderSettings`), plus the three explicit MM test stage settings (#129). None of the
+ * fourteen is 미정 here, none changes while this spec reads the list, and the 미정 count comes from
+ * the other items alone. The change dialogs are opened and cancelled only.
  */
 
 const LIST = '/api/v1/admin/release-settings';
@@ -37,6 +37,19 @@ const CHANGES = '/api/v1/admin/release-settings/changes';
 
 /** The start grant's key (`START_COIN_SETTING`). */
 const START_COIN_KEY = 'grant.start_coin';
+
+/**
+ * The re-grant's six (`REGRANT_SETTINGS`, #74, ADR-0155) with their names and units, in the
+ * registry's order — right after the start grant. Whole numbers each.
+ */
+const REGRANT_ITEMS = [
+  ['grant.regrant_threshold_coin', '재지급 소진 기준액', 'Coin'],
+  ['grant.regrant_amount_coin', '재지급 1회 지급액', 'Coin'],
+  ['grant.regrant_wait_hours', '재지급 대기기간', '시간'],
+  ['grant.regrant_period_days', '재지급 횟수 주기', '일'],
+  ['grant.regrant_period_limit', '재지급 주기 안 횟수', '회'],
+  ['grant.regrant_total_cap_coin', '재지급 누적 상한', 'Coin'],
+] as const;
 
 /**
  * The lead-close gap's key (`LEAD_CLOSE_GAP_SETTING`, #22): how far a market's close must lead its
@@ -113,6 +126,7 @@ const RETENTION_ITEMS = [
  */
 const SHIPPED_KEYS = [
   START_COIN_KEY,
+  ...REGRANT_ITEMS.map(([key]) => key),
   LEAD_CLOSE_GAP_KEY,
   DISPUTE_WINDOW_KEY,
   ...ORDER_ITEMS.map(([key]) => key),
@@ -149,7 +163,7 @@ async function expectForbidden(response: APIResponse): Promise<void> {
 }
 
 test.describe('출시 설정 (#170)', () => {
-  test('관리자 메뉴에서 열면 시작 지급액·선행 마감 최소 간격·이의 기간, 주문·MM 각 세 항목·유동성 표준값 여섯·집중도 인원·거래 패턴 여섯 항목·여섯 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
+  test('관리자 메뉴에서 열면 시작 지급액·재지급 여섯 항목·선행 마감 최소 간격·이의 기간, 주문·MM 각 세 항목·유동성 표준값 여섯·집중도 인원·거래 패턴 여섯 항목·여섯 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
     page,
     admin,
   }) => {
@@ -162,6 +176,13 @@ test.describe('출시 설정 (#170)', () => {
     expect(startCoin.valueSchema.type).toBe('integer');
     // Like the dispute window below, it has a value whatever the database (global-setup.ts, #116).
     expect(startCoin.status).not.toBe('undecided');
+    // The re-grant's six too (#74: `ensureRegrantSettings`), each a whole number with its unit.
+    for (const [key, label, unit] of REGRANT_ITEMS) {
+      const item = items.find((entry) => entry.key === key);
+      expect(item, key).toMatchObject({ key, label, unit });
+      expect(item?.valueSchema.type, key).toBe('integer');
+      expect(item?.status, key).not.toBe('undecided');
+    }
     const leadCloseGap = items.find((item) => item.key === LEAD_CLOSE_GAP_KEY);
     expect(leadCloseGap).toMatchObject({ label: '선행 마감 최소 간격', unit: '분' });
     expect(leadCloseGap?.valueSchema.type).toBe('integer');

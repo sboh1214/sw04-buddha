@@ -239,6 +239,18 @@ export const ERROR_CODES = [
    */
   'ORDER_INTAKE_CLOSED',
   'MARKET_MAKER_CONTROL_NOT_ALLOWED',
+  /**
+   * No re-grant was given and nothing was written, 409, 제한적 재지급 #74, ADR-0155: a release
+   * setting of the six is undecided, so none is given yet, or a condition fails — the account
+   * books held for a reconciliation difference, its start grant never paid, its available Coin
+   * above the threshold, an order of it waiting in a book, a contract of a market not settled,
+   * the wait since the last re-grant or the start grant not over, the re-grants of the period
+   * used up, or this one taking the lifetime re-grants past the cap, never granted in part.
+   * Details carry every reason that applies and the numbers, regrantNotAllowedDetailsSchema: the
+   * status GET /me/regrant reads. Nothing waits: the same request id may be sent again once the
+   * reasons are gone. An account restriction refuses it as RESTRICTED.
+   */
+  'REGRANT_NOT_ALLOWED',
   'INTERNAL',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

@@ -125,7 +125,8 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
     // owner-only route, which this list does not read. Nor a ledger account (#116): whose Coin
     // sits where is the account's own, and a 마켓메이커 자금 would say the bot trades. Nor its
     // total as the ledger says (`balances.ledger_coin`, #116), the third balance column: a market's
-    // collateral total is no public field of that name either.
+    // collateral total is no public field of that name either. Nor a re-grant (#74, ADR-0155):
+    // whether, how much and when an account was re-granted is its wallet's and the admins'.
     fields: [
       ['balance'],
       ['balances'],
@@ -136,6 +137,8 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       ['ledger', 'coin'],
       ['start', 'grant'],
       ['start', 'grants'],
+      ['regrant'],
+      ['regrants'],
     ],
   },
   {

@@ -2209,6 +2209,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/regrants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every re-grant given (재지급, #74), newest first: the account (id, public id, nickname — null once closed), the Coin given, the available Coin read when it was given and when */
+        get: operations["adminListRegrants"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/release-settings": {
         parameters: {
             query?: never;
@@ -3587,6 +3604,24 @@ export type paths = {
         get: operations["getMyReconciliationCorrections"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/regrant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Whether a re-grant (재지급, #74) would be given now: open (every release setting of the six decided), eligible, every refusal that applies, in order, and the numbers the wallet shows — the amount, the threshold, the wait and when it ends, the period, its limit, the re-grants used in it and when the next frees, the lifetime cap, what was given and what it leaves. Every number is null while not open */
+        get: operations["getMyRegrant"];
+        put?: never;
+        /** Ask for a re-grant (재지급, #74): when the available Coin is at or below the threshold, no order waits, no contract of an unsettled market is held, the wait has passed and the period and the lifetime cap leave room, the release setting’s amount is issued to the account at once (ledger kind REGRANT). The same Idempotency-Key answers the re-grant it gave (replayed); a refusal writes nothing */
+        post: operations["applyRegrant"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5162,6 +5197,20 @@ export type components = {
             status: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
             title: string;
         };
+        AdminRegrant: {
+            account: {
+                nickname: string | null;
+                /** @description An account’s public id: 10 lower-case letters and digits, never the account id */
+                publicId: string;
+                userId: string;
+            };
+            amountCoin: components["schemas"]["CoinAmount"];
+            availableBeforeCoin: components["schemas"]["CoinAmount"];
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: uuid */
+            id: string;
+        };
         AdminRelatedMarket: {
             category: {
                 nameKo: string;
@@ -5436,6 +5485,10 @@ export type components = {
         AnswerInterestsStepBody: {
             categoryIds: number[];
             expectedAccountId: string;
+        };
+        ApplyRegrantResult: {
+            regrant: components["schemas"]["Regrant"];
+            replayed: boolean;
         };
         ApprovalDecisionBody: {
             expectedAccountId: string;
@@ -5780,7 +5833,7 @@ export type components = {
             title: string;
         };
         /** @enum {string} */
-        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "TRANSACTION_BUSY" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "FILL_CLASSIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "REPORT_NOT_ALLOWED" | "REPORT_LIMITED" | "MODERATION_NOT_ALLOWED" | "RESTRICTED" | "WRITE_LIMITED" | "CLOSURE_NOT_ALLOWED" | "ACCOUNT_CLOSED" | "PROPOSAL_LIMITED" | "OPEN_ITEMS_MISSING" | "DISPUTE_NOT_ALLOWED" | "ORDER_INTAKE_CLOSED" | "MARKET_MAKER_CONTROL_NOT_ALLOWED" | "INTERNAL";
+        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "TRANSACTION_BUSY" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "FILL_CLASSIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "REPORT_NOT_ALLOWED" | "REPORT_LIMITED" | "MODERATION_NOT_ALLOWED" | "RESTRICTED" | "WRITE_LIMITED" | "CLOSURE_NOT_ALLOWED" | "ACCOUNT_CLOSED" | "PROPOSAL_LIMITED" | "OPEN_ITEMS_MISSING" | "DISPUTE_NOT_ALLOWED" | "ORDER_INTAKE_CLOSED" | "MARKET_MAKER_CONTROL_NOT_ALLOWED" | "REGRANT_NOT_ALLOWED" | "INTERNAL";
         ErrorEnvelope: {
             error: {
                 code: components["schemas"]["ErrorCode"];
@@ -5888,7 +5941,7 @@ export type components = {
             createdAt: string;
             id: string;
             /** @enum {string} */
-            kind: "BUY_FILL" | "SELL_FILL" | "SETTLEMENT_PAYOUT" | "START_GRANT" | "RECONCILIATION_CORRECTION" | "CLOSURE_FORFEIT" | "DEPOSIT" | "BONUS" | "PAYMENT_CANCEL" | "PAYMENT_CANCEL_REVERSAL";
+            kind: "BUY_FILL" | "SELL_FILL" | "SETTLEMENT_PAYOUT" | "START_GRANT" | "RECONCILIATION_CORRECTION" | "REGRANT" | "CLOSURE_FORFEIT" | "DEPOSIT" | "BONUS" | "PAYMENT_CANCEL" | "PAYMENT_CANCEL_REVERSAL";
             /** Format: uuid */
             marketId: string | null;
             marketSlug: string | null;
@@ -5898,7 +5951,7 @@ export type components = {
             orderId: string | null;
             refId: string;
             /** @enum {string} */
-            refType: "payment" | "fill" | "market" | "coupon" | "start_grant" | "account_closure" | "approval_request" | "audit_failure" | "reconciliation_correction";
+            refType: "payment" | "fill" | "market" | "coupon" | "start_grant" | "account_closure" | "approval_request" | "audit_failure" | "reconciliation_correction" | "regrant";
         };
         LiftRestrictionBody: {
             expectedAccountId: string;
@@ -7471,6 +7524,33 @@ export type components = {
         RegisterResult: {
             /** @enum {string} */
             status: "sent";
+        };
+        Regrant: {
+            amountCoin: components["schemas"]["CoinAmount"];
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: uuid */
+            id: string;
+        };
+        /** @enum {string} */
+        RegrantRefusal: "not_ready" | "restricted" | "held" | "no_start_grant" | "not_exhausted" | "live_orders" | "unsettled_positions" | "waiting" | "period_limit" | "total_cap";
+        RegrantStatus: {
+            amountCoin: components["schemas"]["CoinAmount"] | null;
+            eligible: boolean;
+            /** Format: date-time */
+            nextPeriodAt: string | null;
+            open: boolean;
+            periodDays: number | null;
+            periodLimit: number | null;
+            periodUsed: number | null;
+            refusals: components["schemas"]["RegrantRefusal"][];
+            remainingCapCoin: components["schemas"]["CoinAmount"] | null;
+            thresholdCoin: components["schemas"]["CoinAmount"] | null;
+            totalCapCoin: components["schemas"]["CoinAmount"] | null;
+            totalGrantedCoin: components["schemas"]["CoinAmount"] | null;
+            waitHours: number | null;
+            /** Format: date-time */
+            waitUntil: string | null;
         };
         RejectJudgementBody: {
             expectedAccountId: string;
@@ -19308,6 +19388,77 @@ export interface operations {
             };
         };
     };
+    adminListRegrants: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminRegrant"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     adminListReleaseSettings: {
         parameters: {
             query?: {
@@ -23549,7 +23700,7 @@ export interface operations {
         parameters: {
             query?: {
                 cursor?: string;
-                kind?: "BUY_FILL" | "SELL_FILL" | "SETTLEMENT_PAYOUT" | "START_GRANT" | "RECONCILIATION_CORRECTION";
+                kind?: "BUY_FILL" | "SELL_FILL" | "SETTLEMENT_PAYOUT" | "START_GRANT" | "RECONCILIATION_CORRECTION" | "REGRANT";
                 limit?: number;
                 marketId?: string;
                 period?: "7d" | "30d" | "90d";
@@ -25161,6 +25312,118 @@ export interface operations {
             };
             /** @description UNAUTHENTICATED */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getMyRegrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["RegrantStatus"];
+                    };
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    applyRegrant: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The request id: client-generated, unique per account. Re-sending one that was granted answers that re-grant (replayed: true) and grants nothing more. A refusal records nothing, so its id may be sent again once the reasons are gone. */
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedAccountBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ApplyRegrantResult"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN | RESTRICTED */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | REGRANT_NOT_ALLOWED */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

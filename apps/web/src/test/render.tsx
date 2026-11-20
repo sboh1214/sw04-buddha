@@ -10,13 +10,18 @@ import { system } from '@/theme/system';
  * key, as the server pages seed theirs. For the components whose drawing, not only the pure
  * function behind it, an owner decision is about. Test support, not screen code: the screen walk
  * skips this folder (screen-text.ts).
+ *
+ * `prepare` runs on the seeded client before the paint: a state no seed reaches — a read again that
+ * failed over the data held (`Query.setState`), say.
  */
 export function renderWithQueries(
   node: ReactNode,
   seed: readonly (readonly [queryKey: readonly unknown[], data: unknown])[] = [],
+  prepare?: (queryClient: QueryClient) => void,
 ): string {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   for (const [queryKey, data] of seed) queryClient.setQueryData(queryKey, data);
+  prepare?.(queryClient);
   const html = renderToStaticMarkup(
     <ChakraProvider value={system}>
       <QueryClientProvider client={queryClient}>{node}</QueryClientProvider>

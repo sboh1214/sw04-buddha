@@ -41,6 +41,13 @@ describe('useAccountBlock', () => {
     );
   });
 
+  it('says whether a restriction is held apart from the role, an admin’s too (ADR-0155)', () => {
+    // `account` and `restrictionEndsAt` stay what the panel and MY's holdings read; `restricted`
+    // is added for 재지급's card, which says an admin's restriction with its end.
+    expect(source).toContain('restricted: restrictedDetails !== null,');
+    expect(source).toContain('restrictionEndsAt: restrictedDetails?.endsAt ?? null,');
+  });
+
   it('is the one reading of the panel and of MY’s holdings', () => {
     expect(panel).toContain('useAccountBlock(me, now)');
     expect(portfolio).toContain('useAccountBlock(');

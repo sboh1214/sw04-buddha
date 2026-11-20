@@ -182,6 +182,15 @@ export {
   getReleaseSettings,
   storedReleaseSettingValue,
 } from './release-settings.js';
+export {
+  applyRegrant,
+  readAdminRegrantPage,
+  regrantsOf,
+  regrantStatus,
+  type ApplyRegrantInput,
+  type ApplyRegrantOutcome,
+  type RegrantRow,
+} from './regrants.js';
 export * as schema from './schema/index.js';
 export {
   cancelStartGrant,

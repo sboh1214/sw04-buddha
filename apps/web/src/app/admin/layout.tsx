@@ -59,6 +59,9 @@ const NAV: { href: Route; label: string }[] = [
   { href: '/admin/sms', label: copy.adminSms },
   { href: '/admin/audit-failures', label: copy.adminAuditFailures },
   { href: '/admin/treasury', label: copy.adminTreasury },
+  // 재지급 기록 (#74, ADR-0155): the members' re-grants, read only — after 금고, the other Coin
+  // issued.
+  { href: '/admin/regrants', label: copy.adminRegrants },
   { href: '/admin/market-makers', label: copy.adminMarketMakers },
   { href: '/admin/trading-anomalies', label: copy.adminTradingAnomalies },
   { href: '/admin/fill-classifications', label: copy.classificationsTitle },

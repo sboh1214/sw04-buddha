@@ -66,6 +66,8 @@ const OPERATION_RECORDS = [
   'GET /admin/moderation/actions',
   // #175: 이의 접수, the judgement disputes with who submitted and decided them (N03 §8).
   'GET /admin/market-disputes',
+  // #74: 재지급 기록, every re-grant given with its account (owner answer 2026-11-21 3).
+  'GET /admin/regrants',
 ];
 
 describe('admin access (static)', () => {

@@ -235,7 +235,8 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
   describe('directions', () => {
     it('agrees with LEDGER_ENTRY_RULES for every type and every pair of sides (drift)', async () => {
       // The SQL copy of the pairs (`ledger_entry_direction_allowed`, migration 0060) and the shared
-      // table answer alike for each of the 14 × 5 × 5 combinations, mint and burn sides included.
+      // table answer alike for each of the 15 × 5 × 5 combinations, mint and burn sides included
+      // (REGRANT's row came with migration 0077, #74).
       const combos = LEDGER_ENTRY_TYPES.flatMap((type) =>
         SIDES.flatMap((from) => SIDES.map((to) => [type, from, to] as const)),
       );
@@ -259,8 +260,10 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
 
     it('records every allowed pair of every type, moving the amount and each side’s total', async () => {
       await createMarketMakerAccount(t.db);
-      // A forfeiture is the closure's own (schema.test.ts, and the conservation case below).
-      for (const type of LEDGER_ENTRY_TYPES.filter((type) => type !== 'CLOSURE_FORFEIT')) {
+      // A forfeiture is the closure's own (schema.test.ts, and the conservation case below), and a
+      // re-grant `applyRegrant`'s with its record (migration 0077; regrants.test.ts).
+      const own = ['CLOSURE_FORFEIT', 'REGRANT'];
+      for (const type of LEDGER_ENTRY_TYPES.filter((type) => !own.includes(type))) {
         for (const [fromKind, toKind] of LEDGER_ENTRY_RULES[type].pairs) {
           const market = await createMarket(t.db);
           const refOf = async (kind: LedgerSide): Promise<LedgerAccountRef | null> => {

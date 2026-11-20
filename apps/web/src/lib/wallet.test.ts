@@ -60,6 +60,7 @@ describe('LEDGER_KIND_LABEL', () => {
       '정산 지급',
       '시작 지급',
       'Coin 보정',
+      '재지급',
     ]);
     for (const kind of LEDGER_FILTER_KINDS) {
       expect(LEDGER_KIND_LABEL[kind], kind).not.toMatch(/환불|원금|대금|담보|정정/);
@@ -78,10 +79,17 @@ describe('LEDGER_KIND_LABEL', () => {
     expect(LEDGER_KIND_LABEL.START_GRANT).not.toBe(LEDGER_KIND_LABEL.BONUS);
     expect(LEDGER_KIND_LABEL.START_GRANT).not.toContain('보너스');
   });
+
+  it("calls the re-grant '재지급', apart from the start Coin and the coupon (#74, N04 §5)", () => {
+    expect(LEDGER_KIND_LABEL.REGRANT).toBe('재지급');
+    expect(LEDGER_KIND_LABEL.REGRANT).not.toBe(LEDGER_KIND_LABEL.START_GRANT);
+    expect(LEDGER_KIND_LABEL.REGRANT).not.toBe(LEDGER_KIND_LABEL.BONUS);
+    expect(findExcludedText(LEDGER_KIND_LABEL.REGRANT)).toEqual([]);
+  });
 });
 
 describe('LEDGER_FILTER_OPTIONS', () => {
-  it("offers '전체' first, then the five names in the owner's order (ADR-0135 H5)", () => {
+  it("offers '전체' first, then the five names in the owner's order (ADR-0135 H5) and 재지급 (#74)", () => {
     expect(LEDGER_FILTER_OPTIONS.map((option) => option.label)).toEqual([
       copy.ledgerKindAll,
       '매수 체결',
@@ -89,6 +97,7 @@ describe('LEDGER_FILTER_OPTIONS', () => {
       '정산 지급',
       '시작 지급',
       'Coin 보정',
+      '재지급',
     ]);
     expect(LEDGER_FILTER_OPTIONS.map((option) => option.kind)).toEqual([
       undefined,
@@ -111,6 +120,7 @@ describe('the wallet address', () => {
       'settlement-payout',
       'start-grant',
       'reconciliation-correction',
+      'regrant',
     ]);
   });
 

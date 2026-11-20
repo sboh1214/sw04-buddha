@@ -24,6 +24,11 @@ import {
   ORDER_ACCEPTING_SETTING,
   ORDER_RATE_LIMIT_SETTING,
   PRICE_PROTECTION_TICKS_SETTING,
+  REGRANT_PERIOD_LIMIT_MAX,
+  REGRANT_PERIOD_MAX_DAYS,
+  REGRANT_SETTINGS,
+  REGRANT_TOTAL_CAP_MAX_COIN,
+  REGRANT_WAIT_MAX_HOURS,
   RELEASE_SETTINGS,
   RELEASE_SETTING_UNCHANGED_MESSAGE,
   RETENTION_PERIOD_MAX_DAYS,
@@ -635,10 +640,11 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
     await t.app.get(AdminGuard).invalidate(admin.id);
   });
 
-  it('lists the start grant amount (#70), the lead-close gap (#22), the dispute window (#152), the order intake, rate limit and width (#119) and the retention periods (#184), undecided until an admin enters a value', async () => {
+  it('lists the start grant amount (#70), the re-grant numbers (#74), the lead-close gap (#22), the dispute window (#152), the order intake, rate limit and width (#119) and the retention periods (#184), undecided until an admin enters a value', async () => {
     const retention = Object.values(RETENTION_PERIOD_SETTINGS);
     expect([...RELEASE_SETTINGS.keys()]).toEqual([
       START_COIN_SETTING.key,
+      ...Object.values(REGRANT_SETTINGS).map(({ key }) => key),
       LEAD_CLOSE_GAP_SETTING.key,
       DISPUTE_WINDOW_SETTING.key,
       ORDER_ACCEPTING_SETTING.key,
@@ -674,6 +680,52 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
         updatedAt: null,
         updatedBy: null,
       },
+      // 제한적 재지급 (#74, ADR-0155): six whole numbers within their bounds, right after the
+      // start grant's amount.
+      ...(
+        [
+          ['grant.regrant_threshold_coin', REGRANT_SETTINGS.thresholdCoin, 'Coin', 0, 1_000_000],
+          ['grant.regrant_amount_coin', REGRANT_SETTINGS.amountCoin, 'Coin', 1, 1_000_000],
+          [
+            'grant.regrant_wait_hours',
+            REGRANT_SETTINGS.waitHours,
+            '시간',
+            0,
+            REGRANT_WAIT_MAX_HOURS,
+          ],
+          [
+            'grant.regrant_period_days',
+            REGRANT_SETTINGS.periodDays,
+            '일',
+            1,
+            REGRANT_PERIOD_MAX_DAYS,
+          ],
+          [
+            'grant.regrant_period_limit',
+            REGRANT_SETTINGS.periodLimit,
+            '회',
+            1,
+            REGRANT_PERIOD_LIMIT_MAX,
+          ],
+          [
+            'grant.regrant_total_cap_coin',
+            REGRANT_SETTINGS.totalCapCoin,
+            'Coin',
+            1,
+            REGRANT_TOTAL_CAP_MAX_COIN,
+          ],
+        ] as const
+      ).map(([key, definition, unit, minimum, maximum]) => ({
+        key,
+        label: definition.label,
+        unit,
+        description: definition.description,
+        valueSchema: expect.objectContaining({ type: 'integer', minimum, maximum }) as unknown,
+        status: 'undecided',
+        value: null,
+        updatedAt: null,
+        updatedBy: null,
+      })),
       {
         key: 'market.lead_close_gap',
         label: '선행 마감 최소 간격',

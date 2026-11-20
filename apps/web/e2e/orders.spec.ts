@@ -1277,7 +1277,7 @@ test.describe('거래·정산 이력 (#124)', () => {
       await expect(ledger.getByTestId('ledger-balance-note')).toHaveText(
         copy.ledgerBalanceAfterNote,
       );
-      // 유형: '전체' and the five names; 매도 체결 writes the address and leaves one row.
+      // 유형: '전체', the five names and 재지급 (#74); 매도 체결 writes the address and leaves one row.
       const kind = page.getByTestId('wallet-kind');
       await expect(kind.locator('option')).toHaveText([
         copy.ledgerKindAll,
@@ -1286,6 +1286,7 @@ test.describe('거래·정산 이력 (#124)', () => {
         copy.ledgerTypeSettlement,
         copy.ledgerTypeStartGrant,
         copy.ledgerTypeReconciliationCorrection,
+        copy.ledgerTypeRegrant,
       ]);
       await kind.selectOption('SELL_FILL');
       await expect(page).toHaveURL('/my/wallet?kind=sell-fill');

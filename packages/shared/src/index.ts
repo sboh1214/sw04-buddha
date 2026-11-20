@@ -67,6 +67,7 @@ export * from './public-id.js';
 export * from './proposals.js';
 export * from './rate-limit.js';
 export * from './realtime.js';
+export * from './regrant.js';
 export * from './related-markets.js';
 export * from './release-settings.js';
 export * from './retention.js';

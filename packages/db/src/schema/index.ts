@@ -52,6 +52,7 @@ export * from './post-comments.js';
 export * from './posts.js';
 export * from './price-ticks.js';
 export * from './profiles.js';
+export * from './regrants.js';
 export * from './relations.js';
 export * from './release-settings.js';
 export * from './retention-purges.js';

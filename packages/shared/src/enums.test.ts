@@ -99,6 +99,8 @@ describe('enums', () => {
       'BONUS',
       'PAYMENT_CANCEL',
       'PAYMENT_CANCEL_REVERSAL',
+      // #74 (migration 0077, ADR-0155): 재지급, appended.
+      'REGRANT',
     ]);
     expect(enums.paymentStatusSchema.parse('refunding')).toBe('refunding');
     expect(enums.ledgerEntryTypeSchema.parse('PAYMENT_CANCEL_REVERSAL')).toBe(
@@ -489,6 +491,15 @@ describe('enums', () => {
     expect(enums.ledgerEntryTypeSchema.parse('START_GRANT')).toBe('START_GRANT');
     expect(enums.ledgerRefTypeSchema.parse('start_grant')).toBe('start_grant');
     expect(enums.LEDGER_ENTRY_TYPES).toContain('BONUS');
+  });
+
+  it('gives the re-grant a ledger type and a reference of its own (#74)', () => {
+    // ADR-0155 (ADR-0107 결정 2 #73 1·3항): a new issue under its own type '재지급', never the start
+    // grant's or the coupon's, referring to its regrants row.
+    expect(enums.ledgerEntryTypeSchema.parse('REGRANT')).toBe('REGRANT');
+    expect(enums.ledgerRefTypeSchema.parse('regrant')).toBe('regrant');
+    expect(enums.LEDGER_ENTRY_TYPES.at(-1)).toBe('REGRANT');
+    expect(enums.LEDGER_REF_TYPES.at(-1)).toBe('regrant');
   });
 
   it('gives the forfeiture of a closure a ledger type of its own (#140)', () => {

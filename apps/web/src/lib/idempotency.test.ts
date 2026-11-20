@@ -130,4 +130,17 @@ describe('IdempotencyKeys', () => {
     const key = new IdempotencyKeys('user-a', storage).take('pack-1');
     expect(storage.getItem('buddha:charge-key:user-a:pack-1')).toBe(key);
   });
+
+  it('files a 재지급 key apart from the charge keys and from another account (#74)', () => {
+    // The same intent name in two flows never shares a key: settling one leaves the other.
+    const storage = fakeStorage();
+    const regrant = new IdempotencyKeys('user-a', storage, 'regrant-key');
+    const charge = new IdempotencyKeys('user-a', storage);
+    const key = regrant.take('regrant');
+    expect(storage.getItem('buddha:regrant-key:user-a:regrant')).toBe(key);
+    expect(charge.take('regrant')).not.toBe(key);
+    charge.settle('regrant', 200);
+    expect(regrant.take('regrant')).toBe(key);
+    expect(new IdempotencyKeys('user-b', storage, 'regrant-key').take('regrant')).not.toBe(key);
+  });
 });
