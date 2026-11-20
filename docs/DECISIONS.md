@@ -18443,3 +18443,47 @@ better-auth 저장소의 보안 권고 열 건이 1.7.7을 범위에 넣는다(�
   - **배포 뒤 오너 확인.** Kakao의 PKCE는 실제 키로 확인하지 못했다(로컬엔 키가 없다). 배포 뒤 Kakao 로그인과 MY 설정의 Kakao 연결을 한 번씩 해 본다. 실패하면 되돌린다.
   - **되돌리면.** 1.7.7로 되돌려도 저장된 것은 깨지지 않는다 — 스키마·세션 쿠키·비밀번호 해시가 같고, 1.7.7은 링크의 `userId`를 무시한다. 다만 1.7.26이 발급한 변경 링크는 한 시간 동안 1.7.7의 동작(자동 로그인, 미인증 요청자의 주소도 인증)으로 다시 통하고, 1.7.26에서 시작해 1.7.7에서 끝나는 Kakao 흐름(5분)은 실패한다. 1.7.26이 미인증으로 둔 주소는 그대로 미인증이고 재발송으로 인증된다. 되돌릴 때는 이 PR을 통째로 되돌린다: 코드를 두고 lockfile만 1.7.7로 내리면 `mailedByVerifyEmail`이 1.7.7의 확인 링크(`userId` 없음)를 세지 않아 Q-M6-8의 재생 한도가 빠진다(그 경우 `rate-limit.controller.test.ts`의 재생 시험이 실패하는 것을 확인했다).
 - **문서.** ADR-0023·ADR-0024·ADR-0034·ADR-0092·ADR-0094의 상태 줄에 이 ADR을 적었다. `docs/QUESTIONS.md`의 Q-M1-5('미인증 사용자(대체 주소 포함)는 새 주소 인증 1단계')와 Q-M1-6('설정 > 계정에서 실제 주소를 등록·인증한다')은 동결된 문서라 고치지 않는다.
+
+---
+
+## ADR-0152 — 세션 읽기가 DB에서 실패해도 세션 토큰이 로그에 남지 않게: API의 pino `err` 직렬화기가 실패한 쿼리의 바인딩 값을 빼고, better-auth의 로그를 API 로거로 돌린다 — API 계약·웹·마이그레이션·출시 설정 없음
+
+- 날짜: 2026-11-20
+- 상태: 채택
+
+### 맥락
+
+better-auth 1.7.26 업그레이드(ADR-0151)를 조사하며 열어 둔 결정 D6이다: 1.7.12부터 `getSession`이 DB 오류를 `cause`로 단 500(`APIError`, `FAILED_TO_GET_SESSION`)을 던지는데(#11924), drizzle-orm 0.45의 `DrizzleQueryError`는 메시지가 `Failed query: <sql>\nparams: <값>`이고 세션 읽기(`where "session"."token" = $1`)의 값은 세션 토큰 자체다. 조사는 코드만 읽었고 실행하지 않았다.
+
+- **재현.** 시험 DB에서 실제 better-auth·drizzle 어댑터·운영과 같은 로거 옵션(`createLoggerOptions`, production)으로, 풀이 `session` 테이블의 쿼리만 끊긴 연결처럼 거절하게 했다. 세 문 모두 500이었고 토큰이 이렇게 남았다.
+  - **API의 pino.** SessionGuard(`GET /api/v1/me`)와 업로드 관문(`POST /api/v1/media/images`, `image-body.ts`)의 500은 `ApiExceptionFilter`의 `unhandled failure` 줄로 간다. pino의 `stdSerializers.err`는 원인 사슬의 메시지와 스택을 이어 적으므로 토큰이 `err.message`와 `err.stack`에, 그리고 `err.body.message`·`err.body.stack`에 한 번 더 있었다 — better-call의 `APIError.body`는 문자열 `message`를 가진 객체라 pino가 오류로 직렬화하고, 같은 `cause`를 열거되지 않는 필드로 품는다(응답 본문에는 나가지 않는다). 1.7.12 전에는 `cause`가 없어 이 줄에 토큰이 없었다.
+  - **better-auth의 기본 로거.** 세 문(위 둘과 better-auth의 `/api/auth/get-session`)마다 `getSession`이 잡은 오류를 `console.error`로 통째로(`params` 포함)찍었다. 이것은 1.7.7에도 있던 줄이다(`dist/api/routes/session.mjs`의 `logger.error("INTERNAL_SERVER_ERROR", error)`) — 업그레이드가 들여온 것이 아니다.
+  - **남지 않는 곳.** 레이트리밋 트래커(`rate-limit.tracker.ts`)와 실시간 게이트웨이(`market.gateway.ts`)는 `error.message`·`String(error)`만 적어 better-auth의 문구(`Failed to get session`)뿐이다.
+- **무게.** 원래 토큰만으로는 쿠키가 되지 않는다(쿠키는 `BETTER_AUTH_SECRET`의 HMAC으로 서명된다). 그래도 세션 테이블의 열쇠이고, 그 비밀은 같은 호스트의 환경 변수에 있으며, 로그는 요청보다 오래 살고 다른 곳으로 실려 간다(ADR-0035). 같은 길로 다른 쿼리의 실패도 값을 적는다 — 주소, 이름. 본인확인 쓰기는 그래서 호출부에서 `cause`를 버리고 SQLSTATE만 남긴다(`verificationWriteFailure`, ADR-0043의 계보).
+
+### 결정
+
+1. **API의 pino `err` 직렬화기를 `serializeError`(`apps/api/src/logger.ts`)로 바꾼다.** pino의 `stdSerializers.err`를 그대로 쓰고, 그 결과에서 입력 오류가 품은 모든 실패한 쿼리 — 원인 사슬, pino가 오류로 직렬화하는 필드(`body` 같은), `AggregateError`의 `errors` — 의 메시지를 `Failed query: <sql>\nparams: [n redacted]`로 바꾸며, 실패한 쿼리 자신의 `params` 필드는 `[n redacted]`로 쓴다. SQL, 오류의 타입, 드라이버의 이유(`Connection terminated unexpectedly`)는 남는다 — 어느 문장이 왜 실패했는지가 운영자가 그 줄을 읽는 이유다.
+   - 실패한 쿼리는 클래스가 아니라 모양(`message`·`query` 문자열, `params` 배열)으로 알아본다. 트리에 drizzle-orm이 두 벌 생겨도 빠져나가지 않는다.
+   - 직렬화기가 새로 만든 객체(pino의 오류 프로토타입을 가진 것)만 고친다. 호출자의 오류와 그대로 복사된 필드는 건드리지 않는다.
+   - 값을 지우는 곳이 호출부가 아니라 직렬화기인 이유: 값은 호출자가 무엇을 바인딩했느냐이고, 실패한 쿼리를 `err`로 적는 길(`ApiExceptionFilter`, Fastify 자신의 오류 줄)은 모두 이것을 지난다.
+2. **better-auth의 로그를 API의 로거로 돌린다.** `betterAuth()`에 `logger: { log: betterAuthLog(logger) }`를 준다(`apps/api/src/auth/auth.ts`). better-auth의 각 줄은 `createAuth`의 `logger`(Nest `Logger('Auth')` → `NestPinoLogger` → pino)로 가고, 인자는 `describeLogArguments`가 한 줄로 만든다 — 문자열은 그대로, 오류는 `serializeError`로 타입과 메시지(원인 포함), 첫 오류의 스택은 따로(`stack` 필드), 그 밖의 값은 콘솔처럼 `inspect`로. 그래서 better-auth의 줄도 API의 JSON 한 형식이 된다(ADR-0035).
+   - 레벨은 better-auth의 기본(`warn`)으로 둔다. `error`·`warn`·`debug`를 적으면 better-auth의 라우터가 답하는 모든 `APIError`의 메시지(401 포함)를 `error`로 한 줄 더 적는다.
+3. **호출부는 그대로 둔다.** SessionGuard와 업로드 관문은 `cause`를 떼지 않는다 — 드라이버의 이유는 남아야 하고, 문제는 값뿐이다. better-auth를 패치하지 않는다.
+4. **회귀 시험을 둔다.**
+   - `apps/api/src/auth/session-read-log.test.ts`(통합): 위 재현 그대로, 세 문마다 500이고 pino 줄과 콘솔 어디에도 원래 토큰·서명된 쿠키 값·비밀이 없으며, better-auth의 줄(`context: "Auth"`)과 필터의 줄에 SQL·`params: [1 redacted]`·드라이버의 이유가 남는다. 이 수정을 뺀 코드에서는 세 시험이 모두 토큰을 보이며 실패하는 것을 확인했다.
+   - `apps/api/src/logger.test.ts`(단위): 직렬화기(`body`·`AggregateError`·SQL의 `$`·입력을 바꾸지 않음·실패한 쿼리가 없을 때 pino와 같음·API 로거의 `err`), `describeLogArguments`, `betterAuthLog`의 레벨.
+   - `createTestApp`에 `logger` 옵션을 더했다: main.ts처럼 Fastify(`ApiLogController`)와 Nest(`NestPinoLogger`)에 같은 pino를 준다. 주지 않으면 전처럼 `logger: false`.
+
+### 결과
+
+- **바뀐 파일.** `apps/api/src/logger.ts`, `apps/api/src/auth/auth.ts`, `apps/api/src/test/app.ts`, 시험 둘(`logger.test.ts`, `auth/session-read-log.test.ts`), 이 문서.
+- **그대로인 것.** 응답(API의 500 `INTERNAL` 봉투, better-auth의 500 본문), API 계약, 웹, 마이그레이션, 출시 설정, 의존성.
+- **함께 바뀌는 것.**
+  - 세션 읽기가 아닌 실패한 쿼리도 API 로그에서 값이 빠진다. 값으로 원인을 찾던 줄은 이제 SQL과 드라이버의 문구(SQLSTATE)로 읽는다.
+  - better-auth의 줄이 콘솔의 `[Better Auth]:` 형식(개발에서는 색) 대신 `context: "Auth"`의 pino JSON이다. `logger: false`인 시험에서는 조용하다(전에는 시험 출력에 찍혔다).
+- **이 ADR이 다루지 않는 것.**
+  - 워커(`apps/worker/src/logger.ts`)는 pino의 기본 `err` 직렬화기를 쓴다. 세션을 읽지 않지만, 실패한 쿼리의 값은 같은 모양으로 남는다.
+  - node-postgres 오류의 `detail`(제약 위반에서 행을 인용한다)은 이 직렬화기가 가리지 않는다. 본인확인 쓰기는 호출부에서 처리한다(`verificationWriteFailure`).
+  - 오류를 문자열로 바꿔 메시지에 넣는 로그(`String(error)`, `error.message`, `unrecorded-upload.ts`의 `reasonOf`)는 직렬화기를 지나지 않는다. 지금 그 길로 세션 읽기의 오류가 가는 곳은 없다(맥락의 '남지 않는 곳').
+  - better-auth가 오류를 객체 인자 안에 넣어 넘기면 `inspect`로 그대로 적힌다. 1.7.26에 그런 호출은 없다(`{ provider }`, `{ providerId }`, `{ issues }`뿐).
