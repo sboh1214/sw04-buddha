@@ -215,7 +215,7 @@ Next 16은 dev/build 모두 Turbopack이 기본이다. Chakra v3(Emotion)를 그
 ## ADR-0010 — 모바일: 이름 있는 카탈로그 `expo`, `expo-doctor` 바이너리, 에셋 없는 CNG 스캐폴드
 
 - 날짜: 2026-09-02
-- 상태: 채택
+- 상태: 채택, 일부 대체됨(ADR-0149: `expo-doctor` 1.20.5)
 
 ### 맥락
 
@@ -18335,3 +18335,32 @@ ADR-0135 결과 4가 묻지 않고 읽어서 정한 #34 줄(오너 답이 아니
 
 - **web:** `src/lib/market-keys.ts`(`isOrderHistoryKey`), `src/lib/market-live.ts`(`ORDER_HISTORY_INVALIDATE_MS`, `ownHistoryQuery`, `positionRestartsOrder`), `src/components/realtime/realtime-provider.tsx`(`refreshOrderHistory`). 시험 `hooks/use-my-history-budget`(새), `lib/market-live`.
 - **그 밖:** `docs/DECISIONS.md`.
+
+## ADR-0149 — 모바일 개발 도구 `expo-doctor`를 1.20.4에서 1.20.5(sdk-57)로: 한 파일 묶음 안의 minimatch가 GHSA-g3hv-75wg-m249(#87)의 수정을 품는다 — 실행 코드·이미지·마이그레이션·출시 설정 없음
+
+- 날짜: 2026-11-20
+- 상태: 채택
+
+### 맥락
+
+ADR-0010이 `expo-doctor` 1.20.4를 devDependency로 고정했다. ADR-0134 결정 1은 1.20.5(sdk-57)를 경고와 무관한 개발 도구의 갱신으로 보고 오너에게 넘겼고, 오너가 2026-11-20 올리라고 했다. 같은 날 오너의 선택으로 Dependabot 경고 #87(minimatch 10.2.6)은 'vulnerable code not used'로 닫혔다(lockfile의 사용처 다섯이 모두 `optimizationLevel` 기본값 1).
+
+- **한 파일 묶음.** expo-doctor는 의존성 없이 `build/index.js` 하나로 묶여 나오고 glob과 minimatch를 그 안에 품는다. lockfile 밖이라 Dependabot과 `pnpm audit`이 보지 않는다.
+- **1.20.4.** 묶은 glob은 `^13.0.0`이다. 그 glob은 minimatch를 `optimizationLevel: 2`로 고정해 부르고, 묶인 minimatch의 `firstPhasePreProcess`에는 상한이 없으며 `secondPhasePreProcess`는 개수와 상관없이 짝을 견준다 — GHSA-g3hv-75wg-m249의 수정 전 코드다.
+- **1.20.5.** npm `sdk-57` 태그의 판이다(`latest` 1.21.8은 SDK 58용). 묶은 glob은 `^14.0.3`이고, 묶인 minimatch의 `firstPhasePreProcess`가 `braceExpandMax`(기본 100,000)에서 멈추고 `secondPhasePreProcess`가 1,000개를 넘으면 견주지 않는다 — minimatch 11.0.1의 수정 커밋(`77a0f5c4`)과 같은 코드다. 2026-11-05 09:32 UTC에 나와 24시간(ADR-0004)을 넘겼다.
+- **닿는 경로.** 두 판 모두 glob을 부르는 곳은 같은 하나다. 프로젝트에 `modules/` 폴더가 있을 때만 고정 패턴 둘(`modules/**/ios/*.podspec`, `modules/**/android/build.gradle`)을 `signal`·`ignore` 없이 넘긴다. `apps/mobile`에는 `modules/`가 없다. 그래서 1.20.4에서도 실제로 닿는 경로는 아니었고, 이 갱신은 묶음 안의 낡은 판을 걷어내는 위생이다.
+
+### 결정
+
+1. **catalog의 `expo-doctor`를 1.20.4에서 1.20.5로 올린다.** `pnpm-workspace.yaml`에서 바뀌는 것은 이 한 줄이다. 1.21.x는 SDK 58용이라 고르지 않는다.
+2. **override를 쓰지 않고 `minimumReleaseAgeExclude`에 줄을 더하지 않는다.** 24시간을 넘겼으므로 정상 경로다.
+3. **묶음 안에 남는 권고는 이 PR에서 다루지 않는다.** 묶인 minimatch는 두 판 모두 `escape()` 권고 GHSA-c859-jr93-m5j4(범위 7.4.0–11.0.7, 수정판 11.0.8)의 범위다. 1.20.5의 glob `^14.0.3`은 GHSA-qxr8-q827-836c(low, `ignore` 패턴에 `braceExpandMax`가 없음, 범위 13.0.5–14.0.5)의 범위일 수 있다. 위 호출은 `ignore`를 넘기지 않고 패턴은 고정 문자열이다. 둘 다 lockfile 밖이라 경고로 뜨지 않는다.
+
+### 결과
+
+- **바뀐 파일.** `pnpm-workspace.yaml`(catalog 한 줄), `pnpm-lock.yaml`(expo-doctor의 네 줄: catalog·importer·packages·snapshots), 이 문서(ADR-0010의 상태 줄 포함). 실행 코드와 시험은 바꾸지 않았다. 마이그레이션·출시 설정·API 계약의 변화가 없다.
+- **lockfile.** 판이 바뀐 패키지는 expo-doctor 하나다. 새 이름과 빠진 이름이 없고, expo-doctor는 의존성이 없어 다른 줄이 움직이지 않는다. integrity(`sha512-CP4oAWXG…`)는 레지스트리와 같다. 설치 스크립트가 없다.
+- **운영 영향.** expo-doctor는 `apps/mobile`의 devDependency다. Dockerfile은 `apps/mobile`의 매니페스트만 복사하고 `--filter 'api...' 'worker...' 'web...'`로 설치하므로 세 이미지의 내용은 바뀌지 않는다. lockfile이 바뀌므로 머지하면 평소처럼 이미지를 다시 빌드해 배포하고, 새로 적용할 마이그레이션·시드는 없다.
+- **expo-doctor.** `pnpm --filter mobile run doctor`가 1.20.5로 21개 모두 통과한다(main의 1.20.4도 21/21).
+- **확인.** `pnpm install --frozen-lockfile`이 통과하고 `minimumReleaseAgeExclude`에 더한 줄이 없다. `pnpm peers check`의 출력은 main과 같다. 모바일 lint·typecheck(`--force`)와 Prettier가 통과한다. 나머지 패키지의 입력은 바뀌지 않아 시험·빌드·e2e는 이 head의 CI로 본다. Metro 번들·`expo prebuild`·네이티브 빌드는 돌리지 않았다(앱은 M0의 자리뿐이다).
+- **상태 줄.** ADR-0010의 '1.20.4를 고정'을 이 문서가 대체한다. ADR-0134 결정 1의 '오너에게 알린다'가 이 문서로 끝난다.
