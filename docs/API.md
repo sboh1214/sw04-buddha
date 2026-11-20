@@ -552,17 +552,17 @@ Nest 라우팅·전역 prefix·버저닝·본문 파싱보다 **먼저** 실행�
 | 메서드 | 경로 | 쓰임 |
 | --- | --- | --- |
 | POST | `/api/auth/sign-in/email` | 이메일+비밀번호 로그인. 미인증 계정은 `EMAIL_NOT_VERIFIED` |
-| POST | `/api/auth/sign-in/social` | google·kakao·naver OAuth 시작(브라우저 리디렉트) |
+| POST | `/api/auth/sign-in/social` | google·kakao·naver OAuth 시작(브라우저 리디렉트). ID 토큰 로그인은 닫혀 있다(`ID_TOKEN_NOT_SUPPORTED`) |
 | GET·POST | `/api/auth/callback/:id` | OAuth 공급자 콜백. 실패는 `?error=` 로 웹에 되돌아온다 |
 | POST | `/api/auth/sign-out` | 로그아웃 |
 | GET | `/api/auth/get-session` | 현재 세션 조회(웹의 `useSession`) |
 | POST | `/api/auth/send-verification-email` | 인증 메일 재발송 |
-| GET | `/api/auth/verify-email` | 메일 링크. 성공하면 자동 로그인 후 `callbackURL` 로 리디렉트 |
+| GET | `/api/auth/verify-email` | 메일 링크 → `callbackURL` 로 리디렉트. 가입·재발송 링크는 인증하고 자동 로그인한다. 주소 변경 링크는 로그인시키지 않는다 |
 | POST | `/api/auth/request-password-reset` | 비밀번호 재설정 메일 요청 |
 | GET | `/api/auth/reset-password/:token` | 재설정 메일 링크 → `callbackURL` 로 리디렉트 |
 | POST | `/api/auth/reset-password` | 토큰으로 새 비밀번호 설정 |
 | POST | `/api/auth/change-password` | 현재 비밀번호를 알고 바꾸기 |
-| POST | `/api/auth/change-email` | 주소 변경(확인 메일 → 새 주소 인증까지 끝나야 반영) |
+| POST | `/api/auth/change-email` | 주소 변경. 인증된 주소는 확인 메일 → 새 주소 링크로 반영되고 인증된다. 미인증 주소는 새 주소 링크로 반영되고 인증은 재발송으로 한다 |
 | GET | `/api/auth/list-accounts` | 연결된 로그인 수단 목록 |
 | POST | `/api/auth/link-social` | 소셜 계정 연결 |
 | POST | `/api/auth/unlink-account` | 연결 해제. 마지막 하나는 `FAILED_TO_UNLINK_LAST_ACCOUNT` |

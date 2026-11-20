@@ -13,7 +13,9 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 export const auth = betterAuth({
   database: drizzleAdapter(drizzle.mock({ casing: 'snake_case' }), { provider: 'pg' }),
   emailAndPassword: { enabled: true },
-  // The mock holds no tables, so better-auth's schema check (1.7.3+) would log every table as
-  // missing on each generate. The API's own instance keeps the check (ADR-0094).
+  // The mock holds no tables, so better-auth's schema check (1.7.3+) would find every table
+  // missing. Since 1.7.22 the check runs on first use rather than at creation, so `generate` no
+  // longer meets it; off all the same, so a version that runs it again stays quiet. The API's own
+  // instance keeps the check (ADR-0094, ADR-0151).
   advanced: { database: { validateSchema: false } },
 });

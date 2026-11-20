@@ -309,7 +309,7 @@ export const copy = {
   marketingConsentOff: '마케팅 정보 수신 동의를 철회했습니다.',
   marketingConsentChangedAt: '마지막으로 바꾼 때:',
   settingsAccount: '계정',
-  settingsAccountHint: '이메일은 인증을 거친 뒤에만 변경됩니다.',
+  settingsAccountHint: '이메일은 새 이메일로 받은 링크를 눌러야 변경됩니다.',
   settingsEmailUnverified: '이메일 인증이 완료되지 않았습니다.',
   resendVerification: '인증 메일 다시 보내기',
   emailVerifiedBadge: '인증됨',
@@ -321,9 +321,12 @@ export const copy = {
   changeEmail: '이메일 변경',
   changeEmailHintVerified:
     '현재 이메일로 확인 메일이 가고, 확인하면 새 이메일로 인증 메일이 갑니다.',
-  changeEmailHintUnverified: '새 이메일로 인증 메일이 갑니다. 링크를 누르면 변경이 완료됩니다.',
+  // 현재 이메일이 미인증이면 새 이메일의 링크가 주소만 바꾸고, 인증은 그다음 '인증 메일 다시 보내기'로 한다
+  // (better-auth 1.7.16, ADR-0151).
+  changeEmailHintUnverified:
+    "새 이메일로 메일이 갑니다. 링크를 누르면 이메일이 바뀌고, 그다음 여기서 '인증 메일 다시 보내기'로 받은 메일의 링크를 눌러 인증합니다.",
   changeEmailSentCurrent: '현재 이메일로 확인 메일을 보냈습니다.',
-  changeEmailSentNew: '새 이메일로 인증 메일을 보냈습니다.',
+  changeEmailSentNew: '새 이메일로 메일을 보냈습니다. 링크를 누르면 이메일이 바뀝니다.',
   errEmailSame: '현재 이메일과 같습니다.',
 
   // --- 탈퇴 (#140, ADR-0086) ---

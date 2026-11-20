@@ -23,9 +23,11 @@ const CALLBACK = MY_SETTINGS_PATH;
 
 /**
  * Email address, its verification state and the change-email form (PLAN 17 Q5 decision):
- * a new address only applies once it is verified. Verified users first confirm from the
- * current address; unverified ones (incl. Kakao/Naver accounts without an email, which
- * carry a synthetic address) get the verification mail at the new address directly.
+ * a new address only applies through a link mailed to it. Verified users first confirm from
+ * the current address, and the new one arrives verified; unverified ones (incl. Kakao/Naver
+ * accounts without an email, which carry a synthetic address) get the link at the new address
+ * directly, and it arrives unverified — the resend below verifies it (better-auth 1.7.16,
+ * ADR-0151).
  */
 export function AccountSection() {
   const { data: me, isPending } = useMe();

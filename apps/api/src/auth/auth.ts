@@ -180,7 +180,8 @@ const CHANGE_EMAIL_ACCOUNT_BUCKET = `${CHANGE_EMAIL_PATH}/account`;
  * and clicking one does not consume it. For a plain sign-up link that is harmless — it verifies
  * an address and mails nobody. The CONFIRMATION half of a change of address is different: every
  * click re-mints the verification token and mails the NEW address again, no session required
- * (the endpoint refuses only a mismatching one). So one confirmation mail in a caller's own inbox
+ * (the endpoint refuses a mismatching one, and — since better-auth 1.7.16 — a link whose account
+ * no longer holds the address it was sent to, ADR-0151). So one confirmation mail in a caller's own inbox
  * was, until this, an hour of mail to somebody else's — the only path around the per-recipient
  * bound the other five carry (Q-M6-8). Counted here, on the address the link is about to mail.
  *
@@ -195,6 +196,8 @@ const VERIFY_EMAIL_PATH = '/verify-email';
 interface VerificationTokenPayload {
   updateTo?: unknown;
   requestType?: unknown;
+  /** The account the link was issued for: set on every link since better-auth 1.7.16. */
+  userId?: unknown;
 }
 
 /**
@@ -204,21 +207,27 @@ interface VerificationTokenPayload {
  * anybody can forge would be a bucket anybody can spend for free — no account, no request, no
  * mail — and five forged tokens naming an address would refuse the genuine confirmation click
  * for that address a minute at a time. What remains is the flip side every per-recipient bound
- * has: whoever holds a GENUINE link toward X can spend X's bucket by replaying it, at the
- * price of mailing X in their own name (on `/change-email` the price is the caller's own
+ * has: whoever holds a GENUINE link toward X can spend X's bucket by replaying it, mostly at
+ * the price of mailing X in their own name (on `/change-email` the price is the caller's own
  * account bucket — five addresses a minute, signed in). A token that fails here fails
  * in the endpoint too (INVALID_TOKEN / TOKEN_EXPIRED), mailing nobody, so it costs nothing;
  * `verifyJWT` accepts a superset of the endpoint's HS256 — the other HMAC sizes, a missing
  * `exp` — and every member of it needs the secret, which is all a bucket key requires. The
  * VERIFICATION half (`change-email-verification`) applies the change and mails nobody either,
  * so the final click of a legitimate change is never counted — and never refused because a
- * stranger has been replaying the other half. Everything else with an `updateTo` mails it: the
- * confirmation, and the legacy single-step token of older better-auth versions.
+ * stranger has been replaying the other half. Everything else with an `updateTo` is counted on
+ * it — the confirmation, and the single-step token without a `requestType` — except a link that
+ * names no account (`userId`): since 1.7.16 the endpoint refuses those before it looks anything
+ * up (INVALID_TOKEN, mailing nobody), and that is every change link minted before that version.
+ * A link that names one and is refused later — its account gone, the address no longer that
+ * account's, another account's session on the request — is counted like any attempt: the hook
+ * counts attempts, not outcomes.
  */
 async function mailedByVerifyEmail(token: unknown, secret: string): Promise<string | undefined> {
   if (typeof token !== 'string' || token.length === 0) return undefined;
   const payload = await verifyJWT<VerificationTokenPayload>(token, secret);
   if (payload === null || payload.requestType === 'change-email-verification') return undefined;
+  if (payload.userId === undefined) return undefined;
   return emailTracker(payload.updateTo);
 }
 
@@ -243,8 +252,8 @@ async function consumeOrRefuse(
  * PLAN 10.3: Kakao/Naver may withhold the email. better-auth refuses an OAuth sign-in
  * without an email (EMAIL_NOT_FOUND), so the provider's `mapProfileToUser` substitutes a
  * synthetic, unverified address (PLAN 17 Q5 decision 2026-09-03: the provider email is
- * recorded when given; the user registers a real address later through the verified
- * change-email flow below). No mail is ever sent to these addresses, and the before-hook
+ * recorded when given; the user registers a real address later through the change-email flow
+ * below, then verifies it — ADR-0151). No mail is ever sent to these addresses, and the before-hook
  * keeps anyone from claiming one through the credential endpoints.
  */
 export function noEmailFallback(provider: 'kakao' | 'naver', providerAccountId: string): string {
@@ -423,6 +432,10 @@ export function createAuth({
               ...providers.google,
               disableDefaultScope: true,
               scope: [...OAUTH_SCOPES.google],
+              // Sign-in and linking go through the provider's redirect only: `/sign-in/social`
+              // and `/link-social` refuse a client-submitted ID token (404
+              // ID_TOKEN_NOT_SUPPORTED) for every provider here (ADR-0151).
+              disableIdTokenSignIn: true,
             },
           }
         : {}),
@@ -432,6 +445,8 @@ export function createAuth({
               ...providers.kakao,
               disableDefaultScope: true,
               scope: [...OAUTH_SCOPES.kakao],
+              // better-auth 1.7.26 turned Kakao's ID-token sign-in on; ours stays off (as Google).
+              disableIdTokenSignIn: true,
               // The built-in provider maps kakao_account.email, which is undefined when
               // the user withheld consent (email_needs_agreement); mapProfileToUser is
               // spread last by the provider, so these fields win.
@@ -481,11 +496,16 @@ export function createAuth({
     user: {
       changeEmail: {
         enabled: true,
-        // PLAN 17 Q5 decision (2026-09-03): an address only changes after it is verified.
+        // PLAN 17 Q5 decision (2026-09-03): an address only changes through a link mailed to it.
         // - current email verified: confirmation link to the current address, then a
-        //   verification link to the new one (sendChangeEmailConfirmation -> verify-email)
+        //   verification link to the new one (sendChangeEmailConfirmation -> verify-email);
+        //   clicking the second applies the change, verified
         // - current email unverified (synthetic Kakao/Naver address or an unverified real
-        //   one): a verification link to the new address; clicking it applies the change
+        //   one): a link to the new address; clicking it applies the change but leaves the
+        //   address UNVERIFIED (better-auth 1.7.16+, GHSA-hwq2-v29r-p69r: a requester who never
+        //   proved the current address gets no verified one from the change), and the settings
+        //   card's resend (/send-verification-email) verifies it (ADR-0151)
+        // Neither link signs anybody in: with no session it changes the address and stops there.
         // A new address that already belongs to another user gets the same 200 without mail.
         // Because the first branch mails the CURRENT address, the `hooks.before` limit counts
         // the account asking as well as `newEmail` (CHANGE_EMAIL_ACCOUNT_BUCKET).
@@ -603,9 +623,10 @@ export function createAuth({
         // `ctx.context` yet in a before-hook (dispatch sets it to null); this reads the cookie
         // itself. A missing or forged cookie fails the HMAC check before any DB access, so an
         // unauthenticated flood costs a hash; a validly signed one costs a `findSession`, as the
-        // endpoint's own session middleware does (the two sensitive routes read it again,
-        // authoritatively). `disableRefresh`: a check must not renew a session, and a `Set-Cookie`
-        // minted here would not reach the response anyway.
+        // endpoint's own session middleware does (all three routes read it again, authoritatively:
+        // `sensitiveSessionMiddleware`, on `/link-social` too since better-auth 1.7.16).
+        // `disableRefresh`: a check must not renew a session — and since better-auth 1.7.15 a
+        // `Set-Cookie` a before-hook mints does reach the response.
         let sessionRead: ReturnType<typeof getSessionFromCtx> | undefined;
         const cookieSession = () =>
           (sessionRead ??= getSessionFromCtx(ctx, { disableRefresh: true }));
