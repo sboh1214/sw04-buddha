@@ -21,6 +21,7 @@ import { type Market, type MarketSummary, type Me, type Order, type Position } f
 import {
   MY_ORDERS_LIVE_KEY,
   ORDERS_KEY,
+  isOrderHistoryKey,
   isWalletLiveOrdersKey,
   marketBookKey,
   myFillHistoryKey,
@@ -2026,7 +2027,7 @@ describe('the wallet’s live orders (#69, ADR-0144 결정 2-11)', () => {
     pageParams: [undefined],
   });
 
-  it('is left out of the user:position order restart while on screen, and only it', async () => {
+  it('is left out of the user:position order restart while on screen, with the history lists', async () => {
     const wallet = walletLiveOrdersKey(ACCOUNT);
     const shown = () => true;
     expect(wallet).toEqual(['orders', 'live', 'wallet', ACCOUNT]);
@@ -2043,10 +2044,23 @@ describe('the wallet’s live orders (#69, ADR-0144 결정 2-11)', () => {
       myOrderKey(OTHER_ID, ACCOUNT),
       myOrderFillsKey(OTHER_ID, ACCOUNT),
       myMarketFillsKey(ID, ACCOUNT),
-      myOrderHistoryKey({}, ACCOUNT),
-      myFillHistoryKey({ period: '7d' }, ACCOUNT),
     ];
+    // 거래·정산 이력's two lists (#301, ADR-0148): on screen through the history window instead,
+    // off screen reached (marked stale).
+    for (const queryKey of [
+      myOrderHistoryKey({}, ACCOUNT),
+      myOrderHistoryKey({ market: ID, period: '30d' }, ACCOUNT),
+      myFillHistoryKey({ period: '7d' }, ACCOUNT),
+      myFillHistoryKey({}, 'account-b'),
+    ]) {
+      expect(isOrderHistoryKey(queryKey)).toBe(true);
+      expect(positionRestartsOrder({ queryKey, isActive: shown }), JSON.stringify(queryKey)).toBe(
+        false,
+      );
+      expect(positionRestartsOrder({ queryKey, isActive: () => false })).toBe(true);
+    }
     for (const queryKey of others) {
+      expect(isOrderHistoryKey(queryKey), JSON.stringify(queryKey)).toBe(false);
       for (const isActive of [shown, () => false]) {
         expect(positionRestartsOrder({ queryKey, isActive }), JSON.stringify(queryKey)).toBe(true);
       }

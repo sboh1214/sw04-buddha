@@ -120,6 +120,18 @@ function historyKeyFilters(filters: HistoryListFilters): HistoryListFilters {
   };
 }
 
+/**
+ * Whether `queryKey` is one of 거래·정산 이력's two lists (`myOrderHistoryKey`,
+ * `myFillHistoryKey`), of any filter and account — what a fill's `user:position` reads through the
+ * history window instead of at once (#301, ADR-0148, `positionRestartsOrder`).
+ */
+export function isOrderHistoryKey(queryKey: readonly unknown[]): boolean {
+  return (
+    queryKey[0] === ORDERS_KEY[0] &&
+    (queryKey[1] === MY_ORDER_HISTORY_KEY[1] || queryKey[1] === MY_FILL_HISTORY_KEY[1])
+  );
+}
+
 /** `GET /me/orders?state=ended`: the account's ended orders, those the filters leave. */
 export const myOrderHistoryKey = (filters: HistoryListFilters, accountId: string | undefined) =>
   [...MY_ORDER_HISTORY_KEY, historyKeyFilters(filters), accountId] as const;
