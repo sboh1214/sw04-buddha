@@ -127,7 +127,7 @@ catalog:
   expo: 57.0.33
   expo-dev-client: 57.0.21
   expo-status-bar: 57.0.1
-  expo-doctor: 1.20.4
+  expo-doctor: 1.20.5
   # test
   vitest: 4.1.12
   "@vitest/coverage-v8": 4.1.12
