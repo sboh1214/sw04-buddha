@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { betterAuth } from 'better-auth';
+import { type BetterAuthOptions, betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { APIError, createAuthMiddleware, getSessionFromCtx, isAPIError } from 'better-auth/api';
 import { verifyJWT } from 'better-auth/crypto';
@@ -14,6 +14,7 @@ import {
   type RateLimits,
 } from '@buddha/shared';
 import { type Env, enabledOAuthProviders, webOrigins } from '../config/env.js';
+import { describeLogArguments } from '../logger.js';
 import { type Mailer } from '../mail/mailer.js';
 import { authRateLimitFor, type AuthRateLimiter } from '../rate-limit/auth-rate-limit.js';
 import { emailTracker } from '../rate-limit/email-tracker.js';
@@ -288,7 +289,34 @@ export interface CreateAuthOptions {
   rateLimiter?: AuthRateLimiter;
   /** The limits `rateLimiter` counts against; ignored when there is no limiter. */
   rateLimits?: RateLimits;
-  logger?: Pick<Logger, 'warn' | 'error'>;
+  /** Where the mail failures below and better-auth's own lines (`betterAuthLog`) are written. */
+  logger?: Pick<Logger, 'debug' | 'log' | 'warn' | 'error'>;
+}
+
+/**
+ * better-auth's own log lines (its `logger.log` option), written as lines of the API's logger —
+ * Nest's `Logger`, which main.ts puts on the API's pino — instead of printed to the console in a
+ * format of better-auth's.
+ *
+ * Not only for the one format (logger.ts, `NestPinoLogger`). better-auth logs the error it caught
+ * as an argument, and on a failed session read that error is drizzle's, whose message carries the
+ * query's bound value: the session token of the cookie that asked. Its default logger handed that
+ * to `console.error` whole — on every request a database failure stopped while reading a session,
+ * the API's routes and better-auth's own alike, on 1.7.7 as on 1.7.26. Written here an error goes
+ * through `describeLogArguments`, the API's `err` serializer, so the SQL and the driver's reason
+ * stay and the values do not (ADR-0152).
+ */
+export function betterAuthLog(
+  logger: Pick<Logger, 'debug' | 'log' | 'warn' | 'error'>,
+): NonNullable<NonNullable<BetterAuthOptions['logger']>['log']> {
+  return (level, message, ...args: unknown[]) => {
+    const line = describeLogArguments([message, ...args]);
+    const params = line.stack === undefined ? [] : [line.stack];
+    if (level === 'error') logger.error(line.message, ...params);
+    else if (level === 'warn') logger.warn(line.message, ...params);
+    else if (level === 'info') logger.log(line.message, ...params);
+    else logger.debug(line.message, ...params);
+  };
 }
 
 /** The part of a sign-up request body the hooks read, when the body is still readable. */
@@ -338,6 +366,12 @@ export function createAuth({
     baseURL: env.BETTER_AUTH_URL,
     basePath: AUTH_BASE_PATH,
     secret,
+    /**
+     * better-auth's lines go to the API's log (`betterAuthLog`, ADR-0152). The level is left at
+     * better-auth's default, `warn`: naming `error`, `warn` or `debug` would also make its router
+     * log the message of every `APIError` it answers, a 401 included, at `error`.
+     */
+    logger: { log: betterAuthLog(logger) },
     // The BETTER_AUTH_URL origin is trusted implicitly (CSRF check on the Origin header);
     // WEB_ORIGIN adds the web origin(s) explicitly (redirectTo/callbackURL validation).
     trustedOrigins: webOrigins(env),

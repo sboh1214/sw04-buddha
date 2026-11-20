@@ -1,3 +1,4 @@
+import { inspect } from 'node:util';
 import { type LoggerService } from '@nestjs/common';
 import { LogController, type FastifyReply, type FastifyRequest } from 'fastify';
 import { pino, stdSerializers, type Logger, type LoggerOptions } from 'pino';
@@ -35,6 +36,133 @@ export function pathOf(url: string | undefined): string | undefined {
   return query === -1 ? url : url.slice(0, query);
 }
 
+/**
+ * Drizzle's error for a query that failed (`DrizzleQueryError`): `Failed query: <sql>\nparams:
+ * <values>` as its message, the values again as `params`, the driver's error as its `cause`.
+ * Recognised by that shape rather than by class, so a second copy of drizzle-orm in the tree
+ * cannot slip past it.
+ */
+interface FailedQuery {
+  message: string;
+  query: string;
+  params: unknown[];
+}
+
+function isFailedQuery(value: unknown): value is FailedQuery {
+  if (typeof value !== 'object' || value === null) return false;
+  const { message, query, params } = value as Partial<Record<keyof FailedQuery, unknown>>;
+  return typeof message === 'string' && typeof query === 'string' && Array.isArray(params);
+}
+
+/** A failed query's bound values, as the log writes them: how many there were, not what. */
+function redactedParams(query: FailedQuery): string {
+  return `[${String(query.params.length)} redacted]`;
+}
+
+/** Whether pino's serializer treats `value` as an error: anything with a string `message`. */
+function isErrorLike(value: unknown): value is { message: string } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { message?: unknown }).message === 'string'
+  );
+}
+
+/**
+ * Every failed query pino's serializer would write out of `error`: down its causes, and into the
+ * fields it serializes as errors of their own — better-call's `APIError.body`, for one, has a
+ * string `message` and keeps the same `cause` (not enumerable, so not in the response), so pino
+ * writes the cause's message a second time under `body`.
+ */
+function failedQueriesIn(error: unknown, found = new Set<FailedQuery>(), seen = new Set()) {
+  if (!isErrorLike(error) || seen.has(error)) return found;
+  seen.add(error);
+  if (isFailedQuery(error)) found.add(error);
+  failedQueriesIn((error as { cause?: unknown }).cause, found, seen);
+  const errors = (error as { errors?: unknown }).errors;
+  if (Array.isArray(errors)) for (const each of errors) failedQueriesIn(each, found, seen);
+  for (const key in error) failedQueriesIn((error as Record<string, unknown>)[key], found, seen);
+  return found;
+}
+
+/**
+ * The API's `err` serializer: pino's own (`stdSerializers.err`), which writes an error's causes'
+ * messages and stacks after its own, with the bound values of every failed query in it taken out.
+ * The SQL stays — which statement failed, and why (the driver's error below it), is what an
+ * operator reads the line for.
+ *
+ * Not cosmetic. A query's values are whatever the caller bound, and better-auth's session read
+ * binds the session token itself: since better-auth 1.7.12 a failed `getSession` throws a 500
+ * whose `cause` is drizzle's error, so every request a database failure stopped at SessionGuard
+ * or the upload gate wrote the raw token of the cookie that sent it — in `message`, in `stack`,
+ * and again in `body`'s (ADR-0152). Any other failed query wrote its values the same way — an
+ * address, a name — which is why this is the serializer's job rather than one call site's.
+ *
+ * Only what the serializer built is rewritten (the objects on its own prototype); a field it
+ * copied as it found it is the caller's object and is never touched.
+ */
+export function serializeError(error: unknown): unknown {
+  const serialized: unknown = stdSerializers.err(error as Error);
+  const queries = [...failedQueriesIn(error)];
+  if (queries.length === 0 || serialized === error) return serialized;
+  // The message drizzle built, swapped whole wherever pino copied it: the values are inside it
+  // with nothing marking where they end. A function, so a `$1` in the SQL is not a pattern.
+  const redact = (text: string): string =>
+    queries.reduce(
+      (written, query) =>
+        written.replaceAll(
+          query.message,
+          () => `Failed query: ${query.query}\nparams: ${redactedParams(query)}`,
+        ),
+      text,
+    );
+  const built: unknown = Object.getPrototypeOf(serialized);
+  const rewrite = (node: Record<string, unknown>): void => {
+    for (const [key, value] of Object.entries(node)) {
+      if (typeof value === 'string') node[key] = redact(value);
+      else if (Array.isArray(value) && key === 'aggregateErrors') value.forEach(rewriteBuilt);
+      else rewriteBuilt(value);
+    }
+    // A failed query's own fields are copied as they are: `params` would carry the values.
+    if (isFailedQuery(node)) Object.assign(node, { params: redactedParams(node) });
+  };
+  const rewriteBuilt = (value: unknown): void => {
+    if (typeof value === 'object' && value !== null && Object.getPrototypeOf(value) === built) {
+      rewrite(value as Record<string, unknown>);
+    }
+  };
+  rewrite(serialized as Record<string, unknown>);
+  return serialized;
+}
+
+/**
+ * The words and the stack of one line built from a logging call's arguments — joined as the
+ * console joins them, except that an error is written as `serializeError` writes it, its type
+ * and message (its causes' after its own), and the stack of the first one is handed back apart.
+ * For loggers that take a message, not an error: better-auth's (auth.ts).
+ */
+export function describeLogArguments(args: readonly unknown[]): {
+  message: string;
+  stack?: string;
+} {
+  const words: string[] = [];
+  let stack: string | undefined;
+  for (const arg of args) {
+    if (typeof arg === 'string') {
+      words.push(arg);
+      continue;
+    }
+    if (arg instanceof Error) {
+      const written = serializeError(arg) as { type: string; message: string; stack: string };
+      words.push(`${written.type}: ${written.message}`);
+      stack ??= written.stack;
+      continue;
+    }
+    words.push(inspect(arg, { depth: 4, breakLength: Infinity }));
+  }
+  return { message: words.join(' '), ...(stack === undefined ? {} : { stack }) };
+}
+
 export function createLoggerOptions(env: Pick<Env, 'NODE_ENV' | 'LOG_LEVEL'>): LoggerOptions {
   const options: LoggerOptions = {
     name: 'api',
@@ -53,7 +181,7 @@ export function createLoggerOptions(env: Pick<Env, 'NODE_ENV' | 'LOG_LEVEL'>): L
         remoteAddress: request.ip,
       }),
       res: (reply: FastifyReply) => ({ statusCode: reply.statusCode }),
-      err: stdSerializers.err,
+      err: serializeError,
     },
     /**
      * Defence in depth. Nothing above puts headers in a line, but a `logger.info({ req })` at

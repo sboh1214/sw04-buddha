@@ -7,6 +7,7 @@ import { schema, type Db } from '@buddha/db';
 import { connectTestDb, type TestDb } from '@buddha/db/test';
 import { MemoryObjectStorage } from '@buddha/storage';
 import { type Redis } from 'ioredis';
+import { type Logger } from 'pino';
 import {
   DEFAULT_RATE_LIMITS,
   PAID_COIN_SALES_ENABLED,
@@ -26,6 +27,7 @@ import { PAID_COIN_SALES } from '../payments/paid-coin-sales.guard.js';
 import { REDIS } from '../infra/redis/redis.provider.js';
 import { installAddressLimit } from '../rate-limit/address-limit.js';
 import { RATE_LIMITS } from '../rate-limit/rate-limit.limits.js';
+import { ApiLogController, NestPinoLogger } from '../logger.js';
 import { RATE_LIMIT_KEY_PREFIX } from '../rate-limit/redis-throttler.storage.js';
 import { UNCOUNTED_PEERS } from '../rate-limit/uncounted-peers.js';
 import { RealtimeIoAdapter } from '../realtime/realtime-io.adapter.js';
@@ -96,6 +98,12 @@ export interface CreateTestAppOptions {
    * app runs what production ships (RELEASE_SETTINGS).
    */
   releaseSettings?: ReleaseSettingsRegistry;
+  /**
+   * A pino logger for this app only, wired as main.ts wires its own: Fastify's request logger
+   * (with `ApiLogController`) and Nest's `Logger` (`NestPinoLogger`). For the suites about what
+   * the API writes to its log; left out, the app logs nothing (`logger: false`).
+   */
+  logger?: Logger;
 }
 
 /**
@@ -129,8 +137,14 @@ export async function createTestApp(options: CreateTestAppOptions = {}): Promise
     new FastifyAdapter({
       trustProxy: parseTrustProxy(options.trustProxy ?? 'false'),
       routerOptions: { maxParamLength: MAX_PARAM_LENGTH },
+      ...(options.logger === undefined
+        ? {}
+        : { loggerInstance: options.logger, logController: new ApiLogController() }),
     }),
-    { bodyParser: false, logger: false },
+    {
+      bodyParser: false,
+      logger: options.logger === undefined ? false : new NestPinoLogger(options.logger),
+    },
   );
   // Exactly as in main.ts, and for the same reason the adapter below is: a bound the suites do
   // not see is a bound nothing proves.
