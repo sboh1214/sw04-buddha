@@ -898,7 +898,7 @@ PLAN §13 M5는 워커의 `market.close`·`market.finalize`(지연 잡 + 매 분
 ## ADR-0034 — 레이트 리밋: Redis 고정창, 계정·주소·수신자별 버킷 (PLAN 7.5, M6)
 
 - 날짜: 2026-09-10
-- 상태: 채택, 일부 대체됨(ADR-0048: 계정 버킷 `trade`(`/trades` 20회/분)와 그 버킷을 세던 M6 수용 기준 시험 — 나머지 버킷과 구조는 유효), 일부 대체됨(ADR-0073: 결정의 '`ip` — 기본 100req/분. **API 전체에 한 버킷**'과 추기의 '주소 버킷은 … 훅 하나가 API 전체에서 센다' — 이미지 읽기 `GET /api/v1/media/:mediaId`(304 포함)는 `default`가 아니라 자기 주소 버킷 `mediaRead`(분당 600)에만 든다(오너 결정 2026-10-19). 나머지 모든 요청이 주소마다 한 버킷이고 같은 훅이 파싱 앞에서 세는 것은 유효), 일부 대체됨(ADR-0092: 2026-09-10 추기(PR #8 리뷰 2차)의 '`/change-email`은 세션이 없으면 아무것도 세지 않고, 세션이 있으면 계정 버킷을 먼저 센다' — 세션이 있으면 그보다 먼저 본문의 `expectedAccountId`(화면이 보는 계정)를 쿠키의 계정과 견주어, 없거나 다른 계정이면(400·403) 계정 버킷도 `newEmail` 버킷도 세지 않는다. 세션은 그 확인과 계정 버킷이 한 번 읽어 함께 쓴다(`cookieSession`, ADR-0092 결정 3). 세션이 없으면 세지 않는 것과 나머지 결정은 유효)
+- 상태: 채택, 일부 대체됨(ADR-0048: 계정 버킷 `trade`(`/trades` 20회/분)와 그 버킷을 세던 M6 수용 기준 시험 — 나머지 버킷과 구조는 유효), 일부 대체됨(ADR-0073: 결정의 '`ip` — 기본 100req/분. **API 전체에 한 버킷**'과 추기의 '주소 버킷은 … 훅 하나가 API 전체에서 센다' — 이미지 읽기 `GET /api/v1/media/:mediaId`(304 포함)는 `default`가 아니라 자기 주소 버킷 `mediaRead`(분당 600)에만 든다(오너 결정 2026-10-19). 나머지 모든 요청이 주소마다 한 버킷이고 같은 훅이 파싱 앞에서 세는 것은 유효), 일부 대체됨(ADR-0092: 2026-09-10 추기(PR #8 리뷰 2차)의 '`/change-email`은 세션이 없으면 아무것도 세지 않고, 세션이 있으면 계정 버킷을 먼저 센다' — 세션이 있으면 그보다 먼저 본문의 `expectedAccountId`(화면이 보는 계정)를 쿠키의 계정과 견주어, 없거나 다른 계정이면(400·403) 계정 버킷도 `newEmail` 버킷도 세지 않는다. 세션은 그 확인과 계정 버킷이 한 번 읽어 함께 쓴다(`cookieSession`, ADR-0092 결정 3). 세션이 없으면 세지 않는 것과 나머지 결정은 유효), 일부 대체됨(ADR-0150: 결정의 `signIn` 항목 '성공과 실패는 `hooks.after`에서 `ctx.context.returned`가 `APIError`인지로 가른다'의 판정 — `better-auth/api`가 내보내는 하위 클래스에 대한 `instanceof`가 아니라 `isAPIError`로 가른다. better-call이 본문 검증 실패에 던지는 기본 `APIError`(400 `VALIDATION_ERROR`)도 실패라 버킷을 지우지 않는다. 시도를 세고 성공이 지우는 구조는 유효)
 
 ### 맥락
 
@@ -18364,3 +18364,29 @@ ADR-0010이 `expo-doctor` 1.20.4를 devDependency로 고정했다. ADR-0134 결�
 - **expo-doctor.** `pnpm --filter mobile run doctor`가 1.20.5로 21개 모두 통과한다(main의 1.20.4도 21/21).
 - **확인.** `pnpm install --frozen-lockfile`이 통과하고 `minimumReleaseAgeExclude`에 더한 줄이 없다. `pnpm peers check`의 출력은 main과 같다. 모바일 lint·typecheck(`--force`)와 Prettier가 통과한다. 나머지 패키지의 입력은 바뀌지 않아 시험·빌드·e2e는 이 head의 CI로 본다. Metro 번들·`expo prebuild`·네이티브 빌드는 돌리지 않았다(앱은 M0의 자리뿐이다).
 - **상태 줄.** ADR-0010의 '1.20.4를 고정'과 ADR-0134 결정 1의 '`expo-doctor`는 1.20.4로 둔다'를 이 문서가 대체한다(두 ADR의 상태 줄에 적었다).
+
+## ADR-0150 — 로그인 시도 한도(`signIn`)를 본문이 거절된 요청이 지우지 않게: `hooks.after`의 실패 판정을 `instanceof APIError`에서 `isAPIError`로 — API 계약·마이그레이션·출시 설정 없음
+
+- 날짜: 2026-11-20
+- 상태: 채택
+
+### 맥락
+
+ADR-0034의 `signIn` 버킷은 `/sign-in/email`의 시도를 핸들러 앞(`hooks.before`)에서 주소별로 세고, 비밀번호가 맞은 로그인이 `hooks.after`에서 버킷을 지운다. 성공과 실패는 `ctx.context.returned`가 `APIError`인지로 갈랐고, 코드(`apps/api/src/auth/auth.ts`)는 `better-auth/api`가 내보내는 `APIError`에 대한 `instanceof`였다.
+
+- **두 `APIError`.** `better-auth/api`의 `APIError`(`@better-auth/core/error`)는 better-auth 밑의 라우터 better-call의 `APIError`를 상속한 하위 클래스다. better-call은 라우트 스키마에 맞지 않는 본문에 **자기 기본 클래스**로 400 `VALIDATION_ERROR`를 던진다(better-call 1.4.0 `dist/endpoint.mjs`). better-auth의 dispatch는 그것을 `isAPIError`(두 클래스 모두 참)로 잡아 `ctx.context.returned`에 넣고 after 훅을 돌린다. 기본 클래스의 객체는 하위 클래스에 대한 `instanceof`가 거짓이므로, 우리 훅은 그 400을 성공한 로그인으로 읽고 버킷을 지웠다.
+- **영향.** 한 주소에 틀린 비밀번호를 아홉 번 보낸 뒤 `{ "email": <그 주소>, "password": 0 }` 하나를 보내면 버킷이 비었다. 그것을 되풀이하면 그 주소에 분당 10회 한도가 걸리지 않는다. 호출자 주소의 `default` 버킷(ADR-0034·ADR-0073)은 이 판정과 무관하다.
+- **발견.** better-auth 1.7.7 → 1.7.26 업그레이드를 조사하다(2026-11-20) 찾았다. 같은 통합 시험 흐름으로 1.7.7과 1.7.26 모두에서 재현했다 — 업그레이드가 들여온 것이 아니라 M6부터 있던 결함이다. better-call 1.4.6도 같은 구조다.
+
+### 결정
+
+1. **after 훅의 판정을 `isAPIError(ctx.context.returned)`로 바꾼다.** `isAPIError`는 `better-auth/api`가 내보내고(1.7.7·1.7.26 모두), dispatch가 무엇을 `returned`에 넣을지 정할 때 쓰는 바로 그 함수다. dispatch가 거기 넣는 오류는 이 판정으로 모두 실패가 되고, 그 밖의 throw는 after 훅을 건너뛰므로 판정할 일이 없다.
+2. **세는 쪽은 그대로다.** 라우트 스키마에 맞지 않는 본문(400 `VALIDATION_ERROR`)도 주소가 있으면 한 번의 시도로 센다(ADR-0034 — 시도 자체를 센다). 이제 그 시도는 지워지지 않는다. 파싱되지 않는 JSON(400)이나 받지 않는 Content-Type(415)은 better-call의 라우터가 훅 앞에서 거절하므로 세지도 지우지도 않는다 — 전과 같다.
+3. **회귀 시험을 둔다.** `apps/api/src/rate-limit/rate-limit.controller.test.ts`: 틀린 비밀번호 아홉 번 → `password: 0`(400 `VALIDATION_ERROR`) → 다음 시도가 429 `RATE_LIMITED`. 수정 전 코드에서는 마지막이 401이었다.
+
+### 결과
+
+- **바뀐 파일.** `apps/api/src/auth/auth.ts`(import 하나, 판정 한 줄, 주석), `apps/api/src/rate-limit/rate-limit.controller.test.ts`(시험 하나), 이 문서(ADR-0034의 상태 줄 포함).
+- **그대로인 것.** 맞은 비밀번호·틀린 비밀번호(401)·미인증(403 `EMAIL_NOT_VERIFIED`)의 응답과 버킷 동작, 웹, API 계약(`docs/API.md`의 `signIn` 설명은 여전히 맞다), 마이그레이션, 출시 설정.
+- **다른 곳.** 같은 `instanceof APIError` 판정은 저장소에 이 한 곳뿐이었다. `APIError`를 **던지는** 곳(`auth.ts`)은 그대로 하위 클래스를 쓴다.
+- **상태 줄.** ADR-0034의 상태 줄에 이 ADR을 적었다.

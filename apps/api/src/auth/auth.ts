@@ -1,7 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
-import { APIError, createAuthMiddleware, getSessionFromCtx } from 'better-auth/api';
+import { APIError, createAuthMiddleware, getSessionFromCtx, isAPIError } from 'better-auth/api';
 import { verifyJWT } from 'better-auth/crypto';
 import { type Db, schema } from '@buddha/db';
 import {
@@ -701,15 +701,21 @@ export function createAuth({
        *
        * `ctx.context.returned` is what the endpoint answered — and better-auth catches a thrown
        * `APIError` and puts it there before running these hooks (`api/dispatch.mjs`), so a wrong
-       * password arrives as an `APIError` instance rather than as a rejection, and anything else
-       * means the password was right.
+       * password arrives as an `APIError` value rather than as a rejection, and anything else
+       * means the password was right (any other throw skips the after hooks altogether).
+       *
+       * The test is `isAPIError`, the one dispatch itself uses to decide what lands there — not
+       * `instanceof APIError`. The class `better-auth/api` exports is a SUBCLASS of better-call's,
+       * and better-call (the router underneath) throws its own base class for a body that fails
+       * the route's schema: `instanceof` read that 400 as a success, and a malformed request
+       * after every nine guesses kept the address unlocked (ADR-0150).
        *
        * Clearing here rather than not counting in the first place is what keeps the count
        * atomic — see `AuthRateLimiter.reset`.
        */
       after: createAuthMiddleware(async (ctx) => {
         if (ctx.path !== SIGN_IN_PATH || ctx.request === undefined) return;
-        if (ctx.context.returned instanceof APIError) return;
+        if (isAPIError(ctx.context.returned)) return;
         const address = emailTracker((ctx.body as { email?: unknown } | undefined)?.email);
         if (address === undefined) return;
         await rateLimiter?.reset(ctx.path, address);
