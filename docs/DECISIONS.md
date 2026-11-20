@@ -16249,7 +16249,7 @@ ADR-0132가 60건 가운데 57건을 lockfile에서 걷어냈고 medium 세 건�
 ## ADR-0134 — Dependabot 경고 #85 glob: 발행 24시간을 넘긴 Expo 57.0.33으로 glob 13을 걷어내고 glob 14.0.6으로 올린다
 
 - 날짜: 2026-11-13
-- 상태: 채택
+- 상태: 채택, 일부 대체됨(ADR-0149: `expo-doctor` 1.20.5)
 
 ### 맥락
 
@@ -18354,13 +18354,13 @@ ADR-0010이 `expo-doctor` 1.20.4를 devDependency로 고정했다. ADR-0134 결�
 
 1. **catalog의 `expo-doctor`를 1.20.4에서 1.20.5로 올린다.** `pnpm-workspace.yaml`에서 바뀌는 것은 이 한 줄이다. 1.21.x는 SDK 58용이라 고르지 않는다.
 2. **override를 쓰지 않고 `minimumReleaseAgeExclude`에 줄을 더하지 않는다.** 24시간을 넘겼으므로 정상 경로다.
-3. **묶음 안에 남는 권고는 이 PR에서 다루지 않는다.** 묶인 minimatch는 두 판 모두 `escape()` 권고 GHSA-c859-jr93-m5j4(범위 7.4.0–11.0.7, 수정판 11.0.8)의 범위다. 1.20.5의 glob `^14.0.3`은 GHSA-qxr8-q827-836c(low, `ignore` 패턴에 `braceExpandMax`가 없음, 범위 13.0.5–14.0.5)의 범위일 수 있다. 위 호출은 `ignore`를 넘기지 않고 패턴은 고정 문자열이다. 둘 다 lockfile 밖이라 경고로 뜨지 않는다.
+3. **묶음 안에 남는 권고는 이 PR에서 다루지 않는다.** 묶인 minimatch는 두 판 모두 `escape()` 권고 GHSA-c859-jr93-m5j4(범위 7.4.0–11.0.7, 수정판 11.0.8)의 범위다. 묶인 glob도 두 판 모두 GHSA-qxr8-q827-836c(low, `ignore` 패턴에 `braceExpandMax`가 없음, 범위 13.0.5–14.0.5)의 범위다 — 1.20.4(2026-08-26)의 glob은 그 날 이전에 나온 13.0.5·13.0.6 가운데 하나고(묶음에 13.0.5가 더한 `braceExpandMax: 1e4`가 있다), 1.20.5(2026-11-05)의 glob은 14.0.4(2026-11-06)보다 먼저 나왔으므로 14.0.3이다. 이 갱신이 들여온 권고가 아니고, 위 호출은 `ignore`를 넘기지 않으며 패턴은 고정 문자열이다. 둘 다 lockfile 밖이라 경고로 뜨지 않는다.
 
 ### 결과
 
-- **바뀐 파일.** `pnpm-workspace.yaml`(catalog 한 줄), `pnpm-lock.yaml`(expo-doctor의 네 줄: catalog·importer·packages·snapshots), 이 문서(ADR-0010의 상태 줄 포함). 실행 코드와 시험은 바꾸지 않았다. 마이그레이션·출시 설정·API 계약의 변화가 없다.
+- **바뀐 파일.** `pnpm-workspace.yaml`(catalog 한 줄), `pnpm-lock.yaml`(expo-doctor의 네 곳 여섯 줄: catalog·importer·packages·snapshots), 이 문서(ADR-0010의 상태 줄 포함). 실행 코드와 시험은 바꾸지 않았다. 마이그레이션·출시 설정·API 계약의 변화가 없다.
 - **lockfile.** 판이 바뀐 패키지는 expo-doctor 하나다. 새 이름과 빠진 이름이 없고, expo-doctor는 의존성이 없어 다른 줄이 움직이지 않는다. integrity(`sha512-CP4oAWXG…`)는 레지스트리와 같다. 설치 스크립트가 없다.
-- **운영 영향.** expo-doctor는 `apps/mobile`의 devDependency다. Dockerfile은 `apps/mobile`의 매니페스트만 복사하고 `--filter 'api...' 'worker...' 'web...'`로 설치하므로 세 이미지의 내용은 바뀌지 않는다. lockfile이 바뀌므로 머지하면 평소처럼 이미지를 다시 빌드해 배포하고, 새로 적용할 마이그레이션·시드는 없다.
+- **운영 영향.** expo-doctor는 `apps/mobile`의 devDependency다. Dockerfile은 `apps/mobile`의 매니페스트만 복사하고(빌드 단계의 `COPY . .`도 `.dockerignore`의 `apps/mobile/*`·`!apps/mobile/package.json` 때문에 매니페스트만 들인다) `--filter 'api...' 'worker...' 'web...'`로 설치하므로 세 이미지의 내용은 바뀌지 않는다. lockfile이 바뀌므로 머지하면 평소처럼 이미지를 다시 빌드해 배포하고, 새로 적용할 마이그레이션·시드는 없다.
 - **expo-doctor.** `pnpm --filter mobile run doctor`가 1.20.5로 21개 모두 통과한다(main의 1.20.4도 21/21).
 - **확인.** `pnpm install --frozen-lockfile`이 통과하고 `minimumReleaseAgeExclude`에 더한 줄이 없다. `pnpm peers check`의 출력은 main과 같다. 모바일 lint·typecheck(`--force`)와 Prettier가 통과한다. 나머지 패키지의 입력은 바뀌지 않아 시험·빌드·e2e는 이 head의 CI로 본다. Metro 번들·`expo prebuild`·네이티브 빌드는 돌리지 않았다(앱은 M0의 자리뿐이다).
-- **상태 줄.** ADR-0010의 '1.20.4를 고정'을 이 문서가 대체한다. ADR-0134 결정 1의 '오너에게 알린다'가 이 문서로 끝난다.
+- **상태 줄.** ADR-0010의 '1.20.4를 고정'과 ADR-0134 결정 1의 '`expo-doctor`는 1.20.4로 둔다'를 이 문서가 대체한다(두 ADR의 상태 줄에 적었다).
