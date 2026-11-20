@@ -333,6 +333,30 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
       expect((await signIn(bystander.email, bystander.password)).statusCode).toBe(200);
     });
 
+    it('does not clear the bucket on a body the route refuses (ADR-0150)', async () => {
+      // The 400 for a malformed body is thrown by better-call, the router under better-auth,
+      // as ITS base `APIError` — not the subclass `better-auth/api` exports. An `instanceof`
+      // test against the subclass read that refusal as a sign-in that succeeded and cleared the
+      // bucket, so one malformed request after every nine guesses kept an address unlocked.
+      const user = await signUpTestUser(t);
+      for (let i = 0; i < DEFAULT_RATE_LIMITS.signIn - 1; i += 1) {
+        const wrong = await signIn(user.email, 'not-the-password');
+        expect([i, wrong.statusCode]).toEqual([i, 401]);
+      }
+      const malformed = await t.app.inject({
+        method: 'POST',
+        url: '/api/auth/sign-in/email',
+        headers: jsonHeaders,
+        payload: { email: user.email, password: 0 },
+      });
+      expect(malformed.statusCode).toBe(400);
+      expect(malformed.json()).toMatchObject({ code: 'VALIDATION_ERROR' });
+      // It was the tenth attempt — counted before the body was looked at, and not taken back.
+      const refused = await signIn(user.email, 'not-the-password');
+      expect(refused.statusCode).toBe(429);
+      expect(refused.json()).toMatchObject({ code: 'RATE_LIMITED' });
+    });
+
     it('clears the bucket on a sign-in that SUCCEEDS', async () => {
       // A shared account — this repo's seeded admin, a demo login, a team mailbox — signs in
       // many times a minute with the correct password. Counting those locked the e2e suite out
