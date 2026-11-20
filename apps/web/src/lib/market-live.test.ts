@@ -1263,7 +1263,7 @@ describe('positionReopensMarket (#67, ADR-0142 결정 2-2)', () => {
     );
   });
 
-  it('is wired into user:position: read before the patch, one market restart after it', () => {
+  it('is wired into user:position: read before the patch, one holdings restart after it', () => {
     // The provider is a component this runner cannot mount, so its wiring is pinned in source.
     const provider = readFileSync(
       path.join(SRC, 'components', 'realtime', 'realtime-provider.tsx'),
@@ -1275,11 +1275,54 @@ describe('positionReopensMarket (#67, ADR-0142 결정 2-2)', () => {
     expect(read).toBeGreaterThan(-1);
     // Before the patch: afterwards the row reads 1 or more and nothing would answer.
     expect(read).toBeLessThan(write);
-    expect(handler).toContain(
-      'if (reopensMarket) void restartQueries(queryClient, marketKey(event.marketId));',
+    // MY's rows are the holdings chunks since #300 (ADR-0147): the ones naming this market, each
+    // by its own hash.
+    expect(handler).toMatch(
+      /if \(reopensMarket\) \{\s*for \(const query of holdingChunksToRead\(queryClient, event\.marketId\)\) \{\s*void restartQueries\(queryClient, query\.queryKey, sameChunk\(query\)\);\s*\}\s*\}/,
     );
     // Only behind the decision: an unconditional restart is a request per own trade on screen.
-    expect(handler.split('restartQueries(queryClient, marketKey(').length - 1).toBe(1);
+    expect(handler.split('holdingChunksToRead(').length - 1).toBe(1);
+    expect(handler.split('restartQueries(queryClient, marketKey(').length - 1).toBe(0);
+  });
+});
+
+describe('MY’s holdings chunks in the provider (#300, ADR-0147)', () => {
+  it('restarts the chunks naming a market on its status, and a first read on its tick', () => {
+    const provider = readFileSync(
+      path.join(SRC, 'components', 'realtime', 'realtime-provider.tsx'),
+      'utf8',
+    );
+    const tickAt = provider.indexOf("'market:tick': (raw: unknown) => {");
+    const statusAt = provider.indexOf("'market:status': (raw: unknown) => {");
+    const bookAt = provider.indexOf("'market:book': (raw: unknown) => {");
+    expect([tickAt, statusAt, bookAt].every((at) => at > 0)).toBe(true);
+    const tick = provider.slice(tickAt, statusAt);
+    const status = provider.slice(statusAt, bookAt);
+    // The tick: the card loop moves a chunk with rows; a chunk on its first read is read once
+    // more after its answer, by its own hash — never cancelled.
+    expect(tick).toMatch(
+      /for \(const query of holdingMarketsFirstReads\(queryClient, event\.marketId\)\) \{\s*afterHoldingFirstRead\(query, \(\) => \{\s*void restartQueries\(queryClient, query\.queryKey, sameChunk\(query\)\);\s*\}\);\s*\}/,
+    );
+    expect(tick.indexOf('for (const queryKey of CARD_PAGES_KEYS)')).toBeLessThan(
+      tick.indexOf('holdingMarketsFirstReads('),
+    );
+    // The status: `applyStatus` on the card pages, then the read that brings the flags back.
+    expect(status).toMatch(
+      /for \(const query of holdingChunksToRead\(queryClient, event\.marketId\)\) \{\s*void restartQueries\(queryClient, query\.queryKey, sameChunk\(query\)\);\s*\}/,
+    );
+    expect(status.split('holdingChunksToRead(').length - 1).toBe(1);
+    // A reconnect forgets every chunk's read before the snapshot keys are read again.
+    const resnapshot = provider.slice(provider.indexOf('const resnapshot = () => {'));
+    expect(resnapshot.indexOf('forgetHoldingReads();')).toBeGreaterThan(0);
+    expect(resnapshot.indexOf('forgetHoldingReads();')).toBeLessThan(
+      resnapshot.indexOf('for (const queryKey of snapshotKeys)'),
+    );
+    // `MARKETS_KEY` is a snapshot key and a card key: the chunks are resnapshotted on reconnect
+    // and moved by every card reducer with no line of their own.
+    expect(provider).toMatch(/const SNAPSHOT_KEYS = \[\s*MARKET_KEY,\s*MARKETS_KEY,/);
+    expect(provider).toContain(
+      'const CARD_PAGES_KEYS = [MARKETS_KEY, WATCHLIST_PAGES_KEY] as const;',
+    );
   });
 });
 

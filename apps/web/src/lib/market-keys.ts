@@ -369,6 +369,29 @@ export type HomeFilters = MarketFilters | WatchlistViewFilters;
 export const marketsKey = (filters: MarketFilters) => [...MARKETS_KEY, filters] as const;
 
 /**
+ * MY's holdings' market rows (#300, ADR-0147): `GET /markets?ids=`, one entry per up to
+ * `MARKET_IDS_MAX` held markets (`holdingMarketChunks`: lower-cased, distinct, sorted, so the
+ * order the groups are drawn in never makes a new entry). Under `['markets']` and kept in its
+ * card-page shape (one page, no cursor — `MarketPages`), so the list join (`joinMarketPages`,
+ * query-client.ts), every card reducer of `market:tick`·`market:status`·`market:stats`, and the
+ * reconnect's resnapshot of `MARKETS_KEY` reach it as they reach the home grid; what a list never
+ * needed — a re-read on `market:status`, the first-read race, a bought-back market — the provider
+ * adds by this prefix (`holdingMarketsHolding`, market-live.ts). Public rows: the key names what
+ * the account holds only in this tab's memory, which SessionCacheGuard empties on a change of
+ * account and no server render dehydrates.
+ */
+export const HOLDING_MARKETS_KEY = [...MARKETS_KEY, 'holdings'] as const;
+export const holdingMarketsKey = (marketIds: readonly string[]) =>
+  [...HOLDING_MARKETS_KEY, marketIds] as const;
+
+/** The market ids a `holdingMarketsKey` entry reads, or none for any other key. */
+export function holdingMarketIdsOf(queryKey: readonly unknown[]): readonly string[] {
+  if (queryKey[0] !== MARKETS_KEY[0] || queryKey[1] !== HOLDING_MARKETS_KEY[1]) return [];
+  const ids = queryKey[2];
+  return Array.isArray(ids) ? (ids as string[]) : [];
+}
+
+/**
  * The detail key, always on the row's canonical lower-cased uuid and never on the slug
  * (A-M3-29).
  *

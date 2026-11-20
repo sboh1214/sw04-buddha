@@ -6,6 +6,7 @@ import {
   focusManager,
   hashKey,
   hydrate,
+  partialMatchKey,
 } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type Market, type MarketSummary, api } from '@/lib/api';
@@ -13,9 +14,11 @@ import {
   DEFAULT_MARKET_FILTERS,
   DEFAULT_SEARCH_FILTERS,
   MARKETS_KEY,
+  MARKET_KEY,
   type MarketFilters,
   type MarketSearch,
   dehydratePublic,
+  holdingMarketsKey,
   marketBookKey,
   marketKey,
   marketSearchKey,
@@ -29,15 +32,28 @@ import {
   applyStatus,
   applyTick,
   applyToPages,
+  HOLDING_READ_FRESH_MS,
+  afterHoldingFirstRead,
+  forgetHoldingReads,
+  holdingChunkStaleTime,
+  holdingChunksToRead,
+  holdingMarketsFirstReads,
+  holdingMarketsHolding,
+  holdingReadFresh,
+  noteHoldingRead,
+  sameChunk,
+  seedHoldingChunk,
   tickRestartsMarket,
 } from '@/lib/market-live';
 import { prefetchRelatedMarkets } from '@/lib/market-ssr';
 import { getQueryClient, restartQueries } from '@/lib/query-client';
 import { handleMarketStats } from '@/lib/market-stats-event';
 import { LIVE_REFRESH_MS } from '@/lib/ticks';
+import { priceIsStale } from './use-portfolio';
 import {
-  holdingMarketQueryOptions,
-  holdingMarketRefetchOnFocus,
+  holdingMarketChunks,
+  holdingMarketsQueryOptions,
+  holdingMarketsRefetchOnFocus,
   marketQueryOptions,
   marketSearchInfiniteQueryOptions,
   marketsInfiniteQueryOptions,
@@ -902,47 +918,63 @@ describe('marketQueryOptions', () => {
  * MY's holdings read the detail's entry with two observer options of their own (#67, ADR-0142
  * 결정 2-22): no settlement poll, and a focus re-read only where a label moves with time.
  */
-describe('holdingMarketQueryOptions', () => {
+describe('MY’s holdings read their markets 50 to a request (#300, ADR-0147)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('is the detail’s entry and request', async () => {
-    const holding = holdingMarketQueryOptions(ID.toUpperCase());
-    expect(holding.queryKey).toEqual(marketQueryOptions(ID).queryKey);
+  const idOf = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  /** One chunk's answer as the entry holds it: one page, no cursor. */
+  const chunk = (...rows: MarketSummary[]): MarketPages => ({
+    pages: [{ items: rows, nextCursor: null }],
+    pageParams: [undefined],
+  });
+
+  it('chunks the held ids lower-cased, distinct and sorted, 50 to a chunk', () => {
+    expect(holdingMarketChunks([THIRD_ID, ID.toUpperCase(), OTHER_ID, ID])).toEqual([
+      [ID, OTHER_ID, THIRD_ID].sort(),
+    ]);
+    // The order the groups are drawn in makes no new entry.
+    expect(holdingMarketChunks([OTHER_ID, ID])).toEqual(holdingMarketChunks([ID, OTHER_ID]));
+    const many = Array.from({ length: 120 }, (_, n) => idOf(119 - n));
+    const chunks = holdingMarketChunks(many);
+    expect(chunks.map((ids) => ids.length)).toEqual([50, 50, 20]);
+    expect(chunks.flat()).toEqual([...many].sort());
+    expect(holdingMarketChunks([])).toEqual([]);
+  });
+
+  it('asks GET /markets?ids= once for the chunk and keeps the answer as one card page', async () => {
+    const ids = [ID, OTHER_ID];
+    const options = holdingMarketsQueryOptions(ids);
+    expect(options.queryKey).toEqual(holdingMarketsKey(ids));
     const spy = vi.spyOn(api, 'GET').mockResolvedValue({
-      data: { data: detail },
+      data: { data: [card, otherCard], meta: { nextCursor: null } },
       response: new Response(null, { status: 200 }),
     } as never);
-    expect(await holding.queryFn()).toEqual(detail);
-    expect(await marketQueryOptions(ID).queryFn()).toEqual(detail);
-    expect(spy.mock.calls[0]).toEqual(spy.mock.calls[1]);
-    expect(spy.mock.calls[0]).toEqual([
-      '/api/v1/markets/{idOrSlug}',
-      { params: { path: { idOrSlug: ID } } },
-    ]);
+    expect(await options.queryFn({ queryKey: options.queryKey })).toEqual(chunk(card, otherCard));
+    expect(spy.mock.calls).toEqual([['/api/v1/markets', { params: { query: { ids } } }]]);
+    // Never the detail's entry: a summary written into `['market', id]` would draw a detail with
+    // its rules and record missing.
+    expect(partialMatchKey(options.queryKey, MARKET_KEY)).toBe(false);
+    expect(partialMatchKey(options.queryKey, MARKETS_KEY)).toBe(true);
   });
 
-  it('never polls, the detail still does while a payout is pending', () => {
-    expect(holdingMarketQueryOptions(ID).refetchInterval).toBe(false);
-    for (const status of ['resolved', 'settling'] as const) {
-      expect(
-        marketQueryOptions(ID).refetchInterval({ state: { data: { ...detail, status } } }),
-      ).toBe(5_000);
-    }
-    // The detail keeps the client's focus re-read: no option of its own.
-    expect('refetchOnWindowFocus' in marketQueryOptions(ID)).toBe(false);
-    expect(holdingMarketQueryOptions(ID).refetchOnWindowFocus).toBe(holdingMarketRefetchOnFocus);
-  });
-
-  it('re-reads on focus a missing or failed row, and a 거래 마감 or 잠정 결과 one only', () => {
-    const focus = (data: Market | undefined, status = data === undefined ? 'pending' : 'success') =>
-      holdingMarketRefetchOnFocus({ state: { data, status } });
+  it('never polls, and re-reads on focus only a chunk with no rows, a failure or a 마감·잠정 결과', () => {
+    expect(holdingMarketsQueryOptions([ID]).refetchInterval).toBe(false);
+    expect(holdingMarketsQueryOptions([ID]).refetchOnWindowFocus).toBe(
+      holdingMarketsRefetchOnFocus,
+    );
+    const focus = (
+      data: MarketPages | undefined,
+      status = data === undefined ? 'pending' : 'success',
+      fetchFailureCount = 0,
+    ) => holdingMarketsRefetchOnFocus({ state: { data, status, fetchFailureCount } });
     expect(focus(undefined)).toBe(true);
     expect(focus(undefined, 'error')).toBe(true);
-    expect(focus({ ...detail, status: 'open' }, 'error')).toBe(true);
+    expect(focus(chunk({ ...card, status: 'open' }), 'error')).toBe(true);
     for (const status of ['closed', 'provisional'] as const) {
-      expect(focus({ ...detail, status }), status).toBe(true);
+      // One such market among open ones: the chunk, once.
+      expect(focus(chunk(card, { ...otherCard, status })), status).toBe(true);
     }
     for (const status of [
       'scheduled',
@@ -953,8 +985,311 @@ describe('holdingMarketQueryOptions', () => {
       'settled',
       'cancelled',
     ] as const) {
-      expect(focus({ ...detail, status }), status).toBe(false);
+      expect(focus(chunk({ ...card, status }, otherCard)), status).toBe(false);
     }
+    expect(focus(chunk())).toBe(false);
+    // A failure a neighbour's tick wrote over: status back to success, the count kept.
+    expect(focus(chunk(card), 'success', 3)).toBe(true);
+  });
+
+  it('takes the card reducers and the list join, so an older answer never rolls a tick back', () => {
+    const client = getQueryClient();
+    const key = holdingMarketsKey([ID, OTHER_ID]);
+    client.setQueryData<MarketPages>(key, chunk(card, otherCard));
+    // What the provider's card loop does for a tick of ID (`CARD_PAGES_KEYS` → `MARKETS_KEY`).
+    const tick = {
+      marketId: ID,
+      lastPrice: 61,
+      volumeCoin: '130000',
+      tradeCount: 11,
+      statsRevision: '11',
+      traderCount: 4,
+      ts: '2026-09-07T00:01:00.000Z',
+    };
+    client.setQueriesData<MarketPages>({ queryKey: MARKETS_KEY }, (held) =>
+      applyToPages(held, (row) => applyTick(row, tick as never)),
+    );
+    expect(client.getQueryData<MarketPages>(key)?.pages[0]?.items[0]).toMatchObject({
+      lastPrice: 61,
+      tradeCount: 11,
+    });
+    // An answer read before that trade lands after it: `joinMarketPages` keeps the tick's pair.
+    client.setQueryData<MarketPages>(key, chunk(card, otherCard));
+    expect(client.getQueryData<MarketPages>(key)?.pages[0]?.items[0]).toMatchObject({
+      lastPrice: 61,
+      tradeCount: 11,
+    });
+    client.clear();
+  });
+
+  it('finds the chunks naming a market, and owes a first read one follow-up, once', async () => {
+    const client = getQueryClient();
+    const both = holdingMarketsKey([ID, OTHER_ID]);
+    const third = holdingMarketsKey([THIRD_ID]);
+    client.setQueryData<MarketPages>(third, chunk({ ...card, id: THIRD_ID }));
+    // A first read on the wire: no rows, fetching — answered by the test.
+    let answer: (pages: MarketPages) => void = () => undefined;
+    void client.prefetchQuery({
+      queryKey: both,
+      queryFn: () => new Promise<MarketPages>((resolve) => (answer = resolve)),
+    });
+    // A home list holding the same market is not MY's.
+    client.setQueryData<MarketPages>(marketsKey(DEFAULT_MARKET_FILTERS), chunk(card));
+    expect(holdingMarketsHolding(client, ID.toUpperCase()).map((q) => q.queryKey)).toEqual([both]);
+    expect(holdingMarketsHolding(client, THIRD_ID).map((q) => q.queryKey)).toEqual([third]);
+    const owed = holdingMarketsFirstReads(client, ID);
+    expect(owed.map((q) => q.queryKey)).toEqual([both]);
+    // The same chunk's other market, later ticks: no second follow-up for this first read.
+    expect(holdingMarketsFirstReads(client, OTHER_ID)).toEqual([]);
+    expect(holdingMarketsFirstReads(client, ID)).toEqual([]);
+    // A chunk with rows takes the tick by the card loop: nothing owed.
+    expect(holdingMarketsFirstReads(client, THIRD_ID)).toEqual([]);
+    // The follow-up runs after the first answer, never cancelling it.
+    let followed = 0;
+    afterHoldingFirstRead(owed[0]!, () => (followed += 1));
+    expect(followed).toBe(0);
+    expect(client.getQueryState(both)?.fetchStatus).toBe('fetching');
+    answer(chunk(card, otherCard));
+    await vi.waitFor(() => expect(followed).toBe(1));
+    // Once done, a later first read may owe one again.
+    await client.resetQueries({ queryKey: both });
+    void client.prefetchQuery({
+      queryKey: both,
+      queryFn: () => new Promise<MarketPages>(() => undefined),
+    });
+    expect(holdingMarketsFirstReads(client, ID).map((q) => q.queryKey)).toEqual([both]);
+    client.clear();
+  });
+
+  it('is fresh by its own last answer, which no neighbour’s tick restamps (review)', async () => {
+    const client = getQueryClient();
+    const ids = [ID, OTHER_ID];
+    const options = holdingMarketsQueryOptions(ids);
+    const hash = hashKey(options.queryKey);
+    forgetHoldingReads();
+    let reads = 0;
+    vi.spyOn(api, 'GET').mockImplementation((() => {
+      reads += 1;
+      return Promise.resolve({
+        data: { data: [card, otherCard], meta: { nextCursor: null } },
+        response: new Response(null, { status: 200 }),
+      });
+    }) as never);
+    const observe = () => {
+      const observer = new QueryObserver<MarketPages>(client, options);
+      return observer.subscribe(() => undefined);
+    };
+    /** Until the read in flight has answered (leaving mid-read would cancel it). */
+    const landed = () =>
+      vi.waitFor(() => expect(client.getQueryState(options.queryKey)?.fetchStatus).toBe('idle'));
+    let leave = observe();
+    await vi.waitFor(() => expect(reads).toBe(1));
+    await landed();
+    leave();
+    expect(holdingReadFresh(hash, Date.now())).toBe(true);
+    // Back within the read's freshness: nothing asked.
+    leave = observe();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(reads).toBe(1);
+    leave();
+    // A status of one of its markets forgets the read; a neighbour's tick then writes the chunk
+    // (a manual success: `dataUpdatedAt` now, `isInvalidated` cleared) — and the chunk is
+    // still read when observed again.
+    expect(holdingChunksToRead(client, OTHER_ID).map((q) => q.queryHash)).toEqual([hash]);
+    await restartQueries(client, options.queryKey, sameChunk({ queryHash: hash }));
+    const tick = {
+      marketId: ID,
+      lastPrice: 61,
+      volumeCoin: '130000',
+      tradeCount: 11,
+      statsRevision: '11',
+      traderCount: 4,
+      ts: '2026-09-07T00:01:00.000Z',
+    };
+    client.setQueriesData<MarketPages>({ queryKey: MARKETS_KEY }, (held) =>
+      applyToPages(held, (row) => applyTick(row, tick as never)),
+    );
+    expect(client.getQueryState(options.queryKey)?.isInvalidated).toBe(false);
+    leave = observe();
+    await vi.waitFor(() => expect(reads).toBe(2));
+    await landed();
+    leave();
+    // Past the client's staleTime with no reason: read again, as any entry.
+    expect(holdingReadFresh(hash, Date.now() + HOLDING_READ_FRESH_MS)).toBe(false);
+    client.clear();
+  });
+
+  it('restarts a chunk by its own hash, never a longer chunk its ids begin (review)', async () => {
+    const client = getQueryClient();
+    const short = holdingMarketsKey([ID, OTHER_ID]);
+    const long = holdingMarketsKey([ID, OTHER_ID, THIRD_ID]);
+    client.setQueryData<MarketPages>(short, chunk(card, otherCard));
+    client.setQueryData<MarketPages>(long, chunk(card, otherCard, { ...card, id: THIRD_ID }));
+    // A key restart matches by prefix: the id list [ID, OTHER_ID] is a prefix of the longer one.
+    expect(partialMatchKey(long, short)).toBe(true);
+    const target = client.getQueryCache().find({ queryKey: short, exact: true })!;
+    await restartQueries(client, short, sameChunk(target));
+    expect(client.getQueryState(short)?.isInvalidated).toBe(true);
+    expect(client.getQueryState(long)?.isInvalidated).toBe(false);
+    client.clear();
+  });
+
+  it('keeps a failure on screen after a neighbour’s tick writes the chunk (review)', async () => {
+    const client = getQueryClient();
+    const key = holdingMarketsKey([ID, OTHER_ID]);
+    client.setQueryData<MarketPages>(key, chunk(card, otherCard));
+    await client
+      .fetchQuery({
+        queryKey: key,
+        queryFn: () => Promise.reject(new Error('503')),
+        staleTime: 0,
+        retry: false,
+      })
+      .catch(() => undefined);
+    const observer = new QueryObserver<MarketPages>(client, { queryKey: key, enabled: false });
+    const leave = observer.subscribe(() => undefined);
+    expect(priceIsStale(observer.getCurrentResult())).toBe(true);
+    const tick = {
+      marketId: ID,
+      lastPrice: 61,
+      volumeCoin: '130000',
+      tradeCount: 11,
+      statsRevision: '11',
+      traderCount: 4,
+      ts: '2026-09-07T00:01:00.000Z',
+    };
+    client.setQueriesData<MarketPages>({ queryKey: MARKETS_KEY }, (held) =>
+      applyToPages(held, (row) => applyTick(row, tick as never)),
+    );
+    const after = observer.getCurrentResult();
+    // The write put the status back to success …
+    expect(after.isError).toBe(false);
+    // … and the failure still stands until a read answers.
+    expect(after.failureCount).toBe(1);
+    expect(priceIsStale(after)).toBe(true);
+    leave();
+    client.clear();
+  });
+
+  it('starts a new set of held markets from the cached chunks’ rows, and still reads it (codex)', async () => {
+    const client = getQueryClient();
+    forgetHoldingReads();
+    // [A, B] was read, and A has since ticked; B is sold out, so the set is [A] — a new key.
+    const ticked: MarketSummary = { ...card, lastPrice: 61, tradeCount: 11, statsRevision: '11' };
+    client.setQueryData<MarketPages>(holdingMarketsKey([ID, OTHER_ID]), chunk(ticked, otherCard));
+    // An older chunk naming A too: the join keeps the newer row.
+    client.setQueryData<MarketPages>(holdingMarketsKey([ID, THIRD_ID]), chunk(card));
+    expect(seedHoldingChunk(client, [ID])).toEqual(chunk(ticked));
+    expect(seedHoldingChunk(client, [THIRD_ID])).toBeUndefined();
+    let reads = 0;
+    vi.spyOn(api, 'GET').mockImplementation((() => {
+      reads += 1;
+      return Promise.resolve({
+        data: { data: [{ ...ticked, lastPrice: 62, tradeCount: 12 }], meta: { nextCursor: null } },
+        response: new Response(null, { status: 200 }),
+      });
+    }) as never);
+    const options = holdingMarketsQueryOptions([ID], () => seedHoldingChunk(client, [ID]));
+    const observer = new QueryObserver<MarketPages>(client, options);
+    // The first render already has A's live row — not the positions snapshot.
+    expect(observer.getCurrentResult().data?.pages[0]?.items[0]?.lastPrice).toBe(61);
+    const leave = observer.subscribe(() => undefined);
+    // And the chunk's own read is still owed: a seed is not an answer.
+    await vi.waitFor(() =>
+      expect(observer.getCurrentResult().data?.pages[0]?.items[0]?.lastPrice).toBe(62),
+    );
+    expect(reads).toBe(1);
+    leave();
+    client.clear();
+  });
+
+  it('owes nothing after a first read that fails: no read past the retry policy (codex)', async () => {
+    const client = getQueryClient();
+    const key = holdingMarketsKey([OTHER_ID, THIRD_ID]);
+    let fail: (error: Error) => void = () => undefined;
+    void client
+      .prefetchQuery({
+        queryKey: key,
+        queryFn: () => new Promise<MarketPages>((_, reject) => (fail = reject)),
+        retry: false,
+      })
+      .catch(() => undefined);
+    const owed = holdingMarketsFirstReads(client, OTHER_ID);
+    expect(owed.map((q) => q.queryKey)).toEqual([key]);
+    let followed = 0;
+    afterHoldingFirstRead(owed[0]!, () => (followed += 1));
+    fail(new Error('429'));
+    await vi.waitFor(() => expect(client.getQueryState(key)?.status).toBe('error'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(followed).toBe(0);
+    // And the bookkeeping is cleared: the next first read may owe one again.
+    void client.prefetchQuery({
+      queryKey: key,
+      queryFn: () => new Promise<MarketPages>(() => undefined),
+    });
+    expect(holdingMarketsFirstReads(client, THIRD_ID).map((q) => q.queryKey)).toEqual([key]);
+    client.clear();
+  });
+
+  it('seeds a tie from the chunk answered last, whatever order the cache holds them in (codex)', () => {
+    const client = getQueryClient();
+    forgetHoldingReads();
+    // [A, B] was read after a dispute's decision (the same status key, new flags); [A, C], an
+    // older chunk off screen, still holds the flags from before — and sits later in the cache.
+    const ab = holdingMarketsKey([ID, OTHER_ID]);
+    const ac = holdingMarketsKey([ID, THIRD_ID]);
+    const before: MarketSummary = { ...card, status: 'provisional', disputeUnderReview: false };
+    const decided: MarketSummary = { ...before, disputeUnderReview: true };
+    client.setQueryData<MarketPages>(ab, chunk(decided, otherCard));
+    client.setQueryData<MarketPages>(ac, chunk(before));
+    noteHoldingRead(hashKey(ac), 1_000);
+    noteHoldingRead(hashKey(ab), 2_000);
+    // A read forgotten since (a status restart) still orders by its answer.
+    forgetHoldingReads(hashKey(ab));
+    expect(seedHoldingChunk(client, [ID])?.pages[0]?.items[0]?.disputeUnderReview).toBe(true);
+    client.clear();
+  });
+
+  it('owes a follow-up to a seeded chunk on its read only for a market it has no row of', () => {
+    const client = getQueryClient();
+    const key = holdingMarketsKey([ID, THIRD_ID]);
+    void client.prefetchQuery({
+      queryKey: key,
+      queryFn: () => new Promise<MarketPages>(() => undefined),
+      initialData: chunk(card),
+      staleTime: 0,
+    });
+    expect(client.getQueryState(key)?.fetchStatus).toBe('fetching');
+    // ID's row is there: the card loop takes its tick.
+    expect(holdingMarketsFirstReads(client, ID)).toEqual([]);
+    // THIRD_ID has none yet: its tick would be dropped, and the answer on the wire predates it.
+    expect(holdingMarketsFirstReads(client, THIRD_ID).map((q) => q.queryKey)).toEqual([key]);
+    client.clear();
+  });
+
+  it('never counts a cancelled read as the chunk’s answer (codex)', async () => {
+    forgetHoldingReads();
+    vi.spyOn(api, 'GET').mockResolvedValue({
+      data: { data: [card], meta: { nextCursor: null } },
+      response: new Response(null, { status: 200 }),
+    } as never);
+    const options = holdingMarketsQueryOptions([ID]);
+    const hash = hashKey(options.queryKey);
+    const cancelled = new AbortController();
+    cancelled.abort();
+    await options.queryFn({ queryKey: options.queryKey, signal: cancelled.signal });
+    expect(holdingReadFresh(hash, Date.now())).toBe(false);
+    await options.queryFn({ queryKey: options.queryKey, signal: new AbortController().signal });
+    expect(holdingReadFresh(hash, Date.now())).toBe(true);
+    // A cancelled failure does not forget the answer that stands.
+    vi.spyOn(api, 'GET').mockRejectedValue(new Error('aborted'));
+    await expect(
+      options.queryFn({ queryKey: options.queryKey, signal: cancelled.signal }),
+    ).rejects.toThrow('aborted');
+    expect(holdingReadFresh(hash, Date.now())).toBe(true);
+    // The request carries the signal, so a cancel stops it on the wire too.
+    expect(vi.mocked(api.GET).mock.calls.at(-1)?.[1]).toMatchObject({ signal: cancelled.signal });
+    expect(options.staleTime).toBe(holdingChunkStaleTime);
   });
 });
 

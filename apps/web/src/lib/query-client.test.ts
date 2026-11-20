@@ -12,7 +12,14 @@ import { positionsKey } from '@/hooks/use-portfolio';
 import { postImageUploader } from '@/hooks/use-posts';
 import { positionFixture } from '@/test/positions';
 import { ApiError, type Position, api } from './api';
-import { CATEGORIES_QUERY_KEY, MARKET_KEY, POSITIONS_KEY, marketKey } from './market-keys';
+import {
+  CATEGORIES_QUERY_KEY,
+  MARKETS_KEY,
+  MARKET_KEY,
+  POSITIONS_KEY,
+  holdingMarketsKey,
+  marketKey,
+} from './market-keys';
 import { MY_ACTIONS_KEY, MY_REPORTS_KEY, MY_RESTRICTION_KEY, myRestrictionKey } from './moderation';
 import {
   ME_KEY,
@@ -831,6 +838,41 @@ describe('a reconnect reads a snapshot key once (ADR-0142 결정 2-21)', () => {
       market.unsubscribe();
       setResnapshotOwed(client, null);
       client.unmount();
+      client.clear();
+    }
+  });
+
+  it('reads MY’s 50 held markets as one chunk, once, on a reconnect (#300, ADR-0147)', async () => {
+    // #300 reads the rows 50 to a request under `['markets']`, which the provider owes as a
+    // snapshot key beside `['market']`: the 50 reads above become one.
+    const client = getQueryClient();
+    const owed = [MARKETS_KEY, POSITIONS_KEY, ME_QUERY_KEY] as const;
+    const ids = Array.from(
+      { length: 50 },
+      (_, n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`,
+    );
+    const page = () => ({ pages: [{ items: [], nextCursor: null }], pageParams: [undefined] });
+    const reads = { count: 0 };
+    client.setQueryData(holdingMarketsKey(ids), page());
+    const observer = new QueryObserver<unknown>(client, {
+      queryKey: holdingMarketsKey(ids),
+      queryFn: () => {
+        reads.count += 1;
+        return Promise.resolve(page());
+      },
+      retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      setResnapshotOwed(client, owed);
+      age();
+      client.getQueryCache().onOnline();
+      await settle();
+      for (const root of owed) await restartQueries(client, root);
+      await settle();
+      expect(reads.count).toBe(1);
+    } finally {
+      unsubscribe();
       client.clear();
     }
   });

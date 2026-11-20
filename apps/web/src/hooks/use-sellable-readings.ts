@@ -22,9 +22,9 @@ interface ListReads extends ReadFacts {
 
 /**
  * MY's sellable reads: at most 10 on their way and 20 started in any minute (ADR-0142 결정 2-15).
- * With the market rows (one each, `useHoldings`) and the screen's own reads, a cold
- * `/my/positions` stays under the address's 100 a minute at 50 held markets; the rest of them wait
- * as skeletons, the top groups (the latest changed) first.
+ * With the market rows (one request per 50 held markets since #300, `useHoldings`) and the
+ * screen's own reads, a cold `/my/positions` stays under one tab's 50 a minute at 50 held markets
+ * (5 + 1 + 20); the rest of them wait as skeletons, the top groups (the latest changed) first.
  */
 export const SELLABLE_PACE = { maxInFlight: 10, perWindow: 20, windowMs: 60_000 } as const;
 

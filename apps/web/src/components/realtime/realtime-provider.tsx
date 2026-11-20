@@ -66,12 +66,17 @@ import {
   applyToPages,
   bookRestartsOwnOrders,
   bookRestartsSellable,
+  afterHoldingFirstRead,
   chunkIds,
+  forgetHoldingReads,
+  holdingChunksToRead,
+  holdingMarketsFirstReads,
   ownOrdersRefreshKeys,
   ownOrdersStatusKeys,
   ownSettlementKeys,
   positionReopensMarket,
   positionRestartsOrder,
+  sameChunk,
   tickRestartsMarket,
   walletMissesMarket,
   wroteASettlement,
@@ -451,6 +456,10 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       // instead of once per connection — which was exactly the route Q-M4-7 names, and the one a
       // Redis blip opens. An event whose id is not past the watermark committed before a balance
       // this tab has already applied, so refusing it can lose nothing.
+      // MY's holdings chunks (#300, ADR-0147) are read again with `MARKETS_KEY`; one off screen
+      // is only marked stale, and a neighbour's next tick would clear that mark — so every
+      // chunk's read time is forgotten too and its next observer reads it (`holdingReads`).
+      forgetHoldingReads();
       for (const queryKey of snapshotKeys) {
         void restartQueries(queryClient, queryKey);
       }
@@ -769,6 +778,15 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
             applyToPages(held, (row) => applyTick(row, event)),
           );
         }
+        // MY's holdings chunks are card pages too (#300, ADR-0147), so the loop above moved
+        // them — except a chunk whose first read is still on the wire: the race above. Not a
+        // restart (a chunk takes up to 50 markets' ticks; cancelling its read each window could
+        // keep a slow one from answering): one more read after it lands, once per first read.
+        for (const query of holdingMarketsFirstReads(queryClient, event.marketId)) {
+          afterHoldingFirstRead(query, () => {
+            void restartQueries(queryClient, query.queryKey, sameChunk(query));
+          });
+        }
         // And every range of this market's series, so the open chart's right edge moves
         // without a refetch (PLAN 11.5: an event must not become a request).
         queryClient.setQueriesData<CachedSeries>(
@@ -821,11 +839,12 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // distinction has bitten, and the worst of them. `applyStatus` writes NOTHING into a
         // cache with no row, and a bare invalidation on a query that has answered nothing hands
         // back the request already running: the one that read the market BEFORE the transition.
-        // MY's `['market', id]` entries are unseeded (`useQueries`), so that pre-close
-        // snapshot landed as fresh and the row went on saying `open`. What that costs on screen
-        // is the MISSING 마감 badge, not a wrong one: `OpenPositionRow` draws a status badge only
-        // when `marketStatus !== 'open'`, so the holding is listed with no sign that the market
-        // can no longer be traded. No figure is wrong — a close writes no price tick and no
+        // MY's `['market', id]` entries were unseeded (`useQueries`, #67; MY's rows are the
+        // holdings chunks since #300, restarted beside this one and unseeded too), so that
+        // pre-close snapshot landed as fresh and the row went on saying `open`. What that costs on
+        // screen is the MISSING 마감 badge, not a wrong one: `OpenPositionRow` draws a status badge
+        // only when `marketStatus !== 'open'`, so the holding is listed with no sign that the
+        // market can no longer be traded. No figure is wrong — a close writes no price tick and no
         // arithmetic here reads the status — which is why this is P3 and not higher.
         //
         // Unlike a dropped tick, NOTHING repairs it: a close publishes no `user:position`, so the
@@ -854,6 +873,12 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // `restartQueries` is still the right call there because it matches by PREFIX, which is
         // what these entries need: they are `['ticks', id, range]`, one per range this tab opened.
         void restartQueries(queryClient, marketKey(event.marketId));
+        // MY's holdings chunks that hold it (#300, ADR-0147): `applyStatus` above moved their
+        // status but put '판정 지연'·'이의 검토 중' back to false, and a same-key repeat (an edit, a
+        // delay record, a dispute's decision) not at all — the read, as for `['market', id]`.
+        for (const query of holdingChunksToRead(queryClient, event.marketId)) {
+          void restartQueries(queryClient, query.queryKey, sameChunk(query));
+        }
         void restartQueries(queryClient, [...TICKS_KEY, event.marketId]);
         // The first kind again: a transition empties a book (a non-OPEN market shows no 호가,
         // #179, ADR-0114) or fills it back, and a `market:status` is published without a
@@ -1005,12 +1030,18 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         }
         // The first kind of the RULE above (#67, ADR-0142 결정 2-2): the event carries no price.
         // MY left this market's room when the holding was sold out, so the buy back's
-        // `market:tick` went by, and the `['market', id]` entry it kept is inside `staleTime` —
-        // the observer `useHoldings` mounts again would take it as fresh and value the holding at
-        // the price from before its own fill. Marked stale here, that mount reads the market once
-        // (an entry on screen is read now). Once per sold-out market bought back
-        // (`positionReopensMarket`), never for a market already held at 1 or more.
-        if (reopensMarket) void restartQueries(queryClient, marketKey(event.marketId));
+        // `market:tick` went by, and a holdings chunk that held it before (#300, ADR-0147: MY's
+        // rows are `holdingMarketsKey` entries now) may still be inside `staleTime` — the chunk
+        // `useHoldings` observes again would take it as fresh and value the holding at the price
+        // from before its own fill. Marked stale here, that mount reads it once. Only the chunks
+        // that name this market: the one on screen, which no longer does, is left alone. Once
+        // per sold-out market bought back (`positionReopensMarket`), never for a market already
+        // held at 1 or more.
+        if (reopensMarket) {
+          for (const query of holdingChunksToRead(queryClient, event.marketId)) {
+            void restartQueries(queryClient, query.queryKey, sameChunk(query));
+          }
+        }
         // The order lists have no reducer and no event of their own (#123's 대기 주문, 주문 상세 and
         // their fills, 내 거래 too, all under `['orders']`): an `Order` carries its id, status,
         // filledQty, filledAmountCoin and the market's slug and title, none of which any

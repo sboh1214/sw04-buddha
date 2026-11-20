@@ -7,6 +7,7 @@ import { cursorQuerySchema } from './api/pagination.js';
 import { recentPeriodSchema } from './api/period.js';
 import { coinAmountSchema, serializeCoinAmount } from './api/coin-amount.js';
 import { uuidParamSchema } from './api/path-param.js';
+import { uuidSchema } from './api/uuid.js';
 import {
   BP_MAX,
   INT4_MAX,
@@ -391,21 +392,54 @@ export const marketCategoryFilterSchema = z
 export const marketSearchTermSchema = z.string().trim().min(1).max(MARKET_SEARCH_TERM_MAX);
 
 /**
+ * The most markets one `GET /markets?ids=` names (#300, ADR-0147): MY's holdings read their
+ * markets 50 to a request — one request a reading for up to 50 held markets.
+ */
+export const MARKET_IDS_MAX = 50;
+
+/**
+ * `GET /markets?ids=` (#300, ADR-0147): the markets to read by id, 1..`MARKET_IDS_MAX`, as the
+ * query string repeats the key (`ids=a&ids=b`, openapi-fetch's form) — a lone `ids=a` arrives as
+ * a string and is read as a list of one. Each a uuid, lower-cased; a repeated id counts once.
+ */
+const marketIdsSchema = z.preprocess(
+  (raw) => (typeof raw === 'string' ? [raw] : raw),
+  z.array(uuidSchema).min(1).max(MARKET_IDS_MAX),
+);
+
+/**
  * `GET /markets` (no `.meta`: query DTO). `status` defaults to `open` — the home's list (ADR-0061
  * decision 1, item 13) — and `all` is every public status, which the search screen asks for until
  * a status is picked (ADR-0066).
+ *
+ * `ids` (#300, ADR-0147) reads those markets instead: every public status (draft, in review and
+ * unknown ids are left out alike), in the order named, one page with no cursor. `status`, `sort`
+ * and `limit` do not apply to it — they have defaults, so an explicit one cannot be told from
+ * none — and `category`, `q` and `cursor`, which have none, are refused beside it.
  */
-export const marketListQuerySchema = cursorQuerySchema.extend({
-  /** A category slug on either level: a top-level slug lists every sub-category under it. */
-  category: marketCategoryFilterSchema.optional(),
-  status: marketListStatusSchema.default('open'),
-  sort: marketSortSchema.default(DEFAULT_MARKET_SORT),
-  /**
-   * The search screen's (ADR-0066): a title holding it, case-insensitive, or a tag of exactly that
-   * name, case and spaces aside (#17).
-   */
-  q: marketSearchTermSchema.optional(),
-});
+export const marketListQuerySchema = cursorQuerySchema
+  .extend({
+    /** A category slug on either level: a top-level slug lists every sub-category under it. */
+    category: marketCategoryFilterSchema.optional(),
+    status: marketListStatusSchema.default('open'),
+    sort: marketSortSchema.default(DEFAULT_MARKET_SORT),
+    /**
+     * The search screen's (ADR-0066): a title holding it, case-insensitive, or a tag of exactly
+     * that name, case and spaces aside (#17).
+     */
+    q: marketSearchTermSchema.optional(),
+    /**
+     * These markets by id (#300): every public status, in the order named, one page. `status`,
+     * `sort` and `limit` do not apply; `category`, `q` and `cursor` are refused beside it.
+     */
+    ids: marketIdsSchema.optional(),
+  })
+  .refine(
+    (query) =>
+      query.ids === undefined ||
+      (query.category === undefined && query.q === undefined && query.cursor === undefined),
+    { message: 'ids takes no category, q or cursor', path: ['ids'] },
+  );
 export type MarketListQuery = z.infer<typeof marketListQuerySchema>;
 
 // ---- orders, fills, positions ------------------------------------------------------

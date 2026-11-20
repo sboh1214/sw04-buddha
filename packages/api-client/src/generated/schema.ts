@@ -2815,7 +2815,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Markets by status (default open; all is every public status), never draft or in review, optionally by category and a search (q: a title partial match, case-insensitive, or a tag of exactly that name, case and spaces aside); sorted recommended (24-hour volume, then the latest opening; the default), volume (all-time volume, then the latest opening; both sort keys leave out fills approved as abnormal, while each row's volumeCoin still counts them), newest (latest opening) or closing (soonest close; with all or an ended status, the markets not closed yet (scheduled, open, paused) first and then the ended ones, latest close first) */
+        /** Markets by status (default open; all is every public status), never draft or in review, optionally by category and a search (q: a title partial match, case-insensitive, or a tag of exactly that name, case and spaces aside); sorted recommended (24-hour volume, then the latest opening; the default), volume (all-time volume, then the latest opening; both sort keys leave out fills approved as abnormal, while each row's volumeCoin still counts them), newest (latest opening) or closing (soonest close; with all or an ended status, the markets not closed yet (scheduled, open, paused) first and then the ended ones, latest close first). With ids (repeated, 1 to 50 uuids), those markets instead: every public status, in the order named, a repeated id once, one page with no cursor; a draft, in-review or unknown id is left out, never NOT_FOUND. status, sort and limit do not apply to ids; category, q and cursor beside it are a VALIDATION_ERROR */
         get: operations["listMarkets"];
         put?: never;
         post?: never;
@@ -22125,6 +22125,7 @@ export interface operations {
             query?: {
                 category?: string;
                 cursor?: string;
+                ids?: string[];
                 limit?: number;
                 q?: string;
                 sort?: "recommended" | "volume" | "newest" | "closing";

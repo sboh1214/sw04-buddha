@@ -76,7 +76,10 @@ export class MarketsController {
       "while each row's volumeCoin still counts them), newest (latest opening) or closing " +
       '(soonest close; with all or an ended status, the ' +
       'markets not closed yet (scheduled, open, paused) first and then the ended ones, latest ' +
-      'close first)',
+      'close first). With ids (repeated, 1 to 50 uuids), those markets instead: every public ' +
+      'status, in the order named, a repeated id once, one page with no cursor; a draft, ' +
+      'in-review or unknown id is left out, never NOT_FOUND. status, sort and limit do not ' +
+      'apply to ids; category, q and cursor beside it are a VALIDATION_ERROR',
   })
   @ApiPageOf(marketSummarySchema)
   @ApiErrors('VALIDATION_ERROR')

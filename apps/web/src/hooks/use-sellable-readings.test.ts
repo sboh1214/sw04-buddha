@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { MARKET_IDS_MAX } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { sellableQueryOptions } from '@/hooks/use-orders-place';
 import { RequestPacer } from '@/lib/request-pacer';
@@ -41,16 +42,38 @@ describe('pacedSellableQueryOptions', () => {
       50: { entry: 75, reconnectSellable: 20 },
     } as const;
     for (const markets of [1, 5, 10, 25, 50] as const) {
-      const bound = fixed + markets + SELLABLE_PACE.perWindow;
-      // One tab's 50 a minute up to 25 held markets; under the address's 100 at 50.
-      expect(bound, `N = ${String(markets)}`).toBeLessThanOrEqual(markets <= 25 ? 50 : 100);
+      // #67's bound, one market row per held market — what the measurement above was taken on.
+      const before = fixed + markets + SELLABLE_PACE.perWindow;
+      expect(before, `N = ${String(markets)}`).toBeLessThanOrEqual(markets <= 25 ? 50 : 100);
       // The bound never understates what was measured, nor the computed reconnect after 결정 2-21.
       const { entry, reconnectSellable } = measured[markets];
-      expect(entry, `N = ${String(markets)}`).toBeLessThanOrEqual(bound);
+      expect(entry, `N = ${String(markets)}`).toBeLessThanOrEqual(before);
       expect(reconnectSellable).toBeLessThanOrEqual(SELLABLE_PACE.perWindow);
       expect(fixed + markets + reconnectSellable, `N = ${String(markets)}`).toBeLessThanOrEqual(
-        bound,
+        before,
       );
+    }
+    // #300 (ADR-0147): the rows are read 50 to a request, so the market rows' share is the
+    // number of chunks, not N — one tab's 50 a minute at every N up to 50, and far past it.
+    for (const markets of [1, 5, 10, 25, 50, 100, 200] as const) {
+      const chunks = Math.ceil(markets / MARKET_IDS_MAX);
+      const bound = fixed + chunks + SELLABLE_PACE.perWindow;
+      expect(bound, `N = ${String(markets)}`).toBeLessThanOrEqual(markets <= 50 ? 26 : 50);
+    }
+    expect(MARKET_IDS_MAX).toBe(50);
+    // Measured 2026-11-20 on this code (ADR-0147 결과 2), same tool and conditions as #67: first
+    // entry and reconnect within the bound at every N, and the ADR records the same numbers.
+    const after = {
+      1: { entry: 17, reconnect: 18 },
+      5: { entry: 21, reconnect: 22 },
+      10: { entry: 26, reconnect: 26 },
+      25: { entry: 26, reconnect: 26 },
+      50: { entry: 26, reconnect: 26 },
+    } as const;
+    for (const markets of [1, 5, 10, 25, 50] as const) {
+      const bound = fixed + Math.ceil(markets / MARKET_IDS_MAX) + SELLABLE_PACE.perWindow;
+      expect(after[markets].entry, `N = ${String(markets)}`).toBeLessThanOrEqual(bound);
+      expect(after[markets].reconnect, `N = ${String(markets)}`).toBeLessThanOrEqual(bound);
     }
     // The ADR states the same bound, and still points #123's empty ADR-0141 line at this run.
     const decisions = readFileSync(
@@ -65,6 +88,9 @@ describe('pacedSellableQueryOptions', () => {
     expect(adr0142).toContain(
       "ADR-0141 결과 3 '실시간 예산' 줄은 이 측정(`/my/orders` 한 쪽 6·두 쪽 12, 주문 상세 36",
     );
+    const adr0147 = decisions.slice(decisions.indexOf('\n## ADR-0147 '));
+    expect(adr0147).toMatch(/\| N = 50 +\| \*\*26\/10\/26\/25\*\* +\| 75\/10\/75\/25 +\|/);
+    expect(adr0147).not.toContain('[측정 전]');
     // A focus return re-reads no open market's row (결정 2-22): the fixed reads and the queue.
     expect(fixed + SELLABLE_PACE.perWindow).toBeLessThanOrEqual(50);
     expect(SELLABLE_PACE).toEqual({ maxInFlight: 10, perWindow: 20, windowMs: 60_000 });
@@ -87,13 +113,17 @@ describe('who paces', () => {
     );
   });
 
-  it('MY’s holdings read the market rows through their own observer options, the detail its own', () => {
-    // ADR-0142 결정 2-22: no settlement poll and a narrower focus re-read on MY only.
+  it('MY’s holdings read the market rows 50 to a request, the detail its own row', () => {
+    // #300 (ADR-0147): chunks of held ids through `GET /markets?ids=`, with ADR-0142 결정 2-22's
+    // options (no settlement poll, a narrower focus re-read); never the detail's entry.
     const portfolio = src('../app/my/portfolio.tsx');
     const hook = portfolio.slice(portfolio.indexOf('export function useHoldings('));
     const body = hook.slice(0, hook.indexOf('\n}\n'));
-    expect(body).toContain('holdingMarketQueryOptions(');
+    expect(body).toMatch(
+      /holdingMarketChunks\(marketIds\)\.map\(\(ids\) =>\s*holdingMarketsQueryOptions\(ids, \(\) => seedHoldingChunk\(queryClient, ids\)\),?\s*\)/,
+    );
     expect(body).not.toMatch(/(?<![A-Za-z])marketQueryOptions\(/);
+    expect(body).not.toContain('holdingMarketQueryOptions(');
     const markets = src('./use-markets.ts');
     const useMarket = markets.slice(markets.indexOf('export function useMarket('));
     expect(useMarket.slice(0, useMarket.indexOf('\n}\n'))).toContain(

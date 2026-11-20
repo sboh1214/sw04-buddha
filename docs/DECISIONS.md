@@ -17298,7 +17298,7 @@ ADR-0135 결과 2 '바뀌지 않는 것'의 ADR-0113 항목(옛 ADR을 읽은 �
 ## ADR-0142 — 보유 계약과 자산 요약(#67): 두 묶음 보유 행과 시장 묶음, 보유 1 이상의 보유 계약 탭과 탭 위 잔고 요약 카드, 소수 둘째 자리 평균 매입가, sellable 견적의 매도 가능 칸과 매도 잠금, '최근 체결 <절대 시각>'과 순서 키를 실은 Position(`marketLastFillAt`·`marketTradeCount`·`marketStatusEventId`), 상세 패널로 가는 매도 진입(`openSell`, `?order=sell&contract=`), 계정별 보유 키, `isPendingOrder` 제거 — 마이그레이션·출시 설정 없음 (#67)
 
 - 날짜: 2026-11-16
-- 상태: 채택, 일부 대체됨(ADR-0143: 결정 2-18의 '정산 이력의 `SettledBody`는 그대로'와 결정 2-14의 보유 목록을 부르는 곳 가운데 '`/my/history`의 정산 이력' — MY의 정산 목록은 정산 기록(`GET /me/settlements`)이고 `SettledBody`를 지웠다. `settled` 목록은 잔고 요약(총 실현 손익)과 상세의 내 포지션이 그대로 읽는다. 결정 2-19의 `OrdersBody`·`useOrders` — 지웠다. 결과 3 '모듈 층'과 결과 5의 '#124' — 했다(`ProfileUnavailable`은 `components/my/` 아래다). 나머지는 유효; 남은 위험 둘을 이어 적는다 — PR(#67)의 마지막 전체 검증을 시작한 뒤 CLI 7차(`4ca642a8`)에서 나와 그 커밋에는 적지 못했다: (1) 보유가 많은 MY 목록에서 상세나 MY 요약으로 옮기면, 더는 관찰되지 않는 시장의 sellable도 결정 2-16의 회전에 남아 6초 칸을 하나씩 쓴다(그 restart는 요청을 보내지 않는다). 그래서 보이는 매도 가능·매도 잠금이 그만큼 늦게 다시 읽힐 수 있다. (2) 375에서 보유 행의 '매도'로 시트를 연 뒤 전량 매도하면 그 행이 '보유 없음' 행으로 바뀌어, 시트를 닫을 때 키보드 포커스가 돌아갈 단추가 없다(진입 바로 넘기는 대체 없음). 둘 다 돈·체결·다른 계정의 정보에 닿지 않는 화면 문제라 오너 규칙(2026-11-16)대로 고치지 않았다), 일부 대체됨(ADR-0145: 결과 5의 '#34' — 했다. 지급 완료 시장의 내 포지션은 `GET /me/settlements?marketId=`의 기록으로 정산 내역(정산 때 보유 수량·잔여 원가·계약당 지급·지급액·정산 손익, 결과 확정·지급 완료)과 그 계약 행의 실현 손익(누적, 그대로)을 보인다. `SettledPositionRows`를 지웠다 — '보유 수량'이 늘 0계약이던 줄이다. 끝난 시장의 빈 문구는 '이 시장에서 보유한 계약이 없습니다.'다. 지급 전 상태의 HoldingRow와 `positionListStatusFor`는 그대로다. 나머지는 유효)
+- 상태: 채택, 일부 대체됨(ADR-0143: 결정 2-18의 '정산 이력의 `SettledBody`는 그대로'와 결정 2-14의 보유 목록을 부르는 곳 가운데 '`/my/history`의 정산 이력' — MY의 정산 목록은 정산 기록(`GET /me/settlements`)이고 `SettledBody`를 지웠다. `settled` 목록은 잔고 요약(총 실현 손익)과 상세의 내 포지션이 그대로 읽는다. 결정 2-19의 `OrdersBody`·`useOrders` — 지웠다. 결과 3 '모듈 층'과 결과 5의 '#124' — 했다(`ProfileUnavailable`은 `components/my/` 아래다). 나머지는 유효; 남은 위험 둘을 이어 적는다 — PR(#67)의 마지막 전체 검증을 시작한 뒤 CLI 7차(`4ca642a8`)에서 나와 그 커밋에는 적지 못했다: (1) 보유가 많은 MY 목록에서 상세나 MY 요약으로 옮기면, 더는 관찰되지 않는 시장의 sellable도 결정 2-16의 회전에 남아 6초 칸을 하나씩 쓴다(그 restart는 요청을 보내지 않는다). 그래서 보이는 매도 가능·매도 잠금이 그만큼 늦게 다시 읽힐 수 있다. (2) 375에서 보유 행의 '매도'로 시트를 연 뒤 전량 매도하면 그 행이 '보유 없음' 행으로 바뀌어, 시트를 닫을 때 키보드 포커스가 돌아갈 단추가 없다(진입 바로 넘기는 대체 없음). 둘 다 돈·체결·다른 계정의 정보에 닿지 않는 화면 문제라 오너 규칙(2026-11-16)대로 고치지 않았다), 일부 대체됨(ADR-0145: 결과 5의 '#34' — 했다. 지급 완료 시장의 내 포지션은 `GET /me/settlements?marketId=`의 기록으로 정산 내역(정산 때 보유 수량·잔여 원가·계약당 지급·지급액·정산 손익, 결과 확정·지급 완료)과 그 계약 행의 실현 손익(누적, 그대로)을 보인다. `SettledPositionRows`를 지웠다 — '보유 수량'이 늘 0계약이던 줄이다. 끝난 시장의 빈 문구는 '이 시장에서 보유한 계약이 없습니다.'다. 지급 전 상태의 HoldingRow와 `positionListStatusFor`는 그대로다. 나머지는 유효), 일부 대체됨(ADR-0147: 결정 2-22의 `holdingMarketQueryOptions` — MY의 시장 행은 `GET /markets?ids=`로 50개씩 읽는 묶음 항목(`holdingMarketsQueryOptions`, `['markets','holdings', ids]`)이고 주기 읽기 없음·좁은 포커스 다시 읽기를 묶음 단위로 둔다. 결정 2-2의 되산 시장 restart의 대상 — `['market', id]`가 아니라 그 시장을 담은 묶음. 결과 3 남은 위험의 'N = 50의 시장 행' — 했다(제안의 `Market` 행·각 `['market', id]`에 쓰기 대신 `MarketSummary`·MY 전용 묶음 항목, ADR-0147 결정 2). 나머지는 유효)
 
 이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #67의 MY 보유 계약 탭과 잔고 요약 카드, 시장 상세의 내 포지션, 보유에서 매도로 들어가는 길과 그것이 서버에 더한 것(`Position`의 공개 시장 값 셋)을 기록한다. #61(ADR-0136)·#63(ADR-0137)·#122(ADR-0138)·#64(ADR-0139)·#66(ADR-0140)·#123(ADR-0141) 위에 쌓았다.
 
@@ -18145,3 +18145,110 @@ ADR-0135 결과 4가 묻지 않고 읽어서 정한 #34 줄(오너 답이 아니
 
 - **web:** `src/lib/my-orders.ts`, `src/hooks/use-my-orders.ts`, `src/hooks/use-wallet-lock-watch.ts`(주석), `src/lib/market-keys.ts`(주석). 시험: `hooks/use-my-orders`, `hooks/use-wallet-budget`. e2e: `orders`.
 - **그 밖:** `docs/DECISIONS.md`.
+
+## ADR-0147 — 보유 계약의 시장 행 묶음 읽기(#300): 공개 `GET /markets?ids=`(1\~50, 모든 공개 상태, `MarketSummary`, 이름 댄 차례, 커서 없는 한 쪽)와 MY가 보유 시장을 50개씩 한 요청으로 읽는 항목 `['markets','holdings', ids]`(카드 쪽 모양), `market:status`·첫 읽기 경합·되산 시장의 다시 읽기 — 마이그레이션·출시 설정 없음 (#300)
+
+- 날짜: 2026-11-20
+- 상태: 채택
+
+이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #300 — MY 보유 계약과 MY 요약이 보유 시장의 시장 행을 시장마다 따로 읽어 보유 50개 시장의 첫 진입·재연결이 분당 75였던 것 — 을 고친 공개 API 인자 하나와 웹의 읽기를 기록한다. #67(ADR-0142) 위이고, #302(ADR-0146) 위에 쌓았다.
+
+**PR과 이슈.** PR 본문은 `Closes #300`을 쓴다. 마이그레이션과 출시 설정이 없다. `@buddha/shared`(쿼리 스키마)·api·생성물(openapi·api-client·docs/API.md)이 바뀐다.
+
+### 맥락
+
+**기획.** N04 §3 "MY에서 보유 계약, 주문·체결·정산 이력, 지갑, 내 글, 관심 시장을 확인한다.", N02 §8 "현재 보유가치는 최근 체결가 기준 참고 평가로 표시한다." 운영 기준은 ADR-0138(로그인한 탭 하나 분당 50 요청 이하, 주소당 분당 100, 429는 다시 시도하지 않는다).
+
+**#300 본문.** 수용 기준 넷은 결과 4의 표가 하나씩 대조한다. 오너 결정 두 항목 가운데 마일스톤·에픽은 이슈를 만들 때 정했다(M13, 에픽 #160의 하위 이슈, `scope:mvp`).
+
+**넘겨받은 것.** ADR-0142 결과 3의 남은 위험 'N = 50의 시장 행'과 그 제안: "`GET /api/v1/markets?ids=<uuid,…>`(공개, 최대 50, `GET /markets/:idOrSlug`와 같은 `Market` 행). MY가 보유 시장을 한 요청으로 읽어 각 `['market', id]`에 쓰면 … 약 26". 결정 2-2(가격·시각은 체결 수로, 상태는 상태 키로 고름, 되산 시장의 restart), 2-21(재연결 한 번 읽기), 2-22(MY의 시장 행 관찰 옵션: 주기 읽기 없음, 포커스는 거래 마감·잠정 결과·행 없음·실패만).
+
+**이 PR 전.** `useHoldings`(`app/my/portfolio.tsx`)가 보유 1 이상 시장마다 `useQueries(holdingMarketQueryOptions(id))` — 상세와 같은 `['market', id]` 항목과 `GET /markets/:idOrSlug` 요청 — 를 두었다. `/my/positions`와 `/my` 요약 둘 다 보유 시장 전부를 읽었다(`groupLimit`은 sellable에만 걸린다). 재연결은 `MARKET_KEY` 재스냅숏으로 N개를 다시 읽었다. 측정(ADR-0142 결과 3, 고친 뒤): N = 50 첫 진입/정상/재연결/포커스 75/10/75/25, N = 25 50/10/50/25.
+
+**범위.** 하는 것: 공개 목록 라우트의 `ids` 인자, MY 보유 행의 시장 읽기(묶음 항목·포커스·실시간), 그 시험과 문서. 하지 않는 것: 매도 가능 읽기(이미 분당 20 줄), 시장 상세의 요청(ADR-0142 결과 3 '상세의 첫 진입 58'), 보유 행의 표시 내용, 시장 방 입장(`useMarketSocket` 그대로).
+
+### 결정
+
+**1. 오너 결정 (다시 정하지 않는다).** 2026-11-20, 이 세션의 질문 '#300 approach'('#300 (MY holdings market rows): the owner decision in the issue is whether the public API may gain a route that reads several markets at once. …')에 오너가 고른 답: **"Batch route (Recommended)"** — "New public GET /markets?ids= (up to 50 ids, public statuses only, MarketSummary rows), one request feeding MY's holding rows. Server change, small, no migration. About 26 at N = 50; rows update when they do now." 고르지 않은 둘: 웹만의 줄(N = 50 약 45, 줄 뒤 행의 가격·배지 최대 2분 늦음 — ADR-0142 결정 2-22가 같은 이유로 택하지 않음), 시장 행을 읽지 않고 `Position`과 이벤트로(약 25 + 마감·잠정 시장 수, ADR-0142 결정 2-2·2-22를 다시 쓰고 positions API를 건드림).
+
+**2. 읽은 것.** 오너의 답이 아니라 있는 결정과 코드에서 읽은 것이다.
+
+1. **`Market`이 아니라 `MarketSummary`.** ADR-0142의 제안은 `Market` 행을 각 `['market', id]`에 쓰는 것이었으나, 오너 답대로 `MarketSummary`다. `Market` 하나는 `getPublic`에서 약 7질의(태그·출처·규칙 버전·판정 지연·24시간 전 가격·판정 기록)라 50개면 한 요청에 약 350질의다. 보유 행이 시장 행에서 읽는 일곱(`lastPrice`·`lastFillAt`·`tradeCount`·`status`·`statusEventId`·`judgementDelayed`·`disputeUnderReview`)은 모두 `MarketSummary`에 있고(`toMarketSummary`, 시장 행 하나에서 계산, 추가 질의 없음), 목록 라우트가 이미 그 모양을 준다(ADR-0062).
+2. **`['market', id]`가 아니라 MY 전용 항목.** `MarketSummary`를 `['market', id]`에 쓰면 상세가 빠진 칸(규칙·판정 기록)을 그린다. 상세는 서버 렌더가 그 항목을 채우므로(`seedMarketDetail`) MY가 미리 채울 까닭이 없다. 그래서 MY와 상세는 시장 행 항목을 더는 함께 쓰지 않는다.
+3. **같은 라우트의 인자.** 새 정적 경로(`/markets/batch` 같은)는 `/markets/:idOrSlug`의 slug와 겹칠 수 있어, 오너 답의 `GET /markets?ids=` 그대로 목록 라우트의 인자로 둔다.
+
+**3. 구현.**
+
+1. **쿼리 스키마**(`@buddha/shared` `market.ts`). `marketListQuerySchema`에 `ids`: `MARKET_IDS_MAX = 50`개까지의 uuid(`uuidSchema` — 소문자로), 키를 되풀이한 꼴(`ids=a&ids=b`, openapi-fetch의 기본 직렬화)이고 하나면 문자열로 오므로 목록 하나로 읽는다(`z.preprocess`). 쉼표 목록은 받지 않는다(uuid가 아닌 값 하나라 400). 기본값이 있는 `status`·`sort`·`limit`은 명시한 것과 없는 것을 가를 수 없어 `ids`와 함께 와도 쓰지 않고, 기본값이 없는 `category`·`q`·`cursor`는 `ids`와 함께 오면 `VALIDATION_ERROR`(경로 `ids`)로 거절한다(객체 `refine`). 웹이 `.shape`로 읽는 칸(`category`·`q`)은 zod 4의 refine 뒤에도 그대로다. swagger는 그 객체를 칸마다 펼친다(`ids`: `type: array`, `minItems 1`, `maxItems 50`, uuid).
+2. **서비스**(`market.service.ts` `listByIds`). `list`가 `ids`면 그것으로 간다: 중복을 빼고, 기본 키 `inArray` + `isPublicMarket()`(공개 상태 아홉)과 범주 조인의 한 문장, 정렬 키·24시간 거래량 없음. 행은 한 `nowMs`의 `toMarketSummary`, 차례는 이름 댄 차례, `nextCursor: null`. 초안·검수 중·없는 id는 똑같이 빠진다(NOT_FOUND로 있는지 알리지 않는다). 요청 하나는 주소 버킷 `default`의 한 번이다.
+3. **문서화된 작업**(`markets.controller.ts`의 `listMarkets` 요약, `surface/registry.ts`의 `'GET /markets'` 사유). 라우트 키가 같아 등록을 더하지 않고 사유만 고쳤다.
+4. **웹의 항목**(`lib/market-keys.ts`). `HOLDING_MARKETS_KEY = ['markets','holdings']`, `holdingMarketsKey(ids)`, `holdingMarketIdsOf(queryKey)`. `['markets']` 아래이고 값은 카드 목록 한 쪽의 모양(`MarketPages` — `{ pages: [{ items, nextCursor: null }], pageParams: [undefined] }`)이라, 목록 join(`joinMarketPages` — 행마다 체결 수·통계 판·상태 키로, 늦은 답이 tick을 되돌리지 않는다), `market:tick`·`market:status`·`market:stats`의 카드 처리기(`CARD_PAGES_KEYS`의 `applyToPages`), 재연결의 재스냅숏(`SNAPSHOT_KEYS`의 `MARKETS_KEY`)과 `online` 빚(결정 2-21)이 홈 목록에 닿듯 닿는다. 일반 `useQueries`(무한 쿼리가 아님)라 다음 쪽을 묻는 길이 없다. 공개 행이고, 키가 그 계정의 보유를 담는 것은 이 탭의 메모리뿐이다(서버 렌더가 탈수하지 않고, 계정이 바뀌면 SessionCacheGuard가 비운다).
+5. **읽기**(`hooks/use-markets.ts`). `holdingMarketChunks(ids)`: 소문자·중복 없음·정렬, 50개씩(`chunkIds`) — 그리는 차례(최근 변경 먼저)가 바뀌어도 새 항목이 생기지 않는다. `holdingMarketsQueryOptions(ids)`: `GET /api/v1/markets?ids=…` 한 번, 주기 읽기 없음(결정 2-22 (가)), 포커스는 그 묶음에 행이 없거나 실패했거나(실패 횟수가 남아 있어도) 거래 마감·잠정 결과 시장이 하나라도 있을 때만(`holdingMarketsRefetchOnFocus`, 결정 2-22 (나)를 묶음 단위로 — 그런 시장이 여럿이어도 한 번), 보유 집합이 바뀐 새 키는 캐시의 다른 묶음이 가진 그 시장들의 행으로 시작한다(`initialData: seedHoldingChunk` — `useQueries`는 hash가 바뀌면 새 관찰자를 만들어 `keepPreviousData`가 닿지 않는다. 행마다 `joinMarket`으로 가장 새 것 — 같은 키의 동점은 마지막으로 답을 받은 묶음의 행이 이기도록 묶음을 답 시각 순으로 지난다, 읽기가 아니라 묶음 자신의 읽기는 그대로 나간다). `holdingMarketQueryOptions`·`holdingMarketRefetchOnFocus`를 지웠다.
+   - **신선함은 묶음 자신의 답으로**(`staleTime: holdingChunkStaleTime`, `lib/market-live.ts`의 `holdingReads`). 묶음 하나는 최대 50개 시장의 항목이고, 카드 처리기(`setQueriesData`)는 화면 밖의 묶음도 그 시장들의 방이 하나라도 든 동안(상세, 홈 목록) 쓴다. 그 쓰기는 수동 `success`라 `dataUpdatedAt`을 지금으로 다시 찍고 `isInvalidated`와 `error`를 지운다(query-core 5.102.8 `successState`). 시장마다의 `['market', id]`(#67)는 제 시장의 사건만 썼지만, 묶음은 바쁜 이웃 하나의 tick으로 늘 신선하고 무효 표시도 실패도 지워진다 — 그대로 두면 MY가 방을 떠난 동안 조용한 시장의 상태·플래그를 놓친 묶음이 다시 마운트될 때 읽히지 않고, 포커스의 거래 마감·잠정 결과 다시 읽기도 막힌다. 그래서 묶음의 신선함은 서버가 그 묶음에 마지막으로 답한 시각(질의 hash → ms)으로만 정하고(`staleTime`이 그 시각이 30초 안이면 무한, 아니면 0 — `dataUpdatedAt`은 아무것도 정하지 않는다), 다시 읽을 까닭마다 그 시각을 잊는다: `market:status`와 되산 시장(`holdingChunksToRead`), 재연결의 재스냅숏(`forgetHoldingReads()`), 실패한 읽기. 요청은 질의의 `signal`을 실어 취소되면 선에서도 멈추고, 취소된 답·실패는 시각을 적거나 지우지 않는다 — 버려진 답이 그 뒤의 까닭을 덮어 신선함을 되살리지 못하게. 실패는 `failureCount`로도 본다(`priceIsStale`): 수동 쓰기는 `fetchFailureCount`를 남기고 읽기 시작만이 지운다.
+6. **`useHoldings`**(`app/my/portfolio.tsx`). 묶음마다 `useQueries`의 관찰자 하나, 그 행들로 `live` 지도를 만든다(키는 응답의 소문자 id). `markToLiveMarket`·`holdingDisplay`(둘 다 `MarketSummary`가 만족하는 `Pick`), '가격 갱신 멈춤' 안내(`priceIsStale`을 묶음마다)와 다시 시도(실패한 묶음만)는 그대로다. 묶음 하나가 실패하면 그 묶음의 시장들이 함께 멈춘 것으로 안내된다.
+7. **실시간이 더한 것**(`lib/market-live.ts` `holdingMarketsHolding`·`holdingChunksToRead`·`sameChunk`·`holdingMarketsFirstReads`·`afterHoldingFirstRead`, `realtime-provider.tsx`). 카드 처리기가 이미 닿으므로 더한 것은 목록에 필요 없던 셋이고, 묶음은 늘 제 hash로만 restart한다(`sameChunk`) — 키로 restart하면 접두로 맞아, 묶음의 id 목록이 더 긴 목록의 앞이면(['markets','holdings',[A,B]]와 [A,B,C]) 다른 묶음까지 읽는다.
+   - `market:status`: 그 시장을 담은 묶음을 읽기 시각을 잊고 restart한다. `applyStatus`는 상태와 키를 옮기지만 표시 플래그를 false로 되돌리고(`NO_STATUS_DISPLAY`) 같은 키의 반복(수정·판정 지연 기록·이의 결정)은 버려, 읽기만이 '판정 지연'·'이의 검토 중'을 되돌린다. 상태 사건마다 그 시장을 담은 묶음 하나에 요청 하나 — #67이 그 시장의 `['market', id]`에 쓰던 하나와 같다. 화면에 없는 묶음은 표시만 되고, 잊은 읽기 시각 때문에 다음 관찰자가 읽는다. `['market', id]`의 restart는 상세를 위해 그대로다.
+   - `market:tick`: 첫 읽기가 도는 동안의 경합(`tickRestartsMarket`이 적은 위험 — 행이 없어 tick을 버리고, 거래 전 스냅숏인 답이 서 버린다)을 묶음에 — 그 시장을 담고, 그 시장의 행이 없고(데이터가 없거나 다른 묶음에서 가져온 행에 그 시장이 없거나), 읽는 중이면 그 읽기가 답한 **뒤에** 한 번 더 읽는다(`afterHoldingFirstRead`). 실패하거나 취소된 읽기 뒤에는 읽지 않는다 — 취소된 것은 더 새 읽기가 대신했고, 실패는 재시도 규칙과 '가격 갱신 멈춤' 안내의 몫이라 곧바로 다시 읽으면 둘을 건너뛴다(429 포함). restart(취소 후 다시)가 아니다: 묶음은 시장 50개의 tick을 받아, 창마다 취소하면 느린 읽기가 끝내 답하지 못할 수 있다. 첫 읽기 하나에 많아야 한 번이다.
+   - `user:position`의 되산 시장(`positionReopensMarket`): 그 시장을 담은 묶음만 읽기 시각을 잊고 restart한다. 판다 → 되산 사이에 보유 집합이 바뀌어 키가 달라지므로, 되돌아갈 그 집합의 묶음이 캐시에 남아 있으면 다시 관찰될 때 한 번 읽힌다. 지금 화면의 묶음(그 시장이 없는)은 건드리지 않는다. 이 처리기의 `['market', id]` restart는 MY의 것이었으므로 이 묶음 restart로 바꿨다.
+   - `market:stats`에는 묶음 경합을 더하지 않았다 — 보유 행은 참여자 수를 읽지 않고, 그 처리기의 카드 처리기가 행이 있는 묶음을 이미 고친다.
+
+**4. 요청 예산.** 시장 행 몫은 N이 아니라 묶음 수 ⌈N/50⌉이다. 계산(결과 2가 쟀다): 첫 진입 = 고정 5(positions 2·me 1·restriction 1·session 1) + 묶음 + sellable(줄, 분당 20) — N ≤ 50에서 ≤ 26, N = 100에서 ≤ 27. 재연결도 같다(`MARKETS_KEY` 재스냅숏이 묶음마다 한 번). 포커스는 결정 2-22 그대로이되 거래 마감·잠정 결과 시장이 있으면 묶음마다 한 번. 정상 상태는 바뀌지 않는다(10). 보유 시장의 `market:status`마다 그 묶음에 하나(#67에서는 그 시장의 행에 하나).
+
+### 결과
+
+**1. 상태 줄.** 이어 썼다(덮어쓰지 않는다, ADR-0047 결과 1). 본문은 고치지 않았다.
+
+- **ADR-0142:** 일부 대체됨 — 결정 2-22의 `holdingMarketQueryOptions`(MY의 시장 행은 `holdingMarketsQueryOptions`의 묶음이고 같은 두 옵션을 묶음 단위로 둔다), 결정 2-2의 되산 시장 restart의 대상(`['market', id]` → 그 시장을 담은 묶음), 결과 3 남은 위험의 'N = 50의 시장 행' — 했다(제안의 `Market` 행·각 `['market', id]`에 쓰기 대신 `MarketSummary`·MY 전용 묶음 항목, 결정 2).
+- **고치지 않은 것:** ADR-0135는 결정만 적은 ADR이라 상태 줄을 잇지 않는다. ADR-0061·0062·0066(목록의 상태·정렬·`MarketSummary`)은 `ids`가 없을 때 그대로다.
+
+**2. 문서와 측정.** 고친 문서: 이 ADR, ADR-0142의 상태 줄, docs/GUARDS.md(항목을 더하지 않았다는 한 줄), 생성물(`pnpm api:openapi`: openapi.json·api-client·docs/API.md의 요약 한 줄). TERMS·README는 바꾸지 않았다 — 화면 낱말과 경로 표가 그대로다.
+
+- **요청 예산 측정**(2026-11-20 02:52–03:26 KST, 이 브랜치의 빌드 `2fc9f8cf`, ADR-0142 결과 3과 같은 도구·조건: MM 프로필 봇 시장, 회원 탭 하나, 두 계정이 10초마다 거래, 60초 창, 커밋하지 않는 일회 Playwright 스크립트, 기록은 세션 상태 폴더 `request-budget-state/300-measure/`). 첫 진입/정상/재연결/포커스(괄호는 ADR-0142 결과 3의 고친 뒤 값):
+
+  | 대상                  | 이 PR           | #67         |
+  | --------------------- | --------------- | ----------- |
+  | `/my/positions` N = 1 | 17/10/18/15     | 17/10/18/15 |
+  | N = 5                 | 21/10/22/19     | 25/10/26/19 |
+  | N = 10                | 26/10/26/24     | 35/10/35/24 |
+  | N = 25                | 26/10/26/25     | 50/10/50/25 |
+  | N = 50                | **26/10/26/25** | 75/10/75/25 |
+  | `/my`(보유 10)        | 26/10/29/26     | 34/10/37/25 |
+
+  모든 창이 50 이하이고 실패·중단·429가 0이다(루프백은 주소 버킷을 세지 않으므로 429 0은 증거가 아니다). 시장 행 요청은 시장마다의 `GET /markets/:id`가 모든 창에서 0이고, 묶음 `GET /markets?ids=`가 첫 진입·재연결에 1(보유 50 이하라 묶음 하나), 정상·포커스에 0이다(모두 거래 중 시장이라 포커스 다시 읽기가 없다). N = 10 이상의 첫 진입·재연결 26은 고정 5 + 묶음 1 + sellable 줄의 분당 20이다(N = 25·50의 첫 진입 창 끝에 매도 가능 칸 10·60개가 아직 줄을 기다린다 — #67과 같다). 정상 10은 sellable 회전(ADR-0142 결정 2-16)이다.
+
+**3. 시험.**
+
+- **shared 단위:** `market.test.ts`에 `it` 둘 — `ids` 하나·되풀이·대문자·50·51·빈 목록·uuid 아님·쉼표 목록, 없으면 그대로; `category`·`q`·`cursor`는 `ids`와 함께 거절(경로 `ids`), `status`·`sort`·`limit`은 기본값대로 통과, `.shape.category` 유지.
+- **api 통합:** `markets.controller.test.ts`의 새 `describe` 하나에 `it` 셋 — (1) 모든 공개 상태(열림·마감·지급 완료·개장 예정)를 이름 댄 차례로, 초안·검수 중·없는 id는 빠지고, 대문자·중복 id는 한 번, 커서 null, 행이 목록(`status=all`)의 행과 같고 칸이 `marketSummarySchema`와 같음, 하나면 목록 하나, 공개 시장이 없으면 빈 쪽; (2) `status=open&sort=newest&limit=1`을 무시, `category`·`q`·`cursor`는 400(경로 `ids`), 50은 200·51은 400, uuid 아님·쉼표·빈 값은 400; (3) '판정 지연'·'이의 검토 중' 플래그가 상세와 같음.
+- **web 단위:** `use-markets.test.ts`(묶음: 소문자·중복·정렬·50씩, 요청과 쪽 모양, `['market']`과 겹치지 않음, 주기 읽기 없음, 포커스 표(덮어쓴 실패 포함), 카드 처리기와 join으로 늦은 답이 tick을 되돌리지 않음, `holdingMarketsHolding`, 첫 읽기 하나에 뒤따르는 읽기 하나(답을 취소하지 않음, 가져온 행에 없는 시장만), 신선함은 묶음 자신의 답 — 상태가 잊게 한 읽기를 이웃의 tick이 되살리지 못함, 제 hash의 restart는 앞이 같은 더 긴 묶음에 닿지 않음, 이웃의 tick 뒤에도 실패 안내가 남음, 새 집합의 묶음은 캐시의 가장 새 행으로 시작하고(동점은 마지막에 답받은 묶음) 그래도 읽음, 취소된 답은 신선함이 아님·요청이 signal을 실음), `realtime-cache.test.ts`(되산 시장: 그 시장을 담은 옛 묶음만 표시되어 다시 관찰될 때 한 번, 화면의 묶음은 그대로), `query-client.test.ts`(재연결에 묶음 하나를 한 번), `market-live.test.ts`(처리기 배선: tick의 첫 읽기·status의 restart·되산 시장의 조건부 restart, `MARKETS_KEY`가 스냅숏·카드 키), `use-sellable-readings.test.ts`(예산 계산 5 + ⌈N/50⌉ + 20, 소스 가드), `use-wallet-budget.test.ts`(`user:position`의 읽기 목록에 묶음 restart — 지갑에 없는 키).
+- **e2e:** 새 `test()` 없음. MY 보유 계약의 기존 단언(`orders.spec.ts` '보유 계약 (#67)' — 참고 평가·최근 체결·상태·매도 가능)이 묶음 읽기로 그대로 통과해야 한다.
+
+**4. 수용 기준 대조.**
+
+| #   | 수용 기준                                                                                                                               | 무엇이 받치나                                                                                            |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| 1   | 보유 1·5·10·25·50개 시장에서 첫 진입·정상·재연결·포커스 복귀가 모두 탭 하나 분당 50 이하(#67과 같은 조건으로 측정)                      | 결정 3·4, 결과 2의 측정                                                                                  |
+| 2   | 참고 평가·최근 체결 시각·상태 배지·'판정 지연'·'이의 검토 중'이 지금과 같은 때에 같은 값으로 바뀜(체결 tick, 상태 변화, 재연결, 포커스) | 카드 처리기·join(결정 3-4), status restart(3-7), 재스냅숏, 포커스(3-5), 단위 시험, e2e '보유 계약 (#67)' |
+| 3   | 시장 행을 읽지 못하면 가격 갱신이 멈췄다는 안내와 다시 시도                                                                             | `priceIsStale`을 묶음마다, 실패한 묶음만 다시(3-6)                                                       |
+| 4   | 비공개(초안·검토 중) 시장의 정보는 어떤 경로로도 드러나지 않음                                                                          | `isPublicMarket()`, 없는 id와 구별되지 않음, api 통합 (1)                                                |
+
+바뀌지 않는 것: 보유 행의 표시와 계산, 매도 가능 읽기와 줄, 방 입장, 상세의 `['market', id]`와 그 주기·포커스, 목록 라우트의 `ids` 없는 동작, DB.
+
+**5. 한계와 남은 위험.**
+
+- **화면 밖 묶음의 카드 쓰기.** 방이 든 시장의 tick은 화면에 없는 묶음에도 쓰인다(홈 목록과 같다). 신선함과 실패는 위의 읽기 시각과 `failureCount`로 보므로 그 쓰기가 다시 읽기를 막지 않는다. 묶음이 캐시에 남는 동안(gcTime) 그 쓰기는 요청 없이 메모리만 쓴다.
+- **캐시에 남은 옛 묶음으로 돌아갈 때의 플래그**(CLI 4차, 화면만이라 오너 규칙(2026-11-16)대로 고치지 않았다). 보유가 [A] → [A,B] → [A]로 바뀌어 캐시의 [A] 묶음을 다시 쓰면 `initialData`는 쓰이지 않는다. 그사이 A의 같은 키 상태 사건(이의 결정·판정 지연 기록)이 화면의 [A,B]만 다시 읽었다면, [A]가 다시 읽힐 때까지(그 사건이 [A]의 읽기 시각도 잊게 해 마운트 때 바로 읽는다) 한 왕복 동안 옛 '판정 지연'·'이의 검토 중'이 보인다. 돈·체결·다른 계정에 닿지 않는다.
+- **묶음 하나의 실패는 그 묶음 전부.** 50개 시장 가운데 하나의 행이 문제가 아니라 요청이 실패하면 50개가 함께 '가격 갱신 멈춤'이다(전에는 시장마다). 다시 시도는 묶음 한 번이다.
+- **보유 집합이 바뀌면 새 키.** 사거나 전량 팔아 보유 시장 집합이 바뀌면 묶음 키가 바뀌어 한 번 새로 읽는다(그 시장 하나만이 아니라 묶음 전체). 그동안은 캐시의 다른 묶음이 가진 행으로 시작해 남은 시장의 가격과 플래그가 빠지지 않는다(새로 산 시장은 답까지 포지션의 값). 50개를 넘으면 묶음 경계가 밀려 여러 묶음이 함께 새 키가 될 수 있다. 집합이 바뀌는 사건은 사람의 주문이라 드물다.
+- **상태 사건이 몰리면.** 같은 묶음의 시장 여럿이 한꺼번에 상태를 바꾸면(예: 같은 시각 마감) 사건마다 그 묶음을 restart해, 진행 중인 읽기가 취소되고 다시 나간다 — 요청 수는 #67(시장마다 하나)과 같고 마지막 읽기가 모두를 가져온다.
+- **상세와 따로.** MY에서 상세로 가거나 그 반대로 와도 시장 행을 함께 쓰지 않는다. 상세는 서버 렌더가 채우고, MY는 묶음 요청 하나로 읽는다.
+- **50개 넘는 보유.** 묶음이 둘 이상이 되어 요청이 묶음마다 하나다. 방은 그대로 `REALTIME_ROOMS_MAX`(200)까지다(ADR-0142 결과 5).
+
+**6. 오너가 할 일.** 머지를 PR 번호를 들어 승인한다(#302 PR 뒤 — 그 위에 쌓았다). 마이그레이션·출시 설정이 없다.
+
+**7. 파일.**
+
+- **shared:** `src/market.ts`(`MARKET_IDS_MAX`, `marketListQuerySchema.ids`). 시험 `market.test.ts`.
+- **api:** `src/markets/market.service.ts`(`listByIds`), `src/markets/markets.controller.ts`(요약), `src/surface/registry.ts`(사유). 시험 `markets/markets.controller.test.ts`. 생성물 `openapi.json`.
+- **web:** `src/lib/market-keys.ts`, `src/hooks/use-markets.ts`, `src/app/my/portfolio.tsx`, `src/lib/market-live.ts`, `src/components/realtime/realtime-provider.tsx`. 시험 `hooks/{use-markets,use-sellable-readings,use-wallet-budget}`, `lib/{market-live,realtime-cache,query-client}`.
+- **그 밖:** `packages/api-client/src/generated/schema.ts`, `docs/{DECISIONS,GUARDS,API}.md`.

@@ -124,13 +124,14 @@ describe('/my/wallet in budget (#69, ADR-0144 결정 6)', () => {
     // screen it is only marked stale, no request), and keys /my/wallet never shows (the market,
     // its sellable figure, the settlement lists, the positions lists). A new one here is a new
     // per-fill cost: weigh it against the budget. The wallet's entry on screen, for a market it
-    // does not hold, only through the book round's window.
+    // does not hold, only through the book round's window. MY's holdings chunks naming a market
+    // bought back from 0 (#300, ADR-0147) are keys /my/wallet never shows either.
     const position = code(provider.slice(positionAt, endAt));
     expect(reads(position).sort()).toEqual(
       [
         'restartQueries(queryClient, ORDERS_KEY, positionRestartsOrder)',
         'restartQueries(queryClient, key)',
-        'restartQueries(queryClient, marketKey(event.marketId))',
+        'restartQueries(queryClient, query.queryKey, sameChunk(query))',
         'restartQueries(queryClient, marketSellableKey(event.marketId))',
         'restartQueries(queryClient, queryKey)',
       ].sort(),
