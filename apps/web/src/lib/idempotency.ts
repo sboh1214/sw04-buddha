@@ -34,10 +34,11 @@ const PREFIX = 'buddha:';
 
 /**
  * Which flow a key belongs to. `charge-key` files a package purchase under the package id
- * (PLAN 5.4). It is the only keyed flow left since the direct AMM trade went (#125); the
- * namespace stays so the next one is filed apart from it.
+ * (PLAN 5.4); `regrant-key` the wallet's 재지급 신청 (#74, ADR-0155) under its one intent
+ * (`REGRANT_INTENT`, lib/regrant.ts) — the request id `POST /me/regrant` grants at most once
+ * (N01 §9), kept until the server answers as a charge's is.
  */
-export type KeyNamespace = 'charge-key';
+export type KeyNamespace = 'charge-key' | 'regrant-key';
 
 /**
  * Client side of PLAN 5.4: one `Idempotency-Key` per intent, kept until the server has decided.

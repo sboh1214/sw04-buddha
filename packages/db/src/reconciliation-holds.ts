@@ -9,7 +9,8 @@ export async function lockReconciliationUserKey(tx: Tx, userId: string): Promise
     sql`SELECT pg_advisory_xact_lock(hashtext('reconciliation:user'), hashtext(${userId}))`,
   );
 }
-export async function reconciliationUserHeld(tx: Tx, userId: string): Promise<boolean> {
+/** Whether an unrecovered #93 hold stands on the account; a reader takes no lock (`GET /me/regrant`). */
+export async function reconciliationUserHeld(tx: Db | Tx, userId: string): Promise<boolean> {
   const [held] = await tx
     .select({ id: reconciliationHolds.id })
     .from(reconciliationHolds)

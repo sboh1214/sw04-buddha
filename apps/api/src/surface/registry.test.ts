@@ -597,7 +597,7 @@ describe('the public API document (static)', () => {
     // new route's step 4). The document says so, as for every other code a client can get. An
     // account restriction (#139, ADR-0085) refuses the public profile items among them (the same
     // check point, `restrictionInForce`) and none of the community writes (#57-12); its own
-    // refusals — #119's orders (`assertCanTrade`), #77's proposal and #140's 탈퇴
+    // refusals — #119's orders and #74's 재지급 (`assertCanTrade`), #77's proposal and #140's 탈퇴
     // (`assertNotRestricted`) — join REFUSED with their routes.
     const REFUSED = [
       'POST /posts',
@@ -618,6 +618,9 @@ describe('the public API document (static)', () => {
       // 주문 (#119, ADR-0112; N02 §9 «계정 제한 시 신규 주문은 막되»): an account restriction only
       // (`assertCanTrade`) — a writing restriction trades on (#57-12).
       'POST /markets/:id/orders',
+      // 재지급 (#74, ADR-0155; owner answer 2026-11-21 8 «계정 제한 중: 받지 않는다»): an account
+      // restriction only, as an order (`assertCanTrade`) — Coin for trading.
+      'POST /me/regrant',
     ];
     // What a writing restriction leaves open (#45-12: deleting one's own, likes, reports and
     // reading; decision 7 and #37-9: clearing a public item and the private settings) and what is

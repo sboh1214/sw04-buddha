@@ -13,7 +13,7 @@
 --                   market_judgements, market_judgement_delays, ledger_accounts, fills, position_settlements, reconciliation_results,
 --                   reconciliation_recoveries, market_conflict_declarations, market_liquidity_versions, treasury_issuances,
 --                   market_maker_allocations, market_maker_runs, market_maker_recalls, market_maker_controls, fill_classifications,
---                   fill_realizations): INSERT/SELECT only;
+--                   fill_realizations, regrants): INSERT/SELECT only;
 --                   reconciliation_corrections: no INSERT, UPDATE, DELETE (only its guarded function writes);
 --                   market_maker_supply_pending, market_maker_supply_states,
 --                   market_maker_supply_intervals: SELECT only, written by their observer triggers;
@@ -32,7 +32,7 @@
 --                   applied later by migrations with REVOKE
 --                   (0001, 0015, 0020, 0021, 0023, 0026, 0030, 0031, 0032, 0033, 0034, 0035,
 --                   0036, 0039, 0040, 0041, 0044, 0045, 0049, 0053, 0054, 0055, 0056, 0058,
---                   0060, 0062, 0064, 0065, 0066, 0067, 0069, 0070, 0072, 0073, 0075, 0076),
+--                   0060, 0062, 0064, 0065, 0066, 0067, 0069, 0070, 0072, 0073, 0075, 0076, 0077),
 --                   see bottom.
 
 CREATE ROLE buddha_migrate LOGIN PASSWORD 'buddha';
@@ -114,4 +114,7 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO buddha_app;
 -- 0076 (#124: fill_realizations: UPDATE, DELETE): what a member's sale realised on a trade fill
 -- is a permanent fact like its fill; a trigger refuses both to every role, and another binds a
 -- row to its fill at INSERT (a trade fill, its net proceeds, a member on the selling side).
+-- 0077 (#74: regrants: UPDATE, DELETE): a re-grant given is a permanent fact like its REGRANT
+-- entry; a trigger refuses both to every role, and others bind a row to its own entry at INSERT
+-- and refuse the 운영 마켓메이커's and a closed account's.
 -- Default privileges are applied at CREATE time, so a REVOKE afterwards sticks.

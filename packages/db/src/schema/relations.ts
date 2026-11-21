@@ -43,6 +43,7 @@ import { postCommentRevisions, postComments } from './post-comments.js';
 import { postImages, postRevisions, posts } from './posts.js';
 import { priceTicks } from './price-ticks.js';
 import { profiles } from './profiles.js';
+import { regrants } from './regrants.js';
 import { releaseSettings } from './release-settings.js';
 import { startGrantNumbers, startGrants } from './start-grants.js';
 import { marketTags, tags } from './tags.js';
@@ -131,6 +132,14 @@ export const startGrantsRelations = relations(startGrants, ({ one, many }) => ({
 
 export const startGrantNumbersRelations = relations(startGrantNumbers, ({ one }) => ({
   grant: one(startGrants, { fields: [startGrantNumbers.grantId], references: [startGrants.id] }),
+}));
+
+export const regrantsRelations = relations(regrants, ({ one }) => ({
+  user: one(user, { fields: [regrants.userId], references: [user.id] }),
+  ledgerEntry: one(ledgerEntries, {
+    fields: [regrants.ledgerEntryId],
+    references: [ledgerEntries.id],
+  }),
 }));
 
 export const phoneVerificationCodesRelations = relations(phoneVerificationCodes, ({ one }) => ({
@@ -556,6 +565,7 @@ export const userRelations = relations(user, ({ one, many }) => ({
   }),
   phoneVerificationCodes: many(phoneVerificationCodes),
   startGrant: one(startGrants, { fields: [user.id], references: [startGrants.userId] }),
+  regrants: many(regrants),
   consentRecords: many(consentRecords),
   nicknameHolds: many(nicknameHolds),
   ledgerAccounts: many(ledgerAccounts),

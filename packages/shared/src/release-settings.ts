@@ -13,6 +13,12 @@ import { expectedAccountIdSchema } from './expected-account.js';
 import { disputeWindowMinutesSchema } from './market-judgement.js';
 import { liquidityCurveBSchema } from './market-liquidity.js';
 import { LEAD_CLOSE_GAP_MAX_MINUTES } from './market-times.js';
+import {
+  REGRANT_PERIOD_LIMIT_MAX,
+  REGRANT_PERIOD_MAX_DAYS,
+  REGRANT_TOTAL_CAP_MAX_COIN,
+  REGRANT_WAIT_MAX_HOURS,
+} from './regrant.js';
 import { RETENTION_PERIOD_MAX_DAYS, type RetentionPeriod } from './retention.js';
 import { START_GRANT_MAX_COIN } from './start-grant.js';
 
@@ -197,6 +203,75 @@ export const START_COIN_SETTING = defineReleaseSetting({
     '본인확인한 휴대전화 번호마다 한 번 주는 시작 Coin의 금액(#70). 값이 있으면 상태와 상관없이 그 값으로 주고, 미정이면 지급을 기다리게 했다가 값을 넣으면 기다리던 계정에 준다. 바꾼 값은 그 뒤의 지급부터 적용하고 이미 받은 계정은 그대로다.',
   schema: z.number().int().min(1).max(START_GRANT_MAX_COIN),
 });
+
+/**
+ * What every re-grant item's description ends with (#74, ADR-0155; owner answers 2026-11-21 12):
+ * the six are read together at each request, whatever their status, and one undecided closes it.
+ */
+const REGRANT_RULES =
+  '재지급 신청마다 여섯 값을 함께 읽어 그 신청에 쓴다. 값이 있으면 상태와 상관없이 쓰고, 하나라도 미정이면 재지급을 받지 않는다(지갑에 준비 중). 바꾼 값은 그 뒤의 신청부터 적용하고 이미 준 재지급은 그대로다.';
+
+/**
+ * 제한적 재지급 (#74, ADR-0155; N01 §2, owner answers 2026-11-21 1·5·6·12): the six numbers of the
+ * re-grant a member applies for in the wallet. Read together (`getReleaseSettings`, one statement)
+ * inside the request's transaction, after its locks — a re-grant is done at once, so nothing in
+ * progress keeps an older reading (docs/SETTINGS.md). Whatever their status values are used; while
+ * any one is undecided every request is refused as `not_ready` ('준비 중'). Integers, each bounded
+ * against a typo, not a decided value (#133 decides them):
+ * - `thresholdCoin` 소진 기준액: eligible when available Coin is at or below it (0 to
+ *   START_GRANT_MAX_COIN);
+ * - `amountCoin` 1회 지급액: what one re-grant gives (1 to START_GRANT_MAX_COIN);
+ * - `waitHours` 대기기간: since the account's last re-grant, or since its start grant was paid
+ *   before the first (0 to REGRANT_WAIT_MAX_HOURS);
+ * - `periodDays` 주기 and `periodLimit` 주기 안 횟수: at most that many re-grants within the last
+ *   period (1 to REGRANT_PERIOD_MAX_DAYS, 1 to REGRANT_PERIOD_LIMIT_MAX);
+ * - `totalCapCoin` 누적 상한: the account's lifetime re-grants, this one included, never above it —
+ *   no partial grant (1 to REGRANT_TOTAL_CAP_MAX_COIN).
+ */
+export const REGRANT_SETTINGS = {
+  thresholdCoin: defineReleaseSetting({
+    key: 'grant.regrant_threshold_coin',
+    label: '재지급 소진 기준액',
+    unit: 'Coin',
+    description: `가용 Coin이 이 값 이하인 계정만 재지급을 받을 수 있다(#74). 주문에 묶인 Coin은 가용 Coin에 넣지 않는다. ${REGRANT_RULES}`,
+    schema: z.number().int().min(0).max(START_GRANT_MAX_COIN),
+  }),
+  amountCoin: defineReleaseSetting({
+    key: 'grant.regrant_amount_coin',
+    label: '재지급 1회 지급액',
+    unit: 'Coin',
+    description: `재지급 한 번에 주는 Coin(#74). 신청이 조건을 모두 채우면 그 요청에서 바로 이 금액을 새로 발행해 준다. 누적 상한을 넘게 되면 남은 만큼 깎아 주지 않고 주지 않는다. ${REGRANT_RULES}`,
+    schema: z.number().int().min(1).max(START_GRANT_MAX_COIN),
+  }),
+  waitHours: defineReleaseSetting({
+    key: 'grant.regrant_wait_hours',
+    label: '재지급 대기기간',
+    unit: '시간',
+    description: `마지막 재지급(없으면 시작 지급) 뒤 다음 재지급까지 지나야 하는 시간(#74). 0이면 기다리지 않는다. ${REGRANT_RULES}`,
+    schema: z.number().int().min(0).max(REGRANT_WAIT_MAX_HOURS),
+  }),
+  periodDays: defineReleaseSetting({
+    key: 'grant.regrant_period_days',
+    label: '재지급 횟수 주기',
+    unit: '일',
+    description: `재지급 횟수를 세는 기간(#74). 신청 시각부터 거슬러 이 기간 안의 재지급만 센다. ${REGRANT_RULES}`,
+    schema: z.number().int().min(1).max(REGRANT_PERIOD_MAX_DAYS),
+  }),
+  periodLimit: defineReleaseSetting({
+    key: 'grant.regrant_period_limit',
+    label: '재지급 주기 안 횟수',
+    unit: '회',
+    description: `한 계정이 최근 주기 안에 받을 수 있는 재지급 횟수의 상한(#74). 다 쓰면 가장 오래된 재지급이 주기 밖으로 나갈 때 다시 받을 수 있다. ${REGRANT_RULES}`,
+    schema: z.number().int().min(1).max(REGRANT_PERIOD_LIMIT_MAX),
+  }),
+  totalCapCoin: defineReleaseSetting({
+    key: 'grant.regrant_total_cap_coin',
+    label: '재지급 누적 상한',
+    unit: 'Coin',
+    description: `한 계정이 재지급으로 받는 Coin의 평생 합계 상한(#74). 이번 재지급을 더해 이 값을 넘으면 주지 않는다(남은 만큼 깎아 주지 않는다). ${REGRANT_RULES}`,
+    schema: z.number().int().min(1).max(REGRANT_TOTAL_CAP_MAX_COIN),
+  }),
+} as const;
 
 /**
  * 선행 마감 최소 간격 (#22, ADR-0098; ADR-0093 decision 2 #172 item 13 and result 3): how many
@@ -597,14 +672,15 @@ export const RETENTION_PERIOD_SETTINGS: Readonly<
 /**
  * The shipped registry, in the order the admin screen lists it: the operating values, then the
  * retention periods. #170 built the mechanism, and each value is registered by the issue that uses
- * it (#70 the start grant, #22 the lead-close gap, #152 the dispute window, #119 the order intake,
- * the order rate limit and the price-protection width, #184 the retention periods, #77 the market
- * proposals' retention period; #74, … to come) — define it with `defineReleaseSetting` and list it
- * here, then update every test that pins the list (docs/SETTINGS.md, 항목 등록하기). Tests inject their
- * own registry (`createTestApp({ releaseSettings })` in apps/api).
+ * it (#70 the start grant, #74 the re-grant's six, #22 the lead-close gap, #152 the dispute window,
+ * #119 the order intake, the order rate limit and the price-protection width, #184 the retention
+ * periods, #77 the market proposals' retention period, …) — define it with `defineReleaseSetting`
+ * and list it here, then update every test that pins the list (docs/SETTINGS.md, 항목 등록하기).
+ * Tests inject their own registry (`createTestApp({ releaseSettings })` in apps/api).
  */
 export const RELEASE_SETTINGS: ReleaseSettingsRegistry = defineReleaseSettings([
   START_COIN_SETTING,
+  ...Object.values(REGRANT_SETTINGS),
   LEAD_CLOSE_GAP_SETTING,
   DISPUTE_WINDOW_SETTING,
   ORDER_ACCEPTING_SETTING,

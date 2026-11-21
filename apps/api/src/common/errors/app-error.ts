@@ -90,6 +90,9 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   ORDER_INTAKE_CLOSED: HttpStatus.CONFLICT,
   TRANSACTION_BUSY: HttpStatus.CONFLICT,
   MARKET_MAKER_CONTROL_NOT_ALLOWED: HttpStatus.CONFLICT,
+  // The account's state or the release settings refuse the re-grant (#74, ADR-0155): a conflict
+  // with that state, which the same request passes once every reason is gone.
+  REGRANT_NOT_ALLOWED: HttpStatus.CONFLICT,
   INTERNAL: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 

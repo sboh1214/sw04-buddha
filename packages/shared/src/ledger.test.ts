@@ -96,7 +96,13 @@ describe('ledger entry rules (#116, ADR-0107 결정 2 #73)', () => {
     const listed: readonly string[] = [...USER_INFLOW_TYPES, ...USER_INFLOW_EXCEPTIONS];
     expect(credits.filter((type) => !listed.includes(type))).toEqual([]);
     expect([...credits].sort()).toEqual([...listed].sort());
-    expect(USER_INFLOW_TYPES).toEqual(['START_GRANT', 'TRADE_FILL', 'SETTLEMENT_PAYOUT']);
+    // 재지급 joined by ADR-0155 (#74): a grant, as the start Coin is.
+    expect(USER_INFLOW_TYPES).toEqual([
+      'START_GRANT',
+      'REGRANT',
+      'TRADE_FILL',
+      'SETTLEMENT_PAYOUT',
+    ]);
     expect(USER_INFLOW_EXCEPTIONS).toEqual([
       'DEPOSIT',
       'BONUS',
@@ -118,6 +124,7 @@ describe('ledger entry rules (#116, ADR-0107 결정 2 #73)', () => {
       'DEPOSIT',
       'BONUS',
       'PAYMENT_CANCEL_REVERSAL',
+      'REGRANT',
     ]);
     // 실제 소각은 탈퇴 소멸 하나 (#73 16항), plus the kept payment cancel (2항).
     expect(LEDGER_BURN_TYPES).toEqual(['CLOSURE_FORFEIT', 'PAYMENT_CANCEL']);
@@ -127,7 +134,7 @@ describe('ledger entry rules (#116, ADR-0107 결정 2 #73)', () => {
       'PAYMENT_CANCEL',
       'PAYMENT_CANCEL_REVERSAL',
     ]);
-    expect(LEDGER_GRANT_TYPES).toEqual(['START_GRANT']);
+    expect(LEDGER_GRANT_TYPES).toEqual(['START_GRANT', 'REGRANT']);
   });
 
   it('shows a member exactly the types a user account takes part in', () => {
@@ -142,7 +149,7 @@ describe('ledger entry rules (#116, ADR-0107 결정 2 #73)', () => {
   it('maps every word of the plan (N01 §2·§9) to its types', () => {
     const byWord = (word: string) =>
       LEDGER_ENTRY_TYPES.filter((type) => LEDGER_ENTRY_RULES[type].plan === word);
-    expect(byWord('발행')).toEqual(['START_GRANT', 'TREASURY_MINT']);
+    expect(byWord('발행')).toEqual(['START_GRANT', 'TREASURY_MINT', 'REGRANT']);
     expect(byWord('운영금 이전')).toEqual(['BOT_ALLOCATION', 'BOT_RECALL']);
     expect(byWord('담보')).toEqual(['PAIR_MINT_COLLATERAL', 'PAIR_BURN_RETURN']);
     expect(byWord('거래')).toEqual(['TRADE_FILL']);
@@ -159,6 +166,15 @@ describe('ledgerEntryShapeError', () => {
   const other = '3f1a5b6c-1111-4222-8333-444455556667';
 
   it('accepts each type’s own shape', () => {
+    expect(
+      ledgerEntryShapeError({
+        type: 'REGRANT',
+        amountCoin: 500n,
+        fromKind: null,
+        toKind: 'user',
+        marketId: null,
+      }),
+    ).toBeNull();
     expect(
       ledgerEntryShapeError({
         type: 'START_GRANT',
@@ -220,6 +236,14 @@ describe('ledgerEntryShapeError', () => {
       },
     ],
     [
+      'a re-grant from anyone (a mint only, #74)',
+      { type: 'REGRANT', amountCoin: 1n, fromKind: 'treasury', toKind: 'user', marketId: null },
+    ],
+    [
+      'a re-grant into the treasury',
+      { type: 'REGRANT', amountCoin: 1n, fromKind: null, toKind: 'treasury', marketId: null },
+    ],
+    [
       'a market on an event of none',
       { type: 'START_GRANT', amountCoin: 1n, fromKind: null, toKind: 'user', marketId },
     ],
@@ -274,7 +298,7 @@ describe('the wallet kinds (#69, ADR-0144)', () => {
   );
 
   it('maps each (type, side) a user account takes to exactly one kind, and every kind is one', () => {
-    expect(userSides).toHaveLength(11);
+    expect(userSides).toHaveLength(12);
     const sources = LEDGER_ENTRY_KINDS.flatMap((kind) =>
       LEDGER_KIND_SOURCES[kind].map((source) => `${source.type}/${source.side}`),
     );
@@ -291,6 +315,9 @@ describe('the wallet kinds (#69, ADR-0144)', () => {
     expect(ledgerEntryKind('PAIR_MINT_COLLATERAL', 'from')).toBe('BUY_FILL');
     expect(ledgerEntryKind('TRADE_FILL', 'from')).toBe('BUY_FILL');
     expect(ledgerEntryKind('TRADE_FILL', 'to')).toBe('SELL_FILL');
+    // 재지급 (#74, ADR-0155) is its own kind, on the side it credits, after the first five.
+    expect(ledgerEntryKind('REGRANT', 'to')).toBe('REGRANT');
+    expect(LEDGER_ENTRY_KINDS.indexOf('REGRANT')).toBe(5);
     expect(ledgerEntryKindSchema.options).toEqual([...LEDGER_ENTRY_KINDS]);
   });
 
@@ -304,6 +331,7 @@ describe('the wallet kinds (#69, ADR-0144)', () => {
       ['TREASURY_MINT', 'to'],
       ['BOT_ALLOCATION', 'from'],
       ['PAIR_BURN_RETURN', 'to'],
+      ['REGRANT', 'from'],
     ] as const) {
       expect(() => ledgerEntryKind(type, side), `${type}/${side}`).toThrow();
     }
@@ -323,6 +351,7 @@ describe('the wallet kinds (#69, ADR-0144)', () => {
       'SETTLEMENT_PAYOUT',
       'START_GRANT',
       'RECONCILIATION_CORRECTION',
+      'REGRANT',
     ]);
     // The excluded are the kept paid-Coin and coupon types and 탈퇴 소멸.
     expect([...LEDGER_FILTER_EXCLUDED].sort()).toEqual(

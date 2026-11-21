@@ -8313,6 +8313,11 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           // The start grant (migration 0031, #70): coined that way from the start.
           'start_grants.amount_coin',
           'start_grants_amount_coin_check',
+          // The re-grant (migration 0077, #74): what it gave and the available Coin it found.
+          'regrants.amount_coin',
+          'regrants.available_before_coin',
+          'regrants_amount_coin_check',
+          'regrants_available_before_coin_check',
         ].sort(),
       );
     });
@@ -10885,7 +10890,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
             'write_limit_events', 'link_uses', 'link_flags', 'retention_purges',
             'themes', 'theme_markets', 'theme_notices', 'tags', 'market_tags', 'categories',
             'market_sources', 'market_rule_versions', 'market_judgement_delays', 'orders',
-            'fills', 'fill_realizations')
+            'fills', 'fill_realizations', 'regrants')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
@@ -10904,6 +10909,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(privs('fills')).toEqual(['INSERT', 'SELECT']);
       // Migration 0076 (#124): what a sale realised is a permanent fact like its fill.
       expect(privs('fill_realizations')).toEqual(['INSERT', 'SELECT']);
+      // Migration 0077 (#74): a re-grant given is a permanent fact like its REGRANT entry.
+      expect(privs('regrants')).toEqual(['INSERT', 'SELECT']);
       expect(privs('payments')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       // Migration 0028 (#183): the real name changes in place and the row goes with the account;
       // a code's wrong entries, its use and what the provider said (0030) are written in place,

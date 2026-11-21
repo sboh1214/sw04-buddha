@@ -2372,6 +2372,106 @@ export async function startCoinText(context: APIRequestContext): Promise<string>
   return coinText(amount);
 }
 
+// ---- 재지급 (#74, 출시 설정) ---------------------------------------------------------------
+
+/**
+ * The six release settings of the re-grant (#74, ADR-0155; `REGRANT_SETTINGS`, restated: these
+ * specs import only types from `@buddha/shared`), in the registry's order — right after 시작
+ * 지급액. While any one is 미정 no re-grant is given (the wallet's card says '준비 중').
+ */
+export const REGRANT_SETTING_KEYS = {
+  thresholdCoin: 'grant.regrant_threshold_coin',
+  amountCoin: 'grant.regrant_amount_coin',
+  waitHours: 'grant.regrant_wait_hours',
+  periodDays: 'grant.regrant_period_days',
+  periodLimit: 'grant.regrant_period_limit',
+  totalCapCoin: 'grant.regrant_total_cap_coin',
+} as const;
+
+export type RegrantSettingName = keyof typeof REGRANT_SETTING_KEYS;
+
+/**
+ * How far below the start Coin the suite puts the 소진 기준액 (`ensureRegrantSettings`): a fresh
+ * account, which holds the start Coin, is not exhausted — no spec that never asks for a re-grant
+ * sees its wallet's card turn on — and regrant.spec.ts spends a little more than this to reach it.
+ */
+export const E2E_REGRANT_SPEND_COIN = 10_000;
+
+/**
+ * The 시험값 the suite enters for each of the six while it is 미정, given the start Coin in force:
+ * the threshold E2E_REGRANT_SPEND_COIN under it (never below 0), 50,000 Coin a re-grant, no
+ * 대기기간 (whole hours — a spec cannot wait out one), three a 30-day period and 500,000 Coin in all
+ * (ten re-grants). Test values of the suite only, never a decided one (#133 decides them).
+ */
+export function e2eRegrantValues(startCoin: number): Readonly<Record<RegrantSettingName, number>> {
+  return {
+    thresholdCoin: Math.max(0, startCoin - E2E_REGRANT_SPEND_COIN),
+    amountCoin: 50_000,
+    waitHours: 0,
+    periodDays: 30,
+    periodLimit: 3,
+    totalCapCoin: 500_000,
+  };
+}
+
+/** Why the suite entered them, as the change record keeps it (1..500 characters). */
+const E2E_REGRANT_REASON = 'e2e: 시험 DB의 재지급 시험값';
+
+/**
+ * The six as `context`'s admin reads them through `GET /admin/release-settings`: each value
+ * whatever its status (설계 제안, 시험값 and 승인됨 are all used, ADR-0155), or null while 미정.
+ */
+export async function regrantSettingValues(
+  context: APIRequestContext,
+): Promise<Record<RegrantSettingName, number | null>> {
+  const items = await unwrap<ReleaseSetting[]>(await context.get('/api/v1/admin/release-settings'));
+  const valueOf = (key: string): number | null => {
+    const item = items.find((entry) => entry.key === key);
+    if (item === undefined) throw new Error(`no release setting ${key} is registered`);
+    return item.status === 'undecided' || typeof item.value !== 'number' ? null : item.value;
+  };
+  return {
+    thresholdCoin: valueOf(REGRANT_SETTING_KEYS.thresholdCoin),
+    amountCoin: valueOf(REGRANT_SETTING_KEYS.amountCoin),
+    waitHours: valueOf(REGRANT_SETTING_KEYS.waitHours),
+    periodDays: valueOf(REGRANT_SETTING_KEYS.periodDays),
+    periodLimit: valueOf(REGRANT_SETTING_KEYS.periodLimit),
+    totalCapCoin: valueOf(REGRANT_SETTING_KEYS.totalCapCoin),
+  };
+}
+
+/**
+ * Makes sure the six have values, for the suite's global setup (global-setup.ts; owner answer
+ * 2026-11-21 12: "e2e는 시험값을 넣는다"): while one is 미정, `context`'s admin enters
+ * `e2eRegrantValues(startCoin)`'s as a 시험값 with its reason; a value already there — a run before
+ * this one, or a developer's — is left as it is, and regrant.spec.ts reads the ones in force. Safe
+ * to run twice at once, as `ensureDisputeWindow` is. After `ensureStartCoin`, whose amount the
+ * threshold is set under.
+ */
+export async function ensureRegrantSettings(
+  context: APIRequestContext,
+  startCoin: number,
+): Promise<void> {
+  const values = e2eRegrantValues(startCoin);
+  const before = await regrantSettingValues(context);
+  for (const name of Object.keys(REGRANT_SETTING_KEYS) as RegrantSettingName[]) {
+    if (before[name] !== null) continue;
+    const key = REGRANT_SETTING_KEYS[name];
+    const entered = await context.patch(`/api/v1/admin/release-settings/${key}`, {
+      data: {
+        status: 'test',
+        value: values[name],
+        reason: E2E_REGRANT_REASON,
+        expectedAccountId: await accountIdOf(context),
+      },
+    });
+    if (entered.ok() || (await regrantSettingValues(context))[name] !== null) continue;
+    throw new Error(
+      `entering ${key} failed (${String(entered.status())}): ${await entered.text()}`,
+    );
+  }
+}
+
 // ---- 주문 접수 (#119, 출시 설정) -----------------------------------------------------------
 
 /**

@@ -30,6 +30,7 @@ import { ProfilesModule } from './profiles/profiles.module.js';
 import { ProposalsModule } from './proposals/proposals.module.js';
 import { RateLimitModule } from './rate-limit/rate-limit.module.js';
 import { RealtimeModule } from './realtime/realtime.module.js';
+import { RegrantModule } from './regrant/regrant.module.js';
 import { ReleaseSettingsModule } from './release-settings/release-settings.module.js';
 import { RetentionModule } from './retention/retention.module.js';
 import { SearchHistoryModule } from './search-history/search-history.module.js';
@@ -118,6 +119,9 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     // 카테고리 관리 (#17): the operators' /admin/categories. After the modules above, so the
     // document keeps their routes where they were.
     CategoriesModule,
+    // 제한적 재지급 (#74, ADR-0155): the member's /me/regrant and the admins' /admin/regrants. After
+    // the modules above, so the document keeps their routes where they were.
+    RegrantModule,
   ],
   controllers: [HealthController],
 })

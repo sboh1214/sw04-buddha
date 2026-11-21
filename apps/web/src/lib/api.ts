@@ -348,6 +348,17 @@ export type DismissedReports = components['schemas']['DismissedReports'];
 export type AccountClosureCheck = components['schemas']['AccountClosureCheck'];
 export type AccountClosureBody = components['schemas']['AccountClosureBody'];
 export type AccountClosureResult = components['schemas']['AccountClosureResult'];
+/**
+ * 재지급 (#74, ADR-0155): whether a re-grant would be given now (`GET /me/regrant` — open, eligible,
+ * every refusal and the numbers the wallet's card shows; REGRANT_NOT_ALLOWED's details too), one
+ * re-grant, `POST /me/regrant`'s answer (the re-grant, and whether its request id had been granted
+ * before), and one record of `GET /admin/regrants`.
+ */
+export type RegrantStatus = components['schemas']['RegrantStatus'];
+export type RegrantRefusal = components['schemas']['RegrantRefusal'];
+export type Regrant = components['schemas']['Regrant'];
+export type ApplyRegrantResult = components['schemas']['ApplyRegrantResult'];
+export type AdminRegrant = components['schemas']['AdminRegrant'];
 /** `POST /media/images`'s answer: the stored image's id, which the editor's image node carries. */
 export type UploadedImage = components['schemas']['UploadedImage'];
 /**

@@ -1,7 +1,8 @@
 /**
  * #113 at run time, against the docker `test` profile. Account A's private data is in the
  * database — email, nickname and time zone, its 본인확인 (verified phone, real name, the code's
- * hash), its start Coin (#70: the grant, its amount and the keyed hash of A's number), password
+ * hash), its start Coin (#70: the grant, its amount and the keyed hash of A's number), a re-grant
+ * (#74: its id, its request id and its amount, the six re-grant settings decided), password
  * and session, a balance and a ledger memo, orders and the fill one of them got against another
  * account's resting order, a position with its PnL, a payment, two watched markets (#89), a
  * recorded search (#15), its consent records with the address and browser they came with, a
@@ -119,6 +120,7 @@ import {
   CONSENT_ITEMS,
   DISPUTE_WINDOW_SETTING,
   PAGE_LIMIT_MAX,
+  REGRANT_SETTINGS,
   currentConsentVersion,
   REALTIME_EVENT_REGISTRY,
   REALTIME_EXCEPTION_EVENT,
@@ -277,6 +279,8 @@ interface Fixture {
   /** A's filled order on `market` (#119): its id and its request id, what B's reads name. */
   filledOrderId: string;
   filledOrderKey: string;
+  /** A's re-grant's request id (#74, ADR-0155): what B's refused request sends. */
+  regrantKey: string;
   /**
    * A's resting order on `market` (#119): what B's cancel names (#178). A row with no lock
    * (`createOrder`), so no step here may cancel it: B's cancels are refused before they reach it.
@@ -351,7 +355,25 @@ const AMOUNTS = {
   /** A's settlement record (#124): the contracts held at settlement and their remaining cost. */
   settlementQty: 1_618_033,
   settlementCost: 5_772_156n,
+  /**
+   * A's re-grant (#74): its amount, and so what A's status says A got by re-grants in all — a
+   * record's figure, not the release setting's (which the status shows everyone).
+   */
+  regrant: 2_236_067n,
 } as const;
+
+/**
+ * The six re-grant settings' test values (#74, ADR-0155): any decided values open the status
+ * reads; none of them is one of A's figures, which they appear beside.
+ */
+const REGRANT_TEST_VALUES: Readonly<Record<keyof typeof REGRANT_SETTINGS, number>> = {
+  thresholdCoin: 100,
+  amountCoin: 1_000,
+  waitHours: 0,
+  periodDays: 30,
+  periodLimit: 3,
+  totalCapCoin: 50_000_000,
+};
 
 /**
  * The fill everyone may see: anonymous, so its numbers are public (N01 §5; #121: a YES buy, so its
@@ -1001,6 +1023,19 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
     status: 200,
     own: ['available balance'],
   },
+  // B's own re-grant status (#74, ADR-0155): B's numbers — nothing of A's, whose re-grant total
+  // the same read shows A (the six release settings are decided here, so the numbers are there).
+  'GET /me/regrant': {
+    status: 200,
+    own: ['regrant amount'],
+  },
+  // B's cookie naming A's account, with A's re-grant's request id: refused before anything is read
+  // or written — nobody is re-granted, and A's request id still names A's re-grant alone (below).
+  'POST /me/regrant': {
+    headers: (fixture) => ({ 'idempotency-key': fixture.regrantKey }),
+    body: (fixture) => ({ expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
   // B's cookie naming A's account (#140): refused before anything is read or done — neither
   // account closes (A's record, number and profile stay, below).
   'POST /me/closure': {
@@ -1323,6 +1358,16 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     // An admin finishes the onboarding like any account before /admin answers it (ADR-0072).
     await completeOnboarding(t.db, { userId: admin.id });
     await t.app.get(AdminGuard).invalidate(admin.id);
+    // The six re-grant settings decided (#74, test values): every status read then carries its
+    // account's numbers, A's re-grant total among them (`GET /me/regrant`'s own case).
+    for (const [name, value] of Object.entries(REGRANT_TEST_VALUES)) {
+      await setReleaseSetting(t.db, {
+        adminId: admin.id,
+        key: REGRANT_SETTINGS[name as keyof typeof REGRANT_SETTINGS].key,
+        status: 'test',
+        value,
+      });
+    }
 
     const nickname = `leak_${tag}`;
     // A zone nobody else here picks (B's refused write in OWNER_CASES sends Europe/Paris), so its
@@ -1439,17 +1484,40 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       qty: 617,
     });
     const fillId = String(trade.id);
+    // A's re-grant (#74, ADR-0155), as `applyRegrant` records it: its REGRANT mint and its row,
+    // under A's request id — its id and request id A's, its amount the total A's status shows.
+    const regrantId = randomUUID();
+    const regrantKey = `leak-regrant-${tag}`;
     const entry = await t.db.transaction(async (tx) => {
       const paymentRef = randomUUID();
       await recordLedgerEntry(tx, {
         type: 'DEPOSIT',
-        amountCoin: AMOUNTS.available + AMOUNTS.locked + paidToB - AMOUNTS.startGrant,
+        amountCoin:
+          AMOUNTS.available + AMOUNTS.locked + paidToB - AMOUNTS.startGrant - AMOUNTS.regrant,
         from: null,
         to: { kind: 'user', userId: a.id },
         refType: 'payment',
         refId: paymentRef,
         idempotencyKey: ledgerKeys.deposit(paymentRef),
         memo,
+      });
+      const regranted = await recordLedgerEntry(tx, {
+        type: 'REGRANT',
+        amountCoin: AMOUNTS.regrant,
+        from: null,
+        to: { kind: 'user', userId: a.id },
+        refType: 'regrant',
+        refId: regrantId,
+        idempotencyKey: ledgerKeys.regrant(regrantId),
+      });
+      await tx.insert(schema.regrants).values({
+        id: regrantId,
+        userId: a.id,
+        requestId: regrantKey,
+        amountCoin: AMOUNTS.regrant,
+        availableBeforeCoin: 0n,
+        ledgerEntryId: regranted.entry.id,
+        createdAt: regranted.entry.createdAt,
       });
       const paid = await recordLedgerEntry(tx, {
         type: 'TRADE_FILL',
@@ -2232,6 +2300,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       paymentId: payment!.id,
       filledOrderId: filled.id,
       filledOrderKey: filledKey,
+      regrantKey,
       openOrderId: open.id,
       soldFillId: String(sale.fill.id),
       tradedMarketId: tradedMarket.id,
@@ -2379,6 +2448,9 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('proposal internal memo', internalMemo),
         text('start grant id', startGrant.id),
         text('phone hash', phoneHash),
+        text('regrant id', regrantId),
+        text('regrant key', regrantKey),
+        amount('regrant amount', AMOUNTS.regrant),
         amount('start grant amount', AMOUNTS.startGrant),
         amount('available balance', AMOUNTS.available),
         amount('locked balance', AMOUNTS.locked),
@@ -3019,6 +3091,26 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         .from(schema.profiles)
         .where(isNotNull(schema.profiles.closedAt)),
     ).toEqual([]);
+    // B's refused re-grant gave nobody anything (#74): A's request id names A's one re-grant. B
+    // sending it as itself asks for B's own — refused for B's reasons (no start grant of B's),
+    // with B's numbers alone, and nothing written either.
+    const regrantRows = () =>
+      t.db
+        .select({ userId: schema.regrants.userId, requestId: schema.regrants.requestId })
+        .from(schema.regrants);
+    const aRegrant = { userId: f.a.id, requestId: sentinel('regrant key') };
+    expect(await regrantRows()).toEqual([aRegrant]);
+    const regrantAsB = await call(routeOf('POST /me/regrant'), {
+      headers: { 'idempotency-key': f.regrantKey },
+      body: { expectedAccountId: f.b.id },
+      cookie: f.b.cookie,
+    });
+    expect({
+      status: regrantAsB.statusCode,
+      code: regrantAsB.json<{ error?: { code: string } }>().error?.code,
+      leaks: leaked(regrantAsB.body),
+    }).toEqual({ status: 409, code: 'REGRANT_NOT_ALLOWED', leaks: [] });
+    expect(await regrantRows()).toEqual([aRegrant]);
     expect(passwordBefore).toHaveLength(1);
     expect(await password()).toEqual(passwordBefore);
     // B's refused consent, nickname, change, interests step and interest categories changed

@@ -19,6 +19,8 @@ export type AccountBlock = 'admin' | 'restricted' | null;
  * server's instant at the read, when the screen has one; the browser's otherwise): from that
  * instant it holds nothing, and the restriction is read again — nothing is published when a term
  * runs out. `me` undefined (a visitor, or not answered yet) reads nothing and blocks nothing.
+ * `restricted` says a restriction is held apart from the role, for a screen that speaks of it
+ * rather than of ordering (재지급's card).
  */
 export function useAccountBlock(me: Me | undefined, now?: number) {
   const queryClient = useQueryClient();
@@ -43,6 +45,12 @@ export function useAccountBlock(me: Me | undefined, now?: number) {
     /** The restriction read itself: whether it answered or failed is the caller's ladder. */
     restriction,
     account,
+    /**
+     * A current account restriction is held, whatever the role — `account` names an admin first,
+     * and one admin can restrict another (재지급's card says its end, ADR-0155). `restrictionEndsAt`
+     * is null both with none held and for 무기한: this tells them apart.
+     */
+    restricted: restrictedDetails !== null,
     restrictionEndsAt: restrictedDetails?.endsAt ?? null,
     /** The restriction answered or failed: a failed read holds nothing (the server refuses). */
     restrictionSettled: restriction.data !== undefined || restriction.isError,

@@ -4,13 +4,16 @@ import { PG_INTEGRITY_CONSTRAINT_VIOLATION, isPgError } from './pg-error.js';
 /**
  * The triggers of migration 0043 that refuse a new row of a closed account (#140, ADR-0086) from
  * the writers that take no lock the closure holds: a watch, a recorded search, a 본인확인 record
- * and a code send. They raise with their own name as the constraint.
+ * and a code send — and migration 0077's on a re-grant (#74, ADR-0155), whose request waited for
+ * the closure on the profile row and then found the account closed. They raise with their own
+ * name as the constraint.
  */
 const CLOSED_ACCOUNT_ROW_TRIGGERS = [
   'market_watches_open_account',
   'market_searches_open_account',
   'phone_verifications_open_account',
   'phone_verification_codes_open_account',
+  'regrants_open_account',
 ] as const;
 
 /**

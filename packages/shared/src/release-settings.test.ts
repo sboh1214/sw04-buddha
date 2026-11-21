@@ -19,6 +19,7 @@ import {
   PRICE_PROTECTION_TICKS_SETTING,
   RELEASE_SETTINGS,
   RELEASE_SETTING_STATUS_LABELS,
+  REGRANT_SETTINGS,
   RETENTION_PERIOD_SETTINGS,
   START_COIN_SETTING,
   defineReleaseSetting,
@@ -35,6 +36,12 @@ import {
   type ReleaseSettingValue,
 } from './release-settings.js';
 import { LEAD_CLOSE_GAP_MAX_MINUTES, timeRuleViolations } from './market-times.js';
+import {
+  REGRANT_PERIOD_LIMIT_MAX,
+  REGRANT_PERIOD_MAX_DAYS,
+  REGRANT_TOTAL_CAP_MAX_COIN,
+  REGRANT_WAIT_MAX_HOURS,
+} from './regrant.js';
 import { RETENTION_PERIODS, RETENTION_PERIOD_MAX_DAYS } from './retention.js';
 import { START_GRANT_MAX_COIN } from './start-grant.js';
 
@@ -58,9 +65,16 @@ const window = defineReleaseSetting({
 });
 
 describe('release settings registry', () => {
-  it('ships the items the issues that use them registered: the start grant (#70), the lead-close gap (#22), the dispute window (#152), the order intake, rate limit and price-protection width (#119) and the retention periods (#184, #77)', () => {
+  it('ships the items the issues that use them registered: the start grant (#70), the re-grant (#74), the lead-close gap (#22), the dispute window (#152), the order intake, rate limit and price-protection width (#119) and the retention periods (#184, #77)', () => {
     expect([...RELEASE_SETTINGS.keys()]).toEqual([
       'grant.start_coin',
+      // 제한적 재지급의 여섯 값 (#74, ADR-0155): beside the start grant.
+      'grant.regrant_threshold_coin',
+      'grant.regrant_amount_coin',
+      'grant.regrant_wait_hours',
+      'grant.regrant_period_days',
+      'grant.regrant_period_limit',
+      'grant.regrant_total_cap_coin',
       // 선행 마감 최소 간격 (#22, ADR-0093 #172 item 13): the operating values come first.
       'market.lead_close_gap',
       // 이의 기간 (#152, ADR-0093 #173 item 5): one value for every market.
@@ -107,6 +121,44 @@ describe('release settings registry', () => {
     // The worker reads each period through the very object the registry holds.
     for (const definition of Object.values(RETENTION_PERIOD_SETTINGS)) {
       expect(RELEASE_SETTINGS.get(definition.key)).toBe(definition);
+    }
+    // And the re-grant reads its six the same way (@buddha/db `applyRegrant`).
+    for (const definition of Object.values(REGRANT_SETTINGS)) {
+      expect(RELEASE_SETTINGS.get(definition.key)).toBe(definition);
+    }
+  });
+
+  it('takes the six re-grant numbers as bounded integers, each undecided until entered (#74)', () => {
+    // ADR-0155 (owner answers 2026-11-21 1·5·6·12): a bound against a typo, not a decided value.
+    const bounds = {
+      thresholdCoin: ['Coin', 0, START_GRANT_MAX_COIN],
+      amountCoin: ['Coin', 1, START_GRANT_MAX_COIN],
+      waitHours: ['시간', 0, REGRANT_WAIT_MAX_HOURS],
+      periodDays: ['일', 1, REGRANT_PERIOD_MAX_DAYS],
+      periodLimit: ['회', 1, REGRANT_PERIOD_LIMIT_MAX],
+      totalCapCoin: ['Coin', 1, REGRANT_TOTAL_CAP_MAX_COIN],
+    } as const;
+    expect(Object.keys(REGRANT_SETTINGS)).toEqual(Object.keys(bounds));
+    for (const [name, [unit, min, max]] of Object.entries(bounds)) {
+      const definition = REGRANT_SETTINGS[name as keyof typeof bounds];
+      const accepts = (value: unknown) => definition.schema.safeParse(value).success;
+      expect(definition.key, name).toMatch(/^grant\.regrant_/);
+      expect(definition.label, name).toMatch(/^재지급 /);
+      expect(definition.unit, name).toBe(unit);
+      // Every description says that one undecided value closes the re-grant (준비 중).
+      expect(definition.description, name).toContain('하나라도 미정이면 재지급을 받지 않는다');
+      expect([accepts(min), accepts(max)], name).toEqual([true, true]);
+      for (const value of [min - 1, max + 1, 1.5, String(max)]) {
+        expect(accepts(value), `${name} ${String(value)}`).toBe(false);
+      }
+      expect(readReleaseSetting(RELEASE_SETTINGS, definition, undefined)).toEqual({
+        key: definition.key,
+        status: 'undecided',
+        value: null,
+      });
+      expect(
+        readReleaseSetting(RELEASE_SETTINGS, definition, { status: 'test', value: max }),
+      ).toEqual({ key: definition.key, status: 'test', value: max });
     }
   });
 

@@ -1280,7 +1280,8 @@
                 "SELL_FILL",
                 "SETTLEMENT_PAYOUT",
                 "START_GRANT",
-                "RECONCILIATION_CORRECTION"
+                "RECONCILIATION_CORRECTION",
+                "REGRANT"
               ]
             }
           },
@@ -29171,6 +29172,285 @@
           "admin"
         ]
       }
+    },
+    "/api/v1/me/regrant": {
+      "get": {
+        "operationId": "getMyRegrant",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RegrantStatus"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Whether a re-grant (재지급, #74) would be given now: open (every release setting of the six decided), eligible, every refusal that applies, in order, and the numbers the wallet shows — the amount, the threshold, the wait and when it ends, the period, its limit, the re-grants used in it and when the next frees, the lifetime cap, what was given and what it leaves. Every number is null while not open",
+        "tags": [
+          "wallet"
+        ]
+      },
+      "post": {
+        "operationId": "applyRegrant",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "The request id: client-generated, unique per account. Re-sending one that was granted answers that re-grant (replayed: true) and grants nothing more. A refusal records nothing, so its id may be sent again once the reasons are gone.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpectedAccountBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ApplyRegrantResult"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN | RESTRICTED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | REGRANT_NOT_ALLOWED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Ask for a re-grant (재지급, #74): when the available Coin is at or below the threshold, no order waits, no contract of an unsettled market is held, the wait has passed and the period and the lifetime cap leave room, the release setting’s amount is issued to the account at once (ledger kind REGRANT). The same Idempotency-Key answers the re-grant it gave (replayed); a refusal writes nothing",
+        "tags": [
+          "wallet"
+        ]
+      }
+    },
+    "/api/v1/admin/regrants": {
+      "get": {
+        "operationId": "adminListRegrants",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "Opaque; `meta.nextCursor` of the previous page.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AdminRegrant"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/PageMeta"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Every re-grant given (재지급, #74), newest first: the account (id, public id, nickname — null once closed), the Coin given, the available Coin read when it was given and when",
+        "tags": [
+          "admin"
+        ]
+      }
     }
   },
   "info": {
@@ -29264,6 +29544,7 @@
           "DISPUTE_NOT_ALLOWED",
           "ORDER_INTAKE_CLOSED",
           "MARKET_MAKER_CONTROL_NOT_ALLOWED",
+          "REGRANT_NOT_ALLOWED",
           "INTERNAL"
         ]
       },
@@ -30026,6 +30307,7 @@
               "SETTLEMENT_PAYOUT",
               "START_GRANT",
               "RECONCILIATION_CORRECTION",
+              "REGRANT",
               "CLOSURE_FORFEIT",
               "DEPOSIT",
               "BONUS",
@@ -30050,7 +30332,8 @@
               "account_closure",
               "approval_request",
               "audit_failure",
-              "reconciliation_correction"
+              "reconciliation_correction",
+              "regrant"
             ]
           },
           "refId": {
@@ -47584,6 +47867,223 @@
           "nameKo",
           "expectedAccountId"
         ]
+      },
+      "RegrantStatus": {
+        "type": "object",
+        "properties": {
+          "open": {
+            "type": "boolean"
+          },
+          "eligible": {
+            "type": "boolean"
+          },
+          "refusals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RegrantRefusal"
+            }
+          },
+          "amountCoin": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CoinAmount"
+              }
+            ]
+          },
+          "thresholdCoin": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CoinAmount"
+              }
+            ]
+          },
+          "waitHours": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "waitUntil": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "periodDays": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "periodLimit": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "periodUsed": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "nextPeriodAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "totalCapCoin": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CoinAmount"
+              }
+            ]
+          },
+          "totalGrantedCoin": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CoinAmount"
+              }
+            ]
+          },
+          "remainingCapCoin": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CoinAmount"
+              }
+            ]
+          }
+        },
+        "required": [
+          "open",
+          "eligible",
+          "refusals",
+          "amountCoin",
+          "thresholdCoin",
+          "waitHours",
+          "waitUntil",
+          "periodDays",
+          "periodLimit",
+          "periodUsed",
+          "nextPeriodAt",
+          "totalCapCoin",
+          "totalGrantedCoin",
+          "remainingCapCoin"
+        ],
+        "additionalProperties": false
+      },
+      "RegrantRefusal": {
+        "type": "string",
+        "enum": [
+          "not_ready",
+          "restricted",
+          "held",
+          "no_start_grant",
+          "not_exhausted",
+          "live_orders",
+          "unsettled_positions",
+          "waiting",
+          "period_limit",
+          "total_cap"
+        ]
+      },
+      "ApplyRegrantResult": {
+        "type": "object",
+        "properties": {
+          "regrant": {
+            "$ref": "#/components/schemas/Regrant"
+          },
+          "replayed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "regrant",
+          "replayed"
+        ],
+        "additionalProperties": false
+      },
+      "Regrant": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "amountCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "id",
+          "amountCoin",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "AdminRegrant": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "account": {
+            "type": "object",
+            "properties": {
+              "userId": {
+                "type": "string"
+              },
+              "publicId": {
+                "type": "string",
+                "pattern": "^[23456789abcdefghjklmnpqrstuvwxyz]{10}$",
+                "description": "An account’s public id: 10 lower-case letters and digits, never the account id"
+              },
+              "nickname": {
+                "nullable": true,
+                "type": "string"
+              }
+            },
+            "required": [
+              "userId",
+              "publicId",
+              "nickname"
+            ],
+            "additionalProperties": false
+          },
+          "amountCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
+          "availableBeforeCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "id",
+          "account",
+          "amountCoin",
+          "availableBeforeCoin",
+          "createdAt"
+        ],
+        "additionalProperties": false
       }
     }
   }

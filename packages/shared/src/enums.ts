@@ -34,8 +34,9 @@ export type AccountType = (typeof ACCOUNT_TYPES)[number];
  * (`ledger_entry_direction_allowed`, migration 0060). Migration 0060 recreated the Postgres type
  * on the emptied database (#116, as 0017 did for #125) — ADMIN_ADJUST, TRADE_BUY, TRADE_SELL and
  * FEE went —, so this order is 0060's; from here on it only appends again (ADR-0042). No FEE type
- * while fees are 0 (15항), no generic burn (16항), no test-only value (7항); 재지급 and 판정 오류
- * 보상 come with #74 and #144. Names avoid the excluded storage tokens (`transfer`, `reward`, …).
+ * while fees are 0 (15항), no generic burn (16항), no test-only value (7항); 재지급 came with #74
+ * (REGRANT, migration 0077, ADR-0155) and 판정 오류 보상 comes with #144. Names avoid the excluded
+ * storage tokens (`transfer`, `reward`, …).
  */
 export const LEDGER_ENTRY_TYPES = [
   /**
@@ -90,6 +91,14 @@ export const LEDGER_ENTRY_TYPES = [
   'BONUS',
   'PAYMENT_CANCEL',
   'PAYMENT_CANCEL_REVERSAL',
+  /**
+   * 재지급 (#74, ADR-0155; ADR-0107 결정 2 #73 1·3항, N01 §2·§9): the limited re-grant a member whose
+   * available Coin ran down to the release setting's threshold applies for in the wallet, minted
+   * straight into the account's user ledger account at the request — a type of its own, never
+   * START_GRANT or BONUS. Written only by `applyRegrant` (ref `regrant` → regrants.id). Not
+   * trading profit (N02 §8): nothing that computes PnL reads the ledger. Appended (migration 0077).
+   */
+  'REGRANT',
 ] as const;
 export type LedgerEntryType = (typeof LEDGER_ENTRY_TYPES)[number];
 export const ledgerEntryTypeSchema = z.enum(LEDGER_ENTRY_TYPES);
@@ -128,6 +137,8 @@ export const LEDGER_REF_TYPES = [
   'audit_failure',
   /** Public member-history reference only; hides the ledger's internal audit failure id (#93). */
   'reconciliation_correction',
+  /** A REGRANT entry's regrants row (#74, ADR-0155): one entry per row, keyed by its id. */
+  'regrant',
 ] as const;
 export type LedgerRefType = (typeof LEDGER_REF_TYPES)[number];
 export const ledgerRefTypeSchema = z.enum(LEDGER_REF_TYPES);

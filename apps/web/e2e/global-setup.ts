@@ -3,6 +3,7 @@ import {
   awaitOwnStartGrant,
   ensureDisputeWindow,
   ensureOrderSettings,
+  ensureRegrantSettings,
   ensureStartCoin,
   signInFirstSeedAdmin,
   signInSecondSeedAdmin,
@@ -35,6 +36,12 @@ import { marketMakerE2eProfile, prepareMarketMakerTestProfile } from './market-m
  * still (market.spec.ts AC 1). A value already there is left as it is, and the specs read the one
  * in force (`startCoinValue`).
  *
+ * The re-grant's six settings (#74, ADR-0155; owner answer 2026-11-21 12: 'e2e는 시험값을 넣는다')
+ * the same way, right after the start Coin (`ensureRegrantSettings`): the 소진 기준액 10,000 Coin
+ * under the start Coin in force, so a fresh account is not exhausted and no other spec's wallet
+ * card turns on, 50,000 Coin a re-grant, no 대기기간, three in 30 days and 500,000 Coin in all.
+ * Values already there are left as they are; regrant.spec.ts reads the ones in force.
+ *
  * And the order intake's three settings (#119, ADR-0112; ADR-0107 결정 3: the test environment opens
  * it with test values): `order.accepting` true, `order.rate_limit` 20 a minute and
  * `order.price_protection_ticks` 5 — the width before any spec submits a market for review, which
@@ -58,7 +65,7 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
   try {
     await signInFirstSeedAdmin(context);
     await ensureDisputeWindow(context);
-    await ensureStartCoin(context);
+    await ensureRegrantSettings(context, await ensureStartCoin(context));
     await ensureOrderSettings(context);
     await awaitOwnStartGrant(context);
     await signInSecondSeedAdmin(approver);

@@ -154,6 +154,8 @@ describe('the notice above a 더 보기 that failed', () => {
         'app/admin/payments/admin-payments.tsx',
         'app/admin/proposals/[id]/market-picker.tsx',
         'app/admin/proposals/admin-proposals.tsx',
+        // 재지급 기록 (#74, ADR-0155)
+        'app/admin/regrants/admin-regrants.tsx',
         'app/admin/reports/admin-reports.tsx',
         'app/admin/retention/admin-retention-purges.tsx',
         'app/admin/settings/admin-release-settings.tsx',
@@ -265,6 +267,7 @@ describe('the notice above a 더 보기 that failed', () => {
         'useAdminNotices',
         'useAdminPayments',
         'useAdminProposals',
+        'useAdminRegrants',
         'useAdminRelatedSearch',
         'useAdminReportQueue',
         'useAdminRoleChanges',

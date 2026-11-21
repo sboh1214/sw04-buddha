@@ -390,6 +390,67 @@ export const copy = {
   // ADR-0069 decision 4 #70, the owner's words: the start Coin waits for its amount (the release
   // setting 시작 지급액 is undecided) and is paid once an admin enters it (ADR-0071).
   walletStartGrantPending: '시작 Coin은 준비되는 대로 지급됩니다.',
+  // --- 재지급 (#74, ADR-0155; N01 §2, 오너 답 2026-11-21) ---
+  // 지갑의 재지급 카드(lib/regrant.ts): 늘 보인다(답 10). 여섯 출시 설정 가운데 하나라도 미정이면 '준비 중'(답
+  // 12), 조건을 모두 채우면 '재지급 신청'이 켜지고 그 요청에서 바로 받는다(답 3). 아니면 버튼이 꺼지고 이유마다
+  // 한 줄 — 남은 대기 시간·횟수·누적 한도의 수와 함께(답 9). 대기 중 신청 상태는 없다(답 2). 주문 화면의 잔액
+  // 부족 안내와 잇지 않는다(답 11). '가용 코인'은 지갑의 잔고 이름(walletBalance)이다. 문장은 조각으로 나뉘어
+  // 있고 수·시각은 lib/regrant.ts가 사이에 넣는다(Coin 뒤의 조사는 '이/을'로 같다).
+  regrantTitle: '재지급',
+  regrantIntro:
+    '가용 코인이 신청 기준 이하로 줄면 정해진 한도 안에서 Coin을 다시 받을 수 있습니다.',
+  regrantNotReady: '재지급은 준비 중입니다.',
+  regrantStatusFailed: '재지급 정보를 불러오지 못했습니다.',
+  regrantAmount: '1회 지급액',
+  regrantThreshold: '신청 기준',
+  // '가용 코인 990,000 Coin 이하'
+  regrantAtOrBelow: '이하',
+  regrantPeriod: '남은 횟수',
+  // '최근 30일 3회 중 2회'
+  regrantPeriodRecent: '최근',
+  regrantDayUnit: '일',
+  regrantTimesOf: '회 중',
+  regrantTimesUnit: '회',
+  regrantRemainingCap: '남은 누적 한도',
+  // '450,000 Coin (누적 상한 500,000 Coin)'
+  regrantTotalCap: '누적 상한',
+  regrantConditions: '대기 주문이나 정산되지 않은 시장의 보유 계약이 있으면 받을 수 없습니다.',
+  // '마지막 재지급(처음이면 시작 Coin을 받은 때) 뒤 24시간이 지나야 받을 수 있습니다.'
+  regrantWaitLead: '마지막 재지급(처음이면 시작 Coin을 받은 때) 뒤',
+  regrantWaitTail: '시간이 지나야 받을 수 있습니다.',
+  regrantApply: '재지급 신청',
+  // 받은 뒤의 한 줄(role="status"): '재지급 50,000 Coin을 받았습니다.'
+  regrantGrantedLead: '재지급',
+  regrantGrantedTail: '을 받았습니다.',
+  // 같은 요청 ID가 이미 준 재지급으로 답을 받았을 때(replayed, N01 §9 — 답을 잃은 요청의 ID를 다시 보낸
+  // 경우, 며칠 뒤의 신청 포함): 새로 받은 것이 없으니 받은 때를 밝힌다(regrantGrantedLead로 시작).
+  // '재지급 50,000 Coin은 2026. 11. 21. 오후 12:00에 이미 받았습니다. 이번 신청으로 더 받은 Coin은 없습니다.'
+  regrantReplayedMiddle: '은',
+  regrantReplayedTail: '에 이미 받았습니다. 이번 신청으로 더 받은 Coin은 없습니다.',
+  regrantBlocked: '지금은 재지급을 받을 수 없습니다.',
+  // 거절 이유(REGRANT_REFUSALS)마다 한 문장. 계정 제한은 조치·신고 내역으로 가는 링크가 아래에 붙고, 신청이
+  // RESTRICTED로 거절되면 끝나는 때를 뒤에 붙인다('…(2026. 12. 1. 오전 9:00까지).' — errRestricted*와 같은 꼴이라
+  // 마침표가 없다).
+  regrantRefusalRestricted: '계정 제한 중에는 재지급을 받을 수 없습니다',
+  regrantRefusalHeld: '계정을 확인하고 있어 지금은 재지급을 받을 수 없습니다.',
+  regrantRefusalNoStartGrant: '시작 Coin을 받은 계정만 재지급을 받을 수 있습니다.',
+  // '가용 코인이 990,000 Coin 이하일 때 받을 수 있습니다.'
+  regrantRefusalNotExhaustedLead: '가용 코인이',
+  regrantRefusalNotExhaustedTail: '이하일 때 받을 수 있습니다.',
+  regrantRefusalLiveOrders: '대기 중인 주문이 있습니다. 주문이 모두 끝난 뒤 다시 신청해 주세요.',
+  regrantRefusalUnsettled:
+    '정산되지 않은 시장의 계약을 보유하고 있습니다. 모두 매도하거나 정산이 끝난 뒤 다시 신청해 주세요.',
+  // '대기기간이 지나지 않았습니다. 2026. 11. 22. 오후 3:00부터 받을 수 있습니다.'
+  regrantRefusalWaiting: '대기기간이 지나지 않았습니다.',
+  regrantFrom: '부터 받을 수 있습니다.',
+  // '최근 30일 동안 받을 수 있는 3회를 모두 받았습니다. 2026. 12. 1. 오전 9:00부터 다시 받을 수 있습니다.'
+  regrantRefusalPeriodLimitMiddle: '동안 받을 수 있는',
+  regrantRefusalPeriodLimitTail: '를 모두 받았습니다.',
+  regrantAgainFrom: '부터 다시 받을 수 있습니다.',
+  // '남은 누적 한도 40,000 Coin이 1회 지급액 50,000 Coin보다 적어 받을 수 없습니다.' — 남은 만큼 깎아 주지
+  // 않는다(답 6).
+  regrantRefusalTotalCapMiddle: '이 1회 지급액',
+  regrantRefusalTotalCapTail: '보다 적어 받을 수 없습니다.',
   chargeTitle: '코인 충전',
   chargeHint: '금액이 클수록 할인율이 높습니다.',
   chargeDiscount: '할인',
@@ -452,6 +513,9 @@ export const copy = {
   ledgerTypePaymentCancelReversal: '결제 취소 복원',
   // ADR-0069 decision 4 #70: the start Coin's own ledger type, '시작 지급'.
   ledgerTypeStartGrant: '시작 지급',
+  // 재지급(#74, ADR-0155): 지갑에서 신청해 받은 Coin의 원장 유형 REGRANT. 시작 지급과도 쿠폰의 보너스와도
+  // 다른 낱말이다(N04 §5: 지급 출처를 가른다).
+  ledgerTypeRegrant: '재지급',
   /** The forfeiture of the Coin left when a member closes the account (#140, #57-16). */
   ledgerTypeClosureForfeit: '탈퇴 소멸',
 
@@ -2439,6 +2503,19 @@ export const copy = {
   // 시장 제안(#77, ADR-0089): 탈퇴한 계정의 것, 처리가 끝난 뒤 — 새 항목 '시장 제안 기록 보존기간'(ADR-0087의
   // 오너 결정 2026-10-24 13)의 기간으로 센다.
   adminRetentionKindMarketProposals: '시장 제안 기록',
+  // --- admin: 재지급 기록 (#74, ADR-0155; 오너 답 2026-11-21 3: 관리자 화면은 지급 기록 조회만) ---
+  // 회원이 지갑에서 신청해 그 요청에서 바로 받은 재지급, 최근 것부터 20개씩. 관리자가 주거나 거두는 기능은
+  // 없고(ADR-0107), 금액과 조건은 출시 설정의 여섯 값이다. '신청 때 가용 코인'은 지급하기 직전 잠금 아래에서
+  // 읽은 가용 코인이다(소진 확인).
+  adminRegrants: '재지급 기록',
+  adminRegrantsIntro:
+    '회원이 지갑에서 신청해 받은 재지급입니다. 조건을 채운 신청은 그 자리에서 지급되고, 관리자가 지급하거나 거두는 기능은 없습니다.',
+  adminRegrantsSettingsNotice:
+    '1회 지급액·신청 기준·대기기간·주기와 횟수·누적 상한은 출시 설정의 값이고, 하나라도 미정이면 재지급을 받지 않습니다.',
+  adminRegrantsSettingsLink: '출시 설정 열기',
+  adminRegrantsEmpty: '재지급 기록이 없습니다.',
+  adminRegrantAmount: '지급액',
+  adminRegrantAvailableBefore: '신청 때 가용 코인',
 
   // --- markets (M4) ---
   // 홈 (PLAN 11.3, ADR-0041 Kalshi 형): 헤더 2단의 상위 카테고리 · 왼쪽 세부 분류 · 정렬 · 검색.

@@ -12,6 +12,7 @@ import { CouponForm } from './coupon-form';
 import { LedgerSection } from './ledger-list';
 import { PaymentHistory } from './payment-history';
 import { ReconciliationCorrectionHistory } from './reconciliation-correction-history';
+import { RegrantCard } from './regrant-card';
 
 export const metadata: Metadata = { title: `${copy.walletTitle} | ${copy.appName}` };
 
@@ -19,6 +20,9 @@ export const metadata: Metadata = { title: `${copy.walletTitle} | ${copy.appName
  * MY's 지갑 (`/my/wallet`, #16; PLAN 11.3's `/wallet` until then): the balance and the ledger.
  * The notice at the top is fixed copy (PLAN Appendix A, N01 §2): Coin never converts back to
  * cash. No session -> the login page, on every navigation to it (`requireMySession`).
+ *
+ * Right under the balance, the 재지급 card (#74, ADR-0155; owner answer 2026-11-21 10: always on
+ * the wallet, and only there): the member's own status and request, read in the browser.
  *
  * Charging, coupons and 결제 내역 are drawn only while paid Coin is on sale
  * (PAID_COIN_SALES_ENABLED, ADR-0049) — closed in the initial product (N06), where the API
@@ -55,6 +59,7 @@ export default async function WalletPage({
         </Alert.Content>
       </Alert.Root>
       <BalanceCard />
+      <RegrantCard />
       {PAID_COIN_SALES_ENABLED && (
         <>
           <ChargeForm highlightPackageId={filters.packageId} />
