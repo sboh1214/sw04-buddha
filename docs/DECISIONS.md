@@ -18575,7 +18575,7 @@ ADR-0151 결정 7이 오너에게 남긴 후속이다. better-auth는 링크 메
 ## ADR-0155 — 제한적 재지급(#74): MY 지갑의 신청이 조건을 모두 채우면 그 요청에서 바로 주는 전용 원장 유형 `REGRANT`(받는 계정에 신규 발행)와 그 기록 `regrants`, 기다리는 신청 없이 까닭 전부와 수치로 거절(`REGRANT_NOT_ALLOWED`), 출시 설정 여섯(`grant.regrant_*`) — 하나라도 미정이면 '준비 중', 관리자는 기록만 읽는다(`/admin/regrants`) — 마이그레이션 0077(기존 행을 바꾸지 않는다) (#74)
 
 - 날짜: 2026-11-21
-- 상태: 채택
+- 상태: 채택, 일부 대체됨(ADR-0156: 결과 5의 관리자 계정 — 관리자 권한이 있는 동안은 받지 않는다(오너 답 2026-11-21). 그래서 결정 4의 까닭 차례(열에서 열하나로, `admin`은 `restricted` 다음)와 4-1의 '값이 필요 없는 셋(2\~4)', 12-7과 결정 8의 '준비 중' 동안 함께 싣는 까닭 목록에 `admin`이 더해진다)
 
 이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #74(M12, 에픽 #161)의 재지급 — 저장(마이그레이션 0077), 서버의 판정과 지급(`@buddha/db`), API, MY 지갑의 카드, 관리자의 기록 화면, e2e — 을 기록한다. 오너가 2026-11-21에 답한 열둘(결정의 표)과 앞선 ADR이 이미 정한 것(맥락)을 따랐다.
 
@@ -18792,3 +18792,61 @@ ADR-0151 결정 7이 오너에게 남긴 후속이다. better-auth는 링크 메
 - **판정 오류 보상(#144)과 운영 사고 보상의 공백**은 그대로다(ADR-0107 결정 2 #73 7항). 다계정·공모 감시는 #98, 판매를 다시 열 때의 재지급 자격은 #111이다(ADR-0107 결정 2 #73 2항).
 
 **6. 상태 줄.** 이 ADR이 앞선 글을 대신하거나 넘겨받은 것을 한 곳의 상태 줄에 '일부 대체됨(ADR-0155: …)'을 이어 적었다(본문은 고치지 않았다, ADR-0047 결과 1): ADR-0055(결과 3의 '#74(재지급)'), ADR-0069(결정 1 #57 13항과 결정 6의 재지급 신청·'#74 전체'), ADR-0071(결정 8의 '앱의 어느 라우트도 start·grant를 말하지 않음'), ADR-0085(결과 5의 '재지급(#74)은 M9가 정한다'), ADR-0107(결정 2 #73 1·3·7·13·14항의 재지급과 결정 6의 두 항목), ADR-0109(결정 2의 '재지급이 더해진다'와 유입 목록, 결과 5의 #74 항목), ADR-0144(결정 2-1의 필터 다섯·11 조합, 2-7, 결과 3의 수용 기준 3, 결과 7의 #74). ADR-0047(재지급 수치는 #133)과 ADR-0135(결정 5의 남은 것 — #74로 넘긴다)는 그대로 맞아 적지 않았다.
+
+## ADR-0156 — 관리자 계정의 재지급(#74 후속): 관리자 권한이 있는 동안은 재지급을 받지 않는다 — 거절 까닭 `admin`(계정 제한 다음, 보류 앞), 역할은 신청이 프로필 `FOR KEY SHARE`를 잡는 문장에서 읽는다 — 마이그레이션·출시 설정 없음
+
+- 날짜: 2026-11-21
+- 상태: 채택
+
+### 맥락
+
+ADR-0155 결과 5가 오너에게 남긴 물음이다: 관리자도 회원과 같은 조건으로 재지급을 받았다(시작 지급과 같다). 결정 8의 카드 서술('관리자 계정도 같다 — 관리자도 같은 조건으로 재지급을 받고')도 그것을 전제로 했다.
+
+- 관리자는 권한이 있는 동안 어느 시장에도 주문하지 못한다(ADR-0107 결정 5 '#119·#143 관리자의 거래'). 주문 접수가 시장 잠금 아래 프로필 `FOR SHARE`로 역할을 읽어 `FORBIDDEN`으로 거절하고(ADR-0112 10-16), DB가 `orders_refuse_admin_owner`(0062)와 `orders_refuse_revoked_owner`(0066 — 같은 프로필 `FOR SHARE`)로 행을 거절한다. 관리자가 받은 재지급 Coin은 권한이 있는 동안 쓸 데가 없다.
+- 관리자는 `/admin/settings`에서 재지급의 여섯 출시 설정을 바꿀 수 있다. 막지 않으면 기준액·대기기간을 고쳐 자기 계정에 Coin을 발행할 여지가 있다.
+- 권한 부여(`AdminAccountsService.grant`, 시드의 승격)는 역할 잠금을 기다리지 않고 잡은 뒤 대상의 프로필을 `FOR UPDATE NOWAIT`로 잡고 나서 역할을 쓴다. 잡지 못하면 트랜잭션 전체를 롤백하고 다시 하며, 다하면 409 `TRANSACTION_BUSY`다(ADR-0120 결정 7, `withTransactionRetry`). 회수(`revoke`)는 독점 역할 잠금과 `user` 행 `FOR UPDATE` 뒤 프로필을 따로 잠그지 않고 고친다(`UPDATE`는 `FOR NO KEY UPDATE`).
+- 재지급 신청은 API의 `assertCanTrade`와 `applyRegrant`의 첫 문장이 그 계정의 프로필을 `FOR KEY SHARE`로 잡는다(ADR-0155 결정 5의 1). 상태 읽기(`regrantStatus`)는 잠금이 없다(결정 6).
+- 탈퇴의 거절 까닭에 같은 뜻의 `admin`이 있다(`ACCOUNT_CLOSURE_REFUSALS`, #57-17 — '관리자 권한이 있는 계정은 권한을 회수받은 뒤에 탈퇴할 수 있습니다.').
+
+### 결정
+
+**오너 답(2026-11-21 11:30 KST, 결정표 0-3, 추천안).** 「관리자 계정의 재지급 — 막는다: 관리자 권한이 있는 동안은 재지급을 받지 않는다(거절 까닭 하나를 더한다).」 오너에게 보인 근거: 관리자는 권한이 있는 동안 주문하지 못하므로(ADR-0107 결정 5 — 주문이 관리자를 거절한다) 재지급이 쓸 데가 없고, 출시 설정을 고칠 수 있는 관리자가 자기에게 Coin을 발행할 여지를 없앤다.
+
+**1. 까닭 `admin`**(`REGRANT_REFUSALS`, `packages/shared/src/regrant.ts`). 계정이 관리자 역할(`profiles.role = 'admin'`)을 가진 동안 거절한다. 권한을 회수하면 다음 신청부터 회원과 같은 조건으로 받는다 — 오너 답이 '권한이 있는 동안'이므로 주문의 회수 경계(ADR-0120 결정 4: 회수 뒤 생성된 시장만)와 같은 경계는 두지 않는다. 대기기간·주기·누적 상한은 계정의 재지급 행을 그대로 센다(관리자인 동안에는 행이 생기지 않으므로 관리자였던 기간이 따로 셈에 들지 않는다). 이름은 탈퇴의 같은 까닭과 같다. 운영 마켓메이커는 프로필이 없어 역할도 없다 — 그대로 `no_start_grant`다(ADR-0155 결정 12-5).
+
+**2. 차례: `restricted` 다음, `held` 앞.** `not_ready`·`restricted`·`admin`·`held`·`no_start_grant`·`not_exhausted`·`live_orders`·`unsettled_positions`·`waiting`·`period_limit`·`total_cap`(ADR-0155 결정 4의 차례에 하나를 끼웠다).
+
+- 출시 설정 값이 필요 없는 계정 단위 까닭이라 잔고·주문·재지급 이력의 까닭(`not_exhausted`부터)보다 앞이고, 설정이 미정일 때도 `not_ready`와 함께 묻는다(ADR-0155 결정 4의 1 — 그때 카드는 '준비 중'만 보인다, 결정 12-7).
+- 계정 단위 셋 사이에서는 주문이 묻는 차례를 따른다: `assertCanTrade`의 `RESTRICTED` → 역할의 `FORBIDDEN` → 접수 안의 `ledger_hold`(`held`와 같은 보류, ADR-0155 결정 12-3). 재지급 신청도 API가 `assertCanTrade`를 `applyRegrant` 앞에서 부르므로 계정 제한 중인 관리자의 `POST`는 `RESTRICTED`이고, 그 계정의 상태(`GET`)도 `restricted`를 먼저 싣는다 — 신청이 받는 답과 상태의 첫 까닭이 같다. `no_start_grant`는 지난 일(시작 지급)이라 지금 서 있는 제한·역할·보류 뒤에 그대로 둔다.
+- 값은 배열의 가운데에 넣었다. `RegrantRefusal`은 답에만 실리고 어느 행에도 저장되지 않으며(마이그레이션 없음), 카드는 까닭을 서버의 차례대로 그리므로 차례는 이 배열 하나가 정한다. OpenAPI의 `RegrantRefusal` enum과 생성된 클라이언트 타입이 같은 차례다.
+
+**3. 역할을 읽는 곳과 잠금**(`packages/db/src/regrants.ts`).
+
+- `applyRegrant`: 프로필을 `FOR KEY SHARE`로 잡는 첫 문장이 역할도 읽는다(`select({ role })`). 다른 잠금은 더하지 않았다. 권한 부여는 역할을 쓰기 전에 대상의 프로필을 `FOR UPDATE`(NOWAIT)로 잡고 — API의 부여와 시드의 승격 둘 다 — `FOR UPDATE`는 `FOR KEY SHARE`와 충돌한다.
+  - 부여가 먼저 행을 잡았으면 신청의 잠금(API에서는 `assertCanTrade`의 것)이 그 커밋을 기다리고, 기다린 잠금 문장은 커밋된 새 행을 돌려준다 — 역할이 `admin`이라 거절한다. API에서는 `assertCanTrade` 때부터 잠금을 쥐므로 그 뒤에 커밋되는 부여는 없고, 그 전에 커밋된 부여는 `applyRegrant`의 문장이 본다.
+  - 신청이 먼저 잡았으면 부여의 NOWAIT가 실패해(55P03) 부여 전체가 롤백되고 다시 시도한다. 부여는 재지급이 커밋된 뒤에야 역할을 쓰므로 그 재지급은 회원이었던 계정이 받은 것이다 — 부여 전에 걸어 둔 주문처럼 부여보다 앞선 일이다. 받은 Coin은 남고 권한이 있는 동안 주문에 쓰지 못한다.
+  - 주문 접수의 `FOR SHARE`로 올리지 않았다. 더 막는 것은 회수와 보통의 프로필 갱신(닉네임 등, `FOR NO KEY UPDATE`)뿐이다. 회수와 겹친 신청은 역할을 읽은 때에 따라 `admin`으로 거절되거나 회수 뒤의 회원으로 받는다 — 둘 다 그때의 계정 그대로다. `FOR KEY SHARE`는 `assertCanTrade`·`assertWriter`처럼 보통의 프로필 갱신을 기다리게 하지 않는 가장 가벼운 잠금으로 남는다. 전역 역할 잠금(`lockAdminRoles`)도 잡지 않는다 — 주문처럼 계정 하나의 행 잠금으로 충분하다(ADR-0112 10-16).
+- 재전송이 먼저다: 이미 받은 요청 ID는 권한을 받은 뒤에도 그 재지급으로 답한다(ADR-0155 결정 5의 3 — 조건보다 앞이고 아무것도 더 주지 않는다).
+- `regrantStatus`: 잠금 없이 지금의 역할을 읽는다(`holdsAdminRole`).
+- DB 트리거는 더하지 않았다. 주문에는 `orders_refuse_admin_owner`가 있지만 `regrants` 행을 쓰는 곳은 `applyRegrant` 하나이고(docs/GUARDS.md '제한적 재지급'), 계정 제한·보류·소진 같은 다른 조건도 DB가 커밋 때 보지 않는다.
+
+**4. API.** 새 것이 없다. `GET /me/regrant`의 `refusals`와 `REGRANT_NOT_ALLOWED`(409)의 `details`가 `admin`을 싣는다. 관리자도 본인 전용 라우트의 `SessionGuard`·`OnboardedGuard`를 지나므로 계정 제한이 아니면 409다. `pnpm api:openapi`로 `apps/api/openapi.json`·`packages/api-client/src/generated/schema.ts`·`docs/API.md`를 다시 만들었고, `scripts/generate-api-doc.mjs`의 `REGRANT_NOT_ALLOWED` 노트가 까닭을 차례대로 적으므로 `not_ready` 다음에 `admin`을 더했다(`restricted`는 그 노트에 없다 — 신청은 `RESTRICTED`다).
+
+**5. 웹.** `copy.regrantRefusalAdmin` = '관리자 권한이 있는 동안에는 재지급을 받을 수 없습니다.' — 계정 제한의 문장('계정 제한 중에는 재지급을 받을 수 없습니다')과 같은 꼴이고 끝도 링크도 없다(조치·신고 내역의 링크는 계정 제한 줄만). `regrantRefusalText`가 `admin`에 그 문장을 준다. 카드는 바꾸지 않았다 — 까닭을 서버의 차례대로 한 줄씩 그리고, 계정 제한의 끝은 역할과 상관없이 `useAccountBlock`의 `restricted`로 쓴다(ADR-0155 결정 12-15). 제한된 관리자는 이제 계정 제한(끝과 링크)과 관리자 권한의 두 줄이다. '준비 중' 동안은 다른 까닭처럼 그리지 않는다(결정 12-7). 탈퇴 화면의 `closureRefusalAdmin`은 그대로다.
+
+**6. 시험.**
+
+- shared `regrant.test.ts`: 까닭의 차례에 `admin`, 설정 미정일 때 `['not_ready', 'admin']` 상태의 직렬화.
+- db `regrants.test.ts`(23 → 26): 관리자의 거절(신청과 상태가 같음 — `refused`가 둘을 견준다, 수치는 그대로), 권한을 받기 전에 받은 요청 ID의 재전송, 설정 미정일 때 `['not_ready', 'admin']`, 회수하면 다시 받음. '모든 까닭의 차례'에 `admin`(주문을 건 뒤 역할을 줬다 — 주문 트리거는 넣을 때만 본다). 새 묶음 'a role grant at once': 부여처럼 역할 잠금·프로필 `FOR UPDATE NOWAIT`·역할 쓰기를 쥔 채 커밋하지 않은 연결이 있으면 신청이 그 프로필에서 기다리고(`waitForLockWaiter`), 커밋 뒤 `admin`으로 거절되어 아무것도 쓰지 않는다. 반대로 커밋하지 않은 재지급이 있으면 부여의 `FOR UPDATE NOWAIT`가 55P03이고, 재지급이 커밋된 뒤 부여가 지나 다음 신청이 `admin`이다. 역할을 잠금 문장보다 앞에서 잠금 없이 읽게 바꾸면 첫 경합 시험이 실패하는 것을 확인했다(되돌렸다).
+- api `regrant.controller.test.ts`(20 → 21): 관리자의 `POST`는 409 `REGRANT_NOT_ALLOWED`이고 `details`가 `GET`과 같은 `{ …열린 수치, refusals: ['admin'] }`, 아무것도 쓰지 않음, 회수 뒤 지급.
+- web `lib/regrant.test.ts`(22 → 23): 모든 까닭의 줄과 문장에 `admin`(계정 제한 다음), 관리자 줄은 링크가 없고 거절의 알림 문장, '준비 중' 동안은 그리지 않음. `regrant-card.test.tsx`(17 → 18): 제한된 관리자의 두 줄(제한의 끝과 링크 하나, 관리자 문장, 꺼진 버튼), 관리자 줄 하나(링크 없음, `aria-describedby`가 까닭 목록). 제외 기능 검사는 `regrant`로 시작하는 새 문구를 함께 본다.
+
+### 결과
+
+- **바뀐 파일.** `packages/shared/src/regrant.ts`·`regrant.test.ts`, `packages/db/src/regrants.ts`·`regrants.test.ts`, `apps/api/src/regrant/regrant.controller.test.ts`, 생성물(`apps/api/openapi.json`, `packages/api-client/src/generated/schema.ts`, `docs/API.md`)과 `scripts/generate-api-doc.mjs`, `apps/web/src/copy.ts`·`lib/regrant.ts`·`lib/regrant.test.ts`·`app/my/wallet/regrant-card.test.tsx`, 문서(이 ADR, ADR-0155의 상태 줄, `README.md`의 `/my/wallet` 줄, `docs/GUARDS.md`·`docs/OPERATIONS.md`의 재지급 조건). `docs/TERMS.md`는 까닭을 하나씩 적지 않아 그대로다.
+- **그대로인 것.** 마이그레이션·출시 설정·라우트와 가드·오류 코드, 다른 까닭의 뜻과 서로의 차례, 카드의 구조와 계정 제한의 끝을 읽는 길, 관리자 기록 화면(`/admin/regrants`), 시작 지급(관리자도 받는다), 권한 부여·회수와 주문의 거절, 이미 준 재지급. e2e(`regrant.spec.ts`)는 회원 둘이 신청하고 관리자는 기록만 읽어 바꾸지 않았다.
+- **검증.** shared 87파일 1,835개, db `regrants.test.ts` 26개와 `phone-change`·`appeal-lookup`·`ledger` 시험(4파일 139개), api `src/regrant`·`src/surface`·`admin-access`·`interests-step-docs`·`proposals-docs`·`start-grant.service` 시험(7파일 100개), web 전체 220파일 3,725개 통과. 타입 검사(shared·db·api의 `tsc`, web의 `pnpm run typecheck`), 바꾼 파일의 eslint·prettier, `pnpm api:openapi` 뒤 패키지 빌드. e2e는 돌리지 않았다.
+- **남은 것.**
+  - API가 웹보다 먼저 배포되는 동안 옛 웹의 카드는 관리자 계정의 `admin` 줄을 문장 없이 그린다(옛 `regrantRefusalText`가 모르는 까닭이다). 버튼은 `eligible`로 꺼져 있어 신청은 나가지 않는다 — 관리자 계정에만, 그 사이에만이다.
+  - 관리자 계정으로 재지급을 거절받는 e2e는 없다 — db·api·웹 단위 시험이 받친다.
+- **상태 줄.** ADR-0155의 상태 줄에 '일부 대체됨(ADR-0156: 결과 5의 관리자 계정 — …)'을 이어 적었다. 결정 2가 까닭 하나를 끼우므로 ADR-0155의 결정 4(까닭 차례, 4-1의 '값이 필요 없는 셋(2\~4)' — 이제 넷(2\~5)), 12-7과 결정 8의 '준비 중' 동안 함께 싣는 까닭 목록(계정 제한·보류·시작 지급 없음에 관리자 권한이 더해진다)도 같은 줄에 적었다. 같은 전제를 말한 결정 8의 '관리자 계정도 같다 — 관리자도 같은 조건으로 재지급을 받고(결과 5)'도 그 결과 5를 가리키므로 이것으로 함께 대체된다(본문은 고치지 않았다, ADR-0047 결과 1). 제한된 관리자의 끝을 쓰는 결정 8·12-15의 나머지는 유효하다.

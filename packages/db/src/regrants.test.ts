@@ -12,7 +12,7 @@ import {
   regrantStatus,
   type ApplyRegrantOutcome,
 } from './regrants.js';
-import { ledgerEntries, regrants, startGrants } from './schema/index.js';
+import { ledgerEntries, profiles, regrants, startGrants } from './schema/index.js';
 import { cancelStartGrant } from './start-grants.js';
 import {
   closeAccount,
@@ -63,8 +63,8 @@ const DAY_MS = 86_400_000;
 /**
  * 제한적 재지급 (#74, ADR-0155; owner answers 2026-11-21): `applyRegrant` and `regrantStatus` on the
  * docker test profile — every refusal with its numbers, the grant and its ledger entry, a request
- * id's replay, two requests at once, and migration 0077's guards (keep-record, the human and open
- * account, the row and the entry naming each other).
+ * id's replay, two requests at once, a role grant at once (ADR-0156), and migration 0077's guards
+ * (keep-record, the human and open account, the row and the entry naming each other).
  */
 describe.skipIf(!hasTestDb())('the re-grant (#74, docker test profile)', () => {
   let t: TestDb;
@@ -127,6 +127,10 @@ describe.skipIf(!hasTestDb())('the re-grant (#74, docker test profile)', () => {
     expect(await regrantStatus(t.db, userId)).toEqual(done.status);
     return done.status;
   }
+
+  /** The role as the test fixtures write it (no grant record: the role alone is read). */
+  const setRole = (userId: string, role: 'admin' | 'user') =>
+    t.db.update(profiles).set({ role }).where(eq(profiles.userId, userId));
 
   const grantedAtOf = async (userId: string) =>
     (await t.db.select().from(startGrants).where(eq(startGrants.userId, userId)))[0]!.grantedAt!;
@@ -380,6 +384,40 @@ describe.skipIf(!hasTestDb())('the re-grant (#74, docker test profile)', () => {
       expect((await apply(writing)).outcome).toBe('granted');
     });
 
+    it('refuses an admin while it holds the role, and grants once it is revoked', async () => {
+      // ADR-0156 (owner answer 2026-11-21): no re-grant while the role is held, as no order.
+      await settle();
+      const userId = await member();
+      const before = randomUUID();
+      await granted(userId, before);
+      await settle({ thresholdCoin: 10_000 });
+      await setRole(userId, 'admin');
+      expect(await refused(userId)).toMatchObject({
+        open: true,
+        eligible: false,
+        refusals: ['admin'],
+        periodUsed: 1,
+        totalGrantedCoin: 500n,
+      });
+      // A request id granted before the role still answers its re-grant (before any condition).
+      expect(await apply(userId, before)).toMatchObject({ outcome: 'replayed', replayed: true });
+      // While not ready it is named with the other reasons that need no value.
+      await unsettle();
+      expect(await refused(userId)).toEqual({
+        open: false,
+        eligible: false,
+        refusals: ['not_ready', 'admin'],
+        ...closedNumbers,
+      });
+      expect(await regrantsOf(t.db, userId)).toHaveLength(1);
+      // Revoked: a member again, on the members' terms.
+      await settle({ thresholdCoin: 10_000 });
+      await setRole(userId, 'user');
+      expect(await regrantStatus(t.db, userId)).toMatchObject({ eligible: true, refusals: [] });
+      expect((await apply(userId)).outcome).toBe('granted');
+      expect(await regrantsOf(t.db, userId)).toHaveLength(2);
+    });
+
     it('refuses an account held for a reconciliation difference (#93), as an order is', async () => {
       await settle();
       const userId = await member();
@@ -495,9 +533,12 @@ describe.skipIf(!hasTestDb())('the re-grant (#74, docker test profile)', () => {
       await t.db.transaction((tx) =>
         runAccountReconciliation(tx, { userId }, { source: 'manual' }),
       );
+      // Made an admin after its order (`orders_refuse_admin_owner` refuses one placed after).
+      await setRole(userId, 'admin');
       const status = await refused(userId);
       expect(status.refusals).toEqual([
         'restricted',
+        'admin',
         'held',
         'not_exhausted',
         'live_orders',
@@ -621,6 +662,80 @@ describe.skipIf(!hasTestDb())('the re-grant (#74, docker test profile)', () => {
       }
       expect((await ledgerOf(t.db, userId)).filter((e) => e.type === 'REGRANT')).toHaveLength(1);
       expect((await balanceOf(t.db, userId))!.availableCoin).toBe(600n);
+    });
+  });
+
+  describe('a role grant at once (ADR-0156)', () => {
+    /**
+     * A role grant on a client of its own, holding its locks as AdminAccountsService.grant takes
+     * them — the admin-roles lock, then the grantee's profile FOR UPDATE NOWAIT — with `admin`
+     * written and not yet committed.
+     */
+    async function grantInFlight(userId: string) {
+      const client = new Client({ connectionString: testDbUrls()!.appUrl });
+      await client.connect();
+      await client.query('BEGIN');
+      await client.query("SELECT pg_try_advisory_xact_lock(hashtext('buddha:admin_roles'))");
+      await client.query('SELECT 1 FROM profiles WHERE user_id = $1 FOR UPDATE NOWAIT', [userId]);
+      await client.query("UPDATE profiles SET role = 'admin' WHERE user_id = $1", [userId]);
+      return {
+        client,
+        async commit() {
+          await client.query('COMMIT');
+          await client.end();
+        },
+      };
+    }
+
+    it('waits for a grant in flight and refuses with the role it wrote', async () => {
+      await settle();
+      const userId = await member();
+      const grant = await grantInFlight(userId);
+      const request = apply(userId);
+      await waitForLockWaiter(grant.client, 'the re-grant waits on the profile');
+      await grant.commit();
+      expect(await request).toMatchObject({ outcome: 'refused', status: { refusals: ['admin'] } });
+      expect(await regrantsOf(t.db, userId)).toEqual([]);
+      expect((await balanceOf(t.db, userId))!.availableCoin).toBe(100n);
+    });
+
+    it('keeps a grant off the profile until a re-grant in flight commits', async () => {
+      await settle({ thresholdCoin: 10_000 });
+      const userId = await member();
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let applied!: () => void;
+      const appliedNow = new Promise<void>((resolve) => {
+        applied = resolve;
+      });
+      const request = t.db.transaction(async (tx) => {
+        const done = await applyRegrant(tx, { userId, requestId: randomUUID() });
+        applied();
+        await held;
+        return done;
+      });
+      await appliedNow;
+      // The grant's own lock, NOWAIT: refused while the re-grant holds the profile (55P03).
+      const client = new Client({ connectionString: testDbUrls()!.appUrl });
+      await client.connect();
+      try {
+        await client.query('BEGIN');
+        await expect(
+          client.query('SELECT 1 FROM profiles WHERE user_id = $1 FOR UPDATE NOWAIT', [userId]),
+        ).rejects.toMatchObject({ code: '55P03' });
+        await client.query('ROLLBACK');
+      } finally {
+        await client.end();
+      }
+      release();
+      expect((await request).outcome).toBe('granted');
+      // Committed: the grant goes through now, after the re-grant, and the next request is refused.
+      const grant = await grantInFlight(userId);
+      await grant.commit();
+      expect((await refused(userId)).refusals).toEqual(['admin']);
+      expect(await regrantsOf(t.db, userId)).toHaveLength(1);
     });
   });
 

@@ -165,6 +165,8 @@ export function regrantRefusalText(
       return copy.regrantNotReady;
     case 'restricted':
       return restrictedText(restrictionEndsAt, formatDate);
+    case 'admin':
+      return copy.regrantRefusalAdmin;
     case 'held':
       return copy.regrantRefusalHeld;
     case 'no_start_grant':

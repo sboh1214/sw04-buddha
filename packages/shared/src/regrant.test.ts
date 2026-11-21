@@ -37,11 +37,12 @@ const closed: RegrantStatusRead = {
 
 describe('제한적 재지급 (#74, ADR-0155)', () => {
   it('names every refusal in the order the server asks them', () => {
-    // owner answers 2026-11-21: 12 (준비 중), 8 (계정 제한), #93's hold, 4 (시작 지급), 1 (소진), 2
-    // (대기 주문), 7 (미정산 계약), 5 (대기기간·주기·누적 상한).
+    // owner answers 2026-11-21: 12 (준비 중), 8 (계정 제한), the admin role (ADR-0156), #93's hold,
+    // 4 (시작 지급), 1 (소진), 2 (대기 주문), 7 (미정산 계약), 5 (대기기간·주기·누적 상한).
     expect(REGRANT_REFUSALS).toEqual([
       'not_ready',
       'restricted',
+      'admin',
       'held',
       'no_start_grant',
       'not_exhausted',
@@ -59,6 +60,12 @@ describe('제한적 재지급 (#74, ADR-0155)', () => {
     expect(regrantStatusSchema.parse(serializeRegrantStatus(closed))).toEqual({
       ...closed,
       refusals: ['not_ready'],
+    });
+    // An admin's status while not ready: the reasons that need no value, in their order.
+    const adminClosed: RegrantStatusRead = { ...closed, refusals: ['not_ready', 'admin'] };
+    expect(regrantStatusSchema.parse(serializeRegrantStatus(adminClosed))).toEqual({
+      ...closed,
+      refusals: ['not_ready', 'admin'],
     });
     const waiting: RegrantStatusRead = {
       open: true,

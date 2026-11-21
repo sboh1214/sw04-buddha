@@ -189,26 +189,39 @@ describe('RegrantCard', () => {
     );
   });
 
-  it('says an admin’s account restriction with its end too (ADR-0155 결과 5, 결정 8)', () => {
-    // One admin can restrict another, and admins get re-grants on the members' terms: `account`
-    // names the admin first, the restriction is still held (`useAccountBlock`'s `restricted`).
+  it('says an admin’s role and its restriction with the end (ADR-0156, ADR-0155 결정 8)', () => {
+    // One admin can restrict another, and an admin is refused while it holds the role: the status
+    // names both, the restriction first. `account` names the admin first, the restriction is
+    // still held (`useAccountBlock`'s `restricted`), so its line says its end too.
     const admin = { ...ACCOUNT, profile: { role: 'admin' } } as Me;
-    const restricted: RegrantStatus = { ...eligible, eligible: false, refusals: ['restricted'] };
+    const refused: RegrantStatus = {
+      ...eligible,
+      eligible: false,
+      refusals: ['restricted', 'admin'],
+    };
     const shown = (iso: string) => formatInTimeZone(iso, SEOUL_TIME_ZONE);
     const until = '2026-12-01T00:00:00.000Z';
     const withRestriction = (accountRestriction: MyRestriction['accountRestriction']) =>
       renderWithQueries(<RegrantCard />, [
         [ME_QUERY_KEY, admin],
-        [regrantStatusKey(admin.id), restricted],
+        [regrantStatusKey(admin.id), refused],
         [myRestrictionKey(admin.id), { restriction: null, accountRestriction }],
       ]);
     const line = (html: string) => byTestId(html, 'regrant-refusal');
+    const reasons = (html: string) =>
+      [...html.matchAll(/\sdata-reason="([a-z_]+)"/g)].map(([, reason]) => reason);
 
     const term = withRestriction({ kind: 'account', endsAt: until });
+    expect(reasons(term)).toEqual(['restricted', 'admin']);
     expect(line(term)?.text).toContain(
       `계정 제한 중에는 재지급을 받을 수 없습니다(${shown(until)}까지).`,
     );
+    expect(byTestId(term, 'regrant-blocked')?.text).toContain(
+      '관리자 권한이 있는 동안에는 재지급을 받을 수 없습니다.',
+    );
+    // The way to 조치·신고 내역 is the restriction's alone.
     expect(testIdsStartingWith(term, 'restricted-moderation-link')).toHaveLength(1);
+    expect(applyOff(term)).toBeDefined();
     const indefinite = withRestriction({ kind: 'account', endsAt: null });
     expect(line(indefinite)?.text).toContain('계정 제한 중에는 재지급을 받을 수 없습니다(무기한).');
     // None held: the sentence alone, as for a member.
@@ -216,6 +229,21 @@ describe('RegrantCard', () => {
       '계정 제한 중에는 재지급을 받을 수 없습니다.',
     );
     expect(line(withRestriction(null))?.text).not.toContain('(무기한)');
+  });
+
+  it('says an admin’s role alone, with no way to 조치·신고 내역 (ADR-0156)', () => {
+    const admin = { ...ACCOUNT, profile: { role: 'admin' } } as Me;
+    const html = renderWithQueries(<RegrantCard />, [
+      [ME_QUERY_KEY, admin],
+      [regrantStatusKey(admin.id), { ...eligible, eligible: false, refusals: ['admin'] }],
+    ]);
+    expect(applyOff(html)).toBeDefined();
+    expect(byTestId(html, 'regrant-refusal')?.attributes['data-reason']).toBe('admin');
+    expect(byTestId(html, 'regrant-refusal')?.text).toContain(
+      '관리자 권한이 있는 동안에는 재지급을 받을 수 없습니다.',
+    );
+    expect(testIdsStartingWith(html, 'restricted-moderation-link')).toHaveLength(0);
+    expect(applyDescription(html)?.attributes['data-testid']).toBe('regrant-blocked');
   });
 
   it('keeps the card drawn under a notice when a read again fails, its rung only for a first read', () => {

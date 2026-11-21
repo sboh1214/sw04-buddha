@@ -47983,6 +47983,7 @@
         "enum": [
           "not_ready",
           "restricted",
+          "admin",
           "held",
           "no_start_grant",
           "not_exhausted",
