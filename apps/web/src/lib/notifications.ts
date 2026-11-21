@@ -7,6 +7,8 @@ import {
 } from '@buddha/shared';
 import { copy } from '@/copy';
 import type { InboxNotification } from './api';
+import { myOrderPath } from './my';
+import { myHistoryPath } from './my-history';
 
 /**
  * 알림함 (#53, ADR-0157; N05 §4·§8, owner answers 53-1…53-11) as the member's screens read it: MY ›
@@ -47,10 +49,10 @@ export const notificationUnreadKey = (accountId: string | undefined) =>
 /**
  * The window of the unread count's and the list's re-read on `user:notification` (53-1, owner
  * answer 53-9: 30 s), leading and trailing (`RoundWindow`, realtime-provider.tsx): a lone signal is
- * read at once, and signals that keep coming — once #134 ships, a resting order's every later fill
- * publishes one — are read together at most this long after. The count is on every page beside
- * MY, so its rounds count against every page's request budget: at 30 s, 3 a minute, which lowers
- * the wallet's entry limit from 9 ledger pages to 5 (ADR-0144 결정 6, ADR-0157;
+ * read at once, and signals that keep coming — since #134 (ADR-0158), a resting order's every
+ * later fill publishes one — are read together at most this long after. The count is on every
+ * page beside MY, so its rounds count against every page's request budget: at 30 s, 3 a minute,
+ * which lowers the wallet's entry limit from 9 ledger pages to 5 (ADR-0144 결정 6, ADR-0157;
  * use-wallet-budget.test.ts) and /my/history's from 7 loaded pages to 6 (ADR-0148;
  * use-my-history-budget.test.ts).
  */
@@ -98,28 +100,48 @@ export function notificationCategoryLabel(category: NotificationCategory): strin
 
 /**
  * The title of a notification whose type this web does not render (53-11 ④): its category's name
- * and '알림' — '시장 알림' ('알림' alone for a category this web does not know). Only the tests'
- * types reach it in #53, which ships none (52-20); a producer's type comes with its renderer
- * (components/notifications).
+ * and '알림' — '시장 알림' ('알림' alone for a category this web does not know). A type a newer
+ * server sends reaches it, and params its definition refuses; a producer's type comes with its
+ * renderer (components/notifications — #134's 거래 three, ADR-0158).
  */
 export function notificationFallbackTitle(category: NotificationCategory): string {
   const label = notificationCategoryLabel(category);
   return label === undefined ? copy.notificationFallback : `${label} ${copy.notificationFallback}`;
 }
 
+/** Each target kind's own target, by its kind. */
+type TargetOfKind = {
+  [Kind in NotificationTargetKind]: Extract<NotificationTarget, { kind: Kind }>;
+};
+
 /**
- * Where each target kind leads, one entry per kind of the union (the `satisfies` makes a kind a
- * producer adds without its path a compile error here). A market by its slug: the detail answers
+ * Where each target kind leads, one entry per kind of the union (the type makes a kind a producer
+ * adds without its path a compile error here). A market by its slug: the detail answers
  * in every public status — 마감, 지급 완료 and 취소 included (#53 AC 4) — and the target names no
- * status, so the path is the same whatever the market has become since.
+ * status, so the path is the same whatever the market has become since. #134's two (ADR-0158,
+ * 52-4): one of the member's own orders, its 주문 상세 (ADR-0141 — the final state, the filled and
+ * the ended quantity); and the member's ended orders on 거래·정산 이력 (ADR-0143, the default
+ * list), of one market or, for an account event, of all.
  */
-const NOTIFICATION_TARGET_PATHS = {
+const NOTIFICATION_TARGET_PATHS: {
+  [Kind in NotificationTargetKind]: (target: TargetOfKind[Kind]) => string;
+} = {
   // The slug as the schema took it (a-z, 0-9, Korean syllables and -): written as every market
   // link of this web writes it.
   market: (target) => `/markets/${target.slug}`,
-} satisfies {
-  [Kind in NotificationTargetKind]: (target: Extract<NotificationTarget, { kind: Kind }>) => string;
+  // The ids as the schema took them: uuids, lower-cased.
+  order: (target) => myOrderPath(target.orderId),
+  order_history: (target) =>
+    myHistoryPath(target.marketId === null ? {} : { market: target.marketId }),
 };
+
+/** A target's path, by its kind's entry (generic, so the entry and the target are one kind's). */
+function targetPath<Kind extends NotificationTargetKind>(
+  kind: Kind,
+  target: TargetOfKind[Kind],
+): string {
+  return NOTIFICATION_TARGET_PATHS[kind](target);
+}
 
 /**
  * Where a notification leads, or null: a target the shared schema does not take — a kind a newer
@@ -129,7 +151,7 @@ const NOTIFICATION_TARGET_PATHS = {
 export function notificationHref(target: unknown): string | null {
   const parsed = notificationTargetSchema.safeParse(target);
   if (!parsed.success) return null;
-  return NOTIFICATION_TARGET_PATHS[parsed.data.kind](parsed.data);
+  return targetPath(parsed.data.kind, parsed.data);
 }
 
 /** Whether the member has not read it yet (53-2: a read keeps its first `readAt`). */

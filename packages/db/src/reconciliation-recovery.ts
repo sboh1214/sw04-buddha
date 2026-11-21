@@ -129,11 +129,18 @@ async function writeRecovery(
   return recovered!;
 }
 
-/** Closed/cancelled/later market recovery never rewinds status. Account recovery touches no order. */
+/** The market a recovery read under its locks: what the caller's 만료 notice names (#134). */
+export type RecoveredMarket = Pick<typeof markets.$inferSelect, 'id' | 'title' | 'status'>;
+
+/**
+ * Closed/cancelled/later market recovery never rewinds status. Account recovery touches no order.
+ * Returns the market row it read (null for an account hold), so the caller builds its
+ * `orders_expired` notice for `expired.expired` without a second read (#134, ADR-0158).
+ */
 export async function recoverReconciliationHold(
   tx: Tx,
   input: RecoverReconciliationInput,
-): Promise<ReconciliationRun & { expired: ExpiredOrders }> {
+): Promise<ReconciliationRun & { expired: ExpiredOrders; market: RecoveredMarket | null }> {
   const hold = await validateEvidence(
     tx,
     await lockReconciliationHold(tx, input.holdId),
@@ -142,8 +149,10 @@ export async function recoverReconciliationHold(
   );
   let expired: ExpiredOrders = { expired: [], held: [], touched: { positions: [] } };
   let run: ReconciliationRun;
+  let recovered: RecoveredMarket | null = null;
   if (hold.marketId) {
     const [market] = await tx.select().from(markets).where(eq(markets.id, hold.marketId));
+    if (market) recovered = { id: market.id, title: market.title, status: market.status };
     if (market?.status === 'paused') throw new ReconciliationError('paused');
     const locked = await lockMarketOrders(tx, hold.marketId);
     run = await runMarketReconciliation(tx, hold.marketId, {
@@ -165,7 +174,12 @@ export async function recoverReconciliationHold(
       { source: 'recovery', actorId: input.approverId },
     );
   }
-  return { ...run, hold: await writeRecovery(tx, hold, input, run), expired };
+  return {
+    ...run,
+    hold: await writeRecovery(tx, hold, input, run),
+    expired,
+    market: recovered,
+  };
 }
 
 /** Called by endMarketPause inside the existing approved resume/early-close transaction. */

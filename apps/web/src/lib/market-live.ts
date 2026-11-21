@@ -737,10 +737,12 @@ export function ownSettlementKeys(client: QueryClient, accountId: string | undef
  * ADR-0143 결정 9): every filter's entry of this account (`myOrderHistoryKey`'s last part), as
  * `ownSettlementKeys` picks. A live order a `market:book` or a `market:status` ended — another
  * tab's cancel, a restriction's or an admin grant's bulk cancel, a pause, a recovery approval, a
- * close's expiry — sends no `user:` event for a buy, so `ORDERS_KEY`'s restart on `user:position`
- * never reaches the row it now is; without this, MY's summary drops the order from its live
- * preview and its 주문 이력 preview does not take it in until the next read. Only a list on screen
- * asks (`refetchType` 'active'). /my/history holds no market room, so there it waits for a read.
+ * close's expiry — sends no `user:` event that re-reads a buy (a batch's cancel or expiry sends
+ * only the inbox signal `user:notification`, #134, which re-reads the inbox alone), so
+ * `ORDERS_KEY`'s restart on `user:position` never reaches the row it now is; without this, MY's
+ * summary drops the order from its live preview and its 주문 이력 preview does not take it in until the
+ * next read. Only a list on screen asks (`refetchType` 'active'). /my/history holds no market room,
+ * so there it waits for a read.
  */
 export function ownOrderHistoryKeys(
   client: QueryClient,
@@ -1226,15 +1228,15 @@ export class SellableRotation {
 }
 
 /**
- * Whether a `market:book` in `marketId` puts the account's 매도 가능액 there in the read-again
- * window (#67, ADR-0142): the tab holds the account's sellable of that market with a contract it
- * holds — unlocked, which a book change can price differently, or locked in resting sells, which
- * a book change can UNLOCK. An account restriction's approval and an admin grant cancel the
- * account's resting orders and publish `market:book` alone (no `market:status`, no `user:`
- * event), so a holding all in resting sells read again only on its own change would keep its
- * 매도 잠금 after those sells were gone. A visitor and a member who holds nothing there (the
- * detail's sellable says 0 for both) add no request (R5); the window's gap caps the reads a
- * minute whatever the number of markets in it.
+ * Whether a `market:book` in `marketId` puts the account's 매도 가능액 there in the read-again window
+ * (#67, ADR-0142): the tab holds the account's sellable of that market with a contract it holds —
+ * unlocked, which a book change can price differently, or locked in resting sells, which a book
+ * change can UNLOCK. An account restriction's approval and an admin grant cancel the account's
+ * resting orders and publish `market:book` alone (no `market:status`; the only `user:` event is the
+ * inbox signal `user:notification`, #134, which re-reads the inbox alone), so a holding all in
+ * resting sells read again only on its own change would keep its 매도 잠금 after those sells were gone.
+ * A visitor and a member who holds nothing there (the detail's sellable says 0 for both) add no
+ * request (R5); the window's gap caps the reads a minute whatever the number of markets in it.
  *
  * A FIRST read still on its way (the entry exists, is fetching, and holds no answer) counts too:
  * whether the account holds anything there is not known yet, and that read left before this change,
@@ -1257,11 +1259,12 @@ export function bookRestartsSellable(
 }
 
 /**
- * The keys one round of the account's orders reads again (#123, ADR-0141 결정 10): its live lists
- * and the detail of each of its live orders on any of `marketIds` (`ownLiveOrderIds`). The live
- * lists' prefix does not cover a detail, and a buy cancelled elsewhere sends no `user:` event, so
- * a detail left out stays drawn live. And the account's ended-order lists (`ownOrderHistoryKeys`,
- * #124): the order that left the live list is a row there now.
+ * The keys one round of the account's orders reads again (#123, ADR-0141 결정 10): its live lists and
+ * the detail of each of its live orders on any of `marketIds` (`ownLiveOrderIds`). The live lists'
+ * prefix does not cover a detail, and a buy cancelled elsewhere sends no `user:` event that
+ * re-reads orders (a batch's sends only the inbox's `user:notification`, #134), so a detail left
+ * out stays drawn live. And the account's ended-order lists (`ownOrderHistoryKeys`, #124): the
+ * order that left the live list is a row there now.
  */
 export function ownOrdersRefreshKeys(
   client: QueryClient,
@@ -1280,14 +1283,15 @@ export function ownOrdersRefreshKeys(
 }
 
 /**
- * The keys of the account's orders a `market:status` restarts (#123, ADR-0141 결정 10): with a
- * live order of the account held on that market, the live lists and those orders' details; and,
- * held or not, each of the account's FIRST reads still on its way — a live list of that market
- * or of every market (`'all'`), or any order's detail (its market is not known before it
- * answers). Such a read left before the pause or the close, so it would land as fresh and draw an
- * expired or held order 대기, with no `user:` event behind it for a buy. `restartQueries` cancels
- * exactly those and asks again; a status is rare, so the request it adds is too. With a held
- * order, the account's ended-order lists too (`ownOrderHistoryKeys`, #124).
+ * The keys of the account's orders a `market:status` restarts (#123, ADR-0141 결정 10): with a live
+ * order of the account held on that market, the live lists and those orders' details; and, held or
+ * not, each of the account's FIRST reads still on its way — a live list of that market or of every
+ * market (`'all'`), or any order's detail (its market is not known before it answers). Such a read
+ * left before the pause or the close, so it would land as fresh and draw an expired or held order
+ * 대기, with no `user:` event behind it that re-reads orders (the inbox's `user:notification`, #134,
+ * re-reads the inbox alone). `restartQueries` cancels exactly those and asks again; a status is
+ * rare, so the request it adds is too. With a held order, the account's ended-order lists too
+ * (`ownOrderHistoryKeys`, #124).
  */
 export function ownOrdersStatusKeys(
   client: QueryClient,

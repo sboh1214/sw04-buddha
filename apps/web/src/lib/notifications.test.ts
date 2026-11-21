@@ -50,7 +50,7 @@ const notification = (id: string, fields: Partial<InboxNotification> = {}): Inbo
   ...fields,
 });
 
-/** The new copy of #53: what a member reads of the inbox. */
+/** The copy of #53 and #134's 거래 알림 (ADR-0158): what a member reads of the inbox. */
 const NOTIFICATION_COPY = [
   copy.notificationsReadAll,
   copy.notificationsEmpty,
@@ -63,7 +63,18 @@ const NOTIFICATION_COPY = [
   copy.unreadNotificationsCount,
   copy.unreadNotificationsOver,
   copy.adminRetentionKindNotifications,
+  copy.notificationOrderFilled,
+  copy.notificationOrderFilledMerged,
+  copy.notificationOrderFilledSince,
+  copy.notificationOrderFilledMergedSince,
+  copy.notificationOrdersCancelledMarket,
+  copy.notificationOrdersCancelledAccount,
+  copy.notificationOrdersExpiredClosed,
+  copy.notificationOrdersExpiredCancelled,
 ];
+
+const ORDER_ID = '7d0f9a2e-4b1c-4e8d-9a3f-1c2b3d4e5f60';
+const MARKET_ID = '3e5a7c9b-2d4f-4a6b-8c1d-0e2f4a6b8c0d';
 
 describe('알림함 keys (#53, ADR-0157)', () => {
   it('keys the count and the list under one private root, the account last (ADR-0091)', () => {
@@ -130,6 +141,28 @@ describe('a notification’s words and its link', () => {
     expect(notificationHref({ kind: 'market', slug: '첫눈-2026' })).toBe('/markets/첫눈-2026');
   });
 
+  it('leads an order to its 주문 상세 and an order history to 거래·정산 이력, of one market or all (#134)', () => {
+    // ADR-0158, 52-4: one ended order → its detail (ADR-0141); several → the ended orders (the
+    // history's default list, ADR-0143), filtered to the market for a market event.
+    expect(notificationHref({ kind: 'order', orderId: ORDER_ID })).toBe(`/my/orders/${ORDER_ID}`);
+    expect(notificationHref({ kind: 'order', orderId: ORDER_ID.toUpperCase() })).toBe(
+      `/my/orders/${ORDER_ID}`,
+    );
+    expect(notificationHref({ kind: 'order_history', marketId: MARKET_ID })).toBe(
+      `/my/history?market=${MARKET_ID}`,
+    );
+    expect(notificationHref({ kind: 'order_history', marketId: MARKET_ID.toUpperCase() })).toBe(
+      `/my/history?market=${MARKET_ID}`,
+    );
+    // An account event's: every market.
+    expect(notificationHref({ kind: 'order_history', marketId: null })).toBe('/my/history');
+    // Not a uuid, or no market field at all: nowhere (the schema refuses it).
+    expect(notificationHref({ kind: 'order', orderId: '../admin' })).toBeNull();
+    expect(notificationHref({ kind: 'order', id: ORDER_ID })).toBeNull();
+    expect(notificationHref({ kind: 'order_history', marketId: 'first-snow' })).toBeNull();
+    expect(notificationHref({ kind: 'order_history' })).toBeNull();
+  });
+
   it('leads nowhere for a kind it does not know or a target it cannot read (never a URL from data)', () => {
     expect(notificationHref({ kind: 'post', id: 'p1' })).toBeNull();
     expect(notificationHref({ kind: 'market' })).toBeNull();
@@ -162,7 +195,15 @@ describe('a notification’s words and its link', () => {
       renderers,
       [definition],
     );
-    expect(known).toEqual({ known: true, Title, params: { title: '첫눈' } });
+    expect(known).toEqual({ known: true, Title, params: { title: '첫눈' }, eventCount: 1 });
+    // The row's eventCount goes along: a merged one's 횟수 (52-6, ADR-0158).
+    expect(
+      notificationView(
+        notification('n5', { type: 'market_closed', params: { title: '첫눈' }, eventCount: 3 }),
+        renderers,
+        [definition],
+      ),
+    ).toEqual({ known: true, Title, params: { title: '첫눈' }, eventCount: 3 });
     // Params the definition refuses, or no definition, or no renderer: the fallback.
     for (const [item, defs, rends] of [
       [
@@ -178,9 +219,10 @@ describe('a notification’s words and its link', () => {
   });
 
   it('has one renderer per type, its words the guard registry’s text (#113)', () => {
-    // Empty in #53 (52-20): each producer adds the definition, the guard entry and the renderer.
-    expect(NOTIFICATION_DEFINITIONS).toEqual([]);
+    // #53 shipped none (52-20); #134 the 거래 three (ADR-0158). Each producer adds the definition,
+    // the guard entry and the renderer.
     const types = NOTIFICATION_DEFINITIONS.map((definition: { type: string }) => definition.type);
+    expect(types).toEqual(['order_filled', 'orders_cancelled', 'orders_expired']);
     expect(Object.keys(NOTIFICATION_RENDERERS).sort()).toEqual([...types].sort());
     expect(Object.keys(NOTIFICATION_TYPE_REGISTRY).sort()).toEqual([...types].sort());
     const registry: Readonly<Record<string, { text: readonly string[] }>> =
@@ -188,6 +230,83 @@ describe('a notification’s words and its link', () => {
     const renderers: Readonly<Record<string, NotificationRenderer>> = NOTIFICATION_RENDERERS;
     for (const [type, renderer] of Object.entries(renderers)) {
       expect(renderer.copy, type).toEqual(registry[type]?.text);
+    }
+    // Non-vacuous: every type has words, and each sentence a renderer may draw is among them.
+    expect(NOTIFICATION_RENDERERS.order_filled.copy).toHaveLength(10);
+    expect(NOTIFICATION_RENDERERS.orders_cancelled.copy).toHaveLength(4);
+    expect(NOTIFICATION_RENDERERS.orders_expired.copy).toHaveLength(2);
+  });
+
+  it('draws each 거래 type through its renderer with the row’s eventCount, and the fallback for params its definition refuses (#134)', () => {
+    const filled = notificationView(
+      notification('n1', {
+        type: 'order_filled',
+        category: 'trade',
+        params: {
+          marketTitle: '첫눈이 올까',
+          outcome: 'NO',
+          side: 'buy',
+          qty: '2',
+          amountCoin: '80',
+          fullyFilled: false,
+          orderQty: '3',
+          orderFilledQty: '2',
+        },
+        target: { kind: 'order', orderId: ORDER_ID },
+        eventCount: 2,
+      }),
+    );
+    if (!filled.known) throw new Error('order_filled is a type this web renders');
+    expect(filled.Title({ params: filled.params, eventCount: filled.eventCount })).toBe(
+      '첫눈이 올까 NO 매수 주문 부분 체결 · 체결 2회 · 누적 2계약 · 평균 40.00 Coin',
+    );
+    const cancelled = notificationView(
+      notification('n2', {
+        type: 'orders_cancelled',
+        category: 'trade',
+        params: { reason: 'restricted', orderCount: 3, marketCount: 2, marketTitle: null },
+        target: { kind: 'order_history', marketId: null },
+      }),
+    );
+    if (!cancelled.known) throw new Error('orders_cancelled is a type this web renders');
+    expect(cancelled.Title({ params: cancelled.params, eventCount: 1 })).toBe(
+      '계정 제한으로 대기 주문 3건 취소(시장 2곳)',
+    );
+    const expired = notificationView(
+      notification('n3', {
+        type: 'orders_expired',
+        category: 'trade',
+        params: { marketTitle: '첫눈이 올까', cause: 'closed', orderCount: 1 },
+        target: { kind: 'order', orderId: ORDER_ID },
+      }),
+    );
+    if (!expired.known) throw new Error('orders_expired is a type this web renders');
+    expect(expired.Title({ params: expired.params, eventCount: 1 })).toBe(
+      '첫눈이 올까 거래 마감으로 대기 주문 1건 만료',
+    );
+    // Params the definition refuses — a quantity as a number, a paused notice with no market (the
+    // refine), an unknown cause — draw the category's fallback, never a broken sentence.
+    for (const [type, params] of [
+      [
+        'order_filled',
+        {
+          marketTitle: '첫눈',
+          outcome: 'NO',
+          side: 'buy',
+          qty: 1,
+          amountCoin: '40',
+          fullyFilled: false,
+          orderQty: '3',
+          orderFilledQty: '1',
+        },
+      ],
+      ['orders_cancelled', { reason: 'paused', orderCount: 2, marketCount: 1, marketTitle: null }],
+      ['orders_expired', { marketTitle: '첫눈', cause: 'settled', orderCount: 1 }],
+    ] as const) {
+      expect(
+        notificationView(notification('n4', { type, category: 'trade', params })),
+        type,
+      ).toEqual({ known: false, title: '거래 알림' });
     }
   });
 
@@ -238,6 +357,7 @@ describe('the inbox’s words (#113, N05 §4)', () => {
       './notifications.ts',
       '../hooks/use-notifications.ts',
       '../components/notifications/notification-renderers.tsx',
+      './trade-notifications.ts',
       '../components/notifications/notification-row.tsx',
       '../components/notifications/unread-count.tsx',
       '../app/my/notifications/my-notifications.tsx',

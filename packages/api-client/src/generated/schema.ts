@@ -6870,6 +6870,18 @@ export type components = {
             kind: "market";
             slug: string;
         };
+        NotificationOrderHistoryTarget: {
+            /** @enum {string} */
+            kind: "order_history";
+            /** Format: uuid */
+            marketId: string | null;
+        };
+        NotificationOrderTarget: {
+            /** @enum {string} */
+            kind: "order";
+            /** Format: uuid */
+            orderId: string;
+        };
         NotificationParams: {
             [key: string]: string | number | boolean | (null);
         };
@@ -6877,7 +6889,7 @@ export type components = {
             notification: components["schemas"]["Notification"];
             unreadCount: number;
         };
-        NotificationTarget: components["schemas"]["NotificationMarketTarget"];
+        NotificationTarget: components["schemas"]["NotificationMarketTarget"] | components["schemas"]["NotificationOrderTarget"] | components["schemas"]["NotificationOrderHistoryTarget"];
         NotificationUnreadCount: {
             unreadCount: number;
         };

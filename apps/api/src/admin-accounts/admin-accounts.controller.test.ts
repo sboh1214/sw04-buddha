@@ -65,6 +65,7 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
     await t?.close(); // undefined when beforeAll timed out waiting for the file lock
   });
   beforeEach(async () => {
+    vi.restoreAllMocks();
     await t.reset();
     a = await signUpTestUser(t);
     b = await signUpTestUser(t);
@@ -275,6 +276,79 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
     published.mockRestore();
   });
 
+  /** The account's notifications (#53), as the database holds them. */
+  const noticesOf = (userId: string) =>
+    t.db.select().from(schema.notifications).where(eq(schema.notifications.userId, userId));
+  /**
+   * `MarketPublisher.publishUser` watched: each `user:notification` as [account, ts, the account's
+   * notifications committed when it was sent] — read on another connection, so a signal sent
+   * before COMMIT would count none.
+   */
+  function signals() {
+    const sent: [string, string, number][] = [];
+    vi.spyOn(t.app.get(MarketPublisher), 'publishUser').mockImplementation(async (id, event) => {
+      if (event.type === 'user:notification') {
+        sent.push([id, event.ts, (await noticesOf(id)).length]);
+      }
+    });
+    return sent;
+  }
+
+  it('notifies the grantee once of the 관리자 권한 cancel across markets — a held market’s order left out — after COMMIT; none with no order (#134, ADR-0158)', async () => {
+    await openOrderIntake(t.db, { adminId: a.id });
+    const person = (await createUser(t.db, { balanceCoin: 1000n })).user.id;
+    const [one, two, held] = [
+      await createMarket(t.db, { createdBy: a.id }),
+      await createMarket(t.db, { createdBy: a.id }),
+      await createMarket(t.db, { createdBy: a.id }),
+    ];
+    const rest = async (marketId: string, limitPriceCoin: number) => {
+      const placed = await placeTestOrder(t.db, { marketId, ownerId: person, limitPriceCoin });
+      if (placed.kind !== 'placed' || placed.order.status !== 'open') throw new Error('order');
+      return placed.order;
+    };
+    // Three orders in two markets, and one in a market held for a ledger failure.
+    await rest(one.id, 40);
+    await rest(one.id, 41);
+    await rest(two.id, 30);
+    const deferred = await rest(held.id, 20);
+    await createMarketPause(t.db, { marketId: held.id, by: a.id, reason: 'ledger_failure' });
+    const sent = signals();
+    const response = await grant({ userId: person, reason: '관리자 권한 부여' });
+    expect(response.statusCode, response.body).toBe(201);
+    const change = data<AdminRoleChange>(response);
+    expect(change.tradeEffects).toMatchObject({ cancelledOrderCount: 3, heldOrderCount: 1 });
+    // 52-4: one per account event — N orders, M markets, the ended orders of every market.
+    expect(await noticesOf(person)).toEqual([
+      expect.objectContaining({
+        type: 'orders_cancelled',
+        category: 'trade',
+        params: { reason: 'admin_role', orderCount: 3, marketCount: 2, marketTitle: null },
+        target: { kind: 'order_history', marketId: null },
+        mergeKey: null,
+        eventCount: 1,
+        occurredAt: new Date(change.createdAt),
+        readAt: null,
+      }),
+    ]);
+    const keys = await t.db
+      .select()
+      .from(schema.notificationKeys)
+      .where(eq(schema.notificationKeys.userId, person));
+    expect(keys.map((key) => key.eventKey)).toEqual([`admin_action:${change.id}`]);
+    // The held market's order is still live: its recovery ends and notifies it.
+    expect(
+      (await t.db.select().from(schema.orders).where(eq(schema.orders.id, deferred.id)))[0],
+    ).toEqual(deferred);
+    expect(sent).toEqual([[person, change.createdAt, 1]]);
+
+    // A grant with no resting order notifies nothing and signals nothing.
+    const idle = (await createUser(t.db, { balanceCoin: 1000n })).user.id;
+    expect((await grant({ userId: idle, reason: '주문 없는 부여' })).statusCode).toBe(201);
+    expect(await noticesOf(idle)).toEqual([]);
+    expect(sent).toHaveLength(1);
+  });
+
   it.each(['profile', 'market', 'balance'] as const)(
     'rolls back every busy %s grant attempt, then grants exactly once after release',
     async (resource) => {
@@ -317,6 +391,14 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
       ).toHaveLength(1);
       expect(published).toHaveBeenCalledExactlyOnceWith([market.id], expect.any(Date));
       published.mockRestore();
+      // #134: the rolled-back attempts left no notice; the one grant, one (N = 1: the order).
+      expect(await noticesOf(person)).toEqual([
+        expect.objectContaining({
+          type: 'orders_cancelled',
+          params: { reason: 'admin_role', orderCount: 1, marketCount: 1, marketTitle: null },
+          target: { kind: 'order', orderId: placed.order.id },
+        }),
+      ]);
     },
   );
 

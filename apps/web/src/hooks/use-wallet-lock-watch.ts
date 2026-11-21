@@ -13,10 +13,11 @@ import { useMarketSocket } from './use-market-socket';
 import { useWalletLiveOrders } from './use-my-orders';
 
 /**
- * The wallet's 주문 잠금 코인 kept up with the account's live buys (#69, ADR-0144 결정 2-11;
- * ADR-0135 결과 4: read again after the book's signal, no new server or realtime contract). A lock
- * alone publishes no `user:` event (ADR-0112 결정 8), so a buy cancelled in another tab, by an
- * account restriction or the admin role, or expired at the close would leave the card behind.
+ * The wallet's 주문 잠금 코인 kept up with the account's live buys (#69, ADR-0144 결정 2-11; ADR-0135 결과 4:
+ * read again after the book's signal, no new server or realtime contract). A lock alone publishes
+ * no `user:` event (ADR-0112 결정 8) — a batch's inbox signal `user:notification` (#134, ADR-0158)
+ * re-reads the inbox alone — so a buy cancelled in another tab, by an account restriction or the
+ * admin role, or expired at the close would leave the card behind.
  *
  * The wallet reads the account's live orders — every market's first page of 100
  * (`WALLET_LIVE_ORDERS_PAGE`, #302, ADR-0146; the lists' 20 left a buy past the newest 20 out),

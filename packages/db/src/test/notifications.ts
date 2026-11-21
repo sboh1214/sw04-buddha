@@ -1,10 +1,10 @@
 /**
- * Test-only notification types (#53, ADR-0157). #53 ships no type of the product (52-20,
- * NOTIFICATION_DEFINITIONS is empty), and a test-only type must never ship in that list, so the
- * tests — the packages' suites, the API's and the e2e fixture worker's — deliver theirs through the
- * real write path with `{ definitions: TEST_NOTIFICATION_DEFINITIONS }`, which no production source
- * may pass (notifications.test.ts's static guard). No vitest import here: the e2e fixture worker
- * imports `@buddha/db/test`.
+ * Test-only notification types (#53, ADR-0157). #53 shipped no type of the product (52-20); #134
+ * ships the 거래 three (ADR-0158). A test-only type must never ship in NOTIFICATION_DEFINITIONS, so
+ * the tests — the packages' suites, the API's and the e2e fixture worker's — deliver theirs through
+ * the real write path with `{ definitions: TEST_NOTIFICATION_DEFINITIONS }`, which no production
+ * source may pass (notifications.test.ts's static guard). No vitest import here: the e2e fixture
+ * worker imports `@buddha/db/test`.
  */
 import { randomUUID } from 'node:crypto';
 import { defineNotification } from '@buddha/shared';

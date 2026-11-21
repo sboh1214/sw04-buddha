@@ -7,7 +7,9 @@
  * `closeMarketAtClose` itself (packages/db market-close.test.ts); here the job around it: its
  * result, what it publishes after COMMIT, and the scan (#120, ADR-0115). A market nobody traded
  * on is cancelled by the same close (#20, ADR-0117): every case says which of the two it is, and
- * `tradeOnce` (one pair mint between two members) makes a market a CLOSED one.
+ * `tradeOnce` (one pair mint between two members) makes a market a CLOSED one. The members whose
+ * orders the close ended get one `user:notification` each after COMMIT (#134, ADR-0158); the
+ * notices' rows are pinned on the db side, here the signal and the job's counts.
  */
 import { randomUUID } from 'node:crypto';
 import { schema } from '@buddha/db';
@@ -44,6 +46,7 @@ import {
   ORDER_ACCEPTING_SETTING,
   USER_CHANNEL_PATTERN,
   marketChannel,
+  userChannel,
 } from '@buddha/shared';
 import { and, asc, count, eq, inArray } from 'drizzle-orm';
 import { Redis } from 'ioredis';
@@ -191,6 +194,7 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
         closedAt: expect.any(Date) as unknown,
         expiredOrders: 0,
         heldOrders: 0,
+        notifiedMembers: 0,
       });
 
       const [event] = await eventsOf(market.id);
@@ -581,16 +585,35 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
         contracts: { yes, no, collateralCoin },
       };
     };
-    /** Every `user:` room: the close publishes nothing on any of them. */
-    async function subscribeToUsers() {
+    /**
+     * Every `user:` room: the close sends nothing there but the inbox signal (#134, ADR-0158).
+     * `onReceipt` runs the moment a message arrives (a read from another connection).
+     */
+    async function subscribeToUsers<T>(onReceipt?: (channel: string) => Promise<T>) {
       const subscriber = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
-      const received: string[] = [];
-      subscriber.on('pmessage', (_pattern: string, _channel: string, message: string) =>
-        received.push(message),
-      );
+      const received: { channel: string; event: unknown }[] = [];
+      const seen: Promise<T>[] = [];
+      subscriber.on('pmessage', (_pattern: string, channel: string, message: string) => {
+        received.push({ channel, event: JSON.parse(message) as unknown });
+        if (onReceipt) seen.push(onReceipt(channel));
+      });
       await subscriber.psubscribe(USER_CHANNEL_PATTERN);
-      return { received, quit: () => subscriber.quit() };
+      return { received, seen, quit: () => subscriber.quit() };
     }
+    /** A member's `orders_expired` rows (#134): the close's notices. */
+    const expiryNotices = (userId: string) =>
+      t.db
+        .select()
+        .from(schema.notifications)
+        .where(
+          and(
+            eq(schema.notifications.userId, userId),
+            eq(schema.notifications.type, 'orders_expired'),
+          ),
+        );
+    /** The signals by room, sorted: the publish order of several members is not a contract. */
+    const byChannel = (received: { channel: string; event: unknown }[]) =>
+      [...received].sort((x, y) => x.channel.localeCompare(y.channel));
 
     /**
      * A due OPEN market with three live orders of the three account kinds (the db suite's
@@ -646,6 +669,8 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
           closedAt: expect.any(Date) as unknown,
           expiredOrders: 3,
           heldOrders: 0,
+          // A and C; the 운영 마켓메이커 has no inbox (53-5).
+          notifiedMembers: 2,
         });
         // BullMQ stores the result as JSON: counts only, nothing a bigint or an owner id.
         expect(JSON.parse(JSON.stringify(result))).toEqual({
@@ -710,10 +735,33 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
           },
           { type: 'market:book', marketId, ts: result.closedAt.toISOString() },
         ]);
-        // No user: event: the expiry follows #178's batch cancels (ADR-0113 12-11, ADR-0115
-        // 결정 8), though C's sell lock moved; only a resting sell and an owner's sell cancel send
-        // user:position (ADR-0112 결정 8, ADR-0113 결정 10). ADR-0112 10-10 covers balances only.
-        expect(users.received).toEqual([]);
+        // No user:position or user:balance: the expiry follows #178's batch cancels (ADR-0113
+        // 12-11, ADR-0115 결정 8), though C's sell lock moved; only a resting sell and an owner's
+        // sell cancel send user:position (ADR-0112 결정 8, ADR-0113 결정 10). ADR-0112 10-10
+        // covers balances only. The inbox signal goes to A and C, one each at the close's instant
+        // (#134, ADR-0158) — never to the bot, nor to B, whose IOC order had ended at its intake.
+        await waitForMessages(users.received, 2, 'user:notification of A and C');
+        await sleep(100);
+        const signal = { type: 'user:notification', ts: result.closedAt.toISOString() };
+        expect(byChannel(users.received)).toEqual(
+          byChannel([
+            { channel: userChannel(due.a), event: signal },
+            { channel: userChannel(due.c), event: signal },
+          ]),
+        );
+        // 거래 마감: one notice each, leading to the one order it ended (52-4).
+        for (const [owner, order] of [
+          [due.a, due.partial.id],
+          [due.c, due.sell.id],
+        ] as const) {
+          expect(await expiryNotices(owner)).toEqual([
+            expect.objectContaining({
+              params: expect.objectContaining({ cause: 'closed', orderCount: 1 }) as unknown,
+              target: { kind: 'order', orderId: order },
+              occurredAt: result.closedAt,
+            }),
+          ]);
+        }
       } finally {
         await Promise.all([market.quit(), users.quit()]);
       }
@@ -746,6 +794,78 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
         ]);
       } finally {
         await subscriber.quit();
+      }
+    });
+
+    it('says 시장 취소 when no person filled: one notice and one signal per member, after COMMIT, none for the bot (#134, #20)', async () => {
+      const marketId = await openMarket();
+      const [a, b] = [await member(), await member()];
+      const mm = await fundMarketMakerFunds(t.db, marketId, 1_000n);
+      // Nothing crosses (NO 40 + YES 30 < 100): no fill, so the close cancels the market.
+      await placed({ ownerId: a, marketId, outcome: 'NO', limitPriceCoin: 40 });
+      await placed({ ownerId: a, marketId, limitPriceCoin: 30 });
+      const single = await placed({ ownerId: b, marketId, limitPriceCoin: 20 });
+      await placed({ ownerId: mm, marketId, limitPriceCoin: 10 });
+      await passMarketClose(t.db, marketId);
+      const { title } = await marketRow(marketId);
+      // Read the recipient's notices from another connection the moment its signal arrives.
+      const users = await subscribeToUsers(async (channel) => ({
+        channel,
+        notices: (await expiryNotices(channel.slice('user:'.length))).length,
+      }));
+      try {
+        const result = await closeMarket(t.db, marketId, publish);
+        if (result.outcome !== 'cancelled') throw new Error(`cancelled, got ${result.outcome}`);
+        expect(result).toMatchObject({ expiredOrders: 4, heldOrders: 0, notifiedMembers: 2 });
+
+        await waitForMessages(users.received, 2, 'user:notification of A and B');
+        await sleep(100);
+        const signal = { type: 'user:notification', ts: result.closedAt.toISOString() };
+        expect(byChannel(users.received)).toEqual(
+          byChannel([
+            { channel: userChannel(a), event: signal },
+            { channel: userChannel(b), event: signal },
+          ]),
+        );
+        // Each signal found its notice committed (ADR-0157 결정 8: after COMMIT, never inside).
+        expect(
+          (await Promise.all(users.seen)).sort((x, y) => x.channel.localeCompare(y.channel)),
+        ).toEqual(
+          [userChannel(a), userChannel(b)]
+            .sort((x, y) => x.localeCompare(y))
+            .map((channel) => ({ channel, notices: 1 })),
+        );
+        // 52-4·52-5: 시장 취소; two orders lead to the market's history, one to the order.
+        expect(await expiryNotices(a)).toEqual([
+          expect.objectContaining({
+            category: 'trade',
+            params: { marketTitle: title, cause: 'cancelled', orderCount: 2 },
+            target: { kind: 'order_history', marketId },
+            mergeKey: null,
+            eventCount: 1,
+            occurredAt: result.closedAt,
+            readAt: null,
+          }),
+        ]);
+        expect(await expiryNotices(b)).toEqual([
+          expect.objectContaining({
+            params: { marketTitle: title, cause: 'cancelled', orderCount: 1 },
+            target: { kind: 'order', orderId: single.id },
+          }),
+        ]);
+        expect(await expiryNotices(mm)).toEqual([]);
+
+        // A second run skips: no notice, no signal (nothing on a skip).
+        const before = await t.db.select().from(schema.notifications);
+        await expect(closeMarket(t.db, marketId, publish)).resolves.toMatchObject({
+          outcome: 'skipped',
+          reason: 'not_open_or_paused',
+        });
+        await sleep(100);
+        expect(users.received).toHaveLength(2);
+        expect(await t.db.select().from(schema.notifications)).toEqual(before);
+      } finally {
+        await users.quit();
       }
     });
 
@@ -787,7 +907,8 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
       try {
         const result = await closeMarket(t.db, marketId, publish);
         if (result.outcome !== 'cancelled') throw new Error(`cancelled, got ${result.outcome}`);
-        expect(result).toMatchObject({ expiredOrders: 2, heldOrders: 0 });
+        // The 운영 마켓메이커 has no inbox: no notice, no signal (53-5).
+        expect(result).toMatchObject({ expiredOrders: 2, heldOrders: 0, notifiedMembers: 0 });
         expect(await marketRow(marketId)).toMatchObject({
           status: 'cancelled',
           statusEventId: result.statusEventId,
@@ -827,6 +948,7 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
       const a = await member();
       const row = await placed({ ownerId: a, marketId, limitPriceCoin: 40 });
       const { received, quit } = await subscribeTo(marketId);
+      const users = await subscribeToUsers();
       try {
         await expect(closeMarket(t.db, marketId, publish)).resolves.toEqual({
           outcome: 'skipped',
@@ -835,10 +957,13 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
         });
         expect(await orderRow(row.id)).toEqual(row);
         expect(await coinOf(a)).toEqual({ available: 960n, locked: 40n });
+        // No notice and no signal on a skip (#134).
+        expect(await expiryNotices(a)).toEqual([]);
         await sleep(100);
         expect(received).toEqual([]);
+        expect(users.received).toEqual([]);
       } finally {
-        await quit();
+        await Promise.all([quit(), users.quit()]);
       }
     });
 
@@ -853,7 +978,12 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
       const { received, quit } = await subscribeTo(marketId);
       try {
         const result = await closeMarket(t.db, marketId, publish);
-        expect(result).toMatchObject({ outcome: 'cancelled', expiredOrders: 0, heldOrders: 0 });
+        expect(result).toMatchObject({
+          outcome: 'cancelled',
+          expiredOrders: 0,
+          heldOrders: 0,
+          notifiedMembers: 0,
+        });
         expect(await orderRow(row.id)).toEqual(cancelled);
         await waitForMessages(received, 1, 'market:status of the close');
         await sleep(100);
@@ -872,10 +1002,18 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
       await createMarketPause(t.db, { marketId, reason: 'ledger_failure', by: adminId });
       await passMarketClose(t.db, marketId);
       const { received, quit } = await subscribeTo(marketId);
+      const users = await subscribeToUsers();
       try {
         const result = await closeMarket(t.db, marketId, publish);
-        // Nobody filled: CANCELLED, and still held (결정 4 #178 '복구 전에 마감이 오면').
-        expect(result).toMatchObject({ outcome: 'cancelled', expiredOrders: 0, heldOrders: 1 });
+        // Nobody filled: CANCELLED, and still held (결정 4 #178 '복구 전에 마감이 오면'). The
+        // live order ends at #93's recovery, which notifies then (#134): nothing now.
+        expect(result).toMatchObject({
+          outcome: 'cancelled',
+          expiredOrders: 0,
+          heldOrders: 1,
+          notifiedMembers: 0,
+        });
+        expect(await expiryNotices(a)).toEqual([]);
         expect(await marketRow(marketId)).toMatchObject({ status: 'cancelled' });
         expect(await pausesOf(marketId)).toMatchObject([
           { reason: 'ledger_failure', endKind: 'closed_at_close' },
@@ -887,8 +1025,9 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
         expect(received.map((m) => (JSON.parse(m) as { type: string }).type)).toEqual([
           'market:status',
         ]);
+        expect(users.received).toEqual([]);
       } finally {
-        await quit();
+        await Promise.all([quit(), users.quit()]);
       }
     });
 
@@ -928,7 +1067,7 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
       }
     });
 
-    it('keeps the expiry when both publishes fail: the close committed, one warning per event', async () => {
+    it('keeps the expiry when every publish fails: the close committed, one warning per event', async () => {
       const marketId = await openMarket();
       const a = await member();
       const row = await placed({ ownerId: a, marketId, limitPriceCoin: 40 });
@@ -941,8 +1080,14 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
       );
       try {
         const result = await closeMarket(t.db, marketId, createPublisher(dead, logger));
-        expect(result).toMatchObject({ outcome: 'cancelled', expiredOrders: 1 });
+        expect(result).toMatchObject({
+          outcome: 'cancelled',
+          expiredOrders: 1,
+          notifiedMembers: 1,
+        });
         expect(await orderRow(row.id)).toMatchObject({ status: 'expired' });
+        // The notice committed with the close; only its signal was lost (the REST read has it).
+        expect(await expiryNotices(a)).toHaveLength(1);
         expect(logs).toMatchObject([
           {
             msg: 'realtime publish failed',
@@ -953,6 +1098,11 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
             msg: 'realtime publish failed',
             channel: marketChannel(marketId),
             eventType: 'market:book',
+          },
+          {
+            msg: 'realtime publish failed',
+            channel: userChannel(a),
+            eventType: 'user:notification',
           },
         ]);
       } finally {

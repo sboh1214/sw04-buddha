@@ -38,8 +38,8 @@ export type Notifications = Pick<
  * member's notifications, newest first by 발생 시각 with 더 보기 as every MY list (53-3), unread
  * ones marked by more than colour; pressing one marks it read and opens its target (53-2), and
  * '모두 읽음' at the heading's right marks every unread one read. Opening the list marks nothing.
- * Until a producer ships its type (52-20) every member sees '알림이 없습니다.'. Personal and
- * client-only like every MY list.
+ * #53 shipped no type (52-20); since #134 (ADR-0158) the 거래 three fill it, and a member with
+ * none sees '알림이 없습니다.'. Personal and client-only like every MY list.
  */
 export function MyNotifications() {
   const ended = useSessionEnded();

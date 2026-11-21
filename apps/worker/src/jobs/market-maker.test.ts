@@ -22,7 +22,8 @@ import {
   testDbUrls,
   type TestDb,
 } from '@buddha/db/test';
-import { eq, sql } from 'drizzle-orm';
+import { userChannel } from '@buddha/shared';
+import { and, eq, sql } from 'drizzle-orm';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { refreshMarketMaker, scanMarketMakers } from './market-maker.js';
@@ -68,6 +69,8 @@ describe.skipIf(!hasTestDb())('maker worker transactions and delivery (#129)', (
     expect(await refreshMarketMaker(t.db, market.id, publish, enqueue, logger)).toMatchObject({
       outcome: 'ready',
       placedOrders: 2,
+      // Quotes fill nobody's resting order: no notice, no signal (#134).
+      notifiedMembers: 0,
     });
     expect(publish.mock.calls.map(([, event]) => event.type)).toEqual(['market:book']);
     publish.mockClear();
@@ -84,7 +87,7 @@ describe.skipIf(!hasTestDb())('maker worker transactions and delivery (#129)', (
     const a = (await createUser(t.db, { balanceCoin: 4_000n })).user.id;
     const b = (await createUser(t.db, { balanceCoin: 4_000n })).user.id;
     await mintTestPairs(t.db, { marketId: market.id, yesHolderId: a, noHolderId: b, qty: 1 });
-    await placeTestOrder(t.db, {
+    const resting = await placeTestOrder(t.db, {
       marketId: market.id,
       ownerId: a,
       outcome: 'YES',
@@ -92,13 +95,23 @@ describe.skipIf(!hasTestDb())('maker worker transactions and delivery (#129)', (
       limitPriceCoin: 1,
       qty: 1,
     });
+    if (resting.kind !== 'placed') throw new Error('Resting sell fixture was not placed');
     const preparedFillCount = (await t.db.select().from(schema.fills)).length;
-    const publish = vi.fn<Publish>().mockImplementation(async () => {
+    const fillNotices = () =>
+      t.db
+        .select()
+        .from(schema.notifications)
+        .where(
+          and(eq(schema.notifications.userId, a), eq(schema.notifications.type, 'order_filled')),
+        );
+    const publish = vi.fn<Publish>().mockImplementation(async (_channel, event) => {
       expect(await t.db.select().from(schema.fills)).toHaveLength(preparedFillCount + 1);
       expect(await readMarketMakerRuntime(t.db, market.id)).toMatchObject({
         completedGeneration: 1n,
         generation: 2n,
       });
+      // The signal finds the notice committed (ADR-0157 결정 8).
+      if (event.type === 'user:notification') expect(await fillNotices()).toHaveLength(1);
     });
     const enqueue = vi.fn().mockImplementation(async () => {
       expect(await readMarketMakerRuntime(t.db, market.id)).toMatchObject({
@@ -107,10 +120,37 @@ describe.skipIf(!hasTestDb())('maker worker transactions and delivery (#129)', (
       });
     });
     const result = await refreshMarketMaker(t.db, market.id, publish, enqueue, logger);
-    expect(result).toMatchObject({ generation: '1', fills: 1, nextGeneration: '2' });
+    expect(result).toMatchObject({
+      generation: '1',
+      fills: 1,
+      nextGeneration: '2',
+      notifiedMembers: 1,
+    });
+    // BullMQ stores the job's result: the count, never whom it notified.
+    expect(JSON.stringify(result)).not.toContain(a);
     for (const type of ['market:book', 'market:tick', 'market:trade']) {
       expect(publish.mock.calls.filter(([, event]) => event.type === type)).toHaveLength(1);
     }
+    // #134 (ADR-0158): the bot filled A's resting sell, so A — and only A — gets the inbox
+    // signal at the cycle's finish, beside A's balance and position snapshots.
+    expect(publish.mock.calls.filter(([, event]) => event.type === 'user:notification')).toEqual([
+      [userChannel(a), { type: 'user:notification', ts: result.finishedAt }],
+    ]);
+    // The same notice a member's fill gives (AC 8: nothing says the bot was the other side).
+    expect(await fillNotices()).toEqual([
+      expect.objectContaining({
+        category: 'trade',
+        target: { kind: 'order', orderId: resting.order.id },
+        mergeKey: resting.order.id,
+        params: expect.objectContaining({
+          outcome: 'YES',
+          side: 'sell',
+          qty: '1',
+          amountCoin: '1',
+          fullyFilled: true,
+        }) as unknown,
+      }),
+    ]);
     expect(enqueue).toHaveBeenCalledExactlyOnceWith(market.id, 2n);
     const publicEvents = publish.mock.calls.filter(([, event]) => event.type.startsWith('market:'));
     for (const [, event] of publicEvents) {
@@ -379,6 +419,7 @@ describe.skipIf(!hasTestDb())('maker worker transactions and delivery (#129)', (
     expect(rows.filter((row) => row.status === 'open').map((row) => row.id)).toEqual([
       humanOrder.order.id,
     ]);
+    // The stop cleanup cancels the bot's quotes only: no fill, so no user:notification (#134).
     expect(publish.mock.calls.map(([, event]) => event.type)).toEqual(['market:book']);
     expect(await readMarketMakerRuntime(t.db, other.id)).toMatchObject({
       desiredEnabled: true,

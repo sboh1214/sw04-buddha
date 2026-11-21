@@ -48518,6 +48518,12 @@
         "oneOf": [
           {
             "$ref": "#/components/schemas/NotificationMarketTarget"
+          },
+          {
+            "$ref": "#/components/schemas/NotificationOrderTarget"
+          },
+          {
+            "$ref": "#/components/schemas/NotificationOrderHistoryTarget"
           }
         ]
       },
@@ -48538,6 +48544,49 @@
         "required": [
           "kind",
           "slug"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationOrderTarget": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "order"
+            ]
+          },
+          "orderId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "kind",
+          "orderId"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationOrderHistoryTarget": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "order_history"
+            ]
+          },
+          "marketId": {
+            "nullable": true,
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "kind",
+          "marketId"
         ],
         "additionalProperties": false
       },

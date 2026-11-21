@@ -22,7 +22,7 @@ import { getQueryClient } from '@/lib/query-client';
  *
  * #53 (ADR-0157) put the unread notification count beside MY on every page, the wallet included,
  * and it is read again on `user:notification` through its own window (owner answer 53-9: 30 s) —
- * once #134 ships, a resting order's every later fill publishes one, so the bound must count that
+ * since #134 (ADR-0158), a resting order's every later fill publishes one, so the bound counts that
  * window too, not only the count's first read. It lowered the wallet's entry limit from 9 ledger
  * pages to 5 (ADR-0144 '일부 대체됨').
  */

@@ -82,7 +82,7 @@ describe('MyNotifications', () => {
     expect(byTestId(html, 'my-notifications-read-all-failed')).toBeUndefined();
   });
 
-  it('says there is none — what every member sees until a producer ships its type (52-20)', () => {
+  it('says there is none while the member has no notification', () => {
     const html = drawn(list([{ items: [], nextCursor: null }]));
     expect(byTestId(html, 'my-notifications-empty')?.text).toBe('알림이 없습니다.');
     expect(byTestId(html, 'my-notifications-list')).toBeUndefined();
@@ -143,6 +143,79 @@ describe('MyNotifications', () => {
     expect(byTestId(read, 'notification-row')?.attributes.href).toBe('/markets/closed-market');
     // No raw params or ids on screen: the label is the type's renderer's to word.
     expect(byTestId(unread, 'notification-row')?.text).not.toContain('첫눈');
+  });
+
+  it('draws each 거래 알림 with its own title and leads it to the order or the history (#134)', () => {
+    // ADR-0158: three rows as the API answers them (occurredAt aside); none is the fallback.
+    const ORDER_ID = '7d0f9a2e-4b1c-4e8d-9a3f-1c2b3d4e5f60';
+    const MARKET_ID = '3e5a7c9b-2d4f-4a6b-8c1d-0e2f4a6b8c0d';
+    const FILLED_ID = '9b2c8e4a-1f3d-4c6b-8a7e-5d4c3b2a1f21';
+    const CANCELLED_ID = '9b2c8e4a-1f3d-4c6b-8a7e-5d4c3b2a1f22';
+    const EXPIRED_ID = '9b2c8e4a-1f3d-4c6b-8a7e-5d4c3b2a1f23';
+    const html = drawn(
+      list([
+        {
+          items: [
+            notification(FILLED_ID, {
+              type: 'order_filled',
+              category: 'trade',
+              params: {
+                marketTitle: '첫눈이 올까',
+                outcome: 'NO',
+                side: 'buy',
+                qty: '3',
+                amountCoin: '120',
+                fullyFilled: true,
+                orderQty: '3',
+                orderFilledQty: '3',
+              },
+              target: { kind: 'order', orderId: ORDER_ID },
+              eventCount: 3,
+            }),
+            notification(CANCELLED_ID, {
+              type: 'orders_cancelled',
+              category: 'trade',
+              params: {
+                reason: 'paused',
+                orderCount: 2,
+                marketCount: 1,
+                marketTitle: '첫눈이 올까',
+              },
+              target: { kind: 'order_history', marketId: MARKET_ID },
+            }),
+            notification(EXPIRED_ID, {
+              type: 'orders_expired',
+              category: 'trade',
+              params: { marketTitle: '첫눈이 올까', cause: 'cancelled', orderCount: 1 },
+              target: { kind: 'order_history', marketId: null },
+              readAt: '2026-11-21T04:30:00.000Z',
+            }),
+          ],
+          nextCursor: null,
+        },
+      ]),
+    );
+    const filled = rowOf(html, FILLED_ID) ?? '';
+    const cancelled = rowOf(html, CANCELLED_ID) ?? '';
+    const expired = rowOf(html, EXPIRED_ID) ?? '';
+    expect(byTestId(filled, 'notification-row-category')?.text).toBe('거래');
+    expect(byTestId(filled, 'notification-row-title')?.text).toBe(
+      '첫눈이 올까 NO 매수 주문 전량 체결 · 체결 3회 · 누적 3계약 · 평균 40.00 Coin',
+    );
+    expect(byTestId(filled, 'notification-row')?.attributes.href).toBe(`/my/orders/${ORDER_ID}`);
+    expect(byTestId(cancelled, 'notification-row-title')?.text).toBe(
+      '첫눈이 올까 일시 중단으로 대기 주문 2건 취소',
+    );
+    expect(byTestId(cancelled, 'notification-row')?.attributes.href).toBe(
+      `/my/history?market=${MARKET_ID}`,
+    );
+    expect(byTestId(expired, 'notification-row-title')?.text).toBe(
+      '첫눈이 올까 시장 취소로 대기 주문 1건 만료',
+    );
+    expect(byTestId(expired, 'notification-row')?.attributes.href).toBe('/my/history');
+    expect(expired).toContain('data-read="true"');
+    // None drew the fallback title (53-11 ④).
+    expect(html).not.toContain(`${copy.notificationCategoryTrade} ${copy.notificationFallback}`);
   });
 
   it('draws a target this web cannot lead to as a button that only marks it read', () => {
@@ -260,5 +333,13 @@ describe('the page and its preview', () => {
     expect(body).toContain('read.mutate({ id: item.id, expectedAccountId: accountId });');
     expect(body).toContain('readAll.mutate({ expectedAccountId: accountId });');
     expect(body).not.toMatch(/mutateAsync|await read/);
+  });
+
+  it('breaks a title’s Korean at spaces, a run too long for the row still wrapping (#134)', () => {
+    const row = source('../../../components/notifications/notification-row.tsx');
+    const title = row.slice(0, row.indexOf('data-testid="notification-row-title"'));
+    expect(title.slice(title.lastIndexOf('<Text'))).toMatch(
+      /wordBreak="keep-all"\s+overflowWrap="anywhere"/,
+    );
   });
 });

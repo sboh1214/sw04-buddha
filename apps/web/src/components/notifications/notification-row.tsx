@@ -70,14 +70,19 @@ export function NotificationRow({
           {notificationCategoryLabel(notification.category)}
         </Text>
       </HStack>
+      {/* `keep-all`: the title (a market's stored title since #134) breaks Korean at spaces, never
+          between two syllables ('주문'); `anywhere` still breaks a run too long for the row
+          (order-panel.tsx's rule). */}
       <Text
         as="span"
         display="block"
+        wordBreak="keep-all"
+        overflowWrap="anywhere"
         fontWeight={unread ? 'semibold' : 'normal'}
         color={unread ? 'fg' : 'fg.muted'}
         data-testid="notification-row-title"
       >
-        {view.known ? <view.Title params={view.params} /> : view.title}
+        {view.known ? <view.Title params={view.params} eventCount={view.eventCount} /> : view.title}
       </Text>
       <Text
         as="span"

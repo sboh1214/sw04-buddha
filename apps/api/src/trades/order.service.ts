@@ -2,9 +2,11 @@ import { Inject, Injectable } from '@nestjs/common';
 import { MarketJobs } from '../jobs/market-jobs.service.js';
 import {
   cancelOrder,
+  createNotifications,
   findOrderByRequest,
   ledgerHeldMarketIds,
   lockMarket,
+  notifiedUserIds,
   placeOrder,
   placeOrderChangedBook,
   schema,
@@ -23,6 +25,7 @@ import {
   LIVE_ORDER_STATUSES,
   marketTickEvent,
   marketTradeEvent,
+  notificationEvent,
   ownFillPrice,
   serializeCoinAmount,
   type MarketFillStats,
@@ -137,6 +140,15 @@ interface IntakeTrades {
   stats: MarketFillStats;
 }
 
+/**
+ * Whom an intake's resting-fill notices reached (#134, ADR-0158: `notifiedUserIds`), and the
+ * intake's instant: each gets `user:notification` after COMMIT.
+ */
+interface IntakeNotices {
+  userIds: readonly string[];
+  at: Date;
+}
+
 const notFound = (what: 'Market' | 'Order') =>
   new AppError('NOT_FOUND', { message: `${what} not found` });
 
@@ -179,7 +191,10 @@ const notFound = (what: 'Market' | 'Order') =>
  *   statistics as the intake left them (`marketTickEvent`), first (`publish`: in any order the
  *   gateway delivers it alike), and after the signal one `market:trade` per fill in fill order —
  *   the anonymous public row (`marketTradeEvent`: no owner, order, taker direction or account
- *   type; #121, ADR-0116). Nothing for a replay, a refusal, a rejected order, one that only
+ *   type; #121, ADR-0116). In the transaction, last, the notices of the resting orders the
+ *   intake filled (#134, ADR-0158: `order_filled` to each person whose resting order it met —
+ *   never the submitter, whose answer is its result, 52-2), and after COMMIT `user:notification`
+ *   to each person they reached. Nothing for a replay, a refusal, a rejected order, one that only
  *   rests, or a rollback.
  * - 취소 (`cancel`, #178, ADR-0113): the whole remainder of one of the session's live orders, ended
  *   in one transaction by `cancelOrder` (@buddha/db order-cancel.ts: the market's lock, the order
@@ -193,7 +208,8 @@ const notFound = (what: 'Market' | 'Order') =>
  *   market closed before its recovery, #93's kind). After COMMIT, best effort, a sell's
  *   `user:position` (its lock was on that row) — a buy's release writes no ledger entry and
  *   publishes no `user:` event, as its resting — and `market:book` (#179). An order that had
- *   ended, or a held one, changed nothing and publishes nothing.
+ *   ended, or a held one, changed nothing and publishes nothing. No notice either way: the
+ *   member's own cancel is its answer (#134, ADR-0158, 52-3).
  * - The owner's reads (`listMine`, `mine`, `mineByRequest`, `listMyFills`): the session's own
  *   rows only — another account's order is NOT_FOUND, as if it did not exist (N04 §7) — and a
  *   fill as the caller's own order took it, the counterparty anonymous (결정 5 '#179·#119'). A
@@ -215,8 +231,8 @@ export class OrderService {
     requestId: string,
     body: WithoutExpectedAccount<PlaceOrderBody>,
   ): Promise<PlaceOrderResult> {
-    const { answer, touched, book, trades, marketMakerGeneration } = await this.db.transaction(
-      async (tx) => {
+    const { answer, touched, book, trades, notices, marketMakerGeneration } =
+      await this.db.transaction(async (tx) => {
         await assertCanTrade(tx, userId);
         await lockMarket(tx, marketId);
         const [profile] = await tx
@@ -268,8 +284,17 @@ export class OrderService {
               replayed: result.kind === 'replayed',
             };
             const placed = result.kind === 'placed' ? result : null;
+            // #134 (ADR-0158, 52-2): the resting persons' fill notices, last in the transaction
+            // (ADR-0157 결정 4: one call, after the reads too). A replay wrote nothing: none.
+            const notified = placed
+              ? notifiedUserIds(await createNotifications(tx, placed.notifications))
+              : [];
             return {
               answer,
+              notices:
+                placed && notified.length > 0
+                  ? { userIds: notified, at: placed.order.createdAt }
+                  : null,
               touched: placed?.touched ?? null,
               marketMakerGeneration: placed?.marketMakerGeneration ?? null,
               // At the order's own instant (the database clock's), the signal's display time.
@@ -285,9 +310,8 @@ export class OrderService {
             };
           }
         }
-      },
-    );
-    if (touched) await this.publish(touched, book, trades);
+      });
+    if (touched) await this.publish(touched, book, trades, notices);
     if (marketMakerGeneration !== null)
       await this.jobs.refreshMarketMaker(marketId, marketMakerGeneration);
     return answer;
@@ -491,8 +515,10 @@ export class OrderService {
    * The intake's realtime, after COMMIT and best effort (`MarketPublisher` logs a failed send):
    * when it filled, the market's `market:tick` first (#121); then each person's balance with the
    * last ledger entry of the intake as its key, then each position row, then — when the live book
-   * changed — the market's `market:book`, then each fill's `market:trade` by fill id. Issued
-   * together, awaited together (realtime.ts), so the wire keeps this order.
+   * changed — the market's `market:book`, then each fill's `market:trade` by fill id, then
+   * `user:notification` to each person a resting fill's notice reached (#134, ADR-0158: a signal,
+   * its place immaterial). Issued together, awaited together (realtime.ts), so the wire keeps
+   * this order.
    *
    * The gateway sends the tick reliably like the rest (market.gateway.ts, ADR-0116 10-6), so its
    * delivery does not rest on this order. Each event is keyed apart (`tradeCount`, `fillId`), so
@@ -502,6 +528,7 @@ export class OrderService {
     touched: PlaceOrderTouched,
     book: { marketId: string; at: Date } | null,
     trades: IntakeTrades | null = null,
+    notices: IntakeNotices | null = null,
   ): Promise<void> {
     const filled = trades ? [...trades.fills].sort((a, b) => a.id - b.id) : [];
     await Promise.all([
@@ -517,6 +544,9 @@ export class OrderService {
       book && this.publisher.publishBook([book.marketId], book.at),
       ...filled.map((fill) =>
         this.publisher.publishMarket(fill.marketId, marketTradeEvent(fill.marketId, fill)),
+      ),
+      ...(notices?.userIds ?? []).map((userId) =>
+        this.publisher.publishUser(userId, notificationEvent(notices!.at)),
       ),
     ]);
   }

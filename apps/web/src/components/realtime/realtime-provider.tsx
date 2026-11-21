@@ -686,8 +686,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
      * would leave the count behind until a reconnect. A round restarts the account's count and its
      * list: on screen each reads once — the count on every page, beside MY; the list's loaded
      * pages on MY › 알림 and the summary — and off screen each is only marked stale. A lone signal
-     * is read at once; signals that keep coming — a resting order's fills, once #134 ships — are
-     * read together at most a window later: 3 rounds a minute, which the wallet's budget counts
+     * is read at once; signals that keep coming — a resting order's fills, since #134 (ADR-0158) —
+     * are read together at most a window later: 3 rounds a minute, which the wallet's budget counts
      * (use-wallet-budget.test.ts).
      */
     const refreshNotifications = (fired = false) => {

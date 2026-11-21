@@ -1,9 +1,13 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  createNotifications,
   isHumanAccountTypeSql,
   lockAdminRoles,
   lockMarket,
   lockReconciliationHold,
+  notifiedUserIds,
+  orderEndNotificationInputs,
+  reconciliationHoldEventKey,
   recoverReconciliationHold,
   ReconciliationError,
   runAccountReconciliation,
@@ -11,10 +15,14 @@ import {
   runSupplyReconciliation,
   schema,
   type Db,
+  type ExpiredOrders,
+  type NotificationInput,
+  type RecoveredMarket,
 } from '@buddha/db';
 import {
   decodeKeyset,
   encodeKeyset,
+  notificationEvent,
   RECONCILIATION_RECOVERY_APPROVAL_KIND,
   reconciliationRecoveryPayloadSchema,
   type ReconciliationHold,
@@ -92,6 +100,27 @@ function requestTarget(holdId: string) {
     eq(requests.targetType, 'reconciliation_hold'),
     eq(requests.targetId, holdId),
   );
+}
+
+/**
+ * A recovery's 만료 notices (#134, ADR-0158; 52-4·52-5): one `orders_expired` per member whose
+ * orders the recovery of a closed held market ended (`expireLockedOrders`), at the instant it
+ * ended them — 시장 취소 for a CANCELLED market, 거래 마감 for any status past the close. None for
+ * an account hold (it touches no order) or a recovery that ended nothing, keyed by the hold.
+ */
+function recoveryNotices(
+  holdId: string,
+  { expired, market }: { expired: ExpiredOrders; market: RecoveredMarket | null },
+): NotificationInput[] {
+  const at = expired.expired[0]?.endedAt;
+  if (market === null || at == null) return [];
+  return orderEndNotificationInputs(expired.expired, {
+    kind: 'expired',
+    cause: market.status === 'cancelled' ? 'cancelled' : 'closed',
+    market: { id: market.id, title: market.title },
+    eventKey: reconciliationHoldEventKey(holdId),
+    occurredAt: at,
+  });
 }
 
 function refusal(code: string): AppError {
@@ -273,17 +302,22 @@ export class ReconciliationService {
           holdId,
           approved.decidedAt ?? (await clockTimestamp(tx)),
         );
-        return {
-          detail: await this.detail(tx, recovered.hold),
-          recovered,
-          marketId: recovered.hold.marketId,
-        };
+        const detail = await this.detail(tx, recovered.hold);
+        // #134 (ADR-0158, 52-4·52-5): the 만료 notices of the closed held market's orders the
+        // recovery ended, last in the transaction (ADR-0157 결정 4). An account hold ends none.
+        const notices = recoveryNotices(recovered.hold.id, recovered);
+        const notified = notifiedUserIds(await createNotifications(tx, notices));
+        return { detail, recovered, marketId: recovered.hold.marketId, notified };
       }),
     );
     const { recovered } = done;
-    if (recovered.expired.expired.length > 0 && done.marketId !== null) {
-      await this.publisher.publishBook([done.marketId], recovered.result.checkedAt);
-    }
+    const ended = recovered.expired.expired[0]?.endedAt ?? recovered.result.checkedAt;
+    await Promise.all([
+      recovered.expired.expired.length > 0 && done.marketId !== null
+        ? this.publisher.publishBook([done.marketId], recovered.result.checkedAt)
+        : undefined,
+      ...done.notified.map((id) => this.publisher.publishUser(id, notificationEvent(ended))),
+    ]);
     return done.detail;
   }
 

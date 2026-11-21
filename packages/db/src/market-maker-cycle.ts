@@ -19,6 +19,7 @@ import { burnAvailableMarketMakerPairs } from './market-maker-burn.js';
 import { readMarketMakerRiskSnapshot } from './market-maker-risk.js';
 import { readMarketMakerRuntime, recordMarketMakerRun } from './market-maker-runtime.js';
 import { readMarketMakerStageSettings } from './market-maker-settings.js';
+import { createNotifications, notifiedUserIds } from './notifications.js';
 import { cancelOrder } from './order-cancel.js';
 import {
   placeOrder,
@@ -58,12 +59,20 @@ export type MarketMakerCycleResult =
       burnedQty: number;
       bookChanged: boolean;
       nextGeneration: bigint | null;
+      /**
+       * The members a placement's fill notified (#134, ADR-0158: a bot order filling a member's
+       * resting order, `order_filled`): publish `user:notification` to them after COMMIT. Ids for
+       * the publisher only — a job's stored result carries counts, never ids.
+       */
+      notifiedUserIds: string[];
     });
 
 /** One bounded pass. Caller commits before enqueue/publish, or rolls back before error recording.
  * All potentially encountered people are prelocked once before the first cancellation or fill:
  * several placements must not acquire new shared balances after an earlier placement wrote one.
  * No runtime is created for old OPEN markets. Price follows actual holdings, never last trade.
+ * Every exit through `finish()` delivers the placements' fill notices last (#134, ADR-0158: one
+ * `createNotifications` after the run record; none filled, no SQL) and names whom they reached.
  */
 export async function runMarketMakerCycle(
   tx: Tx,
@@ -106,6 +115,11 @@ export async function runMarketMakerCycle(
         },
       });
       if (!recorded) throw new Error('Allocated runtime disappeared');
+      // #134: the members whose resting orders the placements filled, last in the transaction.
+      const notified = await createNotifications(
+        tx,
+        placed.flatMap((result) => result.notifications),
+      );
       return {
         ...context,
         runId: recorded.run.id,
@@ -118,6 +132,7 @@ export async function runMarketMakerCycle(
         bookChanged: cancelledOrderIds.length > 0 || placed.some(placeOrderChangedBook),
         nextGeneration:
           recorded.runtime.generation > context.generation ? recorded.runtime.generation : null,
+        notifiedUserIds: notifiedUserIds(notified),
       };
     };
     const [market] = await tx.select().from(markets).where(eq(markets.id, marketId)).for('update');

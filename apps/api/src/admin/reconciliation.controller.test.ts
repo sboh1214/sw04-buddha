@@ -13,6 +13,7 @@ import {
   openOrderIntake,
   passMarketClose,
   placeTestOrder,
+  tradeOnce,
   withLedgerGuardsOff,
 } from '@buddha/db/test';
 import {
@@ -22,7 +23,7 @@ import {
   type ReconciliationRun,
   type ReconciliationTarget,
 } from '@buddha/shared';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
@@ -113,6 +114,27 @@ describe.skipIf(!hasTestInfra)('admin reconciliation (integration)', () => {
   }
   const decisionPath = (holdId: string, requestId: string, action: string) =>
     `/holds/${holdId}/recovery-requests/${requestId}/${action}`;
+  /** The account's notifications (#53), as the database holds them, newest first. */
+  const noticesOf = (userId: string) =>
+    t.db
+      .select()
+      .from(schema.notifications)
+      .where(eq(schema.notifications.userId, userId))
+      .orderBy(desc(schema.notifications.occurredAt));
+  /**
+   * `MarketPublisher.publishUser` watched: each `user:notification` as [account, ts, the account's
+   * notifications committed when it was sent] — read on another connection, so a signal sent
+   * before COMMIT would count none.
+   */
+  function signals() {
+    const sent: [string, string, number][] = [];
+    vi.spyOn(t.app.get(MarketPublisher), 'publishUser').mockImplementation(async (id, event) => {
+      if (event.type === 'user:notification') {
+        sent.push([id, event.ts, (await noticesOf(id)).length]);
+      }
+    });
+    return sent;
+  }
 
   async function brokenRecoveryMarket() {
     const { market } = await createScheduledMarket(t.db);
@@ -572,6 +594,7 @@ describe.skipIf(!hasTestInfra)('admin reconciliation (integration)', () => {
     const [before] = await t.db.select().from(schema.orders).where(eq(schema.orders.id, order.id));
     expect(before?.status).toBe('open');
     const id = (await request(checked.hold!)).requests[0]!.id;
+    const sent = signals();
     const publisher = t.app.get(MarketPublisher);
     const statuses = vi.spyOn(publisher, 'publishMarket');
     const books = vi.spyOn(publisher, 'publishBook').mockImplementation(async () => {
@@ -597,8 +620,87 @@ describe.skipIf(!hasTestInfra)('admin reconciliation (integration)', () => {
     expect(balance).toMatchObject({ availableCoin: 1_000n, lockedCoin: 0n });
     expect(books).toHaveBeenCalledExactlyOnceWith([market.id], expect.any(Date));
     expect(statuses).not.toHaveBeenCalled();
+    // #134 (52-5): the order's 만료 by 시장 취소, at the instant the recovery ended it, keyed by
+    // the hold; signalled after COMMIT.
+    const notices = await noticesOf(holder.user.id);
+    expect(notices).toEqual([
+      expect.objectContaining({
+        type: 'orders_expired',
+        category: 'trade',
+        params: { marketTitle: market.title, cause: 'cancelled', orderCount: 1 },
+        target: { kind: 'order', orderId: order.id },
+        eventCount: 1,
+        occurredAt: after!.endedAt,
+        readAt: null,
+      }),
+    ]);
+    const [key] = await t.db
+      .select()
+      .from(schema.notificationKeys)
+      .where(eq(schema.notificationKeys.userId, holder.user.id));
+    expect(key?.eventKey).toBe(`reconciliation_hold:${checked.hold!.id}`);
+    expect(sent).toEqual([[holder.user.id, after!.endedAt!.toISOString(), 1]]);
     await post(decisionPath(checked.hold!.id, id, 'approve'), approver, { reason: '중복 승인' });
     expect(books).toHaveBeenCalledTimes(1);
+    expect(await noticesOf(holder.user.id)).toEqual(notices);
+    expect(sent).toHaveLength(1);
+  });
+
+  it('recovers a held CLOSED market: its deferred orders expire 거래 마감, one notice per member and market (#134, ADR-0158)', async () => {
+    const { market } = await createOpenedMarket(t.db);
+    await openOrderIntake(t.db, { adminId: asker.id });
+    // A person's trade first, so the close takes the market to CLOSED, not CANCELLED (#20).
+    await tradeOnce(t.db, market.id);
+    const holder = (await createUser(t.db, { balanceCoin: 1_000n })).user.id;
+    const single = (await createUser(t.db, { balanceCoin: 1_000n })).user.id;
+    const rest = async (ownerId: string, limitPriceCoin: number) => {
+      const placed = await placeTestOrder(t.db, { marketId: market.id, ownerId, limitPriceCoin });
+      if (placed.kind !== 'placed' || placed.order.status !== 'open')
+        throw new Error('Expected a resting order');
+      return placed.order;
+    };
+    await rest(holder, 30);
+    await rest(holder, 31);
+    const lone = await rest(single, 32);
+    await createMarketPause(t.db, { marketId: market.id, reason: 'ledger_failure' });
+    await passMarketClose(t.db, market.id);
+    // The close of a held market keeps its orders live and notifies nothing (G).
+    expect(await closeTestMarket(t.db, market.id)).toMatchObject({ closed: true, notified: [] });
+    const checked = await run({ scope: 'market', marketId: market.id });
+    expect(checked.result.passed).toBe(true);
+    const id = (await request(checked.hold!)).requests[0]!.id;
+    const sent = signals();
+    const approved = await post(decisionPath(checked.hold!.id, id, 'approve'), approver, {
+      reason: '마감 뒤 대사와 잠금 확인',
+    });
+    expect(approved.statusCode, approved.body).toBe(200);
+    expect(approved.json<{ data: ReconciliationHoldDetail }>().data.market?.status).toBe('closed');
+    const [ended] = await t.db.select().from(schema.orders).where(eq(schema.orders.id, lone.id));
+    expect(ended).toMatchObject({ status: 'expired' });
+    const params = { marketTitle: market.title, cause: 'closed' };
+    expect(await noticesOf(holder)).toEqual([
+      expect.objectContaining({
+        type: 'orders_expired',
+        params: { ...params, orderCount: 2 },
+        target: { kind: 'order_history', marketId: market.id },
+        occurredAt: ended!.endedAt,
+      }),
+    ]);
+    expect(await noticesOf(single)).toEqual([
+      expect.objectContaining({
+        type: 'orders_expired',
+        params: { ...params, orderCount: 1 },
+        target: { kind: 'order', orderId: lone.id },
+        occurredAt: ended!.endedAt,
+      }),
+    ]);
+    const at = ended!.endedAt!.toISOString();
+    expect([...sent].sort(([x], [y]) => x.localeCompare(y))).toEqual(
+      [
+        [holder, at, 1],
+        [single, at, 1],
+      ].sort(([x], [y]) => String(x).localeCompare(String(y))),
+    );
   });
 
   it('automatically pauses broken markets as the system and recovers through the existing pause approval', async () => {

@@ -82,7 +82,7 @@ const TABLES = EXPORTS.filter((value): value is PgTable => is(value, PgTable)).m
 );
 const ENUMS = EXPORTS.filter(isPgEnum);
 
-/** The product's notification types (#53: none yet, 52-20), as stored in two columns. */
+/** The product's notification types (#53 none, 52-20; #134 the 거래 three), in two columns. */
 const NOTIFICATION_TYPE_NAMES: readonly string[] = NOTIFICATION_DEFINITIONS.map(
   (definition: NotificationDefinition) => definition.type,
 );
@@ -153,8 +153,9 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   'retention_purges.kind': RETENTION_PURGE_KINDS,
   'retention_purges.outcome': RETENTION_PURGE_OUTCOMES,
   // #53 (ADR-0157): a notification's type — the product's list, which the write path holds (the
-  // database holds the shape only; empty in #53, 52-20) — on the row and on its dedupe key, and
-  // its category, held by a CHECK regenerated from the shared list (52-21).
+  // database holds the shape only; empty in #53, 52-20, and the 거래 three since #134, ADR-0158) — on
+  // the row and on its dedupe key, and its category, held by a CHECK regenerated from the shared
+  // list (52-21).
   'notifications.type': NOTIFICATION_TYPE_NAMES,
   'notifications.category': NOTIFICATION_CATEGORIES,
   'notification_keys.type': NOTIFICATION_TYPE_NAMES,
