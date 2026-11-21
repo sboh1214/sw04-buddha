@@ -120,6 +120,9 @@ describe('findPrivateField', () => {
     ['lastSearchedAt', 'search-history'],
     ['userQueries', 'search-history'],
     ['mySearch', 'search-history'],
+    ['notifications', 'notifications'],
+    ['unreadCount', 'notifications'],
+    ['userInbox', 'notifications'],
     ['likedByMe', 'likers'],
     ['isLiked', 'likers'],
     ['liked_by', 'likers'],
@@ -511,6 +514,53 @@ describe('findPrivateField', () => {
         examples.some((words) => words.split(' ').includes(word)),
         word,
       ).toBe(true);
+    }
+  });
+
+  // The notifications item (#53, ADR-0157): a notification, an unread count, and an inbox or
+  // alerts said to be somebody's. A run or a word without an example here fails the test below.
+  const NOTIFICATION_RUNS: readonly [string, string][] = [
+    ['notification', 'notification'],
+    ['lastNotification', 'notification'],
+    ['notifications', 'notifications'],
+    ['notification_count', 'notification'],
+    ['unread', 'unread'],
+    ['hasUnread', 'unread'],
+    ['unreadCount', 'unread count'],
+    ['unread_count', 'unread count'],
+    ['userInbox', 'user inbox'],
+    ['memberInboxes', 'member inboxes'],
+    ['myAlerts', 'my alerts'],
+    ['viewerAlert', 'viewer alert'],
+  ];
+  const notificationHits = (name: string) =>
+    findPrivateField(name)
+      .filter((hit) => hit.item === 'notifications')
+      .map((hit) => hit.words);
+
+  it.each(NOTIFICATION_RUNS)('keeps %s private as a notifications field (%s)', (name, words) => {
+    expect(notificationHits(name)).toContain(words);
+  });
+
+  it('has an example above for every run and every word of the notifications item', () => {
+    const notifications = PRIVATE_DATA.find((item) => item.id === 'notifications')!;
+    const examples = NOTIFICATION_RUNS.map(([, words]) => words);
+    for (const run of notifications.fields) {
+      expect(examples, run.join(' ')).toContain(run.join(' '));
+    }
+    for (const word of notifications.owned!.words) {
+      expect(
+        examples.some((words) => words.split(' ').includes(word)),
+        word,
+      ).toBe(true);
+    }
+  });
+
+  it('leaves a read time, an alert and an inbox with nobody beside them alone (#53)', () => {
+    // Words the owner-only answer shares with public ones: a time a thing was read, a market's own
+    // notice; only a whose-word makes an inbox or alerts a person's.
+    for (const name of ['readAt', 'read', 'alert', 'alerts', 'inbox', 'occurredAt', 'eventCount']) {
+      expect(notificationHits(name), name).toEqual([]);
     }
   });
 

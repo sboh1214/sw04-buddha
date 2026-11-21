@@ -87,6 +87,9 @@ import {
   noticeImages,
   noticeRevisions,
   notices,
+  notificationInboxes,
+  notificationKeys,
+  notifications,
   orders,
   paymentEvents,
   payments,
@@ -171,6 +174,7 @@ import {
 } from './test/factories.js';
 import { connectTestDb, hasTestDb, testDbUrls, type TestDb } from './test/harness.js';
 import { ledgerOf } from './test/ledger.js';
+import { createTestNotification } from './test/notifications.js';
 import {
   hasStandingConsent,
   isNicknameHeld,
@@ -4552,6 +4556,23 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
               }),
           ],
           ['market_proposals', () => createProposal(t.db, { userId: accountId })],
+          // #53 (53-5): an inbox and a notification are a person's, the admins' included.
+          [
+            'notification_inboxes',
+            () => t.db.insert(notificationInboxes).values({ userId: accountId }),
+          ],
+          [
+            'notifications',
+            () =>
+              t.db.insert(notifications).values({
+                userId: accountId,
+                type: 'test_notice',
+                category: 'market',
+                params: { label: 'x' },
+                target: { kind: 'market', slug: market.slug },
+                occurredAt: now,
+              }),
+          ],
         ] as const;
       for (const [table, write] of rowsOf(marketMaker)) {
         expect(await guarded(write()), table).toEqual({
@@ -4567,9 +4588,12 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         value: marketMaker,
         expiresAt: new Date(now.getTime() + 60_000),
       });
-      // A person writes each of the others (its profile the trigger wrote, as for every person).
+      // A person writes each of the others (its profile and its inbox the trigger wrote, as for
+      // every person).
       const { user: other } = await createUser(t.db);
-      for (const [table, write] of rowsOf(other.id).filter(([table]) => table !== 'profiles')) {
+      for (const [table, write] of rowsOf(other.id).filter(
+        ([table]) => table !== 'profiles' && table !== 'notification_inboxes',
+      )) {
         expect(await guarded(write().then(() => 'written')), table).toEqual({
           state: undefined,
           constraint: undefined,
@@ -7076,6 +7100,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       | 'watch'
       | 'unwatch'
       | 'search'
+      | 'notification'
       | 'interest'
       | 'hold'
       | 'timeZone'
@@ -7085,7 +7110,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
 
     /**
      * An account with every row a closure deletes or changes: a session, a sign-in method, a
-     * password-reset token, a 본인확인 record, a watch (and its event), a search, an interest
+     * password-reset token, a 본인확인 record, a watch (and its event), a search, a notification
+     * (its inbox, #53), an interest
      * category, a nickname hold of its own, a time zone, Coin, its address and name — and the two
      * kinds of account restriction request about it still waiting: one to restrict it (`request`,
      * its target the member) and one to lift an ended restriction of its (`change`, its target that
@@ -7121,6 +7147,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       // Its 본인확인 record came with its Coin: `balanceCoin` pays it as the start grant (#116).
       await createWatch(t.db, { userId: member.id, marketId: market.id });
       await createSearch(t.db, { userId: member.id, query: '금리' });
+      await createTestNotification(t.db, { userId: member.id, slug: market.slug });
       await t.db
         .insert(profileInterestCategories)
         .values({ userId: member.id, categoryId: category.id });
@@ -7254,6 +7281,9 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         if (keep !== 'search') {
           await tx.delete(marketSearches).where(eq(marketSearches.userId, userId));
         }
+        if (keep !== 'notification') {
+          await tx.delete(notificationInboxes).where(eq(notificationInboxes.userId, userId));
+        }
         if (keep !== 'session') await tx.delete(session).where(eq(session.userId, userId));
         if (keep !== 'account') await tx.delete(account).where(eq(account.userId, userId));
         if (keep !== 'reset') await tx.delete(verification).where(eq(verification.value, userId));
@@ -7340,6 +7370,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         ['watch', 'its watchlist'],
         ['unwatch', 'a watch with no unwatch event'],
         ['search', 'its search history'],
+        // #53 (53-7): its inbox, and with it its notifications and their keys.
+        ['notification', 'its notifications'],
         ['interest', 'its interest categories'],
         ['hold', 'a nickname hold of its own'],
         ['timeZone', 'its time zone'],
@@ -10858,6 +10890,382 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       // is released, free for the next account, and held by nobody's grant.
       await t.db.transaction((tx) => cancelStartGrant(tx, a.id));
       expect(await startGrantHoldsNumber(t.db, hash, b.id)).toBe(false);
+    });
+  });
+
+  describe('notifications (migration 0078, #53)', () => {
+    /** The refusal a guard raises: its SQLSTATE, the constraint it names and its message. */
+    async function refusedBy(write: Promise<unknown>) {
+      const error = await write.then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      return {
+        state: sqlState(error),
+        constraint: sqlConstraint(error),
+        message: errorMessage(error),
+      };
+    }
+
+    /** A notification row as a raw writer would insert it: the shape the database holds. */
+    const raw = (
+      userId: string,
+      slug: string,
+      change: Partial<typeof notifications.$inferInsert> = {},
+    ): typeof notifications.$inferInsert => ({
+      userId,
+      type: 'test_notice',
+      category: 'market',
+      params: { label: 'x' },
+      target: { kind: 'market', slug },
+      occurredAt: new Date(),
+      ...change,
+    });
+
+    const inboxOf = async (userId: string) =>
+      t.db.select().from(notificationInboxes).where(eq(notificationInboxes.userId, userId));
+
+    /** A member with one notification and its key, and the notification's row. */
+    async function notified() {
+      const { user: member } = await createUser(t.db);
+      const market = await createMarket(t.db);
+      const outcome = await createTestNotification(t.db, { userId: member.id, slug: market.slug });
+      if (outcome.kind !== 'created') throw new Error(`expected created, got ${outcome.kind}`);
+      const [row] = await t.db.select().from(notifications).where(eq(notifications.id, outcome.id));
+      return { member, market, row: row! };
+    }
+
+    /** Runs `work` as the migration role (the table owner), whose writes only the triggers hold. */
+    async function asOwner<T>(work: (owner: ReturnType<typeof createDb>) => Promise<T>) {
+      const owner = createDb(testDbUrls()!.migrateUrl, { max: 1 });
+      try {
+        return await work(owner);
+      } finally {
+        await closeDb(owner);
+      }
+    }
+
+    it('makes every person’s account with its inbox, and the 운영 마켓메이커 with none (53-5)', async () => {
+      const { user: member } = await createUser(t.db);
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      const marketMaker = await createMarketMakerAccount(t.db);
+      expect(await inboxOf(member.id)).toEqual([
+        { userId: member.id, createdAt: expect.any(Date) as unknown },
+      ]);
+      expect(await inboxOf(admin.id)).toHaveLength(1);
+      expect(await inboxOf(marketMaker)).toEqual([]);
+      // The trigger opens it with the profile, in the account's own transaction.
+      const [profile] = await t.db.select().from(profiles).where(eq(profiles.userId, member.id));
+      expect((await inboxOf(member.id))[0]!.createdAt.getTime()).toBe(profile!.createdAt.getTime());
+    });
+
+    it('refuses a closed account an inbox and takes one for an open account without one (53-5)', async () => {
+      const { user: closed } = await createUser(t.db);
+      await closeAccount(t.db, closed.id);
+      expect(await inboxOf(closed.id)).toEqual([]);
+      expect(
+        await refusedBy(t.db.insert(notificationInboxes).values({ userId: closed.id })),
+      ).toMatchObject({
+        state: '23000',
+        constraint: 'notification_inboxes_open_account',
+        message: expect.stringContaining('notification_inboxes takes no row of it') as unknown,
+      });
+      const { user: open } = await createUser(t.db);
+      await t.db.delete(notificationInboxes).where(eq(notificationInboxes.userId, open.id));
+      await t.db.insert(notificationInboxes).values({ userId: open.id });
+      expect(await inboxOf(open.id)).toHaveLength(1);
+      // An account that is not there meets the foreign key.
+      expect(
+        await refusal(t.db.insert(notificationInboxes).values({ userId: 'no-such-account' })),
+      ).toEqual({ state: '23503', constraint: 'notification_inboxes_user_id_user_id_fk' });
+      // A notification needs the inbox: none for the closed account, whoever writes.
+      const market = await createMarket(t.db);
+      expect(await refusal(t.db.insert(notifications).values(raw(closed.id, market.slug)))).toEqual(
+        {
+          state: '23503',
+          constraint: 'notifications_user_id_notification_inboxes_user_id_fk',
+        },
+      );
+    });
+
+    it('holds a notification and a key to their shapes (the CHECKs)', async () => {
+      const { member, market, row } = await notified();
+      const bad: [Partial<typeof notifications.$inferInsert>, string][] = [
+        [{ type: 'Bad-Type' }, 'notifications_type_check'],
+        [{ type: 'a' }, 'notifications_type_check'],
+        [{ type: '1st_type' }, 'notifications_type_check'],
+        [{ category: 'price' }, 'notifications_category_check'],
+        [{ params: ['x'] as never }, 'notifications_params_check'],
+        [{ params: 'x' as never }, 'notifications_params_check'],
+        [{ target: { slug: market.slug } as never }, 'notifications_target_check'],
+        [{ target: { kind: 1, slug: market.slug } as never }, 'notifications_target_check'],
+        [{ target: [] as never }, 'notifications_target_check'],
+        [{ mergeKey: 'has space' }, 'notifications_merge_key_check'],
+        [{ mergeKey: '' }, 'notifications_merge_key_check'],
+        [{ eventCount: 0 }, 'notifications_event_count_check'],
+      ];
+      for (const [change, constraint] of bad) {
+        expect(
+          await refusal(t.db.insert(notifications).values(raw(member.id, market.slug, change))),
+          JSON.stringify(change),
+        ).toEqual({ state: '23514', constraint });
+      }
+      // A type the shape takes, though no list holds it: the write path holds the list.
+      await t.db.insert(notifications).values(raw(member.id, market.slug, { type: 'any_shape_9' }));
+      const key = { userId: member.id, type: row.type, eventKey: 'e-2', notificationId: row.id };
+      for (const [change, constraint] of [
+        [{ type: 'Bad' }, 'notification_keys_type_check'],
+        [{ eventKey: 'has space' }, 'notification_keys_event_key_check'],
+        [{ eventKey: 'x/y' }, 'notification_keys_event_key_check'],
+      ] as const) {
+        expect(
+          await refusal(t.db.insert(notificationKeys).values({ ...key, ...change })),
+          JSON.stringify(change),
+        ).toEqual({ state: '23514', constraint });
+      }
+      // One key per member, type and event (53-4).
+      const [first] = await t.db
+        .select()
+        .from(notificationKeys)
+        .where(eq(notificationKeys.notificationId, row.id));
+      expect(await refusal(t.db.insert(notificationKeys).values(first!))).toEqual({
+        state: '23505',
+        constraint: 'notification_keys_user_id_type_event_key_pk',
+      });
+    });
+
+    it('keeps a key to its notification’s account and type, and cascades inbox → notifications → keys', async () => {
+      const { member, market, row } = await notified();
+      const { user: other } = await createUser(t.db);
+      for (const change of [{ userId: other.id }, { type: 'test_merged_notice' }]) {
+        expect(
+          await refusal(
+            t.db.insert(notificationKeys).values({
+              userId: member.id,
+              type: row.type,
+              eventKey: 'mismatch',
+              notificationId: row.id,
+              ...change,
+            }),
+          ),
+          JSON.stringify(change),
+        ).toEqual({ state: '23503', constraint: 'notification_keys_notification_fk' });
+      }
+      expect(
+        await deleteActions(
+          t.db,
+          'notification_inboxes_user_id_user_id_fk',
+          'notifications_user_id_notification_inboxes_user_id_fk',
+          'notification_keys_notification_fk',
+        ),
+      ).toEqual({
+        notification_inboxes_user_id_user_id_fk: 'c',
+        notifications_user_id_notification_inboxes_user_id_fk: 'c',
+        notification_keys_notification_fk: 'c',
+      });
+      // A notification deleted (the retention) takes its keys; the inbox (the closure) takes all.
+      await createTestNotification(t.db, { userId: member.id, slug: market.slug });
+      await t.db.delete(notifications).where(eq(notifications.id, row.id));
+      expect(
+        await t.db
+          .select()
+          .from(notificationKeys)
+          .where(eq(notificationKeys.notificationId, row.id)),
+      ).toEqual([]);
+      expect(
+        await t.db.select().from(notificationKeys).where(eq(notificationKeys.userId, member.id)),
+      ).toHaveLength(1);
+      await t.db.delete(notificationInboxes).where(eq(notificationInboxes.userId, member.id));
+      expect(
+        await t.db.select().from(notifications).where(eq(notifications.userId, member.id)),
+      ).toEqual([]);
+      expect(
+        await t.db.select().from(notificationKeys).where(eq(notificationKeys.userId, member.id)),
+      ).toEqual([]);
+    });
+
+    it('holds one unread merge target per account, type and merge key; a read one is none', async () => {
+      const { user: member } = await createUser(t.db);
+      const market = await createMarket(t.db);
+      const target = raw(member.id, market.slug, { type: 'test_merged_notice', mergeKey: 'o-1' });
+      const [first] = await t.db.insert(notifications).values(target).returning();
+      expect(await refusal(t.db.insert(notifications).values(target))).toEqual({
+        state: '23505',
+        constraint: 'notifications_merge_target_uidx',
+      });
+      // Another key, another type, or no key at all is another row.
+      await t.db.insert(notifications).values({ ...target, mergeKey: 'o-2' });
+      await t.db.insert(notifications).values({ ...target, type: 'other_type' });
+      await t.db.insert(notifications).values({ ...target, mergeKey: null });
+      await t.db.insert(notifications).values({ ...target, mergeKey: null });
+      // Once read, the next one of the key is a new unread row.
+      await t.db
+        .update(notifications)
+        .set({ readAt: new Date() })
+        .where(eq(notifications.id, first!.id));
+      await t.db.insert(notifications).values(target);
+    });
+
+    describe('notifications_kept', () => {
+      /** Updates notification `id` as buddha_app. */
+      const update = (id: string, set: Partial<typeof notifications.$inferInsert>) =>
+        t.db.update(notifications).set(set).where(eq(notifications.id, id));
+      const kept = (message: string) => ({
+        state: '23000',
+        constraint: 'notifications_kept',
+        message: expect.stringContaining(message) as unknown,
+      });
+
+      it('passes an unread merge — params, one more event, a later time — and a first read', async () => {
+        const { row } = await notified();
+        const later = new Date(row.occurredAt.getTime() + 60_000);
+        await update(row.id, {
+          params: { label: 'merged' },
+          eventCount: sql`${notifications.eventCount} + 1` as never,
+          occurredAt: later,
+        });
+        // The same time again, and a merge and a read in one statement, pass too.
+        await update(row.id, { occurredAt: later, params: { label: 'merged twice' } });
+        const readAt = new Date();
+        await update(row.id, { params: { label: 'read' }, readAt });
+        const [now] = await t.db.select().from(notifications).where(eq(notifications.id, row.id));
+        expect(now).toMatchObject({
+          params: { label: 'read' },
+          eventCount: 2,
+          occurredAt: later,
+          readAt,
+        });
+      });
+
+      it('keeps the first read: never back to unread, never moved (AC 5)', async () => {
+        const { row } = await notified();
+        const readAt = new Date();
+        await update(row.id, { readAt });
+        expect(await refusedBy(update(row.id, { readAt: null }))).toEqual(
+          kept('its first read is kept'),
+        );
+        expect(
+          await refusedBy(update(row.id, { readAt: new Date(readAt.getTime() + 1_000) })),
+        ).toEqual(kept('its first read is kept'));
+        // The same read time again changes nothing and passes.
+        await update(row.id, { readAt });
+      });
+
+      it('takes no merged event into a read notification (52-6)', async () => {
+        const { row } = await notified();
+        await update(row.id, { readAt: new Date() });
+        for (const set of [
+          { params: { label: 'late' } },
+          { eventCount: 2 },
+          { occurredAt: new Date(row.occurredAt.getTime() + 1_000) },
+        ]) {
+          expect(await refusedBy(update(row.id, set)), JSON.stringify(set)).toEqual(
+            kept('only an unread one takes a merged event'),
+          );
+        }
+      });
+
+      it('never lowers the event count', async () => {
+        const { row } = await notified();
+        await update(row.id, { eventCount: 3 });
+        expect(await refusedBy(update(row.id, { eventCount: 2 }))).toEqual(
+          kept('its event count never goes down'),
+        );
+      });
+
+      it('never moves the 발생 시각 back (134-2)', async () => {
+        const { row } = await notified();
+        expect(
+          await refusedBy(update(row.id, { occurredAt: new Date(row.occurredAt.getTime() - 1) })),
+        ).toEqual(kept('its occurrence time never goes back'));
+      });
+
+      it('changes no other column, whoever writes: buddha_app has no privilege, the owner meets the trigger', async () => {
+        const { member, row } = await notified();
+        const { user: other } = await createUser(t.db);
+        const changes: Partial<typeof notifications.$inferInsert>[] = [
+          { id: randomUUID() },
+          { userId: other.id },
+          { type: 'other_type' },
+          { category: 'trade' },
+          { target: { kind: 'market', slug: 'another-market' } },
+          { mergeKey: 'o-1' },
+          { createdAt: new Date(row.createdAt.getTime() + 1) },
+        ];
+        for (const set of changes) {
+          expect(
+            (await refusal(update(row.id, set))).state,
+            `buddha_app ${JSON.stringify(set)}`,
+          ).toBe('42501');
+        }
+        await asOwner(async (owner) => {
+          for (const set of changes) {
+            expect(
+              await refusedBy(
+                owner.update(notifications).set(set).where(eq(notifications.id, row.id)),
+              ),
+              `owner ${JSON.stringify(set)}`,
+            ).toEqual(kept('never change'));
+          }
+        });
+        expect(
+          (await t.db.select().from(notifications).where(eq(notifications.userId, member.id)))[0],
+        ).toEqual(row);
+      });
+    });
+
+    it('lets buddha_app change four columns of a notification and no key, and lock an inbox', async () => {
+      const { rows } = await t.db.execute<{ table: string; privilege: string }>(sql`
+        SELECT table_name AS "table", privilege_type AS privilege
+        FROM information_schema.role_table_grants
+        WHERE grantee = 'buddha_app' AND table_schema = 'public'
+          AND table_name IN ('notification_inboxes', 'notifications', 'notification_keys')
+        ORDER BY 1, 2`);
+      const privs = (table: string) =>
+        rows.filter((row) => row.table === table).map((row) => row.privilege);
+      expect(privs('notification_inboxes')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+      expect(privs('notifications')).toEqual(['DELETE', 'INSERT', 'SELECT']);
+      expect(privs('notification_keys')).toEqual(['DELETE', 'INSERT', 'SELECT']);
+      const { rows: columns } = await t.db.execute<{ column: string }>(sql`
+        SELECT column_name AS "column" FROM information_schema.column_privileges
+        WHERE grantee = 'buddha_app' AND table_schema = 'public' AND table_name = 'notifications'
+          AND privilege_type = 'UPDATE'
+        ORDER BY 1`);
+      expect(columns.map((row) => row.column)).toEqual([
+        'event_count',
+        'occurred_at',
+        'params',
+        'read_at',
+      ]);
+      const { member, row } = await notified();
+      const [key] = await t.db
+        .select()
+        .from(notificationKeys)
+        .where(eq(notificationKeys.notificationId, row.id));
+      expect(
+        (
+          await refusal(
+            t.db
+              .update(notificationKeys)
+              .set({ eventKey: 'moved' })
+              .where(eq(notificationKeys.eventKey, key!.eventKey)),
+          )
+        ).state,
+      ).toBe('42501');
+      // The writers' gate (FOR KEY SHARE) and the closure's (FOR UPDATE) both take an inbox.
+      await t.db.transaction(async (tx) => {
+        for (const lock of ['FOR KEY SHARE', 'FOR UPDATE'] as const) {
+          const { rows: locked } = await tx.execute(
+            sql`SELECT user_id FROM notification_inboxes WHERE user_id = ${member.id} ${sql.raw(lock)}`,
+          );
+          expect(locked, lock).toHaveLength(1);
+        }
+        // And a merge locks a notification row (its column grants are enough).
+        const { rows: target } = await tx.execute(
+          sql`SELECT id FROM notifications WHERE id = ${row.id} FOR UPDATE`,
+        );
+        expect(target).toHaveLength(1);
+      });
     });
   });
 

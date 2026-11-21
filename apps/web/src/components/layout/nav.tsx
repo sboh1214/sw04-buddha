@@ -18,6 +18,7 @@ import { usePathname, useSearchParams } from 'next/navigation';
 import { type ReactNode, Suspense, useState } from 'react';
 import type { UrlObject } from 'url';
 import { AuthButtons } from '@/components/auth/auth-buttons';
+import { UnreadCount, useUnreadNotifications } from '@/components/notifications/unread-count';
 import { ColorModeButton } from '@/components/ui/color-mode';
 import { copy } from '@/copy';
 import { useCategories } from '@/hooks/use-markets';
@@ -157,7 +158,10 @@ export function Nav() {
  *
  * MY joins once the session says someone is signed in (owner decision 2026-10-13). `useSession`
  * holds `isPending` through hydration (lib/use-session.ts), so the server HTML and the hydrating
- * render both list two items and MY appears after them, last, so neither of them moves.
+ * render both list two items and MY appears after them, last, so neither of them moves. Beside it,
+ * once its account is known, the member's unread notification count (#53, owner answer 53-1;
+ * `UnreadCount`): over the item's corner, so the row keeps its height, and described to a screen
+ * reader through the link's `aria-describedby` — the link's name stays 'MY'.
  *
  * `usePathname` is safe in the root layout — it is `useSearchParams` that forces a static page
  * into a Suspense boundary (see `CategoryNav`).
@@ -168,34 +172,55 @@ export function Nav() {
 function PrimaryLinks() {
   const pathname = usePathname();
   const { data: session } = useSession();
+  const unread = useUnreadNotifications();
 
   return (
     <HStack as="nav" aria-label={copy.navPrimary} hideBelow="md" gap="1">
       {primaryNavItems(session != null).map((item) => {
         const current = isPrimaryCurrent(pathname, item.key);
+        // MY carries the member's unread count (#53, 53-1): beside the link, never in it, so its
+        // text and name stay 'MY' (`UnreadCount`).
+        const count = item.key === 'my' ? unread : null;
         return (
-          <ChakraLink
-            key={item.key}
-            asChild
-            h="36px"
-            px="4"
-            borderRadius="pill"
-            textStyle="overlineLg"
-            color="fg"
-            textDecoration="none"
-            bg={current ? 'surface.hover' : undefined}
-            _hover={{ bg: 'surface.hover', textDecoration: 'none' }}
-            data-testid={`nav-primary-${item.key}`}
-          >
-            <NextLink href={item.href} aria-current={current ? 'page' : undefined}>
-              {item.label}
-            </NextLink>
-          </ChakraLink>
+          // A flex box, so the inline link sits in no line box of its own: no height is added.
+          <Box key={item.key} position="relative" display="flex">
+            <ChakraLink
+              asChild
+              h="36px"
+              px="4"
+              borderRadius="pill"
+              textStyle="overlineLg"
+              color="fg"
+              textDecoration="none"
+              bg={current ? 'surface.hover' : undefined}
+              _hover={{ bg: 'surface.hover', textDecoration: 'none' }}
+              data-testid={`nav-primary-${item.key}`}
+            >
+              <NextLink
+                href={item.href}
+                aria-current={current ? 'page' : undefined}
+                aria-describedby={count === null ? undefined : NAV_MY_UNREAD_ID}
+              >
+                {item.label}
+              </NextLink>
+            </ChakraLink>
+            {item.key === 'my' && (
+              <UnreadCount
+                unread={count}
+                id={NAV_MY_UNREAD_ID}
+                testId="nav-primary-my-unread"
+                placement={{ top: '-1', insetEnd: '-1' }}
+              />
+            )}
+          </Box>
         );
       })}
     </HStack>
   );
 }
+
+/** The header MY item's unread phrase, which its link names as its description. */
+const NAV_MY_UNREAD_ID = 'nav-primary-my-unread-text';
 
 /**
  * The search entry. A real `<form>` that navigates to `/search?q=…` (ADR-0066: the results are a

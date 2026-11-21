@@ -1,9 +1,10 @@
 'use client';
 
-import { HStack, Link as ChakraLink } from '@chakra-ui/react';
+import { Box, HStack, Link as ChakraLink } from '@chakra-ui/react';
 import NextLink from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useRef } from 'react';
+import { UnreadCount, useUnreadNotifications } from '@/components/notifications/unread-count';
 import { copy } from '@/copy';
 import { MY_TABS, isMyTabCurrent, tabStripScrollDelta } from '@/lib/my';
 
@@ -18,10 +19,15 @@ import { MY_TABS, isMyTabCurrent, tabStripScrollDelta } from '@/lib/my';
  * scroll container the way the header's category row does. On a phone the later tabs start out
  * of view, so the current one is scrolled into the strip whenever the page changes — the strip
  * only, never the window (`tabStripScrollDelta`, lib/my.ts).
+ *
+ * 알림 carries the member's unread notification count (#53, owner answer 53-1; `UnreadCount`): over
+ * the tab's corner, inside the strip's padding, and described to a screen reader through the
+ * link's `aria-describedby` — the tab's name stays '알림'.
  */
 export function MyTabs() {
   const pathname = usePathname();
   const navRef = useRef<HTMLDivElement>(null);
+  const unread = useUnreadNotifications();
 
   useEffect(() => {
     const strip = navRef.current;
@@ -46,28 +52,47 @@ export function MyTabs() {
     >
       {MY_TABS.map((tab) => {
         const current = isMyTabCurrent(pathname, tab.href);
+        // 알림 carries the member's unread count (#53, 53-1), beside the link and not in it.
+        const count = tab.key === 'notifications' ? unread : null;
         return (
-          <ChakraLink
-            key={tab.key}
-            asChild
-            h="36px"
-            px="4"
-            flexShrink="0"
-            whiteSpace="nowrap"
-            borderRadius="pill"
-            textStyle="emphasisMd"
-            color={current ? 'fg' : 'fg.muted'}
-            textDecoration="none"
-            bg={current ? 'surface.hover' : undefined}
-            _hover={{ bg: 'surface.hover', color: 'fg', textDecoration: 'none' }}
-            data-testid={`my-tab-${tab.key}`}
-          >
-            <NextLink href={tab.href} aria-current={current ? 'page' : undefined}>
-              {tab.label}
-            </NextLink>
-          </ChakraLink>
+          <Box key={tab.key} position="relative" display="flex" flexShrink="0">
+            <ChakraLink
+              asChild
+              h="36px"
+              px="4"
+              flexShrink="0"
+              whiteSpace="nowrap"
+              borderRadius="pill"
+              textStyle="emphasisMd"
+              color={current ? 'fg' : 'fg.muted'}
+              textDecoration="none"
+              bg={current ? 'surface.hover' : undefined}
+              _hover={{ bg: 'surface.hover', color: 'fg', textDecoration: 'none' }}
+              data-testid={`my-tab-${tab.key}`}
+            >
+              <NextLink
+                href={tab.href}
+                aria-current={current ? 'page' : undefined}
+                aria-describedby={count === null ? undefined : MY_TAB_UNREAD_ID}
+              >
+                {tab.label}
+              </NextLink>
+            </ChakraLink>
+            {tab.key === 'notifications' && (
+              <UnreadCount
+                unread={count}
+                id={MY_TAB_UNREAD_ID}
+                testId="my-tab-notifications-unread"
+                // Within the strip's 4px of padding, which a scroll container does not clip.
+                placement={{ top: '-1', insetEnd: '-1' }}
+              />
+            )}
+          </Box>
         );
       })}
     </HStack>
   );
 }
+
+/** The 알림 tab's unread phrase, which its link names as its description. */
+const MY_TAB_UNREAD_ID = 'my-tab-notifications-unread-text';

@@ -34,6 +34,8 @@ const USER_EVENTS = {
     version: 1,
     ts,
   },
+  // #53 (ADR-0157 53-1): a signal with no state — the type and the time only.
+  'user:notification': { type: 'user:notification', ts },
 } as const satisfies { [K in UserRealtimeEvent['type']]: Extract<UserRealtimeEvent, { type: K }> };
 
 /** The `type` literal of each member of a family union. */

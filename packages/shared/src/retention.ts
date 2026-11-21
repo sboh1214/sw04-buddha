@@ -31,7 +31,11 @@ import { NICKNAME_HOLD_DAYS } from './nickname.js';
  * RETENTION_PERIOD_SETTINGS or an existing one's, whose description then names the kind too — a
  * purge kind here, and its step in the worker's job (docs/SETTINGS.md '보존기간 항목 등록하기').
  * #77's market proposals came so, with a setting of their own (ADR-0087's owner decision
- * 2026-10-24 13).
+ * 2026-10-24 13), and #53's notifications (ADR-0157 53-7). Unlike the closure-anchored kinds
+ * (consent records, verification records, moderation records and market proposals of a withdrawn
+ * account), notifications are deleted from a live member's inbox by their 발생 시각 (53-10), read
+ * or unread: a closure deletes a closed one's inbox whole at once, so no period counts from a
+ * withdrawal.
  */
 
 /**
@@ -66,6 +70,9 @@ export const RETENTION_PERIOD_MAX_DAYS = 7_300;
  * - `market_proposals`: 시장 제안 기록 — a withdrawn account's market proposals (#77,
  *   `market_proposals`: the form, the status and the operators' reasons, memos and internal memo),
  *   once their processing has ended (owner decision 2026-10-24 13, ADR-0087 결과 5; ADR-0089).
+ * - `notifications`: 알림 — every account's notifications (#53, `notifications` with their keys),
+ *   read or not, once the period has passed since their 발생 시각 (a merged one's latest event,
+ *   134-2; owner answers 53-7, 53-10). A closed account's went whole with its closure.
  */
 export const RETENTION_PERIODS = [
   'consent_records',
@@ -74,6 +81,7 @@ export const RETENTION_PERIODS = [
   'moderation_records',
   'removed_profile_items',
   'market_proposals',
+  'notifications',
 ] as const;
 export type RetentionPeriod = (typeof RETENTION_PERIODS)[number];
 
@@ -109,7 +117,12 @@ export type RetentionPeriod = (typeof RETENTION_PERIODS)[number];
  *   survive.
  * - `consent_records`, `phone_verification_records`: as their periods.
  * - `market_proposals`: a withdrawn account's proposals whose processing has ended (#77) — nothing
- *   names a proposal, so last.
+ *   names a proposal.
+ * - `notifications`: notifications whose 발생 시각 is past the period (#53, ADR-0157), their
+ *   dedupe keys going with them (the foreign key's cascade) — nothing names a notification, so
+ *   last. Unlike the closure-anchored kinds (consent records, verification records, moderation
+ *   records and market proposals of a withdrawn account), they are deleted from a live member's
+ *   inbox by their 발생 시각, read or unread.
  */
 export const RETENTION_PURGE_KINDS = [
   'nickname_holds',
@@ -128,6 +141,7 @@ export const RETENTION_PURGE_KINDS = [
   'consent_records',
   'phone_verification_records',
   'market_proposals',
+  'notifications',
 ] as const;
 export type RetentionPurgeKind = (typeof RETENTION_PURGE_KINDS)[number];
 export const retentionPurgeKindSchema = z
@@ -160,6 +174,7 @@ export const RETENTION_PURGE_KIND_PERIODS: Readonly<
   consent_records: 'consent_records',
   phone_verification_records: 'phone_verification_records',
   market_proposals: 'market_proposals',
+  notifications: 'notifications',
 };
 
 /** The days a nickname hold is kept: the hold itself (#57-6), recorded as its purge's period. */

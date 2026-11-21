@@ -491,19 +491,21 @@ export function PositionsBody({
  * One card with its own heading, so each section is a landmark a screen reader can jump to. A
  * preview on the summary passes `href`, its tab, for the 전체 보기 beside the heading. `headingAs`
  * is `h4` on a page that names itself with an `h3` under MY's `h2` (조치·신고 내역, which is no
- * tab to name it).
+ * tab to name it). `action` is a control at the heading's right — MY › 알림's '모두 읽음' (#53).
  */
 export function Section({
   title,
   testId,
   href,
   headingAs = 'h3',
+  action,
   children,
 }: {
   title: string;
   testId: string;
   href?: Route;
   headingAs?: 'h3' | 'h4';
+  action?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -513,6 +515,7 @@ export function Section({
           <Heading as={headingAs} size="md">
             {title}
           </Heading>
+          {action}
           {href !== undefined && (
             <ChakraLink
               asChild

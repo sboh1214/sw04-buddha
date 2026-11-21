@@ -19,12 +19,14 @@
  * key check naming an item (a link flag) neither waits for the run nor is waited for. After PR
  * #233's review (ADR-0087 7-29): a report sent while the run waits for its post, or holding the
  * comment the run passes by, keeps that item's versions — the run asks what awaits an item once it
- * holds it — and a reply to a 대댓글, which holds two comments, neither waits nor deadlocks. The
- * release settings are changed the way the admin screen changes them (a row and its record); the
- * run's instant is moved past a period instead of backdating a closure (a closed profile never
- * changes, migration 0043). Skips when TEST_* are unset.
+ * holds it — and a reply to a 대댓글, which holds two comments, neither waits nor deadlocks. #53's
+ * notifications (ADR-0157, owner answers 53-7 and 53-10): every account's, read or not, from their
+ * 발생 시각 — a merged one's latest event — with their keys, and one a write in flight holds passed
+ * by. The release settings are changed the way the admin screen changes them (a row and its
+ * record); the run's instant is moved past a period instead of backdating a closure (a closed
+ * profile never changes, migration 0043). Skips when TEST_* are unset.
  */
-import { schema } from '@buddha/db';
+import { createNotifications, markNotificationRead, schema } from '@buddha/db';
 import {
   closeAccount,
   connectTestDb,
@@ -44,12 +46,15 @@ import {
   createProfileImage,
   createProposal,
   createReport,
+  createTestNotification,
   createUser,
   createWatch,
   hasTestDb,
   randomPhone,
   randomPhoneHash,
   setReleaseSetting,
+  TEST_MERGED_NOTIFICATION,
+  TEST_NOTIFICATION_DEFINITIONS,
   type TestDb,
 } from '@buddha/db/test';
 import {
@@ -57,6 +62,7 @@ import {
   DELETED_POSTS_RETENTION_SETTING,
   MARKET_PROPOSALS_RETENTION_SETTING,
   MODERATION_RECORDS_RETENTION_SETTING,
+  NOTIFICATIONS_RETENTION_SETTING,
   ORPHAN_MEDIA_RETRY_FIRST_HOURS,
   ORPHAN_MEDIA_RETRY_SLACK_MINUTES,
   PHONE_VERIFICATION_RECORDS_RETENTION_SETTING,
@@ -83,6 +89,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
   let admin: string;
   let otherAdmin: string;
   let marketId: string;
+  let marketSlug: string;
 
   beforeAll(async () => {
     t = await connectTestDb();
@@ -95,7 +102,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     storage = new MemoryObjectStorage();
     admin = (await createUser(t.db, { role: 'admin' })).user.id;
     otherAdmin = (await createUser(t.db, { role: 'admin' })).user.id;
-    marketId = (await createMarket(t.db, { createdBy: admin })).id;
+    ({ id: marketId, slug: marketSlug } = await createMarket(t.db, { createdBy: admin }));
   });
 
   const setPeriod = (
@@ -254,6 +261,12 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
       decision: { status: 'rejected', by: otherAdmin },
     });
     await createProposal(t.db, { userId: user.id, status: 'retracted' });
+    // A live member's notification (#53): its period too is not approved.
+    await createTestNotification(t.db, {
+      userId: other,
+      slug: marketSlug,
+      occurredAt: before(new Date(), 1),
+    });
     const closedAt = await closeAccount(t.db, user.id);
     await setPeriod(CONSENT_RECORDS_RETENTION_SETTING, 1, 'test');
     await setPeriod(MARKET_PROPOSALS_RETENTION_SETTING, 1, 'proposal');
@@ -278,6 +291,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     expect(await t.db.select().from(schema.approvalRequests)).toHaveLength(1);
     expect(await t.db.select().from(schema.linkFlags)).toHaveLength(1);
     expect(await t.db.select().from(schema.marketProposals)).toHaveLength(1);
+    expect(await t.db.select().from(schema.notifications)).toHaveLength(1);
     const byKind = Object.fromEntries(outcome.kinds.map((kind) => [kind.kind, kind]));
     expect(byKind.consent_records).toEqual({
       kind: 'consent_records',
@@ -292,6 +306,12 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     expect(byKind.deleted_posts).toMatchObject({ status: 'undecided', periodDays: null });
     expect(byKind.removed_profile_items).toMatchObject({ status: 'undecided', periodDays: null });
     expect(byKind.market_proposals).toMatchObject({ status: 'proposal', periodDays: null });
+    expect(byKind.notifications).toEqual({
+      kind: 'notifications',
+      status: 'undecided',
+      periodDays: null,
+      deleted: 0,
+    });
     // Only the nickname holds' fixed 30 days applied: the closure's hold of the nickname is over.
     expect(await purgeRecords()).toEqual([
       { kind: 'nickname_holds', count: 1, periodDays: 30, ranAt: now, outcome: 'done' },
@@ -2381,6 +2401,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
       MODERATION_RECORDS_RETENTION_SETTING,
       REMOVED_PROFILE_ITEMS_RETENTION_SETTING,
       MARKET_PROPOSALS_RETENTION_SETTING,
+      NOTIFICATIONS_RETENTION_SETTING,
     ]) {
       await setPeriod(definition, 1);
     }
@@ -3010,6 +3031,181 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     await run(later);
     expect(await t.db.select().from(schema.postCommentRevisions)).toEqual([]);
     expect(await countsAt(later)).toMatchObject({ comment_revisions: 1 });
+  });
+
+  /** A test notification of `userId`'s through the real write path (#53): its id, made new. */
+  async function notify(
+    userId: string,
+    input: { occurredAt: Date; eventKey?: string; mergeKey?: string },
+  ): Promise<string> {
+    const outcome = await createTestNotification(t.db, { userId, slug: marketSlug, ...input });
+    if (outcome.kind !== 'created') throw new Error(`notification not created: ${outcome.kind}`);
+    return outcome.id;
+  }
+
+  const notificationIds = async () =>
+    (await t.db.select({ id: schema.notifications.id }).from(schema.notifications))
+      .map((row) => row.id)
+      .sort();
+
+  /** The notifications the dedupe keys name, one entry per key. */
+  const keyedIds = async () =>
+    (
+      await t.db
+        .select({ id: schema.notificationKeys.notificationId })
+        .from(schema.notificationKeys)
+    )
+      .map((row) => row.id)
+      .sort();
+
+  it('deletes every account’s notifications, read or not, once the period has passed since their 발생 시각, with their keys — a live account’s too (#53, ADR-0157 53-7, 53-10)', async () => {
+    const member = (await createUser(t.db)).user.id;
+    const other = (await createUser(t.db)).user.id;
+    // A withdrawn account's consent records, whose own period is undecided: they stay.
+    const leaving = (await createUser(t.db)).user.id;
+    await createConsents(t.db, { userId: leaving });
+    await closeAccount(t.db, leaving);
+    const at = before(new Date(), 40);
+    const unread = await notify(member, { occurredAt: at, eventKey: 'event-unread' });
+    const read = await notify(member, { occurredAt: at, eventKey: 'event-read' });
+    expect(await markNotificationRead(t.db, member, read)).toMatchObject({ changed: true });
+    const theirs = await notify(other, { occurredAt: at, eventKey: 'event-theirs' });
+    // A day younger: due a day later.
+    const younger = await notify(member, { occurredAt: after(at, 1), eventKey: 'event-younger' });
+    await setPeriod(NOTIFICATIONS_RETENTION_SETTING, 30);
+
+    // A millisecond short of 30 days: kept, and the run says it looked (0).
+    const early = after(at, 30, -1);
+    await run(early);
+    expect(await notificationIds()).toEqual([unread, read, theirs, younger].sort());
+    expect(await countsAt(early)).toEqual({ notifications: 0 });
+
+    // Exactly 30 days: the three of that 발생 시각, read or not, whoever's — in batches of two,
+    // each recorded in its transaction — with the keys of the events they held.
+    const due = after(at, 30);
+    const outcome = await run(due, 2);
+    expect(await notificationIds()).toEqual([younger]);
+    expect(await keyedIds()).toEqual([younger]);
+    expect(outcome.kinds.find((kind) => kind.kind === 'notifications')).toEqual({
+      kind: 'notifications',
+      status: 'approved',
+      periodDays: 30,
+      deleted: 3,
+    });
+    expect(
+      (await purgeRecords()).filter(
+        (row) => row.kind === 'notifications' && row.ranAt.getTime() === due.getTime(),
+      ),
+    ).toEqual([
+      { kind: 'notifications', count: 2, periodDays: 30, ranAt: due, outcome: 'done' },
+      { kind: 'notifications', count: 1, periodDays: 30, ranAt: due, outcome: 'done' },
+    ]);
+    // No other kind's period applied.
+    expect(await countsAt(due)).toEqual({ notifications: 3 });
+    expect(await t.db.select().from(schema.consentRecords)).toHaveLength(4);
+
+    // Its key gone with it, the same event reprocessed notifies again (accepted, ADR-0157).
+    const again = await notify(member, { occurredAt: at, eventKey: 'event-unread' });
+    expect(await keyedIds()).toEqual([again, younger].sort());
+    const later = after(at, 31);
+    await run(later);
+    expect(await notificationIds()).toEqual([]);
+    expect(await keyedIds()).toEqual([]);
+    expect(await countsAt(later)).toEqual({ notifications: 2 });
+  });
+
+  it('counts a merged notification from its latest event, to which each merge raises its 발생 시각 (#53, 134-2, ADR-0157 53-10)', async () => {
+    const member = (await createUser(t.db)).user.id;
+    const first = before(new Date(), 50);
+    const latest = after(first, 10);
+    const id = await notify(member, { occurredAt: first, eventKey: 'fill-1', mergeKey: 'order-1' });
+    expect(
+      await createTestNotification(t.db, {
+        userId: member,
+        slug: marketSlug,
+        occurredAt: latest,
+        eventKey: 'fill-2',
+        mergeKey: 'order-1',
+      }),
+    ).toEqual({ kind: 'merged', id, userId: member, paramsReset: false });
+    await setPeriod(NOTIFICATIONS_RETENTION_SETTING, 30);
+
+    // 30 days since the first event, then a millisecond short of 30 since the latest: kept.
+    const sinceFirst = after(first, 30);
+    await run(sinceFirst);
+    const early = after(latest, 30, -1);
+    await run(early);
+    expect(await notificationIds()).toEqual([id]);
+    expect(await countsAt(sinceFirst)).toEqual({ notifications: 0 });
+    expect(await countsAt(early)).toEqual({ notifications: 0 });
+    // 30 days since the latest: due, with both events' keys.
+    const due = after(latest, 30);
+    await run(due);
+    expect(await notificationIds()).toEqual([]);
+    expect(await keyedIds()).toEqual([]);
+    expect(await countsAt(due)).toEqual({ notifications: 1 });
+  });
+
+  it('passes by, waiting for neither, a notification a mark-read holds and one a merge holds, and judges them again on the next run: the read one goes, the merged one is younger (#53, ADR-0157)', async () => {
+    const member = (await createUser(t.db)).user.id;
+    const at = before(new Date(), 40);
+    await notify(member, { occurredAt: at });
+    const reading = await notify(member, { occurredAt: at });
+    const merging = await notify(member, {
+      occurredAt: at,
+      eventKey: 'fill-1',
+      mergeKey: 'order-1',
+    });
+    await setPeriod(NOTIFICATIONS_RETENTION_SETTING, 30);
+    const due = after(at, 30);
+
+    // In one transaction not yet committed: the member opens one (its UPDATE holds the row) and a
+    // fill merges into another (FOR UPDATE, its 발생 시각 raised to the transaction's clock).
+    let held = () => {};
+    const holding = new Promise<void>((resolve) => {
+      held = resolve;
+    });
+    let release = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const writing = t.db.transaction(async (tx) => {
+      expect(await markNotificationRead(tx, member, reading)).toMatchObject({ changed: true });
+      const [merged] = await createNotifications(
+        tx,
+        [
+          {
+            userId: member,
+            type: TEST_MERGED_NOTIFICATION.type,
+            eventKey: 'fill-2',
+            params: { label: 'test', total: 1 },
+            target: { kind: 'market', slug: marketSlug },
+            mergeKey: 'order-1',
+          },
+        ],
+        { definitions: TEST_NOTIFICATION_DEFINITIONS },
+      );
+      expect(merged).toEqual({ kind: 'merged', id: merging, userId: member, paramsReset: false });
+      held();
+      await released;
+    });
+    await Promise.race([holding, writing]);
+    try {
+      // FOR UPDATE without SKIP LOCKED would wait here for the write's commit.
+      await within(run(due), 10);
+    } finally {
+      release();
+      await writing;
+    }
+    expect(await notificationIds()).toEqual([reading, merging].sort());
+    expect(await countsAt(due)).toEqual({ notifications: 1 });
+
+    // Committed: the read one is as old as it was and goes; the merged one's 발생 시각 is the
+    // merge's now, inside the period.
+    const next = after(due, 0, 1);
+    await run(next);
+    expect(await notificationIds()).toEqual([merging]);
+    expect(await countsAt(next)).toEqual({ notifications: 1 });
   });
 
   it('queues each object’s key with its row’s deletion and unqueues it once the store has removed it (#46, ADR-0087 7-12)', async () => {

@@ -3,6 +3,7 @@ export * from './contracts.js';
 export * from './factories.js';
 export * from './harness.js';
 export * from './ledger.js';
+export * from './notifications.js';
 export * from './operator.js';
 export * from './orders.js';
 export * from './wait.js';

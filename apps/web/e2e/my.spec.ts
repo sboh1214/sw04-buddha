@@ -56,10 +56,19 @@ test.describe('MY', () => {
 
     // The summary: 잔고 요약 with a new account's start Coin (creating an account grants nothing
     // since #70, ADR-0071; the nickname step pays it from the value the e2e database holds,
-    // global-setup.ts, #116), a preview per tab with content, 준비 중 for the rest. 관심 시장 has its
-    // content since #89 (ADR-0064) and 내 글 since #51 (ADR-0080): a fresh account's are empty.
+    // global-setup.ts, #116) and a preview per tab but 설정. 관심 시장 has its content since #89
+    // (ADR-0064), 내 글 since #51 (ADR-0080) and 알림 since #53 (ADR-0157): a fresh account's are
+    // empty, and no preview says 준비 중 any more.
     await expect(page.getByTestId('portfolio-available')).toHaveText(await startCoinText(admin));
-    for (const key of ['positions', 'orders', 'history', 'wallet', 'posts', 'watchlist']) {
+    for (const key of [
+      'positions',
+      'orders',
+      'history',
+      'wallet',
+      'posts',
+      'watchlist',
+      'notifications',
+    ]) {
       const preview = page.getByTestId(`my-preview-${key}`);
       await expect(preview).toBeVisible();
       await expect(preview.getByRole('link', { name: copy.myViewAll })).toBeVisible();
@@ -73,11 +82,13 @@ test.describe('MY', () => {
       copy.authoredCommentsEmpty,
     );
     await expect(page.getByTestId('my-preview-posts-coming-soon')).toHaveCount(0);
-    await expect(page.getByTestId('my-preview-notifications-coming-soon')).toHaveText(
-      copy.comingSoon,
+    await expect(page.getByTestId('my-preview-notifications-empty')).toHaveText(
+      copy.notificationsEmpty,
     );
-    // The previews, 준비 중 ones included, run in the tab bar's order (the owner's; 설정 has
-    // none), so 관심 시장 is not drawn above 내 글.
+    await expect(page.getByTestId('my-preview-notifications-coming-soon')).toHaveCount(0);
+    await expect(page.getByText(copy.comingSoon, { exact: true })).toHaveCount(0);
+    // The previews run in the tab bar's order (the owner's; 설정 has none), so 관심 시장 is not
+    // drawn above 내 글, nor 알림 above 관심 시장.
     const previews = await page
       .locator('[data-testid^="my-preview-"]')
       .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-testid')));

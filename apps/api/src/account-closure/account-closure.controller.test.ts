@@ -4,26 +4,28 @@
  * profile. Pinned: the member closes their own account at once on the typed '탈퇴' — the Coin left
  * forfeited by one '탈퇴 소멸' entry (the ledger still sums to the balance, now 0), the identifying
  * data deleted (real name and number, address, sign-in methods, sessions, public items, profile
- * image, watchlist, search history) while the records stay (ledger, start grant and its number,
- * code-send records, consent records, watch events, posts, comments, likes, reports), the public
- * face anonymised on every surface ('탈퇴한 사용자' with no profile link, the profile and its lists
- * 404 — N04 §7's third deletion check, #37-19), the nickname held unlinked for 30 days, a start
- * grant still waiting cancelled and its number freed, the account restriction requests about the
- * member closed as rejected '탈퇴'; the closed account signs in no more, and the same address and
- * number sign up again at once without a second start Coin. The waiting orders are cancelled
- * first as 취소 완료(탈퇴) at the closure's instant, their locks forfeited with the rest (#178,
- * ADR-0113). Refused while an admin, restricted, holding an unsettled contract, paying or with an
- * order waiting for a ledger failure's recovery — nothing changes then, no order cancelled;
- * another member's rows, requests, contracts, payments and orders are neither touched nor
- * counted. Asked twice at once,
+ * image, watchlist, search history, the inbox with its notifications — #53) while the records stay
+ * (ledger, start grant and its number, code-send records, consent records, watch events, posts,
+ * comments, likes, reports), the public face anonymised on every surface ('탈퇴한 사용자' with no profile
+ * link, the profile and its lists 404 — N04 §7's third deletion check, #37-19), the nickname held
+ * unlinked for 30 days, a start grant still waiting cancelled and its number freed, the account
+ * restriction requests about the member closed as rejected '탈퇴'; the closed account signs in no
+ * more, and the same address and number sign up again at once without a second start Coin. The
+ * waiting orders are cancelled first as 취소 완료(탈퇴) at the closure's instant, their locks forfeited
+ * with the rest (#178, ADR-0113). Refused while an admin, restricted, holding an unsettled
+ * contract, paying or with an order waiting for a ledger failure's recovery — nothing changes then,
+ * no order cancelled; another member's rows, requests, contracts, payments and orders are neither
+ * touched nor counted. Asked twice at once,
  * it runs once. A request that passed SessionGuard before the closure committed writes nothing
  * (UNAUTHENTICATED), and operators can neither adjust nor grant the closed account; a former admin
  * who closed the account is named with no nickname in the operators' records. Skips when TEST_*
  * are unset.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
-import { lockMarket, schema } from '@buddha/db';
+import { createNotifications, lockMarket, schema } from '@buddha/db';
 import {
+  TEST_NOTIFICATION,
+  TEST_NOTIFICATION_DEFINITIONS,
   checkOrderInvariants,
   completeOnboarding,
   createApprovalRequest,
@@ -45,6 +47,7 @@ import {
   createReport,
   createSearch,
   createStartGrant,
+  createTestNotification,
   createWatch,
   ledgerOf as accountLedgerOf,
   openOrderIntake,
@@ -200,6 +203,22 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
   async function orderOf(id: string) {
     const [row] = await t.db.select().from(schema.orders).where(eq(schema.orders.id, id));
     return row!;
+  }
+  /** The account's inbox (#53): whether it is there, and its notifications and their keys. */
+  async function inboxOf(userId: string) {
+    const { notificationInboxes, notifications, notificationKeys } = schema;
+    const count = async (rows: Promise<unknown[]>) => (await rows).length;
+    return {
+      inbox: await count(
+        t.db.select().from(notificationInboxes).where(eq(notificationInboxes.userId, userId)),
+      ),
+      notifications: await count(
+        t.db.select().from(notifications).where(eq(notifications.userId, userId)),
+      ),
+      keys: await count(
+        t.db.select().from(notificationKeys).where(eq(notificationKeys.userId, userId)),
+      ),
+    };
   }
   /** The account's ledger, each event from its side (`ledgerOf` of @buddha/db/test, #116). */
   const ledgerOf = (userId: string) => accountLedgerOf(t.db, userId);
@@ -619,6 +638,164 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       // That account received nothing: its own confirmation screen says nothing of the start Coin
       // (owner decision 2026-10-23 (3차) 9).
       expect((await checkOf(again)).startGrantReceived).toBe(false);
+    });
+
+    it('deletes the inbox with every notification and its keys at once, nobody else’s, and the closed account receives none after (#53, 53-5, 53-7)', async () => {
+      const notify = (who: TestUser, mergeKey?: string) =>
+        createTestNotification(t.db, { userId: who.id, slug: market.slug, mergeKey });
+      await notify(member);
+      // A merged one: two events, two keys.
+      await notify(member, 'order-1');
+      expect(await notify(member, 'order-1')).toMatchObject({ kind: 'merged' });
+      const theirs = await notify(other);
+      expect(await inboxOf(member.id)).toEqual({ inbox: 1, notifications: 2, keys: 3 });
+      await closed(member);
+      expect(await inboxOf(member.id)).toEqual({ inbox: 0, notifications: 0, keys: 0 });
+      expect(await inboxOf(other.id)).toEqual({ inbox: 1, notifications: 1, keys: 1 });
+      expect(theirs).toMatchObject({ kind: 'created' });
+      // The write path skips the closed account (no inbox), whatever its type.
+      expect(await notify(member)).toEqual({
+        kind: 'skipped',
+        userId: member.id,
+        reason: 'no_inbox',
+      });
+      expect(await notify(member, 'order-2')).toMatchObject({ kind: 'skipped' });
+      expect(await inboxOf(member.id)).toEqual({ inbox: 0, notifications: 0, keys: 0 });
+    });
+
+    it('waits for a notification writer already holding the inbox and deletes what it wrote; one its refusals stop answers at once, never reaching the inbox (#53, ADR-0157 §5)', async () => {
+      // A producer's event in flight: its write path holds the member's inbox FOR KEY SHARE.
+      const observer = await t.db.$client.connect();
+      let release = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let held = () => {};
+      const holding = new Promise<void>((resolve) => {
+        held = resolve;
+      });
+      const writer = t.db.transaction(async (tx) => {
+        const outcomes = await createNotifications(
+          tx,
+          [
+            {
+              userId: member.id,
+              type: TEST_NOTIFICATION.type,
+              eventKey: 'in-flight',
+              params: { label: '쓰는 중' },
+              target: { kind: 'market', slug: market.slug },
+            },
+          ],
+          { definitions: TEST_NOTIFICATION_DEFINITIONS },
+        );
+        held();
+        await gate;
+        return outcomes;
+      });
+      const position = await createPosition(t.db, {
+        userId: member.id,
+        marketId: market.id,
+        outcome: 'YES',
+        qty: 2,
+      });
+      let closing: Promise<Res> | undefined;
+      try {
+        await holding;
+        // Refused by the refusals asked before any lock: at once, the writer still in flight.
+        const refused = close(member);
+        const waited = new Promise<'waited'>((resolve) => setTimeout(resolve, 5_000, 'waited'));
+        const res = await Promise.race([refused, waited]);
+        if (res === 'waited') throw new Error('the refused closure waited on the inbox');
+        expect(errorOf(res, 409, 'CLOSURE_NOT_ALLOWED')).toEqual({
+          reason: 'unsettled_contracts',
+        });
+        // Nothing refuses it now: it waits for the writer's commit, then deletes what it wrote.
+        await t.db
+          .update(schema.positions)
+          .set({ settled: true })
+          .where(
+            and(
+              eq(schema.positions.userId, position.userId),
+              eq(schema.positions.marketId, position.marketId),
+            ),
+          );
+        closing = close(member);
+        await waitForLockWaiter(observer, 'the closure behind the writer’s inbox');
+        release();
+        expect(await writer).toEqual([
+          { kind: 'created', id: expect.any(String) as string, userId: member.id },
+        ]);
+        expect(dataOf<AccountClosureResult>(await closing).closedAt).toEqual(expect.any(String));
+      } finally {
+        release();
+        await Promise.allSettled([writer, closing]);
+        observer.release();
+      }
+      expect(await inboxOf(member.id)).toEqual({ inbox: 0, notifications: 0, keys: 0 });
+    });
+
+    it('skips a notification for an account whose closure is in flight, and does not send it again when that closure is then refused (owner answer 53-8)', async () => {
+      const observer = await t.db.$client.connect();
+      let release = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let held = () => {};
+      const holding = new Promise<void>((resolve) => {
+        held = resolve;
+      });
+      // A fill on a resting order committing while the closure runs: its contracts not yet seen
+      // by the refusals asked before the locks, and the member's balance held, so the closure
+      // waits past the inbox it took.
+      const filling = t.db.transaction(async (tx) => {
+        await tx.insert(schema.positions).values({
+          userId: member.id,
+          marketId: market.id,
+          outcome: 'YES',
+          qty: 2,
+          costBasisCoin: 0n,
+          realizedPnlCoin: 0n,
+          settled: false,
+          lockedQty: 0,
+        });
+        await tx
+          .select({ one: sql`1` })
+          .from(schema.balances)
+          .where(eq(schema.balances.userId, member.id))
+          .for('update');
+        held();
+        await gate;
+      });
+      let closing: Promise<Res> | undefined;
+      try {
+        await holding;
+        closing = close(member);
+        await waitForLockWaiter(observer, 'the closure behind the fill in flight');
+        // A producer's event now: the inbox is the closure's, so the member is skipped — without
+        // waiting on it.
+        const notifying = createTestNotification(t.db, { userId: member.id, slug: market.slug });
+        const waited = new Promise<'waited'>((resolve) => setTimeout(resolve, 5_000, 'waited'));
+        const outcome = await Promise.race([notifying, waited]);
+        if (outcome === 'waited') throw new Error('the notification waited on the closure');
+        expect(outcome).toEqual({ kind: 'skipped', userId: member.id, reason: 'no_inbox' });
+        release();
+        await filling;
+        // The fill committed first: the closure's locked check refuses it.
+        expect(errorOf(await closing, 409, 'CLOSURE_NOT_ALLOWED')).toEqual({
+          reason: 'unsettled_contracts',
+        });
+      } finally {
+        release();
+        await Promise.allSettled([filling, closing]);
+        observer.release();
+      }
+      // The account stays open with its inbox; the skipped notification is not sent again (53-8),
+      // and the next event reaches it.
+      expect((await profileOf(member.id)).closedAt).toBeNull();
+      expect(await inboxOf(member.id)).toEqual({ inbox: 1, notifications: 0, keys: 0 });
+      expect(
+        await createTestNotification(t.db, { userId: member.id, slug: market.slug }),
+      ).toMatchObject({ kind: 'created' });
     });
 
     it('ends each watch it deletes with one unwatch at the closure, and writes none for a market already unwatched (owner decision 2026-10-23 (2차) 2)', async () => {

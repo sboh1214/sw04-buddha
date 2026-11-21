@@ -18,6 +18,7 @@ import {
   marketTickEventSchema,
   marketTradeEvent,
   marketTradeEventSchema,
+  notificationEvent,
   realtimeEventSchema,
   statusRank,
   statusSupersedes,
@@ -25,6 +26,7 @@ import {
   supersedes,
   userBalanceEventSchema,
   userChannel,
+  userNotificationEventSchema,
   userPositionEventSchema,
   userRealtimeEventSchema,
 } from './realtime.js';
@@ -80,6 +82,7 @@ const position = {
   version: 1,
   ts,
 };
+const notification = { type: 'user:notification', ts };
 
 describe('realtime events (PLAN 8)', () => {
   it('parses every event through its own schema and the union', () => {
@@ -89,7 +92,8 @@ describe('realtime events (PLAN 8)', () => {
     expect(marketBookEventSchema.parse(book)).toEqual(book);
     expect(userBalanceEventSchema.parse(balance)).toEqual(balance);
     expect(userPositionEventSchema.parse(position)).toEqual(position);
-    for (const event of [tick, trade, status, book, balance, position]) {
+    expect(userNotificationEventSchema.parse(notification)).toEqual(notification);
+    for (const event of [tick, trade, status, book, balance, position, notification]) {
       const parsed = realtimeEventSchema.parse(event);
       expect(parsed).toEqual(event);
       expect(REALTIME_EVENT_TYPES).toContain(parsed.type);
@@ -187,6 +191,20 @@ describe('ordering keys', () => {
     }
     const { settled: _settled, ...positionWithoutSettled } = position;
     expect(userPositionEventSchema.safeParse(positionWithoutSettled).success).toBe(false);
+  });
+
+  it('leaves the inbox signal keyless and empty: the member re-reads the count and the list (#53)', () => {
+    // ADR-0157 53-1: something in the inbox changed — no count, no notification, no key.
+    expect(notificationEvent(new Date(ts))).toEqual(notification);
+    expect(Object.keys(userNotificationEventSchema.shape).sort()).toEqual(['ts', 'type']);
+    // Strip, not pass: a count or a notification smuggled into the signal never reaches the room.
+    expect(
+      userNotificationEventSchema.parse({ ...notification, unreadCount: 3, title: 'x' }),
+    ).toEqual(notification);
+    expect(userNotificationEventSchema.safeParse({ ...notification, ts: undefined }).success).toBe(
+      false,
+    );
+    expect(realtimeEventSchema.parse(notification).type).toBe('user:notification');
   });
 
   it('leaves the book signal keyless: it carries no state, so the receiver re-reads the book', () => {
@@ -353,7 +371,7 @@ describe('per-family event unions', () => {
     book,
     { type: 'market:stats', marketId, traderCount: 0, statsRevision: '2' },
   ];
-  const userEvents = [balance, position];
+  const userEvents = [balance, position, notification];
 
   it('parses its own family and refuses the other, which is the authorization check', () => {
     for (const event of marketEvents) {

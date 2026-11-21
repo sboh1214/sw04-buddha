@@ -4,19 +4,20 @@ import { copy } from '../src/copy';
 import { accountIdOf, adminAccount, expect, freshEmail, signIn, signUp, test } from './helpers';
 
 /**
- * 출시 설정 (#170, ADR-0055) as the shipped build has it: thirty-four registered items — 시작 지급액
+ * 출시 설정 (#170, ADR-0055) as the shipped build has it: thirty-five registered items — 시작 지급액
  * (`grant.start_coin`, #70, ADR-0071), the re-grant's six (`grant.regrant_*`, #74, ADR-0155: 소진
  * 기준액, 1회 지급액, 대기기간, 주기, 주기 안 횟수, 누적 상한), 선행 마감 최소 간격 (`market.lead_close_gap`, #22, ADR-0098), 이의
  * 기간 (`market.dispute_window`, #152, ADR-0103), 주문 접수, 주문 속도 제한 and 가격 보호 폭 표준값 (`order.*`, #119,
  * ADR-0112 — the first a flag), three MM risk-stage items (`#129` risk stages), the MM human
- * concentration N (#182), six anomaly inputs (#98), and the six retention periods (`retention.*` —
- * #184's five, ADR-0087, and #77's market proposals, ADR-0089) — which the screen and the API list
- * alike, in the registry's order. Changing and recording an item are fixed by the API suite with
- * injected test items (`createTestApp({ releaseSettings })`), paying the start Coin once a value is
- * entered by the API and worker suites, deleting what a retention period has kept by the worker's
- * suite, the lead-close gap's use by the API suite (admin-markets-times.controller.test.ts) and the
- * dispute window's by the API and worker suites (admin-market-judgements.controller.test.ts,
- * market-resolve.test.ts); a browser cannot register one.
+ * concentration N (#182), six anomaly inputs (#98), and the seven retention periods (`retention.*`
+ * — #184's five, ADR-0087, #77's market proposals, ADR-0089, and #53's notifications, ADR-0157) —
+ * which the screen and the API list alike, in the registry's order. Changing and recording an item
+ * are fixed by the API suite with injected test items (`createTestApp({ releaseSettings })`),
+ * paying the start Coin once a value is entered by the API and worker suites, deleting what a
+ * retention period has kept by the worker's suite, the lead-close gap's use by the API suite
+ * (admin-markets-times.controller.test.ts) and the dispute window's by the API and worker suites
+ * (admin-market-judgements.controller.test.ts, market-resolve.test.ts); a browser cannot register
+ * one.
  *
  * Nothing here changes an item. A value entered in a run would be paid by the worker to every
  * waiting grant — or, for an approved retention period, delete the records older than it at the
@@ -82,8 +83,8 @@ const MARKET_MAKER_ITEMS = [
 ] as const;
 
 /**
- * The retention periods (`RETENTION_PERIOD_SETTINGS`, #184 and #77) with their names, restated:
- * these specs import only types from `@buddha/shared` (helpers.ts). Whole days each.
+ * The retention periods (`RETENTION_PERIOD_SETTINGS`, #184, #77 and #53) with their names,
+ * restated: these specs import only types from `@buddha/shared` (helpers.ts). Whole days each.
  */
 const LIQUIDITY_ITEMS = [
   ['market_maker.default_budget_coin', '시장 유동성 예산 표준값', 'Coin', 'string'],
@@ -118,6 +119,10 @@ const RETENTION_ITEMS = [
   // #77 (ADR-0087's owner decision 2026-10-24 13): a withdrawn account's market proposals, once
   // processed.
   ['retention.market_proposals', '시장 제안 기록 보존기간'],
+  // #53 (ADR-0157, owner answers 53-7 and 53-10): every account's notifications, by their 발생
+  // 시각. The global setup enters no value for it: an approved one would have the worker delete
+  // what notifications.spec.ts reads.
+  ['retention.notifications', '알림 보존기간'],
 ] as const;
 
 /**
@@ -163,7 +168,7 @@ async function expectForbidden(response: APIResponse): Promise<void> {
 }
 
 test.describe('출시 설정 (#170)', () => {
-  test('관리자 메뉴에서 열면 시작 지급액·재지급 여섯 항목·선행 마감 최소 간격·이의 기간, 주문·MM 각 세 항목·유동성 표준값 여섯·집중도 인원·거래 패턴 여섯 항목·여섯 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
+  test('관리자 메뉴에서 열면 시작 지급액·재지급 여섯 항목·선행 마감 최소 간격·이의 기간, 주문·MM 각 세 항목·유동성 표준값 여섯·집중도 인원·거래 패턴 여섯 항목·일곱 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
     page,
     admin,
   }) => {

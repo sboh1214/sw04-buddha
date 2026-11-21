@@ -15,7 +15,9 @@ import { identifierWords } from './excluded.js';
  * every watchlist and every market's watch count to nobody but the member (#37 for #89, ADR-0061
  * decision 3, ADR-0064). A member's recorded searches are listed by ADR-0066's own choice: the
  * owner decided they are recorded and shown to the member (#15, ADR-0061 decision 3), not who else
- * may see them. A hidden post's or comment's mark and reason are its author's (#45-5, ADR-0080).
+ * may see them. A member's notifications are their own MY tab's (#53, ADR-0157 53-1), with whether
+ * they read them and how many they have not. A hidden post's or comment's mark and reason are its
+ * author's (#45-5, ADR-0080).
  * Reports and the operators' actions are operators' (N04 §6, #45-13), the reporter's own reports
  * and the member's own actions theirs (#50, ADR-0081).
  * A market proposal and its proposer are the proposer's and the operators' alone (#77, ADR-0069
@@ -44,6 +46,7 @@ export const PRIVATE_DATA_IDS = [
   'time-zone',
   'watchlist',
   'search-history',
+  'notifications',
   'likers',
   'identity-verification',
   'consent',
@@ -283,6 +286,24 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
     ],
     owned: {
       words: ['search', 'query', 'queries', 'keyword', 'keywords'],
+      whose: WHOSE_OR_VIEWER,
+    },
+  },
+  {
+    id: 'notifications',
+    name: '특정 사용자의 알림(내용·읽음·안 읽은 수)',
+    basis: 'ADR-0157(53-1 MY 탭의 본인 알림함, 53-6), N04 §2',
+    // A member's inbox is theirs alone (#53, ADR-0157): what they were notified of, whether they
+    // read it and how many are unread. A public shape never carries a notification
+    // (`notification`, `notifications`, `lastNotification`) or an unread count (`unread`,
+    // `unreadCount`), and no market-channel event does either — the inbox's signal travels on the
+    // member's own room (`user:notification`). A name that says an inbox or alerts are somebody's
+    // (`userInbox`, `myAlerts`, `memberInboxes`) is a person's. The member's own
+    // `GET /me/notifications` and its unread count are owner-only routes, which this list does
+    // not read.
+    fields: [['notification'], ['notifications'], ['unread'], ['unread', 'count']],
+    owned: {
+      words: ['inbox', 'inboxes', 'alert', 'alerts'],
       whose: WHOSE_OR_VIEWER,
     },
   },

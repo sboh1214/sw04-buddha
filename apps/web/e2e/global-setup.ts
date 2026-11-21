@@ -54,6 +54,11 @@ import { marketMakerE2eProfile, prepareMarketMakerTestProfile } from './market-m
  * the insufficient-funds scenario. All three invocations are required (e2e/README.md). Existing
  * conflicting stage values fail setup instead of being overwritten. These are test fixtures only.
  *
+ * It enters no retention period (`retention.*`), `retention.notifications` (#53, ADR-0157)
+ * included: an approved value would have the worker's daily purge delete what the specs wrote —
+ * notifications.spec.ts' rows among them — so each stays as the database holds it, 미정 on a fresh
+ * one (release-settings.spec.ts reads them as they are).
+ *
  * Before any test, so no spec writes a setting while another reads it:
  * release-settings.spec.ts reads the whole list once and holds the screen to it. The values stay
  * in the database for the runs after this one (README '테스트').

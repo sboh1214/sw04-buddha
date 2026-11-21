@@ -2,8 +2,14 @@ import { readFileSync } from 'node:fs';
 import { MARKET_IDS_MAX } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { sellableQueryOptions } from '@/hooks/use-orders-place';
+import { NOTIFICATION_REFRESH_MS } from '@/lib/notifications';
 import { RequestPacer } from '@/lib/request-pacer';
 import { SELLABLE_PACE, pacedSellableQueryOptions } from './use-sellable-readings';
+
+const MINUTE = 60_000;
+
+/** The most rounds a leading-and-trailing window of `ms` runs in any closed 60 s window. */
+const roundsPerMinute = (ms: number) => Math.floor(MINUTE / ms) + 1;
 
 /**
  * MY's sellable reads go through one queue; the detail's one market does not (#67, ADR-0142 결정
@@ -30,10 +36,20 @@ describe('pacedSellableQueryOptions', () => {
     // held market — on a reconnect too, read once (결정 2-21; `lib/query-client.test.ts` pins the
     // N market rows of a reconnect) — and the queue's cap. Within a minute the sellable reads are
     // the N first reads plus the 결정 2-16 rotation (10 a minute), so min(N, 20) understates
-    // them below N = 20; the queue's per-minute cap is the bound that holds at every N.
-    const fixed = 5;
-    // Measured 2026-11-17 (ADR-0142 결과 3): first entry, and the sellable reads of a reconnect
-    // (a resnapshot restarts SELLABLE_KEY; 결정 2-21 does not change that).
+    // them below N = 20; the queue's per-minute cap is the bound that holds at every N. The
+    // screen's own fixed reads are what the measurements below were taken on, before #53.
+    const screenFixed = 5;
+    // #53 (ADR-0157) put the unread notification count beside MY on every page, this one
+    // included: one more fixed read on entry and on a reconnect (`NOTIFICATIONS_KEY` is a
+    // resnapshot key), never on a focus (`staleTime: Infinity`). And once a producer ships, each
+    // `user:notification` reads it again through its own window: at most 3 rounds a minute.
+    const fixed = screenFixed + 1;
+    const notificationRounds = roundsPerMinute(NOTIFICATION_REFRESH_MS);
+    expect(fixed).toBe(6);
+    expect(NOTIFICATION_REFRESH_MS).toBe(30_000);
+    expect(notificationRounds).toBe(3);
+    // Measured 2026-11-17 (ADR-0142 결과 3), before #53: first entry, and the sellable reads of a
+    // reconnect (a resnapshot restarts SELLABLE_KEY; 결정 2-21 does not change that).
     const measured = {
       1: { entry: 17, reconnectSellable: 12 },
       5: { entry: 25, reconnectSellable: 16 },
@@ -43,25 +59,34 @@ describe('pacedSellableQueryOptions', () => {
     } as const;
     for (const markets of [1, 5, 10, 25, 50] as const) {
       // #67's bound, one market row per held market — what the measurement above was taken on.
-      const before = fixed + markets + SELLABLE_PACE.perWindow;
+      const before = screenFixed + markets + SELLABLE_PACE.perWindow;
       expect(before, `N = ${String(markets)}`).toBeLessThanOrEqual(markets <= 25 ? 50 : 100);
       // The bound never understates what was measured, nor the computed reconnect after 결정 2-21.
       const { entry, reconnectSellable } = measured[markets];
       expect(entry, `N = ${String(markets)}`).toBeLessThanOrEqual(before);
       expect(reconnectSellable).toBeLessThanOrEqual(SELLABLE_PACE.perWindow);
-      expect(fixed + markets + reconnectSellable, `N = ${String(markets)}`).toBeLessThanOrEqual(
-        before,
-      );
+      expect(
+        screenFixed + markets + reconnectSellable,
+        `N = ${String(markets)}`,
+      ).toBeLessThanOrEqual(before);
     }
     // #300 (ADR-0147): the rows are read 50 to a request, so the market rows' share is the
-    // number of chunks, not N — one tab's 50 a minute at every N up to 50, and far past it.
+    // number of chunks, not N — one tab's 50 a minute at every N up to 50, and far past it. Entry
+    // and reconnect: 26 at N ≤ 50 before #53, 27 with the count's read; a minute that also
+    // takes the count's 3 rounds, 30 — and 33 at N = 200 (4 chunks), still within 50.
     for (const markets of [1, 5, 10, 25, 50, 100, 200] as const) {
       const chunks = Math.ceil(markets / MARKET_IDS_MAX);
       const bound = fixed + chunks + SELLABLE_PACE.perWindow;
-      expect(bound, `N = ${String(markets)}`).toBeLessThanOrEqual(markets <= 50 ? 26 : 50);
+      expect(bound, `N = ${String(markets)}`).toBeLessThanOrEqual(markets <= 50 ? 27 : 50);
+      expect(bound + notificationRounds, `N = ${String(markets)}`).toBeLessThanOrEqual(
+        markets <= 50 ? 30 : 50,
+      );
     }
+    expect(fixed + 1 + SELLABLE_PACE.perWindow).toBe(27);
+    expect(fixed + 1 + SELLABLE_PACE.perWindow + notificationRounds).toBe(30);
+    expect(fixed + 4 + SELLABLE_PACE.perWindow + notificationRounds).toBe(33);
     expect(MARKET_IDS_MAX).toBe(50);
-    // Measured 2026-11-20 on this code (ADR-0147 결과 2), same tool and conditions as #67: first
+    // Measured 2026-11-20 before #53 (ADR-0147 결과 2), same tool and conditions as #67: first
     // entry and reconnect within the bound at every N, and the ADR records the same numbers.
     const after = {
       1: { entry: 17, reconnect: 18 },
@@ -71,7 +96,7 @@ describe('pacedSellableQueryOptions', () => {
       50: { entry: 26, reconnect: 26 },
     } as const;
     for (const markets of [1, 5, 10, 25, 50] as const) {
-      const bound = fixed + Math.ceil(markets / MARKET_IDS_MAX) + SELLABLE_PACE.perWindow;
+      const bound = screenFixed + Math.ceil(markets / MARKET_IDS_MAX) + SELLABLE_PACE.perWindow;
       expect(after[markets].entry, `N = ${String(markets)}`).toBeLessThanOrEqual(bound);
       expect(after[markets].reconnect, `N = ${String(markets)}`).toBeLessThanOrEqual(bound);
     }
@@ -91,8 +116,9 @@ describe('pacedSellableQueryOptions', () => {
     const adr0147 = decisions.slice(decisions.indexOf('\n## ADR-0147 '));
     expect(adr0147).toMatch(/\| N = 50 +\| \*\*26\/10\/26\/25\*\* +\| 75\/10\/75\/25 +\|/);
     expect(adr0147).not.toContain('[측정 전]');
-    // A focus return re-reads no open market's row (결정 2-22): the fixed reads and the queue.
-    expect(fixed + SELLABLE_PACE.perWindow).toBeLessThanOrEqual(50);
+    // A focus return re-reads no open market's row (결정 2-22): the fixed reads and the queue —
+    // not the unread count (`staleTime: Infinity`), though a minute may hold its rounds too.
+    expect(screenFixed + SELLABLE_PACE.perWindow + notificationRounds).toBeLessThanOrEqual(50);
     expect(SELLABLE_PACE).toEqual({ maxInFlight: 10, perWindow: 20, windowMs: 60_000 });
   });
 });

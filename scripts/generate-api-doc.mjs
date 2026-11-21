@@ -325,6 +325,11 @@ const REALTIME_EVENTS = {
     key: '`ledgerEntryId`',
   },
   'user:position': { room: '`user:<id>`', note: '변경된 포지션 1행', key: '`version`' },
+  'user:notification': {
+    room: '`user:<id>`',
+    note: '본인 알림함이 바뀌었다는 신호(#53, ADR-0157 53-1) — 시각만 싣고 알림·안 읽은 수는 싣지 않는다. 생산자의 사건이 커밋한 뒤 새 알림을 받거나 묶인 알림이 갱신된 계정마다, 그리고 `POST /api/v1/me/notifications/{id}/read`·`POST /api/v1/me/notifications/read-all` 이 실제로 읽음 처리한 뒤 본인에게 보낸다(이미 읽은 것을 다시 읽으면 보내지 않는다). 받은 화면은 안 읽은 수(`GET /api/v1/me/notifications/unread-count`)와 열려 있는 목록을 다시 읽는다. 토스트는 띄우지 않는다',
+    key: '없음(상태를 싣지 않는 신호)',
+  },
 };
 
 /** 실시간 절의 꼬리말. `supersedes` / `statusSupersedes` 의 계약을 그대로 옮긴 것. */
@@ -332,9 +337,9 @@ const REALTIME_ORDERING = `이벤트는 커밋 순서대로 도착하지 않을 
 밀리초 \`ts\` 는 동점이 날 수 있다. 그래서 다시 바뀔 수 있는 엔티티의 이벤트는 위 표의 **순서 키**를
 싣는다. 클라이언트는 들고 있는 값보다 큰 키만 받아들이고(\`supersedes\`), 같거나 작으면 중복이거나
 늦은 것이므로 버린다. 키는 같은 이벤트 종류 안에서만 비교한다 — 서로 다른 시퀀스에서 나온 숫자다.
-\`market:book\` 만은 키가 없다: 상태를 싣지 않는 신호라 받으면 호가를 다시 읽을 뿐이고, 늦거나 겹친
-신호는 읽기 한 번으로 끝난다. \`market:status\` 를 받아도 호가를 다시 읽는다 — 거래 중이 아닌 시장의
-호가는 비어 있다.
+\`market:book\` 과 \`user:notification\` 은 키가 없다: 상태를 싣지 않는 신호라 받으면 호가를, 또는
+안 읽은 알림 수와 알림 목록을 다시 읽을 뿐이고, 늦거나 겹친 신호는 읽기 한 번으로 끝난다.
+\`market:status\` 를 받아도 호가를 다시 읽는다 — 거래 중이 아닌 시장의 호가는 비어 있다.
 
 그 밖에 게이트웨이만 보내는 이벤트가 둘 있다.
 
@@ -358,6 +363,7 @@ const TAG_LABELS = {
   orders: '주문',
   watchlist: '관심 시장',
   'search-history': '최근 검색',
+  notifications: '알림',
   themes: '테마',
   proposals: '시장 제안',
   disputes: '판정 이의',

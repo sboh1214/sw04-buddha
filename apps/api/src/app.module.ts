@@ -20,6 +20,7 @@ import { MarketsModule } from './markets/markets.module.js';
 import { MediaModule } from './media/media.module.js';
 import { MeModule } from './me/me.module.js';
 import { NoticesModule } from './notices/notices.module.js';
+import { NotificationsModule } from './notifications/notifications.module.js';
 import { ModerationModule } from './moderation/moderation.module.js';
 import { OnboardingModule } from './onboarding/onboarding.module.js';
 import { AdminSmsStatusModule } from './phone-verification/admin-sms-status.module.js';
@@ -122,6 +123,9 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     // 제한적 재지급 (#74, ADR-0155): the member's /me/regrant and the admins' /admin/regrants. After
     // the modules above, so the document keeps their routes where they were.
     RegrantModule,
+    // 앱 내 알림함 (#53, ADR-0157): the member's /me/notifications — the list, the unread count and
+    // the read marks. After the modules above, so the document keeps their routes where they were.
+    NotificationsModule,
   ],
   controllers: [HealthController],
 })

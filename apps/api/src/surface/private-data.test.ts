@@ -103,6 +103,7 @@ import {
   createSupplementedMarket,
   createSupplementRequest,
   createSearch,
+  createTestNotification,
   createSettlementRecord,
   createStartGrant,
   createTheme,
@@ -269,6 +270,11 @@ interface Fixture {
   watchedCategory: string;
   /** A's recorded search (#15): the id B's delete names, its term a sentinel. */
   searchId: string;
+  /**
+   * A's unread notification (#53, ADR-0157; a test type through the real write path), its label a
+   * sentinel: the id B's read mark names. A has one more, older and unread too.
+   */
+  notificationId: string;
   /** A's 접수 proposal (#77): the id B's read and retract name. */
   proposalId: string;
   /** A's verified number (ADR-0070), digits: what B's code request names. */
@@ -322,6 +328,8 @@ interface Fixture {
     proposals: string;
     /** A's newer 판정 이의 (#175), so the page holds both of A's. */
     disputes: string;
+    /** Past A's newer notification (#53), so the page holds both of A's. */
+    notifications: string;
   };
   sentinels: readonly Sentinel[];
 }
@@ -888,6 +896,29 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
     status: 403,
   },
   'POST /me/search-history/clear': {
+    body: (fixture) => ({ expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
+  // B's inbox, paged from A's newer notification (#53, ADR-0157): B was notified of nothing, so
+  // nothing of A's may come back. A's own page holds A's notifications, ids and labels.
+  'GET /me/notifications': {
+    query: { cursor: (fixture) => fixture.cursors.notifications, limit: LIMIT },
+    status: 200,
+    own: ['notification id', 'notification label'],
+  },
+  // B's own unread count, 0: a number with no record in it, so no `own` label can show the check
+  // is not blind; below, A hears A's.
+  'GET /me/notifications/unread-count': {
+    status: 200,
+  },
+  // B's cookie naming A's account and A's notification: refused before anything is read or
+  // written — A's notifications stay unread (below), where B naming itself is checked too.
+  'POST /me/notifications/:id/read': {
+    params: { id: (fixture) => fixture.notificationId },
+    body: (fixture) => ({ expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
+  'POST /me/notifications/read-all': {
     body: (fixture) => ({ expectedAccountId: fixture.a.id }),
     status: 403,
   },
@@ -2213,6 +2244,29 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     const searchTerm = `leak-search-${tag}`;
     const search = await createSearch(t.db, { userId: a.id, query: searchTerm });
 
+    // A's notifications (#53, ADR-0157): two unread, through the real write path with the tests'
+    // own type (#53 ships none), about the open market every public call reads — a public answer
+    // or a market-room event carrying an inbox would carry their labels or ids.
+    const notificationLabel = `leak-notice-${tag}`;
+    const notifiedAt = Date.now() - 60_000;
+    const olderNotice = await createTestNotification(t.db, {
+      userId: a.id,
+      slug: market.slug,
+      label: `${notificationLabel}-older`,
+      occurredAt: new Date(notifiedAt - 1_000),
+    });
+    const newerNotice = await createTestNotification(t.db, {
+      userId: a.id,
+      slug: market.slug,
+      label: notificationLabel,
+      occurredAt: new Date(notifiedAt),
+    });
+    if (newerNotice.kind !== 'created' || olderNotice.kind !== 'created') {
+      throw new Error(
+        `A's notifications were not created: ${newerNotice.kind}, ${olderNotice.kind}`,
+      );
+    }
+
     // A's proposals (#77), counted by A's number's hash: one adopted into the open market every
     // public call reads — a public market answer naming who proposed it would carry A's id or
     // nickname, or the proposal's own words — with the operators' internal memo on it (nobody's
@@ -2294,6 +2348,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       },
       watchedCategory: watchedCategory!.slug,
       searchId: search.id,
+      notificationId: newerNotice.id,
       proposalId: proposal.id,
       phone,
       categoryId,
@@ -2324,6 +2379,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         actions: cursorAfter(hiding),
         proposals: cursorAfter(proposal),
         disputes: cursorAfter({ createdAt: dispute.submittedAt, id: dispute.id }),
+        notifications: cursorAfter({ createdAt: new Date(notifiedAt), id: newerNotice.id }),
       },
       sentinels: [
         text('user id', a.id),
@@ -2440,6 +2496,10 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('watched market slug', watched.slug),
         text('search term', searchTerm),
         text('search id', search.id),
+        // Both of A's notifications: the newer's label is a prefix of the older's.
+        text('notification label', notificationLabel),
+        text('notification id', newerNotice.id),
+        text('older notification id', olderNotice.id),
         text('proposal id', proposal.id),
         text('adopted proposal id', adoptedProposal.id),
         text('proposal question', proposalQuestion),
@@ -3173,6 +3233,39 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     expect(asB.json<{ data: unknown }>().data).toEqual([]);
     expect(await searches()).toEqual([aSearch]);
 
+    // B's refused read marks left A's notifications unread (#53, ADR-0157). B naming itself on A's
+    // notification is NOT_FOUND — the id is looked up among B's own — and B's '모두 읽음' reaches
+    // B's inbox alone: both leave A's unread, and A's count is still A's two.
+    const unreadOfA = async () =>
+      (
+        await t.db
+          .select({ id: schema.notifications.id, readAt: schema.notifications.readAt })
+          .from(schema.notifications)
+          .where(eq(schema.notifications.userId, f.a.id))
+      ).filter((row) => row.readAt === null).length;
+    expect(await unreadOfA()).toBe(2);
+    const readAsB = await call(routeOf('POST /me/notifications/:id/read'), {
+      params: { id: f.notificationId },
+      body: { expectedAccountId: f.b.id },
+      cookie: f.b.cookie,
+    });
+    expect({ status: readAsB.statusCode, leaks: leaked(readAsB.body) }).toEqual({
+      status: 404,
+      leaks: [],
+    });
+    const allAsB = await call(routeOf('POST /me/notifications/read-all'), {
+      body: { expectedAccountId: f.b.id },
+      cookie: f.b.cookie,
+    });
+    expect(allAsB.statusCode).toBe(200);
+    expect(allAsB.json<{ data: unknown }>().data).toEqual({ unreadCount: 0 });
+    expect(await unreadOfA()).toBe(2);
+    const countRoute = routeOf('GET /me/notifications/unread-count');
+    const countOf = async (cookie: string) =>
+      (await call(countRoute, { cookie })).json<{ data: unknown }>().data;
+    expect(await countOf(f.b.cookie)).toEqual({ unreadCount: 0 });
+    expect(await countOf(f.a.cookie)).toEqual({ unreadCount: 2 });
+
     // B's refused post writes and upload wrote nothing (#46). B naming itself on A's post is
     // refused too — only its author changes a post — and A's post stays as it was.
     expect(await postState()).toEqual(postsBefore);
@@ -3509,6 +3602,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         version: 1,
         ts,
       },
+      // A signal with no state (#53, ADR-0157): its absence from the market room is what counts.
+      'user:notification': { type: 'user:notification', ts },
     } satisfies { [K in UserRealtimeEvent['type']]: Extract<UserRealtimeEvent, { type: K }> };
     const publisher = t.app.get(MarketPublisher);
     const raw = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });

@@ -491,6 +491,9 @@ export const PRIVATE_QUERY_ROOTS: ReadonlySet<string> = new Set([
   // 정산 기록 (#124, ADR-0143): the account's settlement records (`SETTLEMENTS_KEY`) — what it held
   // and was paid, nobody else's to see (N04 §7). The history's orders and fills are under 'orders'.
   'settlements',
+  // 알림함 (#53, ADR-0157): the account's notifications and its unread count (`NOTIFICATIONS_KEY`,
+  // lib/notifications.ts) — its inbox is nobody else's (PRIVATE_DATA `notifications`).
+  'notifications',
 ]);
 
 export function isPrivateQueryKey(queryKey: readonly unknown[]): boolean {

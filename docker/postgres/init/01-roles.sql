@@ -27,12 +27,15 @@
 --                   phone_verification_refused_sends, consent_records, post_revisions,
 --                   post_comment_revisions, post_likes, comment_likes, notice_revisions,
 --                   profile_item_removals, restriction_end_changes, write_limit_events,
---                   link_uses: no UPDATE; link_flags: no UPDATE but of its review_action_id
---                   column; post_comment_counts: SELECT only, written by its trigger) are
+--                   link_uses, notification_keys: no UPDATE; link_flags: no UPDATE but of its
+--                   review_action_id column; notifications: no UPDATE but of its params,
+--                   event_count, occurred_at and read_at columns; post_comment_counts: SELECT
+--                   only, written by its trigger) are
 --                   applied later by migrations with REVOKE
 --                   (0001, 0015, 0020, 0021, 0023, 0026, 0030, 0031, 0032, 0033, 0034, 0035,
 --                   0036, 0039, 0040, 0041, 0044, 0045, 0049, 0053, 0054, 0055, 0056, 0058,
---                   0060, 0062, 0064, 0065, 0066, 0067, 0069, 0070, 0072, 0073, 0075, 0076, 0077),
+--                   0060, 0062, 0064, 0065, 0066, 0067, 0069, 0070, 0072, 0073, 0075, 0076, 0077,
+--                   0078),
 --                   see bottom.
 
 CREATE ROLE buddha_migrate LOGIN PASSWORD 'buddha';
@@ -117,4 +120,9 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO buddha_app;
 -- 0077 (#74: regrants: UPDATE, DELETE): a re-grant given is a permanent fact like its REGRANT
 -- entry; a trigger refuses both to every role, and others bind a row to its own entry at INSERT
 -- and refuse the 운영 마켓메이커's and a closed account's.
+-- 0078 (#53: notification_keys: UPDATE; notifications: UPDATE — then GRANT UPDATE (params,
+-- event_count, occurred_at, read_at), what a merge and a read write): a dedupe key is never
+-- changed, and a trigger holds a notification's other columns, its first read and a read one's
+-- content to every role. notification_inboxes keeps the default DML: the writers and the closure
+-- lock its rows, which needs UPDATE privilege on some column.
 -- Default privileges are applied at CREATE time, so a REVOKE afterwards sticks.

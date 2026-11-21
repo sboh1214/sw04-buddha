@@ -12,12 +12,12 @@ import { AccountBlockLine } from '@/components/position/account-block-line';
 import { CoinText } from '@/components/ui/coin-text';
 import { copy } from '@/copy';
 import { useMe } from '@/hooks/use-me';
+import { useMyNotifications } from '@/hooks/use-notifications';
 import { useLedger } from '@/hooks/use-wallet';
 import { useWatchlist } from '@/hooks/use-watchlist';
 import { MY_PREVIEW_ROWS, MY_TABS, MY_WALLET_PATH, type MyTabKey } from '@/lib/my';
 import { readFailed } from '@/lib/query-client';
 import { profilePath } from '@/lib/profile';
-import { ComingSoonTab } from './coming-soon';
 import {
   BalanceSummary,
   LivePendingOrders,
@@ -31,6 +31,7 @@ import {
 } from './portfolio';
 import { MyAuthoredPreview } from './posts/my-authored';
 import { MyProposalsPreview } from './proposals/my-proposals';
+import { NotificationsBody } from './notifications/my-notifications';
 import { LedgerRow } from './wallet/ledger-list';
 import { StartGrantPendingNotice } from './wallet/start-grant-notice';
 import { WatchlistBody } from './watchlist/watchlist';
@@ -55,10 +56,10 @@ function tab(key: MyTabKey) {
 /**
  * `/my`, MY's first screen (owner decision 2026-10-13): 잔고 요약 — the old portfolio's card —
  * and a preview of each tab, the first `MY_PREVIEW_ROWS` rows through the tab's own list body
- * with a 전체 보기 to the tab. 설정 has no rows to preview; the tab with no content yet says 준비 중
- * (알림 #53). The previews run in the tab bar's order (MY_TABS, the owner's): 내 글 — rows since
- * #51 (ADR-0080), the newest three posts and the newest three comments — then 관심 시장 — rows since
- * #89 (ADR-0064), the newest three watches as market cards — then the 준비 중 of 알림.
+ * with a 전체 보기 to the tab. 설정 has no rows to preview. The previews run in the tab bar's order
+ * (MY_TABS, the owner's): 내 글 — rows since #51 (ADR-0080), the newest three posts and the newest
+ * three comments — then 관심 시장 — rows since #89 (ADR-0064), the newest three watches as market
+ * cards — then 알림 — rows since #53 (ADR-0157, 53-11 ②), the newest three notifications.
  *
  * 내 제안 (#77, ADR-0089) closes the summary: not a tab (ADR-0069 decision 4 #77 위치), so after
  * the tab bar's previews, its newest proposals with 전체 보기 to `/my/proposals`.
@@ -171,7 +172,7 @@ export function MySummary() {
       <WalletPreview />
       <PostsPreview />
       <WatchlistPreview />
-      <ComingSoonPreview tabKey="notifications" />
+      <NotificationsPreview />
       {/* 내 제안 (#77, ADR-0089): a MY sub-page, not a tab — linked from here (ADR-0069 decision
           4 #77 위치), after the tabs' previews since it is none of them. */}
       <MyProposalsPreview limit={MY_PREVIEW_ROWS} />
@@ -197,9 +198,36 @@ function ViewOwnProfileLink() {
   );
 }
 
-/** The preview of a tab whose content its own issue brings: 준비 중 (ADR-0054 decision 1-7). */
-function ComingSoonPreview({ tabKey }: { tabKey: MyTabKey }) {
-  return <ComingSoonTab title={tab(tabKey).label} testId={`my-preview-${tabKey}`} />;
+/**
+ * 알림's preview (#53, ADR-0157; owner answer 53-11 ②): the tab's own body with its newest
+ * `MY_PREVIEW_ROWS` notifications and the tab's 전체 보기 for the rest — no '모두 읽음' here, which
+ * is the tab's. Pressing a row marks it read and opens it, as on the tab. Under the tab's key
+ * (`notificationListKey`), so the two share one read. Its own component so its query lives only as
+ * long as the summary does.
+ */
+function NotificationsPreview() {
+  const accountId = useMe().data?.id;
+  const notifications = useMyNotifications(accountId);
+  const notificationsTab = tab('notifications');
+  return (
+    <Section
+      title={notificationsTab.label}
+      testId="my-preview-notifications"
+      href={notificationsTab.href}
+    >
+      {accountId === undefined ? (
+        <ProfileUnavailable height="24" />
+      ) : (
+        <NotificationsBody
+          key={accountId}
+          notifications={notifications}
+          accountId={accountId}
+          limit={MY_PREVIEW_ROWS}
+          testId="my-preview-notifications"
+        />
+      )}
+    </Section>
+  );
 }
 
 /**

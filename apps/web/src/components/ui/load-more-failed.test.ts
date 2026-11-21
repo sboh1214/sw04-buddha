@@ -10,12 +10,12 @@ import { SRC, screenSources } from '@/test/screen-text';
  * #50), the admin lists (the report queue and the action log too, #50, #187's review list of
  * repeated links, its rows and a row's entries, #139's account restriction requests, #184's
  * retention records, #81's themes and a theme's market picker, and #77's proposals and a proposal's
- * market picker), MY's 내 제안 (#77) and the market picker (the write screen's and the community
- * list's market filter) — each draws `LoadMoreFailed` first in its 더 보기 button's own condition
- * (`… && (<>`), so the two come and go together and a list with no 더 보기 says nothing (5-14(c));
- * on the list the button pages; with that list's own first-read failure message (5-14(a)). No
- * DOM under node, so the sources are read, per list: one more 더 보기 written without the notice,
- * a notice moved out of its button's condition or given another message fails here.
+ * market picker), MY's 내 제안 (#77), MY › 알림 (#53) and the market picker (the write screen's and the
+ * community list's market filter) — each draws `LoadMoreFailed` first in its 더 보기 button's own
+ * condition (`… && (<>`), so the two come and go together and a list with no 더 보기 says nothing
+ * (5-14(c)); on the list the button pages; with that list's own first-read failure message
+ * (5-14(a)). No DOM under node, so the sources are read, per list: one more 더 보기 written without
+ * the notice, a notice moved out of its button's condition or given another message fails here.
  *
  * And nothing that reads a paged list's query has a failure rung on `isError` alone: that flag is
  * true after a failed 더 보기 too, so such a rung swapped every row read so far for its error the
@@ -168,6 +168,8 @@ describe('the notice above a 더 보기 that failed', () => {
         // MY '판정 이의' (#175, ADR-0104)
         'app/my/disputes/my-disputes.tsx',
         'app/my/moderation/my-moderation.tsx',
+        // MY › 알림 (#53, ADR-0157), whose body MY 요약's preview draws too (no 더 보기 there)
+        'app/my/notifications/my-notifications.tsx',
         'app/my/proposals/my-proposals.tsx',
         'app/my/wallet/ledger-list.tsx',
         'app/my/wallet/payment-history.tsx',
@@ -287,6 +289,7 @@ describe('the notice above a 더 보기 that failed', () => {
         'useMyDisputes',
         'useMyMarketFills',
         'useMyModerationActions',
+        'useMyNotifications',
         'useMyProposals',
         'useMyReports',
         'useOrderFills',

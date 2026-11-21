@@ -133,6 +133,7 @@ import {
   nicknameHolds,
   noticeImages,
   notices,
+  notificationInboxes,
   phoneVerifications,
   positionSettlements,
   positions,
@@ -3677,6 +3678,13 @@ export async function createLinkFlag(db: Db, input: CreateLinkFlagInput) {
  */
 export async function closeAccount(db: Db, userId: string): Promise<Date> {
   return db.transaction(async (tx) => {
+    // The API's closure takes the member's inbox first (#53, ADR-0157): every notification writer
+    // then skips the account, and one already holding it is waited for.
+    await tx
+      .select({ userId: notificationInboxes.userId })
+      .from(notificationInboxes)
+      .where(eq(notificationInboxes.userId, userId))
+      .for('update');
     const [profile] = await tx
       .select()
       .from(profiles)
@@ -3747,6 +3755,8 @@ export async function closeAccount(db: Db, userId: string): Promise<Date> {
         );
     }
     await tx.delete(marketSearches).where(eq(marketSearches.userId, userId));
+    // Its notifications and their keys go with the inbox (53-7).
+    await tx.delete(notificationInboxes).where(eq(notificationInboxes.userId, userId));
     await tx.delete(session).where(eq(session.userId, userId));
     await tx.delete(account).where(eq(account.userId, userId));
     await tx.delete(verification).where(eq(verification.value, userId));

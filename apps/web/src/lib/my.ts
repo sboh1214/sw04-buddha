@@ -15,6 +15,8 @@ export const MY_ORDERS_PATH = '/my/orders';
 export const MY_HISTORY_PATH = '/my/history';
 export const MY_WALLET_PATH = '/my/wallet';
 export const MY_SETTINGS_PATH = '/my/settings';
+/** MY › 알림 (#53, ADR-0157): the member's inbox, newest first. */
+export const MY_NOTIFICATIONS_PATH = '/my/notifications';
 
 export type MyTabKey =
   | 'positions'
@@ -28,8 +30,9 @@ export type MyTabKey =
 
 /**
  * The tabs in the owner's order: N02 §8 with 관심 시장 added (N04 §3, N05 §3) and 알림·설정 as two.
- * 알림 is a placeholder until #53 fills it; #89 filled 관심 시장 (ADR-0064) and #51 내 글 (ADR-0080).
- * Next 16 types `href`, so the list is declared as routes rather than plain strings.
+ * Every tab has its content: #89 filled 관심 시장 (ADR-0064), #51 내 글 (ADR-0080) and #53 알림
+ * (ADR-0157), whose tab carries the unread count (53-1). Next 16 types `href`, so the list is
+ * declared as routes rather than plain strings.
  */
 export const MY_TABS: readonly { key: MyTabKey; href: Route; label: string }[] = [
   { key: 'positions', href: '/my/positions', label: copy.myPositions },
@@ -38,7 +41,7 @@ export const MY_TABS: readonly { key: MyTabKey; href: Route; label: string }[] =
   { key: 'wallet', href: MY_WALLET_PATH, label: copy.myWallet },
   { key: 'posts', href: '/my/posts', label: copy.myPosts },
   { key: 'watchlist', href: '/my/watchlist', label: copy.myWatchlist },
-  { key: 'notifications', href: '/my/notifications', label: copy.myNotifications },
+  { key: 'notifications', href: MY_NOTIFICATIONS_PATH, label: copy.myNotifications },
   { key: 'settings', href: MY_SETTINGS_PATH, label: copy.mySettings },
 ];
 
