@@ -34,6 +34,7 @@ import { markets } from './markets.js';
 import { mediaObjects } from './media-objects.js';
 import { nicknameHolds } from './nickname-holds.js';
 import { noticeImages, noticeRevisions, notices } from './notices.js';
+import { notificationInboxes, notificationKeys, notifications } from './notifications.js';
 import { orders } from './orders.js';
 import { paymentEvents } from './payment-events.js';
 import { payments } from './payments.js';
@@ -349,6 +350,26 @@ export const marketSearchesRelations = relations(marketSearches, ({ one }) => ({
   user: one(user, { fields: [marketSearches.userId], references: [user.id] }),
 }));
 
+export const notificationInboxesRelations = relations(notificationInboxes, ({ one, many }) => ({
+  user: one(user, { fields: [notificationInboxes.userId], references: [user.id] }),
+  notifications: many(notifications),
+}));
+
+export const notificationsRelations = relations(notifications, ({ one, many }) => ({
+  inbox: one(notificationInboxes, {
+    fields: [notifications.userId],
+    references: [notificationInboxes.userId],
+  }),
+  keys: many(notificationKeys),
+}));
+
+export const notificationKeysRelations = relations(notificationKeys, ({ one }) => ({
+  notification: one(notifications, {
+    fields: [notificationKeys.notificationId],
+    references: [notifications.id],
+  }),
+}));
+
 // Two references to `markets`, so both ends name theirs (as `category_parent` above).
 export const marketLinksRelations = relations(marketLinks, ({ one }) => ({
   lowMarket: one(markets, {
@@ -576,6 +597,10 @@ export const userRelations = relations(user, ({ one, many }) => ({
   watches: many(marketWatches),
   watchEvents: many(marketWatchEvents),
   searches: many(marketSearches),
+  notificationInbox: one(notificationInboxes, {
+    fields: [user.id],
+    references: [notificationInboxes.userId],
+  }),
   marketLinks: many(marketLinks),
   posts: many(posts),
   postComments: many(postComments),

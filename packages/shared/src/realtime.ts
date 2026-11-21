@@ -33,9 +33,10 @@ import { publicFill, type PublicFillFacts } from './market.js';
  * one `market:tick` — the gateway sends it reliably, not volatile (ADR-0116 10-6) — and one
  * `market:trade` per fill, #121). `ts` is for display, and
  * keys are compared within one event type, never across them (they come from different
- * sequences). `market:book` is the one event with no key: it is a signal that carries no state
- * — the receiver re-reads `GET /markets/:id/book` — so a late or duplicate one costs one read and
- * never takes anything back. A `market:status` also means "re-read the book": a market that is not
+ * sequences). `market:book` and `user:notification` are the two events with no key: each is a
+ * signal that carries no state — the receiver re-reads `GET /markets/:id/book`, or the member's
+ * unread count and inbox (#53, ADR-0157) — so a late or duplicate one costs one read and never
+ * takes anything back. A `market:status` also means "re-read the book": a market that is not
  * OPEN shows an empty one (#179, ADR-0114).
  *
  * `market:status` is ordered by `statusEventId` — the `market_events.id` of the transition, or
@@ -67,6 +68,7 @@ export const REALTIME_EVENT_TYPES = [
   'market:book',
   'user:balance',
   'user:position',
+  'user:notification',
 ] as const;
 export type RealtimeEventType = (typeof REALTIME_EVENT_TYPES)[number];
 
@@ -303,6 +305,28 @@ export const userPositionEventSchema = z
   .meta({ id: 'UserPositionEvent' });
 export type UserPositionEvent = z.infer<typeof userPositionEventSchema>;
 
+/**
+ * Room `user:<id>`: something in the member's inbox changed (#53, ADR-0157 53-1) — a notification
+ * was created or a merged one grew (published after the producer's COMMIT to every account its
+ * write path reported, `notifiedUserIds`), or one or all were marked read (the API's read writes,
+ * so the member's other tabs and devices follow). A signal like `market:book`: no state and no
+ * ordering key — the receiver re-reads its unread count and its list. An absolute count would need
+ * a per-account order key, a lock in every writer, the purge and the closure; a signal costs one
+ * read and never takes anything back. No toast is shown for it (53-1).
+ */
+export const userNotificationEventSchema = z
+  .object({
+    type: z.literal('user:notification'),
+    ts: tsSchema,
+  })
+  .meta({ id: 'UserNotificationEvent' });
+export type UserNotificationEvent = z.infer<typeof userNotificationEventSchema>;
+
+/** The `user:notification` signal at `at`: one builder for the API and the worker. */
+export function notificationEvent(at: Date): UserNotificationEvent {
+  return { type: 'user:notification', ts: at.toISOString() };
+}
+
 export const realtimeEventSchema = z
   .discriminatedUnion('type', [
     marketTickEventSchema,
@@ -312,13 +336,14 @@ export const realtimeEventSchema = z
     marketBookEventSchema,
     userBalanceEventSchema,
     userPositionEventSchema,
+    userNotificationEventSchema,
   ])
   .meta({ id: 'RealtimeEvent' });
 export type RealtimeEvent = z.infer<typeof realtimeEventSchema>;
 
 export type MarketRealtimeEvent =
   MarketTickEvent | MarketStatsEvent | MarketTradeEvent | MarketStatusEvent | MarketBookEvent;
-export type UserRealtimeEvent = UserBalanceEvent | UserPositionEvent;
+export type UserRealtimeEvent = UserBalanceEvent | UserPositionEvent | UserNotificationEvent;
 
 /** Redis channel and Socket.IO room for one market (public). */
 export function marketChannel(marketId: string): `market:${string}` {
@@ -429,4 +454,5 @@ export const marketRealtimeEventSchema = z.discriminatedUnion('type', [
 export const userRealtimeEventSchema = z.discriminatedUnion('type', [
   userBalanceEventSchema,
   userPositionEventSchema,
+  userNotificationEventSchema,
 ]);

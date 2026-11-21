@@ -49,4 +49,9 @@ export const REALTIME_EVENT_REGISTRY = {
     channel: 'user',
     reason: '본인 보유 계약과 손익(N04 §2 본인 전용)',
   },
+  'user:notification': {
+    channel: 'user',
+    reason:
+      '본인 알림함이 바뀌었다는 신호(새 알림·묶인 알림의 갱신·읽음 처리) — 내용 없이, 받는 쪽이 안 읽은 수와 목록을 다시 읽는다. N05 §4, ADR-0157 53-1',
+  },
 } as const satisfies Record<RealtimeEventType, RealtimeEventEntry>;

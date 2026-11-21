@@ -359,6 +359,19 @@ export type RegrantRefusal = components['schemas']['RegrantRefusal'];
 export type Regrant = components['schemas']['Regrant'];
 export type ApplyRegrantResult = components['schemas']['ApplyRegrantResult'];
 export type AdminRegrant = components['schemas']['AdminRegrant'];
+/**
+ * 알림함 (#53, ADR-0157): one notification of the member's inbox as `GET /me/notifications` answers
+ * it — `InboxNotification`, so the name does not shadow the DOM's global `Notification` — its
+ * category, its flat params and its typed target, the unread count (`GET
+ * /me/notifications/unread-count` and `POST /me/notifications/read-all`; the cap, 100, means "100
+ * or more") and a read's answer (the notification as it now stands and the count after it).
+ */
+export type InboxNotification = components['schemas']['Notification'];
+export type NotificationCategory = components['schemas']['NotificationCategory'];
+export type NotificationParams = components['schemas']['NotificationParams'];
+export type NotificationTarget = components['schemas']['NotificationTarget'];
+export type NotificationUnreadCount = components['schemas']['NotificationUnreadCount'];
+export type NotificationReadResult = components['schemas']['NotificationReadResult'];
 /** `POST /media/images`'s answer: the stored image's id, which the editor's image node carries. */
 export type UploadedImage = components['schemas']['UploadedImage'];
 /**

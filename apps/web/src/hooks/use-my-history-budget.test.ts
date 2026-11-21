@@ -15,6 +15,7 @@ import {
   ownHistoryQuery,
   positionRestartsOrder,
 } from '@/lib/market-live';
+import { NOTIFICATION_REFRESH_MS } from '@/lib/notifications';
 import type { CursorPage } from '@/lib/order-join';
 import { restartQueries } from '@/lib/query-client';
 import { orderHistoryQueryOptions } from './use-my-history';
@@ -30,6 +31,14 @@ import { orderHistoryQueryOptions } from './use-my-history';
  * restarts exactly the account's history lists (`ownHistoryQuery`), and the provider holds one
  * `RoundWindow` of `ORDER_HISTORY_INVALIDATE_MS` for it (the source guard below; the window's own
  * steps are market-live.test.ts's, and this file drives the same class on a virtual clock).
+ *
+ * The bound counts one more window. The unread notification count beside MY (#53, ADR-0157) is in
+ * the header on this page too, and its own window (`NOTIFICATION_REFRESH_MS`, owner answer 53-9)
+ * reads it again on `user:notification`, 3 rounds a minute at most — once #134 ships, a resting
+ * order's every later fill publishes one. So the steady state is 7 × K + 3, which moved the
+ * documented limit from 7 loaded pages to 6 (ADR-0148 '일부 대체됨'). use-wallet-budget.test.ts
+ * pins the provider's wiring of that window; on /my/notifications a round reads the count and
+ * every loaded page of the list (use-notifications.test.ts).
  */
 const MINUTE = 60_000;
 const ACCOUNT = 'a1e1c0de-0000-4000-8000-000000000001';
@@ -93,19 +102,31 @@ describe('/my/history in budget on fills (#301, ADR-0148)', () => {
     expect(rounds([0])).toEqual([0]);
   });
 
-  it('stays at 50 up to 7 loaded pages — the documented limit', () => {
+  it('stays at 50 up to 6 loaded pages — the documented limit (ADR-0157)', () => {
     // One list on screen at a time (주문 or 체결); each round reads every page it has loaded.
-    const steady = (pages: number) => roundsPerMinute(ORDER_HISTORY_INVALIDATE_MS) * pages;
-    // Measured for #124 at 3 pages and 12 fills a minute: 36 before; at most 21 after.
-    expect(steady(3)).toBe(21);
-    expect(steady(5)).toBe(35);
-    expect(steady(7)).toBeLessThanOrEqual(50);
-    expect(steady(8)).toBeGreaterThan(50);
+    const list = (pages: number) => roundsPerMinute(ORDER_HISTORY_INVALIDATE_MS) * pages;
+    // And the unread count beside MY (#53): its own window's rounds, whatever the pages.
+    expect(NOTIFICATION_REFRESH_MS).toBe(30_000);
+    const notificationRounds = roundsPerMinute(NOTIFICATION_REFRESH_MS);
+    expect(notificationRounds).toBe(3);
+    const steady = (pages: number) => list(pages) + notificationRounds;
+    // Measured for #124 at 3 pages and 12 fills a minute: 36 before; at most 21 after (#301).
+    expect(list(3)).toBe(21);
+    expect(list(5)).toBe(35);
+    // ADR-0148's limit, the list's window alone: 7 pages (49), 8 past 50.
+    expect(list(7)).toBeLessThanOrEqual(50);
+    expect(list(8)).toBeGreaterThan(50);
+    // With the count's rounds: 6 pages (45); 7 pages, 121 rows or more, can pass 50 (52).
+    expect(steady(6)).toBe(45);
+    expect(steady(7)).toBe(52);
+    // Under the address's 100 up to 13 pages (14 before #53).
+    expect(steady(13)).toBeLessThanOrEqual(100);
+    expect(steady(14)).toBeGreaterThan(100);
     // Before #301 the same pages cost 'pages × fills', past 50 from 3 pages at 17 fills a minute.
     expect(3 * 17).toBeGreaterThan(50);
-    // Measured 2026-11-20 on this code (ADR-0148 결과 2): the steady list reads of the three
-    // history targets, at 3 and 5 pages × 12 and 30 own fills a minute — within 7 × K, and not
-    // growing with the fill rate.
+    // Measured 2026-11-20 on this code, before #53 (ADR-0148 결과 2): the steady list reads of the
+    // three history targets, at 3 and 5 pages × 12 and 30 own fills a minute — within 7 × K, and
+    // not growing with the fill rate.
     const measuredSteady = {
       '3x12': [18, 18, 18],
       '5x12': [30, 30, 30],
@@ -114,7 +135,7 @@ describe('/my/history in budget on fills (#301, ADR-0148)', () => {
     } as const;
     for (const [run, reads] of Object.entries(measuredSteady)) {
       const pages = Number(run.split('x')[0]);
-      for (const read of reads) expect(read, run).toBeLessThanOrEqual(steady(pages));
+      for (const read of reads) expect(read, run).toBeLessThanOrEqual(list(pages));
     }
     const decisions = readFileSync(
       new URL('../../../../docs/DECISIONS.md', import.meta.url),
@@ -212,7 +233,8 @@ describe('/my/history in budget on fills (#301, ADR-0148)', () => {
     const positionAt = provider.indexOf("'user:position': (raw: unknown) => {");
     const position = provider.slice(
       positionAt,
-      provider.indexOf('} satisfies Record<RealtimeEventType'),
+      // `user:notification` (#53) follows it, the last handler.
+      provider.indexOf("'user:notification': (raw: unknown) => {"),
     );
     // Inside the fill's branch, beside the `ORDERS_KEY` restart that now leaves the lists out.
     expect(position).toMatch(

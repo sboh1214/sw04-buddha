@@ -21,6 +21,8 @@ import {
   MARKET_SUPPLEMENT_APPROVAL_KIND,
   MEDIA_KINDS,
   MODERATION_ACTION_TYPES,
+  NOTIFICATION_CATEGORIES,
+  NOTIFICATION_DEFINITIONS,
   PAYMENT_EVENT_TYPES,
   PAYMENT_PROVIDERS,
   PHONE_VERIFICATION_SEND_OUTCOMES,
@@ -41,6 +43,7 @@ import {
   identifierWords,
   namesPersonalProbability,
   tokenForms,
+  type NotificationDefinition,
 } from '@buddha/shared';
 import { is } from 'drizzle-orm';
 import {
@@ -78,6 +81,11 @@ const TABLES = EXPORTS.filter((value): value is PgTable => is(value, PgTable)).m
   getTableConfig(table),
 );
 const ENUMS = EXPORTS.filter(isPgEnum);
+
+/** The product's notification types (#53: none yet, 52-20), as stored in two columns. */
+const NOTIFICATION_TYPE_NAMES: readonly string[] = NOTIFICATION_DEFINITIONS.map(
+  (definition: NotificationDefinition) => definition.type,
+);
 
 /**
  * The fixed value lists varchar columns hold (a Postgres enum's values come with the enum). A
@@ -144,6 +152,12 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   // done or failed (owner decision 2026-10-24 14).
   'retention_purges.kind': RETENTION_PURGE_KINDS,
   'retention_purges.outcome': RETENTION_PURGE_OUTCOMES,
+  // #53 (ADR-0157): a notification's type — the product's list, which the write path holds (the
+  // database holds the shape only; empty in #53, 52-20) — on the row and on its dedupe key, and
+  // its category, held by a CHECK regenerated from the shared list (52-21).
+  'notifications.type': NOTIFICATION_TYPE_NAMES,
+  'notifications.category': NOTIFICATION_CATEGORIES,
+  'notification_keys.type': NOTIFICATION_TYPE_NAMES,
 };
 
 /**
@@ -645,6 +659,63 @@ describe('excluded features in stored data (#113)', () => {
     ).toEqual([]);
     // The personal table it is (a recorder's), holding no personal probability (the test below).
     expect(personalTables().map((table) => table.name)).toContain('market_judgement_delays');
+  });
+
+  it('names the inbox, the notifications and their keys, their CHECKs and indexes, each read above (#53)', () => {
+    // ADR-0157, migration 0078: three personal tables — an inbox per person's account, its
+    // notifications and their dedupe keys — under the names the schema test spells, read by the
+    // test above for an excluded feature ('notification', 'inbox', 'unread', 'merge' and 'kept'
+    // name none; the screen's '안 읽은 수' is never stored as a 'badge', a `scoring` token).
+    expect(storageNames()).toEqual(
+      expect.arrayContaining([
+        { where: 'table', name: 'notification_inboxes' },
+        { where: 'table', name: 'notifications' },
+        { where: 'table', name: 'notification_keys' },
+        ...[
+          'notifications_id_user_id_type_unique',
+          'notifications_type_check',
+          'notifications_category_check',
+          'notifications_params_check',
+          'notifications_target_check',
+          'notifications_merge_key_check',
+          'notifications_event_count_check',
+          'notifications_user_id_occurred_at_id_idx',
+          'notifications_user_id_unread_idx',
+          'notifications_merge_target_uidx',
+          'notifications_occurred_at_id_idx',
+        ].map((name) => ({ where: 'notifications constraint', name })),
+        ...[
+          'notification_keys_notification_fk',
+          'notification_keys_type_check',
+          'notification_keys_event_key_check',
+          'notification_keys_notification_id_idx',
+        ].map((name) => ({ where: 'notification_keys constraint', name })),
+        ...NOTIFICATION_CATEGORIES.map((name) => ({
+          where: 'notifications.category value',
+          name,
+        })),
+      ]),
+    );
+    const notificationsTable = TABLES.find((table) => table.name === 'notifications');
+    expect(notificationsTable?.columns.map((column) => column.name)).toEqual([
+      'id',
+      'userId',
+      'type',
+      'category',
+      'params',
+      'target',
+      'mergeKey',
+      'eventCount',
+      'occurredAt',
+      'createdAt',
+      'readAt',
+    ]);
+    // No stored name says 'badge', whatever the screen calls its unread count.
+    expect(storageNames().filter(({ name }) => /badge/i.test(name))).toEqual([]);
+    // Personal tables all three, holding no personal probability (the test below).
+    expect(personalTables().map((table) => table.name)).toEqual(
+      expect.arrayContaining(['notification_inboxes', 'notifications', 'notification_keys']),
+    );
   });
 
   it('names the market cancel’s stored values, each read above (#20)', () => {

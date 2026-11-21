@@ -55,6 +55,7 @@ export * from './me.js';
 export * from './moderation.js';
 export * from './nickname.js';
 export * from './notice.js';
+export * from './notifications.js';
 export * from './onboarding.js';
 export * from './order-book.js';
 export * from './orders.js';

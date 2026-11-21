@@ -47,6 +47,9 @@ describe('보존기간 처리 기록 (#184, ADR-0087)', () => {
     // A withdrawn account's market proposals, their own period (#77, ADR-0087's owner decision
     // 2026-10-24 13).
     expect(retentionPurgeKindLabel('market_proposals')).toBe('시장 제안 기록');
+    // The inbox's notifications (#53, ADR-0157): every account's, read or not, by their own
+    // 발생 시각 (53-10) — from a live member's inbox too, unlike the closure-anchored kinds.
+    expect(retentionPurgeKindLabel('notifications')).toBe('알림');
     // A closed account's decided or retracted 판정 이의, emptied in place under the 신고·제재 period
     // (#175, ADR-0104): its links and reason go, its count and status stay.
     expect(retentionPurgeKindLabel('market_disputes')).toBe('판정 이의 본문');

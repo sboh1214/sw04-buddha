@@ -651,6 +651,10 @@ describe('the public API document (static)', () => {
       'POST /me/search-history',
       'POST /me/search-history/:id/delete',
       'POST /me/search-history/clear',
+      // 알림 읽음 (#53, ADR-0157; owner answer 53-6 «계정 제한 중에도 모든 유형을 받음»): reading one's own
+      // inbox is neither writing nor trading, and a restricted member reads what it receives.
+      'POST /me/notifications/:id/read',
+      'POST /me/notifications/read-all',
       'POST /me/proposals/:id/retract',
       'POST /markets/:id/disputes',
       'POST /me/disputes/:disputeId/retract',

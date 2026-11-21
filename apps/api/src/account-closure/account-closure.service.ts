@@ -120,7 +120,8 @@ interface Closed {
  *    (`postAuthorOf`). Posts, comments and likes stay as they are (#37-17).
  * 5. The current watchlist goes, each watch ended by its unwatch event in the watch history, which
  *    stays (ADR-0064; owner decision 2026-10-23 (2차) 2), and the search history goes (#57-18).
- *    So does the profile's time zone (point 4; owner decision 2026-10-23 (3차) 6).
+ *    So does the profile's time zone (point 4; owner decision 2026-10-23 (3차) 6), and the inbox
+ *    with every notification and its keys (#53, ADR-0157 53-7 «탈퇴하면 한 번에 지움»).
  * 6. Signing in ends: every session, every sign-in method (password and social links), better-auth's
  *    password-reset tokens for the account; the address is replaced by `closedAccountEmail` (freed
  *    for a new sign-up at once, #57-17), the name and photo emptied (decision 7). Migration 0043
@@ -135,7 +136,15 @@ interface Closed {
  * market proposals (#77) — reports and proposals still waiting are processed as any (decision 4
  * #140 «처리 중인 신고·이의·제안: 그대로 검토»), the member no longer seeing them, which the
  * confirmation says to an account with a proposal waiting (`pendingProposals`). Migration 0043
- * checks at the commit that nothing of the deletions was left (`profiles_closed_completely`).
+ * checks at the commit that nothing of the deletions was left (`profiles_closed_completely`, which
+ * migration 0078 makes ask for the inbox too).
+ *
+ * The notifications (#53, ADR-0157 §5): before any lock the refusals are asked once without one
+ * (`refuseEarly`), so a closure refused then never holds the inbox; then the member's inbox is
+ * taken FOR UPDATE, first of every lock. Every notification writer meets it FOR KEY SHARE SKIP
+ * LOCKED and skips the account without waiting — no producer, whatever it holds, waits on the
+ * closure — and one already holding it is waited for and deleted with the inbox. A notification
+ * skipped so is not sent again if the closure then fails (owner answer 53-8 '그대로 둔다').
  *
  * Asked twice at once (two tabs), the second waits for the first and answers what it did: the
  * closure runs once. After the commit the sessions are gone, so every later request is
@@ -234,6 +243,19 @@ export class AccountClosureService {
 
   private async closeIn(tx: Tx, userId: string): Promise<Closed> {
     const { profiles, phoneVerifications } = schema;
+    // A closure the account's refusals stop now is refused before it locks anything (#53,
+    // ADR-0157 §5): it never holds the inbox below, so no notification is skipped for it.
+    await this.refuseEarly(tx, userId);
+    // The member's inbox FOR UPDATE, first (#53, ADR-0157; 53-5, 53-8): from here on every
+    // notification writer skips the account — its gate takes inboxes FOR KEY SHARE SKIP LOCKED and
+    // never waits, whatever locks it holds — and a writer already holding the KEY SHARE is waited
+    // for, so what it wrote is deleted with the inbox below. One skipped here is not sent again if
+    // the closure then fails (a refusal that appeared since `refuseEarly`; owner answer 53-8).
+    await tx
+      .select({ held: sql`1` })
+      .from(schema.notificationInboxes)
+      .where(eq(schema.notificationInboxes.userId, userId))
+      .for('update');
     await lockAdminRoles(tx, 'shared');
     const [profile] = await tx
       .select({
@@ -321,9 +343,37 @@ export class AccountClosureService {
     const imageKey = await this.anonymise(tx, userId, profile.nickname!, profile.imageId, closedAt);
     await this.unwatchAll(tx, userId, closedAt);
     await tx.delete(schema.marketSearches).where(eq(schema.marketSearches.userId, userId));
+    // The inbox, and with it every notification and its keys (53-7, the cascades).
+    await tx
+      .delete(schema.notificationInboxes)
+      .where(eq(schema.notificationInboxes.userId, userId));
     await this.endSignIn(tx, userId);
     await this.closeRequests(tx, userId, closedAt);
     return { closedAt, forfeitedCoin, imageKey, bookMarketIds: cancelledMarketIds(cancelled) };
+  }
+
+  /**
+   * The refusals asked without a lock before the closure takes any (#53, ADR-0157 §5): the reads
+   * `check` makes — the profile's role, a restriction (`assertNotRestricted`), `refusalsOf` — in
+   * the order the locked check below asks them, and the same refusal thrown. A closure refused here
+   * never holds the member's inbox, so no notification meant for an account that stays open is
+   * skipped for it; only a refusal that appears between this read and the locked one (a fill on a
+   * resting order, a restriction committing meanwhile) can still cost one (owner answer 53-8). The
+   * locked check stays the one that decides. An account already closed (the second tab) or with no
+   * profile goes on to the locked path, which answers it as before.
+   */
+  private async refuseEarly(tx: Tx, userId: string): Promise<void> {
+    const { profiles } = schema;
+    const [profile] = await tx
+      .select({ role: profiles.role, closedAt: profiles.closedAt })
+      .from(profiles)
+      .where(eq(profiles.userId, userId))
+      .limit(1);
+    if (profile === undefined || profile.closedAt !== null) return;
+    if (profile.role === 'admin') throw closureNotAllowed('admin');
+    await assertNotRestricted(tx, userId);
+    const [refusal] = await this.refusalsOf(tx, userId, profile.role);
+    if (refusal !== undefined) throw closureNotAllowed(refusal);
   }
 
   /**

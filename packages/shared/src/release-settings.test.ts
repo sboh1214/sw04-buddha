@@ -13,6 +13,7 @@ import {
   LEAD_CLOSE_GAP_SETTING,
   MARKET_LIQUIDITY_DEFAULT_SETTINGS,
   MARKET_PROPOSALS_RETENTION_SETTING,
+  NOTIFICATIONS_RETENTION_SETTING,
   MARKET_MAKER_CONCENTRATION_TOP_N_SETTING,
   ORDER_ACCEPTING_SETTING,
   ORDER_RATE_LIMIT_SETTING,
@@ -106,6 +107,8 @@ describe('release settings registry', () => {
       'retention.removed_profile_items',
       // 시장 제안 기록 보존기간 (#77, ADR-0087's owner decision 2026-10-24 13).
       'retention.market_proposals',
+      // 알림 보존기간 (#53, ADR-0157 53-7): registered with no value.
+      'retention.notifications',
     ]);
     expect(RELEASE_SETTINGS.get('grant.start_coin')).toBe(START_COIN_SETTING);
     expect(RELEASE_SETTINGS.get('market.lead_close_gap')).toBe(LEAD_CLOSE_GAP_SETTING);
@@ -296,6 +299,28 @@ describe('release settings registry', () => {
     expect(definition.description).toContain('늦은 쪽부터');
     expect(definition.description).toContain('처리를 기다리는 제안(접수·검토)');
     expect(definition.description).toContain('탈퇴하지 않은 계정의 제안은 지우지 않는다');
+  });
+
+  it('names the notifications’ period as the owner set it: from the 발생 시각, read or not (#53, ADR-0157 53-7, 53-10)', () => {
+    const definition = RETENTION_PERIOD_SETTINGS.notifications;
+    expect(definition).toBe(NOTIFICATIONS_RETENTION_SETTING);
+    expect(definition).toMatchObject({
+      key: 'retention.notifications',
+      label: '알림 보존기간',
+      unit: '일',
+    });
+    expect(RELEASE_SETTINGS.get('retention.notifications')).toBe(definition);
+    // Counted from the 발생 시각 — a merged one's latest event — whether read or not, and a
+    // closed account's go whole at its closure.
+    expect(definition.description).toContain('알림함의 알림(유형·내용·대상·읽음 여부·발생 시각)');
+    expect(definition.description).toContain(
+      '발생 시각(묶인 알림은 묶인 사건 가운데 가장 늦은 시각)부터',
+    );
+    expect(definition.description).toContain('읽음 여부와 상관없이 지운다(#53)');
+    expect(definition.description).toContain('탈퇴한 계정의 알림은 탈퇴할 때 모두 지운다');
+    expect(definition.description).toContain('상태가 승인됨일 때만 지우고');
+    expect(definition.schema.safeParse(30).success).toBe(true);
+    expect(definition.schema.safeParse(0).success).toBe(false);
   });
 
   it('takes a whole Coin amount for the start grant, up to START_GRANT_MAX_COIN (#70)', () => {

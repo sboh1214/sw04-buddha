@@ -1084,12 +1084,43 @@ const marketProposals: Step = async (tx, { cutoff, limit }) => {
 };
 
 /**
+ * Every account's notifications (#53, ADR-0157; owner answers 53-7 and 53-10 — their own period,
+ * '알림'), read or not, once the period has passed since their 발생 시각 (`occurred_at`): a merged
+ * one's latest event, which each merge raises it to (134-2), so it counts from that. Unlike the
+ * closure-anchored kinds (consent records, verification records, moderation records and market
+ * proposals of a withdrawn account), they are deleted from a live member's inbox by their
+ * 발생 시각, read or unread: a closure deletes a closed one's inbox whole at once (53-7), so none
+ * counts from a withdrawal. Their dedupe keys go with them (`notification_keys`' foreign key
+ * cascades): the same event reprocessed after that would notify again (accepted, ADR-0157 구현의
+ * 선택). Locked SKIP LOCKED: a merge (FOR UPDATE), a mark-read or a '모두 읽음' in flight holds its
+ * row, which is left to the next run (a merge raises its 발생 시각 meanwhile), and the run waits
+ * for none of them. One that comes after waits only on a row the run holds and then finds it gone:
+ * a merge makes a new notification, a mark-read answers as for a missing one. No realtime signal
+ * (`user:notification`): an open tab's unread count may include a notification the run deleted
+ * until that tab next reads it (ADR-0157).
+ */
+const notifications: Step = async (tx, { cutoff, limit }) => {
+  const { notifications: table } = schema;
+  const due = await tx
+    .select({ id: table.id })
+    .from(table)
+    .where(lte(table.occurredAt, cutoff))
+    .orderBy(asc(table.occurredAt), asc(table.id))
+    .limit(limit)
+    .for('update', { skipLocked: true });
+  const ids = due.map((row) => row.id);
+  if (ids.length > 0) await tx.delete(table).where(inArray(table.id, ids));
+  return { selected: ids.length, deleted: { notifications: ids.length }, storageKeys: [] };
+};
+
+/**
  * The steps in the order a run takes them (RETENTION_PURGE_KINDS): each kind before what it names —
  * a report before its action (a hiding's among them, which goes with its hidden item and that
  * item's versions), a removed profile item and an ended hold before theirs, an action before its
  * requests — and the versions before the originals, so an original's images are judged against the
  * versions still kept. #187's review list names nothing the run deletes and nothing names it, nor
- * do #175's 판정 이의, emptied in place: they close the 신고·제재 kinds.
+ * do #175's 판정 이의, emptied in place: they close the 신고·제재 kinds. #53's notifications, last,
+ * name nothing the run deletes, and only their own keys name them.
  */
 const STEPS: readonly { kind: RetentionPurgeKind; step: Step }[] = [
   { kind: 'nickname_holds', step: nicknameHolds },
@@ -1108,6 +1139,7 @@ const STEPS: readonly { kind: RetentionPurgeKind; step: Step }[] = [
   { kind: 'consent_records', step: consentRecords },
   { kind: 'phone_verification_records', step: phoneVerificationRecords },
   { kind: 'market_proposals', step: marketProposals },
+  { kind: 'notifications', step: notifications },
 ];
 
 /**

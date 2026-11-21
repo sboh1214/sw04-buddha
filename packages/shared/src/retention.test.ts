@@ -21,6 +21,8 @@ describe('retention (#184)', () => {
       'removed_profile_items',
       // A setting of its own (owner decision 2026-10-24 13, ADR-0087 결과 5; ADR-0089).
       'market_proposals',
+      // The inbox's (#53, ADR-0157 53-7).
+      'notifications',
     ]);
     expect(Object.keys(RETENTION_PERIOD_SETTINGS)).toEqual([...RETENTION_PERIODS]);
   });
@@ -44,9 +46,13 @@ describe('retention (#184)', () => {
     expect(RETENTION_PURGE_KINDS.indexOf('market_disputes')).toBe(
       RETENTION_PURGE_KINDS.indexOf('link_flags') + 1,
     );
-    // A withdrawn account's market proposals (#77): their own period, the last kind of a run.
+    // A withdrawn account's market proposals (#77): their own period.
     expect(RETENTION_PURGE_KIND_PERIODS.market_proposals).toBe('market_proposals');
-    expect(RETENTION_PURGE_KINDS.at(-1)).toBe('market_proposals');
+    // Every account's notifications (#53, ADR-0157 53-7, 53-10): their own period, the last kind
+    // of a run — nothing names a notification.
+    expect(RETENTION_PURGE_KIND_PERIODS.notifications).toBe('notifications');
+    expect(RETENTION_PURGE_KINDS.at(-1)).toBe('notifications');
+    expect(RETENTION_PURGE_KINDS.at(-2)).toBe('market_proposals');
     // Every period is applied to some kind.
     expect(new Set(Object.values(RETENTION_PURGE_KIND_PERIODS).filter(Boolean))).toEqual(
       new Set(RETENTION_PERIODS),

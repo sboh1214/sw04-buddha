@@ -43,6 +43,7 @@ export * from './media-objects.js';
 export * from './moderation.js';
 export * from './nickname-holds.js';
 export * from './notices.js';
+export * from './notifications.js';
 export * from './orders.js';
 export * from './payment-events.js';
 export * from './payments.js';

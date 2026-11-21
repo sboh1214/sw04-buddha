@@ -13,6 +13,7 @@ import {
 import { AUTHORED_KEY, MY_AUTHORED_KEY, myAuthoredKey, profileAuthoredKey } from './authored';
 import { MY_DISPUTES_KEY, myDisputesKey, myMarketDisputeKey } from './disputes';
 import { LIKES_KEY, myPostLikesKey } from './likes';
+import { NOTIFICATIONS_KEY, notificationListKey, notificationUnreadKey } from './notifications';
 import {
   CATEGORIES_QUERY_KEY,
   DEFAULT_MARKET_FILTERS,
@@ -413,6 +414,10 @@ describe('isPrivateQueryKey', () => {
       ['myFillHistoryKey', myFillHistoryKey({ period: '7d' }, 'user-1')],
       ['SETTLEMENTS_KEY', SETTLEMENTS_KEY],
       ['mySettlementsKey', mySettlementsKey({ market: ID }, 'user-1')],
+      // 알림함 (#53): the member's notifications and unread count.
+      ['NOTIFICATIONS_KEY', NOTIFICATIONS_KEY],
+      ['notificationListKey', notificationListKey('user-1')],
+      ['notificationUnreadKey', notificationUnreadKey('user-1')],
     ];
     for (const [name, key] of sessionKeys) expect(isPrivateQueryKey(key), name).toBe(true);
   });
@@ -436,7 +441,9 @@ describe('isPrivateQueryKey', () => {
     // item 13), read with the member's cookie — the root M5's dispute stage held, with new keys.
     // 'sellable' came with #66 (ADR-0140): a member's holding and resting sells on one market.
     // 'settlements' came with #124 (ADR-0143): the account's settlement records — what it held and
-    // was paid is nobody else's to see (N04 §7); this PR changed the list too.
+    // was paid is nobody else's to see (N04 §7); this PR changed the list too. 'notifications' came
+    // with #53 (ADR-0157): the account's inbox and its unread count (PRIVATE_DATA `notifications`),
+    // read with its cookie — that PR changed the list too.
     expect([...PRIVATE_QUERY_ROOTS].sort()).toEqual(
       [
         'admin',
@@ -456,6 +463,7 @@ describe('isPrivateQueryKey', () => {
         'disputes',
         'sellable',
         'settlements',
+        'notifications',
       ].sort(),
     );
   });

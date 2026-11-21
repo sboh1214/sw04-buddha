@@ -13,6 +13,7 @@ import {
   marketTickEventSchema,
   marketTradeEventSchema,
   userBalanceEventSchema,
+  userNotificationEventSchema,
   userPositionEventSchema,
 } from '@buddha/shared';
 import { type QueryKey, useQueryClient } from '@tanstack/react-query';
@@ -84,6 +85,12 @@ import {
   wroteASettlement,
   wroteAnOrder,
 } from '@/lib/market-live';
+import {
+  NOTIFICATIONS_KEY,
+  NOTIFICATION_REFRESH_MS,
+  notificationListKey,
+  notificationUnreadKey,
+} from '@/lib/notifications';
 import { restartQueries, setResnapshotOwed } from '@/lib/query-client';
 import { handleMarketStats } from '@/lib/market-stats-event';
 import { refreshThemeResultsOnStatus } from '@/lib/themes';
@@ -114,6 +121,12 @@ import { type CachedSeries, appendTick } from '@/lib/ticks';
  * market's remaining orders (#120, ADR-0115); nothing comes at `close_at` itself, so the open
  * 호가창 reads its book once more a second past it on a timer of its own (`bookRereadAt`,
  * order-book.tsx), not from here.
+ *
+ * `user:notification` (#53, ADR-0157, owner answer 53-1) is the other signal with no state: the
+ * member's inbox changed — a notification made or merged, one or all read in another tab — so the
+ * unread count beside MY and the inbox, where it is on screen, are read again
+ * (`refreshNotifications`), through one window per connection (owner answer 53-9: 30 s). Nothing
+ * polls them, and no toast is shown.
  */
 
 /**
@@ -202,6 +215,9 @@ const PRIVATE_SNAPSHOT_KEYS = [
   SELLABLE_KEY,
   // 정산 기록 (#124, ADR-0143): a missed settling `user:position` is a record the list lacks.
   SETTLEMENTS_KEY,
+  // 알림함 (#53, ADR-0157): a missed `user:notification` is a count and a list nothing else reads
+  // again — the count's `staleTime` is infinite (53-1 '폴링 없음').
+  NOTIFICATIONS_KEY,
 ] as const;
 
 /**
@@ -427,6 +443,16 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       orderHistoryPending = null;
       orderHistory.disarm();
     };
+    // The account's unread count and inbox on `user:notification` (`refreshNotifications`, #53):
+    // one window for the account and its one trailing timer, per connection like the two above.
+    const notifications = new RoundWindow(NOTIFICATION_REFRESH_MS);
+    let notificationsPending: (() => void) | null = null;
+    /** Cancels the trailing notification round armed, if any, and tells the window so. */
+    const cancelNotifications = () => {
+      notificationsPending?.();
+      notificationsPending = null;
+      notifications.disarm();
+    };
     // The account's 매도 가능액 on `market:book` (`refreshSellable`): one market per gap, per
     // connection like the windows above.
     const sellableRotation = new SellableRotation(SELLABLE_ROTATION_MS);
@@ -479,6 +505,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       cancelBalanceHistory();
       // So were 거래·정산 이력's lists (`ORDERS_KEY`).
       cancelOrderHistory();
+      // And the unread count and the inbox (`NOTIFICATIONS_KEY`).
+      cancelNotifications();
       // Every 매도 가능액 was just read again (`SELLABLE_KEY`): nothing waits in the window.
       sellableRotation.clear();
     };
@@ -646,6 +674,36 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         refreshOrderHistory(true);
       }, step.wait);
       orderHistoryPending = () => {
+        clearTimeout(timer);
+      };
+    };
+
+    /**
+     * The account's unread count and inbox read again for `user:notification` (#53, ADR-0157,
+     * owner answers 53-1 and 53-9): one round per window for the account, leading and trailing —
+     * `refreshOrderHistory`'s shape, for its reason: the signal is the one writer of a new or
+     * merged notification on screen (it carries no state), so a refused round that is dropped
+     * would leave the count behind until a reconnect. A round restarts the account's count and its
+     * list: on screen each reads once — the count on every page, beside MY; the list's loaded
+     * pages on MY › 알림 and the summary — and off screen each is only marked stale. A lone signal
+     * is read at once; signals that keep coming — a resting order's fills, once #134 ships — are
+     * read together at most a window later: 3 rounds a minute, which the wallet's budget counts
+     * (use-wallet-budget.test.ts).
+     */
+    const refreshNotifications = (fired = false) => {
+      const now = Date.now();
+      const step = fired ? notifications.fired(now) : notifications.offer(now);
+      if (step === null) return;
+      if (step === 'run') {
+        void restartQueries(queryClient, notificationUnreadKey(identity ?? undefined));
+        void restartQueries(queryClient, notificationListKey(identity ?? undefined));
+        return;
+      }
+      const timer = setTimeout(() => {
+        notificationsPending = null;
+        refreshNotifications(true);
+      }, step.wait);
+      notificationsPending = () => {
         clearTimeout(timer);
       };
     };
@@ -1130,6 +1188,16 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // as before.
         for (const queryKey of refetchKeys) void restartQueries(queryClient, queryKey);
       },
+
+      'user:notification': (raw: unknown) => {
+        // As `user:balance`: the room is the handshake account's, so this is never another
+        // account's event — only this account's, after the screen stopped being theirs.
+        if (identity === null) return;
+        if (!userNotificationEventSchema.safeParse(raw).success) return;
+        // A signal with no state (#53, ADR-0157): the inbox changed, so the count beside MY and the
+        // list where it is on screen are read again — through the window, never once per event.
+        refreshNotifications();
+      },
     } satisfies Record<RealtimeEventType, (raw: unknown) => void>;
 
     for (const [event, handler] of Object.entries(handlers)) socket.on(event, handler);
@@ -1152,6 +1220,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       cancelBalanceHistory();
       balanceHistoryReads.abort();
       cancelOrderHistory();
+      cancelNotifications();
       sellablePending?.();
       sellablePending = null;
       sellableRotation.clear();

@@ -121,6 +121,22 @@ export {
 } from './market-transitions.js';
 export { migrationsFolder, runMigrations } from './migrator.js';
 export {
+  createNotifications,
+  markAllNotificationsRead,
+  markNotificationRead,
+  NotificationInputError,
+  notificationPage,
+  notifiedUserIds,
+  unreadNotificationCount,
+  type CreateNotificationsOptions,
+  type NotificationCursor,
+  type NotificationInput,
+  type NotificationOutcome,
+  type NotificationPage,
+  type NotificationRow,
+  type NotificationSkipReason,
+} from './notifications.js';
+export {
   hasStandingConsent,
   isNicknameHeld,
   lockNicknames,

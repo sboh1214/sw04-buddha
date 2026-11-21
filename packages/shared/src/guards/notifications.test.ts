@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest';
+import * as z from 'zod';
 import {
+  NOTIFICATION_DEFINITIONS,
+  defineNotification,
+  type NotificationDefinition,
+} from '../notifications.js';
+import {
+  NOTIFICATION_IDENTITY_PARAM,
   NOTIFICATION_TYPES,
+  NOTIFICATION_TYPE_REGISTRY,
   type NotificationTypeEntry,
   findExcludedNotification,
+  findNotificationDefinitionProblems,
 } from './notifications.js';
 
 const entry = (type: string, ...text: string[]): NotificationTypeEntry => ({
@@ -16,6 +25,17 @@ const features = (candidate: NotificationTypeEntry) => [
 ];
 
 describe('NOTIFICATION_TYPES (#113, #53)', () => {
+  it('registers exactly the product list: the registry is keyed by NOTIFICATION_DEFINITIONS', () => {
+    // ADR-0157: the product list is the source and the registry is keyed by it, so a type
+    // defined without its text, or an entry left for a removed type, fails to compile (and this).
+    expect(Object.keys(NOTIFICATION_TYPE_REGISTRY).sort()).toEqual(
+      NOTIFICATION_DEFINITIONS.map((definition: NotificationDefinition) => definition.type).sort(),
+    );
+    expect(NOTIFICATION_TYPES.map((entry) => entry.type)).toEqual(
+      Object.keys(NOTIFICATION_TYPE_REGISTRY),
+    );
+  });
+
   it('registers each type once, with its text and a reason', () => {
     const types = NOTIFICATION_TYPES.map((candidate) => candidate.type);
     expect(new Set(types).size).toBe(types.length);
@@ -57,5 +77,109 @@ describe('findExcludedNotification', () => {
     expect(
       findExcludedNotification(entry('market_resolved', '{title} 시장이 판정되었습니다.')),
     ).toEqual([]);
+  });
+});
+
+/** A planted definition: a flat, private-safe one unless `change` says otherwise. */
+const planted = (change: Partial<NotificationDefinition> = {}): NotificationDefinition => ({
+  ...defineNotification({
+    type: 'planted_notice',
+    category: 'market',
+    targets: ['market'],
+    params: z.object({ title: z.string(), count: z.number().int(), done: z.boolean() }),
+    merge: null,
+  }),
+  ...change,
+});
+
+describe('findNotificationDefinitionProblems (ADR-0157)', () => {
+  it('finds nothing in the product list (empty in #53) or in a definition that keeps the rules', () => {
+    expect(findNotificationDefinitionProblems(NOTIFICATION_DEFINITIONS)).toEqual([]);
+    expect(
+      findNotificationDefinitionProblems([
+        planted(),
+        planted({
+          type: 'planted_merged',
+          category: 'trade',
+          params: z.object({
+            closedAt: z.iso.datetime().nullable(),
+            state: z.enum(['partial', 'full']),
+            amountCoin: z.string(),
+            kind: z.literal('fill'),
+          }),
+          merge: (held) => held,
+        }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it('refuses a param that would store another member or their identity (52-15, ADR-0086)', () => {
+    // Read through the target when the list is read, never stored: a closed member's name and a
+    // forced nickname change show at once.
+    for (const key of [
+      'nickname',
+      'authorNickname',
+      'replyAuthor',
+      'userId',
+      'accountId',
+      'counterpartyId',
+      'publicId',
+      'email',
+      'phone',
+    ]) {
+      expect(NOTIFICATION_IDENTITY_PARAM.test(key), key).toBe(true);
+      expect(
+        findNotificationDefinitionProblems([planted({ params: z.object({ [key]: z.string() }) })]),
+        key,
+      ).toEqual([`planted_notice.${key}: names another account or its identity`]);
+    }
+    for (const key of ['title', 'amountCoin', 'closeAt', 'state', 'count']) {
+      expect(NOTIFICATION_IDENTITY_PARAM.test(key), key).toBe(false);
+    }
+  });
+
+  it('refuses params that are not flat, and names outside the pattern', () => {
+    // The type refuses nested params at compile time already; this is the run-time net.
+    const nested = z.object({
+      nested: z.object({ a: z.string() }),
+      list: z.array(z.string()),
+      loose: z.unknown(),
+      Bad_Name: z.string(),
+    }) as unknown as NotificationDefinition['params'];
+    expect(findNotificationDefinitionProblems([planted({ params: nested })])).toEqual([
+      'planted_notice.nested: not a flat value',
+      'planted_notice.list: not a flat value',
+      'planted_notice.loose: not a flat value',
+      'planted_notice.Bad_Name: name shape',
+    ]);
+    expect(
+      findNotificationDefinitionProblems([
+        planted({ params: z.string() as unknown as NotificationDefinition['params'] }),
+      ]),
+    ).toEqual(['planted_notice: params are not an object']);
+  });
+
+  it('refuses a bad type, a type listed twice, a category or target outside the lists and a merge that is no function', () => {
+    expect(
+      findNotificationDefinitionProblems([
+        planted({ type: 'Bad-Type' }),
+        planted(),
+        planted(),
+        planted({
+          type: 'planted_other',
+          category: 'price' as NotificationDefinition['category'],
+          targets: ['order' as NotificationDefinition['targets'][number]],
+          merge: 'sum' as unknown as NotificationDefinition['merge'],
+        }),
+        planted({ type: 'planted_nowhere', targets: [] }),
+      ]),
+    ).toEqual([
+      'Bad-Type: type shape',
+      'planted_notice: listed twice',
+      'planted_other: category price',
+      'planted_other: target kind order',
+      'planted_other: merge',
+      'planted_nowhere: no target kind',
+    ]);
   });
 });
