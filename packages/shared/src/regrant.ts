@@ -16,8 +16,9 @@ import { publicIdSchema } from './public-id.js';
  * The six numbers are release settings (REGRANT_SETTINGS, release-settings.ts), read together at
  * each request; while any one is undecided nothing is granted ('준비 중', owner answer 12). Only
  * an account whose start grant was paid may apply (owner answer 4), never the 운영 마켓메이커
- * (#115), and one request id grants at most once (N01 §9). Owner-only like the balance it lands in
- * (PRIVATE_DATA `balance`): the account reads its own status, and admins read the records.
+ * (#115) nor an account while it holds the admin role (ADR-0156), and one request id grants at
+ * most once (N01 §9). Owner-only like the balance it lands in (PRIVATE_DATA `balance`): the
+ * account reads its own status, and admins read the records.
  */
 
 /**
@@ -39,6 +40,10 @@ export const REGRANT_TOTAL_CAP_MAX_COIN = 1_000_000_000;
  *   numbers are then unknown, so no reason that needs one is asked;
  * - `restricted`: an account restriction stands (owner answer 8; the rule `assertCanTrade` asks);
  *   the request itself is answered RESTRICTED with its end, as an order is;
+ * - `admin`: the account holds the admin role (ADR-0156, owner answer 2026-11-21): refused while it
+ *   does, as an admin's order is (ADR-0107 결정 5), and given again once the role is revoked. After
+ *   `restricted` and before `held`, the order an order asks them in (RESTRICTED, the role's
+ *   FORBIDDEN, then `ledger_hold`);
  * - `held`: the account's books are held for a reconciliation difference (#93) — new orders are
  *   refused the same way (`ledger_hold`);
  * - `no_start_grant`: the account's start grant was never paid — not asked, waiting for its amount,
@@ -57,6 +62,7 @@ export const REGRANT_TOTAL_CAP_MAX_COIN = 1_000_000_000;
 export const REGRANT_REFUSALS = [
   'not_ready',
   'restricted',
+  'admin',
   'held',
   'no_start_grant',
   'not_exhausted',

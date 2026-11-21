@@ -7533,7 +7533,7 @@ export type components = {
             id: string;
         };
         /** @enum {string} */
-        RegrantRefusal: "not_ready" | "restricted" | "held" | "no_start_grant" | "not_exhausted" | "live_orders" | "unsettled_positions" | "waiting" | "period_limit" | "total_cap";
+        RegrantRefusal: "not_ready" | "restricted" | "admin" | "held" | "no_start_grant" | "not_exhausted" | "live_orders" | "unsettled_positions" | "waiting" | "period_limit" | "total_cap";
         RegrantStatus: {
             amountCoin: components["schemas"]["CoinAmount"] | null;
             eligible: boolean;

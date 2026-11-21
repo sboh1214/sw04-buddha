@@ -5,12 +5,13 @@
  * otherwise every refusal that applies, in order, with its numbers; `POST /me/regrant` grants at
  * once when none does — one REGRANT mint of the setting's amount into the member's own account,
  * its row, the wallet's '재지급' line and a `user:balance` event — and refuses with
- * REGRANT_NOT_ALLOWED and the same status otherwise, writing nothing. One request id grants once
- * (`replayed: true` after, at once or later). The request needs the Idempotency-Key (400), the
- * account on screen (403), no account restriction (403 RESTRICTED, a writing restriction does
- * not stop it), the onboarding done (409) and a session (401); a request that met a closure of
- * its account is answered UNAUTHENTICATED. `GET /admin/regrants` lists every re-grant, newest
- * first, to admins alone. Skips when TEST_* are unset.
+ * REGRANT_NOT_ALLOWED and the same status otherwise, writing nothing — an admin's with `admin`
+ * while it holds the role (ADR-0156). One request id grants once (`replayed: true` after, at once
+ * or later). The request needs the Idempotency-Key (400), the account on screen (403), no account
+ * restriction (403 RESTRICTED, a writing restriction does not stop it), the onboarding done (409)
+ * and a session (401); a request that met a closure of its account is answered UNAUTHENTICATED.
+ * `GET /admin/regrants` lists every re-grant, newest first, to admins alone. Skips when TEST_* are
+ * unset.
  */
 import { randomUUID } from 'node:crypto';
 import { runAccountReconciliation, schema } from '@buddha/db';
@@ -129,12 +130,13 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/regrant, /api/v1/admin/regrants (inte
   }
   async function anAdmin(): Promise<TestUser> {
     const user = await onboarded();
-    await t.db
-      .update(schema.profiles)
-      .set({ role: 'admin' })
-      .where(eq(schema.profiles.userId, user.id));
-    await t.app.get(AdminGuard).invalidate(user.id);
+    await setRole(user, 'admin');
     return user;
+  }
+  /** The role as the test fixtures write it, the guard's cache dropped. */
+  async function setRole(user: TestUser, role: 'admin' | 'user'): Promise<void> {
+    await t.db.update(schema.profiles).set({ role }).where(eq(schema.profiles.userId, user.id));
+    await t.app.get(AdminGuard).invalidate(user.id);
   }
   /** An onboarded member whose start grant was paid with `startCoin`. */
   async function granted(startCoin: bigint): Promise<TestUser> {
@@ -422,6 +424,21 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/regrant, /api/v1/admin/regrants (inte
       await bump(-1n);
       expect((await refusedOf(member)).refusals).toEqual(['held']);
       await expectNothingWritten();
+    });
+
+    it('refuses an admin while it holds the role, and grants once it is revoked', async () => {
+      // ADR-0156 (owner answer 2026-11-21): no re-grant while the role is held, as no order.
+      await settle();
+      await setRole(member, 'admin');
+      expect(await refusedOf(member)).toEqual({
+        ...OPEN_STATUS,
+        eligible: false,
+        refusals: ['admin'],
+      });
+      await expectNothingWritten();
+      await setRole(member, 'user');
+      expect((await grantOf(member)).replayed).toBe(false);
+      expect(await regrantRows()).toHaveLength(1);
     });
 
     it('refuses within the wait since the start grant, with when it ends (5)', async () => {

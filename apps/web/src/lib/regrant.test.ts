@@ -150,6 +150,7 @@ describe('the refusals', () => {
     const lines = regrantRefusals(refusedForAll, at);
     expect(lines.map((line) => line.reason)).toEqual([
       'restricted',
+      'admin',
       'held',
       'no_start_grant',
       'not_exhausted',
@@ -161,6 +162,7 @@ describe('the refusals', () => {
     ]);
     expect(lines.map((line) => line.message)).toEqual([
       '계정 제한 중에는 재지급을 받을 수 없습니다.',
+      '관리자 권한이 있는 동안에는 재지급을 받을 수 없습니다.',
       copy.regrantRefusalHeld,
       copy.regrantRefusalNoStartGrant,
       '가용 코인이 990,000 Coin 이하일 때 받을 수 있습니다.',
@@ -208,8 +210,23 @@ describe('the refusals', () => {
     );
   });
 
+  it('says an admin’s refusal as its own line, with no way to 조치·신고 내역 (ADR-0156)', () => {
+    const admin: RegrantStatus = { ...eligible, eligible: false, refusals: ['admin'] };
+    expect(regrantRefusals(admin, at, '2026-12-01T00:00:00.000Z')).toEqual([
+      {
+        reason: 'admin',
+        message: '관리자 권한이 있는 동안에는 재지급을 받을 수 없습니다.',
+        restricted: false,
+      },
+    ]);
+    expect(regrantRefusedText(admin, at)).toBe(
+      '지금은 재지급을 받을 수 없습니다. 관리자 권한이 있는 동안에는 재지급을 받을 수 없습니다.',
+    );
+  });
+
   it("says '준비 중' alone while not open, whatever else the server named (owner answer 12)", () => {
     expect(regrantRefusals(notReady, at)).toEqual([]);
+    expect(regrantRefusals({ ...notReady, refusals: ['not_ready', 'admin'] }, at)).toEqual([]);
     expect(regrantRefusalText('not_ready', notReady, at)).toBe(copy.regrantNotReady);
   });
 

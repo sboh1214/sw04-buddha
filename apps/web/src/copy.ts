@@ -432,6 +432,8 @@ export const copy = {
   // RESTRICTED로 거절되면 끝나는 때를 뒤에 붙인다('…(2026. 12. 1. 오전 9:00까지).' — errRestricted*와 같은 꼴이라
   // 마침표가 없다).
   regrantRefusalRestricted: '계정 제한 중에는 재지급을 받을 수 없습니다',
+  // 관리자 권한이 있는 동안은 받지 않는다 — 주문과 같다(ADR-0156, 오너 답 2026-11-21). 권한이 회수되면 다시 받는다.
+  regrantRefusalAdmin: '관리자 권한이 있는 동안에는 재지급을 받을 수 없습니다.',
   regrantRefusalHeld: '계정을 확인하고 있어 지금은 재지급을 받을 수 없습니다.',
   regrantRefusalNoStartGrant: '시작 Coin을 받은 계정만 재지급을 받을 수 있습니다.',
   // '가용 코인이 990,000 Coin 이하일 때 받을 수 있습니다.'

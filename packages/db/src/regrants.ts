@@ -47,13 +47,13 @@ export type RegrantRow = typeof regrants.$inferSelect;
  * 제한적 재지급 (#74, ADR-0155; owner answers 2026-11-21): the server half of `POST /me/regrant`
  * (`applyRegrant`) and `GET /me/regrant` (`regrantStatus`), and the admin records
  * (`readAdminRegrantPage`). The conditions, in the order REGRANT_REFUSALS names them:
- * the six release settings decided (12), no account restriction (8), no #93 hold, the start grant
- * paid (4), available Coin at or below the threshold (1), no waiting order (2), no contract of a
- * market not settled (7), the 대기기간 since the last re-grant or the start grant passed, fewer
- * re-grants in the last 주기 than its limit, and the 누적 상한 kept with this one added — never a
- * partial grant (5·6). Each is asked and every one that fails is named (9). When none does, the
- * request gets the amount at once (3): a REGRANT entry minted into the account's user ledger
- * account, and its `regrants` row.
+ * the six release settings decided (12), no account restriction (8), no admin role (ADR-0156), no
+ * #93 hold, the start grant paid (4), available Coin at or below the threshold (1), no waiting
+ * order (2), no contract of a market not settled (7), the 대기기간 since the last re-grant or the
+ * start grant passed, fewer re-grants in the last 주기 than its limit, and the 누적 상한 kept with
+ * this one added — never a partial grant (5·6). Each is asked and every one that fails is named
+ * (9). When none does, the request gets the amount at once (3): a REGRANT entry minted into the
+ * account's user ledger account, and its `regrants` row.
  */
 
 /** The six settings in one fixed order, read in one statement (`getReleaseSettings`). */
@@ -79,6 +79,8 @@ interface RegrantValues {
 /** What the conditions read of the account, apart from its re-grants. */
 interface RegrantFacts {
   restricted: boolean;
+  /** The account holds the admin role (`profiles.role`, ADR-0156). */
+  admin: boolean;
   held: boolean;
   /** When the account's start grant was paid; null when none was (pending, cancelled, none). */
   startGrantedAt: Date | null;
@@ -148,6 +150,20 @@ async function accountRestricted(executor: Executor, userId: string): Promise<bo
     )
     .limit(1);
   return standing !== undefined;
+}
+
+/**
+ * Whether the account holds the admin role now, read without a lock (`regrantStatus`): an admin
+ * never gets a re-grant while it holds the role (ADR-0156), as it never orders (ADR-0107 결정 5).
+ * `applyRegrant` reads it with its profile lock instead.
+ */
+async function holdsAdminRole(executor: Executor, userId: string): Promise<boolean> {
+  const [profile] = await executor
+    .select({ role: profiles.role })
+    .from(profiles)
+    .where(eq(profiles.userId, userId))
+    .limit(1);
+  return profile?.role === 'admin';
 }
 
 /** Whether an order of the account still rests in a book (대기·부분 체결, owner answer 2). */
@@ -266,6 +282,7 @@ function decide(
   const refusals: RegrantRefusal[] = [];
   if (values === null) refusals.push('not_ready');
   if (facts.restricted) refusals.push('restricted');
+  if (facts.admin) refusals.push('admin');
   if (facts.held) refusals.push('held');
   if (facts.startGrantedAt === null) refusals.push('no_start_grant');
   if (values === null || history === null) {
@@ -314,6 +331,7 @@ function decide(
 /** The facts of an account that is no person's (the 운영 마켓메이커, #115): it never gets one. */
 const OPERATING_FACTS: RegrantFacts = {
   restricted: false,
+  admin: false,
   held: false,
   startGrantedAt: null,
   availableCoin: null,
@@ -345,6 +363,7 @@ export async function regrantStatus(
             .limit(1);
     facts = {
       restricted: await accountRestricted(executor, userId),
+      admin: await holdsAdminRole(executor, userId),
       held: await reconciliationUserHeld(executor, userId),
       startGrantedAt: await startGrantedAt(executor, userId, false),
       availableCoin: balance?.availableCoin ?? null,
@@ -426,13 +445,20 @@ async function regrantByRequest(
  * 1. The account's profile row FOR KEY SHARE — `assertCanTrade`'s lock, which the API takes first
  *    for the RESTRICTED answer (taking it again is a no-op): an approved account restriction and a
  *    closure lock it FOR UPDATE before they write, so one in flight commits first and is seen.
+ *    The same statement reads the role (ADR-0156): a role grant locks the grantee's profile FOR
+ *    UPDATE NOWAIT before it writes `admin` (AdminAccountsService.grant, the seed's promotion;
+ *    ADR-0120 결정 7), which conflicts with this lock — a grant in flight commits first and its
+ *    role is read here, and one that comes later fails to lock the row until this re-grant
+ *    commits (the grant is retried whole, at worst TRANSACTION_BUSY): it then follows the
+ *    re-grant, given to a member. A revoke writes the row without that lock: racing it, a re-grant
+ *    is refused for the role or given once the role is gone, both as the account stands.
  * 2. The account's re-grant lock (`pg_advisory_xact_lock`): two requests of one account never
  *    interleave — a second waits, then sees the first's row.
  * 3. The request id: a re-grant this id recorded before → `replayed`, before any condition, so a
  *    lost answer reads back whatever stands now.
- * 4. The account restriction (8), then the start grant FOR UPDATE: a payment in flight commits
- *    first (4) — after the profile, as the closure takes them (profile → 본인확인 기록 → grant →
- *    balance).
+ * 4. The account restriction (8) and the role read in (1), then the start grant FOR UPDATE: a
+ *    payment in flight commits first (4) — after the profile, as the closure takes them (profile
+ *    → 본인확인 기록 → grant → balance).
  * 5. #93's account key (`lockReconciliationUserKey`), before any balance lock as an order takes
  *    it, then whether a hold stands — an order is refused for it too (`ledger_hold`).
  * 6. The account's user ledger account FOR UPDATE (`lockLedgerAccounts`): the available Coin (1),
@@ -457,8 +483,9 @@ export async function applyRegrant(tx: Tx, input: ApplyRegrantInput): Promise<Ap
     throw new RangeError(`request id ${JSON.stringify(requestId)} is not a request id`);
   }
 
-  await tx
-    .select({ one: sql`1` })
+  // The role as the lock holds the row: no role grant commits until this transaction ends.
+  const [profile] = await tx
+    .select({ role: profiles.role })
     .from(profiles)
     .where(eq(profiles.userId, userId))
     .for('key share');
@@ -478,6 +505,7 @@ export async function applyRegrant(tx: Tx, input: ApplyRegrantInput): Promise<Ap
   const availableCoin = locked!.balance.availableCoin;
   const facts: RegrantFacts = {
     restricted,
+    admin: profile?.role === 'admin',
     held,
     startGrantedAt: grantedAt,
     availableCoin,
