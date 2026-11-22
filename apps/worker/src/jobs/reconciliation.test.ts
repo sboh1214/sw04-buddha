@@ -1,8 +1,9 @@
-import { findLedgerAccount, schema, type Db } from '@buddha/db';
+import { findLedgerAccount, RECONCILIATION_NOTICES_FAILED_LOG, schema, type Db } from '@buddha/db';
 import {
   connectTestDb,
   createMarket,
   createUser,
+  createWatch,
   fundMarketMakerFunds,
   hasTestDb,
   mintTestPairs,
@@ -11,8 +12,14 @@ import {
   withLedgerGuardsOff,
   type TestDb,
 } from '@buddha/db/test';
-import { marketChannel, type MarketRealtimeEvent, type UserRealtimeEvent } from '@buddha/shared';
+import {
+  marketChannel,
+  userChannel,
+  type MarketRealtimeEvent,
+  type UserRealtimeEvent,
+} from '@buddha/shared';
 import { eq } from 'drizzle-orm';
+import { pino, type Logger } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Publish } from '../realtime.js';
 import {
@@ -28,6 +35,9 @@ describe.skipIf(!hasTestDb())('reconciliation jobs (#93, integration)', () => {
   let t: TestDb;
   let published: { channel: string; event: MarketRealtimeEvent | UserRealtimeEvent }[];
   let publish: Publish;
+  let logs: Record<string, unknown>[];
+  /** Every level: a run logs nothing but #54's fixed line when its notices fail (54-6). */
+  let logger: Logger;
   beforeAll(async () => {
     t = await connectTestDb();
   });
@@ -41,6 +51,11 @@ describe.skipIf(!hasTestDb())('reconciliation jobs (#93, integration)', () => {
       published.push({ channel, event });
       return Promise.resolve();
     };
+    logs = [];
+    logger = pino(
+      { level: 'debug' },
+      { write: (line: string) => logs.push(JSON.parse(line) as Record<string, unknown>) },
+    );
   });
 
   async function damagedMarket() {
@@ -64,22 +79,22 @@ describe.skipIf(!hasTestDb())('reconciliation jobs (#93, integration)', () => {
         [collateral!.id],
       ),
     );
-    return { market, yes, collateralId: collateral!.id };
+    return { market, yes, no, collateralId: collateral!.id };
   }
 
   it('checks every unexamined market, skips unchanged clean markets and follows new ledger events', async () => {
     const first = await createMarket(t.db, { status: 'open' });
     await createMarket(t.db, { status: 'draft' });
-    expect(await reconcileDueMarkets(t.db, publish)).toMatchObject({
+    expect(await reconcileDueMarkets(t.db, publish, logger)).toMatchObject({
       checked: 2,
       passed: 2,
       mismatched: 0,
       failed: 0,
       scopes: { market: 2, account: 0, supply: 0 },
     });
-    expect((await reconcileDueMarkets(t.db, publish)).checked).toBe(0);
+    expect((await reconcileDueMarkets(t.db, publish, logger)).checked).toBe(0);
     await fundMarketMakerFunds(t.db, first.id, 100n);
-    expect(await reconcileDueMarkets(t.db, publish)).toMatchObject({
+    expect(await reconcileDueMarkets(t.db, publish, logger)).toMatchObject({
       checked: 1,
       passed: 1,
       failed: 0,
@@ -88,7 +103,7 @@ describe.skipIf(!hasTestDb())('reconciliation jobs (#93, integration)', () => {
   });
 
   it('commits a system pause before publishing, preserves orders and retries failed facts without new events', async () => {
-    const { market, yes } = await damagedMarket();
+    const { market, yes, no } = await damagedMarket();
     const adminId = (await createUser(t.db, { role: 'admin' })).user.id;
     await openOrderIntake(t.db, { adminId });
     const placed = await placeTestOrder(t.db, {
@@ -114,18 +129,23 @@ describe.skipIf(!hasTestDb())('reconciliation jobs (#93, integration)', () => {
       expect(await t.db.select().from(schema.reconciliationHolds)).toHaveLength(1);
       await publish(channel, event);
     };
-    const first = await reconcileDueMarkets(t.db, afterCommit);
+    const first = await reconcileDueMarkets(t.db, afterCommit, logger);
     expect(first).toMatchObject({ checked: 1, mismatched: 1, held: 1, paused: 1, failed: 0 });
-    expect(published).toEqual([
-      {
-        channel: marketChannel(market.id),
-        event: expect.objectContaining({
-          type: 'market:status',
-          marketId: market.id,
-          status: 'paused',
-        }) as unknown,
-      },
-    ]);
+    expect(published[0]).toEqual({
+      channel: marketChannel(market.id),
+      event: expect.objectContaining({
+        type: 'market:status',
+        marketId: market.id,
+        status: 'paused',
+      }) as unknown,
+    });
+    // Then the inbox signal of its two holders' `market_paused` (#54 B′; the tests below).
+    expect(
+      published
+        .slice(1)
+        .map(({ channel }) => channel)
+        .sort(),
+    ).toEqual([yes, no].map((id) => userChannel(id)).sort());
     expect((await t.db.select().from(schema.marketPauses))[0]).toMatchObject({
       pausedBy: null,
       reason: 'ledger_failure',
@@ -136,16 +156,16 @@ describe.skipIf(!hasTestDb())('reconciliation jobs (#93, integration)', () => {
     expect(
       (await t.db.select().from(schema.balances).where(eq(schema.balances.userId, yes)))[0],
     ).toEqual(beforeBalance);
-    const again = await reconcileDueMarkets(t.db, publish);
+    const again = await reconcileDueMarkets(t.db, publish, logger);
     expect(again).toMatchObject({ checked: 1, mismatched: 1, held: 1, paused: 0, failed: 0 });
     expect(await t.db.select().from(schema.reconciliationResults)).toHaveLength(2);
     expect(await t.db.select().from(schema.reconciliationHolds)).toHaveLength(1);
-    expect(published).toHaveLength(1);
+    expect(published).toHaveLength(3);
   });
 
   it('a clean manual recheck records success without releasing the hold or resuming the market', async () => {
     const { market, collateralId } = await damagedMarket();
-    await reconcileTarget(t.db, { scope: 'market', marketId: market.id }, publish);
+    await reconcileTarget(t.db, { scope: 'market', marketId: market.id }, publish, logger);
     await withLedgerGuardsOff((client) =>
       client.query(
         'UPDATE balances SET available_coin = available_coin - 1 WHERE account_id = $1',
@@ -156,13 +176,20 @@ describe.skipIf(!hasTestDb())('reconciliation jobs (#93, integration)', () => {
       t.db,
       { scope: 'market', marketId: market.id },
       publish,
+      logger,
       'manual',
     );
     expect(done).toMatchObject({ passed: true, held: true, paused: false });
     expect(
       (await t.db.select().from(schema.markets).where(eq(schema.markets.id, market.id)))[0]?.status,
     ).toBe('paused');
-    expect(published).toHaveLength(1);
+    // The first run's status and its two holders' signals (#54 B′); the clean recheck adds none.
+    expect(published.map(({ event }) => event.type)).toEqual([
+      'market:status',
+      'user:notification',
+      'user:notification',
+    ]);
+    expect(await t.db.select().from(schema.notifications)).toHaveLength(2);
   });
 
   it('daily checks accounts and supply, records both failures and never makes a global hold', async () => {
@@ -173,7 +200,7 @@ describe.skipIf(!hasTestDb())('reconciliation jobs (#93, integration)', () => {
         user.id,
       ]),
     );
-    const result = await reconcileLedger(t.db, publish);
+    const result = await reconcileLedger(t.db, publish, logger);
     expect(result).toMatchObject({
       checked: 3,
       passed: 1,
@@ -193,7 +220,10 @@ describe.skipIf(!hasTestDb())('reconciliation jobs (#93, integration)', () => {
     await createMarket(t.db, { status: 'draft' });
     const funded = await createMarket(t.db, { status: 'open' });
     await fundMarketMakerFunds(t.db, funded.id, 100n);
-    const result = await reconcileLedger(t.db, publish, { source: 'manual', allMarkets: true });
+    const result = await reconcileLedger(t.db, publish, logger, {
+      source: 'manual',
+      allMarkets: true,
+    });
     expect(result).toMatchObject({ mismatched: 0, failed: 0, scopes: { market: 2, supply: 1 } });
     const records = await t.db.select().from(schema.reconciliationResults);
     expect(
@@ -218,7 +248,7 @@ describe.skipIf(!hasTestDb())('reconciliation jobs (#93, integration)', () => {
         return Reflect.get(target, property, receiver) as unknown;
       },
     });
-    const result = await reconcileDueMarkets(failing, publish);
+    const result = await reconcileDueMarkets(failing, publish, logger);
     expect(result).toMatchObject({ checked: 1, passed: 1, failed: 1, paused: 0 });
     expect(result.failures[0]).toMatchObject({
       target: `market:${market.id}`,
@@ -229,6 +259,193 @@ describe.skipIf(!hasTestDb())('reconciliation jobs (#93, integration)', () => {
     expect(
       (await t.db.select().from(schema.markets).where(eq(schema.markets.id, market.id)))[0]?.status,
     ).toBe('open');
+    // Its pause's notices rolled back with it (#54 B′: written in the same transaction).
+    expect(await t.db.select().from(schema.notifications)).toEqual([]);
     expect(published).toEqual([]);
+  });
+
+  /**
+   * #54 B′ (ADR-0159; 54-5, 54-6): the automatic ledger-failure pause tells the market's watchers
+   * and holders `market_paused`, reason `ledger_failure`, through every worker path
+   * (`reconcileTarget`: the minute scan, `market.audit` with a target, the daily audit and the
+   * manual script). Who was told is in the inbox alone: never in a check, a batch or a log.
+   */
+  describe('the automatic pause’s notices (#54 B′)', () => {
+    /** The damaged market's holders (`yes`, `no`), a watcher, and another market's watcher. */
+    async function watchedDamagedMarket() {
+      const damaged = await damagedMarket();
+      const watcher = (await createUser(t.db)).user.id;
+      const elsewhere = (await createUser(t.db)).user.id;
+      await createWatch(t.db, { userId: watcher, marketId: damaged.market.id });
+      // A holder who also watches is told once (one key per member, type and event).
+      await createWatch(t.db, { userId: damaged.yes, marketId: damaged.market.id });
+      const other = await createMarket(t.db, { status: 'open' });
+      await createWatch(t.db, { userId: elsewhere, marketId: other.id });
+      return { ...damaged, watcher, elsewhere, told: [damaged.yes, damaged.no, watcher].sort() };
+    }
+    /** Sorted by room, as `told` is. */
+    const byChannel = <T extends { channel: string }>(rows: T[]) =>
+      [...rows].sort((x, y) => (x.channel < y.channel ? -1 : x.channel > y.channel ? 1 : 0));
+    const noticesOf = (userId: string) =>
+      t.db.select().from(schema.notifications).where(eq(schema.notifications.userId, userId));
+    const marketRow = async (id: string) =>
+      (await t.db.select().from(schema.markets).where(eq(schema.markets.id, id)))[0]!;
+
+    it('tells its watchers and holders after COMMIT: market:status first, then one user:notification each, naming nobody in the check', async () => {
+      const { market, watcher, elsewhere, told } = await watchedDamagedMarket();
+      // Read from another connection the moment each signal arrives: the notice is committed.
+      const seen: Promise<{ channel: string; notices: number }>[] = [];
+      const afterCommit: Publish = async (channel, event) => {
+        if (event.type === 'user:notification') {
+          const userId = channel.slice('user:'.length);
+          seen.push(noticesOf(userId).then((rows) => ({ channel, notices: rows.length })));
+        }
+        await publish(channel, event);
+      };
+      const batch = await reconcileDueMarkets(t.db, afterCommit, logger);
+      // The other market passes and tells nobody.
+      expect(batch).toMatchObject({
+        checked: 2,
+        passed: 1,
+        mismatched: 1,
+        held: 1,
+        paused: 1,
+        failed: 0,
+      });
+      const [check] = batch.mismatches;
+      const row = await marketRow(market.id);
+      expect(row.status).toBe('paused');
+
+      expect(published[0]).toEqual({
+        channel: marketChannel(market.id),
+        event: expect.objectContaining({
+          type: 'market:status',
+          status: 'paused',
+          statusEventId: String(row.statusEventId),
+          ts: check!.checkedAt,
+        }) as unknown,
+      });
+      // The members' signals at the run's instant (the order among members is not a contract).
+      const signal = { type: 'user:notification', ts: check!.checkedAt };
+      expect(byChannel(published.slice(1))).toEqual(
+        told.map((id) => ({ channel: userChannel(id), event: signal })),
+      );
+      expect(byChannel(await Promise.all(seen))).toEqual(
+        told.map((id) => ({ channel: userChannel(id), notices: 1 })),
+      );
+      // One `market_paused` each, the public reason label's key, the market's detail (52-9, 54-4).
+      for (const id of told) {
+        expect(await noticesOf(id)).toEqual([
+          expect.objectContaining({
+            type: 'market_paused',
+            category: 'market',
+            params: { marketTitle: market.title, reason: 'ledger_failure' },
+            target: { kind: 'market', slug: market.slug },
+            mergeKey: null,
+            eventCount: 1,
+            occurredAt: new Date(check!.checkedAt),
+            readAt: null,
+          }),
+        ]);
+      }
+      expect(await noticesOf(elsewhere)).toEqual([]);
+      // Keyed by the pause's own event (`market_event:<id>`).
+      expect(
+        (await t.db.select().from(schema.notificationKeys)).map((key) => ({
+          userId: key.userId,
+          type: key.type,
+          eventKey: key.eventKey,
+        })),
+      ).toEqual(
+        expect.arrayContaining(
+          told.map((userId) => ({
+            userId,
+            type: 'market_paused',
+            eventKey: `market_event:${String(row.statusEventId)}`,
+          })),
+        ),
+      );
+      expect(await t.db.select().from(schema.notificationKeys)).toHaveLength(told.length);
+
+      // Nobody told is named or counted where an operator reads (ADR-0064): the check, the
+      // job's summary and the log carry no recipient.
+      expect(Object.keys(check!).sort()).toEqual(
+        [
+          'accountId',
+          'checkedAt',
+          'findings',
+          'held',
+          'marketId',
+          'passed',
+          'paused',
+          'resultId',
+          'scope',
+          'targetKey',
+          'userId',
+        ].sort(),
+      );
+      const written = JSON.stringify([check, reconciliationBatchSummary(batch), logs]);
+      expect(written).not.toContain(watcher);
+      for (const id of told) expect(written).not.toContain(id);
+      expect(logs).toEqual([]);
+
+      // The next run finds it PAUSED: it pauses nothing and tells nobody again.
+      const before = await t.db.select().from(schema.notifications);
+      expect(await reconcileDueMarkets(t.db, publish, logger)).toMatchObject({
+        checked: 1,
+        paused: 0,
+      });
+      expect(await t.db.select().from(schema.notifications)).toEqual(before);
+      expect(published).toHaveLength(1 + told.length);
+    });
+
+    it('tells them from the daily audit too: a market account’s check pauses its market', async () => {
+      const { market, told } = await watchedDamagedMarket();
+      const result = await reconcileLedger(t.db, publish, logger);
+      expect(result).toMatchObject({ paused: 1, failed: 0 });
+      expect(published.filter(({ channel }) => channel === marketChannel(market.id))).toHaveLength(
+        1,
+      );
+      expect(
+        published
+          .filter(({ event }) => event.type === 'user:notification')
+          .map(({ channel }) => channel)
+          .sort(),
+      ).toEqual(told.map((id) => userChannel(id)).sort());
+      for (const id of told) {
+        expect((await noticesOf(id)).map((notice) => notice.type)).toEqual(['market_paused']);
+      }
+    });
+
+    it('keeps the pause when its notices cannot be written: the fixed line alone, no notice, no signal (54-6)', async () => {
+      const { market, told } = await watchedDamagedMarket();
+      // A slug the write path refuses (no DB CHECK holds `markets.slug`): its notices throw.
+      await t.db
+        .update(schema.markets)
+        .set({ slug: 'Not A Slug' })
+        .where(eq(schema.markets.id, market.id));
+      const check = await reconcileTarget(
+        t.db,
+        { scope: 'market', marketId: market.id },
+        publish,
+        logger,
+      );
+      // The pause and the hold stand: the savepoint took only the notices back.
+      expect(check).toMatchObject({ passed: false, held: true, paused: true });
+      expect((await marketRow(market.id)).status).toBe('paused');
+      expect(await t.db.select().from(schema.marketPauses)).toMatchObject([
+        { pausedBy: null, reason: 'ledger_failure' },
+      ]);
+      expect(await t.db.select().from(schema.reconciliationHolds)).toHaveLength(1);
+      expect(await t.db.select().from(schema.notifications)).toEqual([]);
+      expect(await t.db.select().from(schema.notificationKeys)).toEqual([]);
+      expect(published.map(({ event }) => event.type)).toEqual(['market:status']);
+      // One warning, the fixed sentence and nothing else: no error, id or count.
+      expect(logs).toEqual([
+        expect.objectContaining({ level: 40, msg: RECONCILIATION_NOTICES_FAILED_LOG }),
+      ]);
+      expect(Object.keys(logs[0]!).sort()).toEqual(['hostname', 'level', 'msg', 'pid', 'time']);
+      for (const id of told) expect(JSON.stringify(logs)).not.toContain(id);
+    });
   });
 });

@@ -50,7 +50,10 @@ const notification = (id: string, fields: Partial<InboxNotification> = {}): Inbo
   ...fields,
 });
 
-/** The copy of #53 and #134's 거래 알림 (ADR-0158): what a member reads of the inbox. */
+/**
+ * The copy of #53, #134's 거래 알림 (ADR-0158) and #54's 시장 상태 알림 (ADR-0159): what a member
+ * reads of the inbox.
+ */
 const NOTIFICATION_COPY = [
   copy.notificationsReadAll,
   copy.notificationsEmpty,
@@ -71,6 +74,12 @@ const NOTIFICATION_COPY = [
   copy.notificationOrdersCancelledAccount,
   copy.notificationOrdersExpiredClosed,
   copy.notificationOrdersExpiredCancelled,
+  copy.notificationMarketClosed,
+  copy.notificationMarketClosedEarly,
+  copy.notificationMarketPaused,
+  copy.notificationMarketResumed,
+  copy.notificationMarketCancelled,
+  copy.notificationMarketRulesSupplemented,
 ];
 
 const ORDER_ID = '7d0f9a2e-4b1c-4e8d-9a3f-1c2b3d4e5f60';
@@ -219,10 +228,19 @@ describe('a notification’s words and its link', () => {
   });
 
   it('has one renderer per type, its words the guard registry’s text (#113)', () => {
-    // #53 shipped none (52-20); #134 the 거래 three (ADR-0158). Each producer adds the definition,
-    // the guard entry and the renderer.
+    // #53 shipped none (52-20); #134 the 거래 three (ADR-0158), #54 the 시장 five (ADR-0159). Each
+    // producer adds the definition, the guard entry and the renderer.
     const types = NOTIFICATION_DEFINITIONS.map((definition: { type: string }) => definition.type);
-    expect(types).toEqual(['order_filled', 'orders_cancelled', 'orders_expired']);
+    expect(types).toEqual([
+      'order_filled',
+      'orders_cancelled',
+      'orders_expired',
+      'market_closed',
+      'market_paused',
+      'market_resumed',
+      'market_cancelled',
+      'market_rules_supplemented',
+    ]);
     expect(Object.keys(NOTIFICATION_RENDERERS).sort()).toEqual([...types].sort());
     expect(Object.keys(NOTIFICATION_TYPE_REGISTRY).sort()).toEqual([...types].sort());
     const registry: Readonly<Record<string, { text: readonly string[] }>> =
@@ -235,6 +253,19 @@ describe('a notification’s words and its link', () => {
     expect(NOTIFICATION_RENDERERS.order_filled.copy).toHaveLength(10);
     expect(NOTIFICATION_RENDERERS.orders_cancelled.copy).toHaveLength(4);
     expect(NOTIFICATION_RENDERERS.orders_expired.copy).toHaveLength(2);
+    expect(NOTIFICATION_RENDERERS.market_closed.copy).toHaveLength(2);
+    expect(NOTIFICATION_RENDERERS.market_paused.copy).toHaveLength(4);
+    expect(NOTIFICATION_RENDERERS.market_resumed.copy).toHaveLength(4);
+    expect(NOTIFICATION_RENDERERS.market_cancelled.copy).toHaveLength(1);
+    expect(NOTIFICATION_RENDERERS.market_rules_supplemented.copy).toHaveLength(2);
+    // Every 시장 type is category `market` (52-21) and leads to the market's detail alone (54-4).
+    for (const definition of NOTIFICATION_DEFINITIONS.filter((each) =>
+      each.type.startsWith('market_'),
+    )) {
+      expect(definition.category, definition.type).toBe('market');
+      expect(definition.targets, definition.type).toEqual(['market']);
+      expect(definition.merge, definition.type).toBeNull();
+    }
   });
 
   it('draws each 거래 type through its renderer with the row’s eventCount, and the fallback for params its definition refuses (#134)', () => {
@@ -310,6 +341,55 @@ describe('a notification’s words and its link', () => {
     }
   });
 
+  it('draws each 시장 type through its renderer, and the fallback for params its definition refuses (#54)', () => {
+    const target = { kind: 'market', slug: 'first-snow' } as const;
+    const titleOf = (type: string, params: InboxNotification['params']) => {
+      const view = notificationView(notification('n1', { type, params, target }));
+      if (!view.known) throw new Error(`${type} is a type this web renders`);
+      return view.Title({ params: view.params, eventCount: view.eventCount });
+    };
+    expect(titleOf('market_closed', { marketTitle: '첫눈이 올까', early: false })).toBe(
+      '첫눈이 올까 거래 마감',
+    );
+    expect(titleOf('market_closed', { marketTitle: '첫눈이 올까', early: true })).toBe(
+      '첫눈이 올까 거래 조기 마감',
+    );
+    expect(titleOf('market_paused', { marketTitle: '첫눈이 올까', reason: 'ledger_failure' })).toBe(
+      '첫눈이 올까 거래 일시 중단 · 사유: 담보·원장 장애',
+    );
+    expect(titleOf('market_resumed', { marketTitle: '첫눈이 올까', reason: 'early_result' })).toBe(
+      '첫눈이 올까 거래 재개 · 중단 사유: 사건 선공개(조기 결과)',
+    );
+    expect(titleOf('market_cancelled', { marketTitle: '첫눈이 올까' })).toBe(
+      '첫눈이 올까 시장 취소',
+    );
+    expect(
+      titleOf('market_rules_supplemented', {
+        marketTitle: '첫눈이 올까',
+        ruleVersion: 3,
+        reason: '{x} $&',
+      }),
+    ).toBe('첫눈이 올까 규칙 보충 v3 · 사유: {x} $&');
+    // Each leads to the market's detail (54-4).
+    expect(notificationHref(target)).toBe('/markets/first-snow');
+    // Params the definition refuses — an unknown pause reason, v1, an empty reason, no `early` —
+    // draw the category's fallback, never a broken sentence.
+    for (const [type, params] of [
+      ['market_paused', { marketTitle: '첫눈', reason: 'other' }],
+      ['market_resumed', { marketTitle: '첫눈' }],
+      ['market_rules_supplemented', { marketTitle: '첫눈', ruleVersion: 1, reason: '사유' }],
+      ['market_rules_supplemented', { marketTitle: '첫눈', ruleVersion: 2.5, reason: '사유' }],
+      ['market_rules_supplemented', { marketTitle: '첫눈', ruleVersion: 3, reason: '' }],
+      ['market_closed', { marketTitle: '첫눈' }],
+      ['market_cancelled', { marketTitle: '' }],
+    ] as const) {
+      expect(notificationView(notification('n2', { type, params, target })), type).toEqual({
+        known: false,
+        title: '시장 알림',
+      });
+    }
+  });
+
   it('says unread by readAt alone, and puts a read’s answer in place of its row', () => {
     expect(isUnread(notification('n1'))).toBe(true);
     expect(isUnread(notification('n1', { readAt: '2026-11-21T04:00:00.000Z' }))).toBe(false);
@@ -358,6 +438,7 @@ describe('the inbox’s words (#113, N05 §4)', () => {
       '../hooks/use-notifications.ts',
       '../components/notifications/notification-renderers.tsx',
       './trade-notifications.ts',
+      './market-notifications.ts',
       '../components/notifications/notification-row.tsx',
       '../components/notifications/unread-count.tsx',
       '../app/my/notifications/my-notifications.tsx',

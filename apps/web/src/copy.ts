@@ -3213,8 +3213,8 @@ export const copy = {
   // 알림함(#53, ADR-0157; 오너 답 53-1·53-2·53-3·53-11): MY › 알림은 발생 시각 최신순이고 다른 MY 목록처럼
   // 더 보기로 이어 본다. 안 읽은 알림은 굵은 제목과 점, 화면 낭독기에는 '안 읽음'으로 구별한다(색만으로 구별하지
   // 않는다). 누르면(그 대상으로 가면) 읽음이 되고, 목록을 여는 것만으로는 바뀌지 않는다. '모두 읽음'은 그때 안 읽은
-  // 알림을 모두 읽음으로 한다. #53에는 알림 유형이 없었고(52-20), #134가 거래 알림을 더했다(아래) — 시장 상태·
-  // 판정·정산·커뮤니티·정정 보상의 알림은 그 이슈가 더한다.
+  // 알림을 모두 읽음으로 한다. #53에는 알림 유형이 없었고(52-20), #134가 거래 알림을, #54가 시장 상태 알림을
+  // 더했다(아래) — 판정·정산·커뮤니티·정정 보상의 알림은 그 이슈가 더한다.
   notificationsReadAll: '모두 읽음',
   notificationsEmpty: '알림이 없습니다.',
   notificationUnread: '안 읽음',
@@ -3242,6 +3242,16 @@ export const copy = {
   notificationOrdersCancelledAccount: '{reason}으로 대기 주문 {count}건 취소(시장 {markets}곳)',
   notificationOrdersExpiredClosed: '{market} 거래 마감으로 대기 주문 {count}건 만료',
   notificationOrdersExpiredCancelled: '{market} 시장 취소로 대기 주문 {count}건 만료',
+  // 시장 상태 알림(#54, ADR-0159; 52-1·52-5·52-8~52-10): 관심 등록자와 계약 1개 이상 보유자에게 마감·일시
+  // 중단·재개·시장 취소·중요한 규칙 보충. {…}는 lib/market-notifications.ts가 채운다 — {market}은 저장된 시장
+  // 제목, 중단·재개의 {reason}은 공개 판정 기록의 중단 사유 라벨(52-9, 재개는 끝난 중단의 것 — 54-2), 보충의
+  // {version}은 버전 이력의 이름('v3'), {reason}은 그 보충의 공개 사유 그대로(54-3). 문구는 오너 답 54-1.
+  notificationMarketClosed: '{market} 거래 마감',
+  notificationMarketClosedEarly: '{market} 거래 조기 마감',
+  notificationMarketPaused: '{market} 거래 일시 중단 · 사유: {reason}',
+  notificationMarketResumed: '{market} 거래 재개 · 중단 사유: {reason}',
+  notificationMarketCancelled: '{market} 시장 취소',
+  notificationMarketRulesSupplemented: '{market} 규칙 보충 {version} · 사유: {reason}',
   // 안 읽은 수(53-1, 53-11 ①): MY 메뉴(머리·아래 탭)와 알림 탭 옆에 숫자로 보이고 99를 넘으면 '99+'다. 이
   // 말은 화면 낭독기가 그 링크의 설명으로 읽는다 — '안 읽은 알림 3개', 100개 이상이면 '안 읽은 알림 99개 넘게'.
   unreadNotifications: '안 읽은 알림',

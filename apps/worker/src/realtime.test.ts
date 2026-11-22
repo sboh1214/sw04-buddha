@@ -9,7 +9,12 @@
  * between the two processes to hoist into @buddha/shared.
  */
 import { createServer, type AddressInfo, type Socket } from 'node:net';
-import { marketChannel, userChannel, type MarketStatusEvent } from '@buddha/shared';
+import {
+  marketChannel,
+  notificationEvent,
+  userChannel,
+  type MarketStatusEvent,
+} from '@buddha/shared';
 import { type Redis } from 'ioredis';
 import { pino, type Logger } from 'pino';
 import { describe, expect, it } from 'vitest';
@@ -266,6 +271,49 @@ describe('createPublisher', () => {
       redis.disconnect();
       await server.close();
     }
+  });
+
+  it('logs a failed member publish by its kind, once per event, never naming the member (#54)', async () => {
+    // A reply error as ioredis hands it over: the command's arguments attached (the channel),
+    // and a message that names the channel as Redis 7.2's ACL refusal does.
+    const members = ['member-a-7f3c', 'member-b-91d2', 'member-c-0aa1'];
+    const refusing = {
+      publish: (channel: string) =>
+        Promise.reject(
+          Object.assign(
+            new Error(`NOPERM User default has no permissions to access the '${channel}' channel`),
+            { command: { name: 'publish', args: [channel, '{}'] } },
+          ),
+        ),
+    } as unknown as Redis;
+    const { logger, lines } = recording();
+    const publish = createPublisher(refusing, logger);
+    const at = new Date('2026-11-22T00:00:00.000Z');
+    await publish(marketChannel(MARKET_ID), statusEvent);
+    await Promise.all(members.map((id) => publish(userChannel(id), notificationEvent(at))));
+    // The next event is a line of its own.
+    await publish(userChannel(members[0]!), notificationEvent(new Date(at.getTime() + 1)));
+    expect(lines).toMatchObject([
+      // A market's channel and error as they are.
+      {
+        msg: 'realtime publish failed',
+        channel: marketChannel(MARKET_ID),
+        eventType: 'market:status',
+        err: { command: { args: [marketChannel(MARKET_ID), '{}'] } },
+      },
+      {
+        msg: 'realtime publish failed',
+        channel: 'user',
+        eventType: 'user:notification',
+        err: {
+          type: 'Error',
+          message: "NOPERM User default has no permissions to access the 'user:<member>' channel",
+        },
+      },
+      { msg: 'realtime publish failed', channel: 'user', eventType: 'user:notification' },
+    ]);
+    expect(lines[1]).not.toHaveProperty('err.command');
+    for (const id of members) expect(JSON.stringify(lines)).not.toContain(id);
   });
 
   it('never throws when the connection is refused outright', async () => {

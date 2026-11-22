@@ -3,9 +3,12 @@ import {
   completeOnboarding,
   createOpenedMarket,
   createMarketPause,
+  createUser,
+  createWatch,
   fundTestTreasury,
   ledgerSupply,
   openOrderIntake,
+  placeTestOrder,
   withLedgerGuardsOff,
 } from '@buddha/db/test';
 import { marketMakerControlWriteSchema, type MarketMakerControlChange } from '@buddha/shared';
@@ -151,6 +154,50 @@ describe.skipIf(!hasTestInfra)('market maker controls (integration)', () => {
     expect(refreshSpy).toHaveBeenCalledTimes(1);
     expect(book).toHaveBeenCalledTimes(2);
     expect(data(resumed).marketMaker.runtime?.state).toBe('waiting');
+  });
+  it('tells nobody of the bot-only stop: no market event, no notice, no user:notification, the market still OPEN (#54 AC 3; N01 §8)', async () => {
+    await t.db.transaction((tx) => runMarketMakerCycle(tx, { marketId }));
+    // A member who holds through a fill against the bot's quote, and a watcher.
+    const holder = (await createUser(t.db, { balanceCoin: 1_000n })).user.id;
+    const filled = await placeTestOrder(t.db, {
+      marketId,
+      ownerId: holder,
+      timeInForce: 'ioc',
+      limitPriceCoin: 99,
+      qty: 1,
+    });
+    expect(filled).toMatchObject({ kind: 'placed', order: { status: 'filled' } });
+    const watcher = (await createUser(t.db)).user.id;
+    await createWatch(t.db, { userId: watcher, marketId });
+    const [position] = await t.db
+      .select()
+      .from(schema.positions)
+      .where(eq(schema.positions.userId, holder));
+    expect(position!.qty).toBeGreaterThan(0);
+    const events = await t.db
+      .select()
+      .from(schema.marketEvents)
+      .where(eq(schema.marketEvents.marketId, marketId));
+    const signals = vi.spyOn(t.app.get(MarketPublisher), 'publishUser');
+    const r = await request();
+    const response = await approve(r.request.id);
+    expect(response.statusCode, response.body).toBe(200);
+    expect(data(response).marketMaker.runtime).toMatchObject({ desiredEnabled: false });
+    const [market] = await t.db
+      .select()
+      .from(schema.markets)
+      .where(eq(schema.markets.id, marketId));
+    expect(market!.status).toBe('open');
+    expect(
+      await t.db
+        .select()
+        .from(schema.marketEvents)
+        .where(eq(schema.marketEvents.marketId, marketId)),
+    ).toEqual(events);
+    expect(await t.db.select().from(schema.notifications)).toEqual([]);
+    expect(signals.mock.calls.filter(([, event]) => event.type === 'user:notification')).toEqual(
+      [],
+    );
   });
   it('keeps request reads, global lists and actual execution history private and keyset paginated', async () => {
     const a = await request();

@@ -45,11 +45,16 @@ describe('NOTIFICATION_TYPES (#113, #53)', () => {
     }
   });
 
-  it('registers the 거래 three of #134 with single-brace placeholders only (ADR-0158)', () => {
+  it('registers the 거래 three of #134 and the 시장 five of #54 with single-brace placeholders only (ADR-0158, ADR-0159)', () => {
     expect(Object.keys(NOTIFICATION_TYPE_REGISTRY)).toEqual([
       'order_filled',
       'orders_cancelled',
       'orders_expired',
+      'market_closed',
+      'market_paused',
+      'market_resumed',
+      'market_cancelled',
+      'market_rules_supplemented',
     ]);
     // `{{key}}` in the web's copy must be a business fact (legal.test.ts): never here.
     for (const candidate of NOTIFICATION_TYPES) {
@@ -59,6 +64,39 @@ describe('NOTIFICATION_TYPES (#113, #53)', () => {
           expect(key, `${candidate.type}: ${text}`).toMatch(/^[a-z][a-zA-Z]*$/);
         }
       }
+    }
+  });
+
+  it('words the 시장 five as 54-1 answered, the pause labels as the 공개 판정 기록 shows them', () => {
+    const labels = ['사건 선공개(조기 결과)', '담보·원장 장애', '실질 기준 변경'];
+    expect(NOTIFICATION_TYPE_REGISTRY.market_closed.text).toEqual([
+      '{market} 거래 마감',
+      '{market} 거래 조기 마감',
+    ]);
+    expect(NOTIFICATION_TYPE_REGISTRY.market_paused.text).toEqual([
+      '{market} 거래 일시 중단 · 사유: {reason}',
+      ...labels,
+    ]);
+    expect(NOTIFICATION_TYPE_REGISTRY.market_resumed.text).toEqual([
+      '{market} 거래 재개 · 중단 사유: {reason}',
+      ...labels,
+    ]);
+    expect(NOTIFICATION_TYPE_REGISTRY.market_cancelled.text).toEqual(['{market} 시장 취소']);
+    expect(NOTIFICATION_TYPE_REGISTRY.market_rules_supplemented.text).toEqual([
+      '{market} 규칙 보충 {version} · 사유: {reason}',
+      'v',
+    ]);
+    for (const type of [
+      'market_closed',
+      'market_paused',
+      'market_resumed',
+      'market_cancelled',
+      'market_rules_supplemented',
+    ] as const) {
+      expect(NOTIFICATION_TYPE_REGISTRY[type].reason, type).toContain('ADR-0159');
+      expect(findExcludedNotification({ type, ...NOTIFICATION_TYPE_REGISTRY[type] }), type).toEqual(
+        [],
+      );
     }
   });
 
@@ -110,7 +148,7 @@ const planted = (change: Partial<NotificationDefinition> = {}): NotificationDefi
 });
 
 describe('findNotificationDefinitionProblems (ADR-0157)', () => {
-  it('finds nothing in the product list (#134’s three) or in a definition that keeps the rules', () => {
+  it('finds nothing in the product list (#134’s three, #54’s five) or in a definition that keeps the rules', () => {
     expect(NOTIFICATION_DEFINITIONS.length).toBeGreaterThan(0);
     expect(findNotificationDefinitionProblems(NOTIFICATION_DEFINITIONS)).toEqual([]);
     expect(

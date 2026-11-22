@@ -5,9 +5,8 @@ import { formatKst } from '../src/lib/datetime';
 import {
   NO_FILL_CANCEL_REASON,
   adminAccount,
-  approveAsReviewer,
-  createDraftMarket,
   createOpenMarket,
+  createScheduledMarket,
   expect,
   freshEmail,
   helperTraders,
@@ -16,7 +15,6 @@ import {
   sendJudgementRegistration,
   signIn,
   signUp,
-  submitForReview,
   test,
   tradeOnce,
   workerProbeDisabled,
@@ -65,14 +63,6 @@ const CLOSE_IN_MS = 70_000;
  * per-minute scan should the delayed job be lost.
  */
 const CLOSE_WAIT_MS = 150_000;
-
-const MINUTE_MS = 60 * 1_000;
-const HOUR_MS = 60 * MINUTE_MS;
-
-/** The ISO instant of the whole minute `ms` falls in (scheduled-open.spec.ts's). */
-function minuteIso(ms: number): string {
-  return new Date(Math.floor(ms / MINUTE_MS) * MINUTE_MS).toISOString();
-}
 
 /** `{ data }` out of the success envelope, with the body in the message on a failure. */
 async function dataOf<T>(response: APIResponse): Promise<T> {
@@ -131,18 +121,6 @@ async function showInCancelRequests(page: Page, row: Locator): Promise<void> {
     ).toHaveCount(0);
   }
   await expect(row).toBeVisible();
-}
-
-/** A 개장 예정 market: approved an hour before its scheduled open, its close two hours later. */
-async function createScheduledMarket(admin: APIRequestContext) {
-  const scheduledOpenAt = minuteIso(Date.now() + HOUR_MS);
-  const closeAt = minuteIso(Date.now() + 3 * HOUR_MS);
-  const market = await createDraftMarket(admin, { closeAt, times: { scheduledOpenAt } });
-  const submitted = await submitForReview(admin, market.id);
-  expect(
-    (await approveAsReviewer(admin, market.id, submitted.review.pending?.requestId)).status,
-  ).toBe('scheduled');
-  return market;
 }
 
 /** The `POST /admin/markets/:id<suffix>` this page sends next. */

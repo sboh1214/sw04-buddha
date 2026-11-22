@@ -3,6 +3,9 @@ import { and, asc, count, eq, inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ledgerHeldMarketIds } from './ledger-held-markets.js';
 import { closeMarketAtClose } from './market-close.js';
+import { marketAudience, marketNotificationInputs } from './market-notifications.js';
+import { createNotifications } from './notifications.js';
+import { orderEndNotificationInputs } from './order-notifications.js';
 import {
   cancelLockedOrders,
   lockAccountOrders,
@@ -16,6 +19,7 @@ import {
   ledgerEntries,
   marketEvents,
   marketPauses,
+  marketWatches,
   markets,
   notificationKeys,
   notifications,
@@ -30,6 +34,7 @@ import {
   createMarket,
   createMarketPause,
   createUser,
+  createWatch,
   setReleaseSetting,
 } from './test/factories.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
@@ -686,7 +691,9 @@ describe.skipIf(!hasTestDb())('the close at close_at (#120, docker test profile)
       const done = await closeTestMarket(t.db, m);
       if (!done.closed) throw new Error('expected a close');
       expect(done.status).toBe('closed');
-      expect([...done.notified].sort()).toEqual([a, b].sort());
+      // A and B by their 만료 notice; C and D hold a contract each, so #54's 마감 notice (ADR-0159).
+      expect([...done.notified].sort()).toEqual([a, b, c, d].sort());
+      expect(done.expiryNotified).toBe(2);
       const key = `market_event:${String(done.statusEventId)}`;
       expect(await rowsOf(a)).toEqual([
         expect.objectContaining({
@@ -735,6 +742,7 @@ describe.skipIf(!hasTestDb())('the close at close_at (#120, docker test profile)
       expect(done.status).toBe('cancelled');
       expect(done.expired.expired).toHaveLength(2);
       expect(done.notified).toEqual([a]);
+      expect(done.expiryNotified).toBe(1);
       expect(await rowsOf(a)).toMatchObject([{ params: { cause: 'cancelled', orderCount: 1 } }]);
       expect(await t.db.select().from(notifications)).toHaveLength(1);
     });
@@ -749,6 +757,7 @@ describe.skipIf(!hasTestDb())('the close at close_at (#120, docker test profile)
       if (!done.closed) throw new Error('expected a close');
       expect(done.expired).toMatchObject({ expired: [], held: [{ id: kept.id }] });
       expect(done.notified).toEqual([]);
+      expect(done.expiryNotified).toBe(0);
       expect(await orderRow(kept.id)).toEqual(kept);
       expect(await t.db.select().from(notifications)).toEqual([]);
     });
@@ -757,8 +766,203 @@ describe.skipIf(!hasTestDb())('the close at close_at (#120, docker test profile)
       const m = await market();
       await passMarketClose(t.db, m);
       const done = await closeTestMarket(t.db, m);
-      expect(done).toMatchObject({ closed: true, notified: [] });
+      expect(done).toMatchObject({ closed: true, notified: [], expiryNotified: 0 });
       expect(await t.db.select().from(notifications)).toEqual([]);
+    });
+  });
+
+  describe('시장 상태 알림: the close’s 마감 and 시장 취소 notices (#54, ADR-0159; 52-1·52-5·52-8)', () => {
+    const rowsOf = (userId: string) =>
+      t.db
+        .select()
+        .from(notifications)
+        .where(eq(notifications.userId, userId))
+        .orderBy(asc(notifications.type));
+    const marketRowsOf = async (userId: string) =>
+      (await rowsOf(userId)).filter((row) => row.type.startsWith('market_'));
+    const typesOf = async (userId: string) => (await rowsOf(userId)).map((row) => row.type);
+
+    it('tells the watchers and the holders 거래 마감 at the close’s instant; an order owner who holds gets both notices, one signal', async () => {
+      const m = await market();
+      const [watcher, holder, owner, resting, unwatched] = [
+        await member(),
+        await member(),
+        await member(),
+        await member(),
+        await member(),
+      ];
+      await createWatch(t.db, { userId: watcher, marketId: m });
+      // `holder` buys YES from `owner`'s NO bid of 2: `owner` holds 1 NO with 1 still resting.
+      await placed({ ownerId: owner, marketId: m, outcome: 'NO', limitPriceCoin: 40, qty: 2 });
+      await placed({ ownerId: holder, marketId: m, timeInForce: 'ioc', limitPriceCoin: 60 });
+      // Resting orders only: its 만료 notice alone (52-1).
+      await placed({ ownerId: resting, marketId: m, limitPriceCoin: 20 });
+      // Watched, then not: nothing (#54 AC 5).
+      await createWatch(t.db, { userId: unwatched, marketId: m });
+      await t.db
+        .delete(marketWatches)
+        .where(and(eq(marketWatches.userId, unwatched), eq(marketWatches.marketId, m)));
+      const row = await marketRow(m);
+      await passMarketClose(t.db, m);
+      const done = await closeTestMarket(t.db, m);
+      if (!done.closed) throw new Error('expected a close');
+      expect(done.status).toBe('closed');
+      expect([...done.notified].sort()).toEqual([watcher, holder, owner, resting].sort());
+      // 만료 reached `owner` and `resting`: the count #134's job result keeps (no watcher in it).
+      expect(done.expiryNotified).toBe(2);
+      const key = `market_event:${String(done.statusEventId)}`;
+      for (const userId of [watcher, holder, owner]) {
+        expect(await marketRowsOf(userId), userId).toEqual([
+          expect.objectContaining({
+            type: 'market_closed',
+            category: 'market',
+            params: { marketTitle: row.title, early: false },
+            target: { kind: 'market', slug: row.slug },
+            occurredAt: done.closedAt,
+            mergeKey: null,
+            eventCount: 1,
+          }),
+        ]);
+      }
+      // Two types under one event key, each delivered (53-4).
+      expect(await typesOf(owner)).toEqual(['market_closed', 'order_filled', 'orders_expired']);
+      const keys = await t.db
+        .select({ type: notificationKeys.type, eventKey: notificationKeys.eventKey })
+        .from(notificationKeys)
+        .where(eq(notificationKeys.userId, owner))
+        .orderBy(asc(notificationKeys.type));
+      expect(keys.filter((k) => k.eventKey === key).map((k) => k.type)).toEqual([
+        'market_closed',
+        'orders_expired',
+      ]);
+      expect(await typesOf(resting)).toEqual(['orders_expired']);
+      expect(await rowsOf(unwatched)).toEqual([]);
+      // A second close skips and tells nothing more.
+      const before = await written();
+      expect(await closeTestMarket(t.db, m)).toEqual({
+        closed: false,
+        reason: 'not_open_or_paused',
+      });
+      expect(await written()).toEqual(before);
+      // The same inputs reprocessed: every one a duplicate (53-4).
+      const again = await t.db.transaction(async (tx) =>
+        createNotifications(tx, [
+          ...orderEndNotificationInputs(done.expired.expired, {
+            kind: 'expired',
+            cause: 'closed',
+            market: { id: m, title: row.title },
+            eventKey: key,
+            occurredAt: done.closedAt,
+          }),
+          ...marketNotificationInputs(
+            await marketAudience(tx, m),
+            { slug: row.slug, title: row.title, status: 'closed' },
+            { kind: 'closed', early: false, eventKey: key, occurredAt: done.closedAt },
+          ),
+        ]),
+      );
+      expect(again.length).toBeGreaterThan(0);
+      expect(new Set(again.map((outcome) => outcome.kind))).toEqual(new Set(['duplicate']));
+      expect(await written()).toEqual(before);
+    });
+
+    it('tells the watchers 시장 취소, never 거래 마감, when no person filled (52-5)', async () => {
+      const m = await market();
+      const [watcher, resting] = [await member(), await member()];
+      await createWatch(t.db, { userId: watcher, marketId: m });
+      await placed({ ownerId: resting, marketId: m, outcome: 'NO', limitPriceCoin: 40 });
+      const row = await marketRow(m);
+      await passMarketClose(t.db, m);
+      const done = await closeTestMarket(t.db, m);
+      if (!done.closed) throw new Error('expected a close');
+      expect(done.status).toBe('cancelled');
+      expect([...done.notified].sort()).toEqual([watcher, resting].sort());
+      expect(done.expiryNotified).toBe(1);
+      expect(await rowsOf(watcher)).toEqual([
+        expect.objectContaining({
+          type: 'market_cancelled',
+          params: { marketTitle: row.title },
+          target: { kind: 'market', slug: row.slug },
+          occurredAt: done.closedAt,
+        }),
+      ]);
+      expect(await typesOf(resting)).toEqual(['orders_expired']);
+      expect(
+        await t.db.select().from(notifications).where(eq(notifications.type, 'market_closed')),
+      ).toEqual([]);
+    });
+
+    it('tells 거래 마감 of a PAUSED market reaching its close (52-8 일시 중단 중에 맞은 예정 마감)', async () => {
+      const m = await market();
+      const [watcher, yes, no] = [await member(), await member(), await member()];
+      await tradeOnce(t.db, m, { yesOwner: yes, noOwner: no });
+      await createWatch(t.db, { userId: watcher, marketId: m });
+      await createMarketPause(t.db, { marketId: m, by: adminId });
+      // The fixture pause tells nobody (the API's pause does, B).
+      expect(
+        await t.db.select().from(notifications).where(eq(notifications.category, 'market')),
+      ).toEqual([]);
+      await passMarketClose(t.db, m);
+      const done = await closeTestMarket(t.db, m);
+      if (!done.closed) throw new Error('expected a close');
+      expect(done.status).toBe('closed');
+      expect(done.pause).toMatchObject({ endKind: 'closed_at_close' });
+      expect([...done.notified].sort()).toEqual([watcher, yes, no].sort());
+      expect(done.expiryNotified).toBe(0);
+      for (const userId of [watcher, yes, no]) {
+        expect(await marketRowsOf(userId), userId).toMatchObject([
+          { type: 'market_closed', params: { early: false } },
+        ]);
+      }
+    });
+
+    it('tells a held market’s watchers and holders now, its orders kept live with no 만료 notice (#93)', async () => {
+      const m = await market();
+      const [watcher, yes, no, resting] = [
+        await member(),
+        await member(),
+        await member(),
+        await member(),
+      ];
+      await tradeOnce(t.db, m, { yesOwner: yes, noOwner: no });
+      await createWatch(t.db, { userId: watcher, marketId: m });
+      const kept = await placed({ ownerId: resting, marketId: m, limitPriceCoin: 20 });
+      await createMarketPause(t.db, { marketId: m, reason: 'ledger_failure', by: adminId });
+      await passMarketClose(t.db, m);
+      const done = await closeTestMarket(t.db, m);
+      if (!done.closed) throw new Error('expected a close');
+      expect(done.status).toBe('closed');
+      expect(done.expired).toMatchObject({ expired: [], held: [{ id: kept.id }] });
+      expect(await orderRow(kept.id)).toEqual(kept);
+      expect([...done.notified].sort()).toEqual([watcher, yes, no].sort());
+      expect(done.expiryNotified).toBe(0);
+      expect(
+        await t.db.select().from(notifications).where(eq(notifications.type, 'orders_expired')),
+      ).toEqual([]);
+      expect(await rowsOf(resting)).toEqual([]);
+      for (const userId of [watcher, yes, no]) {
+        expect(
+          (await marketRowsOf(userId)).map((r) => r.type),
+          userId,
+        ).toEqual(['market_closed']);
+      }
+    });
+
+    it('leaves the 운영 마켓메이커’s holding to the gate: in the audience, never told (53-5)', async () => {
+      const m = await market();
+      const mm = await fundMarketMakerFunds(t.db, m, 1_000n);
+      const a = await member();
+      // The bot's NO bid fills against A's YES buy: both hold.
+      await placed({ ownerId: mm, marketId: m, outcome: 'NO', limitPriceCoin: 40 });
+      await placed({ ownerId: a, marketId: m, timeInForce: 'ioc', limitPriceCoin: 60 });
+      await passMarketClose(t.db, m);
+      const done = await closeTestMarket(t.db, m);
+      if (!done.closed) throw new Error('expected a close');
+      expect(done.status).toBe('closed');
+      expect(done.notified).toEqual([a]);
+      expect(await t.db.select().from(notifications).where(eq(notifications.userId, mm))).toEqual(
+        [],
+      );
     });
   });
 });

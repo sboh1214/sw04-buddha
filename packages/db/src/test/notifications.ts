@@ -8,9 +8,11 @@
  */
 import { randomUUID } from 'node:crypto';
 import { defineNotification } from '@buddha/shared';
+import { Client } from 'pg';
 import * as z from 'zod';
 import type { Db } from '../client.js';
 import { createNotifications, type NotificationOutcome } from '../notifications.js';
+import { testDbUrls } from './harness.js';
 
 /** A notice about one market: a label the tests read back, no merge. */
 export const TEST_NOTIFICATION = defineNotification({
@@ -74,4 +76,44 @@ export async function createTestNotification(
     ),
   );
   return outcomes[0]!;
+}
+
+/** The trigger (and its function) `plantNotificationInsertFailure` adds. */
+const PLANTED_FAILURE = 'notifications_test_failure';
+
+/**
+ * Makes Postgres itself refuse every row inserted into `notifications`, with SQLSTATE `code`,
+ * until `remove()`: a BEFORE INSERT trigger whose RAISE names the row's account in its message,
+ * DETAIL and HINT — a refusal that quotes a key. DDL, so on a migrate-role connection; `reset()`
+ * truncates and keeps triggers, so call `remove()` in a `finally`.
+ */
+export async function plantNotificationInsertFailure(
+  code = 'P0001',
+): Promise<{ remove(): Promise<void> }> {
+  if (!/^[0-9A-Z]{5}$/.test(code)) throw new Error(`not a SQLSTATE: ${code}`);
+  const urls = testDbUrls();
+  if (!urls) throw new Error('plantNotificationInsertFailure needs the test database');
+  const client = new Client({ connectionString: urls.migrateUrl });
+  await client.connect();
+  const remove = async () => {
+    try {
+      await client.query(`DROP TRIGGER IF EXISTS ${PLANTED_FAILURE} ON notifications`);
+      await client.query(`DROP FUNCTION IF EXISTS ${PLANTED_FAILURE}()`);
+    } finally {
+      await client.end();
+    }
+  };
+  try {
+    await client.query(`CREATE FUNCTION ${PLANTED_FAILURE}() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        RAISE EXCEPTION 'planted failure for %', NEW.user_id
+          USING ERRCODE = '${code}', DETAIL = 'account ' || NEW.user_id, HINT = NEW.user_id;
+      END $$`);
+    await client.query(`CREATE TRIGGER ${PLANTED_FAILURE} BEFORE INSERT ON notifications
+      FOR EACH ROW EXECUTE FUNCTION ${PLANTED_FAILURE}()`);
+  } catch (error) {
+    await remove();
+    throw error;
+  }
+  return { remove };
 }

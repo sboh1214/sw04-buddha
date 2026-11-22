@@ -39,8 +39,10 @@ export type CloseResult =
       /** A ledger-held market's live orders the close left live and locked, #93's to end. */
       heldOrders: number;
       /**
-       * Members its `orders_expired` notices reached, one signal each (#134, ADR-0158). A count,
-       * never the ids: BullMQ stores the result as JSON.
+       * Members its `orders_expired` notices reached (#134, ADR-0158): order owners only, never
+       * the watchers and holders its `market_closed` or `market_cancelled` reached (#54,
+       * ADR-0159) — a count with them in it would tell how many watch the market, which no surface
+       * shows (ADR-0064). A count, never the ids: BullMQ stores the result as JSON.
        */
       notifiedMembers: number;
     }
@@ -76,9 +78,11 @@ export interface CloseScanResult {
  * the 운영 마켓메이커) ended 만료 at that instant with its lock given back once, filled quantity kept
  * (ADR-0107 결정 4 '#120·#20', 결정 5 '#20·#120·#177 7항'), and last one `orders_expired` notice
  * per member whose orders it ended (#134, ADR-0158 — 52-4·52-5: 거래 마감 for CLOSED, 시장 취소 for
- * CANCELLED; the 운영 마켓메이커 has no inbox). A market held for a ledger failure closes on
- * schedule too but keeps its orders live and locked for #93's recovery (결정 4 #178), which
- * notifies when it ends them.
+ * CANCELLED; the 운영 마켓메이커 has no inbox) and one `market_closed` (early false) or
+ * `market_cancelled` notice per watcher and holder (#54, ADR-0159 — 52-1·52-5·52-8), in the same
+ * call. A market held for a ledger failure closes on schedule too but keeps its orders live and
+ * locked for #93's recovery (결정 4 #178), which notifies their owners when it ends them; its
+ * watchers and holders hear of the close now (52-8).
  *
  * Every caller reaches this through the same transaction — the delayed job the API registered
  * at the approval (#21, ADR-0100: before the open, the close locked while SCHEDULED), the
@@ -106,10 +110,11 @@ export interface CloseScanResult {
  * at COMMIT, so an event published from inside the transaction could reach a client before the row
  * it describes is visible. No `user:position` or `user:balance`: the expiry only moves locks and
  * follows #178's batch cancels (ADR-0113 12-11) — an owner's sell cancel publishes `user:position`,
- * the batches and the expiry do not. The one `user:` event is the inbox signal (#134, ADR-0158):
- * `user:notification` at the close's instant to each member the notices reached (`notified`), sent
- * together after the market's events. Nothing at `close_at` itself before the close runs (#122's),
- * nothing on a skip.
+ * the batches and the expiry do not. The one `user:` event is the inbox signal (#134, ADR-0158;
+ * #54, ADR-0159): `user:notification` at the close's instant to each member the notices reached
+ * (`notified`: order owners, watchers and holders, once each), sent together after the market's
+ * events. The result counts the order owners only (`notifiedMembers`). Nothing at `close_at`
+ * itself before the close runs (#122's), nothing on a skip.
  */
 export async function closeMarket(
   db: Db,
@@ -131,7 +136,7 @@ export async function closeMarket(
   if (done.expired.expired.length > 0) {
     await publish(marketChannel(marketId), marketBookEvent(marketId, done.closedAt));
   }
-  // #134: one inbox signal per member the close's 만료 notices reached (ADR-0158).
+  // #134·#54: one inbox signal per member any of the close's notices reached (ADR-0158, ADR-0159).
   await Promise.all(
     done.notified.map((userId) => publish(userChannel(userId), notificationEvent(done.closedAt))),
   );
@@ -142,7 +147,8 @@ export async function closeMarket(
     closedAt: done.closedAt,
     expiredOrders: done.expired.expired.length,
     heldOrders: done.expired.held.length,
-    notifiedMembers: done.notified.length,
+    // Order owners only: never a count with the watchers in it (ADR-0064, ADR-0159).
+    notifiedMembers: done.expiryNotified,
   };
 }
 

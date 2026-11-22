@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import * as z from 'zod';
+import { APPROVAL_REASON_MAX_LENGTH, approvalReasonSchema } from './approvals.js';
+import { MARKET_PAUSE_REASONS } from './market-pause.js';
 import {
+  MARKET_CANCELLED_NOTIFICATION,
+  MARKET_CLOSED_NOTIFICATION,
+  MARKET_PAUSED_NOTIFICATION,
+  MARKET_RESUMED_NOTIFICATION,
+  MARKET_RULES_SUPPLEMENTED_NOTIFICATION,
   NOTIFICATION_CATEGORIES,
   NOTIFICATION_DEFINITIONS,
   NOTIFICATION_EVENT_KEY_PATTERN,
@@ -238,11 +245,17 @@ describe('notification DTOs', () => {
   });
 });
 
-describe('NOTIFICATION_DEFINITIONS (#53, 52-20; #134)', () => {
-  it('holds the 거래 three of #134, each a 거래 notification', () => {
-    // Pinned. Each producer edits this pin as it appends its own: #54 (시장 상태), #188
-    // (판정·정산), #135 (커뮤니티, 52-19's 제안), #144 (정정·보상). 시작 Coin, a re-grant's
-    // result, a review's rejection and a market's opening are no notification (52-20).
+describe('NOTIFICATION_DEFINITIONS (#53, 52-20; #134; #54)', () => {
+  it('holds the 거래 three of #134, then the 시장 five of #54', () => {
+    // Pinned. Each producer edits this pin as it appends its own: #188 (판정·정산), #135
+    // (커뮤니티, 52-19's 제안), #144 (정정·보상). 시작 Coin, a re-grant's result, a review's
+    // rejection and a market's opening are no notification (52-20).
+    const market = (type: string) => ({
+      type,
+      category: 'market',
+      targets: ['market'],
+      merges: false,
+    });
     expect(
       NOTIFICATION_DEFINITIONS.map((definition) => ({
         type: definition.type,
@@ -264,11 +277,22 @@ describe('NOTIFICATION_DEFINITIONS (#53, 52-20; #134)', () => {
         targets: ['order', 'order_history'],
         merges: false,
       },
+      // #54 (ADR-0159; 52-21: every one a 시장 notification, none merging, 54-4: the detail).
+      market('market_closed'),
+      market('market_paused'),
+      market('market_resumed'),
+      market('market_cancelled'),
+      market('market_rules_supplemented'),
     ]);
     expect(NOTIFICATION_DEFINITIONS).toEqual([
       ORDER_FILLED_NOTIFICATION,
       ORDERS_CANCELLED_NOTIFICATION,
       ORDERS_EXPIRED_NOTIFICATION,
+      MARKET_CLOSED_NOTIFICATION,
+      MARKET_PAUSED_NOTIFICATION,
+      MARKET_RESUMED_NOTIFICATION,
+      MARKET_CANCELLED_NOTIFICATION,
+      MARKET_RULES_SUPPLEMENTED_NOTIFICATION,
     ]);
     for (const definition of NOTIFICATION_DEFINITIONS) {
       expect(NOTIFICATION_TYPE_PATTERN.test(definition.type), definition.type).toBe(true);
@@ -441,5 +465,121 @@ describe('orders_expired (#134, 52-4·52-5)', () => {
     ]) {
       expect(params.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
     }
+  });
+});
+
+describe('시장 상태 알림 (#54, ADR-0159; 52-1·52-5·52-8~52-10, 54-1~54-8)', () => {
+  const title = '첫눈이 올까';
+  const tooLong = 'x'.repeat(NOTIFICATION_PARAM_STRING_MAX + 1);
+  // A 120-code-point title of astral characters is 240 UTF-16 units: still a title here.
+  const astral = '𝔸'.repeat(120);
+
+  it('market_closed: the title and whether an approved decision closed it early', () => {
+    const { params } = MARKET_CLOSED_NOTIFICATION;
+    for (const early of [false, true]) {
+      expect(params.parse({ marketTitle: title, early })).toEqual({ marketTitle: title, early });
+    }
+    expect(params.parse({ marketTitle: astral, early: false }).marketTitle).toBe(astral);
+    for (const bad of [
+      { marketTitle: title },
+      { marketTitle: title, early: 'true' },
+      { marketTitle: '', early: false },
+      { marketTitle: tooLong, early: false },
+      { marketTitle: null, early: false },
+    ]) {
+      expect(params.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it('market_paused and market_resumed: the pause’s public label, never its note (52-9, 54-2)', () => {
+    for (const { params } of [MARKET_PAUSED_NOTIFICATION, MARKET_RESUMED_NOTIFICATION]) {
+      for (const reason of MARKET_PAUSE_REASONS) {
+        expect(params.parse({ marketTitle: title, reason })).toEqual({
+          marketTitle: title,
+          reason,
+        });
+      }
+      for (const bad of [
+        { marketTitle: title, reason: 'operator_stopped' },
+        { marketTitle: title, reason: '사건 선공개' },
+        { marketTitle: title },
+        { marketTitle: '', reason: 'basis_change' },
+        { marketTitle: tooLong, reason: 'basis_change' },
+      ]) {
+        expect(params.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+      }
+      // A note beside it is not kept: the detail's 공개 판정 기록 shows it (52-9).
+      expect(params.parse({ marketTitle: title, reason: 'early_result', note: '설명' })).toEqual({
+        marketTitle: title,
+        reason: 'early_result',
+      });
+    }
+  });
+
+  it('market_cancelled: the title only', () => {
+    const { params } = MARKET_CANCELLED_NOTIFICATION;
+    expect(params.parse({ marketTitle: title })).toEqual({ marketTitle: title });
+    expect(params.parse({ marketTitle: title, early: true, count: 3 })).toEqual({
+      marketTitle: title,
+    });
+    for (const bad of [{}, { marketTitle: '' }, { marketTitle: tooLong }]) {
+      expect(params.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it('market_rules_supplemented: the title after it, its version (2 or more) and its public reason', () => {
+    const { params } = MARKET_RULES_SUPPLEMENTED_NOTIFICATION;
+    const supplemented = { marketTitle: title, ruleVersion: 3, reason: '대체 출처를 더합니다.' };
+    expect(params.parse(supplemented)).toEqual(supplemented);
+    // The longest reason an approval stores fits, in UTF-16 units as both count them.
+    const longest = '가'.repeat(APPROVAL_REASON_MAX_LENGTH);
+    expect(params.parse({ ...supplemented, reason: longest }).reason).toBe(longest);
+    // A reason that holds braces or a replacement pattern is plain text here.
+    expect(params.parse({ ...supplemented, reason: '{market} $& 그대로' }).reason).toBe(
+      '{market} $& 그대로',
+    );
+    for (const bad of [
+      { ...supplemented, ruleVersion: 1 },
+      { ...supplemented, ruleVersion: 1.5 },
+      { ...supplemented, ruleVersion: 0 },
+      { ...supplemented, ruleVersion: '3' },
+      { ...supplemented, reason: '' },
+      { ...supplemented, reason: tooLong },
+      { ...supplemented, reason: null },
+      { ...supplemented, marketTitle: '' },
+      { ...supplemented, marketTitle: tooLong },
+      { marketTitle: title, ruleVersion: 2 },
+    ]) {
+      expect(params.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it('keeps the approval reason cap within the param cap: a raised one would roll approvals back', () => {
+    // The supplement's reason is its request's (`approvalReasonSchema`, UTF-16 units — the unit
+    // zod counts here too). Raising APPROVAL_REASON_MAX_LENGTH past the param cap would make an
+    // approved supplement's notice refused, and the approval roll back (ADR-0159).
+    expect(APPROVAL_REASON_MAX_LENGTH).toBeLessThanOrEqual(NOTIFICATION_PARAM_STRING_MAX);
+    const longest = approvalReasonSchema.parse('𝔸'.repeat(APPROVAL_REASON_MAX_LENGTH / 2));
+    expect(
+      MARKET_RULES_SUPPLEMENTED_NOTIFICATION.params.safeParse({
+        marketTitle: title,
+        ruleVersion: 2,
+        reason: longest,
+      }).success,
+    ).toBe(true);
+  });
+
+  it('stores flat public values only: no time, count, holding or watcher datum (AC 8)', () => {
+    const keys = (definition: { params: z.ZodType }) =>
+      Object.keys((definition.params as z.ZodObject).shape).sort();
+    expect(keys(MARKET_CLOSED_NOTIFICATION)).toEqual(['early', 'marketTitle']);
+    expect(keys(MARKET_PAUSED_NOTIFICATION)).toEqual(['marketTitle', 'reason']);
+    expect(keys(MARKET_RESUMED_NOTIFICATION)).toEqual(['marketTitle', 'reason']);
+    expect(keys(MARKET_CANCELLED_NOTIFICATION)).toEqual(['marketTitle']);
+    expect(keys(MARKET_RULES_SUPPLEMENTED_NOTIFICATION)).toEqual([
+      'marketTitle',
+      'reason',
+      'ruleVersion',
+    ]);
   });
 });

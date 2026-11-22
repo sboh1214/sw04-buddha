@@ -23,8 +23,10 @@ import {
   createRuleSupplement,
   createSupplementRequest,
   createUser,
+  createWatch,
   openOrderIntake,
   placeTestOrder,
+  tradeOnce,
 } from '@buddha/db/test';
 import {
   MARKET_SUPPLEMENT_APPROVAL_KIND,
@@ -36,12 +38,13 @@ import {
   type Market,
 } from '@buddha/shared';
 import { Queue } from 'bullmq';
-import { and, asc, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, count, eq, inArray, ne } from 'drizzle-orm';
 import { Redis } from 'ioredis';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { findPgError } from '../common/errors/pg-error.js';
 import { MARKETS_QUEUE, MarketJobs } from '../jobs/market-jobs.service.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { sleep, waitForLockWaiter, waitForMessages } from '../test/wait.js';
@@ -1439,5 +1442,216 @@ describe.skipIf(!hasTestInfra)('admin market supplements (integration)', () => {
     expect((await supplementActionsFor(market.id)).map((action) => action.type)).toEqual([
       'market_supplement_request',
     ]);
+  });
+
+  // --- the notice (#54) -------------------------------------------------------------------------
+  describe('market notifications (#54, ADR-0159; 52-10)', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    /**
+     * `MarketPublisher.publishUser` watched: each `user:notification` as [account, ts, the
+     * account's notifications committed when it was sent] — read on another connection, so a
+     * signal sent before COMMIT would count none — sorted by account.
+     */
+    function signals() {
+      const sent: [string, string, number][] = [];
+      vi.spyOn(t.app.get(MarketPublisher), 'publishUser').mockImplementation(
+        async (userId, event) => {
+          if (event.type !== 'user:notification') return;
+          const [row] = await t.db
+            .select({ n: count() })
+            .from(schema.notifications)
+            .where(eq(schema.notifications.userId, userId));
+          sent.push([userId, event.ts, row!.n]);
+        },
+      );
+      return () => [...sent].sort(([x], [y]) => x.localeCompare(y));
+    }
+    /** Every `market_rules_supplemented` row, by version, then by account. */
+    async function supplementNotices() {
+      const rows = await t.db
+        .select()
+        .from(schema.notifications)
+        .where(eq(schema.notifications.type, 'market_rules_supplemented'));
+      return rows.sort(
+        (x, y) =>
+          Number(x.params.ruleVersion) - Number(y.params.ruleVersion) ||
+          x.userId.localeCompare(y.userId),
+      );
+    }
+    /** A supplement of `changes` against `baseVersion`, approved; its event and instant. */
+    async function supplement(
+      marketId: string,
+      baseVersion: number,
+      changes: Record<string, unknown>,
+      reason = REASON,
+    ) {
+      const asked = await requestSupplement(marketId, changes, asker, { baseVersion, reason });
+      expect(asked.statusCode, asked.body).toBe(200);
+      const requestId = await pendingId(marketId);
+      const approved = await approve(marketId, requestId);
+      expect(approved.statusCode, approved.body).toBe(200);
+      const event = (await eventsFor(marketId)).at(-1)!;
+      expect(event.type).toBe('rules_supplemented');
+      return { requestId, event, at: event.createdAt };
+    }
+    /** The notice one member keeps of the supplement `version`. */
+    const notice = (
+      userId: string,
+      market: { slug: string },
+      params: { marketTitle: string; ruleVersion: number; reason: string },
+      at: Date,
+    ) => ({
+      userId,
+      type: 'market_rules_supplemented',
+      category: 'market',
+      params,
+      target: { kind: 'market', slug: market.slug },
+      mergeKey: null,
+      occurredAt: at,
+      readAt: null,
+      eventCount: 1,
+    });
+
+    it('tells only a supplement that changed a judgement item or the close — each watcher and holder once, its version, public reason and the title after it — after COMMIT; a title or background alone, an order-only member or another market’s watcher nobody; a re-sent approval nothing (52-1·52-10, 54-3·54-7, AC 4·6)', async () => {
+      await openOrderIntake(t.db, { adminId: asker.id });
+      const c = week();
+      const market = await opened({ closeAt: new Date(c) });
+      const elsewhere = await opened();
+      // Two holders through a real fill (the NO owner's resting order keeps an `order_filled`).
+      const traded = await tradeOnce(t.db, market.id);
+      const [yes, no] = [traded.yes.userId, traded.no.userId];
+      const watcher = (await createUser(t.db)).user.id;
+      // The YES holder also watches: one notice (53-4).
+      await createWatch(t.db, { userId: watcher, marketId: market.id });
+      await createWatch(t.db, { userId: yes, marketId: market.id });
+      // An order-only member (52-1) and another market's watcher hear nothing.
+      const resting = (await createUser(t.db, { balanceCoin: 1_000n })).user.id;
+      const placed = await placeTestOrder(t.db, {
+        marketId: market.id,
+        ownerId: resting,
+        limitPriceCoin: 10,
+      });
+      expect(placed).toMatchObject({ kind: 'placed', order: { status: 'open' } });
+      const other = (await createUser(t.db)).user.id;
+      await createWatch(t.db, { userId: other, marketId: elsewhere.id });
+      const sent = signals();
+
+      // 52-10 '제목·배경만 고친 보충은 알리지 않는다': the versions are made, nobody is told.
+      await supplement(market.id, 1, { title: '첫눈은 언제 올까' });
+      await supplement(market.id, 2, { description: '고친 배경' });
+      await supplement(market.id, 3, { title: '첫눈이 올까', description: '다시 고친 배경' });
+      expect((await versionsOf(market.id)).map((row) => row.version)).toEqual([1, 2, 3, 4]);
+      expect(await supplementNotices()).toEqual([]);
+      expect(sent()).toEqual([]);
+
+      // A judgement item: the version, its public reason, the title it was given at v4.
+      const R = '대체 출처에 기상청 발표를 더합니다. {market} $&';
+      const yesCondition = await supplement(
+        market.id,
+        4,
+        { yesCondition: '서울에 첫눈이 관측되면 YES' },
+        R,
+      );
+      const audience = [no, watcher, yes].sort((x, y) => x.localeCompare(y));
+      const v5 = { marketTitle: '첫눈이 올까', ruleVersion: 5, reason: R };
+      expect((await supplementNotices()).map(({ id: _id, createdAt: _at, ...row }) => row)).toEqual(
+        audience.map((userId) => notice(userId, market, v5, yesCondition.at)),
+      );
+      const keys = await t.db
+        .select()
+        .from(schema.notificationKeys)
+        .where(eq(schema.notificationKeys.type, 'market_rules_supplemented'));
+      expect(keys.map((key) => key.eventKey)).toEqual(
+        audience.map(() => `market_event:${String(yesCondition.event.id)}`),
+      );
+      const at5 = yesCondition.at.toISOString();
+      expect(sent()).toEqual([...audience].map((id) => [id, at5, id === no ? 2 : 1]));
+
+      // The title with the close (extended): told, under the title the supplement gave.
+      const moved = await supplement(market.id, 5, {
+        title: '서울에 첫눈이 올까',
+        closeAt: iso(c + HOUR_MS),
+      });
+      const v6 = { marketTitle: '서울에 첫눈이 올까', ruleVersion: 6, reason: REASON };
+      expect((await supplementNotices()).map(({ id: _id, createdAt: _at, ...row }) => row)).toEqual(
+        [
+          ...audience.map((userId) => notice(userId, market, v5, yesCondition.at)),
+          ...audience.map((userId) => notice(userId, market, v6, moved.at)),
+        ],
+      );
+      const at6 = moved.at.toISOString();
+      expect(sent()).toEqual(
+        [
+          ...audience.map((id): [string, string, number] => [id, at5, id === no ? 2 : 1]),
+          ...audience.map((id): [string, string, number] => [id, at6, id === no ? 3 : 2]),
+        ].sort(([x], [y]) => x.localeCompare(y)),
+      );
+      for (const nobody of [resting, other]) {
+        expect(
+          await t.db
+            .select()
+            .from(schema.notifications)
+            .where(eq(schema.notifications.userId, nobody)),
+        ).toEqual([]);
+      }
+      // No record or answer counts or names who was told (ADR-0064).
+      const [approval] = (await supplementActionsFor(market.id)).filter(
+        (row) => row.type === 'market_supplement_approve',
+      );
+      expect(Object.keys(approval!.payload as object).sort()).toEqual(
+        ['after', 'approvalId', 'before', 'items', 'reason', 'version'].sort(),
+      );
+
+      // The approval again: refused, nothing new (AC 6).
+      vi.restoreAllMocks();
+      const rows = await t.db.select().from(schema.notifications);
+      const again = signals();
+      expectNotAllowed(await approve(market.id, moved.requestId), 'decided');
+      expect(await t.db.select().from(schema.notifications)).toEqual(rows);
+      expect(again()).toEqual([]);
+    });
+
+    it('tells a PAUSED market’s supplement too, and one of the 장기 지연 기한 alone (52-10, 54-7)', async () => {
+      const market = await opened();
+      const watcher = (await createUser(t.db)).user.id;
+      await createWatch(t.db, { userId: watcher, marketId: market.id });
+      const paused = await post(`${marketUrl(market.id)}/pause`, third, {
+        publicNoteConfirmed: true,
+        reason: 'basis_change',
+        note: '판정 기준을 검토한다.',
+      });
+      expect(paused.statusCode, paused.body).toBe(200);
+      const sent = signals();
+      const delay = await supplement(market.id, 1, { delayHandling: '발표가 미뤄지면 기다린다' });
+      const longDelay = await supplement(market.id, 2, { longDelayDays: 30 });
+      expect(detail(await get(marketUrl(market.id)))).toMatchObject({
+        status: 'paused',
+        ruleVersion: 3,
+      });
+      expect((await supplementNotices()).map(({ id: _id, createdAt: _at, ...row }) => row)).toEqual(
+        [
+          notice(
+            watcher,
+            market,
+            { marketTitle: market.title, ruleVersion: 2, reason: REASON },
+            delay.at,
+          ),
+          notice(
+            watcher,
+            market,
+            { marketTitle: market.title, ruleVersion: 3, reason: REASON },
+            longDelay.at,
+          ),
+        ],
+      );
+      // The pause's own notice first (#54 B), then one row per supplement.
+      expect(sent()).toEqual([
+        [watcher, delay.at.toISOString(), 2],
+        [watcher, longDelay.at.toISOString(), 3],
+      ]);
+    });
   });
 });

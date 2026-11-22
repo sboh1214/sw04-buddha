@@ -218,6 +218,54 @@ describe('MyNotifications', () => {
     expect(html).not.toContain(`${copy.notificationCategoryTrade} ${copy.notificationFallback}`);
   });
 
+  it('draws each 시장 알림 with its own title under 시장 and leads it to the market’s detail (#54)', () => {
+    // ADR-0159: one row per type as the API answers them, every one targeting the market (54-4).
+    const target = { kind: 'market', slug: 'first-snow' } as const;
+    const rows = [
+      ['market_closed', { marketTitle: '첫눈이 올까', early: false }, '첫눈이 올까 거래 마감'],
+      ['market_closed', { marketTitle: '첫눈이 올까', early: true }, '첫눈이 올까 거래 조기 마감'],
+      [
+        'market_paused',
+        { marketTitle: '첫눈이 올까', reason: 'early_result' },
+        '첫눈이 올까 거래 일시 중단 · 사유: 사건 선공개(조기 결과)',
+      ],
+      [
+        'market_resumed',
+        { marketTitle: '첫눈이 올까', reason: 'basis_change' },
+        '첫눈이 올까 거래 재개 · 중단 사유: 실질 기준 변경',
+      ],
+      ['market_cancelled', { marketTitle: '첫눈이 올까' }, '첫눈이 올까 시장 취소'],
+      [
+        'market_rules_supplemented',
+        { marketTitle: '첫눈이 올까', ruleVersion: 3, reason: '대체 출처에 {x} $&를 더합니다.' },
+        '첫눈이 올까 규칙 보충 v3 · 사유: 대체 출처에 {x} $&를 더합니다.',
+      ],
+    ] as const;
+    const ids = rows.map((_, index) => `9b2c8e4a-1f3d-4c6b-8a7e-5d4c3b2a1f3${String(index)}`);
+    const html = drawn(
+      list([
+        {
+          items: rows.map(([type, params], index) =>
+            notification(ids[index] ?? '', { type, category: 'market', params, target }),
+          ),
+          nextCursor: null,
+        },
+      ]),
+    );
+    rows.forEach(([type, , title], index) => {
+      const drawnRow = rowOf(html, ids[index] ?? '') ?? '';
+      expect(byTestId(drawnRow, 'notification-row-category')?.text, type).toBe(
+        copy.notificationCategoryMarket,
+      );
+      expect(byTestId(drawnRow, 'notification-row-title')?.text, type).toBe(title);
+      expect(byTestId(drawnRow, 'notification-row')?.attributes.href, type).toBe(
+        '/markets/first-snow',
+      );
+    });
+    // None drew the fallback title (53-11 ④).
+    expect(html).not.toContain(`${copy.notificationCategoryMarket} ${copy.notificationFallback}`);
+  });
+
   it('draws a target this web cannot lead to as a button that only marks it read', () => {
     const html = drawn(
       list([

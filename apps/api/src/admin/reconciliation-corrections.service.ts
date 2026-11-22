@@ -1,10 +1,12 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   applyReconciliationCorrection,
+  deliverReconciliationNotices,
   lockAdminRoles,
   lockMarket,
   lockReconciliationCorrection,
   previewReconciliationCorrections,
+  RECONCILIATION_NOTICES_FAILED_LOG,
   ReconciliationCorrectionError,
   runAccountReconciliation,
   runMarketReconciliation,
@@ -14,6 +16,7 @@ import {
 import {
   decodeKeyset,
   encodeKeyset,
+  notificationEvent,
   RECONCILIATION_CORRECTION_APPROVAL_KIND,
   reconciliationCorrectionPayloadSchema,
   serializeCoinAmount,
@@ -63,6 +66,8 @@ function refusal(code: string): AppError {
 /** The database owns monetary invariants; this service owns the current admin and decision flow. */
 @Injectable()
 export class ReconciliationCorrectionService {
+  private readonly logger = new Logger(ReconciliationCorrectionService.name);
+
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly approvals: ApprovalService,
@@ -168,6 +173,14 @@ export class ReconciliationCorrectionService {
     );
   }
 
+  /**
+   * The correction's approval, then a fresh run of its target. A market run that fails on an OPEN
+   * market pauses it as the system (ADR-0119): its watchers and holders are told `market_paused`,
+   * reason `ledger_failure` (#54 B′, ADR-0159; 54-5), last in the transaction and inside a
+   * savepoint a failed notice rolls back alone — the pause stands, the fixed line is logged (54-6).
+   * After COMMIT the member's balance, `market:status`, then `user:notification` to each member
+   * told; the detail names nobody told and counts nobody (ADR-0064).
+   */
   async approve(
     adminId: string,
     resultId: number,
@@ -208,9 +221,14 @@ export class ReconciliationCorrectionService {
           approved,
           approved.decidedAt ?? (await clockTimestamp(tx)),
         );
-        return { detail: await this.detail(tx, resultId), applied, checked };
+        const detail = await this.detail(tx, resultId);
+        // #54 B′ (54-5·54-6): an automatic pause's notices, the transaction's last statements.
+        const delivered = await deliverReconciliationNotices(tx, checked.systemPause);
+        return { detail, applied, checked, delivered };
       }),
     );
+    // The fixed line alone: no error message, id or count (54-6, ADR-0064).
+    if (done.delivered.failed) this.logger.warn(RECONCILIATION_NOTICES_FAILED_LOG);
     const events: Promise<void>[] = [];
     if (done.applied.outcome === 'recorded' && done.applied.correction.userId !== null) {
       events.push(
@@ -227,6 +245,12 @@ export class ReconciliationCorrectionService {
       events.push(
         this.publisher.publishMarket(done.checked.statusEvent.marketId, done.checked.statusEvent),
       );
+    const paused = done.checked.systemPause;
+    if (paused !== null) {
+      for (const userId of done.delivered.notified) {
+        events.push(this.publisher.publishUser(userId, notificationEvent(paused.at)));
+      }
+    }
     await Promise.all(events);
     return done.detail;
   }

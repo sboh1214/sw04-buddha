@@ -19,10 +19,12 @@ import {
   prepareMarketMakerOpening,
   createStartGrant,
   createUser,
+  createWatch,
   createWriteLimitEvent,
   hasTestDb,
   openOrderIntake,
   passMarketClose,
+  plantNotificationInsertFailure,
   resolveMarketNow,
   setReleaseSetting,
   fundMarketMakerFunds,
@@ -226,7 +228,7 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
     const admin = await createUser(t.db, { role: 'admin' });
     await openOrderIntake(t.db, { adminId: admin.user.id });
     const traded = await createMarket(t.db);
-    await tradeOnce(t.db, traded.id);
+    const trade = await tradeOnce(t.db, traded.id);
     await passMarketClose(t.db, traded.id, new Date(Date.now() - 2 * MINUTE_MS));
     const due = await createMarket(t.db, { closeAt: new Date(Date.now() - MINUTE_MS) });
     const future = await createMarket(t.db, { closeAt: new Date(Date.now() + MINUTE_MS) });
@@ -241,16 +243,29 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
     expect((await marketRow(traded.id)).status).toBe('closed');
     expect((await marketRow(due.id)).status).toBe('cancelled');
     expect((await marketRow(future.id)).status).toBe('open');
+    // The traded market's two holders hear of its close (`market_closed`, #54): their signals
+    // follow its status, in no contracted order between them.
+    const holders = [trade.yes.userId, trade.no.userId].map((id) => userChannel(id)).sort();
     expect(published).toEqual([
       {
         channel: marketChannel(traded.id),
         event: expect.objectContaining({ type: 'market:status', status: 'closed' }) as unknown,
       },
+      ...holders.map(() => ({
+        channel: expect.stringMatching(/^user:/) as unknown,
+        event: expect.objectContaining({ type: 'user:notification' }) as unknown,
+      })),
       {
         channel: marketChannel(due.id),
         event: expect.objectContaining({ type: 'market:status', status: 'cancelled' }) as unknown,
       },
     ]);
+    expect(
+      published
+        .slice(1, 3)
+        .map(({ channel }) => channel)
+        .sort(),
+    ).toEqual(holders);
     expect(logs.at(-1)).toMatchObject({ level: 30, msg: 'market close scan', cancelled: 1 });
 
     // The scheduler job of queues.ts carries no data at all; that is the scan too, and with
@@ -284,6 +299,58 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
       closed: 0,
       cancelled: 1,
     });
+  });
+
+  it('market.close names none of the members its notices were for when they fail (#54)', async () => {
+    // Every watcher and holder is bound into the close's one notification call; Postgres refusing
+    // it (its message, DETAIL and HINT naming the row's account) must reach neither what BullMQ
+    // stores — the scan's `failures[].message`, the single job's `failedReason` — nor the log.
+    const admin = await createUser(t.db, { role: 'admin' });
+    await openOrderIntake(t.db, { adminId: admin.user.id });
+    const traded = await createMarket(t.db);
+    const trade = await tradeOnce(t.db, traded.id);
+    await passMarketClose(t.db, traded.id, new Date(Date.now() - MINUTE_MS));
+    const watcher = (await createUser(t.db)).user.id;
+    await createWatch(t.db, { userId: watcher, marketId: traded.id });
+    const members = [trade.yes.userId, trade.no.userId, watcher];
+    const named = (text: string) => members.some((id) => text.includes(id));
+
+    const planted = await plantNotificationInsertFailure();
+    let failed: unknown;
+    try {
+      const result = await run({ name: JOB_NAMES.marketClose, data: {} });
+      expect(result).toEqual({
+        closed: 0,
+        cancelled: 0,
+        skipped: 0,
+        failed: 1,
+        failures: [
+          {
+            marketId: traded.id,
+            message: 'P0001 notification write failed: planted failure for <recipient>',
+          },
+        ],
+      });
+      failed = await run({ name: JOB_NAMES.marketClose, data: { marketId: traded.id } }).catch(
+        (e: unknown) => e,
+      );
+    } finally {
+      await planted.remove();
+    }
+    // The close rolled back with its notices (53-4): still open, nothing published.
+    expect((await marketRow(traded.id)).status).toBe('open');
+    expect(published).toEqual([]);
+    expect(logs.find((line) => line.msg === 'market close failed in scan')).toMatchObject({
+      level: 50,
+      marketId: traded.id,
+      err: { type: 'NotificationWriteError', code: 'P0001' },
+    });
+    expect(named(JSON.stringify(logs))).toBe(false);
+    // The single job's rejection: BullMQ keeps its message as `failedReason`, main.ts logs it.
+    expect(failed).toMatchObject({ name: 'NotificationWriteError', code: 'P0001' });
+    const error = failed as Error;
+    expect(named(`${String(error)}\n${error.stack ?? ''}\n${JSON.stringify(error)}`)).toBe(false);
+    expect(error).not.toHaveProperty('cause');
   });
 
   it('market.close with a market id closes that market only', async () => {

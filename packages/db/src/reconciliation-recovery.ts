@@ -129,6 +129,17 @@ async function writeRecovery(
   return recovered!;
 }
 
+/**
+ * A recovery's own run never pauses (#54 B′): it answered `not_passed` before this when it failed,
+ * and a passing run pauses nothing. A `systemPause` here is a broken invariant — thrown, so the
+ * transaction rolls back rather than drop the notices of a pause nobody delivers.
+ */
+function assertNoSystemPause(run: ReconciliationRun): void {
+  if (run.systemPause !== null) {
+    throw new Error('a recovery run paused its market: its owner delivers no pause notice');
+  }
+}
+
 /** The market a recovery read under its locks: what the caller's 만료 notice names (#134). */
 export type RecoveredMarket = Pick<typeof markets.$inferSelect, 'id' | 'title' | 'status'>;
 
@@ -174,12 +185,10 @@ export async function recoverReconciliationHold(
       { source: 'recovery', actorId: input.approverId },
     );
   }
-  return {
-    ...run,
-    hold: await writeRecovery(tx, hold, input, run),
-    expired,
-    market: recovered,
-  };
+  const recoveredHold = await writeRecovery(tx, hold, input, run);
+  // After both branches' `not_passed` (the market's above, the account's in `writeRecovery`).
+  assertNoSystemPause(run);
+  return { ...run, hold: recoveredHold, expired, market: recovered };
 }
 
 /** Called by endMarketPause inside the existing approved resume/early-close transaction. */
@@ -208,4 +217,6 @@ export async function recoverPausedMarketReconciliation(
     actorId: input.approverId,
   });
   await writeRecovery(tx, hold, evidence, run);
+  // After `writeRecovery`'s `not_passed`: the market is PAUSED, so its run never pauses (#54 B′).
+  assertNoSystemPause(run);
 }

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   NOTIFICATION_DEFINITIONS,
   NOTIFICATION_EVENT_KEY_PATTERN,
@@ -27,9 +28,9 @@ export type NotificationRow = typeof notifications.$inferSelect;
  * - Same transaction (53-4 '사건과 같은 DB 트랜잭션'): ONE call per transaction, with every
  *   recipient of the event, after the event's other writes — nothing locks after it but the
  *   COMMIT. A duplicate is an outcome, never an error; anything thrown (a validation failure, a
- *   database error) rolls back with the event: no retry queue, no partial notification. A producer
- *   that wants its event to stand whatever happens to the notification has no such option (#52
- *   item 18, AC 10 '생성 실패 때의 처리').
+ *   database error — NotificationWriteError, which names no recipient) rolls back with the event:
+ *   no retry queue, no partial notification. A producer that wants its event to stand whatever
+ *   happens to the notification has no such option (#52 item 18, AC 10 '생성 실패 때의 처리').
  * - The type list (52-20): every input is validated against its definition
  *   (NOTIFICATION_DEFINITIONS; the tests pass their own through `options.definitions`, which no
  *   production source may do — notifications.test.ts's static guard) — an unknown type, params its
@@ -48,6 +49,12 @@ export type NotificationRow = typeof notifications.$inferSelect;
  *   notification. A concurrent duplicate waits on the key's unique index and ends `duplicate` once
  *   the first commits ("동시에 와도 한 건만"). Keys live as long as their notification: once the
  *   retention deletes it, the same event reprocessed would notify again (accepted).
+ * - Cost under the producer's locks (#54, ADR-0159): every input that does not merge is delivered
+ *   in ONE statement whatever the recipients (a market's close may notify every watcher and
+ *   holder, under its market lock and the order owners' balances) — the rows and their keys from
+ *   one JSON parameter, the keys `ON CONFLICT DO NOTHING`, then one DELETE of the rows whose key
+ *   was taken (`duplicate`) only when there are some. Mergeable inputs follow one by one. The
+ *   statement inserts only new rows and waits only on the key of the same (member, type, event).
  * - Merge (52-6, 52-7, 134-2): a mergeable type's event joins the account's unread notification of
  *   the same type and merge key — its params folded by the definition's `merge`, its event count
  *   up by one, its 발생 시각 raised to the event's (the row moves to the top) — keeping its target,
@@ -63,7 +70,8 @@ export type NotificationRow = typeof notifications.$inferSelect;
  *   (`MarketPublisher.publishUser`) and the worker on `userChannel` to `notifiedUserIds(outcomes)`.
  *
  * Inputs are processed in one fixed order — (account, type, merge key, event key) — so concurrent
- * writers take the rows they lock in the same order.
+ * writers take the rows they lock in the same order: the non-merging ones first, in that order in
+ * their one statement, then the merging ones. No producer mixes the two in one call today.
  */
 
 /** One notification to deliver: who, which type, the event it tells, and what it shows. */
@@ -114,6 +122,85 @@ export class NotificationInputError extends Error {
     super(message);
     this.name = 'NotificationInputError';
   }
+}
+
+/**
+ * Any failure of `createNotifications`'s statements, told without its recipients (#54, ADR-0159).
+ * Those statements bind every recipient's account id (the gate's array, the rows' one JSON
+ * parameter); drizzle's DrizzleQueryError writes the bound values into its message and stack, and
+ * the driver's error can quote a key in `detail`, `where` or `hint`. The callers keep what they
+ * catch — the worker's scan result BullMQ stores, a job's `failedReason`, the log lines — so the
+ * original never leaves this module. This keeps what the callers classify on, as they read it
+ * off a driver error: the SQLSTATE `code` (withTransactionRetry's 40001/40P01/55P03, apps/api
+ * pg-error.ts, the worker's messageOf) and `constraint`, plus the driver's short message with any
+ * recipient's id cut out. It has no `cause`.
+ */
+export class NotificationWriteError extends Error {
+  /** The SQLSTATE when Postgres refused a statement; undefined for any other failure. */
+  readonly code: string | undefined;
+  /** The constraint (or the trigger raising as one) Postgres named, if any. */
+  readonly constraint: string | undefined;
+
+  constructor(message: string, pg: { code?: string; constraint?: string | undefined } = {}) {
+    super(message);
+    this.name = 'NotificationWriteError';
+    this.code = pg.code;
+    this.constraint = pg.constraint;
+  }
+}
+
+/** How many links of a cause chain `writeFailure` reads (drizzle's wrapper, then the driver's). */
+const CAUSE_DEPTH = 5;
+
+/** A node-postgres DatabaseError as `writeFailure` reads it: `code` is the SQLSTATE. */
+function driverErrorOf(
+  value: unknown,
+): { code: string; message: string; constraint?: unknown } | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const { code, message } = value as { code?: unknown; message?: unknown };
+  return typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) && typeof message === 'string'
+    ? (value as { code: string; message: string; constraint?: unknown })
+    : undefined;
+}
+
+/** drizzle's wrapper of a failed query (its SQL and bound values), recognised by its shape. */
+function isFailedQuery(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const { query, params } = value as { query?: unknown; params?: unknown };
+  return typeof query === 'string' && Array.isArray(params);
+}
+
+/**
+ * `error` as NotificationWriteError (see there): the driver's SQLSTATE, constraint and message
+ * when Postgres refused a statement, else the message of the first link that is not drizzle's
+ * wrapper (a lost connection, a bug), each with every id of `userIds` replaced.
+ */
+function writeFailure(error: unknown, userIds: readonly string[]): NotificationWriteError {
+  const scrub = (text: string) =>
+    userIds.reduce(
+      (out, id) => (id !== '' && out.includes(id) ? out.split(id).join('<recipient>') : out),
+      text,
+    );
+  let reason: string | undefined;
+  let link = error;
+  for (let depth = 0; depth < CAUSE_DEPTH && link !== undefined && link !== null; depth++) {
+    const driver = driverErrorOf(link);
+    if (driver !== undefined) {
+      const { constraint } = driver;
+      return new NotificationWriteError(`notification write failed: ${scrub(driver.message)}`, {
+        code: driver.code,
+        constraint: typeof constraint === 'string' ? constraint : undefined,
+      });
+    }
+    if (reason === undefined && !isFailedQuery(link)) {
+      reason =
+        link instanceof Error ? link.message : typeof link === 'string' ? link : 'a thrown value';
+    }
+    link = typeof link === 'object' && 'cause' in link ? link.cause : undefined;
+  }
+  return new NotificationWriteError(
+    `notification write failed: ${scrub(reason ?? 'a query failed')}`,
+  );
 }
 
 /** The rounds a merge may race a concurrent read or insert before it gives up (a bug). */
@@ -214,19 +301,66 @@ function rowOf(checked: CheckedInput, occurredAt: Date, at: Date) {
   };
 }
 
-/** A non-mergeable input: a row of its own, or `duplicate` (the row inserted goes again). */
-async function createOne(tx: Tx, checked: CheckedInput, at: Date): Promise<NotificationOutcome> {
-  const { userId } = checked.input;
-  const occurredAt = checked.input.occurredAt ?? at;
-  const [row] = await tx
-    .insert(notifications)
-    .values(rowOf(checked, occurredAt, at))
-    .returning({ id: notifications.id });
-  if (!(await claimKey(tx, checked, row!.id))) {
-    await tx.delete(notifications).where(eq(notifications.id, row!.id));
-    return { kind: 'duplicate', userId };
+/**
+ * Every non-mergeable input of the call (`items`, in the processing order) in one statement (#54,
+ * ADR-0159): each a row of its own with a random id, and its key claimed for it — a row whose key
+ * another notification already holds (the same event reprocessed, a twin in this call, or a
+ * concurrent delivery that committed first) is deleted again and answers `duplicate`. One JSON
+ * parameter carries the rows, so no bind-parameter limit applies however many recipients. The
+ * keys are inserted in the processing order (`ord`), as one-by-one inserts would take them; the
+ * foreign key from a key to its row is checked at the end of the statement, which sees `made`.
+ */
+async function createMany(
+  tx: Tx,
+  items: readonly CheckedInput[],
+  at: Date,
+  outcomes: NotificationOutcome[],
+): Promise<void> {
+  if (items.length === 0) return;
+  const rows = items.map((item, ord) => ({
+    id: randomUUID(),
+    user_id: item.input.userId,
+    type: item.input.type,
+    category: item.definition.category,
+    params: item.params,
+    target: item.target,
+    occurred_at: (item.input.occurredAt ?? at).toISOString(),
+    event_key: item.input.eventKey,
+    ord,
+  }));
+  const { rows: claimed } = await tx.execute<{ notification_id: string }>(sql`
+    WITH input AS (
+      SELECT * FROM jsonb_to_recordset(${JSON.stringify(rows)}::jsonb) AS r(
+        id uuid, user_id text, type text, category text, params jsonb, target jsonb,
+        occurred_at timestamptz, event_key text, ord int)
+    ), made AS (
+      INSERT INTO ${notifications}
+        (id, user_id, type, category, params, target, occurred_at, created_at)
+      SELECT id, user_id, type, category, params, target, occurred_at,
+        ${at.toISOString()}::timestamptz
+      FROM input ORDER BY ord
+      RETURNING id
+    )
+    INSERT INTO ${notificationKeys} (user_id, type, event_key, notification_id)
+    SELECT i.user_id, i.type, i.event_key, i.id FROM input i JOIN made m ON m.id = i.id
+    ORDER BY i.ord
+    ON CONFLICT (user_id, type, event_key) DO NOTHING
+    RETURNING notification_id`);
+  const kept = new Set(claimed.map((row) => row.notification_id));
+  const dropped = rows.filter((row) => !kept.has(row.id)).map((row) => row.id);
+  // A DELETE in the same WITH could not see its sibling's inserts: a second statement, if any.
+  if (dropped.length > 0) {
+    await tx
+      .delete(notifications)
+      .where(sql`${notifications.id} = ANY(${sql.param(dropped)}::uuid[])`);
   }
-  return { kind: 'created', id: row!.id, userId };
+  items.forEach((item, ord) => {
+    const { id } = rows[ord]!;
+    const { userId } = item.input;
+    outcomes[item.index] = kept.has(id)
+      ? { kind: 'created', id, userId }
+      : { kind: 'duplicate', userId };
+  });
 }
 
 /**
@@ -303,17 +437,17 @@ async function mergeOne(tx: Tx, checked: CheckedInput, at: Date): Promise<Notifi
     }
     return { kind: 'created', id: row.id, userId };
   }
-  throw new Error(
-    `notification ${type} for ${userId}: no merge after ${String(MERGE_ROUNDS)} rounds`,
-  );
+  // Never the account: a failure here reaches job results and logs (NotificationWriteError).
+  throw new Error(`notification ${type}: no merge after ${String(MERGE_ROUNDS)} rounds`);
 }
 
 /**
  * Delivers one event's notifications (#53, ADR-0157; the rules in the module doc above): one call
  * per transaction, after the event's other writes, with every recipient. Answers what became of
  * each input, in the inputs' order. Throws — and so rolls the event back — on an input its
- * definition refuses (NotificationInputError, before anything is written) or a database error;
- * never on held params a merge cannot fold (`merged` with `paramsReset`).
+ * definition refuses (NotificationInputError, before anything is written) or a failed statement
+ * (NotificationWriteError: its SQLSTATE kept, no recipient in it); never on held params a merge
+ * cannot fold (`merged` with `paramsReset`).
  */
 export async function createNotifications(
   tx: Tx,
@@ -326,8 +460,24 @@ export async function createNotifications(
   const checked = inputs.map((input, index) => check(input, index, byType)).sort(compareChecked);
   const outcomes = new Array<NotificationOutcome>(inputs.length);
   if (checked.length === 0) return outcomes;
-  // 2. The gate (53-5): the inboxes not taken by a closure, in one statement that never waits.
   const userIds = [...new Set(checked.map((c) => c.input.userId))].sort();
+  try {
+    await deliver(tx, checked, userIds, outcomes);
+  } catch (error) {
+    // What the callers keep must never name the recipients (NotificationWriteError).
+    throw writeFailure(error, userIds);
+  }
+  return outcomes;
+}
+
+/** Steps 2–4 of `createNotifications`: every statement it runs, for its `userIds` (sorted). */
+async function deliver(
+  tx: Tx,
+  checked: readonly CheckedInput[],
+  userIds: readonly string[],
+  outcomes: NotificationOutcome[],
+): Promise<void> {
+  // 2. The gate (53-5): the inboxes not taken by a closure, in one statement that never waits.
   const open = new Set(
     (
       await tx
@@ -341,15 +491,22 @@ export async function createNotifications(
   );
   // 3. One instant: the default 발생 시각 and the creation of every row this call makes.
   const at = await clockTimestamp(tx);
+  const reached = checked.filter((item) => open.has(item.input.userId));
   for (const item of checked) {
-    const { userId } = item.input;
-    outcomes[item.index] = !open.has(userId)
-      ? { kind: 'skipped', userId, reason: 'no_inbox' }
-      : item.mergeKey === null
-        ? await createOne(tx, item, at)
-        : await mergeOne(tx, item, at);
+    if (!open.has(item.input.userId)) {
+      outcomes[item.index] = { kind: 'skipped', userId: item.input.userId, reason: 'no_inbox' };
+    }
   }
-  return outcomes;
+  // 4. Every input that does not merge, in one statement (#54, ADR-0159); then the merges.
+  await createMany(
+    tx,
+    reached.filter((item) => item.mergeKey === null),
+    at,
+    outcomes,
+  );
+  for (const item of reached) {
+    if (item.mergeKey !== null) outcomes[item.index] = await mergeOne(tx, item, at);
+  }
 }
 
 /** The accounts something reached (created or merged): publish `user:notification` to them. */
