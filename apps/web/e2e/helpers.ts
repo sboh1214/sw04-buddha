@@ -25,6 +25,7 @@ import type {
   MarketTimes,
   MarketLiquiditySettings,
   Me,
+  Notification,
   OrderQuote,
   PlaceOrderResult,
   ReleaseSetting,
@@ -167,6 +168,9 @@ const KST_OFFSET_MS = 9 * 60 * 60 * 1_000;
 
 /** The unit every order between market times is compared in (#22, #172 item 12). */
 const MINUTE_MS = 60 * 1_000;
+
+/** An hour: how far apart a 개장 예정 market's times are (`createScheduledMarket`). */
+const HOUR_MS = 60 * MINUTE_MS;
 
 /**
  * How long after its close and its 사건 기한 a spec market is judged (`timesFor`): a day, as the
@@ -1634,6 +1638,22 @@ export async function openThroughReview(
   return approved;
 }
 
+/**
+ * A 개장 예정 market (#21, ADR-0100): approved an hour before its scheduled open, its close two
+ * hours after that — the market an operator's cancel takes (#20, ADR-0117) and a member may watch
+ * (#89). cancel.spec.ts' and market-notifications.spec.ts'.
+ */
+export async function createScheduledMarket(admin: APIRequestContext): Promise<TestMarket> {
+  const scheduledOpenAt = new Date(floorMinute(Date.now() + HOUR_MS)).toISOString();
+  const closeAt = new Date(floorMinute(Date.now() + 3 * HOUR_MS)).toISOString();
+  const market = await createDraftMarket(admin, { closeAt, times: { scheduledOpenAt } });
+  const submitted = await submitForReview(admin, market.id);
+  expect(
+    (await approveAsReviewer(admin, market.id, submitted.review.pending?.requestId)).status,
+  ).toBe('scheduled');
+  return market;
+}
+
 // ---- 규칙 보충 (#80) -------------------------------------------------------------------
 
 /**
@@ -3005,14 +3025,15 @@ export async function createDraftMarket(
 /**
  * A watch straight at the API with the page's own cookie (#89, ADR-0064), for a spec that needs
  * several: the detail's press is pinned by watchlist.spec.ts, and more of them would only add
- * time. Sends the account the cookie is, as the button does (`expectedAccountId`).
+ * time. Sends the account the cookie is, as the button does (`expectedAccountId`). `watched`
+ * false unwatches (the same route, #54's AC 5 in market-notifications.spec.ts).
  */
-export async function watchThroughApi(page: Page, marketId: string): Promise<void> {
+export async function watchThroughApi(page: Page, marketId: string, watched = true): Promise<void> {
   const me = await page.request.get('/api/v1/me');
   expect(me.ok(), await me.text()).toBe(true);
   const { data } = (await me.json()) as { data: { id: string } };
   const saved = await page.request.put(`/api/v1/me/watchlist/${marketId}`, {
-    data: { watched: true, expectedAccountId: data.id },
+    data: { watched, expectedAccountId: data.id },
   });
   expect(saved.status(), await saved.text()).toBe(200);
 }
@@ -3339,4 +3360,55 @@ export async function holdOrderCancel(
 /** The toasts on `page` (Chakra's `role="status"` roots), counted apart from any other status. */
 export function toastsOf(page: Page): Locator {
   return page.locator('[data-scope="toast"][data-part="root"]');
+}
+
+// ---- 알림함 (#53; the inbox reads of #134's and #54's specs) -------------------------------
+
+/** One read of the count after the signal: what a page may take past the realtime budget. */
+export const ONE_READ_MS = 5_000;
+
+/** The unread count's read, as the browser asks it through the web's `/api` rewrite. */
+const UNREAD_COUNT_PATH = '/api/v1/me/notifications/unread-count';
+
+/** The count beside MY where this width shows it: the bottom tabs below md, the header from it. */
+export function myUnread(page: Page): Locator {
+  const width = page.viewportSize()?.width ?? 0;
+  return page.getByTestId(
+    width < MD_MIN_WIDTH_PX ? 'bottom-tab-my-unread' : 'nav-primary-my-unread',
+  );
+}
+
+/** The rows MY › 알림 draws, in order. */
+export function notificationRows(page: Page): Locator {
+  return page.getByTestId('my-notifications-list').getByTestId('notification-row');
+}
+
+/** The row MY › 알림 draws for the notification `id`. */
+export function notificationRow(page: Page, id: string): Locator {
+  return page.locator(`[data-testid="notification-row"][data-notification-id="${id}"]`);
+}
+
+/** The ids of the rows drawn, in order. */
+export function notificationRowIds(page: Page): Promise<(string | null)[]> {
+  return notificationRows(page).evaluateAll((nodes) =>
+    nodes.map((node) => node.getAttribute('data-notification-id')),
+  );
+}
+
+/** Opens `path` and waits for the unread count's first read, so an absence after it means 0. */
+export async function openCounted(page: Page, path: string): Promise<void> {
+  const counted = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === UNREAD_COUNT_PATH && response.ok(),
+  );
+  await page.goto(path);
+  await counted;
+}
+
+/** The member's inbox through the API, newest first (one page is plenty here). */
+export async function inboxOf(context: APIRequestContext): Promise<Notification[]> {
+  return dataOf<Notification[]>(await context.get('/api/v1/me/notifications'));
+}
+
+export async function unreadCountOf(context: APIRequestContext): Promise<number> {
+  return (await dataOf<{ unreadCount: number }>(await context.get(UNREAD_COUNT_PATH))).unreadCount;
 }

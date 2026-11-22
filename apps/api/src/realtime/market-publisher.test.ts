@@ -4,9 +4,10 @@
  * the wire format (JSON of the @buddha/shared event schemas).
  */
 import { createServer, type AddressInfo, type Socket } from 'node:net';
-import { marketChannel, realtimeEventSchema, userChannel } from '@buddha/shared';
+import { Logger } from '@nestjs/common';
+import { marketChannel, notificationEvent, realtimeEventSchema, userChannel } from '@buddha/shared';
 import { Redis } from 'ioredis';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   REDIS,
   REDIS_COMMAND_TIMEOUT_MS,
@@ -102,6 +103,41 @@ function listenStalledRedis(): Promise<{
 function nextEvent(client: Redis, event: 'ready' | 'close'): Promise<void> {
   return new Promise((resolve) => client.once(event, () => resolve()));
 }
+
+describe('MarketPublisher: a failed publish', () => {
+  it('logs a member’s by its kind, once per event, never naming the member (#54)', async () => {
+    // A reply error whose message names the channel, as Redis 7.2's ACL refusal does.
+    const members = ['member-a-7f3c', 'member-b-91d2', 'member-c-0aa1'];
+    const refusing = {
+      publish: (channel: string) =>
+        Promise.reject(
+          new Error(`NOPERM User default has no permissions to access the '${channel}' channel`),
+        ),
+    } as unknown as Redis;
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      const publisher = new MarketPublisher(refusing);
+      const at = new Date('2026-11-22T00:00:00.000Z');
+      await publisher.publishBook([MARKET_ID], at);
+      await Promise.all(members.map((id) => publisher.publishUser(id, notificationEvent(at))));
+      // The next event is a line of its own.
+      await publisher.publishUser(members[0]!, notificationEvent(new Date(at.getTime() + 1)));
+      const lines = warn.mock.calls.map(([message]) => String(message));
+      expect(lines).toEqual([
+        // A market's channel as it is.
+        `publish to ${marketChannel(MARKET_ID)} failed (market:book): Error: NOPERM User default ` +
+          `has no permissions to access the '${marketChannel(MARKET_ID)}' channel`,
+        'publish to user failed (user:notification): Error: NOPERM User default has no ' +
+          "permissions to access the 'user:<member>' channel",
+        'publish to user failed (user:notification): Error: NOPERM User default has no ' +
+          "permissions to access the 'user:<member>' channel",
+      ]);
+      for (const id of members) expect(lines.join('\n')).not.toContain(id);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
 
 describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
   let t: TestApp;

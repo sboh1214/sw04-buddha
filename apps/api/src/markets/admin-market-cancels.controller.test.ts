@@ -46,11 +46,12 @@ import {
   type MarketJobData,
 } from '@buddha/shared';
 import { Queue } from 'bullmq';
-import { and, asc, eq, ne } from 'drizzle-orm';
+import { and, asc, count, eq, ne } from 'drizzle-orm';
 import { Redis } from 'ioredis';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { MARKETS_QUEUE, MarketJobs } from '../jobs/market-jobs.service.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { sleep, waitForMessages } from '../test/wait.js';
@@ -795,5 +796,112 @@ describe.skipIf(!hasTestInfra)('admin market cancels (integration)', () => {
     expect((await cancelActionsFor(market.id)).map((action) => action.type)).toEqual([
       'market_cancel_request',
     ]);
+  });
+
+  // --- the notice (#54) -------------------------------------------------------------------------
+  describe('market notifications (#54, ADR-0159; 52-5)', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    /**
+     * `MarketPublisher.publishUser` watched: each `user:notification` as [account, ts, the
+     * account's notifications committed when it was sent], sorted by account.
+     */
+    function signals() {
+      const sent: [string, string, number][] = [];
+      vi.spyOn(t.app.get(MarketPublisher), 'publishUser').mockImplementation(
+        async (userId, event) => {
+          if (event.type !== 'user:notification') return;
+          const [row] = await t.db
+            .select({ n: count() })
+            .from(schema.notifications)
+            .where(eq(schema.notifications.userId, userId));
+          sent.push([userId, event.ts, row!.n]);
+        },
+      );
+      return () => [...sent].sort(([x], [y]) => x.localeCompare(y));
+    }
+    /** A member who finished the onboarding. */
+    async function member(): Promise<TestUser> {
+      const user = await signUpTestUser(t);
+      await completeOnboarding(t.db, { userId: user.id });
+      return user;
+    }
+    /** Watch (`true`) or unwatch (`false`) through the API (`PUT /me/watchlist/:id`, #89). */
+    async function setWatch(who: TestUser, marketId: string, watched: boolean) {
+      const res = await t.app.inject({
+        method: 'PUT',
+        url: `/api/v1/me/watchlist/${marketId}`,
+        headers: { ...jsonHeaders, cookie: who.cookie },
+        payload: { expectedAccountId: who.id, watched },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+    }
+
+    it('tells the SCHEDULED market’s watchers of its cancel — the approving admin too when watching (54-8) — after COMMIT; an unwatched member, another market’s watcher, a refused or re-sent approval nothing (52-5, AC 5·6·7)', async () => {
+      const market = await scheduled();
+      const elsewhere = await scheduled();
+      const [w, u, x] = [await member(), await member(), await member()];
+      await setWatch(w, market.id, true);
+      await setWatch(approver, market.id, true);
+      await setWatch(u, market.id, true);
+      await setWatch(u, market.id, false);
+      await setWatch(x, elsewhere.id, true);
+      expect((await requestCancel(market.id)).statusCode).toBe(200);
+      const requestId = await pendingId(market.id);
+      const sent = signals();
+      expectNotAllowed(await approve(market.id, requestId, asker), 'requester');
+      expect(await t.db.select().from(schema.notifications)).toEqual([]);
+      expect(sent()).toEqual([]);
+
+      const res = await approve(market.id, requestId);
+      expect(res.statusCode, res.body).toBe(200);
+      // The answer names nobody told (ADR-0064).
+      for (const who of [w, u, x]) expect(res.body).not.toContain(who.id);
+      const event = (await eventsFor(market.id)).at(-1)!;
+      expect(event.type).toBe('cancelled');
+      const rows = (await t.db.select().from(schema.notifications)).sort((x, y) =>
+        x.userId.localeCompare(y.userId),
+      );
+      expect(rows.map(({ id: _id, createdAt: _at, ...row }) => row)).toEqual(
+        [w.id, approver.id]
+          .sort((x, y) => x.localeCompare(y))
+          .map((userId) => ({
+            userId,
+            type: 'market_cancelled',
+            category: 'market',
+            params: { marketTitle: market.title },
+            // The detail stays public in CANCELLED (AC 7).
+            target: { kind: 'market', slug: market.slug },
+            mergeKey: null,
+            eventCount: 1,
+            occurredAt: event.createdAt,
+            readAt: null,
+          })),
+      );
+      const keys = await t.db.select().from(schema.notificationKeys);
+      expect(keys.map((key) => key.eventKey)).toEqual([
+        `market_event:${String(event.id)}`,
+        `market_event:${String(event.id)}`,
+      ]);
+      const at = event.createdAt.toISOString();
+      expect(sent()).toEqual(
+        [
+          [w.id, at, 1],
+          [approver.id, at, 1],
+        ].sort(([x], [y]) => String(x).localeCompare(String(y))),
+      );
+      const shown = await t.app.inject({ method: 'GET', url: `/api/v1/markets/${market.slug}` });
+      expect(shown.statusCode, shown.body).toBe(200);
+      expect(data<Market>(shown).status).toBe('cancelled');
+
+      // The approval again: refused, nothing new (AC 6).
+      vi.restoreAllMocks();
+      const again = signals();
+      expectNotAllowed(await approve(market.id, requestId), 'decided');
+      expect(await t.db.select().from(schema.notifications)).toHaveLength(2);
+      expect(again()).toEqual([]);
+    });
   });
 });

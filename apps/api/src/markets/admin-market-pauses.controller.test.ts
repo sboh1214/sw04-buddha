@@ -33,11 +33,13 @@ import {
   createFill,
   createMarket,
   createMarketPause,
+  createModerationAction,
   createOpenedMarket,
   createPauseDecision,
   createPausedMarket,
   createStartGrant,
   createSupplementRequest,
+  createWatch,
   fundMarketMakerFunds,
   openOrderIntake,
   placeTestOrder,
@@ -1985,44 +1987,67 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
       }
     });
 
-    describe('trade notifications (#134, ADR-0158)', () => {
-      afterEach(() => {
-        vi.restoreAllMocks();
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    /**
+     * `MarketPublisher.publishUser` watched: each `user:notification` as [account, ts, the
+     * account's notifications committed when it was sent] — read on another connection, so a
+     * signal sent before COMMIT would count none.
+     */
+    function signals() {
+      const sent: [string, string, number][] = [];
+      vi.spyOn(t.app.get(MarketPublisher), 'publishUser').mockImplementation(
+        async (userId, event) => {
+          if (event.type !== 'user:notification') return;
+          const [row] = await t.db
+            .select({ n: count() })
+            .from(schema.notifications)
+            .where(eq(schema.notifications.userId, userId));
+          sent.push([userId, event.ts, row!.n]);
+        },
+      );
+      return () => [...sent].sort(([x], [y]) => x.localeCompare(y));
+    }
+    /** A member's order through the API (`POST /markets/:id/orders`), answered. */
+    async function orderVia(who: TestUser, marketId: string, body: Record<string, unknown>) {
+      const res = await t.app.inject({
+        method: 'POST',
+        url: `/api/v1/markets/${marketId}/orders`,
+        headers: { ...jsonHeaders, cookie: who.cookie, 'idempotency-key': randomUUID() },
+        payload: { expectedAccountId: who.id, outcome: 'YES', side: 'buy', qty: 1, ...body },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      return placeOrderResultSchema.parse(data(res)).order;
+    }
+    /** B's IOC YES buy of one at 99: a pair mint against a resting NO bid. */
+    const crossing = (who: TestUser, marketId: string) =>
+      orderVia(who, marketId, { timeInForce: 'ioc', limitPriceCoin: 99 });
+    /**
+     * An inbox's rows sorted by type: the notices of one event share its instant, and their order
+     * falls to a random id (#54 — find them by type, never by position).
+     */
+    const byType = (rows: readonly Notification[]) =>
+      [...rows].sort((x, y) => x.type.localeCompare(y.type));
+    /** The #54 notice of `type` with `params`, leading to the market's detail (54-4). */
+    const marketNotice = (
+      market: Pick<Market, 'slug'>,
+      type: string,
+      params: Record<string, unknown>,
+      occurredAt?: string,
+    ): unknown =>
+      expect.objectContaining({
+        type,
+        category: 'market',
+        params,
+        target: { kind: 'market', slug: market.slug },
+        eventCount: 1,
+        readAt: null,
+        ...(occurredAt === undefined ? {} : { occurredAt }),
       });
 
-      /**
-       * `MarketPublisher.publishUser` watched: each `user:notification` as [account, ts, the
-       * account's notifications committed when it was sent] — read on another connection, so a
-       * signal sent before COMMIT would count none.
-       */
-      function signals() {
-        const sent: [string, string, number][] = [];
-        vi.spyOn(t.app.get(MarketPublisher), 'publishUser').mockImplementation(
-          async (userId, event) => {
-            if (event.type !== 'user:notification') return;
-            const [row] = await t.db
-              .select({ n: count() })
-              .from(schema.notifications)
-              .where(eq(schema.notifications.userId, userId));
-            sent.push([userId, event.ts, row!.n]);
-          },
-        );
-        return () => [...sent].sort(([x], [y]) => x.localeCompare(y));
-      }
-      /** A member's order through the API (`POST /markets/:id/orders`), answered. */
-      async function orderVia(who: TestUser, marketId: string, body: Record<string, unknown>) {
-        const res = await t.app.inject({
-          method: 'POST',
-          url: `/api/v1/markets/${marketId}/orders`,
-          headers: { ...jsonHeaders, cookie: who.cookie, 'idempotency-key': randomUUID() },
-          payload: { expectedAccountId: who.id, outcome: 'YES', side: 'buy', qty: 1, ...body },
-        });
-        expect(res.statusCode, res.body).toBe(200);
-        return placeOrderResultSchema.parse(data(res)).order;
-      }
-      /** B's IOC YES buy of one at 99: a pair mint against a resting NO bid. */
-      const crossing = (who: TestUser, marketId: string) =>
-        orderVia(who, marketId, { timeInForce: 'ioc', limitPriceCoin: 99 });
+    describe('trade notifications (#134, ADR-0158)', () => {
       const notices = (type: string, params: unknown, target: unknown): unknown =>
         expect.objectContaining({ type, category: 'trade', params, target, eventCount: 1 });
 
@@ -2089,7 +2114,7 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
         );
       });
 
-      it('notifies nothing at a ledger failure’s pause, and the 일시 중단 cancel at the approval of its 재개 or 조기 마감 — the recovery (52-3)', async () => {
+      it('notifies an order-only member nothing at a ledger failure’s pause, and the 일시 중단 cancel at the approval of its 재개 or 조기 마감 — the recovery (52-3)', async () => {
         for (const path of ['resume', 'early_close'] as const) {
           const a = await member();
           const market = await opened();
@@ -2229,11 +2254,18 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
             observer.release();
           }
           const cancelled = { reason: 'paused', marketCount: 1, marketTitle: market.title };
+          const paused = marketNotice(market, 'market_paused', {
+            marketTitle: market.title,
+            reason: 'basis_change',
+          });
           if (fillFirst) {
             expect(cross).toMatchObject({ status: 'filled', filledQty: 1 });
             expect(await orderOf(bid.id)).toMatchObject({ status: 'filled' });
-            // Newest first: the pause's cancel of the one still live, then the fill's notice.
-            expect(await inboxOf(a)).toEqual([
+            // Newest first: the pause's cancel of the one still live and, A holding the NO the
+            // fill gave, the pause's market notice (#54), then the fill's notice.
+            const inbox = await inboxOf(a);
+            expect(byType(inbox.slice(0, 2))).toEqual([
+              paused,
               notices(
                 'orders_cancelled',
                 { ...cancelled, orderCount: 1 },
@@ -2242,11 +2274,15 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
                   orderId: other.id,
                 },
               ),
+            ]);
+            expect(inbox.slice(2)).toEqual([
               notices('order_filled', expect.objectContaining({ fullyFilled: true, qty: '1' }), {
                 kind: 'order',
                 orderId: bid.id,
               }),
             ]);
+            // B holds the YES: told of the pause, as a holder (52-1).
+            expect(await inboxOf(b)).toEqual([paused]);
           } else {
             // The pause first: B's order meets a paused market and fills nothing.
             expect(cross).toMatchObject({ status: 'rejected', filledQty: 0 });
@@ -2260,8 +2296,9 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
                 },
               ),
             ]);
+            // Nobody holds: B's order filled nothing.
+            expect(await inboxOf(b)).toEqual([]);
           }
-          expect(await inboxOf(b)).toEqual([]);
           await expectSound();
         }
       });
@@ -2278,15 +2315,21 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
           target: { kind: 'order', orderId: bid.id },
         });
         expect((await pause(market.id)).statusCode).toBe(200);
-        // A second, separate notice (53-4: another type is its own), newest first.
-        expect(await inboxOf(a)).toEqual([
+        // A second, separate notice (53-4: another type is its own), newest first — beside the
+        // pause's market notice to A, who holds the NO that filled (#54, 52-1).
+        const inbox = await inboxOf(a);
+        expect(byType(inbox.slice(0, 2))).toEqual([
+          marketNotice(market, 'market_paused', {
+            marketTitle: market.title,
+            reason: 'basis_change',
+          }),
           notices(
             'orders_cancelled',
             { reason: 'paused', orderCount: 1, marketCount: 1, marketTitle: market.title },
             { kind: 'order', orderId: bid.id },
           ),
-          filled,
         ]);
+        expect(inbox.slice(2)).toEqual([filled]);
         // Its target, the order's detail: what filled and what the cancel ended (#123, ADR-0141).
         const res = await get(`/api/v1/me/orders/${bid.id}`, a);
         expect(res.statusCode, res.body).toBe(200);
@@ -2297,6 +2340,320 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
           filledQty: 1,
           cancelledQty: 2,
         });
+      });
+    });
+
+    describe('market notifications (#54, ADR-0159)', () => {
+      /** Watch (`true`) or unwatch (`false`) through the API (`PUT /me/watchlist/:id`, #89). */
+      async function setWatch(who: TestUser, marketId: string, watched: boolean) {
+        const res = await t.app.inject({
+          method: 'PUT',
+          url: `/api/v1/me/watchlist/${marketId}`,
+          headers: { ...jsonHeaders, cookie: who.cookie },
+          payload: { expectedAccountId: who.id, watched },
+        });
+        expect(res.statusCode, res.body).toBe(200);
+      }
+      /** A member's rows of one type, newest first. */
+      const ofType = async (who: TestUser, type: string) =>
+        (await inboxOf(who)).filter((row) => row.type === type);
+      /** The pause's or approved end's event: the market's last, and its instant. */
+      async function lastEvent(marketId: string) {
+        const event = (await eventsFor(marketId)).at(-1)!;
+        return { event, at: event.createdAt.toISOString() };
+      }
+      /** `signals()`'s entries for `[who, at, rows]`, sorted as it sorts them. */
+      const signalled = (entries: [TestUser, string, number][]) =>
+        entries
+          .map(([who, at, n]): [string, string, number] => [who.id, at, n])
+          .sort(([x], [y]) => x.localeCompare(y));
+
+      it('tells a pause, with its reason, to every watcher and holder — admins, the acting admin and a restricted member too; an order-only member its cancel alone; nobody unwatched, elsewhere or the bot; after COMMIT; a refused pause nothing (52-1·52-9, 53-5·53-6, 54-8, AC 2·5)', async () => {
+        const market = await opened();
+        const elsewhere = await opened();
+        const [a, b, c, h, w, u, r, x] = [
+          await member(),
+          await member(),
+          await member(),
+          await member(),
+          await member(),
+          await member(),
+          await member(),
+          await member(),
+        ];
+        const marketMaker = await fundMarketMakerFunds(t.db, market.id, 1_000n);
+        // H holds a YES against the bot's NO, which the bot then holds: the gate skips it (53-5).
+        await rest(market.id, marketMaker, { outcome: 'NO', limitPriceCoin: 45 });
+        expect(await crossing(h, market.id)).toMatchObject({ status: 'filled' });
+        // A's NO bid of two at 40, one filled by B: A holds a NO with one still resting, B a YES.
+        await rest(market.id, a.id, { outcome: 'NO', limitPriceCoin: 40, qty: 2 });
+        expect(await crossing(b, market.id)).toMatchObject({ status: 'filled' });
+        // C rests a bid nothing meets and does not watch: no holder, no watcher (52-1).
+        await rest(market.id, c.id, { limitPriceCoin: 10 });
+        await setWatch(w, market.id, true);
+        await setWatch(a, market.id, true);
+        // U watched and unwatched before the event (AC 5); X watches another market.
+        await setWatch(u, market.id, true);
+        await setWatch(u, market.id, false);
+        await setWatch(x, elsewhere.id, true);
+        // An admin (53-5) and the admin who pauses (54-8) watch it.
+        await setWatch(third, market.id, true);
+        await setWatch(asker, market.id, true);
+        // A restricted member who watches (53-6).
+        await createWatch(t.db, { userId: r.id, marketId: market.id });
+        await createModerationAction(t.db, {
+          userId: r.id,
+          createdBy: third.id,
+          type: 'account_restriction',
+          approvedBy: approver.id,
+        });
+
+        const before = await t.db.select().from(schema.notifications);
+        const sent = signals();
+        const refused = await pause(market.id, asker, {
+          reason: 'early_result',
+          resultPublishedAt: iso(Date.now() + HOUR_MS),
+        });
+        expectRefused(refused, 'resultPublishedAt', 'after the pause');
+        expect(await t.db.select().from(schema.notifications)).toEqual(before);
+        expect(sent()).toEqual([]);
+
+        const res = await pause(market.id);
+        expect(res.statusCode, res.body).toBe(200);
+        // The answer names nobody told (ADR-0064).
+        for (const who of [a, b, c, h, w, r]) expect(res.body).not.toContain(who.id);
+        const { event, at } = await lastEvent(market.id);
+        expect(event.type).toBe('paused');
+        const paused = marketNotice(
+          market,
+          'market_paused',
+          { marketTitle: market.title, reason: 'basis_change' },
+          at,
+        );
+        for (const who of [b, h, w, r, third, asker]) {
+          expect(await inboxOf(who), who.id).toEqual([paused]);
+        }
+        // A watches and holds: one market notice (53-4), beside its cancel, after its fill.
+        const aInbox = await inboxOf(a);
+        expect(aInbox.map((row) => row.type).slice(2)).toEqual(['order_filled']);
+        expect(byType(aInbox.slice(0, 2))).toEqual([
+          paused,
+          expect.objectContaining({ type: 'orders_cancelled', occurredAt: at }),
+        ]);
+        expect(await inboxOf(c)).toEqual([
+          expect.objectContaining({ type: 'orders_cancelled', occurredAt: at }),
+        ]);
+        expect(await inboxOf(u)).toEqual([]);
+        expect(await inboxOf(x)).toEqual([]);
+        expect(
+          await t.db
+            .select()
+            .from(schema.notifications)
+            .where(eq(schema.notifications.userId, marketMaker)),
+        ).toEqual([]);
+        // Every key the pause wrote is its event's.
+        const keys = await t.db
+          .select()
+          .from(schema.notificationKeys)
+          .where(eq(schema.notificationKeys.type, 'market_paused'));
+        expect(keys).toHaveLength(7);
+        expect(new Set(keys.map((key) => key.eventKey))).toEqual(
+          new Set([`market_event:${String(event.id)}`]),
+        );
+        expect(sent()).toEqual(
+          signalled([
+            [a, at, 3],
+            [b, at, 1],
+            [c, at, 1],
+            [h, at, 1],
+            [w, at, 1],
+            [r, at, 1],
+            [third, at, 1],
+            [asker, at, 1],
+          ]),
+        );
+      });
+
+      it('tells a ledger failure’s pause to the watchers and holders, no cancel, and its approved 재개 or 조기 마감 — the recovery — with the reason ledger_failure (52-8·52-9, 54-2)', async () => {
+        for (const path of ['resume', 'early_close'] as const) {
+          const market = await opened();
+          const [a, b, w] = [await member(), await member(), await member()];
+          // A holds a NO with one more resting, B a YES; W only watches.
+          await rest(market.id, a.id, { outcome: 'NO', limitPriceCoin: 40, qty: 2 });
+          expect(await crossing(b, market.id)).toMatchObject({ status: 'filled' });
+          await setWatch(w, market.id, true);
+          const sent = signals();
+          expect((await pause(market.id, asker, { reason: 'ledger_failure' })).statusCode).toBe(
+            200,
+          );
+          const pausedAt = (await lastEvent(market.id)).at;
+          const paused = marketNotice(
+            market,
+            'market_paused',
+            { marketTitle: market.title, reason: 'ledger_failure' },
+            pausedAt,
+          );
+          for (const who of [a, b, w]) expect(await ofType(who, 'market_paused')).toEqual([paused]);
+          // Its orders wait, live and locked, for the recovery: no cancel yet.
+          expect(await ofType(a, 'orders_cancelled')).toEqual([]);
+          expect(sent()).toEqual(
+            signalled([
+              [a, pausedAt, 2],
+              [b, pausedAt, 1],
+              [w, pausedAt, 1],
+            ]),
+          );
+          vi.restoreAllMocks();
+
+          expect((await requestDecision(market.id, { path })).statusCode).toBe(200);
+          const ended = signals();
+          const approved = await approve(market.id, await pendingId(market.id));
+          expect(approved.statusCode, approved.body).toBe(200);
+          const { event, at } = await lastEvent(market.id);
+          // B's fill is a person's: the early close closes (#20).
+          expect(event.type).toBe(path === 'resume' ? 'resumed' : 'closed');
+          const notice =
+            path === 'resume'
+              ? marketNotice(
+                  market,
+                  'market_resumed',
+                  { marketTitle: market.title, reason: 'ledger_failure' },
+                  at,
+                )
+              : marketNotice(
+                  market,
+                  'market_closed',
+                  { marketTitle: market.title, early: true },
+                  at,
+                );
+          const type = path === 'resume' ? 'market_resumed' : 'market_closed';
+          for (const who of [a, b, w]) expect(await ofType(who, type)).toEqual([notice]);
+          // The recovery cancelled A's held order first (#134), under the same event.
+          expect(await ofType(a, 'orders_cancelled')).toEqual([
+            expect.objectContaining({ occurredAt: at }),
+          ]);
+          expect(ended()).toEqual(
+            signalled([
+              [a, at, 4],
+              [b, at, 2],
+              [w, at, 2],
+            ]),
+          );
+          vi.restoreAllMocks();
+        }
+      });
+
+      it('tells the 재개, with the ended pause’s reason, to the audience at the decision — not who unwatched during the pause, and who watched since; a re-sent approval nothing (52-9, 54-2, AC 5·6)', async () => {
+        const market = await opened();
+        const [h, b, w, u, n] = [
+          await member(),
+          await member(),
+          await member(),
+          await member(),
+          await member(),
+        ];
+        await rest(market.id, h.id, { outcome: 'NO', limitPriceCoin: 40 });
+        expect(await crossing(b, market.id)).toMatchObject({ status: 'filled' });
+        await setWatch(w, market.id, true);
+        await setWatch(u, market.id, true);
+        expect((await pause(market.id)).statusCode).toBe(200);
+        const pausedAt = (await lastEvent(market.id)).at;
+        // During the pause: U unwatches, N watches.
+        await setWatch(u, market.id, false);
+        await setWatch(n, market.id, true);
+        expect(
+          (await requestDecision(market.id, { path: 'resume', reviewResult: 'judgeable' }))
+            .statusCode,
+        ).toBe(200);
+        const requestId = await pendingId(market.id);
+        const sent = signals();
+        const approved = await approve(market.id, requestId);
+        expect(approved.statusCode, approved.body).toBe(200);
+        const { event, at } = await lastEvent(market.id);
+        expect(event.type).toBe('resumed');
+        const resumed = marketNotice(
+          market,
+          'market_resumed',
+          { marketTitle: market.title, reason: 'basis_change' },
+          at,
+        );
+        for (const who of [h, b, w, n])
+          expect(await ofType(who, 'market_resumed')).toEqual([resumed]);
+        expect(await inboxOf(u)).toEqual([
+          marketNotice(
+            market,
+            'market_paused',
+            { marketTitle: market.title, reason: 'basis_change' },
+            pausedAt,
+          ),
+        ]);
+        expect(await inboxOf(n)).toEqual([resumed]);
+        expect(sent()).toEqual(
+          signalled([
+            [h, at, 3],
+            [b, at, 2],
+            [w, at, 2],
+            [n, at, 1],
+          ]),
+        );
+        vi.restoreAllMocks();
+
+        // The approval again: refused, nothing written or signalled (AC 6).
+        const rows = await t.db.select().from(schema.notifications);
+        const again = signals();
+        expectNotAllowed(await approve(market.id, requestId), 'decided');
+        expect(await t.db.select().from(schema.notifications)).toEqual(rows);
+        expect(again()).toEqual([]);
+      });
+
+      it('tells an early close as 조기 마감 to the watchers and holders, and one with no person’s fill as 시장 취소 to its watchers, never both (52-5·52-8)', async () => {
+        for (const withFill of [true, false]) {
+          const market = await opened();
+          const [a, b, w] = [await member(), await member(), await member()];
+          if (withFill) {
+            await rest(market.id, a.id, { outcome: 'NO', limitPriceCoin: 40 });
+            expect(await crossing(b, market.id)).toMatchObject({ status: 'filled' });
+          }
+          await setWatch(w, market.id, true);
+          expect((await pause(market.id)).statusCode).toBe(200);
+          expect(
+            (await requestDecision(market.id, { path: 'early_close', reviewResult: 'judgeable' }))
+              .statusCode,
+          ).toBe(200);
+          const sent = signals();
+          const approved = await approve(market.id, await pendingId(market.id));
+          expect(approved.statusCode, approved.body).toBe(200);
+          const { event, at } = await lastEvent(market.id);
+          expect(event.type).toBe(withFill ? 'closed' : 'cancelled');
+          if (withFill) {
+            const closed = marketNotice(
+              market,
+              'market_closed',
+              { marketTitle: market.title, early: true },
+              at,
+            );
+            for (const who of [a, b, w]) {
+              expect(await ofType(who, 'market_closed')).toEqual([closed]);
+              expect(await ofType(who, 'market_cancelled')).toEqual([]);
+            }
+            expect(sent()).toEqual(
+              signalled([
+                [a, at, 3],
+                [b, at, 2],
+                [w, at, 2],
+              ]),
+            );
+          } else {
+            expect(await ofType(w, 'market_cancelled')).toEqual([
+              marketNotice(market, 'market_cancelled', { marketTitle: market.title }, at),
+            ]);
+            expect(await ofType(w, 'market_closed')).toEqual([]);
+            expect(await inboxOf(a)).toEqual([]);
+            expect(await inboxOf(b)).toEqual([]);
+            expect(sent()).toEqual(signalled([[w, at, 2]]));
+          }
+          vi.restoreAllMocks();
+        }
       });
     });
   });

@@ -1,8 +1,13 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
   allowRuleSupplement,
+  createNotifications,
   insertRuleVersion,
   lockAdminRoles,
+  marketAudience,
+  marketEventKey,
+  marketNotificationInputs,
+  notifiedUserIds,
   ruleContentOf,
   schema,
   type Db,
@@ -15,6 +20,8 @@ import {
   PAUSED_SUPPLEMENT_ITEMS,
   SUPPLEMENT_CLOSE_FIXED_WHILE_PAUSED,
   changedRuleVersionItems,
+  isNotifiedSupplement,
+  notificationEvent,
   supplementChanges,
   supplementItemsOf,
   type AdminMarket,
@@ -36,6 +43,7 @@ import { AppError } from '../common/errors/app-error.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
 import { MarketJobs } from '../jobs/market-jobs.service.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import { type Page } from '../wallet/wallet.service.js';
 import { MarketAdminService, decisionInstant, snapshot } from './market-admin.service.js';
 import {
@@ -169,6 +177,7 @@ export class MarketSupplementService {
     private readonly markets: MarketAdminService,
     private readonly approvals: ApprovalService,
     private readonly jobs: MarketJobs,
+    private readonly publisher: MarketPublisher,
   ) {}
 
   /**
@@ -259,9 +268,14 @@ export class MarketSupplementService {
    * review, the request, its requester, the approver as its maker, at the decision instant); one
    * `rules_supplemented` event (the approver its actor, no status, payload
    * MarketRulesSupplementedPayload); and `market_supplement_approve` with the approver's reason and
-   * the market before and after (`snapshot`). After COMMIT `market:status` with the status and key
-   * unchanged, so a viewer refetches the new text and history (A-M4-36), and, when the close
-   * moved, the delayed close job under the old instant cancelled and one under the new registered.
+   * the market before and after (`snapshot`); then, last, when the supplement changed an item of
+   * NOTIFIED_SUPPLEMENT_ITEMS (52-10, 54-7: a judgement item or the close — not the title or the
+   * background alone), one `market_rules_supplemented` notice per watcher and holder of the market
+   * (#54, ADR-0159): the version, the request's public reason and the title after it, keyed by the
+   * event — on a PAUSED market too. After COMMIT `market:status` with the status and key
+   * unchanged, so a viewer refetches the new text and history (A-M4-36), when the close moved the
+   * delayed close job under the old instant cancelled and one under the new registered, and
+   * `user:notification` to each member the notice reached.
    */
   async approve(
     adminId: string,
@@ -269,7 +283,7 @@ export class MarketSupplementService {
     requestId: string,
     body: WithoutExpectedAccount<ApproveMarketSupplementBody>,
   ): Promise<AdminMarket> {
-    const { market, closeMoved, at } = await this.db.transaction(async (tx) => {
+    const { market, closeMoved, at, notified } = await this.db.transaction(async (tx) => {
       await lockMarket(tx, id);
       const current = await lockedMarketRow(tx, id);
       const request = await this.decidable(tx, adminId, id, requestId);
@@ -323,19 +337,24 @@ export class MarketSupplementService {
       });
       // insertRuleVersion keeps RULE_VERSION_ITEMS order and its CHECK their keys.
       const items = made.changedItems as RuleVersionItem[];
-      await tx.insert(schema.marketEvents).values({
-        marketId: id,
-        type: 'rules_supplemented',
-        actorId: adminId,
-        payload: {
-          version,
-          approvalId: request.id,
-          items,
-          reason: request.requestReason,
-          requestedBy: request.requestedBy,
-        } satisfies MarketRulesSupplementedPayload,
-        createdAt: at,
-      });
+      const [event] = await tx
+        .insert(schema.marketEvents)
+        .values({
+          marketId: id,
+          type: 'rules_supplemented',
+          actorId: adminId,
+          payload: {
+            version,
+            approvalId: request.id,
+            items,
+            reason: request.requestReason,
+            requestedBy: request.requestedBy,
+          } satisfies MarketRulesSupplementedPayload,
+          createdAt: at,
+        })
+        // #54: the notice's key is this event's (`market_event:<id>`, ADR-0159).
+        .returning({ id: schema.marketEvents.id });
+      if (!event) throw new AppError('INTERNAL', { message: 'Supplement event insert failed' });
       const tags = await marketTagNames(tx, id);
       await tx.insert(schema.adminActions).values({
         adminId,
@@ -352,8 +371,27 @@ export class MarketSupplementService {
         },
         createdAt: at,
       });
+      const market = await this.markets.toAdminMarket(tx, row, tags, nextSources);
+      // #54 (ADR-0159; 52-10, 54-3·54-7): a supplement that changed a judgement item or moved the
+      // close tells the market's watchers and holders its version and public reason, under the
+      // title it now has — the transaction's one call, last. A title- or background-only one
+      // tells nobody (its version stays in the history).
+      const notified = isNotifiedSupplement(items)
+        ? notifiedUserIds(
+            await createNotifications(
+              tx,
+              marketNotificationInputs(await marketAudience(tx, id), row, {
+                kind: 'rules_supplemented',
+                ruleVersion: version,
+                reason: request.requestReason,
+                eventKey: marketEventKey(event.id),
+                occurredAt: at,
+              }),
+            ),
+          )
+        : [];
       return {
-        market: await this.markets.toAdminMarket(tx, row, tags, nextSources),
+        market,
         // The delayed close job is keyed by market AND instant (marketCloseJobId), so a moved
         // close is a cancel of the old registration plus a new one, never an edit.
         closeMoved:
@@ -361,15 +399,18 @@ export class MarketSupplementService {
             ? undefined
             : { from: current.closeAt, to: row.closeAt },
         at,
+        notified,
       };
     });
     // Outside the transaction, as every market write publishes: a subscriber answers
     // `market:status` with a REFETCH, which must find the committed text. The job registrations go
-    // out with it, each bounded on its own (MarketJobs).
+    // out with it, each bounded on its own (MarketJobs), and `user:notification` to each member the
+    // notice reached (#54), best effort.
     await Promise.all([
       this.markets.publishStatus(market),
       closeMoved ? this.jobs.cancelClose(market.id, closeMoved.from) : undefined,
       closeMoved ? this.jobs.scheduleClose(market.id, closeMoved.to, at) : undefined,
+      ...notified.map((userId) => this.publisher.publishUser(userId, notificationEvent(at))),
     ]);
     return market;
   }

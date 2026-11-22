@@ -424,8 +424,8 @@ const CALLERS: Record<string, CallerClass> = {
     reason: 'account_closed: the closure deletes the inbox in the same transaction (52-3)',
   },
   'apps/api/src/markets/market-cancel.service.ts': {
-    class: 'excluded',
-    reason: 'a SCHEDULED market has no live order: its expiry is empty (52-5; #54 adds watchers)',
+    class: 'notifies',
+    event: 'E the SCHEDULED market’s cancel (#54 watchers; its expiry is empty)',
   },
   'packages/db/src/seed.ts': {
     class: 'excluded',

@@ -1,4 +1,9 @@
 import {
+  MARKET_CANCELLED_NOTIFICATION,
+  MARKET_CLOSED_NOTIFICATION,
+  MARKET_PAUSED_NOTIFICATION,
+  MARKET_RESUMED_NOTIFICATION,
+  MARKET_RULES_SUPPLEMENTED_NOTIFICATION,
   NOTIFICATION_DEFINITIONS,
   type NotificationDefinition,
   type NotificationParamValues,
@@ -10,6 +15,13 @@ import {
 import type { ReactNode } from 'react';
 import { copy } from '@/copy';
 import type { InboxNotification } from '@/lib/api';
+import {
+  marketCancelledTitle,
+  marketClosedTitle,
+  marketPausedTitle,
+  marketResumedTitle,
+  marketRulesSupplementedTitle,
+} from '@/lib/market-notifications';
 import { notificationFallbackTitle } from '@/lib/notifications';
 import {
   orderFilledTitle,
@@ -57,8 +69,9 @@ function rendererOf<Params extends NotificationParamValues>(
  * One renderer per type of the product's list (NOTIFICATION_DEFINITIONS), keyed by it exactly as
  * the guard's registry is: a type defined without its renderer, or a renderer left behind for a
  * removed type, fails to compile. #53 shipped none (52-20); #134 words the 거래 three
- * (lib/trade-notifications.ts, ADR-0158), and each later producer adds its own (#54 시장 상태,
- * #188 판정·정산, #135 커뮤니티, #144 정정·보상).
+ * (lib/trade-notifications.ts, ADR-0158), #54 the 시장 상태 five (lib/market-notifications.ts,
+ * ADR-0159 — the wording of 54-1), and each later producer adds its own (#188 판정·정산, #135
+ * 커뮤니티, #144 정정·보상).
  */
 export const NOTIFICATION_RENDERERS = {
   order_filled: rendererOf(
@@ -92,6 +105,43 @@ export const NOTIFICATION_RENDERERS = {
     ORDERS_EXPIRED_NOTIFICATION,
     [copy.notificationOrdersExpiredClosed, copy.notificationOrdersExpiredCancelled],
     ordersExpiredTitle,
+  ),
+  market_closed: rendererOf(
+    MARKET_CLOSED_NOTIFICATION,
+    [copy.notificationMarketClosed, copy.notificationMarketClosedEarly],
+    marketClosedTitle,
+  ),
+  market_paused: rendererOf(
+    MARKET_PAUSED_NOTIFICATION,
+    [
+      copy.notificationMarketPaused,
+      // PAUSE_REASON_LABEL's words, which fill {reason} (the 공개 판정 기록's, 52-9).
+      copy.pauseReasonEarlyResult,
+      copy.pauseReasonLedgerFailure,
+      copy.pauseReasonBasisChange,
+    ],
+    marketPausedTitle,
+  ),
+  market_resumed: rendererOf(
+    MARKET_RESUMED_NOTIFICATION,
+    [
+      copy.notificationMarketResumed,
+      copy.pauseReasonEarlyResult,
+      copy.pauseReasonLedgerFailure,
+      copy.pauseReasonBasisChange,
+    ],
+    marketResumedTitle,
+  ),
+  market_cancelled: rendererOf(
+    MARKET_CANCELLED_NOTIFICATION,
+    [copy.notificationMarketCancelled],
+    marketCancelledTitle,
+  ),
+  market_rules_supplemented: rendererOf(
+    MARKET_RULES_SUPPLEMENTED_NOTIFICATION,
+    // ruleVersionName's word, which fills {version} ('v3').
+    [copy.notificationMarketRulesSupplemented, copy.ruleVersionName],
+    marketRulesSupplementedTitle,
   ),
 } as const satisfies Record<NotificationType, NotificationRenderer>;
 

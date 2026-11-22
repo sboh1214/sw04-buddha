@@ -20,8 +20,10 @@ import {
   ledgerEntries,
   marketLiquidityVersions,
   marketMakerControls,
+  marketEvents,
   marketMakerRuntime,
   markets,
+  notifications,
   orders,
   profiles,
 } from './schema/index.js';
@@ -30,6 +32,7 @@ import {
   createMarketPause,
   createOpenedMarket,
   createUser,
+  createWatch,
   setReleaseSetting,
 } from './test/factories.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
@@ -172,6 +175,43 @@ describe.skipIf(!hasTestDb())('approval-bound maker controls (#130)', () => {
       state: 'waiting',
     });
     expect(await t.db.select().from(marketMakerControls)).toHaveLength(2);
+  });
+
+  it('tells nobody of the bot-only stop: no market event, no status change, no notice (#54 AC 3)', async () => {
+    const market = await opened();
+    // A holder of each contract (a person's pair mint) and a watcher: the market's audience.
+    const a = (await createUser(t.db, { balanceCoin: 1000n })).user.id;
+    const b = (await createUser(t.db, { balanceCoin: 1000n })).user.id;
+    const watcher = (await createUser(t.db)).user.id;
+    await placeTestOrder(t.db, {
+      marketId: market.id,
+      ownerId: a,
+      outcome: 'NO',
+      limitPriceCoin: 60,
+    });
+    await placeTestOrder(t.db, {
+      marketId: market.id,
+      ownerId: b,
+      outcome: 'YES',
+      limitPriceCoin: 40,
+    });
+    await createWatch(t.db, { userId: watcher, marketId: market.id });
+    await run(market.id);
+    const events = await t.db.select().from(marketEvents).orderBy(marketEvents.id);
+    const notices = await t.db.select().from(notifications).orderBy(notifications.id);
+    const r = await request(market.id, { action: 'stop' });
+    const result = await approve(r.id);
+    expect(result).toMatchObject({ outcome: 'applied' });
+    expect(result.cancelledOrderIds.length).toBeGreaterThan(0);
+    expect(await readMarketMakerRuntime(t.db, market.id)).toMatchObject({ desiredEnabled: false });
+    expect((await t.db.select().from(markets).where(eq(markets.id, market.id)))[0]!.status).toBe(
+      'open',
+    );
+    expect(await t.db.select().from(marketEvents).orderBy(marketEvents.id)).toEqual(events);
+    expect(await t.db.select().from(notifications).orderBy(notifications.id)).toEqual(notices);
+    expect(
+      await t.db.select().from(notifications).where(eq(notifications.category, 'market')),
+    ).toEqual([]);
   });
 
   it('changes only approved settings through a new immutable version without resetting capital or open binding', async () => {

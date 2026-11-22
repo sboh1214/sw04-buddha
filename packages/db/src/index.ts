@@ -119,6 +119,15 @@ export {
   transitionMarket,
   type MarketTransition,
 } from './market-transitions.js';
+export {
+  deliverReconciliationNotices,
+  marketAudience,
+  marketNotificationInputs,
+  RECONCILIATION_NOTICES_FAILED_LOG,
+  type MarketNotice,
+  type MarketNoticeEvent,
+  type MarketNoticeMarket,
+} from './market-notifications.js';
 export { migrationsFolder, runMigrations } from './migrator.js';
 export {
   createNotifications,
@@ -126,6 +135,7 @@ export {
   markNotificationRead,
   NotificationInputError,
   notificationPage,
+  NotificationWriteError,
   notifiedUserIds,
   unreadNotificationCount,
   type CreateNotificationsOptions,

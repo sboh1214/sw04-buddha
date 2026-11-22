@@ -31,6 +31,8 @@ import { REDIS } from '../infra/redis/redis.provider.js';
 @Injectable()
 export class MarketPublisher {
   private readonly logger = new Logger(MarketPublisher.name);
+  /** The last event a failed `user:` publish was logged for (`type@ts`): one line per event. */
+  private lastMemberFailure: string | undefined;
 
   constructor(@Inject(REDIS) private readonly redis: Redis) {}
 
@@ -51,18 +53,36 @@ export class MarketPublisher {
     );
   }
 
-  /** Room `user:<id>` (the account's own balance and positions). */
+  /**
+   * Room `user:<id>` (the account's own balance and positions). A failure is logged by the
+   * channel's kind alone (`user`), its error with the id cut out, and once per event (its type
+   * and `ts`) however many members it signals: a line per member would list who was told and how
+   * many — a market's watchers and holders (#54, ADR-0159; ADR-0064).
+   */
   async publishUser(userId: string, event: UserRealtimeEvent): Promise<void> {
-    await this.publish(userChannel(userId), event);
+    await this.publish(userChannel(userId), event, userId);
   }
 
-  private async publish(channel: string, event: MarketRealtimeEvent | UserRealtimeEvent) {
+  private async publish(
+    channel: string,
+    event: MarketRealtimeEvent | UserRealtimeEvent,
+    memberId?: string,
+  ) {
     try {
       // Coin amounts are already decimal strings in every event schema (never bigint), so a
       // plain JSON.stringify is safe.
       await this.redis.publish(channel, JSON.stringify(event));
     } catch (error) {
-      this.logger.warn(`publish to ${channel} failed (${event.type}): ${String(error)}`);
+      if (memberId === undefined) {
+        this.logger.warn(`publish to ${channel} failed (${event.type}): ${String(error)}`);
+        return;
+      }
+      const key = `${event.type}@${'ts' in event ? event.ts : ''}`;
+      if (key === this.lastMemberFailure) return;
+      this.lastMemberFailure = key;
+      // A reply error may quote the channel (Redis 7.2's ACL refusal names it).
+      const reason = String(error).split(memberId).join('<member>');
+      this.logger.warn(`publish to user failed (${event.type}): ${reason}`);
     }
   }
 }

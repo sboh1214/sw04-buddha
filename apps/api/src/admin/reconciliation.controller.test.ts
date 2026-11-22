@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { lockAdminRoles, placeOrder, schema } from '@buddha/db';
+import { Logger } from '@nestjs/common';
+import { lockAdminRoles, placeOrder, RECONCILIATION_NOTICES_FAILED_LOG, schema } from '@buddha/db';
 import {
   completeOnboarding,
   closeTestMarket,
@@ -8,6 +9,7 @@ import {
   createOpenedMarket,
   createScheduledMarket,
   createUser,
+  createWatch,
   mintTestPairs,
   fundMarketMakerFunds,
   openOrderIntake,
@@ -650,7 +652,7 @@ describe.skipIf(!hasTestInfra)('admin reconciliation (integration)', () => {
     const { market } = await createOpenedMarket(t.db);
     await openOrderIntake(t.db, { adminId: asker.id });
     // A person's trade first, so the close takes the market to CLOSED, not CANCELLED (#20).
-    await tradeOnce(t.db, market.id);
+    const traded = await tradeOnce(t.db, market.id);
     const holder = (await createUser(t.db, { balanceCoin: 1_000n })).user.id;
     const single = (await createUser(t.db, { balanceCoin: 1_000n })).user.id;
     const rest = async (ownerId: string, limitPriceCoin: number) => {
@@ -664,8 +666,13 @@ describe.skipIf(!hasTestInfra)('admin reconciliation (integration)', () => {
     const lone = await rest(single, 32);
     await createMarketPause(t.db, { marketId: market.id, reason: 'ledger_failure' });
     await passMarketClose(t.db, market.id);
-    // The close of a held market keeps its orders live and notifies nothing (G).
-    expect(await closeTestMarket(t.db, market.id)).toMatchObject({ closed: true, notified: [] });
+    // The close of a held market keeps its orders live and notifies no expiry (G): only the
+    // trade's two holders hear of the close itself, now (#54, 52-8).
+    expect(await closeTestMarket(t.db, market.id)).toMatchObject({
+      closed: true,
+      notified: [traded.yes.userId, traded.no.userId].sort(),
+      expiryNotified: 0,
+    });
     const checked = await run({ scope: 'market', marketId: market.id });
     expect(checked.result.passed).toBe(true);
     const id = (await request(checked.hold!)).requests[0]!.id;
@@ -703,7 +710,7 @@ describe.skipIf(!hasTestInfra)('admin reconciliation (integration)', () => {
     );
   });
 
-  it('automatically pauses broken markets as the system and recovers through the existing pause approval', async () => {
+  it('automatically pauses broken markets as the system, telling its watchers and holders after COMMIT, and recovers through the existing pause approval, which tells the 재개 (#54 B′, 54-2·54-5)', async () => {
     const { market } = await createOpenedMarket(t.db);
     const yes = await createUser(t.db, { balanceCoin: 1_000n });
     const no = await createUser(t.db, { balanceCoin: 1_000n });
@@ -714,6 +721,11 @@ describe.skipIf(!hasTestInfra)('admin reconciliation (integration)', () => {
       qty: 2,
       yesPriceCoin: 60,
     });
+    // A watcher, and the YES holder watching too: one notice each (53-4).
+    const watcher = (await createUser(t.db)).user.id;
+    await createWatch(t.db, { userId: watcher, marketId: market.id });
+    await createWatch(t.db, { userId: yes.user.id, marketId: market.id });
+    const audience = [yes.user.id, no.user.id, watcher].sort();
     const [collateral] = await t.db
       .select()
       .from(schema.ledgerAccounts)
@@ -731,12 +743,61 @@ describe.skipIf(!hasTestInfra)('admin reconciliation (integration)', () => {
         ),
       );
     const publish = vi.spyOn(t.app.get(MarketPublisher), 'publishMarket');
+    // `signals()`, keeping its spy for the call order.
+    const sent: [string, string, number][] = [];
+    const signalled = vi
+      .spyOn(t.app.get(MarketPublisher), 'publishUser')
+      .mockImplementation(async (id, event) => {
+        if (event.type === 'user:notification') {
+          sent.push([id, event.ts, (await noticesOf(id)).length]);
+        }
+      });
     await adjust(1);
-    const failed = await run({ scope: 'market', marketId: market.id });
+    const response = await post('/run', asker, {
+      target: { scope: 'market', marketId: market.id },
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    // The answer names nobody told and counts nobody (ADR-0064): its run and its hold alone.
+    for (const id of audience) expect(response.body).not.toContain(id);
+    const failed = reconciliationRunSchema.parse(response.json<{ data: ReconciliationRun }>().data);
+    expect(Object.keys(response.json<{ data: object }>().data).sort()).toEqual(['hold', 'result']);
     expect(failed.result.passed).toBe(false);
     expect(publish).toHaveBeenCalledWith(
       market.id,
       expect.objectContaining({ type: 'market:status', status: 'paused' }),
+    );
+    // 54-5: the system's pause is a 거래 일시 중단 like an admin's, reason 담보·원장 장애, keyed by
+    // its event at the run's instant; signalled after COMMIT, after the status.
+    const pausedEvent = (
+      await t.db
+        .select()
+        .from(schema.marketEvents)
+        .where(eq(schema.marketEvents.marketId, market.id))
+        .orderBy(desc(schema.marketEvents.id))
+    )[0]!;
+    expect(pausedEvent).toMatchObject({ type: 'paused', actorId: null });
+    expect(pausedEvent.createdAt.toISOString()).toBe(failed.result.checkedAt);
+    const pausedNotice = {
+      type: 'market_paused',
+      category: 'market',
+      params: { marketTitle: market.title, reason: 'ledger_failure' },
+      target: { kind: 'market', slug: market.slug },
+      occurredAt: pausedEvent.createdAt,
+      eventCount: 1,
+      readAt: null,
+    };
+    for (const id of audience) {
+      expect(await noticesOf(id)).toEqual([expect.objectContaining(pausedNotice)]);
+    }
+    const keys = await t.db.select().from(schema.notificationKeys);
+    expect(keys.map((key) => key.eventKey)).toEqual(
+      audience.map(() => `market_event:${String(pausedEvent.id)}`),
+    );
+    expect([...sent].sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))).toEqual(
+      audience.map((id) => [id, failed.result.checkedAt, 1]),
+    );
+    expect(Math.min(...signalled.mock.invocationCallOrder)).toBeGreaterThan(
+      publish.mock.invocationCallOrder[0]!,
     );
     const detail = await t.app.inject({
       method: 'GET',
@@ -788,5 +849,68 @@ describe.skipIf(!hasTestInfra)('admin reconciliation (integration)', () => {
       (await get(`/holds/${failed.hold!.id}`)).json<{ data: ReconciliationHoldDetail }>().data.hold
         .recoveredAt,
     ).not.toBeNull();
+    // Its approved 재개 (C) tells the same audience, with the ended pause's reason (52-9, 54-2).
+    const [resumed] = await t.db
+      .select()
+      .from(schema.marketEvents)
+      .where(eq(schema.marketEvents.marketId, market.id))
+      .orderBy(desc(schema.marketEvents.id))
+      .limit(1);
+    expect(resumed!.type).toBe('resumed');
+    for (const id of audience) {
+      expect(await noticesOf(id)).toEqual([
+        expect.objectContaining({
+          type: 'market_resumed',
+          params: { marketTitle: market.title, reason: 'ledger_failure' },
+          target: { kind: 'market', slug: market.slug },
+          occurredAt: resumed!.createdAt,
+        }),
+        expect.objectContaining(pausedNotice),
+      ]);
+    }
+  });
+
+  it('keeps the automatic pause when its notices cannot be written: none written or signalled, the fixed line logged with no id (54-6)', async () => {
+    const { market } = await createOpenedMarket(t.db);
+    const yes = await createUser(t.db, { balanceCoin: 1_000n });
+    const no = await createUser(t.db, { balanceCoin: 1_000n });
+    await mintTestPairs(t.db, {
+      marketId: market.id,
+      yesHolderId: yes.user.id,
+      noHolderId: no.user.id,
+      qty: 1,
+    });
+    // A slug the write path refuses (no DB CHECK holds `markets.slug`): its notices throw.
+    await t.db
+      .update(schema.markets)
+      .set({ slug: 'Not A Slug' })
+      .where(eq(schema.markets.id, market.id));
+    const [collateral] = await t.db
+      .select()
+      .from(schema.ledgerAccounts)
+      .where(
+        and(
+          eq(schema.ledgerAccounts.marketId, market.id),
+          eq(schema.ledgerAccounts.kind, 'market_collateral'),
+        ),
+      );
+    await withLedgerGuardsOff((client) =>
+      client.query(
+        'UPDATE balances SET available_coin = available_coin + 1 WHERE account_id = $1',
+        [collateral!.id],
+      ),
+    );
+    const sent = signals();
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const failed = await run({ scope: 'market', marketId: market.id });
+    expect(failed.result.passed).toBe(false);
+    // The pause and the hold stand (54-6): the savepoint took only the notices back.
+    const [row] = await t.db.select().from(schema.markets).where(eq(schema.markets.id, market.id));
+    expect(row!.status).toBe('paused');
+    expect(failed.hold).not.toBeNull();
+    expect(await t.db.select().from(schema.notifications)).toEqual([]);
+    expect(await t.db.select().from(schema.notificationKeys)).toEqual([]);
+    expect(sent).toEqual([]);
+    expect(warn.mock.calls).toEqual([[RECONCILIATION_NOTICES_FAILED_LOG]]);
   });
 });

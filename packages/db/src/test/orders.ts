@@ -532,8 +532,8 @@ export async function passMarketClose(
  * transaction: OPEN or PAUSED → CLOSED — or CANCELLED when no fill a person's account is on
  * happened (#20; `tradeOnce` first for a CLOSED one) — with every live order ended 만료 (a held
  * market's kept), or a skip. The market must be due (`passMarketClose`, or a close already past).
- * Writes the close's `orders_expired` notices as the worker's transaction does (#134); publishes
- * nothing.
+ * Writes the close's notices as the worker's transaction does — `orders_expired` (#134) and the
+ * watchers' and holders' `market_closed` or `market_cancelled` (#54, ADR-0159); publishes nothing.
  */
 export async function closeTestMarket(db: Db, marketId: string): Promise<CloseMarketAtCloseResult> {
   return db.transaction((tx) => closeMarketAtClose(tx, marketId));

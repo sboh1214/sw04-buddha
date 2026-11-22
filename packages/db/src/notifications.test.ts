@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { NOTIFICATION_UNREAD_COUNT_CAP, type NotificationDefinition } from '@buddha/shared';
-import { asc, eq } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { DrizzleQueryError, asc, eq, sql } from 'drizzle-orm';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Db } from './client.js';
 import {
   createNotifications,
@@ -10,6 +10,7 @@ import {
   markNotificationRead,
   NotificationInputError,
   notificationPage,
+  NotificationWriteError,
   notifiedUserIds,
   unreadNotificationCount,
   type NotificationInput,
@@ -20,6 +21,7 @@ import {
   notificationInboxes,
   notificationKeys,
   notifications,
+  user,
 } from './schema/index.js';
 import {
   closeAccount,
@@ -34,8 +36,10 @@ import {
   TEST_NOTIFICATION,
   TEST_NOTIFICATION_DEFINITIONS,
   createTestNotification,
+  plantNotificationInsertFailure,
 } from './test/notifications.js';
 import { waitForLockWaiter } from './test/wait.js';
+import { TransactionBusyError, withTransactionRetry } from './transaction-retry.js';
 import { clockTimestamp } from './tx-helpers.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -75,6 +79,21 @@ const mergeable = (
   ...extra,
 });
 
+/**
+ * Every form a caller could keep of a thrown value — its message, its string form, its stack, its
+ * JSON (a pino line, a BullMQ result) — and each of its causes, as far as they go.
+ */
+function keptForms(error: unknown): string[] {
+  const forms: string[] = [];
+  let link = error;
+  for (let depth = 0; depth < 5 && link !== undefined; depth++) {
+    forms.push(JSON.stringify(link) ?? '');
+    if (link instanceof Error) forms.push(String(link), link.message, link.stack ?? '');
+    link = typeof link === 'object' && link !== null && 'cause' in link ? link.cause : undefined;
+  }
+  return forms;
+}
+
 /** A gate one transaction waits at until the test opens it. */
 function gate() {
   let open!: () => void;
@@ -112,6 +131,7 @@ describe.skipIf(!hasTestDb())('notifications (integration, #53)', () => {
       .orderBy(asc(notificationKeys.eventKey));
   const rowOf = async (id: string) =>
     (await t.db.select().from(notifications).where(eq(notifications.id, id)))[0];
+  const kinds = (outcomes: readonly NotificationOutcome[]) => outcomes.map((o) => o.kind);
   const idOf = (outcome: NotificationOutcome | undefined) => {
     if (outcome?.kind !== 'created' && outcome?.kind !== 'merged') {
       throw new Error(`expected a notification, got ${outcome?.kind ?? 'nothing'}`);
@@ -630,11 +650,15 @@ describe.skipIf(!hasTestDb())('notifications (integration, #53)', () => {
         update: () => chain(() => answer('update', [])),
         delete: () => chain(() => answer('delete', [])),
       } as unknown as Tx;
-      await expect(
-        createNotifications(tx, [mergeable(userId, 'market-slug', 'fill-1', 'order-1')], {
-          definitions,
-        }),
-      ).rejects.toThrow(/no merge after 3 rounds/);
+      const error = await createNotifications(
+        tx,
+        [mergeable(userId, 'market-slug', 'fill-1', 'order-1')],
+        { definitions },
+      ).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(NotificationWriteError);
+      expect((error as Error).message).toMatch(/no merge after 3 rounds/);
+      // Not the account either (#54, ADR-0159).
+      expect(keptForms(error).some((form) => form.includes(userId))).toBe(false);
       expect(statements).toEqual([
         'gate',
         'read merge target',
@@ -645,6 +669,347 @@ describe.skipIf(!hasTestDb())('notifications (integration, #53)', () => {
         'insert notification',
       ]);
     });
+  });
+
+  describe('the inputs that do not merge, in one statement (#54, ADR-0159)', () => {
+    /** Spies on the transaction's statements while `createNotifications` runs in it. */
+    async function counted(inputs: readonly NotificationInput[]) {
+      return t.db.transaction(async (tx) => {
+        const spies = {
+          select: vi.spyOn(tx, 'select'),
+          execute: vi.spyOn(tx, 'execute'),
+          insert: vi.spyOn(tx, 'insert'),
+          delete: vi.spyOn(tx, 'delete'),
+          update: vi.spyOn(tx, 'update'),
+        };
+        try {
+          const outcomes = await createNotifications(tx, inputs, { definitions });
+          const calls = Object.fromEntries(
+            Object.entries(spies).map(([name, spy]) => [name, spy.mock.calls.length]),
+          );
+          return { outcomes, calls };
+        } finally {
+          for (const spy of Object.values(spies)) spy.mockRestore();
+        }
+      });
+    }
+
+    it('delivers every recipient with a gate, a clock and one statement, whatever their number', async () => {
+      const market = await slug();
+      const members = [];
+      for (let i = 0; i < 30; i++) members.push(await member());
+      const closed = await member();
+      await closeAccount(t.db, closed);
+      const marketMaker = await createMarketMakerAccount(t.db);
+      const at = new Date('2026-11-22T00:00:00.000Z');
+      const inputs = [...members, closed, marketMaker].map((userId) =>
+        notice(userId, market, 'market_event:1', { occurredAt: at }),
+      );
+      const { outcomes, calls } = await counted(inputs);
+      expect(calls).toEqual({ select: 1, execute: 2, insert: 0, delete: 0, update: 0 });
+      expect(outcomes.map((o) => [o.userId, o.kind])).toEqual([
+        ...members.map((userId) => [userId, 'created']),
+        [closed, 'skipped'],
+        [marketMaker, 'skipped'],
+      ]);
+      // Each its own row and key, at the event's instant, as the one-by-one path wrote them.
+      for (const [index, userId] of members.entries()) {
+        const rows = await rowsOf(userId);
+        expect(rows, userId).toEqual([
+          expect.objectContaining({
+            id: idOf(outcomes[index]),
+            type: 'test_notice',
+            category: 'market',
+            params: { label: 'market_event:1' },
+            target: { kind: 'market', slug: market },
+            mergeKey: null,
+            eventCount: 1,
+            occurredAt: at,
+            readAt: null,
+          }),
+        ]);
+        expect(await keysOf(userId)).toEqual([
+          {
+            userId,
+            type: 'test_notice',
+            eventKey: 'market_event:1',
+            notificationId: idOf(outcomes[index]),
+          },
+        ]);
+      }
+      // One creation instant for the call, the database's.
+      const created = new Set(
+        (await t.db.select({ at: notifications.createdAt }).from(notifications)).map((row) =>
+          row.at.getTime(),
+        ),
+      );
+      expect(created.size).toBe(1);
+      expect(notifiedUserIds(outcomes)).toEqual(members);
+    });
+
+    it('answers a reprocessed event and a twin in the call as duplicates, with one DELETE of their rows', async () => {
+      const market = await slug();
+      const [a, b, c] = [await member(), await member(), await member()];
+      const [first] = await deliver([notice(a, market, 'event-1')]);
+      const { outcomes, calls } = await counted([
+        notice(b, market, 'event-1'),
+        notice(a, market, 'event-1', { params: { label: 'again' } }),
+        notice(c, market, 'event-1'),
+        notice(c, market, 'event-1', { params: { label: 'twin' } }),
+        notice(a, market, 'event-2'),
+      ]);
+      expect(calls).toEqual({ select: 1, execute: 2, insert: 0, delete: 1, update: 0 });
+      expect(outcomes.map((o) => [o.userId, o.kind])).toEqual([
+        [b, 'created'],
+        [a, 'duplicate'],
+        [c, 'created'],
+        [c, 'duplicate'],
+        [a, 'created'],
+      ]);
+      // The duplicates' rows are gone; each key names the row that stayed.
+      expect((await rowsOf(a)).map((row) => [row.id, row.params])).toEqual([
+        [idOf(first), { label: 'event-1' }],
+        [idOf(outcomes[4]), { label: 'event-2' }],
+      ]);
+      expect((await rowsOf(c)).map((row) => row.params)).toEqual([{ label: 'event-1' }]);
+      expect((await keysOf(c)).map((key) => key.notificationId)).toEqual([idOf(outcomes[2])]);
+      expect(await t.db.select().from(notifications)).toHaveLength(4);
+      // All of a call duplicates: nothing more, still one DELETE.
+      const again = await counted([notice(b, market, 'event-1'), notice(c, market, 'event-1')]);
+      expect(kinds(again.outcomes)).toEqual(['duplicate', 'duplicate']);
+      expect(again.calls.delete).toBe(1);
+      expect(await t.db.select().from(notifications)).toHaveLength(4);
+    });
+
+    it('delivers the merging inputs after the others, and answers in the inputs’ order', async () => {
+      const market = await slug();
+      const [a, b] = [await member(), await member()];
+      const closed = await member();
+      await closeAccount(t.db, closed);
+      const outcomes = await deliver([
+        mergeable(a, market, 'fill-1', 'order-1', 2),
+        notice(b, market, 'event-1'),
+        mergeable(a, market, 'fill-2', 'order-1', 3),
+        notice(a, market, 'event-1'),
+        notice(closed, market, 'event-1'),
+        mergeable(closed, market, 'fill-3', 'order-2'),
+      ]);
+      expect(kinds(outcomes)).toEqual([
+        'created',
+        'created',
+        'merged',
+        'created',
+        'skipped',
+        'skipped',
+      ]);
+      expect(idOf(outcomes[2])).toBe(idOf(outcomes[0]));
+      expect(await rowOf(idOf(outcomes[0]))).toMatchObject({
+        eventCount: 2,
+        params: { label: 'fill-2', total: 5 },
+      });
+      expect((await rowsOf(a)).map((row) => row.type).sort()).toEqual([
+        'test_merged_notice',
+        'test_notice',
+      ]);
+    });
+
+    it('leaves nothing when the event rolls back after it', async () => {
+      const market = await slug();
+      const members = [await member(), await member(), await member()];
+      await expect(
+        t.db.transaction(async (tx) => {
+          await createNotifications(
+            tx,
+            members.map((userId) => notice(userId, market, 'event-1')),
+            { definitions },
+          );
+          throw new Error('the event failed after its notices');
+        }),
+      ).rejects.toThrow('the event failed after its notices');
+      expect(await t.db.select().from(notifications)).toEqual([]);
+      expect(await t.db.select().from(notificationKeys)).toEqual([]);
+      // And the same event delivers afterwards.
+      const outcomes = await deliver(members.map((userId) => notice(userId, market, 'event-1')));
+      expect(kinds(outcomes)).toEqual(['created', 'created', 'created']);
+    });
+
+    it('waits on the keys a concurrent delivery of the same event holds, and makes the rest', async () => {
+      const market = await slug();
+      const [a, b, c] = [await member(), await member(), await member()];
+      const first = heldDelivery([notice(a, market, 'race'), notice(b, market, 'race')]);
+      await first.written;
+      const second = deliver([
+        notice(a, market, 'race'),
+        notice(b, market, 'race'),
+        notice(c, market, 'race'),
+      ]);
+      const lock = await holder();
+      try {
+        await lock.waitFor('the second delivery waits on the first’s keys');
+      } finally {
+        await lock.end();
+      }
+      first.release();
+      expect(kinds(await first.done)).toEqual(['created', 'created']);
+      expect(kinds(await second)).toEqual(['duplicate', 'duplicate', 'created']);
+      for (const userId of [a, b, c]) expect(await rowsOf(userId)).toHaveLength(1);
+    });
+
+    // ADR-0159 §5 asked what one event costs with thousands of recipients under the producer's
+    // locks; the number goes into the ADR. Off by default (PERF=1 runs it).
+    it.skipIf(process.env.PERF !== '1')(
+      'times one event delivered to 10,000 members',
+      async () => {
+        const market = await slug();
+        const ids = Array.from({ length: 10_000 }, () => randomUUID());
+        // The sign-up trigger gives each account its profile, ledger account and inbox.
+        for (let from = 0; from < ids.length; from += 1_000) {
+          await t.db.insert(user).values(
+            ids.slice(from, from + 1_000).map((id) => ({
+              id,
+              name: `perf ${id.slice(0, 8)}`,
+              email: `perf-${id}@test.local`,
+              emailVerified: true,
+            })),
+          );
+        }
+        const inputs = ids.map((userId) => notice(userId, market, 'market_event:1'));
+        const started = performance.now();
+        const outcomes = await deliver(inputs);
+        const ms = performance.now() - started;
+        expect(outcomes.every((outcome) => outcome.kind === 'created')).toBe(true);
+        const again = performance.now();
+        expect((await deliver(inputs)).every((outcome) => outcome.kind === 'duplicate')).toBe(true);
+        const duplicateMs = performance.now() - again;
+        console.info(
+          `[perf] one event, 10,000 recipients: ${ms.toFixed(0)} ms created, ` +
+            `${duplicateMs.toFixed(0)} ms all duplicate`,
+        );
+      },
+      120_000,
+    );
+  });
+
+  describe('a failed statement names no recipient (#54, ADR-0159)', () => {
+    /** True when one of `ids` is in one of the forms a caller could keep of `error`. */
+    const names = (error: unknown, ids: readonly string[]) =>
+      keptForms(error).some((form) => ids.some((id) => form.includes(id)));
+
+    it.each([
+      { path: 'the one statement of the inputs that do not merge', merging: false },
+      { path: 'a merge', merging: true },
+    ])(
+      'throws a refusal Postgres raised by its SQLSTATE and reason alone ($path)',
+      async ({ merging }) => {
+        const market = await slug();
+        const members = [await member(), await member(), await member()];
+        const inputs = members.map((userId, i) =>
+          merging
+            ? mergeable(userId, market, `fill-${String(i)}`, `order-${String(i)}`)
+            : notice(userId, market, 'market_event:1'),
+        );
+        // Its message, DETAIL and HINT name the row's account.
+        const planted = await plantNotificationInsertFailure();
+        try {
+          // The control: drizzle's own error of a statement binding an account names it.
+          const raw = await t.db
+            .insert(notifications)
+            .values({
+              userId: members[0]!,
+              type: TEST_NOTIFICATION.type,
+              category: 'market',
+              params: {},
+              target: { kind: 'market', slug: market },
+              occurredAt: new Date(),
+            })
+            .catch((error: unknown) => error);
+          expect(raw).toBeInstanceOf(DrizzleQueryError);
+          expect(names(raw, members)).toBe(true);
+
+          const error = await deliver(inputs).catch((e: unknown) => e);
+          expect(error).toBeInstanceOf(NotificationWriteError);
+          expect(error).toMatchObject({
+            name: 'NotificationWriteError',
+            code: 'P0001',
+            message: 'notification write failed: planted failure for <recipient>',
+          });
+          // No cause: neither drizzle's wrapper (the bound values) nor the driver's (DETAIL, HINT).
+          expect(error).not.toHaveProperty('cause');
+          expect(names(error, members)).toBe(false);
+        } finally {
+          await planted.remove();
+        }
+        expect(await t.db.select().from(notifications)).toEqual([]);
+        expect(await t.db.select().from(notificationKeys)).toEqual([]);
+      },
+    );
+
+    it('throws a gate that could not lock the inboxes by its SQLSTATE alone, still a retry', async () => {
+      // The gate binds every recipient in one array; it never waits on a row (SKIP LOCKED), but a
+      // table lock stops it, and a lock_timeout then refuses it — 55P03, a retryable failure.
+      const market = await slug();
+      const members = [await member(), await member()];
+      const inputs = members.map((userId) => notice(userId, market, 'market_event:1'));
+      const timed = (tx: Tx) =>
+        tx
+          .execute(sql`SET LOCAL lock_timeout = '100ms'`)
+          .then(() => createNotifications(tx, inputs, { definitions }));
+      const lock = await holder();
+      try {
+        await lock.client.query('LOCK TABLE notification_inboxes IN EXCLUSIVE MODE');
+        const error = await t.db.transaction(timed).catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(NotificationWriteError);
+        expect(error).toMatchObject({
+          code: '55P03',
+          message: 'notification write failed: canceling statement due to lock timeout',
+        });
+        expect(error).not.toHaveProperty('cause');
+        expect(names(error, members)).toBe(false);
+        // withTransactionRetry reads the kept SQLSTATE: it retries, then gives up busy.
+        await expect(withTransactionRetry(t.db, timed, { attempts: 2 })).rejects.toBeInstanceOf(
+          TransactionBusyError,
+        );
+      } finally {
+        await lock.end();
+      }
+      expect(kinds(await deliver(inputs))).toEqual(['created', 'created']);
+    });
+
+    it.each(['40001', '40P01'])(
+      'keeps a %s refusal a retry for withTransactionRetry, and nothing else',
+      async (code) => {
+        const market = await slug();
+        const userId = await member();
+        let attempts = 0;
+        const run = (tx: Tx) => {
+          attempts++;
+          return createNotifications(tx, [notice(userId, market, 'market_event:1')], {
+            definitions,
+          });
+        };
+        const planted = await plantNotificationInsertFailure(code);
+        try {
+          await expect(withTransactionRetry(t.db, run, { attempts: 3 })).rejects.toBeInstanceOf(
+            TransactionBusyError,
+          );
+          expect(attempts).toBe(3);
+        } finally {
+          await planted.remove();
+        }
+        // A refusal that is no retry is thrown as it is, at once.
+        const other = await plantNotificationInsertFailure('P0001');
+        attempts = 0;
+        try {
+          const error = await withTransactionRetry(t.db, run, { attempts: 3 }).catch(
+            (e: unknown) => e,
+          );
+          expect(error).toMatchObject({ name: 'NotificationWriteError', code: 'P0001' });
+          expect(attempts).toBe(1);
+        } finally {
+          await other.remove();
+        }
+      },
+    );
   });
 
   describe('reading', () => {

@@ -23,7 +23,8 @@ import {
  * written — and why it exists. N05 §4 leaves score, ranking, Forecast-edit and paid-Coin purchase
  * notifications out of the initial product, and guards/notifications.test.ts fails on a type that
  * names any excluded feature (EXCLUDED_FEATURES), as a name or in its text. #53 shipped no type
- * (52-20); #134 registers the 거래 three (ADR-0158). The web's renderer words a type from its
+ * (52-20); #134 registers the 거래 three (ADR-0158), #54 the 시장 five (ADR-0159, the wording of
+ * 54-1 — owner's answer of 2026-11-22). The web's renderer words a type from its
  * copy (`NOTIFICATION_RENDERERS[type].copy`), whose entries equal `text` here, in order
  * (apps/web lib/notifications.test.ts): whole sentences with single-brace placeholders the web
  * fills, and the words it fills some of them with. docs/GUARDS.md has the registration rule.
@@ -70,6 +71,41 @@ export const NOTIFICATION_TYPE_REGISTRY = {
     ],
     reason:
       '거래 마감·시장 취소로 끝난 대기 주문 — 회원·시장마다 한 건. N05 §4, ADR-0158, 52-4·52-5',
+  },
+  market_closed: {
+    text: ['{market} 거래 마감', '{market} 거래 조기 마감'],
+    reason:
+      '관심·보유 시장의 거래 마감(예정 마감, 일시 중단 중에 맞은 예정 마감, 조기 마감) — 그 순간에 한 건. N05 §4, ADR-0159, 52-1·52-8',
+  },
+  market_paused: {
+    // The three pause labels fill `{reason}` (the 공개 판정 기록's, 52-9).
+    text: [
+      '{market} 거래 일시 중단 · 사유: {reason}',
+      '사건 선공개(조기 결과)',
+      '담보·원장 장애',
+      '실질 기준 변경',
+    ],
+    reason:
+      '관심·보유 시장의 전체 거래 일시 중단(시스템의 원장 장애 중단 포함)과 공개 사유 라벨. N05 §4, N03 §3, ADR-0159, 52-1·52-9',
+  },
+  market_resumed: {
+    text: [
+      '{market} 거래 재개 · 중단 사유: {reason}',
+      '사건 선공개(조기 결과)',
+      '담보·원장 장애',
+      '실질 기준 변경',
+    ],
+    reason: '일시 중단된 관심·보유 시장의 거래 재개 — 중단 알림과 같은 대상. ADR-0159, 52-9',
+  },
+  market_cancelled: {
+    text: ['{market} 시장 취소'],
+    reason: '사용자 체결 없이 취소되거나 개장 전에 취소된 관심 시장. ADR-0159, 52-5',
+  },
+  market_rules_supplemented: {
+    // 'v' fills `{version}` with the version's number ('v3', the detail's version history name).
+    text: ['{market} 규칙 보충 {version} · 사유: {reason}', 'v'],
+    reason:
+      '개장 뒤 판정 항목·거래 마감이 바뀐 규칙 보충 — 버전과 공개 사유. N05 §4, N03 §4, ADR-0159, 52-10',
   },
 } as const satisfies Record<NotificationType, NotificationTypeText>;
 

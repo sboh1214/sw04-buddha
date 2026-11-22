@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { orderBookOf, quoteOrder, RECONCILIATION_SYSTEM_PAUSE_NOTE } from '@buddha/shared';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeMarketAtClose } from './market-close.js';
 import { endMarketPause } from './market-pause.js';
 import { openScheduledMarket } from './market-open.js';
@@ -22,7 +22,8 @@ import {
   selectDueMarketReconciliationIds,
   selectReconciliationAccountTargets,
 } from './reconciliation-audit.js';
-import { recoverReconciliationHold } from './reconciliation-recovery.js';
+import { ReconciliationError, recoverReconciliationHold } from './reconciliation-recovery.js';
+import { deliverReconciliationNotices, marketAudience } from './market-notifications.js';
 import { createNotifications } from './notifications.js';
 import { orderEndNotificationInputs, reconciliationHoldEventKey } from './order-notifications.js';
 import { previewReconciliationCorrections } from './reconciliation-correction.js';
@@ -38,6 +39,7 @@ import {
   reconciliationRecoveries,
   reconciliationResults,
   auditFailures,
+  notificationKeys,
   notifications,
 } from './schema/index.js';
 import {
@@ -49,9 +51,11 @@ import {
   createUser,
   createPosition,
   createProvisionalMarket,
+  createWatch,
   resolveMarketNow,
 } from './test/factories.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
+import { plantNotificationInsertFailure } from './test/notifications.js';
 import {
   balanceOf,
   fundMarketMakerFunds,
@@ -476,6 +480,219 @@ describe.skipIf(!hasTestDb())('reconciliation and persistent recovery (#93)', ()
     await bumpCollateral(market.id, -1n);
     expect((await audit(market.id)).result.passed).toBe(true);
     expect((await ledgerHeldMarketIds(t.db, [market.id])).has(market.id)).toBe(true);
+  });
+
+  describe('the automatic pause’s notices (#54 B′, ADR-0159; 54-5·54-6)', () => {
+    const marketRows = () =>
+      t.db.select().from(notifications).where(eq(notifications.category, 'market'));
+
+    it('describes the pause it made, and only that: a pass, a market not OPEN and other scopes say null', async () => {
+      const { market, yes } = await paired();
+      expect((await audit(market.id)).systemPause).toBeNull();
+      expect((await account(yes)).systemPause).toBeNull();
+      expect(
+        (await t.db.transaction((tx) => runSupplyReconciliation(tx, { source: 'manual' })))
+          .systemPause,
+      ).toBeNull();
+      await bumpCollateral(market.id, 1n);
+      const failed = await audit(market.id);
+      const [pause] = await t.db
+        .select()
+        .from(marketPauses)
+        .where(eq(marketPauses.marketId, market.id));
+      expect(failed.systemPause).toEqual({
+        marketId: market.id,
+        slug: market.slug,
+        title: market.title,
+        eventId: pause!.pauseEventId,
+        at: failed.result.checkedAt,
+      });
+      expect(failed.statusEvent?.statusEventId).toBe(String(pause!.pauseEventId));
+      // Failing again on the PAUSED market pauses nothing more.
+      const again = await audit(market.id);
+      expect(again.result.passed).toBe(false);
+      expect(again.systemPause).toBeNull();
+    });
+
+    it('hands a market account’s run back with its pause: the account path delegates (B′)', async () => {
+      const { market } = await paired();
+      await bumpCollateral(market.id, 1n);
+      const [collateral] = (
+        await t.db.$client.query<{ id: string }>(
+          "SELECT id::text FROM ledger_accounts WHERE kind='market_collateral' AND market_id=$1",
+          [market.id],
+        )
+      ).rows;
+      const run = await t.db.transaction((tx) =>
+        runAccountReconciliation(tx, { accountId: Number(collateral!.id) }, { source: 'manual' }),
+      );
+      expect(run.result.scope).toBe('market');
+      expect(run.systemPause).toMatchObject({ marketId: market.id, slug: market.slug });
+    });
+
+    it('tells the watchers and holders 일시 중단 · 담보·원장 장애, keyed by the pause, at the check', async () => {
+      const { market, yes, no } = await paired();
+      const watcher = (await createUser(t.db)).user.id;
+      const unwatched = (await createUser(t.db)).user.id;
+      await createWatch(t.db, { userId: watcher, marketId: market.id });
+      await createWatch(t.db, { userId: yes, marketId: market.id });
+      await bumpCollateral(market.id, 1n);
+      const { run, delivered } = await t.db.transaction(async (tx) => {
+        const run = await runMarketReconciliation(tx, market.id, { source: 'scheduled' });
+        return { run, delivered: await deliverReconciliationNotices(tx, run.systemPause) };
+      });
+      expect(delivered.failed).toBe(false);
+      expect([...delivered.notified].sort()).toEqual([watcher, yes, no].sort());
+      const rows = await marketRows();
+      expect(rows.map((row) => row.userId).sort()).toEqual([watcher, yes, no].sort());
+      for (const row of rows) {
+        expect(row).toMatchObject({
+          type: 'market_paused',
+          params: { marketTitle: market.title, reason: 'ledger_failure' },
+          target: { kind: 'market', slug: market.slug },
+          occurredAt: run.result.checkedAt,
+          eventCount: 1,
+        });
+      }
+      const keys = await t.db
+        .select({ eventKey: notificationKeys.eventKey })
+        .from(notificationKeys)
+        .where(eq(notificationKeys.type, 'market_paused'));
+      expect(new Set(keys.map((key) => key.eventKey))).toEqual(
+        new Set([`market_event:${String(run.systemPause!.eventId)}`]),
+      );
+      expect(rows.map((row) => row.userId)).not.toContain(unwatched);
+    });
+
+    it('runs no statement for a run that paused nothing', async () => {
+      const calls = await t.db.transaction(async (tx) => {
+        const spies = [
+          vi.spyOn(tx, 'execute'),
+          vi.spyOn(tx, 'select'),
+          vi.spyOn(tx, 'insert'),
+          vi.spyOn(tx, 'transaction'),
+        ];
+        expect(await deliverReconciliationNotices(tx, null)).toEqual({
+          notified: [],
+          failed: false,
+        });
+        const n = spies.reduce((sum, spy) => sum + spy.mock.calls.length, 0);
+        for (const spy of spies) spy.mockRestore();
+        return n;
+      });
+      expect(calls).toBe(0);
+    });
+
+    it('keeps the pause when its notices fail: the savepoint drops them alone (54-6)', async () => {
+      // A slug the write path refuses (no DB CHECK on `markets.slug`): the delivery must throw.
+      const market = await createMarket(t.db, { slug: 'Not A Slug' });
+      const yes = (await createUser(t.db, { balanceCoin: 1000n })).user.id;
+      const no = (await createUser(t.db, { balanceCoin: 1000n })).user.id;
+      await mintTestPairs(t.db, {
+        marketId: market.id,
+        yesHolderId: yes,
+        noHolderId: no,
+        qty: 1,
+        yesPriceCoin: 50,
+      });
+      const watcher = (await createUser(t.db)).user.id;
+      await createWatch(t.db, { userId: watcher, marketId: market.id });
+      await bumpCollateral(market.id, 1n);
+      const { run, delivered } = await t.db.transaction(async (tx) => {
+        const run = await runMarketReconciliation(tx, market.id, { source: 'scheduled' });
+        const delivered = await deliverReconciliationNotices(tx, run.systemPause);
+        // The transaction goes on after the savepoint's rollback.
+        await tx.execute(sql`SELECT 1`);
+        return { run, delivered };
+      });
+      expect(delivered).toEqual({ notified: [], failed: true });
+      expect(run.systemPause).not.toBeNull();
+      // The pause, its event and the hold committed; no notice was written.
+      const [row] = await t.db.select().from(markets).where(eq(markets.id, market.id));
+      expect(row!.status).toBe('paused');
+      expect(
+        await t.db.select().from(marketPauses).where(eq(marketPauses.marketId, market.id)),
+      ).toHaveLength(1);
+      expect(await activeReconciliationHold(t.db, reconciliationMarketKey(market.id))).toEqual(
+        run.hold,
+      );
+      expect(await t.db.select().from(notifications)).toEqual([]);
+      expect(await t.db.select().from(notificationKeys)).toEqual([]);
+    });
+
+    it('keeps the pause when Postgres refuses its notices inside the savepoint (54-6)', async () => {
+      // A refusal Postgres itself raises on the notices' INSERT, after the audience read: it aborts
+      // whatever it ran in. Only a savepoint keeps the transaction alive past it — on the bare
+      // transaction the next statement fails (25P02) and the COMMIT would roll the pause back.
+      const { market, yes, no } = await paired();
+      const watcher = (await createUser(t.db)).user.id;
+      await createWatch(t.db, { userId: watcher, marketId: market.id });
+      await bumpCollateral(market.id, 1n);
+      const planted = await plantNotificationInsertFailure();
+      const { run, delivered, after } = await t.db
+        .transaction(async (tx) => {
+          const run = await runMarketReconciliation(tx, market.id, { source: 'scheduled' });
+          const delivered = await deliverReconciliationNotices(tx, run.systemPause);
+          // The transaction goes on: a later statement in it succeeds and sees the pause.
+          const [after] = await tx
+            .select({ status: markets.status })
+            .from(markets)
+            .where(eq(markets.id, market.id));
+          return { run, delivered, after };
+        })
+        .finally(() => planted.remove());
+      expect(delivered).toEqual({ notified: [], failed: true });
+      expect(after).toEqual({ status: 'paused' });
+      // The pause, its event and the hold committed; no notice was written, to anyone.
+      expect((await t.db.select().from(markets).where(eq(markets.id, market.id)))[0]!.status).toBe(
+        'paused',
+      );
+      const [pause] = await t.db
+        .select()
+        .from(marketPauses)
+        .where(eq(marketPauses.marketId, market.id));
+      expect(pause!.pauseEventId).toBe(run.systemPause!.eventId);
+      expect(
+        await t.db.select().from(marketEvents).where(eq(marketEvents.id, pause!.pauseEventId)),
+      ).toEqual([expect.objectContaining({ fromStatus: 'open', toStatus: 'paused' })]);
+      expect(await activeReconciliationHold(t.db, reconciliationMarketKey(market.id))).toEqual(
+        run.hold,
+      );
+      expect(run.hold).not.toBeNull();
+      expect(await t.db.select().from(notifications)).toEqual([]);
+      expect(await t.db.select().from(notificationKeys)).toEqual([]);
+      // The same delivery without the refusal would have reached all three.
+      expect((await t.db.transaction((tx) => marketAudience(tx, market.id))).sort()).toEqual(
+        [watcher, yes, no].sort(),
+      );
+    });
+
+    it('answers a failing recovery run of a held OPEN market not_passed, its pause rolled back', async () => {
+      const actors = await admins();
+      const { market } = await paired();
+      // A hold made while the market was not OPEN (no automatic pause), then a pass.
+      await t.db.update(markets).set({ status: 'paused' }).where(eq(markets.id, market.id));
+      await bumpCollateral(market.id, 1n);
+      const failed = await audit(market.id);
+      expect(failed.systemPause).toBeNull();
+      await bumpCollateral(market.id, -1n);
+      expect((await audit(market.id)).result.passed).toBe(true);
+      // OPEN again, and broken again: the recovery's own run would pause it.
+      await t.db.update(markets).set({ status: 'open' }).where(eq(markets.id, market.id));
+      await bumpCollateral(market.id, 1n);
+      const input = await approve(failed.hold!, actors);
+      await expect(
+        t.db.transaction((tx) => recoverReconciliationHold(tx, input)),
+      ).rejects.toSatisfy(
+        (error) => error instanceof ReconciliationError && error.code === 'not_passed',
+      );
+      const [row] = await t.db.select().from(markets).where(eq(markets.id, market.id));
+      expect(row!.status).toBe('open');
+      expect(
+        await t.db.select().from(marketPauses).where(eq(marketPauses.marketId, market.id)),
+      ).toEqual([]);
+      expect(await marketRows()).toEqual([]);
+    });
   });
 
   it.each([

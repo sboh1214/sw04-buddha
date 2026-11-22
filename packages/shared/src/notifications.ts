@@ -2,6 +2,7 @@ import * as z from 'zod';
 import { serializeCoinAmount } from './api/coin-amount.js';
 import { uuidSchema } from './api/uuid.js';
 import { orderSideSchema, outcomeSchema, type OrderCancelReason } from './enums.js';
+import { MARKET_PAUSE_REASONS } from './market-pause.js';
 import { marketSlugSchema } from './market.js';
 
 /**
@@ -22,7 +23,9 @@ import { marketSlugSchema } from './market.js';
  * shape only (`notifications.type` is a pattern, not a list — ADR-0157). #53 shipped no type
  * (52-20); the producers add theirs, each with its guard entry (guards/notifications.ts) and its
  * web renderer: #134 the 거래 three (ADR-0158 — `order_filled`, `orders_cancelled`,
- * `orders_expired`, below), then #54 시장 상태, #188 판정·정산, #135 커뮤니티, #144 정정·보상.
+ * `orders_expired`, below), #54 the 시장 상태 five (ADR-0159 — `market_closed`, `market_paused`,
+ * `market_resumed`, `market_cancelled`, `market_rules_supplemented`), then #188 판정·정산, #135
+ * 커뮤니티, #144 정정·보상.
  */
 
 /**
@@ -304,18 +307,140 @@ export const ORDERS_EXPIRED_NOTIFICATION = defineNotification({
   merge: null,
 });
 
+// ---- 시장 상태 알림 (#54, ADR-0159) ----------------------------------------------------------
+//
+// The five 시장 types (52-21: category `market`), each one discrete change of a market's state
+// told "그 순간에 한 건" (52-8) to its watchers and its holders of one contract or more (52-1) —
+// the audience @buddha/db `marketAudience` reads. None merges (one type is one merge group,
+// ADR-0157 결정 3): a pause and its resume keep their order, and two unread supplements keep
+// their own version and reason. Every one leads to the market's detail (`market` target, 54-4)
+// and stores no time (the row's 발생 시각 is the event's), no count, no holding and nothing about
+// the watchers (#54 AC 8).
+
+/**
+ * Public free text of an approved supplement: its request's reason, at most
+ * APPROVAL_REASON_MAX_LENGTH, which equals NOTIFICATION_PARAM_STRING_MAX (notifications.test.ts
+ * pins it, so a raised approval cap cannot roll a supplement's approval back).
+ */
+const noticeTextSchema = z.string().min(1).max(NOTIFICATION_PARAM_STRING_MAX);
+
+/**
+ * A pause's reason (MARKET_PAUSE_REASONS), as a plain enum: `marketPauseReasonSchema` carries an
+ * OpenAPI id, which turns its JSON Schema into a `$ref` the definitions' flatness check refuses.
+ */
+const noticePauseReasonSchema = z.enum(MARKET_PAUSE_REASONS);
+
+/**
+ * `market_closed` (N05 §4 거래 마감; 52-1, 52-8): the market's trading ended CLOSED — at its
+ * `close_at` (OPEN, or PAUSED on schedule: `early` false) or by an approved 조기 마감 (`early`
+ * true). A market that ends with no fill a person's account is on is `market_cancelled` instead,
+ * never both.
+ */
+export const marketClosedParamsSchema = z.object({
+  marketTitle: noticeTitleSchema,
+  early: z.boolean(),
+});
+export type MarketClosedParams = z.infer<typeof marketClosedParamsSchema>;
+
+export const MARKET_CLOSED_NOTIFICATION = defineNotification({
+  type: 'market_closed',
+  category: 'market',
+  targets: ['market'],
+  params: marketClosedParamsSchema,
+  merge: null,
+});
+
+/**
+ * `market_paused` (N05 §4 전체 거래 중단, N03 §3; 52-9, 54-5): OPEN → PAUSED, by an admin or by
+ * the reconciliation's automatic ledger-failure pause. `reason` is the pause's public label
+ * (MARKET_PAUSE_REASONS, as the 공개 판정 기록 shows it) — never its note, which the detail shows.
+ */
+export const marketPausedParamsSchema = z.object({
+  marketTitle: noticeTitleSchema,
+  reason: noticePauseReasonSchema,
+});
+export type MarketPausedParams = z.infer<typeof marketPausedParamsSchema>;
+
+export const MARKET_PAUSED_NOTIFICATION = defineNotification({
+  type: 'market_paused',
+  category: 'market',
+  targets: ['market'],
+  params: marketPausedParamsSchema,
+  merge: null,
+});
+
+/**
+ * `market_resumed` (52-9 "재개도 알리고", 54-2): an approved resume, PAUSED → OPEN, told to the
+ * audience at the resume. `reason` is the ended pause's label: which pause ended.
+ */
+export const marketResumedParamsSchema = z.object({
+  marketTitle: noticeTitleSchema,
+  reason: noticePauseReasonSchema,
+});
+export type MarketResumedParams = z.infer<typeof marketResumedParamsSchema>;
+
+export const MARKET_RESUMED_NOTIFICATION = defineNotification({
+  type: 'market_resumed',
+  category: 'market',
+  targets: ['market'],
+  params: marketResumedParamsSchema,
+  merge: null,
+});
+
+/**
+ * `market_cancelled` (52-5 시장 취소 알림): the market ended CANCELLED — at its `close_at` or by
+ * an approved 조기 마감 with no fill a person's account is on (#20), or a SCHEDULED market's
+ * cancel before its open. Nobody holds a contract there, so its audience is the watchers.
+ */
+export const marketCancelledParamsSchema = z.object({ marketTitle: noticeTitleSchema });
+export type MarketCancelledParams = z.infer<typeof marketCancelledParamsSchema>;
+
+export const MARKET_CANCELLED_NOTIFICATION = defineNotification({
+  type: 'market_cancelled',
+  category: 'market',
+  targets: ['market'],
+  params: marketCancelledParamsSchema,
+  merge: null,
+});
+
+/**
+ * `market_rules_supplemented` (N05 §4 중요한 규칙 보충, N03 §4; 52-10, 54-3, 54-7): an approved
+ * supplement that changed a NOTIFIED_SUPPLEMENT_ITEMS item (market-supplement.ts). `marketTitle`
+ * is the title after it, `ruleVersion` the version it made (2 or more: v1 is the open's) and
+ * `reason` its public reason, as the version history shows them (#54 AC 4).
+ */
+export const marketRulesSupplementedParamsSchema = z.object({
+  marketTitle: noticeTitleSchema,
+  ruleVersion: z.number().int().min(2),
+  reason: noticeTextSchema,
+});
+export type MarketRulesSupplementedParams = z.infer<typeof marketRulesSupplementedParamsSchema>;
+
+export const MARKET_RULES_SUPPLEMENTED_NOTIFICATION = defineNotification({
+  type: 'market_rules_supplemented',
+  category: 'market',
+  targets: ['market'],
+  params: marketRulesSupplementedParamsSchema,
+  merge: null,
+});
+
 /**
  * The product's notification types (N05 §4). #53 shipped none (52-20 lists no type outside N05's
  * but the post-payout correction and compensation, #144; 시작 Coin, a re-grant's result, a
  * review's rejection and a market's opening are not notifications). #134 ships the 거래 three
- * (ADR-0158). Each later producer appends its own here — #54 (시장 상태), #188 (판정·정산), #135
- * (커뮤니티, 52-19's 제안 included), #144 (정정·보상) — with its guard entry
+ * (ADR-0158), #54 the 시장 five (ADR-0159). Each later producer appends its own here — #188
+ * (판정·정산), #135 (커뮤니티, 52-19's 제안 included), #144 (정정·보상) — with its guard entry
  * (NOTIFICATION_TYPE_REGISTRY) and its web renderer, and edits the pin in notifications.test.ts.
  */
 export const NOTIFICATION_DEFINITIONS = [
   ORDER_FILLED_NOTIFICATION,
   ORDERS_CANCELLED_NOTIFICATION,
   ORDERS_EXPIRED_NOTIFICATION,
+  MARKET_CLOSED_NOTIFICATION,
+  MARKET_PAUSED_NOTIFICATION,
+  MARKET_RESUMED_NOTIFICATION,
+  MARKET_CANCELLED_NOTIFICATION,
+  MARKET_RULES_SUPPLEMENTED_NOTIFICATION,
 ] as const satisfies readonly NotificationDefinition[];
 export type NotificationType = (typeof NOTIFICATION_DEFINITIONS)[number]['type'];
 

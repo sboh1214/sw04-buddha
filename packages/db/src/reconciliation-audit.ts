@@ -45,6 +45,25 @@ export interface ReconciliationRun {
   hold: ReconciliationHoldRow | null;
   /** Publish only after the caller commits. Audits never cancel orders or publish a book. */
   statusEvent: MarketStatusEvent | null;
+  /**
+   * The automatic ledger-failure pause this run made (OPEN → PAUSED, actor null), as its notices
+   * name it (#54 B′, 54-5): the market's id, slug and title as read FOR UPDATE, the `paused`
+   * event's id and the run's instant. Null for every run that paused nothing (a pass, a market not
+   * OPEN, an account or supply run). The transaction owner passes it to
+   * `deliverReconciliationNotices` (market-notifications.ts) last in its transaction; a caller that
+   * cannot pause (a recovery, a pause decision's request) asserts it is null after its pass check.
+   * Never part of a response: who was told is nobody's to read (ADR-0064).
+   */
+  systemPause: ReconciliationSystemPause | null;
+}
+
+/** `ReconciliationRun.systemPause`: what the notices of an automatic pause need (#54 B′). */
+export interface ReconciliationSystemPause {
+  marketId: string;
+  slug: string;
+  title: string;
+  eventId: number;
+  at: Date;
 }
 export type ReconciliationAccountTarget = { userId: string } | { accountId: number };
 export const reconciliationMarketKey = (id: string) => `market:${id}`;
@@ -446,6 +465,7 @@ export async function runMarketReconciliation(
     legacy?.id ?? null,
   );
   let statusEvent: MarketStatusEvent | null = null;
+  let systemPause: ReconciliationSystemPause | null = null;
   if (!result.passed && market.status === 'open') {
     const pauseId = randomUUID();
     const eventId = await transitionMarket(tx, {
@@ -483,8 +503,10 @@ export async function runMarketReconciliation(
       statusEventId: String(eventId),
       ts: at.toISOString(),
     };
+    // #54 B′: what the owner's notices name; no audience read or input here (54-5).
+    systemPause = { marketId, slug: market.slug, title: market.title, eventId, at };
   }
-  return { result, hold: hold ?? null, statusEvent };
+  return { result, hold: hold ?? null, statusEvent, systemPause };
 }
 
 export async function runAccountReconciliation(
@@ -501,6 +523,8 @@ export async function runAccountReconciliation(
             .from(ledgerAccounts)
             .where(and(eq(ledgerAccounts.kind, 'user'), eq(ledgerAccounts.ownerId, target.userId)))
         )[0];
+  // A market's account is checked as its market: the run, an automatic pause and its
+  // `systemPause` included, goes back to the owner (#54 B′).
   if (account?.marketId) return runMarketReconciliation(tx, account.marketId, options);
   const userId =
     'userId' in target ? target.userId : account?.kind === 'user' ? account.ownerId : null;
@@ -539,7 +563,7 @@ export async function runAccountReconciliation(
     findings,
     facts: book ? bookFacts(book) : { userId },
   });
-  return { result, hold: await keepHold(tx, result), statusEvent: null };
+  return { result, hold: await keepHold(tx, result), statusEvent: null, systemPause: null };
 }
 
 export async function runSupplyReconciliation(
@@ -588,7 +612,7 @@ export async function runSupplyReconciliation(
       ledgerCoin: row.carried,
     },
   });
-  return { result, hold: null, statusEvent: null };
+  return { result, hold: null, statusEvent: null, systemPause: null };
 }
 
 export async function selectDueMarketReconciliationIds(

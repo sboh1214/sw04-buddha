@@ -8,8 +8,9 @@
  * result, what it publishes after COMMIT, and the scan (#120, ADR-0115). A market nobody traded
  * on is cancelled by the same close (#20, ADR-0117): every case says which of the two it is, and
  * `tradeOnce` (one pair mint between two members) makes a market a CLOSED one. The members whose
- * orders the close ended get one `user:notification` each after COMMIT (#134, ADR-0158); the
- * notices' rows are pinned on the db side, here the signal and the job's counts.
+ * orders the close ended (#134, ADR-0158) and its watchers and holders (#54, ADR-0159) get one
+ * `user:notification` each after COMMIT; the notices' rows are pinned on the db side, here the
+ * signal and the job's counts — `notifiedMembers` counts the order owners alone, never a watcher.
  */
 import { randomUUID } from 'node:crypto';
 import { schema } from '@buddha/db';
@@ -25,6 +26,7 @@ import {
   createPauseDecision,
   createPausedMarket,
   createUser,
+  createWatch,
   fundMarketMakerFunds,
   hasTestDb,
   ledgerAccountBalance,
@@ -611,6 +613,17 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
             eq(schema.notifications.type, 'orders_expired'),
           ),
         );
+    /** A member's #54 notices (ADR-0159): its `market` category rows. */
+    const marketNotices = (userId: string) =>
+      t.db
+        .select()
+        .from(schema.notifications)
+        .where(
+          and(eq(schema.notifications.userId, userId), eq(schema.notifications.category, 'market')),
+        );
+    /** Every notice of a member. */
+    const noticesOf = (userId: string) =>
+      t.db.select().from(schema.notifications).where(eq(schema.notifications.userId, userId));
     /** The signals by room, sorted: the publish order of several members is not a contract. */
     const byChannel = (received: { channel: string; event: unknown }[]) =>
       [...received].sort((x, y) => x.channel.localeCompare(y.channel));
@@ -620,12 +633,13 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
      * construction): A's GTC NO buy 3 @ 40 partly filled (B's IOC YES buy took 1 by a pair mint),
      * C's GTC YES sell 2 @ 70 from minted pairs (a `positions.locked_qty`), and the 운영
      * 마켓메이커's GTC YES buy 2 @ 30 (a lock on the market's 마켓메이커 자금). The close is then
-     * moved a minute back, the market still OPEN.
+     * moved a minute back, the market still OPEN. Holders: A (1 NO), B (1 YES), C (3 YES) and D,
+     * the other side of C's pairs (3 NO), with no order.
      */
     async function dueMarketWithOrders() {
       const marketId = await openMarket();
-      const [a, b, c] = [await member(), await member(), await member(1_150n)];
-      await mintTestPairs(t.db, { marketId, yesHolderId: c, noHolderId: await member(), qty: 3 });
+      const [a, b, c, d] = [await member(), await member(), await member(1_150n), await member()];
+      await mintTestPairs(t.db, { marketId, yesHolderId: c, noHolderId: d, qty: 3 });
       const mm = await fundMarketMakerFunds(t.db, marketId, 1_000n);
       const partial = await placed({
         ownerId: a,
@@ -646,7 +660,7 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
       const filled = await orderRow(partial.id);
       expect(filled).toMatchObject({ status: 'partially_filled', filledQty: 1 });
       await passMarketClose(t.db, marketId);
-      return { marketId, a, b, c, mm, partial: filled, sell, bot };
+      return { marketId, a, b, c, d, mm, partial: filled, sell, bot };
     }
 
     it('expires every live order of every account type in the close, filled quantity kept, then publishes the status and one market:book', async () => {
@@ -669,7 +683,8 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
           closedAt: expect.any(Date) as unknown,
           expiredOrders: 3,
           heldOrders: 0,
-          // A and C; the 운영 마켓메이커 has no inbox (53-5).
+          // A and C, the order owners; the 운영 마켓메이커 has no inbox (53-5). Never the holders
+          // B and D, whom `market_closed` alone reached (#54: no watcher count, ADR-0064).
           notifiedMembers: 2,
         });
         // BullMQ stores the result as JSON: counts only, nothing a bigint or an owner id.
@@ -738,16 +753,17 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
         // No user:position or user:balance: the expiry follows #178's batch cancels (ADR-0113
         // 12-11, ADR-0115 결정 8), though C's sell lock moved; only a resting sell and an owner's
         // sell cancel send user:position (ADR-0112 결정 8, ADR-0113 결정 10). ADR-0112 10-10
-        // covers balances only. The inbox signal goes to A and C, one each at the close's instant
-        // (#134, ADR-0158) — never to the bot, nor to B, whose IOC order had ended at its intake.
-        await waitForMessages(users.received, 2, 'user:notification of A and C');
+        // covers balances only. The inbox signal goes one each at the close's instant to A and C,
+        // whose orders it ended (#134, ADR-0158), and to the holders (#54, ADR-0159): B, whose IOC
+        // order had ended at its intake, and D — A and C hold too, still one signal each. Never
+        // to the bot.
+        await waitForMessages(users.received, 4, 'user:notification of A, B, C and D');
         await sleep(100);
         const signal = { type: 'user:notification', ts: result.closedAt.toISOString() };
         expect(byChannel(users.received)).toEqual(
-          byChannel([
-            { channel: userChannel(due.a), event: signal },
-            { channel: userChannel(due.c), event: signal },
-          ]),
+          byChannel(
+            [due.a, due.b, due.c, due.d].map((id) => ({ channel: userChannel(id), event: signal })),
+          ),
         );
         // 거래 마감: one notice each, leading to the one order it ended (52-4).
         for (const [owner, order] of [
@@ -762,6 +778,20 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
             }),
           ]);
         }
+        // 거래 마감 to every holder, in the same call and under the same key (52-1·52-8, 53-4).
+        const { title, slug } = await marketRow(marketId);
+        for (const holder of [due.a, due.b, due.c, due.d]) {
+          expect(await marketNotices(holder)).toEqual([
+            expect.objectContaining({
+              type: 'market_closed',
+              category: 'market',
+              params: { marketTitle: title, early: false },
+              target: { kind: 'market', slug },
+              occurredAt: result.closedAt,
+            }),
+          ]);
+        }
+        expect(await marketNotices(due.mm)).toEqual([]);
       } finally {
         await Promise.all([market.quit(), users.quit()]);
       }
@@ -797,9 +827,11 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
       }
     });
 
-    it('says 시장 취소 when no person filled: one notice and one signal per member, after COMMIT, none for the bot (#134, #20)', async () => {
+    it('says 시장 취소 when no person filled: one notice and one signal per member, after COMMIT, none for the bot (#134, #20, #54)', async () => {
       const marketId = await openMarket();
-      const [a, b] = [await member(), await member()];
+      const [a, b, w] = [await member(), await member(), await member()];
+      // W only watches (#54): its notice is `market_cancelled`, and it is not an order owner.
+      await createWatch(t.db, { userId: w, marketId });
       const mm = await fundMarketMakerFunds(t.db, marketId, 1_000n);
       // Nothing crosses (NO 40 + YES 30 < 100): no fill, so the close cancels the market.
       await placed({ ownerId: a, marketId, outcome: 'NO', limitPriceCoin: 40 });
@@ -807,34 +839,46 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
       const single = await placed({ ownerId: b, marketId, limitPriceCoin: 20 });
       await placed({ ownerId: mm, marketId, limitPriceCoin: 10 });
       await passMarketClose(t.db, marketId);
-      const { title } = await marketRow(marketId);
+      const { title, slug } = await marketRow(marketId);
       // Read the recipient's notices from another connection the moment its signal arrives.
       const users = await subscribeToUsers(async (channel) => ({
         channel,
-        notices: (await expiryNotices(channel.slice('user:'.length))).length,
+        notices: (await noticesOf(channel.slice('user:'.length))).length,
       }));
       try {
         const result = await closeMarket(t.db, marketId, publish);
         if (result.outcome !== 'cancelled') throw new Error(`cancelled, got ${result.outcome}`);
+        // A and B, the order owners: the watcher W is never counted (ADR-0064, ADR-0159).
         expect(result).toMatchObject({ expiredOrders: 4, heldOrders: 0, notifiedMembers: 2 });
+        expect(JSON.stringify(result)).not.toContain(w);
 
-        await waitForMessages(users.received, 2, 'user:notification of A and B');
+        await waitForMessages(users.received, 3, 'user:notification of A, B and W');
         await sleep(100);
         const signal = { type: 'user:notification', ts: result.closedAt.toISOString() };
         expect(byChannel(users.received)).toEqual(
-          byChannel([
-            { channel: userChannel(a), event: signal },
-            { channel: userChannel(b), event: signal },
-          ]),
+          byChannel([a, b, w].map((id) => ({ channel: userChannel(id), event: signal }))),
         );
         // Each signal found its notice committed (ADR-0157 결정 8: after COMMIT, never inside).
         expect(
           (await Promise.all(users.seen)).sort((x, y) => x.channel.localeCompare(y.channel)),
         ).toEqual(
-          [userChannel(a), userChannel(b)]
+          [userChannel(a), userChannel(b), userChannel(w)]
             .sort((x, y) => x.localeCompare(y))
             .map((channel) => ({ channel, notices: 1 })),
         );
+        // 52-5: the watcher's 시장 취소, never also a `market_closed` (ADR-0159).
+        expect(await noticesOf(w)).toEqual([
+          expect.objectContaining({
+            type: 'market_cancelled',
+            category: 'market',
+            params: { marketTitle: title },
+            target: { kind: 'market', slug },
+            occurredAt: result.closedAt,
+          }),
+        ]);
+        // The order owners hold nothing and do not watch: their order notice alone (52-1).
+        expect(await marketNotices(a)).toEqual([]);
+        expect(await marketNotices(b)).toEqual([]);
         // 52-4·52-5: 시장 취소; two orders lead to the market's history, one to the order.
         expect(await expiryNotices(a)).toEqual([
           expect.objectContaining({
@@ -862,7 +906,7 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
           reason: 'not_open_or_paused',
         });
         await sleep(100);
-        expect(users.received).toHaveLength(2);
+        expect(users.received).toHaveLength(3);
         expect(await t.db.select().from(schema.notifications)).toEqual(before);
       } finally {
         await users.quit();
@@ -997,7 +1041,8 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
 
     it('cancels a ledger-held market on schedule and leaves its orders live and locked for #93, with no market:book', async () => {
       const marketId = await openMarket();
-      const a = await member();
+      const [a, w] = [await member(), await member()];
+      await createWatch(t.db, { userId: w, marketId });
       const row = await placed({ ownerId: a, marketId, limitPriceCoin: 40, qty: 2 });
       await createMarketPause(t.db, { marketId, reason: 'ledger_failure', by: adminId });
       await passMarketClose(t.db, marketId);
@@ -1005,15 +1050,18 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
       const users = await subscribeToUsers();
       try {
         const result = await closeMarket(t.db, marketId, publish);
+        if (result.outcome !== 'cancelled') throw new Error(`cancelled, got ${result.outcome}`);
         // Nobody filled: CANCELLED, and still held (결정 4 #178 '복구 전에 마감이 오면'). The
-        // live order ends at #93's recovery, which notifies then (#134): nothing now.
+        // live order ends at #93's recovery, which notifies its owner then (#134): nothing now.
+        // The watcher hears of the close now (#54, 52-8) — and is not counted (ADR-0064).
         expect(result).toMatchObject({
           outcome: 'cancelled',
           expiredOrders: 0,
           heldOrders: 1,
           notifiedMembers: 0,
         });
-        expect(await expiryNotices(a)).toEqual([]);
+        expect(await noticesOf(a)).toEqual([]);
+        expect((await noticesOf(w)).map((notice) => notice.type)).toEqual(['market_cancelled']);
         expect(await marketRow(marketId)).toMatchObject({ status: 'cancelled' });
         expect(await pausesOf(marketId)).toMatchObject([
           { reason: 'ledger_failure', endKind: 'closed_at_close' },
@@ -1025,7 +1073,14 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
         expect(received.map((m) => (JSON.parse(m) as { type: string }).type)).toEqual([
           'market:status',
         ]);
-        expect(users.received).toEqual([]);
+        await waitForMessages(users.received, 1, 'user:notification of W');
+        await sleep(100);
+        expect(users.received).toEqual([
+          {
+            channel: userChannel(w),
+            event: { type: 'user:notification', ts: result.closedAt.toISOString() },
+          },
+        ]);
       } finally {
         await Promise.all([quit(), users.quit()]);
       }
@@ -1071,6 +1126,9 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
       const marketId = await openMarket();
       const a = await member();
       const row = await placed({ ownerId: a, marketId, limitPriceCoin: 40 });
+      // A watcher too: two members signalled for one event, still one line naming neither (#54).
+      const w = await member();
+      await createWatch(t.db, { userId: w, marketId });
       await passMarketClose(t.db, marketId);
       const dead = createPublisherRedis('redis://127.0.0.1:1', pino({ level: 'silent' }));
       const logs: unknown[] = [];
@@ -1100,11 +1158,13 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
             eventType: 'market:book',
           },
           {
+            // A member's channel by its kind alone (#54, ADR-0159; ADR-0064).
             msg: 'realtime publish failed',
-            channel: userChannel(a),
+            channel: 'user',
             eventType: 'user:notification',
           },
         ]);
+        for (const id of [a, w]) expect(JSON.stringify(logs)).not.toContain(id);
       } finally {
         dead.disconnect();
       }

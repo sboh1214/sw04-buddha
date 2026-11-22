@@ -92,6 +92,43 @@ export type SupplementItem = (typeof SUPPLEMENT_ITEMS)[number];
 export const supplementItemSchema = z.enum(SUPPLEMENT_ITEMS).meta({ id: 'SupplementItem' });
 
 /**
+ * 52-10: the supplement items whose change notifies (판정 항목·거래 마감 연장) — YES·NO 조건, 사건
+ * 기한, 1차·대체 출처와 전환 조건, 지연·취소·무효 처리 with the 장기 지연 기한 (#172 item 10 keeps
+ * them together; 54-7), 거래 마감 연장 (a supplement moves the close only later), 발표 예정 시각
+ * and 기준 시간대 (#54, ADR-0159 `market_rules_supplemented`). market-supplement.test.ts keeps
+ * this and SILENT_SUPPLEMENT_ITEMS a partition of SUPPLEMENT_ITEMS, so a new item is classified.
+ */
+export const NOTIFIED_SUPPLEMENT_ITEMS = [
+  'yesCondition',
+  'noCondition',
+  'eventDeadline',
+  'primarySource',
+  'fallbackSources',
+  'fallbackCondition',
+  'longDelayDays',
+  'delayHandling',
+  'closeAt',
+  'scheduledAnnouncementAt',
+  'judgementTimeZone',
+] as const satisfies readonly SupplementItem[];
+
+/** 52-10: '제목·배경만 고친 보충은 알리지 않는다' — the version history still keeps it. */
+export const SILENT_SUPPLEMENT_ITEMS = [
+  'title',
+  'description',
+] as const satisfies readonly SupplementItem[];
+
+/**
+ * Whether a supplement that changed `items` (its version's `changedItems`) notifies its market's
+ * watchers and holders (52-10): any of NOTIFIED_SUPPLEMENT_ITEMS.
+ */
+export function isNotifiedSupplement(items: readonly RuleVersionItem[]): boolean {
+  return items.some((item) =>
+    (NOTIFIED_SUPPLEMENT_ITEMS as readonly RuleVersionItem[]).includes(item),
+  );
+}
+
+/**
  * What a supplement may change while PAUSED: SUPPLEMENT_ITEMS but the close (#172 item 14). The
  * request and the approval (MarketSupplementService, apps/api) refuse every changed item outside it
  * on its own path, SUPPLEMENT_CLOSE_FIXED_WHILE_PAUSED.

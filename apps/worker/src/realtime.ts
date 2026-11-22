@@ -1,4 +1,8 @@
-import { type MarketRealtimeEvent, type UserRealtimeEvent } from '@buddha/shared';
+import {
+  USER_CHANNEL_PATTERN,
+  type MarketRealtimeEvent,
+  type UserRealtimeEvent,
+} from '@buddha/shared';
 import { Redis } from 'ioredis';
 import { type Logger } from 'pino';
 
@@ -96,13 +100,47 @@ export function createPublisherRedis(
  * the batch, not one per event.
  */
 export function createPublisher(redis: Redis, logger: Logger): Publish {
+  // The last event a failed member publish was logged for (`type@ts`): see `failureOf`.
+  let lastMemberFailure: string | undefined;
   return async (channel, event) => {
     try {
       // Coin amounts are already decimal strings in every event schema (never bigint), so a
       // plain JSON.stringify is safe.
       await redis.publish(channel, JSON.stringify(event));
     } catch (err) {
-      logger.warn({ err, channel, eventType: event.type }, 'realtime publish failed');
+      const failure = failureOf(channel, err);
+      if (failure.channel === MEMBER_CHANNEL_KIND) {
+        const key = `${event.type}@${'ts' in event ? event.ts : ''}`;
+        if (key === lastMemberFailure) return;
+        lastMemberFailure = key;
+      }
+      logger.warn({ ...failure, eventType: event.type }, 'realtime publish failed');
     }
   };
+}
+
+/** `user:` — every member's channel starts so (`userChannel`). */
+const USER_CHANNEL_PREFIX = USER_CHANNEL_PATTERN.slice(0, -1);
+
+/** What a failed publish's log line says in place of a member's channel. */
+const MEMBER_CHANNEL_KIND = 'user';
+
+/**
+ * What a failed publish's log line says of its channel and error. A market's channel as it is; a
+ * member's by its kind alone (`user`), and once per event (its type and `ts`) however many members
+ * it signals: a line per member would list who was told and how many — a market's watchers and
+ * holders (#54, ADR-0159; ADR-0064). Its error then keeps only its name, message and stack, the
+ * id cut out: ioredis attaches the command's arguments (the channel) to a reply error, and Redis
+ * 7.2's ACL refusal names the channel.
+ */
+function failureOf(channel: string, err: unknown): { err: unknown; channel: string } {
+  if (!channel.startsWith(USER_CHANNEL_PREFIX)) return { err, channel };
+  const id = channel.slice(USER_CHANNEL_PREFIX.length);
+  const scrub = (text: string) => (id === '' ? text : text.split(id).join('<member>'));
+  const redacted = new Error(scrub(err instanceof Error ? err.message : String(err)));
+  if (err instanceof Error) {
+    redacted.name = err.name;
+    if (err.stack !== undefined) redacted.stack = scrub(err.stack);
+  }
+  return { err: redacted, channel: MEMBER_CHANNEL_KIND };
 }

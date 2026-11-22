@@ -17,15 +17,17 @@ import type { FillRow, LiveBookOrder, OrderRow } from './orders.js';
  * 거래 알림 (#134, ADR-0158; N05 §4, 52-2…52-6, 134-1…134-3): the inputs of the three 거래 types,
  * built from the rows their events already wrote. Pure functions: each producer's transaction owner
  * passes their output to its ONE `createNotifications` call, last in the transaction (ADR-0157
- * 결정 4), so the later producers of the same transactions (#54's close, pause, resume and cancel
- * notices, #135's restriction notice) append inputs instead of making a second call.
+ * 결정 4), so the later producers of the same transactions append inputs instead of making a
+ * second call: #54's close, pause, resume and cancel notices (market-notifications.ts, ADR-0159 —
+ * after these, in the same array) and #135's restriction notice.
  *
  * Who calls them: the intake (`placeOrder` returns `notifications`; the API's `OrderService.place`
  * and the cycle's `finish()` deliver them), the close at `close_at` (`closeMarketAtClose`), the
- * pause and its approved end (market-pause.service.ts), the admin-role grant, the restriction's
+ * pause and its approved end (market-pause.service.ts), a SCHEDULED market's cancel (its expiry is
+ * always empty; #54's watcher notice rides on it), the admin-role grant, the restriction's
  * approval and the recovery of a closed held market (the API's services). The paths that never
- * notify — a member's own cancel, the intake's own results, the closure, a SCHEDULED market's
- * cancel, the bootstrap seed — are pinned in order-notifications.test.ts.
+ * notify — a member's own cancel, the intake's own results, the closure, the bootstrap seed — are
+ * pinned in order-notifications.test.ts.
  *
  * A throw here, or an input the definitions refuse, rolls the event back (ADR-0157 결정 4의 7): a
  * close would stay undone, a fill refused. So the builders never produce what the definitions
@@ -34,7 +36,10 @@ import type { FillRow, LiveBookOrder, OrderRow } from './orders.js';
 
 /** A fill's event key: one notice per fill and recipient (53-4). */
 export const fillEventKey = (fillId: number): string => `fill:${String(fillId)}`;
-/** A market event's (`market_events.id`: a pause, its approved end, a close) event key. */
+/**
+ * A market event's (`market_events.id`: a pause, its approved end, a close, a cancel, a
+ * supplement) event key — #134's order notices and #54's market notices alike.
+ */
 export const marketEventKey = (eventId: number): string => `market_event:${String(eventId)}`;
 /** An admin action's (`admin_actions.id`: the admin-role grant) event key. */
 export const adminActionEventKey = (id: string): string => `admin_action:${id}`;

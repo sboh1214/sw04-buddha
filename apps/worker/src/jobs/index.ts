@@ -175,7 +175,7 @@ const HANDLERS: Partial<Record<string, Handler>> = {
     return reportScan({ settled, skipped, failed }, failures, 'market finalize', settled, logger);
   },
   [JOB_NAMES.ledgerAudit]: async (_job, { auditDb, publish, logger }) => {
-    const result = await reconcileLedger(auditDb, publish);
+    const result = await reconcileLedger(auditDb, publish, logger);
     const summary = reportReconciliation(result, 'ledger audit', logger, true);
     // Finish every target first, then let BullMQ retry execution failures. Unlike markets,
     // accounts and supply have no per-minute scan. Recorded mismatches already have durable
@@ -188,11 +188,11 @@ const HANDLERS: Partial<Record<string, Handler>> = {
   [JOB_NAMES.marketAudit]: async (job, { db, publish, logger }) => {
     const { marketId } = parseMarketJob(job);
     if (marketId) {
-      const result = await reconcileTarget(db, { scope: 'market', marketId }, publish);
+      const result = await reconcileTarget(db, { scope: 'market', marketId }, publish, logger);
       logger[result.passed ? 'info' : 'error'](result, 'market audit');
       return { ...result };
     }
-    const result = await reconcileDueMarkets(db, publish);
+    const result = await reconcileDueMarkets(db, publish, logger);
     return reportReconciliation(result, 'market audit', logger, false);
   },
   [JOB_NAMES.startGrantPay]: async (_job, { db, publish, logger }) => {

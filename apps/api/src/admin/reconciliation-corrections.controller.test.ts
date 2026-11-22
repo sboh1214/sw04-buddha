@@ -3,8 +3,11 @@ import { lockAdminRoles, schema } from '@buddha/db';
 import {
   completeOnboarding,
   createMarket,
+  createOpenedMarket,
   createStartGrant,
   createUser,
+  createWatch,
+  fundMarketMakerFunds,
   fundTestTreasury,
   ledgerSupply,
   mintTestPairs,
@@ -20,7 +23,7 @@ import {
   type ReconciliationCorrectionDetail,
   type UserBalanceEvent,
 } from '@buddha/shared';
-import { eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
@@ -511,6 +514,124 @@ describe.skipIf(!hasTestInfra)('Coin correction approval and member privacy (int
       expect(totals.carriedCoin).toBe(totals.heldCoin);
     },
   );
+
+  it('tells an OPEN market’s watchers and holders when the correction’s own run pauses it as the system, after COMMIT, the detail naming nobody told (#54 B′, 54-5)', async () => {
+    const { market } = await createOpenedMarket(t.db);
+    const no = await createUser(t.db, { balanceCoin: 100n });
+    await mintTestPairs(t.db, {
+      marketId: market.id,
+      yesHolderId: member.id,
+      noHolderId: no.user.id,
+      qty: 1,
+    });
+    const watcher = (await createUser(t.db)).user.id;
+    await createWatch(t.db, { userId: watcher, marketId: market.id });
+    await fundMarketMakerFunds(t.db, market.id, 50n);
+    // Two breaks of the market's books: the collateral's, which the correction fixes, and the
+    // funds', which it leaves — so the correction's own run fails again.
+    const collateral = { kind: 'market_collateral' as const, marketId: market.id };
+    await recordLegacyCorrectionForTest({
+      amountCoin: 20n,
+      from: collateral,
+      to: { kind: 'treasury' },
+      refType: 'audit_failure',
+      refId: randomUUID(),
+      idempotencyKey: randomUUID(),
+    });
+    const [funds] = await t.db
+      .select()
+      .from(schema.ledgerAccounts)
+      .where(
+        and(
+          eq(schema.ledgerAccounts.marketId, market.id),
+          eq(schema.ledgerAccounts.kind, 'market_maker_funds'),
+        ),
+      );
+    await withLedgerGuardsOff((client) =>
+      client.query(
+        'UPDATE balances SET available_coin = available_coin - 1 WHERE account_id = $1',
+        [funds!.id],
+      ),
+    );
+    // The first failing run must not pause it (a failing run pauses an OPEN market at once), so
+    // the market is set aside by hand while it runs, and OPEN again when its correction is decided.
+    const setStatus = (status: 'open' | 'closed') =>
+      t.db.update(schema.markets).set({ status }).where(eq(schema.markets.id, market.id));
+    await setStatus('closed');
+    const failed = await post('/run', asker, { target: { scope: 'market', marketId: market.id } });
+    expect(failed.statusCode, failed.body).toBe(200);
+    const run = reconciliationRunSchema.parse(failed.json<{ data: unknown }>().data);
+    expect(run.result.passed).toBe(false);
+    await setStatus('open');
+    const preview = await get(`/results/${run.result.id}/corrections`);
+    expect(preview.statusCode, preview.body).toBe(200);
+    const detail = reconciliationCorrectionDetailSchema.parse(
+      preview.json<{ data: unknown }>().data,
+    );
+    const candidate = detail.candidates.find((item) => item.mode === 'fund_collateral')!;
+    expect(candidate).toMatchObject({ accountKind: 'market_collateral', amountCoin: '20' });
+    const asked = await post(`/results/${run.result.id}/correction-requests`, asker, {
+      ...body(candidate),
+      userReason: null,
+    });
+    expect(asked.statusCode, asked.body).toBe(200);
+    const id = asked.json<{ data: ReconciliationCorrectionDetail }>().data.requests[0]!.id;
+    const statuses = vi.spyOn(t.app.get(MarketPublisher), 'publishMarket');
+    const sent: [string, string, number][] = [];
+    const signalled = vi
+      .spyOn(t.app.get(MarketPublisher), 'publishUser')
+      .mockImplementation(async (userId, event) => {
+        if (event.type !== 'user:notification') return;
+        const rows = await t.db
+          .select()
+          .from(schema.notifications)
+          .where(eq(schema.notifications.userId, userId));
+        sent.push([userId, event.ts, rows.length]);
+      });
+    const approved = await post(decisionPath(run.result.id, id), approver, {
+      reason: approvalReason,
+    });
+    expect(approved.statusCode, approved.body).toBe(200);
+    // The answer names nobody told (ADR-0064).
+    expect(approved.body).not.toContain(watcher);
+    const [row] = await t.db.select().from(schema.markets).where(eq(schema.markets.id, market.id));
+    expect(row!.status).toBe('paused');
+    const [event] = await t.db
+      .select()
+      .from(schema.marketEvents)
+      .where(eq(schema.marketEvents.marketId, market.id))
+      .orderBy(desc(schema.marketEvents.id))
+      .limit(1);
+    expect(event).toMatchObject({ type: 'paused', actorId: null });
+    const audience = [member.id, no.user.id, watcher].sort();
+    const byUser = <T extends { userId: string }>(x: T, y: T) =>
+      x.userId < y.userId ? -1 : x.userId > y.userId ? 1 : 0;
+    const rows = (await t.db.select().from(schema.notifications)).sort(byUser);
+    expect(rows.map(({ id: _id, createdAt: _at, ...notice }) => notice)).toEqual(
+      audience.map((userId) => ({
+        userId,
+        type: 'market_paused',
+        category: 'market',
+        params: { marketTitle: market.title, reason: 'ledger_failure' },
+        target: { kind: 'market', slug: market.slug },
+        mergeKey: null,
+        eventCount: 1,
+        occurredAt: event!.createdAt,
+        readAt: null,
+      })),
+    );
+    const at = event!.createdAt.toISOString();
+    expect(sent.map(([userId, ts, n]) => ({ userId, ts, n })).sort(byUser)).toEqual(
+      audience.map((userId) => ({ userId, ts: at, n: 1 })),
+    );
+    expect(statuses).toHaveBeenCalledWith(
+      market.id,
+      expect.objectContaining({ type: 'market:status', status: 'paused' }),
+    );
+    expect(Math.min(...signalled.mock.invocationCallOrder)).toBeGreaterThan(
+      statuses.mock.invocationCallOrder[0]!,
+    );
+  });
 
   it('requires the exact candidate, a separate member reason and at most one pending request per account', async () => {
     const { detail, candidate } = await broken();

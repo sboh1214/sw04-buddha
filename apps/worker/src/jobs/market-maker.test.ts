@@ -14,6 +14,7 @@ import {
   createMarketPause,
   createOpenedMarket,
   createUser,
+  createWatch,
   hasTestDb,
   mintTestPairs,
   openOrderIntake,
@@ -391,6 +392,18 @@ describe.skipIf(!hasTestDb())('maker worker transactions and delivery (#129)', (
       qty: 1,
     });
     if (humanOrder.kind !== 'placed') throw new Error('Human order fixture was not placed');
+    // #54 (AC 3): a watcher and two holders of the market, whom the bot's stop tells nothing.
+    const watcher = (await createUser(t.db)).user.id;
+    await createWatch(t.db, { userId: watcher, marketId: market.id });
+    await mintTestPairs(t.db, {
+      marketId: market.id,
+      yesHolderId: (await createUser(t.db, { balanceCoin: 1_000n })).user.id,
+      noHolderId: (await createUser(t.db, { balanceCoin: 1_000n })).user.id,
+      qty: 1,
+    });
+    const marketEvents = () =>
+      t.db.select().from(schema.marketEvents).where(eq(schema.marketEvents.marketId, market.id));
+    const eventsBefore = await marketEvents();
     await t.db.transaction((tx) => requestMarketMakerRefresh(tx, market.id));
     const before = (await readMarketMakerRuntime(t.db, market.id))!;
     publish.mockClear();
@@ -421,6 +434,9 @@ describe.skipIf(!hasTestDb())('maker worker transactions and delivery (#129)', (
     ]);
     // The stop cleanup cancels the bot's quotes only: no fill, so no user:notification (#134).
     expect(publish.mock.calls.map(([, event]) => event.type)).toEqual(['market:book']);
+    // The bot's stop is no market state (N01 §8, #54 AC 3): no event, no notice to anyone.
+    expect(await marketEvents()).toEqual(eventsBefore);
+    expect(await t.db.select().from(schema.notifications)).toEqual([]);
     expect(await readMarketMakerRuntime(t.db, other.id)).toMatchObject({
       desiredEnabled: true,
       controlGeneration: 1n,

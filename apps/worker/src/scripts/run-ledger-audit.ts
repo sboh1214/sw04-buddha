@@ -1,7 +1,8 @@
 /**
  * Manual #93 reconciliation. With no arguments every account, market and total supply is checked;
  * selectors use the same transaction/hold rules as the scheduled checks. This records results
- * and may pause a broken market; it never corrects money or releases an existing hold.
+ * and may pause a broken market — telling its watchers and holders, as the scheduled check does
+ * (#54 B′, ADR-0159) — it never corrects money or releases an existing hold.
  *
  *   pnpm --filter worker run job:ledger-audit [--market-id UUID | --user-id ID | --account-id N | --supply]
  */
@@ -30,7 +31,10 @@ const publish = createPublisher(redis, logger);
 
 try {
   if (selection.scope === 'all') {
-    const result = await reconcileLedger(db, publish, { source: 'manual', allMarkets: true });
+    const result = await reconcileLedger(db, publish, logger, {
+      source: 'manual',
+      allMarkets: true,
+    });
     console.log(JSON.stringify(reconciliationBatchSummary(result)));
     for (const mismatch of result.mismatches) console.error(JSON.stringify(mismatch));
     for (const failure of result.failures) {
@@ -38,7 +42,7 @@ try {
     }
     process.exitCode = result.mismatched === 0 && result.failed === 0 ? 0 : 1;
   } else {
-    const result = await reconcileTarget(db, selection, publish, 'manual');
+    const result = await reconcileTarget(db, selection, publish, logger, 'manual');
     console.log(JSON.stringify(result));
     process.exitCode = result.passed ? 0 : 1;
   }

@@ -1,8 +1,14 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
   cancelScheduledMarket,
+  createNotifications,
   lockAdminRoles,
   lockMarketOrders,
+  marketAudience,
+  marketEventKey,
+  marketNotificationInputs,
+  notifiedUserIds,
+  orderEndNotificationInputs,
   schema,
   type CancelScheduledSkipReason,
   type Db,
@@ -10,6 +16,7 @@ import {
 import {
   MARKET_CANCEL_APPROVAL_KIND,
   MARKET_CANCEL_REFUSALS,
+  notificationEvent,
   type AdminMarket,
   type AdminMarketCancelItem,
   type ApproveMarketCancelBody,
@@ -76,8 +83,9 @@ const CANCEL_SKIPS: Readonly<Record<CancelScheduledSkipReason, () => AppError>> 
  * `market_cancel` approval request (#171, ApprovalService) on the market, payload
  * `{statusEventId}` (the SCHEDULED state it was asked in), and changes nothing; an admin other
  * than the requester approves it (`cancelScheduledMarket`: the `cancelled` event, the approver its
- * actor, the result type left empty), and after COMMIT `market:status` (cancelled) and the
- * approval's delayed open and close jobs removed. A 반려 by another admin or the requester's 철회
+ * actor, the result type left empty; its watchers' `market_cancelled` notice, #54, ADR-0159), and
+ * after COMMIT `market:status` (cancelled), the approval's delayed open and close jobs removed and
+ * `user:notification` to each watcher told. A 반려 by another admin or the requester's 철회
  * ends it in any status, writing nothing but the record, as #114's next-path requests
  * (MarketPauseService). One request waits per market at a time. No operator path leaves OPEN,
  * PAUSED or CLOSED for CANCELLED: an OPEN market ends by its close, or by a pause and its approved
@@ -184,10 +192,13 @@ export class MarketCancelService {
    * payload `{cancelledAt, source: 'operator', reason, approvalId, requestedBy}` with the
    * request's reason — the market CANCELLED with its result type null, and every live order 만료
    * (none: a SCHEDULED market takes no order). `market_cancel_approve` records the request, the
-   * approver's reason and the market before and after. After COMMIT `market:status` (cancelled,
-   * the event's key), `market:book` only if an order expired, and the delayed `market.open` (at
-   * the scheduled open) and `market.close` (at the close) removed — hygiene, as a 되돌리기's: both
-   * jobs find a cancelled market under the market lock and skip it.
+   * approver's reason and the market before and after; then, last, one call: the `orders_expired`
+   * notices of its expired orders (#134, none) and one `market_cancelled` notice per watcher of the
+   * market (#54, ADR-0159; 52-5 — read at the event, the approver too when they watch, 54-8),
+   * keyed by the event. After COMMIT `market:status` (cancelled, the event's key), `market:book`
+   * only if an order expired, the delayed `market.open` (at the scheduled open) and
+   * `market.close` (at the close) removed — hygiene, as a 되돌리기's: both jobs find a cancelled
+   * market under the market lock and skip it — and `user:notification` to each member told.
    */
   async approve(
     adminId: string,
@@ -195,7 +206,7 @@ export class MarketCancelService {
     requestId: string,
     body: WithoutExpectedAccount<ApproveMarketCancelBody>,
   ): Promise<AdminMarket> {
-    const { market, book, registered } = await this.db.transaction(async (tx) => {
+    const { market, book, registered, notified } = await this.db.transaction(async (tx) => {
       await lockMarket(tx, id);
       const current = await lockedMarketRow(tx, id);
       const request = await this.decidable(tx, adminId, id, requestId);
@@ -234,11 +245,32 @@ export class MarketCancelService {
         } satisfies MarketCancelApproveActionPayload,
         createdAt: at,
       });
+      const market = await this.markets.toAdminMarket(tx, result.market, tags, sources);
+      const eventKey = marketEventKey(result.eventId);
+      // The transaction's one call, last (ADR-0157 결정 4): 52-5's two halves — the 만료 notice of
+      // each member whose orders it expired (#134, ADR-0158: always none, a SCHEDULED market takes
+      // no order, but wired so the order half is never forgotten) and the `market_cancelled`
+      // notice of each watcher (#54, ADR-0159; a SCHEDULED market has no holder).
+      const notices = [
+        ...orderEndNotificationInputs(result.expired.expired, {
+          kind: 'expired',
+          cause: 'cancelled',
+          market: { id: result.market.id, title: result.market.title },
+          eventKey,
+          occurredAt: at,
+        }),
+        ...marketNotificationInputs(await marketAudience(tx, id), result.market, {
+          kind: 'cancelled',
+          eventKey,
+          occurredAt: at,
+        }),
+      ];
       return {
-        market: await this.markets.toAdminMarket(tx, result.market, tags, sources),
+        market,
         book: { marketIds: result.expired.expired.length > 0 ? [id] : [], at },
         // The instants the approval (or a reschedule) registered the jobs under.
         registered: { scheduledOpenAt: current.scheduledOpenAt, closeAt: current.closeAt },
+        notified: notifiedUserIds(await createNotifications(tx, notices)),
       };
     });
     // Outside the transaction, as every market write publishes: a subscriber answers
@@ -248,6 +280,7 @@ export class MarketCancelService {
       this.publisher.publishBook(book.marketIds, book.at),
       registered.scheduledOpenAt ? this.jobs.cancelOpen(id, registered.scheduledOpenAt) : undefined,
       this.jobs.cancelClose(id, registered.closeAt),
+      ...notified.map((userId) => this.publisher.publishUser(userId, notificationEvent(book.at))),
     ]);
     return market;
   }

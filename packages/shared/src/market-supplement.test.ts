@@ -25,8 +25,10 @@ import {
   MARKET_SUPPLEMENT_REFUSALS,
   MARKET_SUPPLEMENT_REJECT_REASONS,
   MARKET_SUPPLEMENT_STATUSES,
+  NOTIFIED_SUPPLEMENT_ITEMS,
   PAUSED_SUPPLEMENT_ITEMS,
   RULE_VERSION_ITEMS,
+  SILENT_SUPPLEMENT_ITEMS,
   SUPPLEMENT_CHANGES_REQUIRED,
   SUPPLEMENT_CLOSE_FIXED_WHILE_PAUSED,
   SUPPLEMENT_ITEMS,
@@ -51,6 +53,8 @@ import {
   supplementChanges,
   supplementItemSchema,
   supplementItemsOf,
+  isNotifiedSupplement,
+  type RuleVersionItem,
 } from './market-supplement.js';
 import { TIME_ITEMS } from './market-times.js';
 
@@ -140,6 +144,43 @@ describe('rule version items (#80, ADR-0093 decision 2 #172 items 7·14)', () =>
     expect(supplementItemSchema.options).toEqual([...SUPPLEMENT_ITEMS]);
     // The close never moves while PAUSED; the rest does.
     expect(PAUSED_SUPPLEMENT_ITEMS).toEqual(SUPPLEMENT_ITEMS.filter((item) => item !== 'closeAt'));
+  });
+
+  it('classifies every supplement item as notified or silent, exactly once (52-10, #54)', () => {
+    // A partition: a new supplement item fails here until it is classified.
+    const notified: readonly string[] = NOTIFIED_SUPPLEMENT_ITEMS;
+    const silent: readonly string[] = SILENT_SUPPLEMENT_ITEMS;
+    expect([...notified, ...silent].sort()).toEqual([...SUPPLEMENT_ITEMS].sort());
+    expect(notified.filter((item) => silent.includes(item))).toEqual([]);
+    expect(new Set(notified).size).toBe(notified.length);
+    // 52-10: 제목·배경만 고친 보충은 알리지 않는다; the 장기 지연 기한 notifies with 지연 처리 (54-7).
+    expect(SILENT_SUPPLEMENT_ITEMS).toEqual(['title', 'description']);
+    expect(notified).toContain('longDelayDays');
+    expect(notified).toContain('closeAt');
+    // The times fixed at the open are no supplement item, so in neither list.
+    for (const fixed of FIXED_AFTER_OPEN_ITEMS) {
+      expect(notified).not.toContain(fixed);
+      expect(silent).not.toContain(fixed);
+    }
+  });
+
+  it('notifies a supplement that changed a judgement item or the close, never a title or background alone', () => {
+    const cases: [RuleVersionItem[], boolean][] = [
+      [[], false],
+      [['title'], false],
+      [['description'], false],
+      [['title', 'description'], false],
+      [['closeAt'], true],
+      [['longDelayDays'], true],
+      [['title', 'yesCondition'], true],
+      [['judgementTimeZone'], true],
+      [['scheduledAnnouncementAt'], true],
+      [['description', 'fallbackSources'], true],
+    ];
+    for (const [items, notifies] of cases) {
+      expect(isNotifiedSupplement(items), JSON.stringify(items)).toBe(notifies);
+    }
+    for (const item of NOTIFIED_SUPPLEMENT_ITEMS) expect(isNotifiedSupplement([item])).toBe(true);
   });
 
   it('takes a supplement in OPEN and PAUSED, and rejects one for a meaning change', () => {

@@ -1,7 +1,7 @@
-import type { APIRequestContext, Locator, Page } from '@playwright/test';
-import type { Market, Notification, Order } from '@buddha/shared';
+import type { Market, Order } from '@buddha/shared';
 import { copy } from '../src/copy';
 import {
+  ONE_READ_MS,
   REALTIME_BUDGET_MS,
   type OrderTerms,
   createOpenMarket,
@@ -9,11 +9,18 @@ import {
   documentSurvived,
   expect,
   freshEmail,
+  inboxOf,
   markDocument,
+  myUnread,
+  notificationRow,
+  notificationRowIds,
+  notificationRows,
+  openCounted,
   pauseMarket,
   placeOrder,
   signUp,
   test,
+  unreadCountOf,
   workerProbeDisabled,
 } from './helpers';
 
@@ -32,59 +39,11 @@ import {
  * (52-2). 2: an admin's 일시 중단 cancels A's two resting bids — one notice to the market's ended
  * orders (52-4). 3: the worker's close expires the rest of a partly filled bid — a notice of its
  * own beside the fill's (53-4) that opens the order, 만료 with its filled and ended quantities
- * (AC 7). A sends two orders in the first two tests and one in the last; B five in the first (and
- * one sent again) and one in the last — all well under the 20 a minute (global-setup.ts).
+ * (AC 7) — and, since #54 (ADR-0159), tells both members, who hold a contract each, of the 거래
+ * 마감 itself (52-1·52-8). A sends two orders in the first two tests and one in the last; B five
+ * in the first (and one sent again) and one in the last — all well under the 20 a minute
+ * (global-setup.ts).
  */
-
-/** One read of the count after the signal: what a page may take past the realtime budget. */
-const ONE_READ_MS = 5_000;
-
-/** The unread count's read, as the browser asks it through the web's `/api` rewrite. */
-const UNREAD_COUNT_PATH = '/api/v1/me/notifications/unread-count';
-
-/** The count beside MY where this width shows it: the bottom tabs below md, the header from it. */
-function myUnread(page: Page): Locator {
-  const width = page.viewportSize()?.width ?? 0;
-  return page.getByTestId(width < 768 ? 'bottom-tab-my-unread' : 'nav-primary-my-unread');
-}
-
-/** The rows MY › 알림 draws, in order. */
-function rows(page: Page): Locator {
-  return page.getByTestId('my-notifications-list').getByTestId('notification-row');
-}
-
-function row(page: Page, id: string): Locator {
-  return page.locator(`[data-testid="notification-row"][data-notification-id="${id}"]`);
-}
-
-/** The ids of the rows drawn, in order. */
-function rowIds(page: Page): Promise<(string | null)[]> {
-  return rows(page).evaluateAll((nodes) =>
-    nodes.map((node) => node.getAttribute('data-notification-id')),
-  );
-}
-
-/** Opens `path` and waits for the unread count's first read, so an absence after it means 0. */
-async function openCounted(page: Page, path: string): Promise<void> {
-  const counted = page.waitForResponse(
-    (response) => new URL(response.url()).pathname === UNREAD_COUNT_PATH && response.ok(),
-  );
-  await page.goto(path);
-  await counted;
-}
-
-/** The member's inbox through the API, newest first (one page is plenty here). */
-async function inboxOf(context: APIRequestContext): Promise<Notification[]> {
-  return dataOf<Notification[]>(await context.get('/api/v1/me/notifications'));
-}
-
-async function unreadCountOf(context: APIRequestContext): Promise<number> {
-  return (
-    await dataOf<{ unreadCount: number }>(
-      await context.get('/api/v1/me/notifications/unread-count'),
-    )
-  ).unreadCount;
-}
 
 /** A 지정가(GTC) NO buy at 40: the resting bid B's immediate YES buys meet as pair mints. */
 const NO_BID = (qty: number): OrderTerms => ({
@@ -151,8 +110,8 @@ test.describe('거래 알림 (#134)', () => {
         readAt: null,
       });
       await page.goto('/my/notifications');
-      await expect(rows(page)).toHaveCount(1);
-      const firstRow = row(page, firstNotice.id);
+      await expect(notificationRows(page)).toHaveCount(1);
+      const firstRow = notificationRow(page, firstNotice.id);
       await expect(firstRow).toHaveAttribute('data-read', 'false');
       await expect(firstRow.getByTestId('notification-row-category')).toHaveText(
         copy.notificationCategoryTrade,
@@ -166,8 +125,8 @@ test.describe('거래 알림 (#134)', () => {
       // (52-6, 134-2 — its time the latest fill's).
       await placeOrder(b, market.id, crypto.randomUUID(), YES_TAKE);
       await page.reload();
-      await expect(rows(page)).toHaveCount(1);
-      expect(await rowIds(page)).toEqual([firstNotice.id]);
+      await expect(notificationRows(page)).toHaveCount(1);
+      expect(await notificationRowIds(page)).toEqual([firstNotice.id]);
       await expect(firstRow.getByTestId('notification-row-title')).toHaveText(
         filledTitle('부분 체결 · 체결 2회 · 누적 2계약 · 평균 40.00 Coin'),
       );
@@ -188,14 +147,16 @@ test.describe('거래 알림 (#134)', () => {
       // '이번' and the order's whole beside it, since it does not hold the earlier two (134-3).
       await placeOrder(b, market.id, crypto.randomUUID(), YES_TAKE);
       await page.reload();
-      await expect(rows(page)).toHaveCount(2);
+      await expect(notificationRows(page)).toHaveCount(2);
       const [afterRead] = await inboxOf(a);
       if (afterRead === undefined || afterRead.id === firstNotice.id) {
         throw new Error('the fill after the read made no notice of its own');
       }
-      expect(await rowIds(page)).toEqual([afterRead.id, firstNotice.id]);
-      await expect(row(page, afterRead.id)).toHaveAttribute('data-read', 'false');
-      await expect(row(page, afterRead.id).getByTestId('notification-row-title')).toHaveText(
+      expect(await notificationRowIds(page)).toEqual([afterRead.id, firstNotice.id]);
+      await expect(notificationRow(page, afterRead.id)).toHaveAttribute('data-read', 'false');
+      await expect(
+        notificationRow(page, afterRead.id).getByTestId('notification-row-title'),
+      ).toHaveText(
         filledTitle('전량 체결 · 이번 1계약 · 평균 40.00 Coin (주문 3계약 중 3계약 체결)'),
       );
       await expect(firstRow.getByTestId('notification-row-title')).toHaveText(
@@ -209,7 +170,7 @@ test.describe('거래 알림 (#134)', () => {
       const lastRequest = crypto.randomUUID();
       await placeOrder(b, market.id, lastRequest, YES_TAKE);
       await page.reload();
-      await expect(rows(page)).toHaveCount(3);
+      await expect(notificationRows(page)).toHaveCount(3);
       const [merged] = await inboxOf(a);
       if (merged === undefined) throw new Error('A has no notice of the second order');
       expect(merged).toMatchObject({
@@ -217,10 +178,10 @@ test.describe('거래 알림 (#134)', () => {
         eventCount: 2,
         readAt: null,
       });
-      expect(await rowIds(page)).toEqual([merged.id, afterRead.id, firstNotice.id]);
-      await expect(row(page, merged.id).getByTestId('notification-row-title')).toHaveText(
-        filledTitle('전량 체결 · 체결 2회 · 누적 2계약 · 평균 40.00 Coin'),
-      );
+      expect(await notificationRowIds(page)).toEqual([merged.id, afterRead.id, firstNotice.id]);
+      await expect(
+        notificationRow(page, merged.id).getByTestId('notification-row-title'),
+      ).toHaveText(filledTitle('전량 체결 · 체결 2회 · 누적 2계약 · 평균 40.00 Coin'));
 
       // --- B sends its last request again under the same request id: `replayed`, and A's
       // notices and count as they were (AC 9).
@@ -284,14 +245,14 @@ test.describe('거래 알림 (#134)', () => {
       target: { kind: 'order_history', marketId: market.id },
       eventCount: 1,
     });
-    await expect(rows(page)).toHaveCount(1);
-    await expect(row(page, notice.id).getByTestId('notification-row-title')).toHaveText(
+    await expect(notificationRows(page)).toHaveCount(1);
+    await expect(notificationRow(page, notice.id).getByTestId('notification-row-title')).toHaveText(
       `${market.title} 일시 중단으로 대기 주문 2건 취소`,
     );
 
     // --- Pressing it opens 거래·정산 이력 filtered to the market: the two orders, 취소 완료 for
     // 일시 중단.
-    await row(page, notice.id).click();
+    await notificationRow(page, notice.id).click();
     await expect(page).toHaveURL(`/my/history?market=${market.id}`);
     const history = page.getByTestId('my-order-history');
     for (const order of [low, high]) {
@@ -302,7 +263,7 @@ test.describe('거래 알림 (#134)', () => {
       );
     }
     await page.goBack();
-    await expect(row(page, notice.id)).toHaveAttribute('data-read', 'true');
+    await expect(notificationRow(page, notice.id)).toHaveAttribute('data-read', 'true');
   });
 });
 
@@ -351,8 +312,8 @@ test.describe('거래 알림 — 거래 마감의 만료 (#134)', () => {
 
       // --- A's 알림 open before the close, the one row drawn and the page marked.
       await openCounted(page, '/my/notifications');
-      await expect(rows(page)).toHaveCount(1);
-      await expect(row(page, fill.id).getByTestId('notification-row-title')).toHaveText(
+      await expect(notificationRows(page)).toHaveCount(1);
+      await expect(notificationRow(page, fill.id).getByTestId('notification-row-title')).toHaveText(
         `${market.title} NO 매수 주문 부분 체결 · 1계약 · 평균 40.00 Coin`,
       );
       await expect(myUnread(page)).toHaveText('1');
@@ -367,13 +328,17 @@ test.describe('거래 알림 — 거래 마감의 만료 (#134)', () => {
         )
         .toBe('closed');
 
-      // --- Its notice comes without a reload (the close's `user:notification`): a row of its own
-      // on top of the fill's — another type, so another notice (53-4) — leading to the order.
-      await expect(myUnread(page)).toHaveText('2', { timeout: REALTIME_BUDGET_MS + ONE_READ_MS });
-      await expect(rows(page)).toHaveCount(2);
+      // --- Its notices come without a reload (the close's one `user:notification`): the expiry, a
+      // row of its own beside the fill's — another type, so another notice (53-4) — leading to the
+      // order, and the 거래 마감 itself, since A holds the NO its fill bought (#54, ADR-0159;
+      // 52-1·52-8): the same event, a third type, leading to the market.
+      await expect(myUnread(page)).toHaveText('3', { timeout: REALTIME_BUDGET_MS + ONE_READ_MS });
+      await expect(notificationRows(page)).toHaveCount(3);
       expect(await documentSurvived(page)).toBe(true);
-      const [expiry] = await inboxOf(a);
-      if (expiry === undefined || expiry.id === fill.id) {
+      const inbox = await inboxOf(a);
+      const expiry = inbox.find((notice) => notice.type === 'orders_expired');
+      const closed = inbox.find((notice) => notice.type === 'market_closed');
+      if (expiry === undefined || closed === undefined) {
         throw new Error('the close made no notice of its own');
       }
       expect(expiry).toMatchObject({
@@ -382,13 +347,46 @@ test.describe('거래 알림 — 거래 마감의 만료 (#134)', () => {
         target: { kind: 'order', orderId: resting.id },
         eventCount: 1,
       });
-      expect(await rowIds(page)).toEqual([expiry.id, fill.id]);
-      await expect(row(page, expiry.id).getByTestId('notification-row-title')).toHaveText(
-        `${market.title} 거래 마감으로 대기 주문 1건 만료`,
+      expect(closed).toMatchObject({
+        category: 'market',
+        params: { marketTitle: market.title, early: false },
+        target: { kind: 'market', slug: market.slug },
+        eventCount: 1,
+      });
+      // The two close rows share the close's instant, so their order falls to their ids; the
+      // fill's is last.
+      const ids = await notificationRowIds(page);
+      expect(ids.slice(0, 2).sort()).toEqual([expiry.id, closed.id].sort());
+      expect(ids[2]).toBe(fill.id);
+      await expect(
+        notificationRow(page, expiry.id).getByTestId('notification-row-title'),
+      ).toHaveText(`${market.title} 거래 마감으로 대기 주문 1건 만료`);
+      await expect(
+        notificationRow(page, closed.id).getByTestId('notification-row-title'),
+      ).toHaveText(`${market.title} 거래 마감`);
+      await expect(notificationRow(page, closed.id)).toHaveAttribute(
+        'href',
+        `/markets/${market.slug}`,
+      );
+
+      // --- B, the incoming side, holds the YES its buy made and has no order left: the 거래 마감
+      // alone (52-1 — the e2e of the worker's close for a holder).
+      const [heard, ...more] = await inboxOf(b);
+      expect(more).toEqual([]);
+      expect(heard).toMatchObject({
+        type: 'market_closed',
+        category: 'market',
+        params: { marketTitle: market.title, early: false },
+        target: { kind: 'market', slug: market.slug },
+      });
+      await openCounted(bPage, '/my/notifications');
+      await expect(notificationRows(bPage)).toHaveCount(1);
+      await expect(notificationRows(bPage).getByTestId('notification-row-title')).toHaveText(
+        `${market.title} 거래 마감`,
       );
 
       // --- Pressed: the order's 주문 상세, 만료 with what filled and what ended together (AC 7).
-      await row(page, expiry.id).click();
+      await notificationRow(page, expiry.id).click();
       await expect(page).toHaveURL(`/my/orders/${resting.id}`);
       await expect(page.getByTestId('order-detail-status')).toHaveText(copy.orderStatusExpired);
       await expect(page.getByTestId('order-detail-filled')).toHaveText('1계약');

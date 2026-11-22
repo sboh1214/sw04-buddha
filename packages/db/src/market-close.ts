@@ -7,6 +7,7 @@ import { eq } from 'drizzle-orm';
 import type { Db } from './client.js';
 import { marketHasHumanFill } from './market-cancel.js';
 import { endPauseAtClose, type MarketPauseRow } from './market-pause.js';
+import { marketAudience, marketNotificationInputs } from './market-notifications.js';
 import { transitionMarket } from './market-transitions.js';
 import { createNotifications, notifiedUserIds } from './notifications.js';
 import { expireLockedOrders, lockMarketOrders, type ExpiredOrders } from './order-cancel.js';
@@ -50,10 +51,17 @@ export type CloseMarketAtCloseResult =
       /** The orders it ended 만료, and a held market's left live and locked (#93's). */
       expired: ExpiredOrders;
       /**
-       * The members its `orders_expired` notices reached (#134, ADR-0158), for the caller's
-       * `user:notification` after COMMIT: the people with orders it ended, one notice each.
+       * Every member its notices reached, once each, for the caller's `user:notification` after
+       * COMMIT: the people with orders it ended (`orders_expired`, #134) and its watchers and
+       * holders (`market_closed` or `market_cancelled`, #54) — never in a job result or a log.
        */
       notified: string[];
+      /**
+       * How many members its `orders_expired` notices reached (#134's meaning of the worker's
+       * `notifiedMembers`): order owners only — a count with the watchers in it would tell how
+       * many watch the market, which no surface shows (ADR-0064, ADR-0159).
+       */
+      expiryNotified: number;
     }
   | { closed: false; reason: CloseSkipReason };
 
@@ -92,9 +100,13 @@ export type CloseMarketAtCloseResult =
  *    move — the 운영 마켓메이커's Coin stays in the market's 마켓메이커 자금 for #181; a market held
  *    for a ledger failure keeps its orders live and locked until #93's recovery (결정 4 #178 '복구
  *    전에 마감이 오면');
- * 8. last, one `orders_expired` notice per member with orders it ended (#134, ADR-0158; 52-4·52-5:
- *    거래 마감 for CLOSED, 시장 취소 for CANCELLED), keyed by the status event — the held market's
- *    live orders get theirs when the recovery ends them (#93).
+ * 8. last, the close's one `createNotifications` call, keyed by the status event: one
+ *    `orders_expired` notice per member with orders it ended (#134, ADR-0158; 52-4·52-5: 거래 마감
+ *    for CLOSED, 시장 취소 for CANCELLED) — the held market's live orders get theirs when the
+ *    recovery ends them (#93) — then one `market_closed` (early false; PAUSED on schedule too) or
+ *    `market_cancelled` notice per watcher and holder (#54, ADR-0159; 52-1·52-5·52-8), read
+ *    without a lock of its own (`marketAudience`): a held market's close tells them now. A member
+ *    with orders who also watches or holds gets both, one signal.
  *
  * It writes no `orders` row itself (order-cancel.ts does) and publishes nothing: the caller sends
  * `market:status`, `market:book` when an order expired, and `user:notification` to `notified`,
@@ -156,24 +168,35 @@ export async function closeMarketAtClose(
       ? await endPauseAtClose(tx, { marketId, now: at, eventId: statusEventId })
       : null;
   const expired = await expireLockedOrders(tx, orders, { at });
-  // #134: the members' 만료 notices, the transaction's last statements (ADR-0157 결정 4).
-  const notified = await createNotifications(
-    tx,
-    orderEndNotificationInputs(expired.expired, {
-      kind: 'expired',
-      cause: traded ? 'closed' : 'cancelled',
-      market: { id: current.id, title: current.title },
-      eventKey: marketEventKey(statusEventId),
-      occurredAt: at,
-    }),
+  const eventKey = marketEventKey(statusEventId);
+  // #134: the members' 만료 notices.
+  const expiry = orderEndNotificationInputs(expired.expired, {
+    kind: 'expired',
+    cause: traded ? 'closed' : 'cancelled',
+    market: { id: current.id, title: current.title },
+    eventKey,
+    occurredAt: at,
+  });
+  // #54: the watchers' and holders' 마감 or 시장 취소 notice, appended to the same call.
+  const status = traded ? 'closed' : 'cancelled';
+  const audience = await marketAudience(tx, marketId);
+  const notices = marketNotificationInputs(
+    audience,
+    { slug: current.slug, title: current.title, status },
+    traded
+      ? { kind: 'closed', early: false, eventKey, occurredAt: at }
+      : { kind: 'cancelled', eventKey, occurredAt: at },
   );
+  // The transaction's last statements (ADR-0157 결정 4): one call, the 만료 inputs first.
+  const outcomes = await createNotifications(tx, [...expiry, ...notices]);
   return {
     closed: true,
-    status: traded ? 'closed' : 'cancelled',
+    status,
     statusEventId,
     closedAt: at,
     pause,
     expired,
-    notified: notifiedUserIds(notified),
+    notified: notifiedUserIds(outcomes),
+    expiryNotified: notifiedUserIds(outcomes.slice(0, expiry.length)).length,
   };
 }
