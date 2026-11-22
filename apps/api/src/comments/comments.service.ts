@@ -1,9 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
-import { schema, type Db } from '@buddha/db';
+import {
+  createNotifications,
+  notifiedUserIds,
+  replyNotificationInput,
+  schema,
+  type Db,
+} from '@buddha/db';
 import {
   COMMENT_REPLIES_PAGE_SIZE,
   commentLinks,
+  notificationEvent,
   type CommentDeletion,
   type CommentNotAllowedDetails,
   type CommentNotAllowedReason,
@@ -22,6 +29,7 @@ import { DB } from '../infra/db/db.provider.js';
 import { commentLikeCountSql } from '../likes/like-queries.js';
 import { LinkReviewService } from '../link-review/link-review.service.js';
 import { assertWriter } from '../moderation/restrictions.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import {
   authorColumns,
   postAuthorOf,
@@ -121,6 +129,11 @@ function replyPageOf(
  * which update those rows, wait for it or it for them — a comment never lands under a post or a
  * 댓글 whose deletion or hiding committed, and a deletion's answer (`placeholder`) counts every
  * comment written before it.
+ *
+ * Notices (#135, ADR-0161; 52-7, 52-18, 135-3, 135-4): a new comment tells the author right above
+ * it in the same transaction — a 댓글 the post's author, a 대댓글 its thread 댓글's — never the
+ * writer, and after COMMIT `user:notification` goes to them. Edits, deletions and reads tell
+ * nobody.
  */
 @Injectable()
 export class CommentsService {
@@ -129,6 +142,7 @@ export class CommentsService {
     private readonly cursors: CommentCursors,
     private readonly limits: WriteLimitsService,
     private readonly links: LinkReviewService,
+    private readonly publisher: MarketPublisher,
   ) {}
 
   /**
@@ -329,6 +343,13 @@ export class CommentsService {
    * 20 in its text (owner decision 2026-10-22) — go to the repetition rules (#187: a flag on the
    * operators' review list at most). Nothing about the author's trading is read or attached (N05
    * §2).
+   *
+   * The notice (#135, ADR-0161; 52-7, 52-18, 135-3): last in the transaction, after the links
+   * (ADR-0157 결정 4), one `post_replied` to the post's author for a 댓글 or one `comment_replied`
+   * to the thread 댓글's author for a 대댓글 — one answering a 대댓글 included, never the named
+   * 대댓글's author — merged into their unread one of that post or 댓글; none when that author is
+   * the writer. Its failure fails the comment (500, nothing kept — 188-2). After COMMIT
+   * `user:notification` to the one it reached, then the answer, which names no recipient.
    */
   async create(
     authorId: string,
@@ -338,11 +359,16 @@ export class CommentsService {
   ): Promise<PublishedComment> {
     const id = randomUUID();
     const links = commentLinks(body);
-    await this.db.transaction(async (tx) => {
+    const { notified, createdAt } = await this.db.transaction(async (tx) => {
       const writer = await this.checkWriter(tx, authorId);
       const { posts, postComments } = schema;
       const [post] = await tx
-        .select({ marketId: posts.marketId, deletedAt: posts.deletedAt, hiddenAt: posts.hiddenAt })
+        .select({
+          marketId: posts.marketId,
+          authorId: posts.authorId,
+          deletedAt: posts.deletedAt,
+          hiddenAt: posts.hiddenAt,
+        })
         .from(posts)
         .where(eq(posts.id, postId))
         .for('share');
@@ -359,16 +385,33 @@ export class CommentsService {
       }
       const parent = parentId === null ? null : await this.lockParent(tx, postId, parentId);
       await this.limits.take(tx, writer, 'comment');
-      await tx.insert(postComments).values({
-        id,
-        postId,
-        parentId: parent?.id ?? null,
-        parentCreatedAt: parent?.createdAt ?? null,
-        authorId,
-        body,
-      });
+      const [inserted] = await tx
+        .insert(postComments)
+        .values({
+          id,
+          postId,
+          parentId: parent?.id ?? null,
+          parentCreatedAt: parent?.createdAt ?? null,
+          authorId,
+          body,
+        })
+        .returning({ createdAt: postComments.createdAt });
       await this.links.record(tx, writer, { commentId: id }, post.marketId, links);
+      // Last in the transaction (ADR-0157 결정 4): the author right above it (52-18), never the
+      // writer (135-3 — no input, so no statement).
+      const reply = { id, createdAt: inserted!.createdAt, authorId };
+      const input = replyNotificationInput(
+        reply,
+        parent === null
+          ? { kind: 'post', postId, authorId: post.authorId }
+          : { kind: 'comment', postId, commentId: parent.id, authorId: parent.authorId },
+      );
+      const outcomes = await createNotifications(tx, input === null ? [] : [input]);
+      return { notified: notifiedUserIds(outcomes), createdAt: reply.createdAt };
     });
+    await Promise.all(
+      notified.map((userId) => this.publisher.publishUser(userId, notificationEvent(createdAt))),
+    );
     return this.published(id);
   }
 
@@ -471,13 +514,14 @@ export class CommentsService {
    * comments in id order could: a retention run that did — its comment versions' step — held the
    * 댓글 while waiting for the 대댓글 this held, and this then waited for the 댓글 (40P01, ADR-0087
    * 7-29). Its `created_at` goes with it: the new 대댓글 carries it (`parent_created_at`, which the
-   * parent's foreign key holds to it).
+   * parent's foreign key holds to it), and its author, whom the new 대댓글's notice goes to (#135,
+   * 52-18: the thread 댓글's author, also when a 대댓글 was named).
    */
   private async lockParent(
     tx: Tx,
     postId: string,
     parentId: string,
-  ): Promise<{ id: string; createdAt: Date }> {
+  ): Promise<{ id: string; createdAt: Date; authorId: string }> {
     const target = await this.lockComment(tx, parentId);
     if (!target || target.postId !== postId) throw parentNotFound();
     let comment = target;
@@ -497,7 +541,7 @@ export class CommentsService {
       case 'hidden':
         throw commentNotAllowed('parent_hidden');
       case 'published':
-        return { id: comment.id, createdAt: comment.createdAt };
+        return { id: comment.id, createdAt: comment.createdAt, authorId: comment.authorId };
     }
   }
 
@@ -508,6 +552,7 @@ export class CommentsService {
         id: postComments.id,
         postId: postComments.postId,
         parentId: postComments.parentId,
+        authorId: postComments.authorId,
         createdAt: postComments.createdAt,
         deletedAt: postComments.deletedAt,
         hiddenAt: postComments.hiddenAt,

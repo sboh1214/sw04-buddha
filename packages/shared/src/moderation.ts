@@ -63,7 +63,8 @@ import { publicIdSchema } from './public-id.js';
  * - Effects are immediate (#45-13). The member acted on sees the action, its reason, its end when
  *   it has one and how to appeal (by email, once per action within APPEAL_WINDOW_DAYS, #45-14 —
  *   #186 words it); never who reported nor which operator acted. The reporter sees the receipt and
- *   the result: 조치함 or 기각 (#45-13). Notifications are M13's.
+ *   the result: 조치함 or 기각 (#45-13), never a notification (52-17). Notifications (#135,
+ *   ADR-0161): the member acted on is told the kind and, for a restriction, its end (52-16, 135-2).
  * - Every admin reads the reports and the actions (ADR-0056 decision 1-2) — but an admin reading a
  *   record about themselves, a report on their item or profile or an action on them, reads no
  *   reporter, no report description and no operator's name in it (owner decision 2026-10-21,

@@ -1,11 +1,23 @@
 import { randomInt } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
-import { isNicknameHeld, lockNicknames, schema, type Db } from '@buddha/db';
+import {
+  createNotifications,
+  isNicknameHeld,
+  lockNicknames,
+  moderationActionNotificationInput,
+  moderationCancelNotificationInput,
+  notifiedUserIds,
+  restrictionEndChangeNotificationInput,
+  schema,
+  type Db,
+  type NotificationInput,
+} from '@buddha/db';
 import {
   AUTO_NICKNAME_ALPHABET,
   AUTO_NICKNAME_PREFIX,
   AUTO_NICKNAME_SUFFIX_LENGTH,
   isAutoNickname,
+  notificationEvent,
   type AdminActionType,
   type AdminModerationAction,
   type AdminReport,
@@ -27,6 +39,7 @@ import { PG_UNIQUE_VIOLATION, isPgError } from '../common/errors/pg-error.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
 import { NICKNAME_UNIQUE_INDEX } from '../me/nickname.service.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import { ModerationReadsService } from './moderation-reads.service.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -62,6 +75,19 @@ export interface ResolvedSubject {
 export interface ReportTarget {
   targetType: ReportTargetType;
   targetKey: string;
+}
+
+/** An action's row as `record` wrote it: its id and its time (`created_at`). */
+interface RecordedAction {
+  actionId: string;
+  at: Date;
+}
+
+/** What a write's transaction hands on: the action, the time, whom its notice reached (#135). */
+interface Notified {
+  id: string;
+  at: Date;
+  notified: string[];
 }
 
 /** The standing-hiding indexes (migration 0039): a second hiding of one item at once. */
@@ -104,26 +130,36 @@ const ITEM_LOCK = 'no key update';
  * `link_flags`, #187) waits for no action: that write holds the post's comment count from its own
  * comment's insert (#48's trigger) when it names the item, and a hiding's `hidden_at` moves that
  * count, so with FOR UPDATE the two waited for each other (ADR-0083 7-13).
+ *
+ * Notices (#135, ADR-0161; 52-16, 52-17, 135-1, 135-2, 135-6): every action on a member, its
+ * cancellation and a writing restriction's 감경 and 조기 해제 tell the member acted on, last in the
+ * transaction (`notify`, ADR-0157 결정 4) — the action's kind and, for a restriction, its own end;
+ * never the operator, a reporter or a reason — and after COMMIT `user:notification` goes to them.
+ * A notice's failure fails the write (500, nothing kept — 188-2). A dismissal tells nobody (135-1),
+ * nor are the reporters of an actioned report told (52-17: they read 조치함 in their 내역). A second
+ * warning or restriction is its own action and its own notice (53-4).
  */
 @Injectable()
 export class ModerationService {
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly reads: ModerationReadsService,
+    private readonly publisher: MarketPublisher,
   ) {}
 
   /**
    * `POST /admin/moderation/posts/:postId/hide` (#45-5): out of the community list and the
    * profile, the placeholder on its page, no new comment, no edit by its author (who may delete
    * it); its images are served to nobody. Refused: the author's own deletion (`deleted` — the
-   * public sees it gone or as its placeholder already) and a hidden post (`hidden`).
+   * public sees it gone or as its placeholder already) and a hidden post (`hidden`). The author is
+   * told '숨김' (#135, M1 — not which item: 135-2).
    */
   async hidePost(
     adminId: string,
     postId: string,
     body: ParsedModerationActionBody,
   ): Promise<AdminModerationAction> {
-    const id = await this.db.transaction(async (tx) => {
+    const done = await this.db.transaction(async (tx) => {
       const { posts } = schema;
       const [post] = await tx
         .select({ authorId: posts.authorId, deletedAt: posts.deletedAt, hiddenAt: posts.hiddenAt })
@@ -136,17 +172,19 @@ export class ModerationService {
       if (post.hiddenAt !== null) throw refused('hidden');
       const now = await clockTimestamp(tx);
       await tx.update(posts).set({ hiddenAt: now }).where(eq(posts.id, postId));
-      return this.record(
+      const row: ActionRow = { type: 'hide', userId: post.authorId, postId };
+      const recorded = await this.record(
         tx,
         adminId,
-        { type: 'hide', userId: post.authorId, postId },
+        row,
         body,
         { targetType: 'post', targetKey: postId },
         'moderation_post_hide',
         { postId },
       );
+      return this.notifyTaken(tx, row, recorded);
     });
-    return this.answer(id, adminId);
+    return this.answered(done, adminId);
   }
 
   /** `POST /admin/moderation/comments/:commentId/hide`: the same for a 댓글 or a 대댓글. */
@@ -155,7 +193,7 @@ export class ModerationService {
     commentId: string,
     body: ParsedModerationActionBody,
   ): Promise<AdminModerationAction> {
-    const id = await this.db.transaction(async (tx) => {
+    const done = await this.db.transaction(async (tx) => {
       const { postComments } = schema;
       const [comment] = await tx
         .select({
@@ -172,17 +210,19 @@ export class ModerationService {
       if (comment.hiddenAt !== null) throw refused('hidden');
       const now = await clockTimestamp(tx);
       await tx.update(postComments).set({ hiddenAt: now }).where(eq(postComments.id, commentId));
-      return this.record(
+      const row: ActionRow = { type: 'hide', userId: comment.authorId, commentId };
+      const recorded = await this.record(
         tx,
         adminId,
-        { type: 'hide', userId: comment.authorId, commentId },
+        row,
         body,
         { targetType: 'comment', targetKey: commentId },
         'moderation_comment_hide',
         { commentId },
       );
+      return this.notifyTaken(tx, row, recorded);
     });
-    return this.answer(id, adminId);
+    return this.answered(done, adminId);
   }
 
   /**
@@ -196,22 +236,18 @@ export class ModerationService {
     userId: string,
     body: ParsedWarningBody,
   ): Promise<AdminModerationAction> {
-    const id = await this.db.transaction(async (tx) => {
+    const done = await this.db.transaction(async (tx) => {
       if (userId === adminId) throw refused('own');
       await this.lockOpenProfile(tx, userId);
       const subject = body.subject;
       const { postId, commentId, target } = await this.subjectOf(tx, userId, subject);
-      return this.record(
-        tx,
-        adminId,
-        { type: 'warning', userId, postId, commentId },
-        body,
-        target,
-        'moderation_warning',
-        { subject },
-      );
+      const row: ActionRow = { type: 'warning', userId, postId, commentId };
+      const recorded = await this.record(tx, adminId, row, body, target, 'moderation_warning', {
+        subject,
+      });
+      return this.notifyTaken(tx, row, recorded);
     });
-    return this.answer(id, adminId);
+    return this.answered(done, adminId);
   }
 
   /**
@@ -235,17 +271,18 @@ export class ModerationService {
     userId: string,
     body: ParsedWritingRestrictionBody,
   ): Promise<AdminModerationAction> {
-    const id = await this.db.transaction(async (tx) => {
+    const done = await this.db.transaction(async (tx) => {
       if (userId === adminId) throw refused('own');
       await this.lockOpenProfile(tx, userId);
       const subject = body.subject;
       const { postId, commentId, target } = await this.subjectOf(tx, userId, subject);
       const now = await clockTimestamp(tx);
       const endsAt = writingRestrictionEndOf(now, body.days);
-      return this.record(
+      const row: ActionRow = { type: 'writing_restriction', userId, postId, commentId, endsAt };
+      const recorded = await this.record(
         tx,
         adminId,
-        { type: 'writing_restriction', userId, postId, commentId, endsAt },
+        row,
         body,
         target,
         'moderation_writing_restriction',
@@ -253,8 +290,9 @@ export class ModerationService {
         undefined,
         now,
       );
+      return this.notifyTaken(tx, row, recorded);
     });
-    return this.answer(id, adminId);
+    return this.answered(done, adminId);
   }
 
   /**
@@ -271,8 +309,10 @@ export class ModerationService {
     endsAt: Date,
     reason: string,
   ): Promise<AdminModerationAction> {
-    await this.changeEnd(adminId, actionId, 'shorten', reason, endsAt);
-    return this.answer(actionId, adminId);
+    return this.answered(
+      await this.changeEnd(adminId, actionId, 'shorten', reason, endsAt),
+      adminId,
+    );
   }
 
   /**
@@ -287,8 +327,7 @@ export class ModerationService {
     actionId: string,
     reason: string,
   ): Promise<AdminModerationAction> {
-    await this.changeEnd(adminId, actionId, 'lift', reason);
-    return this.answer(actionId, adminId);
+    return this.answered(await this.changeEnd(adminId, actionId, 'lift', reason), adminId);
   }
 
   /**
@@ -309,7 +348,7 @@ export class ModerationService {
     userId: string,
     body: ParsedModerationActionBody,
   ): Promise<AdminModerationAction> {
-    const id = await this.db.transaction(async (tx) => {
+    const done = await this.db.transaction(async (tx) => {
       if (userId === adminId) throw refused('own');
       const profile = await this.lockProfile(tx, userId);
       // A closed account has no nickname at all (#140): nothing to take away either.
@@ -321,10 +360,11 @@ export class ModerationService {
         .update(schema.profiles)
         .set({ nicknameChangedAt: null })
         .where(eq(schema.profiles.userId, userId));
-      const actionId = await this.record(
+      const row: ActionRow = { type: 'nickname_reset', userId };
+      const recorded = await this.record(
         tx,
         adminId,
-        { type: 'nickname_reset', userId },
+        row,
         body,
         { targetType: 'profile', targetKey: userId },
         'moderation_nickname_reset',
@@ -334,10 +374,11 @@ export class ModerationService {
       );
       await tx
         .insert(schema.nicknameHolds)
-        .values({ nickname, userId: null, releasedAt: now, actionId });
-      return actionId;
+        .values({ nickname, userId: null, releasedAt: now, actionId: recorded.actionId });
+      // After the hold: the notice is the transaction's last statement (ADR-0157 결정 4).
+      return this.notifyTaken(tx, row, recorded);
     });
-    return this.answer(id, adminId);
+    return this.answered(done, adminId);
   }
 
   /** `POST /admin/moderation/users/:userId/bio-clear` (#37-10): the 소개 emptied, kept for operators. */
@@ -346,23 +387,25 @@ export class ModerationService {
     userId: string,
     body: ParsedModerationActionBody,
   ): Promise<AdminModerationAction> {
-    const id = await this.db.transaction(async (tx) => {
+    const done = await this.db.transaction(async (tx) => {
       if (userId === adminId) throw refused('own');
       const profile = await this.lockProfile(tx, userId);
       if (profile.bio === null) throw refused('nothing_to_remove');
       await tx.update(schema.profiles).set({ bio: null }).where(eq(schema.profiles.userId, userId));
-      return this.record(
+      const row: ActionRow = { type: 'bio_clear', userId };
+      const recorded = await this.record(
         tx,
         adminId,
-        { type: 'bio_clear', userId },
+        row,
         body,
         { targetType: 'profile', targetKey: userId },
         'moderation_bio_clear',
         {},
         { bio: profile.bio },
       );
+      return this.notifyTaken(tx, row, recorded);
     });
-    return this.answer(id, adminId);
+    return this.answered(done, adminId);
   }
 
   /**
@@ -376,7 +419,7 @@ export class ModerationService {
     userId: string,
     body: ParsedModerationActionBody,
   ): Promise<AdminModerationAction> {
-    const id = await this.db.transaction(async (tx) => {
+    const done = await this.db.transaction(async (tx) => {
       if (userId === adminId) throw refused('own');
       const profile = await this.lockProfile(tx, userId);
       if (profile.imageId === null) throw refused('nothing_to_remove');
@@ -384,18 +427,20 @@ export class ModerationService {
         .update(schema.profiles)
         .set({ imageId: null })
         .where(eq(schema.profiles.userId, userId));
-      return this.record(
+      const row: ActionRow = { type: 'image_remove', userId };
+      const recorded = await this.record(
         tx,
         adminId,
-        { type: 'image_remove', userId },
+        row,
         body,
         { targetType: 'profile', targetKey: userId },
         'moderation_image_remove',
         {},
         { imageId: profile.imageId },
       );
+      return this.notifyTaken(tx, row, recorded);
     });
-    return this.answer(id, adminId);
+    return this.answered(done, adminId);
   }
 
   /**
@@ -418,10 +463,12 @@ export class ModerationService {
    * answered before the hold changes hands, and one that comes while this runs waits for it and
    * reads the hold as handed. The reports it resolved stay resolved (조치함 is what was done).
    * Refused: an action on the acting operator (`own`), one cancelled already (`cancelled`) and an
-   * account restriction, which only an approved request cancels (`approval_required`, #139).
+   * account restriction, which only an approved request cancels (`approval_required`, #139). The
+   * member is told of the cancellation and the kind (#135, M8; 52-16 '그 취소' — an ended writing
+   * restriction's too), never the reason.
    */
   async cancel(adminId: string, actionId: string, reason: string): Promise<AdminModerationAction> {
-    await this.db.transaction(async (tx) => {
+    const done = await this.db.transaction(async (tx) => {
       const { moderationActions, posts, postComments } = schema;
       const [action] = await tx
         .select()
@@ -460,16 +507,23 @@ export class ModerationService {
         userId: action.userId,
         reason,
       });
+      return {
+        id: actionId,
+        at: now,
+        notified: await this.notify(tx, [moderationCancelNotificationInput(action, now)]),
+      };
     });
-    return this.answer(actionId, adminId);
+    return this.answered(done, adminId);
   }
 
   /**
    * `POST /admin/reports/dismiss` (기각: nothing done to anyone, #45-11): the reports named — the
    * ones the operator's screen showed, so one that arrived since stays pending — each pending and
-   * none on the acting operator's own item or profile. The reporters read 기각. The reports are
-   * locked in id order, the order an action takes the ones it resolves (`resolveReports`), so a
-   * dismissal and an action on the same reports wait for each other instead of deadlocking.
+   * none on the acting operator's own item or profile. The reporters read 기각; nobody is notified
+   * (#135: 135-1 — nothing was done to the reported member; 52-17 — nor the reporters). The
+   * reports are locked in id order, the order an action takes the ones it resolves
+   * (`resolveReports`), so a dismissal and an action on the same reports wait for each other
+   * instead of deadlocking.
    */
   async dismiss(
     adminId: string,
@@ -505,9 +559,9 @@ export class ModerationService {
 
   /**
    * The records of an action, in its transaction: the action, what a profile action took away, the
-   * pending reports on `target` resolved by it, and the audit row. Answers the action's id. `at` is
-   * the action's time when the caller wrote something at that instant (a nickname reset's hold);
-   * the database clock's now otherwise.
+   * pending reports on `target` resolved by it, and the audit row. Answers the action's id and
+   * time. `at` is the action's time when the caller wrote something at that instant (a nickname
+   * reset's hold); the database clock's now otherwise.
    */
   private async record(
     tx: Tx,
@@ -519,7 +573,7 @@ export class ModerationService {
     payload: Record<string, unknown>,
     removed?: { nickname?: string; bio?: string; imageId?: string },
     at?: Date,
-  ): Promise<string> {
+  ): Promise<RecordedAction> {
     const { moderationActions, profileItemRemovals } = schema;
     const now = at ?? (await clockTimestamp(tx));
     let action: { id: string } | undefined;
@@ -565,7 +619,41 @@ export class ModerationService {
       note: body.note,
       reportIds: resolved.map((report) => report.id),
     });
-    return actionId;
+    return { actionId, at: now };
+  }
+
+  /**
+   * The member's `moderation_action_taken` notice of an action `record` wrote (#135, M1–M7): the
+   * kind and a restriction's own end (135-6), last in the transaction.
+   */
+  private async notifyTaken(tx: Tx, row: ActionRow, recorded: RecordedAction): Promise<Notified> {
+    const input = moderationActionNotificationInput({
+      id: recorded.actionId,
+      type: row.type,
+      userId: row.userId,
+      endsAt: row.endsAt ?? null,
+      createdAt: recorded.at,
+    });
+    return { id: recorded.actionId, at: recorded.at, notified: await this.notify(tx, [input]) };
+  }
+
+  /**
+   * The write's ONE `createNotifications` call (ADR-0157 결정 4): last in its transaction — nothing
+   * locks after it but the COMMIT. Answers the accounts it reached, for `answered` to signal.
+   */
+  private async notify(tx: Tx, inputs: readonly NotificationInput[]): Promise<string[]> {
+    return notifiedUserIds(await createNotifications(tx, inputs));
+  }
+
+  /**
+   * After COMMIT: `user:notification` to whom the write's notice reached (best effort,
+   * MarketPublisher — a failure names no member), then the action as the operator reads it.
+   */
+  private async answered(done: Notified, adminId: string): Promise<AdminModerationAction> {
+    await Promise.all(
+      done.notified.map((userId) => this.publisher.publishUser(userId, notificationEvent(done.at))),
+    );
+    return this.answer(done.id, adminId);
   }
 
   /**
@@ -672,7 +760,8 @@ export class ModerationService {
    * and for a shortening an end not to come (`end_passed`) or not earlier than the end now
    * (`not_earlier`; any is, for 무기한). The trigger of migration 0040 holds the same: earlier only,
    * never 무기한 again, never once ended. No lock on the member's profile: an earlier end only
-   * opens what a write in flight was refused.
+   * opens what a write in flight was refused. Last, the member's notice of the change (#135, M9:
+   * the kind, the change and the new end — 52-16, 135-5 (h)).
    */
   private async changeEnd(
     adminId: string,
@@ -680,8 +769,8 @@ export class ModerationService {
     kind: RestrictionEndChangeKind,
     reason: string,
     requested?: Date,
-  ): Promise<void> {
-    await this.db.transaction(async (tx) => {
+  ): Promise<Notified> {
+    return this.db.transaction(async (tx) => {
       const { moderationActions, restrictionEndChanges } = schema;
       const [action] = await tx
         .select({
@@ -711,15 +800,18 @@ export class ModerationService {
         }
       }
       await tx.update(moderationActions).set({ endsAt }).where(eq(moderationActions.id, actionId));
-      await tx.insert(restrictionEndChanges).values({
-        actionId,
-        kind,
-        previousEndsAt: action.endsAt,
-        endsAt,
-        reason,
-        createdBy: adminId,
-        createdAt: now,
-      });
+      const [change] = await tx
+        .insert(restrictionEndChanges)
+        .values({
+          actionId,
+          kind,
+          previousEndsAt: action.endsAt,
+          endsAt,
+          reason,
+          createdBy: adminId,
+          createdAt: now,
+        })
+        .returning({ id: restrictionEndChanges.id });
       await this.audit(
         tx,
         adminId,
@@ -734,6 +826,11 @@ export class ModerationService {
           reason,
         },
       );
+      const input = restrictionEndChangeNotificationInput(
+        { id: change!.id, kind, endsAt, createdAt: now },
+        { id: actionId, type: action.type, userId: action.userId },
+      );
+      return { id: actionId, at: now, notified: await this.notify(tx, [input]) };
     });
   }
 

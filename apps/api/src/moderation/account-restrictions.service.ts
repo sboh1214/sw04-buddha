@@ -6,8 +6,11 @@ import {
   lockAccountOrders,
   lockAdminRoles,
   moderationActionEventKey,
+  moderationActionNotificationInput,
+  moderationCancelNotificationInput,
   notifiedUserIds,
   orderEndNotificationInputs,
+  restrictionEndChangeNotificationInput,
   schema,
   withTransactionRetry,
   TransactionBusyError,
@@ -120,11 +123,15 @@ interface LockedAction {
  * 대기 주문', #57-13), but those in a market held for a ledger failure, which keep their locks until
  * its recovery (the owner's answer 2026-11-06) — the restriction applies all the same. The member
  * gets one `orders_cancelled` notice of them in that transaction (#134, ADR-0158: 52-3·52-4; the
- * held ones are notified when their market's recovery ends them). After COMMIT each market an
- * order was cancelled in gets `market:book` (#179, ADR-0114: its public book changed), and the
- * member `user:notification`. They are not restored when it ends, is brought forward, lifted or
- * cancelled. Nothing else here touches a balance, a holding or a record of trades (N02 §9:
- * «잔액·기록·이의제기 경로는 유지»).
+ * held ones are notified when their market's recovery ends them). Every approved change also
+ * tells the member in that call (#135, ADR-0161; 52-16): the restriction with its own end
+ * (`moderation_action_taken`, 135-6), its 감경 with the new end or 조기 해제
+ * (`moderation_restriction_end_changed`) and its cancellation (`moderation_action_cancelled`) —
+ * never who asked or approved, nor a reason; a request, a rejection and a retraction tell nobody.
+ * After COMMIT each market an order was cancelled in gets `market:book` (#179, ADR-0114: its
+ * public book changed), and the member one `user:notification`. The orders are not restored when
+ * it ends, is brought forward, lifted or cancelled. Nothing else here touches a balance, a holding
+ * or a record of trades (N02 §9: «잔액·기록·이의제기 경로는 유지»).
  */
 @Injectable()
 export class AccountRestrictionService {
@@ -322,12 +329,15 @@ export class AccountRestrictionService {
    *   resolved (조치함). A member restricted already keeps the one that ends later. Then the
    *   member's resting orders are cancelled 계정 제한 at the approval's instant (the class doc),
    *   the audit naming them (`cancelledOrderIds`) and those left for a recovery (`heldOrderIds`),
-   *   and last the member's one `orders_cancelled` notice of them (#134, ADR-0158; 52-3·52-4);
-   *   after COMMIT `market:book` in each market one was cancelled in (#179) and
-   *   `user:notification` to the member when the notice reached them.
+   *   and last the member's one `orders_cancelled` notice of them (#134, ADR-0158; 52-3·52-4)
+   *   with the `moderation_action_taken` one of the restriction (#135, 52-16) in the same call;
+   *   after COMMIT `market:book` in each market one was cancelled in (#179) and one
+   *   `user:notification` to the member when a notice reached them.
    * - `shorten`, `lift`: the restriction's end brought forward to the end asked for, or to now —
-   *   the change recorded as the asking operator's, with its approval.
-   * - `cancel`: the restriction cancelled at once, as the asking operator's, with its approval.
+   *   the change recorded as the asking operator's, with its approval — and the member's
+   *   `moderation_restriction_end_changed` notice (#135).
+   * - `cancel`: the restriction cancelled at once, as the asking operator's, with its approval —
+   *   an ended one too (52-16 '그 취소') — and the member's `moderation_action_cancelled` notice.
    *
    * Every lock the approval waits on is taken before the decision, whose instant (read by
    * ApprovalService after its own lock of the request) is the time of everything written here —
@@ -380,10 +390,12 @@ export class AccountRestrictionService {
       // The markets whose public book the cancels changed (#179): none for a held market's.
       let bookMarketIds: string[] = [];
       // #134 (ADR-0158, 52-3·52-4): an `apply`'s 계정 제한 cancel, one notice to the member (an
-      // account event across markets); the other changes cancel nothing and notify nothing.
-      let notices: NotificationInput[] = [];
+      // account event across markets); the member's notice of the change (#135, 52-16) joins
+      // #134's one call — for all four changes (ADR-0158 결과 6).
+      let notices: NotificationInput[];
       if (locked.change === 'apply') {
-        done = await this.applyApproved(tx, request, memberId, locked.apply, at);
+        const applied = await this.applyApproved(tx, request, memberId, locked.apply, at);
+        done = applied;
         const ended = await cancelLockedOrders(tx, orders!, { reason: 'restricted', at });
         cancelled = {
           cancelledOrderIds: ended.cancelled.map((order) => order.id),
@@ -396,20 +408,33 @@ export class AccountRestrictionService {
           eventKey: moderationActionEventKey(done.actionId),
           occurredAt: at,
         });
-      } else if (locked.change === 'cancel') {
-        done = {
-          actionId: await this.cancelApproved(tx, request, locked.action, at),
-          reportIds: [],
-        };
-      } else {
-        const actionId = await this.changeEndApproved(
-          tx,
-          request,
-          locked.change,
-          locked.action,
-          at,
+        notices.push(
+          moderationActionNotificationInput({
+            id: applied.actionId,
+            type: 'account_restriction',
+            userId: memberId,
+            endsAt: applied.endsAt,
+            createdAt: at,
+          }),
         );
+      } else if (locked.change === 'cancel') {
+        const actionId = await this.cancelApproved(tx, request, locked.action, at);
         done = { actionId, reportIds: [] };
+        notices = [
+          moderationCancelNotificationInput(
+            { id: actionId, type: 'account_restriction', userId: memberId },
+            at,
+          ),
+        ];
+      } else {
+        const changed = await this.changeEndApproved(tx, request, locked.change, locked.action, at);
+        done = { actionId: changed.actionId, reportIds: [] };
+        notices = [
+          restrictionEndChangeNotificationInput(
+            { id: changed.changeId, kind: locked.change, endsAt: changed.endsAt, createdAt: at },
+            { id: changed.actionId, type: 'account_restriction', userId: memberId },
+          ),
+        ];
       }
       await this.moderation.audit(
         tx,
@@ -628,15 +653,19 @@ export class AccountRestrictionService {
     return { payload, subject };
   }
 
-  /** An approved `apply`: the restriction in force from `at`, its rows locked (see `approve`). */
+  /**
+   * An approved `apply`: the restriction in force from `at`, its rows locked (see `approve`).
+   * Answers its end too (null: 무기한), which the member's notice carries (#135, 135-6).
+   */
   private async applyApproved(
     tx: Tx,
     request: ApprovalRequest,
     memberId: string,
     { payload, subject }: LockedApply,
     at: Date,
-  ): Promise<{ actionId: string; reportIds: string[] }> {
+  ): Promise<{ actionId: string; reportIds: string[]; endsAt: Date | null }> {
     const { postId, commentId, target } = subject;
+    const endsAt = accountRestrictionEndOf(at, payload.days);
     const [action] = await tx
       .insert(schema.moderationActions)
       .values({
@@ -648,7 +677,7 @@ export class AccountRestrictionService {
         note: payload.note,
         createdBy: request.requestedBy,
         createdAt: at,
-        endsAt: accountRestrictionEndOf(at, payload.days),
+        endsAt,
         approvalId: request.id,
       })
       .returning({ id: schema.moderationActions.id });
@@ -657,14 +686,15 @@ export class AccountRestrictionService {
       target === null
         ? []
         : await this.moderation.resolveReports(tx, request.requestedBy, target, actionId, at);
-    return { actionId, reportIds: resolved.map((report) => report.id) };
+    return { actionId, reportIds: resolved.map((report) => report.id), endsAt };
   }
 
   /**
    * An approved `shorten` or `lift`: the restriction locked before the decision (see `approve`),
    * the rules asked again at `at`, the end brought forward and the change recorded (the asking
    * operator's, its reason, the approval) — migration 0042's triggers hold that the change and the
-   * end go together.
+   * end go together. Answers the change's id and the new end, which the member's notice carries
+   * (#135).
    */
   private async changeEndApproved(
     tx: Tx,
@@ -672,7 +702,7 @@ export class AccountRestrictionService {
     change: 'shorten' | 'lift',
     action: LockedAction,
     at: Date,
-  ): Promise<string> {
+  ): Promise<{ actionId: string; changeId: string; endsAt: Date }> {
     const requested =
       change === 'shorten' ? new Date(this.payloadOf(shortenPayloadSchema, request).endsAt) : null;
     const moot = accountRestrictionMoot(action, change, at, requested);
@@ -680,17 +710,20 @@ export class AccountRestrictionService {
     const endsAt = requested ?? at;
     const { moderationActions, restrictionEndChanges } = schema;
     await tx.update(moderationActions).set({ endsAt }).where(eq(moderationActions.id, action.id));
-    await tx.insert(restrictionEndChanges).values({
-      actionId: action.id,
-      kind: change,
-      previousEndsAt: action.endsAt,
-      endsAt,
-      reason: request.requestReason,
-      createdBy: request.requestedBy,
-      createdAt: at,
-      approvalId: request.id,
-    });
-    return action.id;
+    const [inserted] = await tx
+      .insert(restrictionEndChanges)
+      .values({
+        actionId: action.id,
+        kind: change,
+        previousEndsAt: action.endsAt,
+        endsAt,
+        reason: request.requestReason,
+        createdBy: request.requestedBy,
+        createdAt: at,
+        approvalId: request.id,
+      })
+      .returning({ id: restrictionEndChanges.id });
+    return { actionId: action.id, changeId: inserted!.id, endsAt };
   }
 
   /**

@@ -473,11 +473,208 @@ describe('MyNotifications', () => {
     }
   });
 
+  it('draws each 커뮤니티 알림 with its own title under 커뮤니티 and leads it to the post, 조치·신고 내역 or 내 제안 (#135)', () => {
+    // ADR-0161: one row per type as the API answers them — a reply row's name from its
+    // `replyAuthor` (52-15), none when that reply is hidden or deleted (null, 135-4) — each at the
+    // top of its screen (135-7). A Seoul member: the restriction's end in Seoul, one line.
+    const postId = '5c1e9f3a-7b2d-4e6f-8a0c-2d4f6a8c0e1b';
+    const commentId = '6d2f0a4b-8c3e-4f7a-9b1d-3e5a7b9d1f2c';
+    const actionId = '8f4b2c6d-0e5a-4b9c-8d3f-5a7c9e1b3d4e';
+    const proposalId = '9a5c3d7e-1f6b-4cad-9e4a-6b8dae2c4e5f';
+    const reply = {
+      replyId: '1b6d4e8f-2a7c-4dbe-8f5b-7c9ebf3d5f60',
+      replyCreatedAt: '2026-11-21T03:00:00.000Z',
+    };
+    const endsAt = '2026-09-08T06:00:00.000Z';
+    const member = {
+      kind: 'member',
+      publicId: 'k7m2p9qx4z',
+      nickname: '눈사람',
+      imageUrl: null,
+      isAdmin: false,
+    } as const;
+    const postTarget = { kind: 'post', postId } as const;
+    const commentTarget = { kind: 'comment', postId, commentId } as const;
+    const actionTarget = { kind: 'moderation_action', actionId } as const;
+    const rows: readonly (readonly [Partial<InboxNotification>, string, string])[] = [
+      [
+        { type: 'post_replied', params: reply, target: postTarget, replyAuthor: member },
+        '내 글에 새 댓글 · 눈사람',
+        `/community/posts/${postId}`,
+      ],
+      [
+        {
+          type: 'post_replied',
+          params: reply,
+          target: postTarget,
+          eventCount: 3,
+          replyAuthor: { ...member, isAdmin: true },
+        },
+        '내 글에 새 댓글 3개 · 마지막: 눈사람(운영자)',
+        `/community/posts/${postId}`,
+      ],
+      [
+        { type: 'comment_replied', params: reply, target: commentTarget, replyAuthor: null },
+        '내 댓글에 새 답글',
+        `/community/posts/${postId}`,
+      ],
+      [
+        {
+          type: 'comment_replied',
+          params: reply,
+          target: commentTarget,
+          eventCount: 2,
+          replyAuthor: { kind: 'former_member' },
+        },
+        '내 댓글에 새 답글 2개 · 마지막: 탈퇴한 사용자',
+        `/community/posts/${postId}`,
+      ],
+      [
+        {
+          type: 'moderation_action_taken',
+          params: { action: 'hide', endsAt: null },
+          target: actionTarget,
+        },
+        '운영 조치: 숨김',
+        '/my/moderation',
+      ],
+      [
+        {
+          type: 'moderation_action_taken',
+          params: { action: 'writing_restriction', endsAt },
+          target: actionTarget,
+        },
+        `운영 조치: 작성 제한 · ${formatKst(endsAt)}까지`,
+        '/my/moderation',
+      ],
+      [
+        {
+          type: 'moderation_action_taken',
+          params: { action: 'account_restriction', endsAt: null },
+          target: actionTarget,
+        },
+        '운영 조치: 계정 제한 · 무기한',
+        '/my/moderation',
+      ],
+      [
+        {
+          type: 'moderation_action_cancelled',
+          params: { action: 'hide' },
+          target: actionTarget,
+        },
+        '운영 조치 취소: 숨김',
+        '/my/moderation',
+      ],
+      [
+        {
+          type: 'moderation_restriction_end_changed',
+          params: { action: 'writing_restriction', change: 'shorten', endsAt },
+          target: actionTarget,
+        },
+        `운영 조치 감경: 작성 제한 · ${formatKst(endsAt)}까지`,
+        '/my/moderation',
+      ],
+      [
+        {
+          type: 'moderation_restriction_end_changed',
+          params: { action: 'account_restriction', change: 'lift', endsAt },
+          target: actionTarget,
+        },
+        '운영 조치 조기 해제: 계정 제한',
+        '/my/moderation',
+      ],
+      [
+        {
+          type: 'proposal_decided',
+          params: { decision: 'adopted', question: '첫눈이 서울에 올까?' },
+          target: { kind: 'proposal', proposalId },
+        },
+        '시장 제안 채택 · 첫눈이 서울에 올까?',
+        '/my/proposals',
+      ],
+    ];
+    const ids = rows.map((_, index) => `9b2c8e4a-1f3d-4c6b-8a7e-5d4c3b2a1f${String(50 + index)}`);
+    const items = rows.map(([fields], index) =>
+      notification(ids[index] ?? '', { category: 'community', ...fields }),
+    );
+    const html = renderWithQueries(
+      <TimeZoneScope zone={SEOUL_TIME_ZONE} settled>
+        <NotificationsBody
+          notifications={list([{ items, nextCursor: null }])}
+          accountId={ACCOUNT.id}
+          testId="my-notifications"
+        />
+      </TimeZoneScope>,
+    );
+    rows.forEach(([fields, title, href], index) => {
+      const type = String(fields.type);
+      const drawnRow = rowOf(html, ids[index] ?? '') ?? '';
+      expect(byTestId(drawnRow, 'notification-row-category')?.text, type).toBe(
+        copy.notificationCategoryCommunity,
+      );
+      expect(byTestId(drawnRow, 'notification-row-title')?.text, type).toBe(title);
+      expect(byTestId(drawnRow, 'notification-row-judgement-zone'), type).toBeUndefined();
+      expect(byTestId(drawnRow, 'notification-row')?.attributes.href, type).toBe(href);
+      // Never the operator or a reporter (135-2), never the replier's account id.
+      expect(drawnRow, type).not.toMatch(/신고|관리자|k7m2p9qx4z/);
+    });
+    expect(html).not.toContain(
+      `${copy.notificationCategoryCommunity} ${copy.notificationFallback}`,
+    );
+  });
+
+  it('draws a restriction’s end in the member’s settled zone, on one line (135-6)', () => {
+    // A New York member: the end in New York — no 판정 기준 시간대 line, a restriction has none.
+    const newYork = 'America/New_York';
+    const endsAt = '2026-09-08T06:00:00.000Z';
+    const at = formatInTimeZone(endsAt, newYork);
+    expect(at).not.toBe(formatKst(endsAt));
+    for (const [type, params, title] of [
+      [
+        'moderation_action_taken',
+        { action: 'account_restriction', endsAt },
+        `운영 조치: 계정 제한 · ${at}까지`,
+      ],
+      [
+        'moderation_restriction_end_changed',
+        { action: 'writing_restriction', change: 'shorten', endsAt },
+        `운영 조치 감경: 작성 제한 · ${at}까지`,
+      ],
+    ] as const) {
+      const html = renderWithQueries(
+        <TimeZoneScope zone={newYork} settled>
+          <NotificationsBody
+            notifications={list([
+              {
+                items: [
+                  notification(UNREAD_ID, {
+                    type,
+                    category: 'community',
+                    params,
+                    target: {
+                      kind: 'moderation_action',
+                      actionId: '8f4b2c6d-0e5a-4b9c-8d3f-5a7c9e1b3d4e',
+                    },
+                  }),
+                ],
+                nextCursor: null,
+              },
+            ])}
+            accountId={ACCOUNT.id}
+            testId="my-notifications"
+          />
+        </TimeZoneScope>,
+      );
+      expect(byTestId(html, 'notification-row-title')?.text, type).toBe(title);
+      expect(byTestId(html, 'notification-row-judgement-zone'), type).toBeUndefined();
+    }
+  });
+
   it('draws a target this web cannot lead to as a button that only marks it read', () => {
     const html = drawn(
       list([
         {
-          items: [notification(UNREAD_ID, { target: { kind: 'post', id: 'p1' } as never })],
+          items: [notification(UNREAD_ID, { target: { kind: 'dispute', id: 'p1' } as never })],
           nextCursor: null,
         },
       ]),

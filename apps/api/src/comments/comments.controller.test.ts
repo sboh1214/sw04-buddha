@@ -8,16 +8,21 @@
  * text, trimmed, line breaks kept, 1,000 characters; the author by public face only; edits keep
  * the operators' history; deletion and hiding as #45-5 says, for comments and now for posts; a
  * hidden or deleted post or 댓글 takes no new comment; writing never touches a balance, an order or
- * a position. Skips when TEST_* are unset.
+ * a position. A new comment tells the author right above it in its transaction (#135, ADR-0161;
+ * 52-7, 52-18, 135-3): a 댓글 the post's author, a 대댓글 its thread 댓글's, merged while unread, never
+ * the writer, and nothing for an edit, a deletion or a refused write. Skips when TEST_* are unset.
  */
 import { randomUUID } from 'node:crypto';
 import { closeDb, createDb, schema, type Db } from '@buddha/db';
 import {
+  closeAccount,
   completeOnboarding,
   createComment,
   createMarket,
+  createModerationAction,
   createPost,
   createUser,
+  plantNotificationInsertFailure,
   testDbUrls,
 } from '@buddha/db/test';
 import {
@@ -37,10 +42,11 @@ import {
 } from '@buddha/shared';
 import { asc, eq, inArray, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LinkReviewService } from '../link-review/link-review.service.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { PostsService } from '../posts/posts.service.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { waitForLockWaiter } from '../test/wait.js';
 import { WriteLimitsService } from '../write-limits/write-limits.service.js';
@@ -493,6 +499,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
       t.app.get(CommentCursors),
       t.app.get(WriteLimitsService),
       t.app.get(LinkReviewService),
+      t.app.get(MarketPublisher),
     );
     /** Rows of `post_comments` a plan's scans read: those they kept and those they filtered out. */
     const commentRowsRead = (plan: ExplainedPlan): number =>
@@ -861,6 +868,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
         t.app.get(CommentCursors),
         t.app.get(WriteLimitsService),
         t.app.get(LinkReviewService),
+        t.app.get(MarketPublisher),
       ) as unknown as {
         firstReplies(threadIds: string[]): Promise<{ id: string }[]>;
         replies(
@@ -1559,5 +1567,262 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
       () => remove(lone.id),
     );
     expect(deletion.json<{ data: unknown }>().data).toEqual({ id: lone.id, placeholder: true });
+  });
+
+  // ---- notices (#135, ADR-0161) -----------------------------------------------------------------
+
+  describe('the reply notices (#135, ADR-0161; 52-7, 52-18, 135-3)', () => {
+    let third: TestUser;
+    beforeEach(async () => {
+      vi.restoreAllMocks();
+      third = await signUpTestUser(t);
+      await completeOnboarding(t.db, { userId: third.id });
+    });
+
+    /** `who`'s notification rows, oldest first. */
+    const rowsOf = (who: TestUser) =>
+      t.db
+        .select()
+        .from(schema.notifications)
+        .where(eq(schema.notifications.userId, who.id))
+        .orderBy(asc(schema.notifications.createdAt), asc(schema.notifications.id));
+    const allRows = () => t.db.select().from(schema.notifications);
+    /** The `user:notification` signals published from here on, as [account, ts]. */
+    const signals = () => {
+      const spy = vi.spyOn(t.app.get(MarketPublisher), 'publishUser');
+      return () =>
+        spy.mock.calls
+          .filter(([, event]) => event.type === 'user:notification')
+          .map(([userId, event]) => [userId, 'ts' in event ? event.ts : null]);
+    };
+    const replyParams = (comment: { id: string; createdAt: string }) => ({
+      replyId: comment.id,
+      replyCreatedAt: comment.createdAt,
+    });
+
+    it('tells the post’s author of a 댓글 (R1): the reply’s id and time, the post as target, keyed by the comment, after COMMIT', async () => {
+      const signalled = signals();
+      const res = await write({ body: '좋은 근거네요' }, other);
+      expect(res.statusCode, res.body).toBe(201);
+      const comment = publishedCommentSchema.parse(res.json<{ data: unknown }>().data);
+      // The answer names nobody it notified.
+      expect(res.body).not.toContain(author.id);
+      const [notice, ...rest] = await rowsOf(author);
+      expect(rest).toEqual([]);
+      expect(notice).toMatchObject({
+        type: 'post_replied',
+        category: 'community',
+        params: replyParams(comment),
+        target: { kind: 'post', postId: post.id },
+        mergeKey: post.id,
+        eventCount: 1,
+        readAt: null,
+      });
+      expect(notice!.occurredAt.toISOString()).toBe(comment.createdAt);
+      expect(
+        (await t.db.select().from(schema.notificationKeys)).map((key) => [
+          key.userId,
+          key.type,
+          key.eventKey,
+        ]),
+      ).toEqual([[author.id, 'post_replied', `comment:${comment.id}`]]);
+      expect(await rowsOf(other)).toEqual([]);
+      expect(signalled()).toEqual([[author.id, comment.createdAt]]);
+    });
+
+    it('tells the thread 댓글’s author of a 대댓글 (R2) — one answering a 대댓글 too — and neither the post’s author nor the named 대댓글’s', async () => {
+      const thread = await written({ body: '댓글' }, other);
+      // The post's author got the 댓글's notice; from here only `other` hears.
+      const authorRows = await rowsOf(author);
+      expect(authorRows.map((row) => row.type)).toEqual(['post_replied']);
+      const signalled = signals();
+      const first = await reply(thread.id, '대댓글', third);
+      const [notice] = await rowsOf(other);
+      expect(notice).toMatchObject({
+        type: 'comment_replied',
+        category: 'community',
+        params: replyParams(first),
+        target: { kind: 'comment', postId: post.id, commentId: thread.id },
+        mergeKey: thread.id,
+        eventCount: 1,
+      });
+      expect(notice!.occurredAt.toISOString()).toBe(first.createdAt);
+      // The post's author answers the 대댓글: the thread's author hears (merged), not `third`.
+      const answer = await reply(first.id, '대댓글의 답', author);
+      expect(answer.parentId).toBe(thread.id);
+      const merged = await rowsOf(other);
+      expect(merged).toHaveLength(1);
+      expect(merged[0]).toMatchObject({
+        id: notice!.id,
+        eventCount: 2,
+        params: replyParams(answer),
+        target: { kind: 'comment', postId: post.id, commentId: thread.id },
+      });
+      expect(merged[0]!.occurredAt.toISOString()).toBe(answer.createdAt);
+      expect(await rowsOf(third)).toEqual([]);
+      expect(await rowsOf(author)).toEqual(authorRows);
+      expect(signalled()).toEqual([
+        [other.id, first.createdAt],
+        [other.id, answer.createdAt],
+      ]);
+    });
+
+    it('tells nobody of a self-reply, an edit or a deletion (135-3, 135-4)', async () => {
+      const signalled = signals();
+      const own = await written({ body: '내 글에 내 댓글' });
+      const thread = await written({ body: '남의 댓글' }, other);
+      const answer = await reply(thread.id, '대댓글', third);
+      const before = await allRows();
+      expect(before.map((row) => [row.userId, row.type]).sort()).toEqual(
+        [
+          [author.id, 'post_replied'],
+          [other.id, 'comment_replied'],
+        ].sort(),
+      );
+      // `other` answers in its own thread, also to `third`'s 대댓글: its own thread, nobody.
+      await reply(thread.id, '내 스레드의 답', other);
+      await reply(answer.id, '대댓글에 단 내 답', other);
+      // The post's author answers its own 댓글: nobody.
+      await reply(own.id, '내 댓글의 답', author);
+      expect((await edit(answer.id, '고친 대댓글', third)).statusCode).toBe(200);
+      expect((await edit(thread.id, '고친 댓글', other)).statusCode).toBe(200);
+      expect((await remove(answer.id, third)).statusCode).toBe(200);
+      expect(await allRows()).toEqual(before);
+      expect(signalled().map(([userId]) => userId)).toEqual([author.id, other.id]);
+    });
+
+    it('merges the replies of one post while unread, the later one held whatever the order; a read notice is never merged (52-7)', async () => {
+      const first = await written({ body: '하나' }, other);
+      const second = await written({ body: '둘' }, third);
+      const [notice] = await rowsOf(author);
+      expect(notice).toMatchObject({ eventCount: 2, params: replyParams(second) });
+      expect(notice!.occurredAt.toISOString()).toBe(second.createdAt);
+      expect(Date.parse(second.createdAt)).toBeGreaterThanOrEqual(Date.parse(first.createdAt));
+      // Read: the next 댓글 starts a new notice.
+      const read = await send(
+        'POST',
+        `/me/notifications/${notice!.id}/read`,
+        { expectedAccountId: author.id },
+        author,
+      );
+      expect(read.statusCode, read.body).toBe(200);
+      const third2 = await written({ body: '셋' }, other);
+      const rows = await rowsOf(author);
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toMatchObject({ id: notice!.id, eventCount: 2 });
+      expect(rows[0]!.readAt).not.toBeNull();
+      expect(rows[1]).toMatchObject({ eventCount: 1, params: replyParams(third2), readAt: null });
+    });
+
+    it('merges two replies written at once into one notice of two', async () => {
+      const [a, b] = await Promise.all([
+        write({ body: '동시에 하나' }, other),
+        write({ body: '동시에 둘' }, third),
+      ]);
+      expect(a.statusCode, a.body).toBe(201);
+      expect(b.statusCode, b.body).toBe(201);
+      const comments = [a, b].map((res) =>
+        publishedCommentSchema.parse(res.json<{ data: unknown }>().data),
+      );
+      const later = [...comments].sort(
+        (x, y) => Date.parse(x.createdAt) - Date.parse(y.createdAt) || (x.id < y.id ? -1 : 1),
+      )[1]!;
+      const rows = await rowsOf(author);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ eventCount: 2, params: replyParams(later) });
+      expect(rows[0]!.occurredAt.toISOString()).toBe(later.createdAt);
+    });
+
+    it('tells nobody of a refused write: RESTRICTED, WRITE_LIMITED, COMMENT_NOT_ALLOWED, NOT_FOUND', async () => {
+      // The first five of `third` notify; the sixth is over the limit (#187: 5 a minute).
+      for (let i = 0; i < 5; i++) await written({ body: `댓글 ${String(i)}` }, third);
+      const before = await allRows();
+      expect(before).toHaveLength(1);
+      expect(before[0]).toMatchObject({ userId: author.id, eventCount: 5 });
+      await createModerationAction(t.db, {
+        userId: other.id,
+        createdBy: third.id,
+        type: 'writing_restriction',
+        endsAt: new Date(Date.now() + 24 * 60 * 60 * 1_000),
+      });
+      const signalled = signals();
+      const restricted = await write({ body: '제한 중' }, other);
+      expect(errorOf(restricted).code).toBe('RESTRICTED');
+      const limited = await write({ body: '여섯째' }, third);
+      expect(errorOf(limited).code).toBe('WRITE_LIMITED');
+      const unknownParent = await write({ parentId: randomUUID() }, author);
+      expect(unknownParent.statusCode).toBe(404);
+      const hidden = await createPost(t.db, {
+        marketId: market.id,
+        authorId: author.id,
+        hiddenAt: new Date(),
+      });
+      const notAllowed = await write({ body: '숨긴 글에' }, third, hidden.id);
+      expect(errorOf(notAllowed).code).toBe('COMMENT_NOT_ALLOWED');
+      const unknownPost = await write({ body: '없는 글에' }, third, randomUUID());
+      expect(unknownPost.statusCode).toBe(404);
+      expect(await allRows()).toEqual(before);
+      expect(signalled()).toEqual([]);
+    });
+
+    it('skips a closed post author and signals nobody; an admin and a restricted author hear (53-5, 53-6)', async () => {
+      const signalled = signals();
+      await closeAccount(t.db, author.id);
+      await written({ body: '탈퇴한 작성자의 글에' }, other);
+      expect(await allRows()).toEqual([]);
+      expect(signalled()).toEqual([]);
+      // An admin restricted from writing still hears of the 댓글 on their post.
+      const adminAuthor = await signUpTestUser(t);
+      await completeOnboarding(t.db, { userId: adminAuthor.id });
+      await t.db
+        .update(schema.profiles)
+        .set({ role: 'admin' })
+        .where(eq(schema.profiles.userId, adminAuthor.id));
+      const adminPost = await createPost(t.db, { marketId: market.id, authorId: adminAuthor.id });
+      await createModerationAction(t.db, {
+        userId: adminAuthor.id,
+        createdBy: third.id,
+        type: 'writing_restriction',
+        endsAt: null,
+      });
+      const comment = await written({ body: '운영자의 글에' }, other);
+      expect(comment.id).toBeDefined();
+      const res = await write({ body: '하나 더' }, third, adminPost.id);
+      expect(res.statusCode, res.body).toBe(201);
+      expect(await rowsOf(adminAuthor)).toEqual([
+        expect.objectContaining({
+          type: 'post_replied',
+          target: { kind: 'post', postId: adminPost.id },
+        }),
+      ]);
+      expect(signalled().map(([userId]) => userId)).toEqual([adminAuthor.id]);
+    });
+
+    it('fails the comment with its notice: a planted refusal of the notice is a 500 and nothing is kept (188-2)', async () => {
+      const signalled = signals();
+      const planted = await plantNotificationInsertFailure();
+      try {
+        const res = await write({ body: '실패할 댓글' }, other);
+        expect(res.statusCode, res.body).toBe(500);
+        expect(res.body).not.toContain(author.id);
+      } finally {
+        await planted.remove();
+      }
+      expect(
+        await t.db
+          .select()
+          .from(schema.postComments)
+          .where(eq(schema.postComments.authorId, other.id)),
+      ).toEqual([]);
+      expect(await allRows()).toEqual([]);
+      expect(signalled()).toEqual([]);
+      // A self-reply writes no notice, so it is untouched by the refusal.
+      const again = await plantNotificationInsertFailure();
+      try {
+        expect((await write({ body: '내 댓글' })).statusCode).toBe(201);
+      } finally {
+        await again.remove();
+      }
+    });
   });
 });

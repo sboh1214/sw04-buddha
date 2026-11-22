@@ -1,7 +1,8 @@
-import { type APIRequestContext, type Locator, type Page, type Route } from '@playwright/test';
+import { type Locator, type Page, type Route } from '@playwright/test';
 import type { Me } from '@buddha/shared';
 import { copy } from '../src/copy';
 import {
+  commentThroughApi,
   createOpenMarket,
   expect,
   freshEmail,
@@ -9,6 +10,7 @@ import {
   meOf,
   membersSwitchingSessions,
   membersTurningInPlace,
+  postThroughApi,
   signUp,
   test,
 } from './helpers';
@@ -186,41 +188,6 @@ async function dismissDialog(dialog: Locator, dismiss: () => Promise<void>): Pro
   }).toPass({ timeout: 15_000 });
 }
 
-/** A post straight at the API with the context's cookie: this spec's subject is its comments. */
-async function postThroughApi(
-  context: APIRequestContext,
-  marketId: string,
-  title: string,
-  text: string,
-): Promise<string> {
-  const me = await meOf(context);
-  const res = await context.post('/api/v1/posts', {
-    data: {
-      marketId,
-      title,
-      body: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] },
-      expectedAccountId: me.id,
-    },
-  });
-  expect(res.status(), await res.text()).toBe(201);
-  return ((await res.json()) as { data: { id: string } }).data.id;
-}
-
-/** A comment straight at the API with the context's cookie: a 댓글, or a 대댓글 under `parentId`. */
-async function commentThroughApi(
-  context: APIRequestContext,
-  postId: string,
-  parentId: string | null,
-  body: string,
-): Promise<string> {
-  const me = await meOf(context);
-  const res = await context.post(`/api/v1/posts/${postId}/comments`, {
-    data: { parentId, body, expectedAccountId: me.id },
-  });
-  expect(res.status(), await res.text()).toBe(201);
-  return ((await res.json()) as { data: { id: string } }).data.id;
-}
-
 /** A 1×1 PNG for the edit screen's picker, as posts.spec.ts sends. */
 const PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
@@ -272,7 +239,8 @@ test.describe('댓글·대댓글', () => {
     const me = await meOf(page.request);
     const postId = await postThroughApi(page.request, market.id, `댓글 받을 글 ${tag}`, tag);
     // An admin's 댓글, the oldest: '운영자' on it (#45-9).
-    const adminCommentId = await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`);
+    const adminCommentId = (await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`))
+      .id;
 
     await page.goto(`/community/posts/${postId}`);
     const heading = page.getByTestId('comments-heading');
@@ -427,11 +395,11 @@ test.describe('댓글·대댓글', () => {
     const market = await createOpenMarket(admin);
     const tag = freshTag();
     const postId = await postThroughApi(admin, market.id, `방문자가 읽는 글 ${tag}`, tag);
-    const top = await commentThroughApi(admin, postId, null, `읽는 댓글 ${tag}`);
-    const reply = await commentThroughApi(admin, postId, top, `읽는 답글 ${tag}`);
+    const top = (await commentThroughApi(admin, postId, null, `읽는 댓글 ${tag}`)).id;
+    const reply = (await commentThroughApi(admin, postId, top, `읽는 답글 ${tag}`)).id;
     // An address with no place to break, still a link (under 2,048 characters).
     const longAddress = `https://example.com/${'a'.repeat(400)}`;
-    const long = await commentThroughApi(admin, postId, null, `긴 주소 ${longAddress}`);
+    const long = (await commentThroughApi(admin, postId, null, `긴 주소 ${longAddress}`)).id;
 
     // The comments are the browser's to read (오너 결정 2026-10-21): the server's HTML holds the
     // post and the count, and no word of a comment — not in the markup, not in the seeded state.
@@ -487,7 +455,7 @@ test.describe('댓글·대댓글', () => {
     const tag = freshTag();
     await signUp(page, freshEmail());
     const postId = await postThroughApi(page.request, market.id, `답글 많은 글 ${tag}`, tag);
-    const top = await commentThroughApi(admin, postId, null, `답글 많은 댓글 ${tag}`);
+    const top = (await commentThroughApi(admin, postId, null, `답글 많은 댓글 ${tag}`)).id;
     for (let index = 1; index <= 52; index += 1) {
       await commentThroughApi(admin, postId, top, `답글 ${String(index)} ${tag}`);
     }
@@ -539,7 +507,7 @@ test.describe('댓글·대댓글', () => {
     await signUp(page, freshEmail());
     const me = await meOf(page.request);
     const postId = await postThroughApi(page.request, market.id, `지울 글 ${tag}`, tag);
-    const last = await commentThroughApi(page.request, postId, null, `마지막 댓글 ${tag}`);
+    const last = (await commentThroughApi(page.request, postId, null, `마지막 댓글 ${tag}`)).id;
     const deletion = await page.request.post(`/api/v1/posts/${postId}/delete`, {
       data: { expectedAccountId: me.id },
     });
@@ -565,7 +533,7 @@ test.describe('댓글·대댓글', () => {
     const tag = freshTag();
     await signUp(page, freshEmail());
     const postId = await postThroughApi(page.request, market.id, `떠나기 전 글 ${tag}`, tag);
-    const own = await commentThroughApi(page.request, postId, null, `내 댓글 ${tag}`);
+    const own = (await commentThroughApi(page.request, postId, null, `내 댓글 ${tag}`)).id;
     const postPage = `/community/posts/${postId}`;
     await page.goto(postPage);
     const { asked, answers } = dialogs(page);
@@ -689,11 +657,11 @@ test.describe('댓글·대댓글', () => {
     const accountId = (await meOf(page.request)).id;
     const postId = await postThroughApi(page.request, market.id, `재동의 글 ${tag}`, tag);
     const adminMe = await meOf(admin);
-    const theirs = await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`);
+    const theirs = (await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`)).id;
     // Deleted by its author while the reader is on the step: the 답글 to it has no box to go back to.
-    const doomed = await commentThroughApi(admin, postId, null, `곧 지워질 댓글 ${tag}`);
-    const editable = await commentThroughApi(page.request, postId, null, `고칠 댓글 ${tag}`);
-    const deletable = await commentThroughApi(page.request, postId, null, `지울 댓글 ${tag}`);
+    const doomed = (await commentThroughApi(admin, postId, null, `곧 지워질 댓글 ${tag}`)).id;
+    const editable = (await commentThroughApi(page.request, postId, null, `고칠 댓글 ${tag}`)).id;
+    const deletable = (await commentThroughApi(page.request, postId, null, `지울 댓글 ${tag}`)).id;
     const postPage = `/community/posts/${postId}`;
     const viaStep = `/onboarding?next=${encodeURIComponent(postPage)}`;
     const reconsent = await asReconsent(page);
@@ -906,11 +874,11 @@ test.describe('댓글·대댓글', () => {
     // The drafts are kept under each box's item for the account that wrote it (ADR-0092 답 3).
     const accountId = (await meOf(page.request)).id;
     const postId = await postThroughApi(page.request, market.id, `먼 답글의 글 ${tag}`, tag);
-    const top = await commentThroughApi(admin, postId, null, `답글 많은 댓글 ${tag}`);
+    const top = (await commentThroughApi(admin, postId, null, `답글 많은 댓글 ${tag}`)).id;
     for (let index = 1; index <= 50; index += 1) {
       await commentThroughApi(admin, postId, top, `답글 ${String(index)} ${tag}`);
     }
-    const mine = await commentThroughApi(page.request, postId, top, `내 답글 ${tag}`);
+    const mine = (await commentThroughApi(page.request, postId, top, `내 답글 ${tag}`)).id;
     const postPage = `/community/posts/${postId}`;
     const viaStep = `/onboarding?next=${encodeURIComponent(postPage)}`;
     const reconsent = await asReconsent(page);
@@ -1114,7 +1082,7 @@ test.describe('댓글·대댓글', () => {
     };
     const wrote = () => written.push(Date.now());
     const postId = await postThroughApi(page.request, market.id, `아주 긴 스레드 ${tag}`, tag);
-    const top = await commentThroughApi(admin, postId, null, `답글 아주 많은 댓글 ${tag}`);
+    const top = (await commentThroughApi(admin, postId, null, `답글 아주 많은 댓글 ${tag}`)).id;
     // 50 shown, 250 the five pages read, and 60 more past them; written ten at a time (their order
     // within ten is the server's, which this test does not read) — but the 300th, the last of the
     // fifth page read on, the 301st, the first past it, and the 302nd are the reader's own, written
@@ -1132,24 +1100,28 @@ test.describe('댓글·대댓글', () => {
     };
     await replies(1, fifthPageLast - 1);
     await paced();
-    const onFifthPage = await commentThroughApi(
-      page.request,
-      postId,
-      top,
-      `내 ${String(fifthPageLast)}번째 답글 ${tag}`,
-    );
+    const onFifthPage = (
+      await commentThroughApi(
+        page.request,
+        postId,
+        top,
+        `내 ${String(fifthPageLast)}번째 답글 ${tag}`,
+      )
+    ).id;
     wrote();
     const justPastBody = `내 ${String(fifthPageLast + 1)}번째 답글 ${tag}`;
     await paced();
-    const justPast = await commentThroughApi(page.request, postId, top, justPastBody);
+    const justPast = (await commentThroughApi(page.request, postId, top, justPastBody)).id;
     wrote();
     await paced();
-    const nextPast = await commentThroughApi(
-      page.request,
-      postId,
-      top,
-      `내 ${String(fifthPageLast + 2)}번째 답글 ${tag}`,
-    );
+    const nextPast = (
+      await commentThroughApi(
+        page.request,
+        postId,
+        top,
+        `내 ${String(fifthPageLast + 2)}번째 답글 ${tag}`,
+      )
+    ).id;
     wrote();
     await replies(fifthPageLast + 3, total);
     const replyRequests: string[] = [];
@@ -1640,7 +1612,9 @@ test.describe('댓글·대댓글', () => {
     const sizes = [300, 300, 300, 300, 300, 300, 100];
     const tops: string[] = [];
     for (let index = 0; index < sizes.length; index += 1) {
-      tops.push(await commentThroughApi(admin, postId, null, `스레드 ${String(index + 1)} ${tag}`));
+      tops.push(
+        (await commentThroughApi(admin, postId, null, `스레드 ${String(index + 1)} ${tag}`)).id,
+      );
     }
     // The 답글 straight at the API, the threads side by side and ten at a time in each (their order
     // is the server's, which this test does not read).
@@ -1824,8 +1798,8 @@ test.describe('댓글·대댓글', () => {
     // until the page that holds it: there it stands in its place, before those written after it,
     // drawn once — its box still open.
     const later = [
-      await commentThroughApi(admin, postId, null, `나중 댓글 1 ${tag}`),
-      await commentThroughApi(admin, postId, null, `나중 댓글 2 ${tag}`),
+      (await commentThroughApi(admin, postId, null, `나중 댓글 1 ${tag}`)).id,
+      (await commentThroughApi(admin, postId, null, `나중 댓글 2 ${tag}`)).id,
     ];
     for (let pages = 2; pages <= 6; pages += 1) {
       await more.click();
@@ -1853,10 +1827,10 @@ test.describe('댓글·대댓글', () => {
     const me = await meOf(page.request);
     const adminMe = await meOf(admin);
     const postId = await postThroughApi(page.request, market.id, `거절될 글 ${tag}`, tag);
-    const theirs = await commentThroughApi(admin, postId, null, `곧 지워질 댓글 ${tag}`);
-    const mine = await commentThroughApi(page.request, postId, null, `곧 지울 내 댓글 ${tag}`);
-    const other = await commentThroughApi(admin, postId, null, `또 지워질 댓글 ${tag}`);
-    const kept = await commentThroughApi(admin, postId, null, `남는 댓글 ${tag}`);
+    const theirs = (await commentThroughApi(admin, postId, null, `곧 지워질 댓글 ${tag}`)).id;
+    const mine = (await commentThroughApi(page.request, postId, null, `곧 지울 내 댓글 ${tag}`)).id;
+    const other = (await commentThroughApi(admin, postId, null, `또 지워질 댓글 ${tag}`)).id;
+    const kept = (await commentThroughApi(admin, postId, null, `남는 댓글 ${tag}`)).id;
     const postPage = `/community/posts/${postId}`;
     await page.goto(postPage);
     const { asked, answers } = dialogs(page);
@@ -2025,7 +1999,7 @@ test.describe('댓글·대댓글', () => {
     await signUp(page, freshEmail());
     const adminMe = await meOf(admin);
     const postId = await postThroughApi(admin, market.id, `곧 지워질 글 ${tag}`, tag);
-    const mine = await commentThroughApi(page.request, postId, null, `내 댓글 ${tag}`);
+    const mine = (await commentThroughApi(page.request, postId, null, `내 댓글 ${tag}`)).id;
     await page.goto(`/community/posts/${postId}`);
     const section = await page.getByTestId('post-comments').elementHandle();
     const held = page.getByTestId('comment-held');
@@ -2079,15 +2053,13 @@ test.describe('댓글·대댓글', () => {
     const me = await meOf(page.request);
     const adminMe = await meOf(admin);
     const postId = await postThroughApi(admin, market.id, `다시 읽힐 글 ${tag}`, tag);
-    const mine = await commentThroughApi(page.request, postId, null, `곧 지울 내 댓글 ${tag}`);
-    const theirs = await commentThroughApi(admin, postId, null, `곧 지워질 댓글 ${tag}`);
-    const edited = await commentThroughApi(
-      page.request,
-      postId,
-      null,
-      `딴 탭에서 지울 댓글 ${tag}`,
-    );
-    const spare = await commentThroughApi(page.request, postId, null, `나중에 지울 댓글 ${tag}`);
+    const mine = (await commentThroughApi(page.request, postId, null, `곧 지울 내 댓글 ${tag}`)).id;
+    const theirs = (await commentThroughApi(admin, postId, null, `곧 지워질 댓글 ${tag}`)).id;
+    const edited = (
+      await commentThroughApi(page.request, postId, null, `딴 탭에서 지울 댓글 ${tag}`)
+    ).id;
+    const spare = (await commentThroughApi(page.request, postId, null, `나중에 지울 댓글 ${tag}`))
+      .id;
     const postPage = `/community/posts/${postId}`;
     await page.goto(postPage);
     const { asked, answers } = dialogs(page);
@@ -2197,7 +2169,7 @@ test.describe('댓글·대댓글', () => {
     await signUp(page, freshEmail());
     const adminMe = await meOf(admin);
     const postId = await postThroughApi(admin, market.id, `다시 읽기의 글 ${tag}`, tag);
-    const theirs = await commentThroughApi(admin, postId, null, `곧 지워질 댓글 ${tag}`);
+    const theirs = (await commentThroughApi(admin, postId, null, `곧 지워질 댓글 ${tag}`)).id;
     await page.goto(`/community/posts/${postId}`);
     const held = page.getByTestId('comment-held');
     const composer = page.getByTestId('comment-composer');
@@ -2348,7 +2320,7 @@ test.describe('댓글·대댓글', () => {
     // --- a 답글 to the last comment under a post deleted meanwhile, and a new 댓글 beside it with no
     // write: both held with why until closed, then the 404.
     const second = await postThroughApi(admin, market.id, `댓글 하나의 글 ${tag}`, tag);
-    const last = await commentThroughApi(admin, second, null, `마지막 댓글 ${tag}`);
+    const last = (await commentThroughApi(admin, second, null, `마지막 댓글 ${tag}`)).id;
     await page.goto(`/community/posts/${second}`);
     await composer.getByTestId('comment-input').fill(`옆에 쓰던 댓글 ${tag}`);
     await commentOf(page, last).getByTestId('comment-reply').click();
@@ -2391,7 +2363,7 @@ test.describe('댓글·대댓글', () => {
     // with the post, in place — its text shown with why, not put away in the tab for a post now
     // gone — and the 404 waits until it is closed (2026-10-21 답 1·2).
     const third = await postThroughApi(admin, market.id, `재동의 계정의 글 ${tag}`, tag);
-    const own = await commentThroughApi(page.request, third, null, `내 마지막 댓글 ${tag}`);
+    const own = (await commentThroughApi(page.request, third, null, `내 마지막 댓글 ${tag}`)).id;
     const reconsent = await asReconsent(page);
     reconsent.on = true;
     await page.goto(`/community/posts/${third}`);
@@ -2438,7 +2410,7 @@ test.describe('댓글·대댓글', () => {
     /** A post of this account's with a 댓글 under it, and its edit screen. */
     const postWithComment = async (title: string) => {
       const id = await postThroughApi(page.request, market.id, title, `${title}의 근거`);
-      const comment = await commentThroughApi(page.request, id, null, `${title}의 댓글`);
+      const comment = (await commentThroughApi(page.request, id, null, `${title}의 댓글`)).id;
       return { id, comment, edit: `/community/posts/${id}/edit` };
     };
     /** Its author deletes it on its page in another tab: it stays as its placeholder. */
@@ -2663,8 +2635,9 @@ test.describe('탭의 세션이 아직 앞 계정을 말하는데 `GET /me`가 �
     const { a, b, open, toB, toA, close } = await membersTurningInPlace(browser, page);
     try {
       const postId = await postThroughApi(admin, market.id, `계정이 바뀌는 글 ${tag}`, tag);
-      const theirs = await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`);
-      const mine = await commentThroughApi(page.request, postId, null, `앞 계정의 댓글 ${tag}`);
+      const theirs = (await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`)).id;
+      const mine = (await commentThroughApi(page.request, postId, null, `앞 계정의 댓글 ${tag}`))
+        .id;
       const composer = page.getByTestId('comment-composer');
       const replyBox = page.getByTestId(`comment-thread-${theirs}`).getByTestId('reply-composer');
       const editForm = commentOf(page, mine).getByTestId('comment-edit-form');
@@ -2748,7 +2721,7 @@ test.describe('탭의 세션이 아직 앞 계정을 말하는데 `GET /me`가 �
     });
     try {
       const postId = await postThroughApi(admin, market.id, `단계가 남은 회원의 글 ${tag}`, tag);
-      const mine = await commentThroughApi(page.request, postId, null, `곧 지울 댓글 ${tag}`);
+      const mine = (await commentThroughApi(page.request, postId, null, `곧 지울 댓글 ${tag}`)).id;
       const postPage = `/community/posts/${postId}`;
       await open(postPage);
       const held = page.getByTestId('comment-held');
@@ -2827,8 +2800,9 @@ test.describe('탭의 세션이 먼저 다른 회원을 말하는 글 화면의 
     const { a, open, toB, toA, close } = await membersSwitchingSessions(browser, page);
     try {
       const postId = await postThroughApi(admin, market.id, `세션이 바뀌는 글 ${tag}`, tag);
-      const theirs = await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`);
-      const mine = await commentThroughApi(page.request, postId, null, `앞 계정의 댓글 ${tag}`);
+      const theirs = (await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`)).id;
+      const mine = (await commentThroughApi(page.request, postId, null, `앞 계정의 댓글 ${tag}`))
+        .id;
       const composer = page.getByTestId('comment-composer');
       const replyBox = page.getByTestId(`comment-thread-${theirs}`).getByTestId('reply-composer');
       const editForm = commentOf(page, mine).getByTestId('comment-edit-form');
@@ -2913,8 +2887,9 @@ test.describe('탭의 세션이 먼저 다른 회원을 말하는 글 화면의 
     const { a, open, toB, toAMeFirst, close } = await membersSwitchingSessions(browser, page);
     try {
       const postId = await postThroughApi(admin, market.id, `세션이 따라잡는 글 ${tag}`, tag);
-      const theirs = await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`);
-      const mine = await commentThroughApi(page.request, postId, null, `앞 계정의 댓글 ${tag}`);
+      const theirs = (await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`)).id;
+      const mine = (await commentThroughApi(page.request, postId, null, `앞 계정의 댓글 ${tag}`))
+        .id;
       const composer = page.getByTestId('comment-composer');
       const replyBox = page.getByTestId(`comment-thread-${theirs}`).getByTestId('reply-composer');
       const editForm = commentOf(page, mine).getByTestId('comment-edit-form');
@@ -2998,8 +2973,9 @@ test.describe('계정이 바뀌었다 돌아온 글 화면의 콘솔 — 되살�
     const { open, toB, toA, toAMeFirst, close } = await membersSwitchingSessions(browser, page);
     try {
       const postId = await postThroughApi(admin, market.id, `콘솔을 보는 글 ${tag}`, tag);
-      const theirs = await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`);
-      const mine = await commentThroughApi(page.request, postId, null, `앞 계정의 댓글 ${tag}`);
+      const theirs = (await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`)).id;
+      const mine = (await commentThroughApi(page.request, postId, null, `앞 계정의 댓글 ${tag}`))
+        .id;
       const composer = page.getByTestId('comment-composer');
       const replyBox = page.getByTestId(`comment-thread-${theirs}`).getByTestId('reply-composer');
       const editForm = commentOf(page, mine).getByTestId('comment-edit-form');
@@ -3055,8 +3031,9 @@ test.describe('계정이 바뀌었다 돌아온 글 화면의 콘솔 — 되살�
     const { open, toB, toA, close } = await membersTurningInPlace(browser, page);
     try {
       const postId = await postThroughApi(admin, market.id, `콘솔을 보는 글 ${tag}`, tag);
-      const theirs = await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`);
-      const mine = await commentThroughApi(page.request, postId, null, `앞 계정의 댓글 ${tag}`);
+      const theirs = (await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`)).id;
+      const mine = (await commentThroughApi(page.request, postId, null, `앞 계정의 댓글 ${tag}`))
+        .id;
       const composer = page.getByTestId('comment-composer');
       const replyBox = page.getByTestId(`comment-thread-${theirs}`).getByTestId('reply-composer');
       const editForm = commentOf(page, mine).getByTestId('comment-edit-form');

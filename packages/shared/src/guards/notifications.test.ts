@@ -45,7 +45,7 @@ describe('NOTIFICATION_TYPES (#113, #53)', () => {
     }
   });
 
-  it('registers the 거래 three of #134, the 시장 five of #54 and the 판정·정산 six of #188 with single-brace placeholders only (ADR-0158, ADR-0159, ADR-0160)', () => {
+  it('registers the 거래 three of #134, the 시장 five of #54, the 판정·정산 six of #188 and the 커뮤니티 six of #135 with single-brace placeholders only (ADR-0158~ADR-0161)', () => {
     expect(Object.keys(NOTIFICATION_TYPE_REGISTRY)).toEqual([
       'order_filled',
       'orders_cancelled',
@@ -61,8 +61,14 @@ describe('NOTIFICATION_TYPES (#113, #53)', () => {
       'market_dispute_decided',
       'market_dispute_closed_by_correction',
       'market_settled',
+      'post_replied',
+      'comment_replied',
+      'moderation_action_taken',
+      'moderation_action_cancelled',
+      'moderation_restriction_end_changed',
+      'proposal_decided',
     ]);
-    expect(Object.keys(NOTIFICATION_TYPE_REGISTRY)).toHaveLength(14);
+    expect(Object.keys(NOTIFICATION_TYPE_REGISTRY)).toHaveLength(20);
     // `{{key}}` in the web's copy must be a business fact (legal.test.ts): never here.
     for (const candidate of NOTIFICATION_TYPES) {
       for (const text of candidate.text) {
@@ -161,6 +167,89 @@ describe('NOTIFICATION_TYPES (#113, #53)', () => {
     }
   });
 
+  it('words the 커뮤니티 six as 135-5 answered: the action words as MY 조치·신고 내역 shows them', () => {
+    const replyWords = (subject: string) => [
+      `${subject} · {author}`,
+      `${subject} {count}개 · 마지막: {author}`,
+      subject,
+      `${subject} {count}개`,
+      '{nickname}(운영자)',
+      '탈퇴한 사용자',
+    ];
+    const actions = [
+      '숨김',
+      '경고',
+      '닉네임 강제 변경',
+      '소개 비우기',
+      '프로필 이미지 삭제',
+      '작성 제한',
+      '계정 제한',
+    ];
+    expect(NOTIFICATION_TYPE_REGISTRY.post_replied.text).toEqual(replyWords('내 글에 새 댓글'));
+    expect(NOTIFICATION_TYPE_REGISTRY.comment_replied.text).toEqual(
+      replyWords('내 댓글에 새 답글'),
+    );
+    expect(NOTIFICATION_TYPE_REGISTRY.moderation_action_taken.text).toEqual([
+      '운영 조치: {action}',
+      '운영 조치: {action} · {term}',
+      ...actions,
+      '까지',
+      '무기한',
+    ]);
+    expect(NOTIFICATION_TYPE_REGISTRY.moderation_action_cancelled.text).toEqual([
+      '운영 조치 취소: {action}',
+      ...actions,
+    ]);
+    // A 감경's new end is always an instant (never 무기한); a 조기 해제 carries no time (135-5 (f)).
+    expect(NOTIFICATION_TYPE_REGISTRY.moderation_restriction_end_changed.text).toEqual([
+      '운영 조치 감경: {action} · {term}',
+      '운영 조치 조기 해제: {action}',
+      '작성 제한',
+      '계정 제한',
+      '까지',
+    ]);
+    expect(NOTIFICATION_TYPE_REGISTRY.proposal_decided.text).toEqual([
+      '시장 제안 {decision} · {question}',
+      '채택',
+      '반려',
+    ]);
+    // The renderer copy counts the web pins (lib/notifications.test.ts): 6·6·11·8·5·3.
+    expect(
+      (
+        [
+          'post_replied',
+          'comment_replied',
+          'moderation_action_taken',
+          'moderation_action_cancelled',
+          'moderation_restriction_end_changed',
+          'proposal_decided',
+        ] as const
+      ).map((type) => NOTIFICATION_TYPE_REGISTRY[type].text.length),
+    ).toEqual([6, 6, 11, 8, 5, 3]);
+    for (const type of [
+      'post_replied',
+      'comment_replied',
+      'moderation_action_taken',
+      'moderation_action_cancelled',
+      'moderation_restriction_end_changed',
+      'proposal_decided',
+    ] as const) {
+      const { text, reason } = NOTIFICATION_TYPE_REGISTRY[type];
+      expect(reason, type).toContain('ADR-0161');
+      expect(reason, type).toContain('135-5');
+      expect(findExcludedNotification({ type, text, reason }), type).toEqual([]);
+      for (const sentence of text) {
+        // A count is a count, never a score or a skill (#135 AC 5, N05 §2); no reward near a
+        // reply (the activity-reward pattern); never a reason, an operator or a reporter (135-2).
+        expect(sentence, type).not.toMatch(
+          /점수|순위|랭킹|실력|평판|등급|배지|스코어|보상|보너스|지급|사유|신고|처리자|좋아요/,
+        );
+        // No count, time or name is written into the copy: each is a placeholder.
+        expect(sentence, type).not.toMatch(/[0-9]/);
+      }
+    }
+  });
+
   it('names no excluded feature, as a type or in its text (N05 §4)', () => {
     expect(
       NOTIFICATION_TYPES.map((candidate) => ({
@@ -209,7 +298,7 @@ const planted = (change: Partial<NotificationDefinition> = {}): NotificationDefi
 });
 
 describe('findNotificationDefinitionProblems (ADR-0157)', () => {
-  it('finds nothing in the product list (#134’s three, #54’s five, #188’s six) or in a definition that keeps the rules', () => {
+  it('finds nothing in the product list (#134’s three, #54’s five, #188’s six, #135’s six) or in a definition that keeps the rules', () => {
     expect(NOTIFICATION_DEFINITIONS.length).toBeGreaterThan(0);
     expect(findNotificationDefinitionProblems(NOTIFICATION_DEFINITIONS)).toEqual([]);
     expect(
@@ -231,8 +320,8 @@ describe('findNotificationDefinitionProblems (ADR-0157)', () => {
   });
 
   it('refuses a param that would store another member or their identity (52-15, ADR-0086)', () => {
-    // Read through the target when the list is read, never stored: a closed member's name and a
-    // forced nickname change show at once.
+    // Read by the API through the id the type keeps (`replyId`, ADR-0161) when the list is read,
+    // never stored: a closed member's name and a forced nickname change show at once.
     for (const key of [
       'nickname',
       'authorNickname',
@@ -252,6 +341,14 @@ describe('findNotificationDefinitionProblems (ADR-0157)', () => {
     }
     for (const key of ['title', 'amountCoin', 'closeAt', 'state', 'count']) {
       expect(NOTIFICATION_IDENTITY_PARAM.test(key), key).toBe(false);
+    }
+    // #135's names pass; an author's id or an account restriction as a NAME would not (values
+    // such as `account_restriction` are fine).
+    for (const key of ['replyId', 'replyCreatedAt', 'action', 'endsAt', 'change', 'decision']) {
+      expect(NOTIFICATION_IDENTITY_PARAM.test(key), key).toBe(false);
+    }
+    for (const key of ['replyAuthorId', 'accountRestriction', 'userAction']) {
+      expect(NOTIFICATION_IDENTITY_PARAM.test(key), key).toBe(true);
     }
   });
 
@@ -285,7 +382,7 @@ describe('findNotificationDefinitionProblems (ADR-0157)', () => {
         planted({
           type: 'planted_other',
           category: 'price' as NotificationDefinition['category'],
-          targets: ['post' as NotificationDefinition['targets'][number]],
+          targets: ['dispute' as NotificationDefinition['targets'][number]],
           merge: 'sum' as unknown as NotificationDefinition['merge'],
         }),
         planted({ type: 'planted_nowhere', targets: [] }),
@@ -294,7 +391,7 @@ describe('findNotificationDefinitionProblems (ADR-0157)', () => {
       'Bad-Type: type shape',
       'planted_notice: listed twice',
       'planted_other: category price',
-      'planted_other: target kind post',
+      'planted_other: target kind dispute',
       'planted_other: merge',
       'planted_nowhere: no target kind',
     ]);

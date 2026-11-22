@@ -19,7 +19,8 @@ import type { FillRow, LiveBookOrder, OrderRow } from './orders.js';
  * passes their output to its ONE `createNotifications` call, last in the transaction (ADR-0157
  * 결정 4), so the later producers of the same transactions append inputs instead of making a
  * second call: #54's close, pause, resume and cancel notices (market-notifications.ts, ADR-0159 —
- * after these, in the same array) and #135's restriction notice.
+ * after these, in the same array) and #135's notices of an account restriction's four approved
+ * changes (community-notifications.ts, ADR-0161 — 52-16, in the approval's one call).
  *
  * Who calls them: the intake (`placeOrder` returns `notifications`; the API's `OrderService.place`
  * and the cycle's `finish()` deliver them), the close at `close_at` (`closeMarketAtClose`), the
@@ -43,7 +44,11 @@ export const fillEventKey = (fillId: number): string => `fill:${String(fillId)}`
 export const marketEventKey = (eventId: number): string => `market_event:${String(eventId)}`;
 /** An admin action's (`admin_actions.id`: the admin-role grant) event key. */
 export const adminActionEventKey = (id: string): string => `admin_action:${id}`;
-/** A moderation action's (`moderation_actions.id`: a restriction's approval) event key. */
+/**
+ * A moderation action's (`moderation_actions.id`) event key: an account restriction's approval
+ * (#134's `orders_cancelled`) and every #135 notice of an action or its cancellation (ADR-0161 —
+ * two types under one key, 53-4).
+ */
 export const moderationActionEventKey = (id: string): string => `moderation_action:${id}`;
 /** A reconciliation hold's (its recovery) event key. */
 export const reconciliationHoldEventKey = (id: string): string => `reconciliation_hold:${id}`;

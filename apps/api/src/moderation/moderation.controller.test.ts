@@ -11,18 +11,24 @@
  * cancellation and dismissal is recorded with its reason, operator and time; every admin reads the
  * queue, the pages and every report with its reporter. Two operators at once: one hiding of an item
  * stands, and an action takes the reports it resolves in the order a dismissal does (no deadlock).
- * Skips when TEST_* are unset.
+ * Every action, its cancellation and a writing restriction's 감경 and 조기 해제 tell the member acted
+ * on in its transaction (#135, ADR-0161; 52-16, 135-2, 135-6) — the kind and a restriction's own
+ * end, never the operator, a reporter or a reason; a dismissal and a refused action tell nobody,
+ * nor are reporters ever told (135-1, 52-17). Skips when TEST_* are unset.
  */
 import * as crypto from 'node:crypto';
 import { schema } from '@buddha/db';
 import {
+  closeAccount,
   completeOnboarding,
   createComment,
   createMarket,
+  createModerationAction,
   createPost,
   createProfileImage,
   createReport,
   createUser,
+  plantNotificationInsertFailure,
 } from '@buddha/db/test';
 import {
   AUTO_NICKNAME_ALPHABET,
@@ -53,6 +59,7 @@ import {
 import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import {
   IMAGE_READ_BUDGET_BYTES,
   IMAGE_READ_BUSY_RETRY_SECONDS,
@@ -2173,4 +2180,320 @@ describe.skipIf(!hasTestInfra)('/api/v1 moderation (integration)', () => {
       .where(eq(schema.profiles.userId, userId));
     return row!.publicId;
   }
+
+  // ---- notices (#135, ADR-0161) ---------------------------------------------------------------
+
+  describe('the member’s notices (#135, ADR-0161; 52-16, 135-2, 135-6)', () => {
+    beforeEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    const allRows = () =>
+      t.db
+        .select()
+        .from(schema.notifications)
+        .orderBy(schema.notifications.occurredAt, schema.notifications.id);
+    const rowsOf = async (who: TestUser) =>
+      (await allRows()).filter((row) => row.userId === who.id);
+    const keysOf = async (who: TestUser) =>
+      (await t.db.select().from(schema.notificationKeys))
+        .filter((key) => key.userId === who.id)
+        .map((key) => [key.type, key.eventKey])
+        .sort();
+    /** The `user:notification` signals published from here on, as [account, ts]. */
+    const signals = () => {
+      const spy = vi.spyOn(t.app.get(MarketPublisher), 'publishUser');
+      return () =>
+        spy.mock.calls
+          .filter(([, event]) => event.type === 'user:notification')
+          .map(([userId, event]) => [userId, 'ts' in event ? event.ts : null]);
+    };
+    /** The one notice an action wrote: exactly what 135-2 lets it carry. */
+    const takenNotice = (action: AdminModerationAction) => ({
+      type: 'moderation_action_taken',
+      category: 'community',
+      params: { action: action.type, endsAt: action.endsAt },
+      target: { kind: 'moderation_action', actionId: action.id },
+      mergeKey: null,
+      eventCount: 1,
+      readAt: null,
+    });
+    const act = async (url: string, payload: Record<string, unknown>, by: TestUser = admin) =>
+      actionOf(await send(url, { reason: 'spam', note: '설명', ...payload }, by));
+    const restrictWriting = (days: number | null, who: TestUser = author) =>
+      act(`/admin/moderation/users/${who.id}/writing-restriction`, { days });
+    const changeOf = async (actionId: string) =>
+      (
+        await t.db
+          .select()
+          .from(schema.restrictionEndChanges)
+          .where(eq(schema.restrictionEndChanges.actionId, actionId))
+          .orderBy(schema.restrictionEndChanges.createdAt)
+      ).at(-1)!;
+
+    it('tells the author of a hidden post (M1) the kind alone, after COMMIT — never the reporters, the operator or the reason', async () => {
+      await report(`/posts/${post.id}`);
+      const second = await onboarded();
+      await report(`/posts/${post.id}`, second, 'harassment');
+      const signalled = signals();
+      const action = await act(`/admin/moderation/posts/${post.id}/hide`, { note: '욕설' });
+      const [notice, ...rest] = await rowsOf(author);
+      expect(rest).toEqual([]);
+      expect(notice).toMatchObject(takenNotice(action));
+      expect(notice!.params).toEqual({ action: 'hide', endsAt: null });
+      expect(notice!.occurredAt.toISOString()).toBe(action.createdAt);
+      expect(await keysOf(author)).toEqual([
+        ['moderation_action_taken', `moderation_action:${action.id}`],
+      ]);
+      // 52-17: the reporters read 조치함 in their 내역 and get no notice.
+      expect(await rowsOf(reporter)).toEqual([]);
+      expect(await rowsOf(second)).toEqual([]);
+      expect(JSON.stringify(notice)).not.toContain(admin.id);
+      expect(JSON.stringify(notice)).not.toContain('욕설');
+      expect(signalled()).toEqual([[author.id, action.createdAt]]);
+      // The audit keeps what it kept: no recipient, nothing of the notice.
+      const [audit] = await audits('moderation_post_hide');
+      expect(Object.keys(audit!.payload as object).sort()).toEqual(
+        ['actionId', 'note', 'postId', 'reason', 'reportIds', 'userId'].sort(),
+      );
+    });
+
+    it('tells each of the other actions (M2, M3, M5–M7), a second warning as a second notice (53-4)', async () => {
+      await t.db
+        .update(schema.profiles)
+        .set({ nickname: '사칭닉네임', bio: '홍보 링크' })
+        .where(eq(schema.profiles.userId, author.id));
+      const image = await createProfileImage(t.db, { userId: author.id, contentType: 'image/png' });
+      await t.db
+        .update(schema.profiles)
+        .set({ imageId: image.id })
+        .where(eq(schema.profiles.userId, author.id));
+      const signalled = signals();
+      const actions = [
+        await act(`/admin/moderation/comments/${comment.id}/hide`, {}),
+        await act(`/admin/moderation/users/${author.id}/warn`, {}),
+        await act(`/admin/moderation/users/${author.id}/warn`, {
+          subject: { type: 'post', postId: post.id },
+        }),
+        await act(`/admin/moderation/users/${author.id}/nickname-reset`, {
+          reason: 'impersonation',
+        }),
+        await act(`/admin/moderation/users/${author.id}/bio-clear`, {}),
+        await act(`/admin/moderation/users/${author.id}/image-remove`, {}),
+      ];
+      expect(actions.map((action) => action.type)).toEqual([
+        'hide',
+        'warning',
+        'warning',
+        'nickname_reset',
+        'bio_clear',
+        'image_remove',
+      ]);
+      const rows = await rowsOf(author);
+      expect(rows).toHaveLength(actions.length);
+      for (const [index, action] of actions.entries()) {
+        expect(rows[index]).toMatchObject(takenNotice(action));
+        expect(rows[index]!.params).toEqual({ action: action.type, endsAt: null });
+        expect(rows[index]!.occurredAt.toISOString()).toBe(action.createdAt);
+      }
+      expect(signalled()).toEqual(actions.map((action) => [author.id, action.createdAt]));
+      // The nickname reset's hold is written before the notice, in the same transaction.
+      const [hold] = await t.db
+        .select()
+        .from(schema.nicknameHolds)
+        .where(eq(schema.nicknameHolds.actionId, actions[3]!.id));
+      expect(hold).toBeDefined();
+    });
+
+    it('tells a writing restriction with its own end (M4) — a second one too — each 감경 and 조기 해제 with the new end (M9), and the cancellation (M8)', async () => {
+      const signalled = signals();
+      const week = await restrictWriting(7);
+      const forever = await restrictWriting(null);
+      const [first, second] = await rowsOf(author);
+      expect(first).toMatchObject(takenNotice(week));
+      expect(first!.params).toEqual({ action: 'writing_restriction', endsAt: week.endsAt });
+      expect(week.endsAt).not.toBeNull();
+      expect(second).toMatchObject(takenNotice(forever));
+      expect(second!.params).toEqual({ action: 'writing_restriction', endsAt: null });
+
+      const inTwoDays = new Date(Date.now() + 2 * DAY_MS);
+      const shortened = actionOf(
+        await send(
+          `/admin/moderation/actions/${week.id}/shorten`,
+          { endsAt: inTwoDays.toISOString(), reason: '이의 일부 인정' },
+          admin,
+        ),
+      );
+      const shortenRow = await changeOf(week.id);
+      const inOneDay = new Date(Date.now() + DAY_MS);
+      actionOf(
+        await send(
+          `/admin/moderation/actions/${week.id}/shorten`,
+          { endsAt: inOneDay.toISOString(), reason: '다시 감경' },
+          admin,
+        ),
+      );
+      const againRow = await changeOf(week.id);
+      const lifted = actionOf(
+        await send(`/admin/moderation/actions/${forever.id}/lift`, { reason: '이의 인정' }, admin),
+      );
+      const liftRow = await changeOf(forever.id);
+      const cancelled = actionOf(
+        await send(`/admin/moderation/actions/${week.id}/cancel`, { reason: '취소' }, admin),
+      );
+      const changes = (await rowsOf(author)).slice(2);
+      expect(changes).toHaveLength(4);
+      const changed = (
+        row: (typeof changes)[number],
+        change: typeof shortenRow,
+        action: string,
+      ) => {
+        expect(row).toMatchObject({
+          type: 'moderation_restriction_end_changed',
+          category: 'community',
+          params: {
+            action: 'writing_restriction',
+            change: change.kind,
+            endsAt: change.endsAt.toISOString(),
+          },
+          target: { kind: 'moderation_action', actionId: action },
+          eventCount: 1,
+        });
+        expect(row.occurredAt.getTime()).toBe(change.createdAt.getTime());
+      };
+      changed(changes[0]!, shortenRow, week.id);
+      expect(changes[0]!.params).toMatchObject({ endsAt: shortened.endsAt });
+      changed(changes[1]!, againRow, week.id);
+      changed(changes[2]!, liftRow, forever.id);
+      expect(changes[2]!.params).toMatchObject({ change: 'lift', endsAt: lifted.endsAt });
+      expect(changes[3]).toMatchObject({
+        type: 'moderation_action_cancelled',
+        params: { action: 'writing_restriction' },
+        target: { kind: 'moderation_action', actionId: week.id },
+      });
+      expect(changes[3]!.occurredAt.toISOString()).toBe(cancelled.cancelledAt);
+      expect(await keysOf(author)).toEqual(
+        [
+          ['moderation_action_taken', `moderation_action:${week.id}`],
+          ['moderation_action_taken', `moderation_action:${forever.id}`],
+          ['moderation_restriction_end_changed', `restriction_end_change:${shortenRow.id}`],
+          ['moderation_restriction_end_changed', `restriction_end_change:${againRow.id}`],
+          ['moderation_restriction_end_changed', `restriction_end_change:${liftRow.id}`],
+          ['moderation_action_cancelled', `moderation_action:${week.id}`],
+        ].sort(),
+      );
+      expect(signalled()).toHaveLength(6);
+      for (const row of await rowsOf(author)) {
+        expect(Object.keys(row.params).sort()).not.toContain('reason');
+        expect(JSON.stringify(row)).not.toContain(admin.id);
+      }
+    });
+
+    it('tells the cancellation of a hiding and of a writing restriction that already ended (52-16 ‘그 취소’)', async () => {
+      const hidden = await act(`/admin/moderation/posts/${post.id}/hide`, {});
+      const ended = await createModerationAction(t.db, {
+        userId: author.id,
+        createdBy: admin.id,
+        type: 'writing_restriction',
+        createdAt: new Date(Date.now() - 2 * DAY_MS),
+        endsAt: new Date(Date.now() - HOUR_MS),
+      });
+      const signalled = signals();
+      const cancelledHide = actionOf(
+        await send(`/admin/moderation/actions/${hidden.id}/cancel`, { reason: '이의' }, other),
+      );
+      const cancelledEnded = actionOf(
+        await send(`/admin/moderation/actions/${ended.id}/cancel`, { reason: '이의' }, other),
+      );
+      const rows = (await rowsOf(author)).filter(
+        (row) => row.type === 'moderation_action_cancelled',
+      );
+      expect(rows.map((row) => [row.params, row.target])).toEqual([
+        [{ action: 'hide' }, { kind: 'moderation_action', actionId: hidden.id }],
+        [{ action: 'writing_restriction' }, { kind: 'moderation_action', actionId: ended.id }],
+      ]);
+      expect(rows.map((row) => row.occurredAt.toISOString())).toEqual([
+        cancelledHide.cancelledAt,
+        cancelledEnded.cancelledAt,
+      ]);
+      expect(signalled()).toEqual([
+        [author.id, cancelledHide.cancelledAt],
+        [author.id, cancelledEnded.cancelledAt],
+      ]);
+    });
+
+    it('tells nobody of a dismissal (135-1, 52-17) nor of a refused action: own, hidden, cancelled, not_restriction, ended, closed', async () => {
+      const first = await report(`/posts/${post.id}`);
+      const hiddenPost = await act(`/admin/moderation/posts/${post.id}/hide`, {});
+      const hiddenComment = await act(`/admin/moderation/comments/${comment.id}/hide`, {});
+      await send(`/admin/moderation/actions/${hiddenComment.id}/cancel`, { reason: '취소' }, admin);
+      const warning = await act(`/admin/moderation/users/${author.id}/warn`, {});
+      const ended = await createModerationAction(t.db, {
+        userId: author.id,
+        createdBy: admin.id,
+        type: 'writing_restriction',
+        createdAt: new Date(Date.now() - 2 * DAY_MS),
+        endsAt: new Date(Date.now() - HOUR_MS),
+      });
+      const ownPost = await createPost(t.db, { marketId: market.id, authorId: admin.id });
+      const pending = await report(`/comments/${comment.id}`);
+      expect(hiddenPost.type).toBe('hide');
+      const before = await allRows();
+      expect(before).toHaveLength(4);
+      const signalled = signals();
+      // 135-1, 52-17: a dismissal tells neither the member reported nor the reporter.
+      dataOf(
+        await send('/admin/reports/dismiss', { reportIds: [pending.id], reason: '아님' }, admin),
+      );
+      expect((await reportRow(first.id)).status).toBe('actioned');
+      const refusals = [
+        await send(`/admin/moderation/posts/${ownPost.id}/hide`, { reason: 'spam' }, admin),
+        await send(`/admin/moderation/posts/${post.id}/hide`, { reason: 'spam' }, admin),
+        await send(
+          `/admin/moderation/actions/${hiddenComment.id}/cancel`,
+          { reason: '다시' },
+          admin,
+        ),
+        await send(`/admin/moderation/actions/${warning.id}/lift`, { reason: '해제' }, admin),
+        await send(`/admin/moderation/actions/${ended.id}/lift`, { reason: '해제' }, admin),
+      ].map(refusalOf);
+      expect(refusals).toEqual(['own', 'hidden', 'cancelled', 'not_restriction', 'ended']);
+      await closeAccount(t.db, reporter.id);
+      expect(
+        refusalOf(
+          await send(`/admin/moderation/users/${reporter.id}/warn`, { reason: 'spam' }, admin),
+        ),
+      ).toBe('closed');
+      expect(await allRows()).toEqual(before);
+      expect(signalled()).toEqual([]);
+      expect(await rowsOf(reporter)).toEqual([]);
+    });
+
+    it('tells an admin acted on by another admin (53-5)', async () => {
+      const adminPost = await createPost(t.db, { marketId: market.id, authorId: other.id });
+      const action = await act(`/admin/moderation/posts/${adminPost.id}/hide`, {});
+      expect(await rowsOf(other)).toEqual([expect.objectContaining(takenNotice(action))]);
+    });
+
+    it('fails the action with its notice: a planted refusal is a 500 and nothing of the action is kept (188-2)', async () => {
+      const signalled = signals();
+      const planted = await plantNotificationInsertFailure();
+      try {
+        const res = await send(
+          `/admin/moderation/posts/${post.id}/hide`,
+          { reason: 'spam' },
+          admin,
+        );
+        expect(res.statusCode, res.body).toBe(500);
+        expect(res.body).not.toContain(author.id);
+      } finally {
+        await planted.remove();
+      }
+      expect((await postPage()).state).toBe('published');
+      expect(await t.db.select().from(schema.moderationActions)).toEqual([]);
+      expect(await audits('moderation_post_hide')).toEqual([]);
+      expect(await allRows()).toEqual([]);
+      expect(signalled()).toEqual([]);
+    });
+  });
 });

@@ -25,7 +25,8 @@ import {
  * names any excluded feature (EXCLUDED_FEATURES), as a name or in its text. #53 shipped no type
  * (52-20); #134 registers the 거래 three (ADR-0158), #54 the 시장 five (ADR-0159, the wording of
  * 54-1 — owner's answer of 2026-11-22), #188 the 판정·정산 six (ADR-0160, the wording of 188-1 —
- * owner's answer of 2026-11-22). The web's renderer words a type from its
+ * owner's answer of 2026-11-22), #135 the 커뮤니티 six (ADR-0161, the wording of 135-5 — owner's
+ * answer of 2026-11-22). The web's renderer words a type from its
  * copy (`NOTIFICATION_RENDERERS[type].copy`), whose entries equal `text` here, in order
  * (apps/web lib/notifications.test.ts): whole sentences with single-brace placeholders the web
  * fills, and the words it fills some of them with. docs/GUARDS.md has the registration rule.
@@ -159,6 +160,81 @@ export const NOTIFICATION_TYPE_REGISTRY = {
     reason:
       '관심·보유 시장의 최종 정산 — 지급이 끝난 때 확정 결과와 지급 완료를 나눠 적고 보유자에게는 자기 지급액(0 포함, 손익 없음). 무효 지급은 환불이 아니다. N05 §4, N03 §5·§6, ADR-0160, 52-1·52-12·52-15',
   },
+  // #135 (ADR-0161, 135-5). A reply notice: the first two sentences name the latest reply's author
+  // (`{author}`: the nickname, '{nickname}(운영자)' for an admin, '탈퇴한 사용자'), the last two
+  // when that reply is hidden or deleted (no name, 135-4). The action words fill `{action}`; a
+  // restriction's `{term}` is '<time>까지' or '무기한' (135-6: its own end); the decision words fill
+  // `{decision}`.
+  post_replied: {
+    text: [
+      '내 글에 새 댓글 · {author}',
+      '내 글에 새 댓글 {count}개 · 마지막: {author}',
+      '내 글에 새 댓글',
+      '내 글에 새 댓글 {count}개',
+      '{nickname}(운영자)',
+      '탈퇴한 사용자',
+    ],
+    reason:
+      '내 근거 글에 다른 회원이 단 댓글 — 글 작성자에게, 읽기 전까지 같은 글의 댓글을 합쳐 수와 마지막 댓글 작성자 닉네임(목록을 읽을 때 그 댓글에서). 자기 댓글·수정은 알리지 않는다. N05 §2·§4, ADR-0161, 52-7·52-15·52-18·135-3·135-4·135-5',
+  },
+  comment_replied: {
+    text: [
+      '내 댓글에 새 답글 · {author}',
+      '내 댓글에 새 답글 {count}개 · 마지막: {author}',
+      '내 댓글에 새 답글',
+      '내 댓글에 새 답글 {count}개',
+      '{nickname}(운영자)',
+      '탈퇴한 사용자',
+    ],
+    reason:
+      '내 댓글 아래에 다른 회원이 단 답글(대댓글, 대댓글에 단 답 포함) — 그 댓글 작성자에게, 읽기 전까지 같은 댓글의 답글을 합쳐 수와 마지막 답글 작성자 닉네임(목록을 읽을 때 그 답글에서). 자기 답글·수정은 알리지 않는다. N05 §2·§4, ADR-0161, 52-7·52-15·52-18·135-3·135-4·135-5',
+  },
+  moderation_action_taken: {
+    text: [
+      '운영 조치: {action}',
+      '운영 조치: {action} · {term}',
+      '숨김',
+      '경고',
+      '닉네임 강제 변경',
+      '소개 비우기',
+      '프로필 이미지 삭제',
+      '작성 제한',
+      '계정 제한',
+      '까지',
+      '무기한',
+    ],
+    reason:
+      '나에게 내린 운영 조치(숨김·경고·프로필 항목·작성 제한·계정 제한 — 커뮤니티 밖 사유 포함)의 종류와 제한이면 끝나는 때. 사유·운영자·신고자는 싣지 않는다 — 조치·신고 내역에서 본다. N05 §4·§5, N04 §6, ADR-0069 #45 13항, ADR-0161, 52-16·135-2·135-5·135-6',
+  },
+  moderation_action_cancelled: {
+    text: [
+      '운영 조치 취소: {action}',
+      '숨김',
+      '경고',
+      '닉네임 강제 변경',
+      '소개 비우기',
+      '프로필 이미지 삭제',
+      '작성 제한',
+      '계정 제한',
+    ],
+    reason: '나에게 내린 운영 조치의 취소(받아들인 제재 이의 포함). ADR-0161, 52-16·135-2·135-5',
+  },
+  moderation_restriction_end_changed: {
+    text: [
+      '운영 조치 감경: {action} · {term}',
+      '운영 조치 조기 해제: {action}',
+      '작성 제한',
+      '계정 제한',
+      '까지',
+    ],
+    reason:
+      '작성 제한·계정 제한의 감경(새로 끝나는 때)과 조기 해제. 기간이 끝나 저절로 풀리는 것은 알리지 않는다. ADR-0161, 52-16·135-2·135-5·135-6',
+  },
+  proposal_decided: {
+    text: ['시장 제안 {decision} · {question}', '채택', '반려'],
+    reason:
+      '내 시장 제안의 채택·반려 결론만(접수·검토·시장 연결은 알리지 않는다) — 사유는 MY 내 제안에서. N05 §6, ADR-0161, 52-19·135-5',
+  },
 } as const satisfies Record<NotificationType, NotificationTypeText>;
 
 /** One registered type with its name: what the excluded-feature check reads. */
@@ -186,9 +262,9 @@ export function findExcludedNotification(entry: NotificationTypeEntry): Notifica
 
 /**
  * Parameter names that would store another member's identity (ADR-0157, 52-15, ADR-0086): a type
- * that shows one — a reply's author — reads it through its target when the list is read, so a
- * closed member's '탈퇴한 사용자' and a forced nickname change show at once and nothing of theirs
- * stays in other members' inboxes.
+ * that shows one — a reply's author — keeps the id of what names it (`replyId`, ADR-0161) and the
+ * API reads the person through it when the list is read, so a closed member's '탈퇴한 사용자' and
+ * a forced nickname change show at once and nothing of theirs stays in other members' inboxes.
  */
 export const NOTIFICATION_IDENTITY_PARAM =
   /user|account|counterparty|publicId|nickname|author|email|phone/i;

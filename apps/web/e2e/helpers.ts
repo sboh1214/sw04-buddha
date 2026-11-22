@@ -3422,7 +3422,53 @@ export function toastsOf(page: Page): Locator {
   return page.locator('[data-scope="toast"][data-part="root"]');
 }
 
-// ---- 알림함 (#53; the inbox reads of #134's, #54's and #188's specs) -----------------------
+// ---- posts and comments through the API (#46, #48) ------------------------------------------
+
+/**
+ * A post straight at the API with the context's cookie, for a spec whose subject is what comes
+ * after it (comments.spec.ts, community-notifications.spec.ts): its id.
+ */
+export async function postThroughApi(
+  context: APIRequestContext,
+  marketId: string,
+  title: string,
+  text: string,
+): Promise<string> {
+  const me = await meOf(context);
+  const res = await context.post('/api/v1/posts', {
+    data: {
+      marketId,
+      title,
+      body: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] },
+      expectedAccountId: me.id,
+    },
+  });
+  expect(res.status(), await res.text()).toBe(201);
+  return ((await res.json()) as { data: { id: string } }).data.id;
+}
+
+/**
+ * A comment straight at the API with the context's cookie: a 댓글, or a 대댓글 under `parentId`.
+ * Its id and its `createdAt` as answered — the `toISOString()` a reply notice's `replyCreatedAt`
+ * stores (#135, ADR-0161).
+ */
+export async function commentThroughApi(
+  context: APIRequestContext,
+  postId: string,
+  parentId: string | null,
+  body: string,
+): Promise<{ id: string; createdAt: string }> {
+  const me = await meOf(context);
+  const res = await context.post(`/api/v1/posts/${postId}/comments`, {
+    data: { parentId, body, expectedAccountId: me.id },
+  });
+  expect(res.status(), await res.text()).toBe(201);
+  const { id, createdAt } = ((await res.json()) as { data: { id: string; createdAt: string } })
+    .data;
+  return { id, createdAt };
+}
+
+// ---- 알림함 (#53; the inbox reads of #134's, #54's, #188's and #135's specs) ---------------
 
 /** One read of the count after the signal: what a page may take past the realtime budget. */
 export const ONE_READ_MS = 5_000;

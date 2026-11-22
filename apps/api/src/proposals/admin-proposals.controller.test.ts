@@ -11,7 +11,10 @@
  * the proposer. And the owner's answers of 2026-10-19: a 채택 made with no market takes one later,
  * once (a draft or an existing market, `proposal_link`), the status staying 채택; a retired wish is
  * shown as retired. And #140's: a proposal of an account its member closed is reviewed and decided
- * all the same, its proposer named by no nickname. Skips when TEST_* are unset.
+ * all the same, its proposer named by no nickname. A 채택 and a 반려 tell the proposer the decision
+ * and their question in the same transaction (#135, ADR-0161; 52-19 "결론만"), never the reason,
+ * the explanation or a memo; 검토 시작, a later link and the memo tell nobody. Skips when TEST_* are
+ * unset.
  */
 import { schema } from '@buddha/db';
 import {
@@ -20,6 +23,7 @@ import {
   createCategory,
   createMarket,
   createProposal,
+  plantNotificationInsertFailure,
   prepareMarketMakerOpening,
   setReleaseSetting,
   TEST_PRICE_PROTECTION_TICKS,
@@ -35,8 +39,9 @@ import {
 } from '@buddha/shared';
 import { randomUUID } from 'node:crypto';
 import { asc, eq, ne } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 
@@ -976,5 +981,115 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
       headers: { cookie: proposer.cookie },
     });
     expect(seen.body).not.toContain('다시 메모');
+  });
+
+  // ---- the proposer's notice (#135, ADR-0161; 52-19) ----------------------------------------
+
+  describe('the proposer’s notice (#135, ADR-0161; 52-19)', () => {
+    beforeEach(() => {
+      vi.restoreAllMocks();
+    });
+    const rows = () =>
+      t.db
+        .select()
+        .from(schema.notifications)
+        .orderBy(asc(schema.notifications.occurredAt), asc(schema.notifications.id));
+    const signals = () => {
+      const spy = vi.spyOn(t.app.get(MarketPublisher), 'publishUser');
+      return () =>
+        spy.mock.calls
+          .filter(([, event]) => event.type === 'user:notification')
+          .map(([userId, event]) => [userId, 'ts' in event ? event.ts : null]);
+    };
+    const decided = (answer: AdminProposal, decision: 'adopted' | 'rejected') => ({
+      userId: proposer.id,
+      type: 'proposal_decided',
+      category: 'community',
+      params: { decision, question: answer.question },
+      target: { kind: 'proposal', proposalId: answer.id },
+      mergeKey: null,
+      eventCount: 1,
+      readAt: null,
+    });
+
+    it('tells the proposer a 채택 — with a draft, an existing market or none — and a 반려 from 검토 or 접수, and nothing else', async () => {
+      const signalled = signals();
+      const withDraft = await proposal({ deadline: koreanDate(40) });
+      answerOf(await review(withDraft.id));
+      const existing = await createMarket(t.db, { createdBy: admin.id, categoryId: category.id });
+      const withMarket = await proposal({ status: 'reviewing' });
+      const bare = await proposal({ status: 'reviewing' });
+      const reviewed = await proposal({ status: 'reviewing' });
+      const direct = await proposal();
+      // 검토 시작 told nobody.
+      expect(await rows()).toEqual([]);
+      const answers = [
+        answerOf(await adopt(withDraft.id, { memo: '메모', market: { type: 'draft' } })),
+        answerOf(
+          await adopt(withMarket.id, { market: { type: 'existing', marketId: existing.id } }),
+        ),
+        answerOf(await adopt(bare.id, {}, second)),
+        answerOf(await reject(reviewed.id, { reason: 'other', explanation: '반려 설명' })),
+        answerOf(await reject(direct.id, { reason: 'ambiguous_criteria', explanation: '모호' })),
+      ];
+      const stored = await rows();
+      expect(stored).toHaveLength(5);
+      const byTarget = (id: string) =>
+        stored.find((row) => (row.target as { proposalId: string }).proposalId === id)!;
+      for (const [index, answer] of answers.entries()) {
+        const row = byTarget(answer.id);
+        expect(row).toMatchObject(decided(answer, index < 3 ? 'adopted' : 'rejected'));
+        expect(row.occurredAt.toISOString()).toBe(answer.decidedAt);
+        // 52-19 "결론만": never the memo, the reason or the explanation.
+        expect(Object.keys(row.params).sort()).toEqual(['decision', 'question']);
+      }
+      expect(
+        (await t.db.select().from(schema.notificationKeys)).map((key) => key.eventKey).sort(),
+      ).toEqual(answers.map((answer) => `proposal:${answer.id}`).sort());
+      expect(signalled()).toEqual(answers.map((answer) => [proposer.id, answer.decidedAt]));
+      // A later link, the internal memo and a re-sent decision tell nobody.
+      answerOf(await link(bare.id, { market: { type: 'existing', marketId: existing.id } }));
+      answerOf(await put(`/${bare.id}/internal-memo`, { memo: '내부 메모' }));
+      expect((await reject(reviewed.id, { reason: 'other', explanation: '다시' })).statusCode).toBe(
+        400,
+      );
+      expect((await adopt(bare.id, {})).statusCode).toBe(400);
+      expect(await rows()).toEqual(stored);
+      expect(signalled()).toHaveLength(5);
+    });
+
+    it('skips a proposer who closed the account, and tells a deciding admin who proposed (ADR-0160 12-12)', async () => {
+      const signalled = signals();
+      const waiting = await proposal({ status: 'reviewing' });
+      await closeAccount(t.db, proposer.id);
+      answerOf(await adopt(waiting.id));
+      expect(await rows()).toEqual([]);
+      expect(signalled()).toEqual([]);
+      const own = await proposal({ userId: admin.id, status: 'reviewing' });
+      const answer = answerOf(await reject(own.id, { reason: 'other', explanation: '직접 반려' }));
+      expect(await rows()).toEqual([
+        expect.objectContaining({ ...decided(answer, 'rejected'), userId: admin.id }),
+      ]);
+      expect(signalled()).toEqual([[admin.id, answer.decidedAt]]);
+    });
+
+    it('fails the decision with its notice: a planted refusal is a 500 and the proposal stays as it was (188-2)', async () => {
+      const waiting = await proposal({ status: 'reviewing' });
+      const planted = await plantNotificationInsertFailure();
+      try {
+        const res = await adopt(waiting.id, { memo: '채택' });
+        expect(res.statusCode, res.body).toBe(500);
+        expect(res.body).not.toContain(proposer.id);
+      } finally {
+        await planted.remove();
+      }
+      const [row] = await t.db
+        .select()
+        .from(schema.marketProposals)
+        .where(eq(schema.marketProposals.id, waiting.id));
+      expect(row).toMatchObject({ status: 'reviewing', decidedAt: null });
+      expect((await actions()).filter((action) => action.type === 'proposal_adopt')).toEqual([]);
+      expect(await rows()).toEqual([]);
+    });
   });
 });

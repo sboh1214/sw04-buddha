@@ -6860,15 +6860,30 @@ export type components = {
             params: components["schemas"]["NotificationParams"];
             /** Format: date-time */
             readAt: string | null;
+            replyAuthor?: components["schemas"]["PostAuthor"] | null;
             target: components["schemas"]["NotificationTarget"];
             type: string;
         };
         /** @enum {string} */
         NotificationCategory: "trade" | "market" | "community";
+        NotificationCommentTarget: {
+            /** Format: uuid */
+            commentId: string;
+            /** @enum {string} */
+            kind: "comment";
+            /** Format: uuid */
+            postId: string;
+        };
         NotificationMarketTarget: {
             /** @enum {string} */
             kind: "market";
             slug: string;
+        };
+        NotificationModerationActionTarget: {
+            /** Format: uuid */
+            actionId: string;
+            /** @enum {string} */
+            kind: "moderation_action";
         };
         NotificationOrderHistoryTarget: {
             /** @enum {string} */
@@ -6885,11 +6900,23 @@ export type components = {
         NotificationParams: {
             [key: string]: string | number | boolean | (null);
         };
+        NotificationPostTarget: {
+            /** @enum {string} */
+            kind: "post";
+            /** Format: uuid */
+            postId: string;
+        };
+        NotificationProposalTarget: {
+            /** @enum {string} */
+            kind: "proposal";
+            /** Format: uuid */
+            proposalId: string;
+        };
         NotificationReadResult: {
             notification: components["schemas"]["Notification"];
             unreadCount: number;
         };
-        NotificationTarget: components["schemas"]["NotificationMarketTarget"] | components["schemas"]["NotificationOrderTarget"] | components["schemas"]["NotificationOrderHistoryTarget"];
+        NotificationTarget: components["schemas"]["NotificationMarketTarget"] | components["schemas"]["NotificationOrderTarget"] | components["schemas"]["NotificationOrderHistoryTarget"] | components["schemas"]["NotificationPostTarget"] | components["schemas"]["NotificationCommentTarget"] | components["schemas"]["NotificationModerationActionTarget"] | components["schemas"]["NotificationProposalTarget"];
         NotificationUnreadCount: {
             unreadCount: number;
         };
