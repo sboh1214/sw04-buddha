@@ -1,7 +1,8 @@
 import * as z from 'zod';
 import { serializeCoinAmount } from './api/coin-amount.js';
 import { uuidSchema } from './api/uuid.js';
-import { orderSideSchema, outcomeSchema, type OrderCancelReason } from './enums.js';
+import { MARKET_RESULTS, orderSideSchema, outcomeSchema, type OrderCancelReason } from './enums.js';
+import type { MarketDisputeStatus } from './market-dispute.js';
 import { MARKET_PAUSE_REASONS } from './market-pause.js';
 import { marketSlugSchema } from './market.js';
 
@@ -24,8 +25,10 @@ import { marketSlugSchema } from './market.js';
  * (52-20); the producers add theirs, each with its guard entry (guards/notifications.ts) and its
  * web renderer: #134 the 거래 three (ADR-0158 — `order_filled`, `orders_cancelled`,
  * `orders_expired`, below), #54 the 시장 상태 five (ADR-0159 — `market_closed`, `market_paused`,
- * `market_resumed`, `market_cancelled`, `market_rules_supplemented`), then #188 판정·정산, #135
- * 커뮤니티, #144 정정·보상.
+ * `market_resumed`, `market_cancelled`, `market_rules_supplemented`), #188 the 판정·정산 six
+ * (ADR-0160 — `market_judgement_delayed`, `market_provisional_result`,
+ * `market_judgement_corrected`, `market_dispute_decided`, `market_dispute_closed_by_correction`,
+ * `market_settled`), then #135 커뮤니티, #144 정정·보상.
  */
 
 /**
@@ -318,9 +321,10 @@ export const ORDERS_EXPIRED_NOTIFICATION = defineNotification({
 // the watchers (#54 AC 8).
 
 /**
- * Public free text of an approved supplement: its request's reason, at most
+ * Public free text: an approved supplement's request reason (#54), a 판정 지연 record's reason and a
+ * dispute decision's reason (#188) — each `approvalReasonSchema`, at most
  * APPROVAL_REASON_MAX_LENGTH, which equals NOTIFICATION_PARAM_STRING_MAX (notifications.test.ts
- * pins it, so a raised approval cap cannot roll a supplement's approval back).
+ * pins it, so a raised approval cap cannot roll an approval, a record or a decision back).
  */
 const noticeTextSchema = z.string().min(1).max(NOTIFICATION_PARAM_STRING_MAX);
 
@@ -424,13 +428,192 @@ export const MARKET_RULES_SUPPLEMENTED_NOTIFICATION = defineNotification({
   merge: null,
 });
 
+// ---- 판정·정산 알림 (#188, ADR-0160) ---------------------------------------------------------
+//
+// The six 판정·정산 types (52-21: category `market` — N05 §4's 시장 list names 판정 지연, 잠정
+// 결과·이의 기한 and 최종 정산, and a dispute's outcome is about the market's judgement). Four go to
+// the market's watchers and holders of one contract or more (52-1, 52-14 "대상은 관심·보유 기준
+// 그대로다"): 판정 지연 (52-11: each operator record that is the first of its episode or changes
+// the reason or the next review time, 188-5), 잠정 결과 and 판정 정정 (52-12, a grounds-only
+// correction included, 188-1) and 지급 완료 때의 최종 정산 (52-12; the holders the payout recorded,
+// ADR-0159 결과 6). Two go to a dispute's submitter alone (52-14): 기각·수용 with the public
+// decision reason (188-3), and 정정으로 종결 with the new deadline. None merges (one type is one
+// merge group, ADR-0157 결정 3), every one leads to the market's detail (`market` target, 188-4)
+// and none stores a count, a quantity, a P&L, an expected payout, an operator or another member
+// (52-15, #188 AC 11): a payout is the recipient's own. Times are ISO instants the web renders in
+// the member's zone, with the market's 판정 기준 시간대 beside them when it differs (52-15, #22).
+
+/**
+ * A whole number ≥ 0 as a decimal string: a member's payout, 0 included (52-15 '지급액(0 포함)').
+ * positiveDecimalSchema (#134) refuses '0' — it would refuse every loser and roll the payout back.
+ */
+const payoutDecimalSchema = z.string().regex(/^(0|[1-9][0-9]{0,15})$/);
+
+/**
+ * A result (MARKET_RESULTS) as a plain enum: marketResultSchema carries `.meta({ id })`, a `$ref`
+ * the definitions' flatness check refuses (ADR-0159 12-8).
+ */
+const noticeResultSchema = z.enum(MARKET_RESULTS);
+
+/** An instant (ISO, `toISOString()`), rendered in the member's zone (52-15). */
+const noticeInstantSchema = z.iso.datetime();
+
+/**
+ * The market's public 판정 기준 시간대 at the event (#22), null for a market opened before #22.
+ * Whatever `markets.judgement_time_zone` can hold — NOT timeZoneSchema (its `isKnownTimeZone`
+ * refine runs Intl on the server: a zone a newer tzdata stored would refuse the input and roll the
+ * approval or the payout back), no `.min(1)` and the generic cap, not TIME_ZONE_MAX_LENGTH: the
+ * column is varchar(64) in code points with no CHECK (checked on entry only), zod counts UTF-16
+ * units, and a '' or long value a fixture or raw write left would otherwise roll the event back —
+ * noticeTitleSchema's reasoning (ADR-0158 12-16). The web drops a zone it cannot read, '' and
+ * unknown ones included (`judgementLineZone` → `isKnownTimeZone`).
+ */
+const noticeJudgementZoneSchema = z.string().max(NOTIFICATION_PARAM_STRING_MAX).nullable();
+
+/**
+ * `market_judgement_delayed` (N05 §4 판정 지연, N03 §4; 52-11, 52-15, 188-5): an operator's 판정
+ * 지연 기록 on a CLOSED or PROVISIONAL market — the first of its episode (the status and the
+ * judgement version) or one that changes the reason or the next review time; never a time passing
+ * (ADR-0106 결정 6). `reason` is the record's public reason, `nextReviewAt` its 다음 검토 시각.
+ */
+export const marketJudgementDelayedParamsSchema = z.object({
+  marketTitle: noticeTitleSchema,
+  reason: noticeTextSchema,
+  nextReviewAt: noticeInstantSchema,
+  judgementTimeZone: noticeJudgementZoneSchema,
+});
+export type MarketJudgementDelayedParams = z.infer<typeof marketJudgementDelayedParamsSchema>;
+
+export const MARKET_JUDGEMENT_DELAYED_NOTIFICATION = defineNotification({
+  type: 'market_judgement_delayed',
+  category: 'market',
+  targets: ['market'],
+  params: marketJudgementDelayedParamsSchema,
+  merge: null,
+});
+
+/**
+ * `market_provisional_result` (N05 §4 잠정 결과·이의 기한, N03 §5; 52-12, 52-13, 52-15): a first
+ * judgement's approval, CLOSED → PROVISIONAL — its result (YES·NO·VOID) and its 이의 기한. No
+ * expected payout (52-15 '예상 지급액 없음'), and no notice as the deadline draws near (52-13).
+ */
+export const marketProvisionalResultParamsSchema = z.object({
+  marketTitle: noticeTitleSchema,
+  result: noticeResultSchema,
+  disputeDeadline: noticeInstantSchema,
+  judgementTimeZone: noticeJudgementZoneSchema,
+});
+export type MarketProvisionalResultParams = z.infer<typeof marketProvisionalResultParamsSchema>;
+
+export const MARKET_PROVISIONAL_RESULT_NOTIFICATION = defineNotification({
+  type: 'market_provisional_result',
+  category: 'market',
+  targets: ['market'],
+  params: marketProvisionalResultParamsSchema,
+  merge: null,
+});
+
+/**
+ * `market_judgement_corrected` (N03 §7 '이의 기한을 다시 제공한다'; 52-12, 52-14, 188-1): an
+ * approved 판정 정정 of a PROVISIONAL market, v(n) → v(n+1) — every one, a grounds-only correction
+ * that keeps the result included — with the new version's result and its new 이의 기한. Not the
+ * previous result (188-1).
+ */
+export const marketJudgementCorrectedParamsSchema = z.object({
+  marketTitle: noticeTitleSchema,
+  result: noticeResultSchema,
+  disputeDeadline: noticeInstantSchema,
+  judgementTimeZone: noticeJudgementZoneSchema,
+});
+export type MarketJudgementCorrectedParams = z.infer<typeof marketJudgementCorrectedParamsSchema>;
+
+export const MARKET_JUDGEMENT_CORRECTED_NOTIFICATION = defineNotification({
+  type: 'market_judgement_corrected',
+  category: 'market',
+  targets: ['market'],
+  params: marketJudgementCorrectedParamsSchema,
+  merge: null,
+});
+
+/** 52-14: the decisions told to a dispute's submitter — 기각 and 수용 (a decided dispute's status). */
+export const NOTIFIED_DISPUTE_DECISIONS = [
+  'dismissed',
+  'accepted',
+] as const satisfies readonly MarketDisputeStatus[];
+export type NotifiedDisputeDecision = (typeof NOTIFIED_DISPUTE_DECISIONS)[number];
+
+/**
+ * `market_dispute_decided` (N03 §5; 52-14, 188-3): an admin's 기각 or 수용 of the recipient's own
+ * 판정 이의, with the decision's public reason (#173 13항 — the 공개 판정 기록 shows it). A dispute
+ * sent back to pending by a correction's 반려·철회 is not told (188-6); deciding it again is a new
+ * notice.
+ */
+export const marketDisputeDecidedParamsSchema = z.object({
+  marketTitle: noticeTitleSchema,
+  decision: z.enum(NOTIFIED_DISPUTE_DECISIONS),
+  reason: noticeTextSchema,
+});
+export type MarketDisputeDecidedParams = z.infer<typeof marketDisputeDecidedParamsSchema>;
+
+export const MARKET_DISPUTE_DECIDED_NOTIFICATION = defineNotification({
+  type: 'market_dispute_decided',
+  category: 'market',
+  targets: ['market'],
+  params: marketDisputeDecidedParamsSchema,
+  merge: null,
+});
+
+/**
+ * `market_dispute_closed_by_correction` (N03 §7; 52-14 '정정으로 종결이면 새 이의 기한도 싣는다',
+ * 188-1): the recipient's pending 판정 이의 closed by an approved correction, with the new
+ * version's 이의 기한 only — the corrected result is in the correction notice and on the detail.
+ */
+export const marketDisputeClosedByCorrectionParamsSchema = z.object({
+  marketTitle: noticeTitleSchema,
+  disputeDeadline: noticeInstantSchema,
+  judgementTimeZone: noticeJudgementZoneSchema,
+});
+export type MarketDisputeClosedByCorrectionParams = z.infer<
+  typeof marketDisputeClosedByCorrectionParamsSchema
+>;
+
+export const MARKET_DISPUTE_CLOSED_BY_CORRECTION_NOTIFICATION = defineNotification({
+  type: 'market_dispute_closed_by_correction',
+  category: 'market',
+  targets: ['market'],
+  params: marketDisputeClosedByCorrectionParamsSchema,
+  merge: null,
+});
+
+/**
+ * `market_settled` (N05 §4 최종 정산, N03 §5·§6; 52-12 '지급 완료 때 최종 정산', 52-15): the payout
+ * done, SETTLING → SETTLED — the confirmed result and, for a holder at the payout, `payoutCoin`:
+ * the sum of the recipient's own payouts there (both outcomes, 0 included; no P&L). Null for a
+ * watcher who held nothing. A VOID payout is a 지급, never a refund (N03 §6).
+ */
+export const marketSettledParamsSchema = z.object({
+  marketTitle: noticeTitleSchema,
+  result: noticeResultSchema,
+  payoutCoin: payoutDecimalSchema.nullable(),
+});
+export type MarketSettledParams = z.infer<typeof marketSettledParamsSchema>;
+
+export const MARKET_SETTLED_NOTIFICATION = defineNotification({
+  type: 'market_settled',
+  category: 'market',
+  targets: ['market'],
+  params: marketSettledParamsSchema,
+  merge: null,
+});
+
 /**
  * The product's notification types (N05 §4). #53 shipped none (52-20 lists no type outside N05's
  * but the post-payout correction and compensation, #144; 시작 Coin, a re-grant's result, a
  * review's rejection and a market's opening are not notifications). #134 ships the 거래 three
- * (ADR-0158), #54 the 시장 five (ADR-0159). Each later producer appends its own here — #188
- * (판정·정산), #135 (커뮤니티, 52-19's 제안 included), #144 (정정·보상) — with its guard entry
- * (NOTIFICATION_TYPE_REGISTRY) and its web renderer, and edits the pin in notifications.test.ts.
+ * (ADR-0158), #54 the 시장 five (ADR-0159), #188 the 판정·정산 six (ADR-0160). Each later producer
+ * appends its own here — #135 (커뮤니티, 52-19's 제안 included), #144 (정정·보상) — with its guard
+ * entry (NOTIFICATION_TYPE_REGISTRY) and its web renderer, and edits the pin in
+ * notifications.test.ts.
  */
 export const NOTIFICATION_DEFINITIONS = [
   ORDER_FILLED_NOTIFICATION,
@@ -441,6 +624,12 @@ export const NOTIFICATION_DEFINITIONS = [
   MARKET_RESUMED_NOTIFICATION,
   MARKET_CANCELLED_NOTIFICATION,
   MARKET_RULES_SUPPLEMENTED_NOTIFICATION,
+  MARKET_JUDGEMENT_DELAYED_NOTIFICATION,
+  MARKET_PROVISIONAL_RESULT_NOTIFICATION,
+  MARKET_JUDGEMENT_CORRECTED_NOTIFICATION,
+  MARKET_DISPUTE_DECIDED_NOTIFICATION,
+  MARKET_DISPUTE_CLOSED_BY_CORRECTION_NOTIFICATION,
+  MARKET_SETTLED_NOTIFICATION,
 ] as const satisfies readonly NotificationDefinition[];
 export type NotificationType = (typeof NOTIFICATION_DEFINITIONS)[number]['type'];
 

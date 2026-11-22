@@ -13,9 +13,11 @@
  * earlier history — with the market still CLOSED and unjudged, and a passed next review time
  * shown as passed with nothing else following; the current record moving with the episode (a
  * judgement's approval, a rejected correction, a correction's approval, the confirmation); any
- * admin, the registrant of a waiting judgement included; and the admin on screen. The time passing
- * creating nothing in the worker is apps/worker's (judgement-delay.test.ts). Skips when TEST_* are
- * unset.
+ * admin, the registrant of a waiting judgement included; and the admin on screen. And the notice
+ * (#188, ADR-0160; 52-11, 188-5): a record that is the first of its episode or changes the reason
+ * or the next review time tells the market's watchers and holders; an identical re-record nobody.
+ * The time passing creating nothing in the worker is apps/worker's (judgement-delay.test.ts). Skips
+ * when TEST_* are unset.
  */
 import { clockTimestamp, schema } from '@buddha/db';
 import {
@@ -27,7 +29,9 @@ import {
   createJudgementDelay,
   createJudgementRequest,
   createMarket,
+  createPosition,
   createProvisionalMarket,
+  createWatch,
   resolveMarketNow,
   setReleaseSetting,
 } from '@buddha/db/test';
@@ -39,11 +43,12 @@ import {
   type AdminMarket,
   type Market,
 } from '@buddha/shared';
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, count, desc, eq } from 'drizzle-orm';
 import { Redis } from 'ioredis';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import type * as Clock from '../infra/db/clock.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { sleep, waitForLockWaiter, waitForMessages } from '../test/wait.js';
@@ -933,5 +938,201 @@ describe.skipIf(!hasTestInfra)('admin market judgement delays (integration)', ()
     const member = await signUpTestUser(t);
     expect((await record(market.id, member)).statusCode).toBe(403);
     expect(await delaysOf(market.id)).toEqual([]);
+  });
+
+  // --- the notice (#188) ------------------------------------------------------------------------
+  describe('judgement delay notifications (#188, ADR-0160; 52-11, 188-5)', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    /**
+     * `MarketPublisher.publishUser` watched: each `user:notification` as [account, ts, the
+     * account's notifications committed when it was sent] — read on another connection, so a
+     * signal sent before COMMIT would count none — sorted by account.
+     */
+    function signals() {
+      const sent: [string, string, number][] = [];
+      vi.spyOn(t.app.get(MarketPublisher), 'publishUser').mockImplementation(
+        async (userId, event) => {
+          if (event.type !== 'user:notification') return;
+          const [row] = await t.db
+            .select({ n: count() })
+            .from(schema.notifications)
+            .where(eq(schema.notifications.userId, userId));
+          sent.push([userId, event.ts, row!.n]);
+        },
+      );
+      return () => [...sent].sort(([x], [y]) => x.localeCompare(y));
+    }
+    /** An account's `market_judgement_delayed` rows, the oldest first, without ids. */
+    async function delayNotices(userId: string) {
+      const rows = await t.db
+        .select()
+        .from(schema.notifications)
+        .where(
+          and(
+            eq(schema.notifications.userId, userId),
+            eq(schema.notifications.type, 'market_judgement_delayed'),
+          ),
+        )
+        .orderBy(asc(schema.notifications.occurredAt));
+      return rows.map(({ id: _id, createdAt: _at, userId: _user, ...row }) => row);
+    }
+    async function delayKeys() {
+      const rows = await t.db
+        .select()
+        .from(schema.notificationKeys)
+        .where(eq(schema.notificationKeys.type, 'market_judgement_delayed'));
+      return rows.map((row) => row.eventKey).sort();
+    }
+    /** The notice of the record `delay` (`delaysOf`'s row) on `market`. */
+    const delayed = (
+      market: { slug: string; title: string; judgementTimeZone: string | null },
+      delay: { reason: string; nextReviewAt: Date; recordedAt: Date },
+    ) => ({
+      type: 'market_judgement_delayed',
+      category: 'market',
+      params: {
+        marketTitle: market.title,
+        reason: delay.reason,
+        nextReviewAt: delay.nextReviewAt.toISOString(),
+        judgementTimeZone: market.judgementTimeZone,
+      },
+      target: { kind: 'market', slug: market.slug },
+      mergeKey: null,
+      eventCount: 1,
+      occurredAt: delay.recordedAt,
+      readAt: null,
+    });
+    /** `signals()`'s entries: each of `who` once at `at`, with `n` rows. */
+    const signalled = (who: readonly { id: string }[], at: Date, n: number) =>
+      who
+        .map(({ id }): [string, string, number] => [id, at.toISOString(), n])
+        .sort(([x], [y]) => x.localeCompare(y));
+
+    it('tells the watchers and holders the first record — its public reason, next review time and 판정 기준 시간대 — the admins and the recorder too, after COMMIT; an identical re-record nobody, a changed reason or time one more each; a refused record nothing (52-1·52-11·52-15, 53-5, 54-8)', async () => {
+      const market = await closed();
+      const [w, h, outsider] = [
+        await signUpTestUser(t),
+        await signUpTestUser(t),
+        await signUpTestUser(t),
+      ];
+      for (const who of [w, third, recorder]) {
+        await createWatch(t.db, { userId: who.id, marketId: market.id });
+      }
+      await createPosition(t.db, { userId: h.id, marketId: market.id, outcome: 'NO', qty: 2 });
+      const audience = [w, h, third, recorder];
+      const sent = signals();
+      // Refused: nothing written, nobody told.
+      expectRefused(
+        await record(market.id, recorder, { nextReviewAt: iso(Date.now() - MINUTE_MS) }),
+        'nextReviewAt',
+        'not after now',
+      );
+      expect(await t.db.select().from(schema.notifications)).toEqual([]);
+      expect(sent()).toEqual([]);
+
+      // The first record of the episode.
+      const next = Date.now() + DAY_MS + 123;
+      const first = await record(market.id, recorder, { nextReviewAt: iso(next) });
+      expect(first.statusCode, first.body).toBe(200);
+      for (const who of [w, h, outsider]) expect(first.body).not.toContain(who.id);
+      const [d1] = await delaysOf(market.id);
+      const n1 = delayed(market, d1!);
+      for (const who of audience) expect(await delayNotices(who.id), who.id).toEqual([n1]);
+      expect(await delayNotices(outsider.id)).toEqual([]);
+      expect(await delayKeys()).toEqual(audience.map(() => `market_event:${String(d1!.eventId)}`));
+      expect(sent()).toEqual(signalled(audience, d1!.recordedAt, 1));
+      // The record names nobody told: its fields as before.
+      const [action] = await delayActionsFor(market.id);
+      expect(Object.keys(action!.payload as object).sort()).toEqual([
+        'delayId',
+        'judgementVersion',
+        'marketStatus',
+        'nextReviewAt',
+        'reason',
+      ]);
+
+      // The same reason (trimmed alike) and time again: a new record (owner answer (4)), told to
+      // nobody (52-11).
+      vi.restoreAllMocks();
+      const rows = await t.db.select().from(schema.notifications);
+      const keys = await delayKeys();
+      const again = signals();
+      const same = await record(market.id, recorder, {
+        reason: `  ${REASON} `,
+        nextReviewAt: iso(next),
+      });
+      expect(same.statusCode, same.body).toBe(200);
+      expect(await delaysOf(market.id)).toHaveLength(2);
+      expect(await t.db.select().from(schema.notifications)).toEqual(rows);
+      expect(await delayKeys()).toEqual(keys);
+      expect(again()).toEqual([]);
+
+      // Another reason: one more each.
+      vi.restoreAllMocks();
+      const reasoned = signals();
+      expect(
+        (await record(market.id, other, { reason: SECOND_REASON, nextReviewAt: iso(next) }))
+          .statusCode,
+      ).toBe(200);
+      const [d3] = await delaysOf(market.id);
+      const n3 = delayed(market, d3!);
+      for (const who of audience) expect(await delayNotices(who.id), who.id).toEqual([n1, n3]);
+      expect(reasoned()).toEqual(signalled(audience, d3!.recordedAt, 2));
+
+      // Another time: one more each.
+      vi.restoreAllMocks();
+      const timed = signals();
+      expect(
+        (
+          await record(market.id, recorder, {
+            reason: SECOND_REASON,
+            nextReviewAt: iso(next + HOUR_MS),
+          })
+        ).statusCode,
+      ).toBe(200);
+      const [d4] = await delaysOf(market.id);
+      const n4 = delayed(market, d4!);
+      for (const who of audience) {
+        expect(await delayNotices(who.id), who.id).toEqual([n1, n3, n4]);
+      }
+      expect(timed()).toEqual(signalled(audience, d4!.recordedAt, 3));
+      expect(await delayNotices(outsider.id)).toEqual([]);
+    });
+
+    it('tells the first record of a new episode though it repeats the last one’s reason and time: a PROVISIONAL market held past its deadline after a CLOSED record (188-5)', async () => {
+      const market = await closed();
+      const w = await signUpTestUser(t);
+      await createWatch(t.db, { userId: w.id, marketId: market.id });
+      const next = iso(Date.now() + DAY_MS + 123);
+      expect((await record(market.id, recorder, { nextReviewAt: next })).statusCode).toBe(200);
+      const [closedRecord] = await delaysOf(market.id);
+      // Judged two hours ago with a 60-minute window, and held by a dispute past its deadline.
+      const clockNow = (await clockTimestamp(t.db)).getTime();
+      const { market: judged } = await createProvisionalMarket(t.db, {
+        marketId: market.id,
+        registeredBy: other.id,
+        approvedBy: third.id,
+        publishedAt: new Date(clockNow - 2 * HOUR_MS),
+        disputeWindowMinutes: 60,
+      });
+      await held(judged);
+      const sent = signals();
+      expect((await record(market.id, recorder, { nextReviewAt: next })).statusCode).toBe(200);
+      const [provisionalRecord] = await delaysOf(market.id);
+      expect(provisionalRecord).toMatchObject({
+        marketStatus: 'provisional',
+        judgementVersion: 1,
+        reason: closedRecord!.reason,
+        nextReviewAt: closedRecord!.nextReviewAt,
+      });
+      expect(await delayNotices(w.id)).toEqual([
+        delayed(market, closedRecord!),
+        delayed(market, provisionalRecord!),
+      ]);
+      expect(sent()).toEqual(signalled([w], provisionalRecord!.recordedAt, 2));
+    });
   });
 });

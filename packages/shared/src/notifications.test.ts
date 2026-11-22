@@ -2,12 +2,22 @@ import { describe, expect, it } from 'vitest';
 import * as z from 'zod';
 import { APPROVAL_REASON_MAX_LENGTH, approvalReasonSchema } from './approvals.js';
 import { MARKET_PAUSE_REASONS } from './market-pause.js';
+import { MARKET_RESULTS } from './enums.js';
+import { NOTIFICATION_IDENTITY_PARAM } from './guards/notifications.js';
+import { decideDisputeBodySchema } from './market-dispute.js';
+import { recordJudgementDelayBodySchema } from './market-judgement-delay.js';
 import {
   MARKET_CANCELLED_NOTIFICATION,
   MARKET_CLOSED_NOTIFICATION,
+  MARKET_DISPUTE_CLOSED_BY_CORRECTION_NOTIFICATION,
+  MARKET_DISPUTE_DECIDED_NOTIFICATION,
+  MARKET_JUDGEMENT_CORRECTED_NOTIFICATION,
+  MARKET_JUDGEMENT_DELAYED_NOTIFICATION,
   MARKET_PAUSED_NOTIFICATION,
+  MARKET_PROVISIONAL_RESULT_NOTIFICATION,
   MARKET_RESUMED_NOTIFICATION,
   MARKET_RULES_SUPPLEMENTED_NOTIFICATION,
+  MARKET_SETTLED_NOTIFICATION,
   NOTIFICATION_CATEGORIES,
   NOTIFICATION_DEFINITIONS,
   NOTIFICATION_EVENT_KEY_PATTERN,
@@ -16,6 +26,7 @@ import {
   NOTIFICATION_TYPE_PATTERN,
   NOTIFICATION_UNREAD_COUNT_CAP,
   NOTIFIED_CANCEL_REASONS,
+  NOTIFIED_DISPUTE_DECISIONS,
   ORDER_EXPIRY_CAUSES,
   ORDER_FILLED_NOTIFICATION,
   ORDERS_CANCELLED_NOTIFICATION,
@@ -245,11 +256,11 @@ describe('notification DTOs', () => {
   });
 });
 
-describe('NOTIFICATION_DEFINITIONS (#53, 52-20; #134; #54)', () => {
-  it('holds the 거래 three of #134, then the 시장 five of #54', () => {
-    // Pinned. Each producer edits this pin as it appends its own: #188 (판정·정산), #135
-    // (커뮤니티, 52-19's 제안), #144 (정정·보상). 시작 Coin, a re-grant's result, a review's
-    // rejection and a market's opening are no notification (52-20).
+describe('NOTIFICATION_DEFINITIONS (#53, 52-20; #134; #54; #188)', () => {
+  it('holds the 거래 three of #134, then the 시장 five of #54, then the 판정·정산 six of #188', () => {
+    // Pinned. Each producer edits this pin as it appends its own: #135 (커뮤니티, 52-19's 제안),
+    // #144 (정정·보상). 시작 Coin, a re-grant's result, a review's rejection and a market's
+    // opening are no notification (52-20).
     const market = (type: string) => ({
       type,
       category: 'market',
@@ -283,6 +294,13 @@ describe('NOTIFICATION_DEFINITIONS (#53, 52-20; #134; #54)', () => {
       market('market_resumed'),
       market('market_cancelled'),
       market('market_rules_supplemented'),
+      // #188 (ADR-0160; 52-21: every one a 시장 notification, none merging; 188-4: the detail).
+      market('market_judgement_delayed'),
+      market('market_provisional_result'),
+      market('market_judgement_corrected'),
+      market('market_dispute_decided'),
+      market('market_dispute_closed_by_correction'),
+      market('market_settled'),
     ]);
     expect(NOTIFICATION_DEFINITIONS).toEqual([
       ORDER_FILLED_NOTIFICATION,
@@ -293,7 +311,14 @@ describe('NOTIFICATION_DEFINITIONS (#53, 52-20; #134; #54)', () => {
       MARKET_RESUMED_NOTIFICATION,
       MARKET_CANCELLED_NOTIFICATION,
       MARKET_RULES_SUPPLEMENTED_NOTIFICATION,
+      MARKET_JUDGEMENT_DELAYED_NOTIFICATION,
+      MARKET_PROVISIONAL_RESULT_NOTIFICATION,
+      MARKET_JUDGEMENT_CORRECTED_NOTIFICATION,
+      MARKET_DISPUTE_DECIDED_NOTIFICATION,
+      MARKET_DISPUTE_CLOSED_BY_CORRECTION_NOTIFICATION,
+      MARKET_SETTLED_NOTIFICATION,
     ]);
+    expect(NOTIFICATION_DEFINITIONS).toHaveLength(14);
     for (const definition of NOTIFICATION_DEFINITIONS) {
       expect(NOTIFICATION_TYPE_PATTERN.test(definition.type), definition.type).toBe(true);
     }
@@ -581,5 +606,285 @@ describe('시장 상태 알림 (#54, ADR-0159; 52-1·52-5·52-8~52-10, 54-1~54-8
       'reason',
       'ruleVersion',
     ]);
+  });
+});
+
+describe('판정·정산 알림 (#188, ADR-0160; 52-1·52-11~52-15, 188-1~188-6)', () => {
+  const title = '첫눈이 올까';
+  const tooLong = 'x'.repeat(NOTIFICATION_PARAM_STRING_MAX + 1);
+  // A 120-code-point title of astral characters is 240 UTF-16 units: still a title here.
+  const astral = '𝔸'.repeat(120);
+  const at = '2026-09-07T06:00:00.000Z';
+  // Instants as `toISOString()` writes them: anything else is refused.
+  const notInstants = ['2026-09-07 15:00', '2026-09-07', 'tomorrow', '', 1_788_000_000_000, null];
+  // Whatever `markets.judgement_time_zone` may hold, an unknown but well-shaped zone and ''
+  // included: no Intl refine, no minimum (an approval or a payout must never roll back on it).
+  const zones = ['Asia/Seoul', 'America/New_York', 'Mars/Olympus_Mons', '', null];
+  const keys = (definition: { params: z.ZodType }) =>
+    Object.keys((definition.params as z.ZodObject).shape).sort();
+
+  it('market_judgement_delayed: the public reason, the next review time and the market’s zone', () => {
+    const { params } = MARKET_JUDGEMENT_DELAYED_NOTIFICATION;
+    const delayed = {
+      marketTitle: title,
+      reason: '기상청 발표가 늦어지고 있습니다.',
+      nextReviewAt: at,
+      judgementTimeZone: 'America/New_York',
+    };
+    expect(params.parse(delayed)).toEqual(delayed);
+    expect(params.parse({ ...delayed, marketTitle: astral }).marketTitle).toBe(astral);
+    for (const judgementTimeZone of zones) {
+      expect(params.parse({ ...delayed, judgementTimeZone }).judgementTimeZone).toBe(
+        judgementTimeZone,
+      );
+    }
+    // The longest reason a record stores fits; braces and replacement patterns are plain text.
+    const longest = '가'.repeat(APPROVAL_REASON_MAX_LENGTH);
+    expect(params.parse({ ...delayed, reason: longest }).reason).toBe(longest);
+    expect(params.parse({ ...delayed, reason: '{market} $& $1 {{x}}' }).reason).toBe(
+      '{market} $& $1 {{x}}',
+    );
+    for (const nextReviewAt of notInstants) {
+      expect(params.safeParse({ ...delayed, nextReviewAt }).success, String(nextReviewAt)).toBe(
+        false,
+      );
+    }
+    for (const bad of [
+      { ...delayed, reason: '' },
+      { ...delayed, reason: tooLong },
+      { ...delayed, reason: null },
+      { ...delayed, marketTitle: '' },
+      { ...delayed, marketTitle: tooLong },
+      { ...delayed, judgementTimeZone: tooLong },
+      { ...delayed, judgementTimeZone: 9 },
+      { marketTitle: title, reason: '사유', nextReviewAt: at },
+    ]) {
+      expect(params.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it('market_provisional_result and market_judgement_corrected: a result of three, a deadline and the zone', () => {
+    expect(MARKET_RESULTS).toEqual(['YES', 'NO', 'VOID']);
+    for (const { params } of [
+      MARKET_PROVISIONAL_RESULT_NOTIFICATION,
+      MARKET_JUDGEMENT_CORRECTED_NOTIFICATION,
+    ]) {
+      for (const result of MARKET_RESULTS) {
+        const judged = {
+          marketTitle: title,
+          result,
+          disputeDeadline: at,
+          judgementTimeZone: 'Asia/Seoul',
+        };
+        expect(params.parse(judged)).toEqual(judged);
+      }
+      const judged = { marketTitle: astral, result: 'NO', disputeDeadline: at };
+      for (const judgementTimeZone of zones) {
+        expect(params.parse({ ...judged, judgementTimeZone })).toEqual({
+          ...judged,
+          judgementTimeZone,
+        });
+      }
+      for (const disputeDeadline of notInstants) {
+        expect(
+          params.safeParse({ ...judged, judgementTimeZone: null, disputeDeadline }).success,
+          String(disputeDeadline),
+        ).toBe(false);
+      }
+      for (const bad of [
+        { result: 'void' },
+        { result: 'MAYBE' },
+        { result: null },
+        { judgementTimeZone: tooLong },
+        { judgementTimeZone: undefined },
+        { marketTitle: '' },
+      ]) {
+        expect(
+          params.safeParse({ ...judged, judgementTimeZone: null, ...bad }).success,
+          JSON.stringify(bad),
+        ).toBe(false);
+      }
+      // No expected payout, no previous result: what is beside them is not kept (52-15, 188-1).
+      expect(
+        params.parse({
+          ...judged,
+          judgementTimeZone: null,
+          previousResult: 'YES',
+          expectedPayoutCoin: '100',
+          disputeCount: 2,
+        }),
+      ).toEqual({ ...judged, judgementTimeZone: null });
+    }
+  });
+
+  it('market_dispute_decided: 기각 or 수용 and the public decision reason (52-14, 188-3)', () => {
+    const { params } = MARKET_DISPUTE_DECIDED_NOTIFICATION;
+    expect(NOTIFIED_DISPUTE_DECISIONS).toEqual(['dismissed', 'accepted']);
+    for (const decision of NOTIFIED_DISPUTE_DECISIONS) {
+      const decided = { marketTitle: title, decision, reason: '1차 출처의 발표가 같습니다.' };
+      expect(params.parse(decided)).toEqual(decided);
+    }
+    const decided = { marketTitle: astral, decision: 'accepted', reason: '정정합니다.' };
+    const longest = '𝔸'.repeat(APPROVAL_REASON_MAX_LENGTH / 2);
+    expect(params.parse({ ...decided, reason: longest }).reason).toBe(longest);
+    for (const bad of [
+      { decision: 'pending' },
+      { decision: 'retracted' },
+      { decision: 'closed_by_correction' },
+      { decision: 'dismiss' },
+      { decision: 'accept' },
+      { reason: '' },
+      { reason: tooLong },
+      { reason: null },
+      { marketTitle: '' },
+    ]) {
+      expect(params.safeParse({ ...decided, ...bad }).success, JSON.stringify(bad)).toBe(false);
+    }
+    // Neither the decider nor the submitter is kept (52-15 '운영자와 신고자는 싣지 않는다').
+    expect(params.parse({ ...decided, decidedBy: 'admin-1', submitter: 'member-1' })).toEqual(
+      decided,
+    );
+  });
+
+  it('market_dispute_closed_by_correction: the new deadline only, not the corrected result (188-1)', () => {
+    const { params } = MARKET_DISPUTE_CLOSED_BY_CORRECTION_NOTIFICATION;
+    const closed = { marketTitle: title, disputeDeadline: at, judgementTimeZone: null };
+    expect(params.parse(closed)).toEqual(closed);
+    expect(params.parse({ ...closed, result: 'NO' })).toEqual(closed);
+    for (const judgementTimeZone of zones) {
+      expect(params.parse({ ...closed, judgementTimeZone }).judgementTimeZone).toBe(
+        judgementTimeZone,
+      );
+    }
+    for (const disputeDeadline of notInstants) {
+      expect(
+        params.safeParse({ ...closed, disputeDeadline }).success,
+        String(disputeDeadline),
+      ).toBe(false);
+    }
+    expect(params.safeParse({ ...closed, marketTitle: tooLong }).success).toBe(false);
+  });
+
+  it('market_settled: the confirmed result and the recipient’s own payout, 0 included, or none', () => {
+    const { params } = MARKET_SETTLED_NOTIFICATION;
+    for (const result of MARKET_RESULTS) {
+      // '0' a loser's, '200' a winner's, '100' a VOID holder's of both sides, null a watcher's.
+      for (const payoutCoin of ['0', '200', '100', '9007199254740993', null]) {
+        const settled = { marketTitle: title, result, payoutCoin };
+        expect(params.parse(settled), `${result} ${String(payoutCoin)}`).toEqual(settled);
+      }
+    }
+    expect(params.parse({ marketTitle: astral, result: 'VOID', payoutCoin: '0' }).marketTitle).toBe(
+      astral,
+    );
+    for (const payoutCoin of [
+      '-1',
+      '01',
+      '00',
+      '1.5',
+      ' 1',
+      '1e3',
+      '',
+      '12345678901234567',
+      100,
+      0,
+      undefined,
+    ]) {
+      expect(
+        params.safeParse({ marketTitle: title, result: 'YES', payoutCoin }).success,
+        String(payoutCoin),
+      ).toBe(false);
+    }
+    for (const bad of [
+      { marketTitle: title, result: 'void', payoutCoin: '0' },
+      { marketTitle: title, result: null, payoutCoin: '0' },
+      { marketTitle: '', result: 'YES', payoutCoin: '0' },
+    ]) {
+      expect(params.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+    // No P&L, no quantity, nobody else's payout: what is beside them is not kept (52-15, AC 11).
+    expect(
+      params.parse({
+        marketTitle: title,
+        result: 'NO',
+        payoutCoin: '200',
+        settlementPnlCoin: '80',
+        qty: '2',
+        otherPayoutCoin: '0',
+      }),
+    ).toEqual({ marketTitle: title, result: 'NO', payoutCoin: '200' });
+  });
+
+  it('keeps the delay and decision reasons within the param cap: both are approval reasons', () => {
+    // A raised APPROVAL_REASON_MAX_LENGTH past the param cap would make the notice refused and
+    // the record or the decision roll back (ADR-0157 결정 4의 7).
+    expect(recordJudgementDelayBodySchema.shape.reason).toBe(approvalReasonSchema);
+    expect(decideDisputeBodySchema.shape.reason).toBe(approvalReasonSchema);
+    expect(APPROVAL_REASON_MAX_LENGTH).toBeLessThanOrEqual(NOTIFICATION_PARAM_STRING_MAX);
+    const longest = approvalReasonSchema.parse('가'.repeat(APPROVAL_REASON_MAX_LENGTH));
+    expect(
+      MARKET_JUDGEMENT_DELAYED_NOTIFICATION.params.safeParse({
+        marketTitle: title,
+        reason: longest,
+        nextReviewAt: at,
+        judgementTimeZone: null,
+      }).success,
+    ).toBe(true);
+    expect(
+      MARKET_DISPUTE_DECIDED_NOTIFICATION.params.safeParse({
+        marketTitle: title,
+        decision: 'dismissed',
+        reason: longest,
+      }).success,
+    ).toBe(true);
+  });
+
+  it('stores flat public values and the recipient’s own only: no quantity, P&L, expected payout or another member (AC 11)', () => {
+    expect(keys(MARKET_JUDGEMENT_DELAYED_NOTIFICATION)).toEqual([
+      'judgementTimeZone',
+      'marketTitle',
+      'nextReviewAt',
+      'reason',
+    ]);
+    for (const definition of [
+      MARKET_PROVISIONAL_RESULT_NOTIFICATION,
+      MARKET_JUDGEMENT_CORRECTED_NOTIFICATION,
+    ]) {
+      expect(keys(definition), definition.type).toEqual([
+        'disputeDeadline',
+        'judgementTimeZone',
+        'marketTitle',
+        'result',
+      ]);
+    }
+    expect(keys(MARKET_DISPUTE_DECIDED_NOTIFICATION)).toEqual([
+      'decision',
+      'marketTitle',
+      'reason',
+    ]);
+    expect(keys(MARKET_DISPUTE_CLOSED_BY_CORRECTION_NOTIFICATION)).toEqual([
+      'disputeDeadline',
+      'judgementTimeZone',
+      'marketTitle',
+    ]);
+    expect(keys(MARKET_SETTLED_NOTIFICATION)).toEqual(['marketTitle', 'payoutCoin', 'result']);
+    for (const definition of [
+      MARKET_JUDGEMENT_DELAYED_NOTIFICATION,
+      MARKET_PROVISIONAL_RESULT_NOTIFICATION,
+      MARKET_JUDGEMENT_CORRECTED_NOTIFICATION,
+      MARKET_DISPUTE_DECIDED_NOTIFICATION,
+      MARKET_DISPUTE_CLOSED_BY_CORRECTION_NOTIFICATION,
+      MARKET_SETTLED_NOTIFICATION,
+    ]) {
+      for (const key of keys(definition)) {
+        expect(NOTIFICATION_IDENTITY_PARAM.test(key), `${definition.type}.${key}`).toBe(false);
+        expect(
+          /qty|quantity|count|pnl|profit|loss|expected|previous|holder|watcher|operator|admin|submitter|decider/i.test(
+            key,
+          ),
+          `${definition.type}.${key}`,
+        ).toBe(false);
+      }
+    }
   });
 });

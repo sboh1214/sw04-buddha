@@ -11,8 +11,10 @@
  * republish, an acceptance still holding and the last dismissal past the deadline registering
  * `market.resolve` with no delay (the worker's confirmation is apps/worker's); the public labels
  * across the deadline on the detail, the cards and a post's badge; the admin detail's disputes and
- * 이의 접수 with its keyset; two writes of one dispute at once; and the screen's account. No fill
- * exists before #119: the factories write them. Skips when TEST_* are unset.
+ * 이의 접수 with its keyset; two writes of one dispute at once; and the screen's account. And the
+ * notices (#188, ADR-0160): a 기각 or 수용 tells the submitter alone, with its public reason, keyed
+ * by its record — a dispute decided again after a reopen is told again — and a submission or a
+ * 철회 nobody. No fill exists before #119: the factories write them. Skips when TEST_* are unset.
  */
 import { clockTimestamp, schema } from '@buddha/db';
 import {
@@ -23,6 +25,7 @@ import {
   createModerationAction,
   createPost,
   createProvisionalMarket,
+  createWatch,
   resolveMarketNow,
 } from '@buddha/db/test';
 import {
@@ -38,11 +41,12 @@ import {
   type PostMarket,
 } from '@buddha/shared';
 import { Queue } from 'bullmq';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, count, eq } from 'drizzle-orm';
 import { Redis } from 'ioredis';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { MARKETS_QUEUE } from '../jobs/market-jobs.service.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { waitForLockWaiter, waitForMessages } from '../test/wait.js';
@@ -1102,5 +1106,197 @@ describe.skipIf(!hasTestInfra)('market disputes (integration)', () => {
     ]);
     expectError(await list('?status=everything'), 400, 'VALIDATION_ERROR');
     expectError(await get('/admin/market-disputes', member), 403, 'FORBIDDEN');
+  });
+
+  // --- the notices (#188) -----------------------------------------------------------------------
+  describe('dispute decision notifications (#188, ADR-0160; 52-14, 188-3·188-6)', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    /**
+     * `MarketPublisher.publishUser` watched: each `user:notification` as [account, ts, the
+     * account's notifications committed when it was sent] — read on another connection, so a
+     * signal sent before COMMIT would count none — sorted by account.
+     */
+    function signals() {
+      const sent: [string, string, number][] = [];
+      vi.spyOn(t.app.get(MarketPublisher), 'publishUser').mockImplementation(
+        async (userId, event) => {
+          if (event.type !== 'user:notification') return;
+          const [row] = await t.db
+            .select({ n: count() })
+            .from(schema.notifications)
+            .where(eq(schema.notifications.userId, userId));
+          sent.push([userId, event.ts, row!.n]);
+        },
+      );
+      return () => [...sent].sort(([x], [y]) => x.localeCompare(y));
+    }
+    /** Every notification row, the oldest first, without its id and write instant. */
+    async function notices() {
+      const rows = await t.db
+        .select()
+        .from(schema.notifications)
+        .orderBy(asc(schema.notifications.occurredAt));
+      return rows.map(({ id: _id, createdAt: _at, ...row }) => row);
+    }
+    /** The `market_dispute_decided` notice `userId` keeps of a decision at `at`. */
+    const decided = (
+      userId: string,
+      market: { slug: string; title: string },
+      decision: 'dismissed' | 'accepted',
+      reason: string,
+      at: Date,
+    ) => ({
+      userId,
+      type: 'market_dispute_decided',
+      category: 'market',
+      params: { marketTitle: market.title, decision, reason },
+      target: { kind: 'market', slug: market.slug },
+      mergeKey: null,
+      eventCount: 1,
+      occurredAt: at,
+      readAt: null,
+    });
+    /** The decision records of the market, the oldest first: their keys. */
+    async function decisionKeys(marketId: string) {
+      return (await disputeActionsOf(marketId)).map((row) => `admin_action:${row.id}`);
+    }
+    async function keysOf(type: string) {
+      const rows = await t.db
+        .select()
+        .from(schema.notificationKeys)
+        .where(eq(schema.notificationKeys.type, type));
+      return rows.map((row) => row.eventKey).sort();
+    }
+
+    it('tells the submitter alone a 기각 and a 수용 — the decision and its public reason — keyed by the decision’s record, after COMMIT; a watcher or another submitter nothing; the answer and the record name nobody told; a submission and a 철회 tell nobody', async () => {
+      const market = await provisional();
+      const other = await makeMember();
+      const gone = await makeMember();
+      const watcher = await makeMember();
+      for (const who of [member, other, gone]) await fillOn(market.id, who);
+      await createWatch(t.db, { userId: watcher.id, marketId: market.id });
+      const sent = signals();
+      // The member's own acts tell nobody.
+      const mine = data<MyDispute>(await submit(market.id), 201);
+      const theirs = data<MyDispute>(await submit(market.id, other), 201);
+      const retracted = data<MyDispute>(await submit(market.id, gone), 201);
+      data<MyDispute>(await retract(retracted.id, gone));
+      expect(await notices()).toEqual([]);
+      expect(sent()).toEqual([]);
+
+      // 기각, the reason trimmed as stored: the submitter alone.
+      const R1 = '1차 출처의 발표가 잠정 결과와 같습니다. {market} $&';
+      const dismissed = await decide('dismiss', market.id, mine.id, approver, {
+        reason: `  ${R1} `,
+      });
+      expect(dismissed.statusCode, dismissed.body).toBe(200);
+      const [row1] = (await disputesOf(market.id)).filter((row) => row.id === mine.id);
+      const at1 = row1!.decidedAt!;
+      expect(await notices()).toEqual([decided(member.id, market, 'dismissed', R1, at1)]);
+      expect(sent()).toEqual([[member.id, at1.toISOString(), 1]]);
+
+      // 수용: the other submitter alone, its own key.
+      const R2 = '1차 출처가 발표를 정정했습니다.';
+      const accepted = await decide('accept', market.id, theirs.id, third, { reason: R2 });
+      expect(accepted.statusCode, accepted.body).toBe(200);
+      const [row2] = (await disputesOf(market.id)).filter((row) => row.id === theirs.id);
+      const at2 = row2!.decidedAt!;
+      expect(await notices()).toEqual([
+        decided(member.id, market, 'dismissed', R1, at1),
+        decided(other.id, market, 'accepted', R2, at2),
+      ]);
+      expect(sent()).toEqual(
+        [
+          [member.id, at1.toISOString(), 1] as [string, string, number],
+          [other.id, at2.toISOString(), 1] as [string, string, number],
+        ].sort(([x], [y]) => x.localeCompare(y)),
+      );
+      expect(await keysOf('market_dispute_decided')).toEqual(
+        (await decisionKeys(market.id)).sort(),
+      );
+      // Nobody told is named in the answers or the records (ADR-0064): their payloads as before.
+      for (const res of [dismissed, accepted]) expect(res.body).not.toContain(watcher.id);
+      for (const action of await disputeActionsOf(market.id)) {
+        expect(Object.keys(action.payload as object).sort()).toEqual([
+          'disputeId',
+          'judgementVersion',
+          'noConflictConfirmed',
+          'reason',
+        ]);
+      }
+    });
+
+    it('tells a dispute decided again after a correction’s 반려 sent it back to pending a second time, under the new record’s key — the reopen itself nothing (188-6)', async () => {
+      const market = await provisional();
+      await fillOn(market.id, member);
+      const mine = data<MyDispute>(await submit(market.id), 201);
+      const R2 = '1차 출처가 발표를 정정했습니다.';
+      expect((await decide('accept', market.id, mine.id, third, { reason: R2 })).statusCode).toBe(
+        200,
+      );
+      // A correction answering it, rejected: the dispute back to pending, nobody told.
+      const corrected = await post(`/admin/markets/${market.id}/judgements`, approver, {
+        result: 'NO',
+        source: { priority: 0 },
+        evidence: { links: [LINK], collectedAt: new Date(Date.now() - MINUTE_MS).toISOString() },
+        description: '정정된 발표 원문을 확인했다.',
+        correction: { baseVersion: 1, reason: '1차 출처가 발표를 정정했다.' },
+      });
+      expect(corrected.statusCode, corrected.body).toBe(200);
+      const [request] = await t.db
+        .select()
+        .from(schema.approvalRequests)
+        .where(
+          and(
+            eq(schema.approvalRequests.targetId, market.id),
+            eq(schema.approvalRequests.status, 'pending'),
+          ),
+        );
+      const before = await notices();
+      const sent = signals();
+      const rejected = await post(
+        `/admin/markets/${market.id}/judgements/${request!.id}/reject`,
+        third,
+        { reason: '정정할 근거가 부족하다.' },
+      );
+      expect(rejected.statusCode, rejected.body).toBe(200);
+      expect((await disputesOf(market.id)).map((row) => row.status)).toEqual(['pending']);
+      expect(await notices()).toEqual(before);
+      expect(sent()).toEqual([]);
+
+      // Decided again: a second notice, a new key (not a duplicate of the first decision's).
+      const R3 = '정정 반려 뒤 다시 보니 판정과 같습니다.';
+      expect((await decide('dismiss', market.id, mine.id, third, { reason: R3 })).statusCode).toBe(
+        200,
+      );
+      const [row] = await disputesOf(market.id);
+      expect((await notices()).map(({ userId, params }) => [userId, params])).toEqual([
+        [member.id, { marketTitle: market.title, decision: 'accepted', reason: R2 }],
+        [member.id, { marketTitle: market.title, decision: 'dismissed', reason: R3 }],
+      ]);
+      expect((await notices()).at(-1)?.occurredAt).toEqual(row!.decidedAt);
+      const keys = await decisionKeys(market.id);
+      expect(keys).toHaveLength(2);
+      expect(await keysOf('market_dispute_decided')).toEqual([...keys].sort());
+      expect(sent()).toEqual([[member.id, row!.decidedAt!.toISOString(), 2]]);
+    });
+
+    it('tells nobody of a refused decision: by the version’s registrant, or an admin whose role was revoked', async () => {
+      const market = await provisional();
+      await fillOn(market.id, member);
+      const mine = data<MyDispute>(await submit(market.id), 201);
+      const sent = signals();
+      expectNotAllowed(await decide('dismiss', market.id, mine.id, registrant), 'registrant');
+      await t.db
+        .update(schema.profiles)
+        .set({ role: 'user' })
+        .where(eq(schema.profiles.userId, third.id));
+      expectError(await decide('accept', market.id, mine.id, third), 403, 'FORBIDDEN');
+      expect(await notices()).toEqual([]);
+      expect(sent()).toEqual([]);
+    });
   });
 });

@@ -24,9 +24,11 @@
  * disputes it answered back to pending, retractable and decided again; the member disputing v2,
  * decided by any admin but v2's registrant; the hold and '판정 지연' past the deadline, and the
  * resolve job registered at once once nothing holds; two writes at once; the 판정 승인 대기 queue;
- * the admin on screen; and the interim one-admin `POST …/resolve`, gone. The worker's
- * confirmation at the deadline is apps/worker's (market-resolve.test.ts). Skips when TEST_* are
- * unset.
+ * the admin on screen; and the interim one-admin `POST …/resolve`, gone. And the notices (#188,
+ * ADR-0160): an approval's 잠정 결과 to the market's watchers and holders, a correction's 판정 정정
+ * to them and 정정으로 종결 to its closed disputes' submitters, nothing for a registration, a 반려
+ * or a 철회. The worker's confirmation at the deadline is apps/worker's (market-resolve.test.ts).
+ * Skips when TEST_* are unset.
  */
 import { clockTimestamp, schema } from '@buddha/db';
 import {
@@ -37,9 +39,16 @@ import {
   createFill,
   createJudgementRequest,
   createMarket,
+  createModerationAction,
   createOpenedMarket,
   createProvisionalMarket,
+  createStartGrant,
+  createWatch,
+  fundMarketMakerFunds,
+  openOrderIntake,
+  placeTestOrder,
   resolveMarketNow,
+  tradeOnce,
 } from '@buddha/db/test';
 import {
   JOB_NAMES,
@@ -54,11 +63,12 @@ import {
   type MyDispute,
 } from '@buddha/shared';
 import { Queue } from 'bullmq';
-import { and, asc, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, count, eq, inArray, ne } from 'drizzle-orm';
 import { Redis } from 'ioredis';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { MARKETS_QUEUE } from '../jobs/market-jobs.service.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { discoverRoutes } from '../test/routes.js';
 import { hasTestInfra } from '../test/setup-env.js';
@@ -2193,5 +2203,416 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
     expect(await marketRow(market.id)).toMatchObject({ status: 'closed', resolvedResult: null });
     expect(await eventsFor(market.id)).toEqual([]);
     expect(await jobIds()).toEqual([]);
+  });
+
+  // --- the notices (#188) -----------------------------------------------------------------------
+  describe('judgement notifications (#188, ADR-0160)', () => {
+    beforeEach(async () => {
+      await openOrderIntake(t.db, { adminId: registrant.id });
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    /**
+     * `MarketPublisher.publishUser` watched: each `user:notification` as [account, ts, the
+     * account's notifications committed when it was sent] — read on another connection, so a
+     * signal sent before COMMIT would count none — sorted by account.
+     */
+    function signals() {
+      const sent: [string, string, number][] = [];
+      vi.spyOn(t.app.get(MarketPublisher), 'publishUser').mockImplementation(
+        async (userId, event) => {
+          if (event.type !== 'user:notification') return;
+          sent.push([userId, event.ts, await notificationCount(userId)]);
+        },
+      );
+      return () => [...sent].sort(([x], [y]) => x.localeCompare(y));
+    }
+    async function notificationCount(userId: string) {
+      const [row] = await t.db
+        .select({ n: count() })
+        .from(schema.notifications)
+        .where(eq(schema.notifications.userId, userId));
+      return row!.n;
+    }
+    /** `signals()`'s entries for each of `who` at `at`, with what each holds now. */
+    async function signalled(who: readonly { id: string }[], at: Date) {
+      const entries: [string, string, number][] = [];
+      for (const { id } of who) entries.push([id, at.toISOString(), await notificationCount(id)]);
+      return entries.sort(([x], [y]) => x.localeCompare(y));
+    }
+    /** A member who finished the onboarding, with 1,000 Coin to trade. */
+    async function trader(): Promise<TestUser> {
+      const user = await signUpTestUser(t);
+      await completeOnboarding(t.db, { userId: user.id });
+      await createStartGrant(t.db, { userId: user.id, amountCoin: 1_000n });
+      return user;
+    }
+    /** An account's rows of `type`, the oldest first, without their ids and write instants. */
+    async function noticesOf(userId: string, type: string) {
+      const rows = await t.db
+        .select()
+        .from(schema.notifications)
+        .where(and(eq(schema.notifications.userId, userId), eq(schema.notifications.type, type)))
+        .orderBy(asc(schema.notifications.occurredAt));
+      return rows.map(({ id: _id, createdAt: _at, userId: _user, ...row }) => row);
+    }
+    /** A #188 notice of `type` with `params` at `at`, leading to the market's detail (188-4). */
+    const notice = (
+      type: string,
+      market: { slug: string },
+      params: Record<string, unknown>,
+      at: Date,
+    ) => ({
+      type,
+      category: 'market',
+      params,
+      target: { kind: 'market', slug: market.slug },
+      mergeKey: null,
+      eventCount: 1,
+      occurredAt: at,
+      readAt: null,
+    });
+    /** The event keys written for `type`, each once. */
+    async function keysOf(type: string) {
+      const rows = await t.db
+        .select()
+        .from(schema.notificationKeys)
+        .where(eq(schema.notificationKeys.type, type));
+      return rows.map((row) => row.eventKey);
+    }
+    /**
+     * An opened market whose `trades` ran on it, then closed early (its review `judgeable`): CLOSED
+     * with its scheduled judgement ahead, so each approval confirms the event deadline.
+     */
+    async function tradedThenClosed(trades: (marketId: string) => Promise<void>) {
+      const { market } = await createOpenedMarket(t.db, {
+        createdBy: registrant.id,
+        categoryId: category.id,
+        closeAt: new Date(Date.now() + 7 * DAY_MS),
+        fallbackSources: [FALLBACK],
+      });
+      await trades(market.id);
+      return (await closeMarketEarly(t.db, market.id)).market;
+    }
+    /** Watch (`true`) or unwatch (`false`) through the API (`PUT /me/watchlist/:id`, #89). */
+    async function setWatch(who: TestUser, marketId: string, watched: boolean) {
+      const res = await t.app.inject({
+        method: 'PUT',
+        url: `/api/v1/me/watchlist/${marketId}`,
+        headers: { ...jsonHeaders, cookie: who.cookie },
+        payload: { expectedAccountId: who.id, watched },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+    }
+    /** v1 of `result` registered by `registrant` and approved by `reviewer`, confirmed. */
+    async function judge(marketId: string, payload: Record<string, unknown> = {}) {
+      expect((await register(marketId, registrant, payload)).statusCode).toBe(200);
+      const res = await approve(marketId, await pendingId(marketId), reviewer, {
+        eventDeadlineConfirmed: true,
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      return res;
+    }
+
+    it('tells a first judgement’s 잠정 결과 — the result, 이의 기한 and 판정 기준 시간대 — to every watcher and holder, a holder paid 0 to be, admins, the registrant, the approver and a restricted member too, after COMMIT; nobody order-only, unwatched or elsewhere, nor the bot; a registration, a refused or a re-sent approval nothing (52-1·52-12·52-15, 53-5·53-6, 54-8)', async () => {
+      const [a, b, h, w, r, c, x, u] = [
+        await trader(),
+        await trader(),
+        await trader(),
+        await trader(),
+        await trader(),
+        await trader(),
+        await trader(),
+        await trader(),
+      ];
+      const { market: elsewhere } = await createOpenedMarket(t.db, {
+        createdBy: registrant.id,
+        categoryId: category.id,
+      });
+      let bot = '';
+      const market = await tradedThenClosed(async (id) => {
+        // A holds the NO (paid 0 on a YES), B the YES of one real pair.
+        await tradeOnce(t.db, id, { noOwner: a.id, yesOwner: b.id });
+        // H holds a YES against the bot's NO, which the bot holds: the gate skips it (53-5).
+        bot = await fundMarketMakerFunds(t.db, id, 1_000n);
+        await placeTestOrder(t.db, {
+          marketId: id,
+          ownerId: bot,
+          outcome: 'NO',
+          limitPriceCoin: 45,
+        });
+        const crossed = await placeTestOrder(t.db, {
+          marketId: id,
+          ownerId: h.id,
+          timeInForce: 'ioc',
+          limitPriceCoin: 99,
+        });
+        expect(crossed).toMatchObject({ kind: 'placed', order: { status: 'filled' } });
+        // C rests a bid nothing meets — the early close's pause ends it: order-only (52-1).
+        await placeTestOrder(t.db, { marketId: id, ownerId: c.id, limitPriceCoin: 10 });
+        // U watched and unwatched before the event.
+        await setWatch(u, id, true);
+        await setWatch(u, id, false);
+      });
+      expect(market.status).toBe('closed');
+      // W watches; A watches and holds (one notice, 53-4); X watches another market.
+      for (const who of [w, a, r, third, registrant, reviewer]) {
+        await createWatch(t.db, { userId: who.id, marketId: market.id });
+      }
+      await createWatch(t.db, { userId: x.id, marketId: elsewhere.id });
+      // A restricted member who watches (53-6).
+      await createModerationAction(t.db, {
+        userId: r.id,
+        createdBy: third.id,
+        type: 'account_restriction',
+        approvedBy: reviewer.id,
+      });
+
+      const before = await t.db.select().from(schema.notifications);
+      const sent = signals();
+      expect((await register(market.id)).statusCode).toBe(200);
+      const requestId = await pendingId(market.id);
+      // Refused after its decision (the event deadline unconfirmed): rolled back, nobody told.
+      expectRefused(
+        await approve(market.id, requestId, reviewer, { eventDeadlineConfirmed: false }),
+        'eventDeadlineConfirmed',
+        'required',
+      );
+      expect(await t.db.select().from(schema.notifications)).toEqual(before);
+      expect(sent()).toEqual([]);
+
+      const res = await approve(market.id, requestId, reviewer, { eventDeadlineConfirmed: true });
+      expect(res.statusCode, res.body).toBe(200);
+      // The answer names nobody told (ADR-0064).
+      for (const who of [a, b, h, w, r, c, x, u]) expect(res.body).not.toContain(who.id);
+      const event = (await eventsFor(market.id)).at(-1)!;
+      expect(event.type).toBe('provisional');
+      const [v1] = await judgementsFor(market.id);
+      const at = event.createdAt;
+      const provisional = notice(
+        'market_provisional_result',
+        market,
+        {
+          marketTitle: market.title,
+          result: 'YES',
+          disputeDeadline: v1!.disputeDeadline.toISOString(),
+          judgementTimeZone: market.judgementTimeZone,
+        },
+        at,
+      );
+      const audience = [a, b, h, w, r, third, registrant, reviewer];
+      for (const who of audience) {
+        expect(await noticesOf(who.id, 'market_provisional_result'), who.id).toEqual([provisional]);
+      }
+      for (const nobody of [c.id, x.id, u.id, bot]) {
+        expect(await noticesOf(nobody, 'market_provisional_result')).toEqual([]);
+      }
+      expect(await keysOf('market_provisional_result')).toEqual(
+        audience.map(() => `market_event:${String(event.id)}`),
+      );
+      expect(sent()).toEqual(await signalled(audience, at));
+      // The record names nobody told: its keys are the approval's (#152, #176).
+      const approval = (await judgementActionsFor(market.id)).at(-1)!;
+      expect(approval.type).toBe('market_judgement_approve');
+      expect(Object.keys(approval.payload as object).sort()).toEqual(
+        [
+          'after',
+          'approvalId',
+          'before',
+          'closedDisputeIds',
+          'correction',
+          'disputeDeadline',
+          'disputeWindowMinutes',
+          'eventDeadlineConfirmed',
+          'noConflictConfirmed',
+          'previous',
+          'reason',
+          'result',
+          'version',
+        ].sort(),
+      );
+
+      // The approval again: refused, nothing new (AC 10).
+      vi.restoreAllMocks();
+      const rows = await t.db.select().from(schema.notifications);
+      const again = signals();
+      expectNotAllowed(
+        await approve(market.id, requestId, third, { eventDeadlineConfirmed: true }),
+        'decided',
+      );
+      expect(await t.db.select().from(schema.notifications)).toEqual(rows);
+      expect(again()).toEqual([]);
+    });
+
+    it('tells a VOID the same way, and a market with no 판정 기준 시간대 (opened before #22) null (#173 item 9)', async () => {
+      const market = await closed({ blankTimes: true });
+      expect(market.judgementTimeZone).toBeNull();
+      const w = await trader();
+      await createWatch(t.db, { userId: w.id, marketId: market.id });
+      const sent = signals();
+      expect(
+        (
+          await register(market.id, registrant, {
+            result: 'VOID',
+            source: null,
+            voidReason: '사건이 규칙의 출처 밖에서만 확인된다.',
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect((await approve(market.id, await pendingId(market.id))).statusCode).toBe(200);
+      const event = (await eventsFor(market.id)).at(-1)!;
+      const [v1] = await judgementsFor(market.id);
+      expect(await noticesOf(w.id, 'market_provisional_result')).toEqual([
+        notice(
+          'market_provisional_result',
+          market,
+          {
+            marketTitle: market.title,
+            result: 'VOID',
+            disputeDeadline: v1!.disputeDeadline.toISOString(),
+            judgementTimeZone: null,
+          },
+          event.createdAt,
+        ),
+      ]);
+      expect(sent()).toEqual(await signalled([w], event.createdAt));
+    });
+
+    it('tells a correction’s 판정 정정 — the new result and 이의 기한 — to the same watchers and holders, and 정정으로 종결 with the new 이의 기한 alone to each closed dispute’s submitter, under one key: one who also holds two rows and one signal, one who neither watches nor holds the closure alone; an accepted dispute’s submitter nothing of it; a re-sent approval nothing (52-14, 53-4, 188-1)', async () => {
+      const [a, b, w] = [await trader(), await trader(), await trader()];
+      const market = await tradedThenClosed(async (id) => {
+        await tradeOnce(t.db, id, { noOwner: a.id, yesOwner: b.id });
+      });
+      await createWatch(t.db, { userId: w.id, marketId: market.id });
+      await judge(market.id);
+      // v1's disputes: A (a holder) and S (a fill alone) pending, Q (a fill alone) accepted.
+      const s = await memberWithFill(market.id);
+      const q = await memberWithFill(market.id);
+      for (const who of [a, s, q]) expect((await dispute(market.id, who)).statusCode).toBe(201);
+      const [qDispute] = (await disputesFor(market.id)).filter((row) => row.userId === q.id);
+      expect((await accept(market.id, qDispute!.id)).statusCode).toBe(200);
+      expect((await correct(market.id, third)).statusCode).toBe(200);
+      const requestId = await pendingId(market.id);
+      const sent = signals();
+      const res = await approve(market.id, requestId, reviewer, { eventDeadlineConfirmed: true });
+      expect(res.statusCode, res.body).toBe(200);
+      const event = (await eventsFor(market.id)).at(-1)!;
+      expect(event.type).toBe('judgement_corrected');
+      const [, v2] = await judgementsFor(market.id);
+      const at = event.createdAt;
+      const disputeDeadline = v2!.disputeDeadline.toISOString();
+      const corrected = notice(
+        'market_judgement_corrected',
+        market,
+        {
+          marketTitle: market.title,
+          result: 'NO',
+          disputeDeadline,
+          judgementTimeZone: market.judgementTimeZone,
+        },
+        at,
+      );
+      const closure = notice(
+        'market_dispute_closed_by_correction',
+        market,
+        { marketTitle: market.title, disputeDeadline, judgementTimeZone: market.judgementTimeZone },
+        at,
+      );
+      for (const who of [a, b, w]) {
+        expect(await noticesOf(who.id, 'market_judgement_corrected'), who.id).toEqual([corrected]);
+      }
+      for (const who of [a, s]) {
+        expect(await noticesOf(who.id, 'market_dispute_closed_by_correction'), who.id).toEqual([
+          closure,
+        ]);
+      }
+      // 52-14: the correction goes to 관심·보유 alone — S and Q neither watch nor hold; Q's
+      // accepted dispute was answered, and told 수용 already.
+      for (const who of [s, q]) {
+        expect(await noticesOf(who.id, 'market_judgement_corrected')).toEqual([]);
+      }
+      for (const who of [b, w, q]) {
+        expect(await noticesOf(who.id, 'market_dispute_closed_by_correction')).toEqual([]);
+      }
+      const key = `market_event:${String(event.id)}`;
+      expect(await keysOf('market_judgement_corrected')).toEqual([key, key, key]);
+      expect(await keysOf('market_dispute_closed_by_correction')).toEqual([key, key]);
+      // One signal per member, A's two rows in it (53-4).
+      expect(sent()).toEqual(await signalled([a, b, w, s], at));
+      for (const who of [a, b, w, s, q]) expect(res.body).not.toContain(who.id);
+
+      // The approval again: refused, nothing new (AC 10).
+      vi.restoreAllMocks();
+      const rows = await t.db.select().from(schema.notifications);
+      const again = signals();
+      expectNotAllowed(
+        await approve(market.id, requestId, registrant, { eventDeadlineConfirmed: true }),
+        'decided',
+      );
+      expect(await t.db.select().from(schema.notifications)).toEqual(rows);
+      expect(again()).toEqual([]);
+    });
+
+    it('tells a grounds-only correction too, the result unchanged (188-1)', async () => {
+      const w = await trader();
+      const market = await tradedThenClosed(async (id) => {
+        await tradeOnce(t.db, id);
+      });
+      await createWatch(t.db, { userId: w.id, marketId: market.id });
+      await judge(market.id);
+      expect(
+        (
+          await correct(market.id, third, {
+            result: 'YES',
+            description: '정정된 발표 원문을 확인했다.',
+          })
+        ).statusCode,
+      ).toBe(200);
+      const res = await approve(market.id, await pendingId(market.id), reviewer, {
+        eventDeadlineConfirmed: true,
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      const event = (await eventsFor(market.id)).at(-1)!;
+      const [, v2] = await judgementsFor(market.id);
+      expect(await noticesOf(w.id, 'market_judgement_corrected')).toEqual([
+        notice(
+          'market_judgement_corrected',
+          market,
+          {
+            marketTitle: market.title,
+            result: 'YES',
+            disputeDeadline: v2!.disputeDeadline.toISOString(),
+            judgementTimeZone: market.judgementTimeZone,
+          },
+          event.createdAt,
+        ),
+      ]);
+    });
+
+    it('tells nobody of a correction’s registration, 반려 or 철회, nor of the accepted dispute each sends back to pending (52-13, 188-6)', async () => {
+      const { market } = await provisional();
+      const w = await trader();
+      await createWatch(t.db, { userId: w.id, marketId: market.id });
+      const { dispute: answered } = await createDispute(t.db, { marketId: market.id });
+      for (const end of ['reject', 'retract'] as const) {
+        // Accepted (its own notice to the submitter, #188's J3), then a correction answers it.
+        expect((await accept(market.id, answered.id)).statusCode).toBe(200);
+        const rows = await t.db.select().from(schema.notifications);
+        const sent = signals();
+        expect((await correct(market.id, reviewer)).statusCode).toBe(200);
+        const requestId = await pendingId(market.id);
+        const ended =
+          end === 'reject'
+            ? await reject(market.id, requestId, third)
+            : await retract(market.id, requestId, reviewer);
+        expect(ended.statusCode, ended.body).toBe(200);
+        expect((await disputesFor(market.id)).map((row) => row.status)).toEqual(['pending']);
+        expect(await t.db.select().from(schema.notifications)).toEqual(rows);
+        expect(sent()).toEqual([]);
+        vi.restoreAllMocks();
+      }
+    });
   });
 });

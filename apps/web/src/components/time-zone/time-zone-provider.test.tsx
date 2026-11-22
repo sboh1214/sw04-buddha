@@ -4,7 +4,13 @@ import { copy } from '@/copy';
 import { SEOUL_TIME_ZONE, formatInTimeZone } from '@/lib/datetime';
 import { timeZoneLabel } from '@/lib/time-zone';
 import { byTestId, renderWithQueries, testIdsStartingWith } from '@/test/render';
-import { DateTimeText, KstTimeZone, TimeZoneNameText, TimeZoneScope } from './time-zone-provider';
+import {
+  DateTimeText,
+  JudgementZoneLine,
+  KstTimeZone,
+  TimeZoneNameText,
+  TimeZoneScope,
+} from './time-zone-provider';
 
 const ISO = '2026-11-29T15:00:00.000Z';
 const NEW_YORK = 'America/New_York';
@@ -111,6 +117,70 @@ describe('DateTimeText', () => {
       formatInTimeZone(ISO, SEOUL_TIME_ZONE),
     );
     expect(admin).not.toContain('(GMT');
+  });
+});
+
+/**
+ * `DateTimeText`'s second line on its own (#188, ADR-0160): what a 판정·정산 알림's title draws
+ * under its sentence, by the same rule — and what `DateTimeText` itself now draws, its output
+ * unchanged (the tests above).
+ */
+describe('JudgementZoneLine', () => {
+  it('is the labelled line of the judgement zone, once settled in another zone', () => {
+    const html = renderWithQueries(
+      settledIn(
+        SEOUL_TIME_ZONE,
+        <JudgementZoneLine iso={ISO} judgementTimeZone={NEW_YORK} testId={ROW} />,
+      ),
+    );
+    expect(lines(html)).toEqual([`${ROW}-judgement-zone`]);
+    expect(byTestId(html, `${ROW}-judgement-zone`)?.text).toBe(
+      `${copy.rulesJudgementZoneLine} ${formatInTimeZone(ISO, NEW_YORK)}`,
+    );
+    // No viewer's line of its own: the caller drew the time in the viewer's zone already.
+    expect(html).not.toContain(formatInTimeZone(ISO, SEOUL_TIME_ZONE));
+    // The one element, the line alone.
+    expect(html).toMatch(/^<span [^>]*data-testid="row-judgement-zone"[^>]*>[^<]*<\/span>$/);
+    // Without a test id, the line all the same.
+    expect(
+      renderWithQueries(
+        settledIn(SEOUL_TIME_ZONE, <JudgementZoneLine iso={ISO} judgementTimeZone={NEW_YORK} />),
+      ),
+    ).toContain(`${copy.rulesJudgementZoneLine} ${formatInTimeZone(ISO, NEW_YORK)}`);
+  });
+
+  it('draws nothing for the same zone, no zone or an unknown one, unsettled, or under the admin layout', () => {
+    for (const zone of [SEOUL_TIME_ZONE, 'ROK', null, undefined, '', 'Mars/Olympus_Mons']) {
+      expect(
+        renderWithQueries(
+          settledIn(
+            SEOUL_TIME_ZONE,
+            <JudgementZoneLine iso={ISO} judgementTimeZone={zone} testId={ROW} />,
+          ),
+        ),
+        String(zone),
+      ).toBe('');
+    }
+    expect(
+      renderWithQueries(
+        <TimeZoneScope zone={SEOUL_TIME_ZONE} settled={false}>
+          <JudgementZoneLine iso={ISO} judgementTimeZone={NEW_YORK} testId={ROW} />
+        </TimeZoneScope>,
+      ),
+    ).toBe('');
+    expect(
+      renderWithQueries(<JudgementZoneLine iso={ISO} judgementTimeZone={NEW_YORK} testId={ROW} />),
+    ).toBe('');
+    expect(
+      renderWithQueries(
+        settledIn(
+          SEOUL_TIME_ZONE,
+          <KstTimeZone>
+            <JudgementZoneLine iso={ISO} judgementTimeZone={NEW_YORK} testId={ROW} />
+          </KstTimeZone>,
+        ),
+      ),
+    ).toBe('');
   });
 });
 

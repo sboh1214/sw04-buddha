@@ -67,6 +67,11 @@ export interface ResolveScanResult {
  * `marketFinalizeJobId(marketId, resolvedAt)`): RESOLVED → SETTLING is the finalize's own first
  * transaction (ADR-0095 8-5), so RESOLVED is visible, and its per-minute scan settles a market
  * whose job was lost. A VOID result is confirmed too and settles at 50 Coin per contract (#126).
+ *
+ * No notice and no `user:notification` (#188, ADR-0160): 결과 확정 is silent (52-12 — 잠정 결과 and
+ * 지급 완료 tell, the latter from the finalize at its `finalized` transition), and so is a market
+ * a dispute or a correction holds past its deadline (52-13: no 보류 notice). A held market stays
+ * PROVISIONAL here, so its 지급 완료 notice cannot come before the hold clears.
  */
 export async function resolveMarket(
   db: Db,

@@ -30,11 +30,18 @@ import {
   createMarket,
   createProvisionalMarket,
   createUser,
+  createWatch,
   hasTestDb,
   mintTestPairs,
   type TestDb,
 } from '@buddha/db/test';
-import { MARKET_STATUSES, marketChannel } from '@buddha/shared';
+import {
+  MARKET_SETTLED_NOTIFICATION,
+  MARKET_STATUSES,
+  USER_CHANNEL_PATTERN,
+  marketChannel,
+  userChannel,
+} from '@buddha/shared';
 import { asc, eq } from 'drizzle-orm';
 import { Redis } from 'ioredis';
 import { pino } from 'pino';
@@ -699,6 +706,90 @@ describe.skipIf(!hasTestInfra)('market.resolve (integration)', () => {
     expect(await stepsOf(market.id)).toEqual([
       expect.objectContaining({ step: 'coin', status: 'done', attempts: 1 }),
     ]);
+  });
+
+  it('tells nobody at the confirmation nor while a dispute holds past the deadline; 지급 완료 comes once, after the hold (#188, 52-12, 52-13, AC 6)', async () => {
+    const { market, judgement } = await provisional(2 * MINUTE_MS, 'NO');
+    const { user: yes } = await createUser(t.db, { balanceCoin: 1_000n });
+    const { user: no } = await createUser(t.db, { balanceCoin: 1_000n });
+    await mintTestPairs(t.db, {
+      marketId: market.id,
+      yesHolderId: yes.id,
+      noHolderId: no.id,
+      qty: 2,
+    });
+    const { user: watcher } = await createUser(t.db);
+    await createWatch(t.db, { userId: watcher.id, marketId: market.id });
+    // A pending 판정 이의 by a member with a fill and no holding: it holds the market past its
+    // deadline (#175).
+    const held = await disputeOn(market, judgement.publishedAt);
+    const silent = pino({ level: 'silent' });
+    const notices = () => t.db.select().from(schema.notifications);
+    const subscriber = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
+    const received: { channel: string; type: string }[] = [];
+    subscriber.on('pmessage', (_pattern: string, channel: string, message: string) => {
+      received.push({ channel, type: (JSON.parse(message) as { type: string }).type });
+    });
+    await subscriber.psubscribe(USER_CHANNEL_PATTERN);
+    try {
+      // Held: the job and the scan confirm nothing, the finalize has nothing to settle, and no
+      // notice says so (52-13: no 보류 notice) — so no 지급 완료 while held.
+      await expect(resolveMarket(t.db, market.id, publish, enqueueFinalize)).resolves.toMatchObject(
+        { outcome: 'skipped', reason: 'held' },
+      );
+      await expect(resolveDueMarkets(t.db, publish, enqueueFinalize)).resolves.toMatchObject({
+        resolved: 0,
+      });
+      await expect(finalizeMarket(t.db, market.id, publish, silent)).resolves.toMatchObject({
+        outcome: 'skipped',
+        reason: 'not_settling',
+      });
+      expect(await notices()).toEqual([]);
+
+      // Dismissed (the core: the API's own notice to the submitter is not this suite's), then
+      // confirmed: 결과 확정 tells nobody (52-12).
+      expect(await dismiss(held.id, market.id)).toMatchObject({ decided: true, held: false });
+      await expect(resolveMarket(t.db, market.id, publish, enqueueFinalize)).resolves.toMatchObject(
+        { outcome: 'resolved', resolvedResult: 'NO' },
+      );
+      expect(await notices()).toEqual([]);
+      await sleep(100);
+      expect(received).toEqual([]);
+
+      // The payout: one `market_settled` per holder and watcher, at its `finalized` transition.
+      // Not the submitter, who neither watches nor holds (52-14).
+      const finalized = await finalizeMarket(t.db, market.id, publish, silent);
+      expect(finalized).toMatchObject({ outcome: 'settled', paidCoin: 200n });
+      const rows = await notices();
+      expect(
+        rows
+          .map(({ userId, type, params }) => ({ userId, type, params }))
+          .sort((x, y) => (x.userId < y.userId ? -1 : 1)),
+      ).toEqual(
+        [
+          { userId: yes.id, payoutCoin: '0' },
+          { userId: no.id, payoutCoin: '200' },
+          { userId: watcher.id, payoutCoin: null },
+        ]
+          .sort((x, y) => (x.userId < y.userId ? -1 : 1))
+          .map(({ userId, payoutCoin }) => ({
+            userId,
+            type: MARKET_SETTLED_NOTIFICATION.type,
+            params: { marketTitle: market.title, result: 'NO', payoutCoin },
+          })),
+      );
+      expect(rows.some((row) => row.userId === held.userId)).toBe(false);
+      await waitForMessages(received, 6, 'the payout’s user events');
+      await sleep(100);
+      expect(
+        received
+          .filter(({ type }) => type === 'user:notification')
+          .map(({ channel }) => channel)
+          .sort(),
+      ).toEqual([yes.id, no.id, watcher.id].map(userChannel).sort());
+    } finally {
+      await subscriber.quit();
+    }
   });
 
   it('does not fail the confirmation when the publish fails (the transaction has committed)', async () => {

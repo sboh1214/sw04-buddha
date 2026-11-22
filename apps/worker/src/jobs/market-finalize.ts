@@ -1,8 +1,13 @@
 import {
   clockTimestamp,
+  createNotifications,
   lockMarket,
+  marketEventKey,
+  notifiedUserIds,
   reconcileMarketSettlement,
   settleMarketPositions,
+  settlementAudience,
+  settlementNotificationInputs,
   schema,
   transitionMarket,
   type Db,
@@ -12,6 +17,7 @@ import {
   SETTLEMENT_STEP_ERROR_MAX,
   SETTLEMENT_STEPS,
   marketChannel,
+  notificationEvent,
   serializeCoinAmount,
   userChannel,
   type MarketStatusEvent,
@@ -34,6 +40,11 @@ type BalanceRow = typeof schema.balances.$inferSelect;
  */
 export type FinalizeSkipReason = 'not_settling';
 
+/**
+ * What a run hands back — BullMQ stores it and the handler logs it (jobs/index.ts `toLoggable`):
+ * counts of the payout only, never who the `market_settled` notices reached nor how many — a
+ * count with the watchers in it would tell how many watch the market (#188, ADR-0160; ADR-0064).
+ */
 export type FinalizeResult =
   | {
       outcome: 'settled';
@@ -269,12 +280,26 @@ async function startSettling(db: Db, marketId: string): Promise<MarketStatusEven
  * Reconciliation runs before SETTLED even when every step was already done, so a completed coin
  * step never bypasses the accounting checks and never pays again on a reconciliation retry.
  *
+ * The final settlement's notice (#188, ADR-0160; 52-1, 52-12 '지급 완료 때 최종 정산', 52-15):
+ * last in the step transaction, after the `finalized` transition, its one `createNotifications`
+ * call — one `market_settled` per watcher and per account the payout recorded in
+ * `position_settlements` (`settlementAudience`: the holders of a contract or more at the payout,
+ * 지급 0 included; the 운영 마켓메이커's rows too, which the write path's gate skips), each with
+ * the confirmed result and its own summed payout (null for a watcher who held nothing), keyed by
+ * the `finalized` event. All or nothing with the payout (188-2, ADR-0157 결정 4의 7 — no
+ * savepoint): a notice that fails to write rolls the payout back, the market stays `settling`
+ * (지급 지연), the failure is recorded on `coin` with a message naming no account, and the next run
+ * pays and notifies together. A run that skips (`not_settling`) writes nothing — the status guard
+ * keeps a settlement to one notice per member, the key backs it — and `settling` itself is silent
+ * (52-12), as is the confirmation before it (market-resolve.ts). Who was told never reaches the
+ * result, the log or the `finalized` payload (ADR-0064, ADR-0159 12-12).
+ *
  * Every transition goes through `transitionMarket`, whose event row carries its id to the
  * market row as `statusEventId` (A-M3-19); `actorId` is null: the worker acted. Everything is
  * published after COMMIT — `settling` after its own transaction, then once settled the status
  * to the market's room, then per person its last balance (a holder of both outcomes is
  * credited once per winning row; the later ledger row is the greater key) and every closed-out
- * row.
+ * row, then `user:notification` at the payout's instant to each member a notice reached.
  */
 export async function finalizeMarket(
   db: Db,
@@ -374,6 +399,22 @@ export async function finalizeMarket(
         set: { settledAt: now },
       });
 
+      // #188 J5 (ADR-0160; 52-1, 52-12, 52-15): the transaction's one notification call, last,
+      // after the transition (ADR-0157 결정 4). The audience is the payout's own durable records
+      // with the watchers now: `coin.settlements` holds qty-0 rows and is empty on a run whose
+      // coin step was done before. `current` was read `settling`; the builder gets what the
+      // transition wrote. A failure rolls the payout back with it (188-2): no savepoint.
+      const notified = notifiedUserIds(
+        await createNotifications(
+          tx,
+          settlementNotificationInputs(
+            await settlementAudience(tx, marketId),
+            { slug: current.slug, title: current.title, status: 'settled' },
+            { result, eventKey: marketEventKey(statusEventId), occurredAt: now },
+          ),
+        ),
+      );
+
       return {
         outcome: 'settled',
         marketId,
@@ -385,6 +426,7 @@ export async function finalizeMarket(
         paidCoin: reconciled.paidCoin,
         result,
         settlements: coin.settlements,
+        notified,
       } as const;
     });
   } catch (err) {
@@ -394,7 +436,9 @@ export async function finalizeMarket(
 
   if (finalized.outcome !== 'settled') return finalized;
 
-  const { settlements, result, settledAt, ...summary } = finalized;
+  // `notified` stays here: the result BullMQ stores and the log line name no member and count
+  // no watcher (ADR-0064, ADR-0159 12-12).
+  const { settlements, result, settledAt, notified, ...summary } = finalized;
   const ts = settledAt.toISOString();
   const status: MarketStatusEvent = {
     type: 'market:status',
@@ -445,13 +489,16 @@ export async function finalizeMarket(
     ]);
   }
   // Issued back to back, awaited together (realtime.ts): the status first, then each
-  // account's events, in call order on the wire; a Redis that stops answering costs one
-  // command timeout for the batch, not one per holder — the bound is on the publisher's own
-  // connection (`createPublisherRedis`), and the backlog it leaves is dropped when that socket
-  // goes rather than resent, so a settled market never republishes a payout event.
+  // account's events, then the inbox signals, in call order on the wire; a Redis that stops
+  // answering costs one command timeout for the batch, not one per holder — the bound is on the
+  // publisher's own connection (`createPublisherRedis`), and the backlog it leaves is dropped
+  // when that socket goes rather than resent, so a settled market never republishes a payout
+  // event.
   await Promise.all([
     publish(marketChannel(marketId), status),
     ...events.map(([userId, event]) => publish(userChannel(userId), event)),
+    // #188 (ADR-0160): one per member the `market_settled` notices reached, at the payout.
+    ...notified.map((userId) => publish(userChannel(userId), notificationEvent(settledAt))),
   ]);
   return { ...summary, settledAt };
 }

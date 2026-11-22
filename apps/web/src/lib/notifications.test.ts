@@ -10,6 +10,7 @@ import {
   findExcludedIdentifier,
   findExcludedText,
 } from '@buddha/shared';
+import { isValidElement } from 'react';
 import * as z from 'zod';
 import { describe, expect, it } from 'vitest';
 import {
@@ -51,8 +52,8 @@ const notification = (id: string, fields: Partial<InboxNotification> = {}): Inbo
 });
 
 /**
- * The copy of #53, #134's 거래 알림 (ADR-0158) and #54's 시장 상태 알림 (ADR-0159): what a member
- * reads of the inbox.
+ * The copy of #53, #134's 거래 알림 (ADR-0158), #54's 시장 상태 알림 (ADR-0159) and #188's 판정·정산
+ * 알림 (ADR-0160): what a member reads of the inbox.
  */
 const NOTIFICATION_COPY = [
   copy.notificationsReadAll,
@@ -80,6 +81,13 @@ const NOTIFICATION_COPY = [
   copy.notificationMarketResumed,
   copy.notificationMarketCancelled,
   copy.notificationMarketRulesSupplemented,
+  copy.notificationJudgementDelayed,
+  copy.notificationProvisionalResult,
+  copy.notificationJudgementCorrected,
+  copy.notificationDisputeDecided,
+  copy.notificationDisputeClosedByCorrection,
+  copy.notificationMarketSettled,
+  copy.notificationMarketSettledWatcher,
 ];
 
 const ORDER_ID = '7d0f9a2e-4b1c-4e8d-9a3f-1c2b3d4e5f60';
@@ -228,8 +236,9 @@ describe('a notification’s words and its link', () => {
   });
 
   it('has one renderer per type, its words the guard registry’s text (#113)', () => {
-    // #53 shipped none (52-20); #134 the 거래 three (ADR-0158), #54 the 시장 five (ADR-0159). Each
-    // producer adds the definition, the guard entry and the renderer.
+    // #53 shipped none (52-20); #134 the 거래 three (ADR-0158), #54 the 시장 five (ADR-0159), #188
+    // the 판정·정산 six (ADR-0160). Each producer adds the definition, the guard entry and the
+    // renderer.
     const types = NOTIFICATION_DEFINITIONS.map((definition: { type: string }) => definition.type);
     expect(types).toEqual([
       'order_filled',
@@ -240,6 +249,12 @@ describe('a notification’s words and its link', () => {
       'market_resumed',
       'market_cancelled',
       'market_rules_supplemented',
+      'market_judgement_delayed',
+      'market_provisional_result',
+      'market_judgement_corrected',
+      'market_dispute_decided',
+      'market_dispute_closed_by_correction',
+      'market_settled',
     ]);
     expect(Object.keys(NOTIFICATION_RENDERERS).sort()).toEqual([...types].sort());
     expect(Object.keys(NOTIFICATION_TYPE_REGISTRY).sort()).toEqual([...types].sort());
@@ -258,7 +273,14 @@ describe('a notification’s words and its link', () => {
     expect(NOTIFICATION_RENDERERS.market_resumed.copy).toHaveLength(4);
     expect(NOTIFICATION_RENDERERS.market_cancelled.copy).toHaveLength(1);
     expect(NOTIFICATION_RENDERERS.market_rules_supplemented.copy).toHaveLength(2);
-    // Every 시장 type is category `market` (52-21) and leads to the market's detail alone (54-4).
+    expect(NOTIFICATION_RENDERERS.market_judgement_delayed.copy).toHaveLength(2);
+    expect(NOTIFICATION_RENDERERS.market_provisional_result.copy).toHaveLength(5);
+    expect(NOTIFICATION_RENDERERS.market_judgement_corrected.copy).toHaveLength(5);
+    expect(NOTIFICATION_RENDERERS.market_dispute_decided.copy).toHaveLength(3);
+    expect(NOTIFICATION_RENDERERS.market_dispute_closed_by_correction.copy).toHaveLength(2);
+    expect(NOTIFICATION_RENDERERS.market_settled.copy).toHaveLength(5);
+    // Every 시장 type — #54's five and #188's six — is category `market` (52-21) and leads to the
+    // market's detail alone (54-4, 188-4).
     for (const definition of NOTIFICATION_DEFINITIONS.filter((each) =>
       each.type.startsWith('market_'),
     )) {
@@ -390,6 +412,88 @@ describe('a notification’s words and its link', () => {
     }
   });
 
+  it('draws each 판정·정산 type through its renderer, and the fallback for params its definition refuses (#188)', () => {
+    const target = { kind: 'market', slug: 'first-snow' } as const;
+    const viewOf = (type: string, params: InboxNotification['params']) =>
+      notificationView(notification('n1', { type, params, target }));
+    const titleOf = (type: string, params: InboxNotification['params']) => {
+      const view = viewOf(type, params);
+      if (!view.known) throw new Error(`${type} is a type this web renders`);
+      return view.Title({ params: view.params, eventCount: view.eventCount });
+    };
+    // The two with no time are sentences (52-14, 52-15, 188-3).
+    expect(
+      titleOf('market_dispute_decided', {
+        marketTitle: '첫눈이 올까',
+        decision: 'accepted',
+        reason: '{x} $&',
+      }),
+    ).toBe('첫눈이 올까 판정 이의 수용 · 사유: {x} $&');
+    expect(
+      titleOf('market_settled', { marketTitle: '첫눈이 올까', result: 'VOID', payoutCoin: '0' }),
+    ).toBe('첫눈이 올까 결과 확정: 무효 · 지급 완료 · 내 지급액 0 Coin');
+    expect(
+      titleOf('market_settled', { marketTitle: '첫눈이 올까', result: 'NO', payoutCoin: null }),
+    ).toBe('첫눈이 올까 결과 확정: NO · 지급 완료');
+    // The four with a time draw through a component — the hook for the member's zone lives in
+    // it (my-notifications.test.tsx draws them).
+    const deadline = '2026-09-07T06:00:00.000Z';
+    for (const [type, params] of [
+      [
+        'market_judgement_delayed',
+        {
+          marketTitle: '첫눈',
+          reason: '사유',
+          nextReviewAt: deadline,
+          judgementTimeZone: 'America/New_York',
+        },
+      ],
+      [
+        'market_provisional_result',
+        { marketTitle: '첫눈', result: 'YES', disputeDeadline: deadline, judgementTimeZone: null },
+      ],
+      [
+        'market_judgement_corrected',
+        { marketTitle: '첫눈', result: 'NO', disputeDeadline: deadline, judgementTimeZone: '' },
+      ],
+      [
+        'market_dispute_closed_by_correction',
+        { marketTitle: '첫눈', disputeDeadline: deadline, judgementTimeZone: 'Asia/Seoul' },
+      ],
+    ] as const) {
+      expect(isValidElement(titleOf(type, params)), type).toBe(true);
+    }
+    // Each leads to the market's detail, settled included (188-4, AC 12).
+    expect(notificationHref({ ...target, status: 'settled' })).toBe('/markets/first-snow');
+    // Params the definition refuses — a result not of the three, a decision not told, a payout
+    // below 0 or as a number, a time that is no instant, a zone that is no string, an empty
+    // reason — draw the category's fallback, never a broken sentence.
+    for (const [type, params] of [
+      [
+        'market_provisional_result',
+        { marketTitle: '첫눈', result: 'void', disputeDeadline: deadline, judgementTimeZone: null },
+      ],
+      [
+        'market_judgement_corrected',
+        { marketTitle: '첫눈', result: 'NO', disputeDeadline: '내일', judgementTimeZone: null },
+      ],
+      [
+        'market_judgement_delayed',
+        { marketTitle: '첫눈', reason: '', nextReviewAt: deadline, judgementTimeZone: null },
+      ],
+      [
+        'market_dispute_closed_by_correction',
+        { marketTitle: '첫눈', disputeDeadline: deadline, judgementTimeZone: 5 },
+      ],
+      ['market_dispute_decided', { marketTitle: '첫눈', decision: 'pending', reason: '사유' }],
+      ['market_settled', { marketTitle: '첫눈', result: 'YES', payoutCoin: '-1' }],
+      ['market_settled', { marketTitle: '첫눈', result: 'YES', payoutCoin: 200 }],
+      ['market_settled', { marketTitle: '첫눈', result: 'YES' }],
+    ] as const) {
+      expect(viewOf(type, params), type).toEqual({ known: false, title: '시장 알림' });
+    }
+  });
+
   it('says unread by readAt alone, and puts a read’s answer in place of its row', () => {
     expect(isUnread(notification('n1'))).toBe(true);
     expect(isUnread(notification('n1', { readAt: '2026-11-21T04:00:00.000Z' }))).toBe(false);
@@ -439,6 +543,7 @@ describe('the inbox’s words (#113, N05 §4)', () => {
       '../components/notifications/notification-renderers.tsx',
       './trade-notifications.ts',
       './market-notifications.ts',
+      './judgement-notifications.ts',
       '../components/notifications/notification-row.tsx',
       '../components/notifications/unread-count.tsx',
       '../app/my/notifications/my-notifications.tsx',

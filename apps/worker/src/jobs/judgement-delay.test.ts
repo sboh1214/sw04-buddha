@@ -5,10 +5,12 @@
  * is left as it was by every market job the worker runs — each per-minute scan and each per-market
  * job a stale delayed job or a script would run — and a PROVISIONAL market a waiting correction
  * holds past its 이의 기한 is still skipped as `held` with a passed record: no NO, no judgement, no
- * VOID, no event, no publish, and both records kept. The worker has no job of its own for a record
- * or a deadline (JOB_NAMES, pinned below and in @buddha/shared jobs.test.ts). Against the docker
- * `test` profile through the packages/db harness; the publish and the finalize registration are
- * recording stubs (nothing reaches Redis), so it skips with the database alone, as schema tests do.
+ * VOID, no event, no publish, no notice to its watchers and holders (#188, ADR-0160, AC 5 — only
+ * an operator's record tells, 52-11), and both records kept. The worker has no job of its own for
+ * a record or a deadline (JOB_NAMES, pinned below and in @buddha/shared jobs.test.ts). Against the
+ * docker `test` profile through the packages/db harness; the publish and the finalize
+ * registration are recording stubs (nothing reaches Redis), so it skips with the database alone,
+ * as schema tests do.
  */
 import { schema } from '@buddha/db';
 import {
@@ -16,7 +18,10 @@ import {
   createCorrectionRequest,
   createJudgementDelay,
   createMarket,
+  createPosition,
   createProvisionalMarket,
+  createUser,
+  createWatch,
   hasTestDb,
   type TestDb,
 } from '@buddha/db/test';
@@ -102,6 +107,18 @@ describe.skipIf(!hasTestDb())('the time passing creates nothing (#142, integrati
     };
   }
 
+  /**
+   * A watcher and a holder of the market — whom a #188 notice would reach (52-1) — and what any
+   * inbox holds: a passing time must leave it empty (ADR-0106 결정 6, AC 5).
+   */
+  async function audienceOf(marketId: string) {
+    const watcher = (await createUser(t.db)).user.id;
+    await createWatch(t.db, { userId: watcher, marketId });
+    const holder = (await createUser(t.db)).user.id;
+    await createPosition(t.db, { userId: holder, marketId, outcome: 'NO', qty: 3 });
+    return { inbox: () => t.db.select().from(schema.notifications) };
+  }
+
   /** Every per-minute market scan, as the scheduler runs them (jobs/index.ts). */
   async function runEveryScan() {
     return {
@@ -149,6 +166,7 @@ describe.skipIf(!hasTestDb())('the time passing creates nothing (#142, integrati
     for (const { delay } of [first, second]) {
       expect(judgementDelayReviewPassed(delay.nextReviewAt, now)).toBe(true);
     }
+    const audience = await audienceOf(market.id);
     const before = await stateOf(market.id);
     expect(before.delays.map((delay) => delay.id)).toEqual([first.delay.id, second.delay.id]);
 
@@ -206,6 +224,8 @@ describe.skipIf(!hasTestDb())('the time passing creates nothing (#142, integrati
     ]);
     expect(published).toEqual([]);
     expect(enqueued).toEqual([]);
+    // No notice says '판정 지연', NO or anything else because a time passed (AC 5).
+    expect(await audience.inbox()).toEqual([]);
   });
 
   it('still skips a PROVISIONAL market a waiting correction holds as held, its record passed', async () => {
@@ -223,6 +243,7 @@ describe.skipIf(!hasTestDb())('the time passing creates nothing (#142, integrati
     });
     expect(delay).toMatchObject({ marketStatus: 'provisional', judgementVersion: 1 });
     expect(judgementDelayReviewPassed(delay.nextReviewAt, now)).toBe(true);
+    const audience = await audienceOf(market.id);
     const before = await stateOf(market.id);
     expect(before.market.correctionPending).toBe(true);
 
@@ -255,6 +276,8 @@ describe.skipIf(!hasTestDb())('the time passing creates nothing (#142, integrati
     expect(after.delays).toEqual([delay]);
     expect(published).toEqual([]);
     expect(enqueued).toEqual([]);
+    // Held past its deadline: no 보류 or 지급 notice either (52-13).
+    expect(await audience.inbox()).toEqual([]);
   });
 
   it('has no job for a record, its next review time or the long-delay deadline', () => {

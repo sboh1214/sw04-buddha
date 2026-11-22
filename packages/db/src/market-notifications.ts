@@ -41,8 +41,9 @@ type MarketRow = typeof markets.$inferSelect;
  *
  * Never: the bot-only stop, the open and the pre-open transitions, a title- or background-only
  * supplement, a request, a rejection or a retraction (market-notifications.test.ts pins the
- * callers of `transitionMarket`). Judgement and settlement are #188's, which reuses
- * `marketAudience` (52-14).
+ * callers of `transitionMarket`). Judgement and settlement are #188's (judgement-notifications.ts,
+ * ADR-0160): its delay, first judgement and correction notices reuse `marketAudience` (52-14),
+ * and the final settlement reads its own snapshot (`settlementAudience`).
  */
 
 /**
