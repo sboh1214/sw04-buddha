@@ -44,6 +44,8 @@ import {
 } from './contracts.js';
 import type { BalanceRow, LedgerEntryRow } from './ledger.js';
 import { ledgerHeldMarketSql } from './ledger-held-markets.js';
+import type { NotificationInput } from './notifications.js';
+import { restingFillNotificationInputs, type RestingFill } from './order-notifications.js';
 import { latestAdminRevocation } from './role-boundary.js';
 import { burnAvailableMarketMakerPairs } from './market-maker-burn.js';
 import { readMarketMakerRuntime, requestMarketMakerRefresh } from './market-maker-runtime.js';
@@ -141,6 +143,13 @@ export type PlaceOrderResult =
       cancelledBotOrderIds: string[];
       /** Internal durable refresh trigger, only when this intake changed the MM's fills/reservations. */
       marketMakerGeneration?: bigint;
+      /**
+       * The notices of the resting orders' fills (#134, ADR-0158: `order_filled` to each person
+       * whose resting order filled, 52-2), for the caller's ONE `createNotifications` after its
+       * other writes — the API's `OrderService.place`, the cycle's `finish()`. Empty for a
+       * rejected order and an intake that filled no person's resting order.
+       */
+      notifications: NotificationInput[];
     }
   /** The request id named an order before, with the same terms: that order as it stands now. */
   | { kind: 'replayed'; order: OrderRow }
@@ -347,7 +356,12 @@ function humanOwnersOf(
  *    remainder, a budget's unspent Coin, a self-trade stop; a resting GTC order keeps it), then
  *    each planned risk-limited MM remainder cancelled through the existing cancel processing;
  * 8. when it filled, the market's statistics once for the intake (#121, `recordFillStats`), with
- *    the people new to the market read before step 7's first write (`newHumanParticipants`).
+ *    the people new to the market read before step 7's first write (`newHumanParticipants`);
+ * 9. the notices of the resting orders' fills (#134, ADR-0158: `order_filled` to each person whose
+ *    resting order filled — never the incoming owner, 52-2), returned in `notifications` for the
+ *    caller's one `createNotifications`: this function never calls it, because a caller may place
+ *    several orders and write after them in one transaction (the cycle's `finish()`), and the
+ *    write path is one call after the event's other writes (ADR-0157 결정 4).
  *
  * A rejected order is a row with its request id and reason (#177 7항); `replayed`, `conflict`,
  * `closed`, `not_found` and internal `bot_risk_rejected` write nothing, so the request id stays
@@ -397,6 +411,7 @@ export async function placeOrder(
   const [row] = await tx
     .select({
       status: markets.status,
+      title: markets.title,
       widthTicks: markets.priceProtectionTicks,
       closeAt: markets.closeAt,
       createdAt: markets.createdAt,
@@ -459,6 +474,7 @@ export async function placeOrder(
       stats: null,
       touched: { balances: [], positions: [] },
       cancelledBotOrderIds: [],
+      notifications: [],
     };
   };
 
@@ -605,6 +621,7 @@ export async function placeOrder(
     if (before === undefined || before.id < entry.id) lastEntry.set(userId, entry);
   };
   const made: FillRow[] = [];
+  const restingFills: RestingFill[] = [];
   for (const planned of result.fills) {
     const resting = restingById.get(planned.restingOrderId)!;
     const [fill] = await tx
@@ -646,7 +663,7 @@ export async function placeOrder(
       touchPosition(call.input.no.ownerId, 'NO');
     }
     const restingStatus = restingStateAfterFill(planned.restingRemainingQty);
-    await tx
+    const [after] = await tx
       .update(orders)
       .set({
         filledQty: sql`${orders.filledQty} + ${planned.qty}`,
@@ -655,7 +672,10 @@ export async function placeOrder(
         updatedAt: at,
         endedAt: restingStatus === 'filled' ? at : null,
       })
-      .where(eq(orders.id, resting.id));
+      .where(eq(orders.id, resting.id))
+      .returning({ qty: orders.qty, filledQty: orders.filledQty });
+    // A resting order is a quantity order (orders_status_check).
+    restingFills.push({ fill: fill!, resting, planned, order: { ...after!, qty: after!.qty! } });
   }
 
   const release = intakeRemainderRelease(facts, result);
@@ -709,6 +729,11 @@ export async function placeOrder(
     touched: await touchedOf(tx, marketId, lastEntry, touchedPositions),
     cancelledBotOrderIds,
     ...(refresh === null ? {} : { marketMakerGeneration: refresh.generation }),
+    notifications: restingFillNotificationInputs({
+      marketTitle: row.title,
+      at,
+      fills: restingFills,
+    }),
   };
 }
 

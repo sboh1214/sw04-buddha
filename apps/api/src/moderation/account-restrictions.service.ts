@@ -2,12 +2,17 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   cancelLockedOrders,
   cancelledMarketIds,
+  createNotifications,
   lockAccountOrders,
   lockAdminRoles,
+  moderationActionEventKey,
+  notifiedUserIds,
+  orderEndNotificationInputs,
   schema,
   withTransactionRetry,
   TransactionBusyError,
   type Db,
+  type NotificationInput,
 } from '@buddha/db';
 import {
   ACCOUNT_RESTRICTION_APPROVAL_KINDS,
@@ -16,6 +21,7 @@ import {
   accountRestrictionEndOf,
   accountRestrictionReasonSchema,
   moderationTargetSchema,
+  notificationEvent,
   type AccountRestrictionChange,
   type AccountRestrictionDecision,
   type AccountRestrictionRequest,
@@ -112,11 +118,13 @@ interface LockedAction {
  * any member. An `apply`'s approval cancels the member's resting orders in every market as
  * 취소 완료(계정 제한), their locks given back (#178, ADR-0113; ADR-0107 결정 4 #119 '계정 제한 중
  * 대기 주문', #57-13), but those in a market held for a ledger failure, which keep their locks until
- * its recovery (the owner's answer 2026-11-06) — the restriction applies all the same. After
- * COMMIT each market an order was cancelled in gets `market:book` (#179, ADR-0114: its public
- * book changed). They are not restored when it ends, is brought forward, lifted or cancelled.
- * Nothing else here touches a
- * balance, a holding or a record of trades (N02 §9: «잔액·기록·이의제기 경로는 유지»).
+ * its recovery (the owner's answer 2026-11-06) — the restriction applies all the same. The member
+ * gets one `orders_cancelled` notice of them in that transaction (#134, ADR-0158: 52-3·52-4; the
+ * held ones are notified when their market's recovery ends them). After COMMIT each market an
+ * order was cancelled in gets `market:book` (#179, ADR-0114: its public book changed), and the
+ * member `user:notification`. They are not restored when it ends, is brought forward, lifted or
+ * cancelled. Nothing else here touches a balance, a holding or a record of trades (N02 §9:
+ * «잔액·기록·이의제기 경로는 유지»).
  */
 @Injectable()
 export class AccountRestrictionService {
@@ -313,8 +321,10 @@ export class AccountRestrictionService {
    *   ending `days` after the approval (or 무기한), with the pending reports on the subject
    *   resolved (조치함). A member restricted already keeps the one that ends later. Then the
    *   member's resting orders are cancelled 계정 제한 at the approval's instant (the class doc),
-   *   the audit naming them (`cancelledOrderIds`) and those left for a recovery (`heldOrderIds`);
-   *   after COMMIT `market:book` in each market one was cancelled in (#179).
+   *   the audit naming them (`cancelledOrderIds`) and those left for a recovery (`heldOrderIds`),
+   *   and last the member's one `orders_cancelled` notice of them (#134, ADR-0158; 52-3·52-4);
+   *   after COMMIT `market:book` in each market one was cancelled in (#179) and
+   *   `user:notification` to the member when the notice reached them.
    * - `shorten`, `lift`: the restriction's end brought forward to the end asked for, or to now —
    *   the change recorded as the asking operator's, with its approval.
    * - `cancel`: the restriction cancelled at once, as the asking operator's, with its approval.
@@ -345,7 +355,7 @@ export class AccountRestrictionService {
     requestId: string,
     reason: string,
   ): Promise<AccountRestrictionDecision> {
-    const { actionId, book } = await withTransactionRetry(this.db, async (tx) => {
+    const { actionId, book, notified } = await withTransactionRetry(this.db, async (tx) => {
       const { request, change, memberId } = await this.decidable(tx, deciderId, requestId);
       // Every lock first, then the decision and its instant (see above).
       await lockAdminRoles(tx, 'shared');
@@ -369,6 +379,9 @@ export class AccountRestrictionService {
       };
       // The markets whose public book the cancels changed (#179): none for a held market's.
       let bookMarketIds: string[] = [];
+      // #134 (ADR-0158, 52-3·52-4): an `apply`'s 계정 제한 cancel, one notice to the member (an
+      // account event across markets); the other changes cancel nothing and notify nothing.
+      let notices: NotificationInput[] = [];
       if (locked.change === 'apply') {
         done = await this.applyApproved(tx, request, memberId, locked.apply, at);
         const ended = await cancelLockedOrders(tx, orders!, { reason: 'restricted', at });
@@ -377,6 +390,12 @@ export class AccountRestrictionService {
           heldOrderIds: ended.held.map((order) => order.id),
         };
         bookMarketIds = cancelledMarketIds(ended);
+        notices = orderEndNotificationInputs(ended.cancelled, {
+          kind: 'cancelled',
+          reason: 'restricted',
+          eventKey: moderationActionEventKey(done.actionId),
+          occurredAt: at,
+        });
       } else if (locked.change === 'cancel') {
         done = {
           actionId: await this.cancelApproved(tx, request, locked.action, at),
@@ -408,7 +427,9 @@ export class AccountRestrictionService {
           ...cancelled,
         },
       );
-      return { actionId: done.actionId, book: { marketIds: bookMarketIds, at } };
+      // Last in the transaction (ADR-0157 결정 4): nothing locks after it but the COMMIT.
+      const notified = notifiedUserIds(await createNotifications(tx, notices));
+      return { actionId: done.actionId, book: { marketIds: bookMarketIds, at }, notified };
     }).catch((error: unknown) => {
       if (error instanceof TransactionBusyError)
         throw new AppError('TRANSACTION_BUSY', {
@@ -417,7 +438,10 @@ export class AccountRestrictionService {
         });
       throw error;
     });
-    await this.publisher.publishBook(book.marketIds, book.at);
+    await Promise.all([
+      this.publisher.publishBook(book.marketIds, book.at),
+      ...notified.map((id) => this.publisher.publishUser(id, notificationEvent(book.at))),
+    ]);
     return {
       request: await this.reads.request(this.db, requestId, deciderId),
       action: await this.answer(actionId, deciderId),

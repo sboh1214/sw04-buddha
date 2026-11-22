@@ -2,13 +2,17 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   isHumanAccountTypeSql,
   isPhoneVerified,
+  adminActionEventKey,
   adminRoleChangeTimestamp,
   cancelLockedOrders,
   cancelledMarketIds,
   countFilledMarkets,
+  createNotifications,
   ledgerHeldMarketSql,
   lockAccountOrders,
   lockAdminRoles,
+  notifiedUserIds,
+  orderEndNotificationInputs,
   tryLockAdminRoles,
   TransactionBusyError,
   withTransactionRetry,
@@ -21,6 +25,7 @@ import {
   encodeKeyset,
   MIN_ADMINS,
   LIVE_ORDER_STATUSES,
+  notificationEvent,
   type AdminAccount,
   type AdminGrantPreview,
   type AdminRoleChangePayload,
@@ -184,6 +189,12 @@ export class AdminAccountsService {
    * (shared) before it closes, so under this exclusive one the read sees a closure committed. An
    * operating account (the 운영 마켓메이커, #115) is never an admin: it answers NOT_FOUND, as an id
    * that is no account does, before any other reason.
+   *
+   * The grant cancels the account's resting orders as 취소 완료(관리자 권한) at its instant (#143,
+   * ADR-0120; a held market's wait for its recovery) and, last in the transaction, writes the
+   * grantee's one `orders_cancelled` notice of them (#134, ADR-0158; 52-3·52-4). After COMMIT the
+   * role cache, `market:book` in each market an order was cancelled in (#179) and
+   * `user:notification` to the grantee when the notice reached them.
    */
   async grant(actorId: string, userId: string, reason: string): Promise<AdminRoleChange> {
     const done = await withTransactionRetry(this.db, async (tx) => {
@@ -230,7 +241,17 @@ export class AdminAccountsService {
         cancelledOrderIds: cancelled.cancelled.map((order) => order.id),
         heldOrderIds: cancelled.held.map((order) => order.id),
       });
-      return { recordId, marketIds: cancelledMarketIds(cancelled), at };
+      // #134 (ADR-0158, 52-3·52-4): the 관리자 권한 cancel's one notice to the grantee, an account
+      // event across markets, last in the transaction (ADR-0157 결정 4). Held orders are not
+      // ended here: the market's recovery notifies them when it ends them.
+      const notices = orderEndNotificationInputs(cancelled.cancelled, {
+        kind: 'cancelled',
+        reason: 'admin_role',
+        eventKey: adminActionEventKey(recordId),
+        occurredAt: at,
+      });
+      const notified = notifiedUserIds(await createNotifications(tx, notices));
+      return { recordId, marketIds: cancelledMarketIds(cancelled), at, notified };
     }).catch((error: unknown) => {
       if (error instanceof TransactionBusyError)
         throw new AppError('TRANSACTION_BUSY', {
@@ -241,6 +262,7 @@ export class AdminAccountsService {
     await Promise.all([
       this.cacheAdmin(userId),
       this.publisher.publishBook(done.marketIds, done.at),
+      ...done.notified.map((id) => this.publisher.publishUser(id, notificationEvent(done.at))),
     ]);
     return this.change(done.recordId);
   }

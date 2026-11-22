@@ -45,6 +45,23 @@ describe('NOTIFICATION_TYPES (#113, #53)', () => {
     }
   });
 
+  it('registers the 거래 three of #134 with single-brace placeholders only (ADR-0158)', () => {
+    expect(Object.keys(NOTIFICATION_TYPE_REGISTRY)).toEqual([
+      'order_filled',
+      'orders_cancelled',
+      'orders_expired',
+    ]);
+    // `{{key}}` in the web's copy must be a business fact (legal.test.ts): never here.
+    for (const candidate of NOTIFICATION_TYPES) {
+      for (const text of candidate.text) {
+        expect(text, candidate.type).not.toMatch(/\{\{|\}\}/);
+        for (const [, key] of text.matchAll(/\{([^{}]*)\}/g)) {
+          expect(key, `${candidate.type}: ${text}`).toMatch(/^[a-z][a-zA-Z]*$/);
+        }
+      }
+    }
+  });
+
   it('names no excluded feature, as a type or in its text (N05 §4)', () => {
     expect(
       NOTIFICATION_TYPES.map((candidate) => ({
@@ -93,7 +110,8 @@ const planted = (change: Partial<NotificationDefinition> = {}): NotificationDefi
 });
 
 describe('findNotificationDefinitionProblems (ADR-0157)', () => {
-  it('finds nothing in the product list (empty in #53) or in a definition that keeps the rules', () => {
+  it('finds nothing in the product list (#134’s three) or in a definition that keeps the rules', () => {
+    expect(NOTIFICATION_DEFINITIONS.length).toBeGreaterThan(0);
     expect(findNotificationDefinitionProblems(NOTIFICATION_DEFINITIONS)).toEqual([]);
     expect(
       findNotificationDefinitionProblems([
@@ -168,7 +186,7 @@ describe('findNotificationDefinitionProblems (ADR-0157)', () => {
         planted({
           type: 'planted_other',
           category: 'price' as NotificationDefinition['category'],
-          targets: ['order' as NotificationDefinition['targets'][number]],
+          targets: ['post' as NotificationDefinition['targets'][number]],
           merge: 'sum' as unknown as NotificationDefinition['merge'],
         }),
         planted({ type: 'planted_nowhere', targets: [] }),
@@ -177,7 +195,7 @@ describe('findNotificationDefinitionProblems (ADR-0157)', () => {
       'Bad-Type: type shape',
       'planted_notice: listed twice',
       'planted_other: category price',
-      'planted_other: target kind order',
+      'planted_other: target kind post',
       'planted_other: merge',
       'planted_nowhere: no target kind',
     ]);

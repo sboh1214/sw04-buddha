@@ -22,8 +22,11 @@ import {
  * person reads in the type — its title and body as the web's renderer words them, placeholders as
  * written — and why it exists. N05 §4 leaves score, ranking, Forecast-edit and paid-Coin purchase
  * notifications out of the initial product, and guards/notifications.test.ts fails on a type that
- * names any excluded feature (EXCLUDED_FEATURES), as a name or in its text. Empty in #53, which
- * ships no type (52-20). docs/GUARDS.md has the registration rule.
+ * names any excluded feature (EXCLUDED_FEATURES), as a name or in its text. #53 shipped no type
+ * (52-20); #134 registers the 거래 three (ADR-0158). The web's renderer words a type from its
+ * copy (`NOTIFICATION_RENDERERS[type].copy`), whose entries equal `text` here, in order
+ * (apps/web lib/notifications.test.ts): whole sentences with single-brace placeholders the web
+ * fills, and the words it fills some of them with. docs/GUARDS.md has the registration rule.
  */
 export interface NotificationTypeText {
   /** Every text a person reads in it: the title and the body, placeholders as written. */
@@ -32,10 +35,43 @@ export interface NotificationTypeText {
   readonly reason: string;
 }
 
-export const NOTIFICATION_TYPE_REGISTRY = {} as const satisfies Record<
-  NotificationType,
-  NotificationTypeText
->;
+export const NOTIFICATION_TYPE_REGISTRY = {
+  order_filled: {
+    // 134-3: the last two sentences when the notice does not hold every fill of the order.
+    text: [
+      '{market} {contract} 주문 {state} · {qty}계약 · 평균 {price}',
+      '{market} {contract} 주문 {state} · 체결 {count}회 · 누적 {qty}계약 · 평균 {price}',
+      '{market} {contract} 주문 {state} · 이번 {qty}계약 · 평균 {price} (주문 {orderQty}계약 중 {orderFilledQty}계약 체결)',
+      '{market} {contract} 주문 {state} · 체결 {count}회 · 이번 {qty}계약 · 평균 {price} (주문 {orderQty}계약 중 {orderFilledQty}계약 체결)',
+      '부분 체결',
+      '전량 체결',
+      'YES',
+      'NO',
+      '매수',
+      '매도',
+    ],
+    reason:
+      '대기하던 내 주문에 나중에 생긴 체결(부분·전량) — 같은 주문의 체결은 읽기 전까지 한 알림에 합치고 횟수·누적 수량·평균 가격을 싣는다. 읽은 뒤의 체결은 새 알림이고, 알림의 수량이 주문의 누적 체결과 다르면 주문 전체(주문 수량 중 체결 수량)를 함께 보인다. N05 §4, ADR-0158, 52-2·52-6, 134-1·134-2·134-3',
+  },
+  orders_cancelled: {
+    text: [
+      '{market} 일시 중단으로 대기 주문 {count}건 취소',
+      '{reason}으로 대기 주문 {count}건 취소(시장 {markets}곳)',
+      '관리자 권한',
+      '계정 제한',
+    ],
+    reason:
+      '내가 하지 않은 대기 주문의 일괄 취소(일시 중단·관리자 권한·계정 제한) — 사건마다 한 건. N05 §4, ADR-0158, 52-3·52-4',
+  },
+  orders_expired: {
+    text: [
+      '{market} 거래 마감으로 대기 주문 {count}건 만료',
+      '{market} 시장 취소로 대기 주문 {count}건 만료',
+    ],
+    reason:
+      '거래 마감·시장 취소로 끝난 대기 주문 — 회원·시장마다 한 건. N05 §4, ADR-0158, 52-4·52-5',
+  },
+} as const satisfies Record<NotificationType, NotificationTypeText>;
 
 /** One registered type with its name: what the excluded-feature check reads. */
 export interface NotificationTypeEntry extends NotificationTypeText {

@@ -11,7 +11,8 @@
  * crossing order; the cancel processing itself is packages/db order-cancel.test.ts's. And the
  * `market:book` signal (#179, ADR-0114) both publish after COMMIT when the live book changed, and
  * an intake that filled publishes its anonymous `market:trade` rows and one `market:tick` after it
- * (#121, ADR-0116).
+ * (#121, ADR-0116). And the resting owner's fill notice (#134, ADR-0158): merged while unread,
+ * never the incoming owner's, nothing for a replay or the owner's cancel, with its signal.
  */
 import { randomUUID } from 'node:crypto';
 import { lockAdminRoles, lockLedgerAccounts, lockMarket, schema } from '@buddha/db';
@@ -46,6 +47,8 @@ import {
   marketTickEventSchema,
   marketTradeEventSchema,
   myFillSchema,
+  notificationSchema,
+  notificationUnreadCountSchema,
   orderSchema,
   placeOrderResultSchema,
   type AdminMarket,
@@ -53,6 +56,7 @@ import {
   type Market,
   type MarketRealtimeEvent,
   type MyFill,
+  type Notification,
   type Order,
   type PlaceOrderResult,
 } from '@buddha/shared';
@@ -163,6 +167,14 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
   };
   const placed = (res: Res): PlaceOrderResult =>
     placeOrderResultSchema.parse(dataOf<PlaceOrderResult>(res));
+  /** The account's inbox (#53), newest first: its 거래 notices here (#134). */
+  const inboxOf = async (who: TestUser) =>
+    notificationSchema.array().parse(dataOf<Notification[]>(await read('/me/notifications', who)));
+  /** The `user:notification` signals a `publishUser` spy saw, as [account, ts]. */
+  const signalsOf = (publish: { mock: { calls: [string, { type: string; ts?: string }][] } }) =>
+    publish.mock.calls
+      .filter(([, event]) => event.type === 'user:notification')
+      .map(([userId, event]) => [userId, event.ts]);
   const orderRows = async () => (await t.db.select({ n: count() }).from(schema.orders))[0]!.n;
 
   it('takes no order while intake is closed, and the request id stays free (결정 3)', async () => {
@@ -633,16 +645,23 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
     expect(await positionsOf(a)).toEqual([['NO', 2, '80']]);
     expect(await positionsOf(b)).toEqual([['YES', 2, '120']]);
 
-    // After COMMIT: each person's balance, keyed by its last ledger entry, and its position row.
+    // After COMMIT: each person's balance, keyed by its last ledger entry, and its position row;
+    // and the inbox signal to A alone, whose RESTING order filled (#134, ADR-0158) — never to B,
+    // whose own answer is its result (52-2).
     const sent = publish.mock.calls.map(([userId, event]) => [userId, event.type]);
     expect(sent.sort()).toEqual(
       [
         [a.id, 'user:balance'],
+        [a.id, 'user:notification'],
         [a.id, 'user:position'],
         [b.id, 'user:balance'],
         [b.id, 'user:position'],
       ].sort(),
     );
+    expect(publish).toHaveBeenCalledWith(a.id, {
+      type: 'user:notification',
+      ts: incoming.order.createdAt,
+    });
     const balanceEvents = publish.mock.calls.filter(([, event]) => event.type === 'user:balance');
     for (const [userId, event] of balanceEvents) {
       const row = await balanceOf(t.db, userId);
@@ -667,7 +686,8 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
     });
 
     // A takes that YES at once: a trade at 70 (the ask 70 + 5 ticks bounds it). Both people's
-    // balance and YES row go out — the resting seller's too, whose screen did nothing.
+    // balance and YES row go out — the resting seller's too, whose screen did nothing, with its
+    // inbox signal (#134: B's resting sell filled).
     publish.mockClear();
     const taken = placed(await send(a, { timeInForce: 'ioc', limitPriceCoin: 99 }));
     expect(taken.order).toMatchObject({
@@ -680,11 +700,14 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
         [a.id, 'user:balance'],
         [a.id, 'user:position'],
         [b.id, 'user:balance'],
+        [b.id, 'user:notification'],
         [b.id, 'user:position'],
       ].sort(),
     );
     for (const [userId, event] of publish.mock.calls) {
-      if (event.type === 'user:balance') {
+      if (event.type === 'user:notification') {
+        expect(event).toEqual({ type: 'user:notification', ts: taken.order.createdAt });
+      } else if (event.type === 'user:balance') {
         const row = await balanceOf(t.db, userId);
         expect(event).toMatchObject({
           availableCoin: String(row!.availableCoin),
@@ -711,6 +734,92 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
     });
     const [aBought] = dataOf<MyFill[]>(await read(`/me/fills?orderId=${taken.order.id}`, a));
     expect(aBought).toMatchObject({ id: bSold!.id, side: 'buy', realizedPnlCoin: null });
+  });
+
+  it('notifies the resting owner of each fill — merged while unread, 전량 체결 at the end — never the incoming owner, and a replay adds nothing (#134, ADR-0158)', async () => {
+    await open();
+    const publish = vi.spyOn(t.app.get(MarketPublisher), 'publishUser');
+    // A bids NO at 40 for 3: it rests. Each of B's IOC YES buys of one mints a pair at A's 40.
+    const resting = placed(await send(a, { outcome: 'NO', qty: 3 })).order;
+    const take = async (requestId = randomUUID()) =>
+      placed(await send(b, { timeInForce: 'ioc', limitPriceCoin: 99 }, { requestId }));
+    const requestId = randomUUID();
+    const first = (await take(requestId)).order;
+    expect(first).toMatchObject({ status: 'filled', filledQty: 1 });
+    // 52-2·134-1·134-3: the RESTING order's contract and direction, the quantity and Coin at its
+    // own price, the order's totals; leading to that order. B's answer is its own result.
+    const [notice] = await inboxOf(a);
+    expect(notice).toEqual({
+      id: expect.any(String) as unknown,
+      type: 'order_filled',
+      category: 'trade',
+      params: {
+        marketTitle: market.title,
+        outcome: 'NO',
+        side: 'buy',
+        qty: '1',
+        amountCoin: '40',
+        fullyFilled: false,
+        orderQty: '3',
+        orderFilledQty: '1',
+      },
+      target: { kind: 'order', orderId: resting.id },
+      eventCount: 1,
+      occurredAt: first.createdAt,
+      readAt: null,
+    });
+    expect(await inboxOf(b)).toEqual([]);
+    expect(
+      notificationUnreadCountSchema.parse(dataOf(await read('/me/notifications/unread-count', a))),
+    ).toEqual({ unreadCount: 1 });
+    // Nothing of the counterparty (AC 8·10): neither its account nor its order.
+    const raw = (await read('/me/notifications', a)).body;
+    expect(raw).not.toContain(b.id);
+    expect(raw).not.toContain(first.id);
+    // After COMMIT, the inbox signal to A alone, at the intake's instant.
+    expect(signalsOf(publish)).toEqual([[a.id, first.createdAt]]);
+
+    // B re-sends its request (AC 9): the order as it stands, nothing written, nothing published.
+    publish.mockClear();
+    expect(await take(requestId)).toEqual({ order: first, replayed: true });
+    expect(await inboxOf(a)).toEqual([notice]);
+    expect(publish).not.toHaveBeenCalled();
+
+    // The next fill while unread joins it (52-6): 체결 2회, the sums, its 발생 시각 (134-2).
+    const second = (await take()).order;
+    expect(await inboxOf(a)).toEqual([
+      {
+        ...notice,
+        params: { ...notice!.params, qty: '2', amountCoin: '80', orderFilledQty: '2' },
+        eventCount: 2,
+        occurredAt: second.createdAt,
+      },
+    ]);
+    // The last one fills the order: the same notice turns 전량 체결.
+    const third = (await take()).order;
+    expect(await inboxOf(a)).toEqual([
+      {
+        ...notice,
+        params: {
+          ...notice!.params,
+          qty: '3',
+          amountCoin: '120',
+          fullyFilled: true,
+          orderFilledQty: '3',
+        },
+        eventCount: 3,
+        occurredAt: third.createdAt,
+      },
+    ]);
+    expect(signalsOf(publish)).toEqual([
+      [a.id, second.createdAt],
+      [a.id, third.createdAt],
+    ]);
+    expect(await inboxOf(b)).toEqual([]);
+    expect(dataOf<Order>(await read(`/me/orders/${resting.id}`, a))).toMatchObject({
+      status: 'filled',
+      filledQty: 3,
+    });
   });
 
   it('publishes market:book after COMMIT for an order that rested or filled, and none for one that changed no live order (#179)', async () => {
@@ -2252,6 +2361,79 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
         awaitingRecovery: false,
       });
       expect(dataOf<Order>(await read(`/me/orders/${waiting.id}`, a)).awaitingRecovery).toBe(false);
+    });
+
+    it('notifies the fill alone when it meets the owner’s cancel on the market lock, and nothing when the cancel comes first (#134 AC 3·4)', async () => {
+      await open();
+      const publish = vi.spyOn(t.app.get(MarketPublisher), 'publishUser');
+      // The cancel first, then the fill first: A's inbox is empty before each round's fill.
+      for (const crossFirst of [false, true]) {
+        // A rests a NO bid of one at 40 (a YES ask of 60); B's IOC YES buy of one fills it whole.
+        const bid = placed(await send(a, { outcome: 'NO' })).order;
+        publish.mockClear();
+        const observer = await t.db.$client.connect();
+        let release = () => {};
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        let held = () => {};
+        const holding = new Promise<void>((resolve) => {
+          held = resolve;
+        });
+        const holder = t.db.transaction(async (tx) => {
+          await lockMarket(tx, market.id);
+          held();
+          await gate;
+        });
+        const crossing = () => send(b, { timeInForce: 'ioc', limitPriceCoin: 99 });
+        let cross: Order;
+        let answer: Order;
+        try {
+          await holding;
+          const first = crossFirst ? crossing() : cancel(a, bid.id);
+          await waitForLockWaiter(observer, 'the first request behind the market lock');
+          const second = crossFirst ? cancel(a, bid.id) : crossing();
+          await waitForLockWaiter(observer, 'the second request behind the market lock', 2);
+          release();
+          await holder;
+          const [one, two] = await Promise.all([first, second]);
+          const [crossRes, cancelRes] = crossFirst ? [one, two] : [two, one];
+          cross = placed(crossRes).order;
+          answer = orderSchema.parse(dataOf<Order>(cancelRes));
+        } finally {
+          release();
+          await holder.catch(() => undefined);
+          observer.release();
+        }
+        if (crossFirst) {
+          // The fill took it all: the cancel found it ended and answers it as it is (ADR-0113).
+          expect(cross).toMatchObject({ status: 'filled', filledQty: 1 });
+          expect(answer).toMatchObject({
+            id: bid.id,
+            status: 'filled',
+            filledQty: 1,
+            cancelledQty: 0,
+            cancelReason: null,
+          });
+          // "남은 수량이 먼저 모두 체결되면 취소 완료 알림이 생기지 않는다": the fill's notice alone.
+          expect(await inboxOf(a)).toEqual([
+            expect.objectContaining({
+              type: 'order_filled',
+              target: { kind: 'order', orderId: bid.id },
+              params: expect.objectContaining({ qty: '1', fullyFilled: true }) as unknown,
+            }),
+          ]);
+          expect(signalsOf(publish)).toEqual([[a.id, cross.createdAt]]);
+        } else {
+          // The owner's cancel never notifies (52-3), and the fill found nothing to meet.
+          expect(answer).toMatchObject({ status: 'cancelled', cancelReason: 'by_owner' });
+          expect(cross).toMatchObject({ status: 'rejected', rejectReason: 'no_quote' });
+          expect(await inboxOf(a)).toEqual([]);
+          expect(signalsOf(publish)).toEqual([]);
+        }
+        expect(await inboxOf(b)).toEqual([]);
+        await expectSound();
+      }
     });
 
     it('meets a crossing order on the market lock: whichever comes first, one remainder and one lock', async () => {

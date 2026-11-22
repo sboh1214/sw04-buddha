@@ -16,9 +16,13 @@
  * one-admin close is admin-markets.controller.test's. And the resting orders (#178, ADR-0113): a
  * pause cancels every one of the market's — people's and the 운영 마켓메이커's — as 일시 중단 at its
  * instant, a refused one none; a `ledger_failure` pause none (an owner's cancel refused), until the
- * approval of its 재개 or 조기 마감 cancels them before the status changes. Skips when TEST_* are
- * unset.
+ * approval of its 재개 or 조기 마감 cancels them before the status changes. And the 거래 notices
+ * (#134, ADR-0158): one `orders_cancelled` per member and pause or approved end, one
+ * `orders_expired` per member at an early close, none for the 운영 마켓메이커, a refusal or a
+ * `ledger_failure` pause, signalled after COMMIT; a crossing fill first keeps its own notice, and
+ * a partly filled order's cancel is a notice apart. Skips when TEST_* are unset.
  */
+import { randomUUID } from 'node:crypto';
 import { lockMarket, schema } from '@buddha/db';
 import {
   balanceOf,
@@ -45,19 +49,25 @@ import {
   floorToMinute,
   marketChannel,
   marketCloseJobId,
+  notificationSchema,
+  orderSchema,
+  placeOrderResultSchema,
   type AdminMarket,
   type AdminMarketPauseDecisionItem,
   type Market,
+  type Notification,
+  type Order,
   type MarketPauseReason,
   type MarketPauseReviewResult,
   type MarketPausePath,
 } from '@buddha/shared';
 import { Queue } from 'bullmq';
-import { and, asc, desc, eq, ne } from 'drizzle-orm';
+import { and, asc, count, desc, eq, ne } from 'drizzle-orm';
 import { Redis } from 'ioredis';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { MARKETS_QUEUE, MarketJobs } from '../jobs/market-jobs.service.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { sleep, waitForLockWaiter, waitForMessages } from '../test/wait.js';
@@ -1759,6 +1769,12 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
     const expectSound = async () => expect(await checkOrderInvariants(t.db)).toEqual([]);
     const cancelAsOwner = (who: TestUser, orderId: string) =>
       post(`/api/v1/me/orders/${orderId}/cancel`, who);
+    /** The member's inbox (#53), newest first: its 거래 notices (#134). */
+    const inboxOf = async (who: TestUser) => {
+      const res = await get('/api/v1/me/notifications', who);
+      expect(res.statusCode, res.body).toBe(200);
+      return notificationSchema.array().parse(data<Notification[]>(res));
+    };
 
     beforeEach(async () => {
       await openOrderIntake(t.db, { adminId: asker.id });
@@ -1958,8 +1974,330 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
           cancelReason: pauseFirst ? 'paused' : 'by_owner',
         });
         expect(await balanceOf(t.db, a.id)).toMatchObject({ lockedCoin: 0n });
+        // #134 (52-3): the pause's cancel notified once (the first round); the owner's own none.
+        expect(await inboxOf(a)).toEqual([
+          expect.objectContaining({
+            type: 'orders_cancelled',
+            params: expect.objectContaining({ reason: 'paused', orderCount: 1 }) as unknown,
+          }),
+        ]);
         await expectSound();
       }
+    });
+
+    describe('trade notifications (#134, ADR-0158)', () => {
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
+      /**
+       * `MarketPublisher.publishUser` watched: each `user:notification` as [account, ts, the
+       * account's notifications committed when it was sent] — read on another connection, so a
+       * signal sent before COMMIT would count none.
+       */
+      function signals() {
+        const sent: [string, string, number][] = [];
+        vi.spyOn(t.app.get(MarketPublisher), 'publishUser').mockImplementation(
+          async (userId, event) => {
+            if (event.type !== 'user:notification') return;
+            const [row] = await t.db
+              .select({ n: count() })
+              .from(schema.notifications)
+              .where(eq(schema.notifications.userId, userId));
+            sent.push([userId, event.ts, row!.n]);
+          },
+        );
+        return () => [...sent].sort(([x], [y]) => x.localeCompare(y));
+      }
+      /** A member's order through the API (`POST /markets/:id/orders`), answered. */
+      async function orderVia(who: TestUser, marketId: string, body: Record<string, unknown>) {
+        const res = await t.app.inject({
+          method: 'POST',
+          url: `/api/v1/markets/${marketId}/orders`,
+          headers: { ...jsonHeaders, cookie: who.cookie, 'idempotency-key': randomUUID() },
+          payload: { expectedAccountId: who.id, outcome: 'YES', side: 'buy', qty: 1, ...body },
+        });
+        expect(res.statusCode, res.body).toBe(200);
+        return placeOrderResultSchema.parse(data(res)).order;
+      }
+      /** B's IOC YES buy of one at 99: a pair mint against a resting NO bid. */
+      const crossing = (who: TestUser, marketId: string) =>
+        orderVia(who, marketId, { timeInForce: 'ioc', limitPriceCoin: 99 });
+      const notices = (type: string, params: unknown, target: unknown): unknown =>
+        expect.objectContaining({ type, category: 'trade', params, target, eventCount: 1 });
+
+      it('notifies each member once of the pause’s cancel — N = 1 its order, N > 1 the market’s ended orders — the 운영 마켓메이커 none, after COMMIT; a refused pause none', async () => {
+        const market = await opened();
+        const [a, b] = [await member(), await member()];
+        const marketMaker = await fundMarketMakerFunds(t.db, market.id, 1_000n);
+        // Nothing crosses: A's YES 40 and NO 30, B's YES 35, the bot's YES 45.
+        await rest(market.id, a.id, { limitPriceCoin: 40 });
+        await rest(market.id, a.id, { outcome: 'NO', limitPriceCoin: 30 });
+        const bOrder = await rest(market.id, b.id, { limitPriceCoin: 35 });
+        await rest(market.id, marketMaker, { limitPriceCoin: 45 });
+        const sent = signals();
+        const refused = await pause(market.id, asker, {
+          reason: 'early_result',
+          resultPublishedAt: iso(Date.now() + HOUR_MS),
+        });
+        expectRefused(refused, 'resultPublishedAt', 'after the pause');
+        expect(await t.db.select().from(schema.notifications)).toEqual([]);
+        expect(sent()).toEqual([]);
+
+        const res = await pause(market.id);
+        expect(res.statusCode, res.body).toBe(200);
+        const event = (await eventsFor(market.id)).at(-1)!;
+        expect(event.type).toBe('paused');
+        const at = event.createdAt.toISOString();
+        const params = { reason: 'paused', marketCount: 1, marketTitle: market.title };
+        expect(await inboxOf(a)).toEqual([
+          {
+            id: expect.any(String) as unknown,
+            type: 'orders_cancelled',
+            category: 'trade',
+            params: { ...params, orderCount: 2 },
+            target: { kind: 'order_history', marketId: market.id },
+            eventCount: 1,
+            occurredAt: at,
+            readAt: null,
+          },
+        ]);
+        expect(await inboxOf(b)).toEqual([
+          notices(
+            'orders_cancelled',
+            { ...params, orderCount: 1 },
+            {
+              kind: 'order',
+              orderId: bOrder.id,
+            },
+          ),
+        ]);
+        // Every row is a member's: the bot has no inbox (53-5). Each keyed by the pause's event.
+        const rows = await t.db.select().from(schema.notifications);
+        expect(rows.map((row) => row.userId).sort()).toEqual([a.id, b.id].sort());
+        const keys = await t.db.select().from(schema.notificationKeys);
+        expect(keys.map((key) => key.eventKey)).toEqual([
+          `market_event:${String(event.id)}`,
+          `market_event:${String(event.id)}`,
+        ]);
+        // After COMMIT, one signal per notified member, each seeing its committed row.
+        expect(sent()).toEqual(
+          [
+            [a.id, at, 1],
+            [b.id, at, 1],
+          ].sort(([x], [y]) => String(x).localeCompare(String(y))),
+        );
+      });
+
+      it('notifies nothing at a ledger failure’s pause, and the 일시 중단 cancel at the approval of its 재개 or 조기 마감 — the recovery (52-3)', async () => {
+        for (const path of ['resume', 'early_close'] as const) {
+          const a = await member();
+          const market = await opened();
+          const order = await rest(market.id, a.id, { limitPriceCoin: 40 });
+          const sent = signals();
+          expect((await pause(market.id, asker, { reason: 'ledger_failure' })).statusCode).toBe(
+            200,
+          );
+          expect(await inboxOf(a)).toEqual([]);
+          expect(sent()).toEqual([]);
+          expect((await requestDecision(market.id, { path })).statusCode).toBe(200);
+          const approved = await approve(market.id, await pendingId(market.id));
+          expect(approved.statusCode, approved.body).toBe(200);
+          const event = (await eventsFor(market.id)).at(-1)!;
+          // Nobody filled: the early close cancels the market (#20) after the recovery's cancel.
+          expect(event.type).toBe(path === 'resume' ? 'resumed' : 'cancelled');
+          const at = event.createdAt.toISOString();
+          expect(await inboxOf(a)).toEqual([
+            {
+              id: expect.any(String) as unknown,
+              type: 'orders_cancelled',
+              category: 'trade',
+              params: {
+                reason: 'paused',
+                orderCount: 1,
+                marketCount: 1,
+                marketTitle: market.title,
+              },
+              target: { kind: 'order', orderId: order.id },
+              eventCount: 1,
+              occurredAt: at,
+              readAt: null,
+            },
+          ]);
+          expect(sent()).toEqual([[a.id, at, 1]]);
+          vi.restoreAllMocks();
+        }
+      });
+
+      it('notifies the early close’s 만료 per member — 시장 취소 with no person’s fill, 거래 마감 after one (52-4·52-5)', async () => {
+        for (const withFill of [false, true]) {
+          const [a, b] = [await member(), await member()];
+          const market = await opened();
+          if (withFill) await traded(market.id);
+          // The leftover orders of a market not held, built by hand as the #120 test does: a
+          // pause cancels every order since #178.
+          expect((await pause(market.id)).statusCode).toBe(200);
+          const setStatus = (status: 'open' | 'paused') =>
+            t.db.update(schema.markets).set({ status }).where(eq(schema.markets.id, market.id));
+          await setStatus('open');
+          await rest(market.id, a.id, { limitPriceCoin: 40 });
+          await rest(market.id, a.id, { limitPriceCoin: 41 });
+          const bOrder = await rest(market.id, b.id, { limitPriceCoin: 30 });
+          await setStatus('paused');
+          expect(
+            (await requestDecision(market.id, { path: 'early_close', reviewResult: 'judgeable' }))
+              .statusCode,
+          ).toBe(200);
+          const sent = signals();
+          const approved = await approve(market.id, await pendingId(market.id));
+          expect(approved.statusCode, approved.body).toBe(200);
+          const event = (await eventsFor(market.id)).at(-1)!;
+          const cause = withFill ? 'closed' : 'cancelled';
+          expect(event.type).toBe(cause);
+          const at = event.createdAt.toISOString();
+          const params = { marketTitle: market.title, cause };
+          expect(await inboxOf(a)).toEqual([
+            {
+              id: expect.any(String) as unknown,
+              type: 'orders_expired',
+              category: 'trade',
+              params: { ...params, orderCount: 2 },
+              target: { kind: 'order_history', marketId: market.id },
+              eventCount: 1,
+              occurredAt: at,
+              readAt: null,
+            },
+          ]);
+          expect(await inboxOf(b)).toEqual([
+            notices(
+              'orders_expired',
+              { ...params, orderCount: 1 },
+              {
+                kind: 'order',
+                orderId: bOrder.id,
+              },
+            ),
+          ]);
+          expect(sent()).toEqual(
+            [
+              [a.id, at, 1],
+              [b.id, at, 1],
+            ].sort(([x], [y]) => String(x).localeCompare(String(y))),
+          );
+          vi.restoreAllMocks();
+        }
+      });
+
+      it('serialises a pause with a crossing order on the market lock: a fill first keeps its notice and the pause notifies only what was still live (AC 3·4)', async () => {
+        for (const fillFirst of [false, true]) {
+          const [a, b] = [await member(), await member()];
+          const market = await opened();
+          // A's NO bid of one at 40, which B's IOC YES buy fills whole, and a YES bid at 30
+          // nothing meets.
+          const bid = await rest(market.id, a.id, { outcome: 'NO', limitPriceCoin: 40 });
+          const other = await rest(market.id, a.id, { limitPriceCoin: 30 });
+          const observer = await t.db.$client.connect();
+          let release = () => {};
+          const gate = new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          let held = () => {};
+          const holding = new Promise<void>((resolve) => {
+            held = resolve;
+          });
+          const holder = t.db.transaction(async (tx) => {
+            await lockMarket(tx, market.id);
+            held();
+            await gate;
+          });
+          let cross: Order;
+          try {
+            await holding;
+            const first = fillFirst ? crossing(b, market.id) : pause(market.id);
+            await waitForLockWaiter(observer, 'the first write behind the market lock');
+            const second = fillFirst ? pause(market.id) : crossing(b, market.id);
+            await waitForLockWaiter(observer, 'the second write behind the market lock', 2);
+            release();
+            await holder;
+            const [one, two] = await Promise.all([first, second]);
+            const [crossed, paused] = fillFirst ? [one, two] : [two, one];
+            expect((paused as Res).statusCode, (paused as Res).body).toBe(200);
+            cross = orderSchema.parse(crossed);
+          } finally {
+            release();
+            await holder.catch(() => undefined);
+            observer.release();
+          }
+          const cancelled = { reason: 'paused', marketCount: 1, marketTitle: market.title };
+          if (fillFirst) {
+            expect(cross).toMatchObject({ status: 'filled', filledQty: 1 });
+            expect(await orderOf(bid.id)).toMatchObject({ status: 'filled' });
+            // Newest first: the pause's cancel of the one still live, then the fill's notice.
+            expect(await inboxOf(a)).toEqual([
+              notices(
+                'orders_cancelled',
+                { ...cancelled, orderCount: 1 },
+                {
+                  kind: 'order',
+                  orderId: other.id,
+                },
+              ),
+              notices('order_filled', expect.objectContaining({ fullyFilled: true, qty: '1' }), {
+                kind: 'order',
+                orderId: bid.id,
+              }),
+            ]);
+          } else {
+            // The pause first: B's order meets a paused market and fills nothing.
+            expect(cross).toMatchObject({ status: 'rejected', filledQty: 0 });
+            expect(await inboxOf(a)).toEqual([
+              notices(
+                'orders_cancelled',
+                { ...cancelled, orderCount: 2 },
+                {
+                  kind: 'order_history',
+                  marketId: market.id,
+                },
+              ),
+            ]);
+          }
+          expect(await inboxOf(b)).toEqual([]);
+          await expectSound();
+        }
+      });
+
+      it('notifies a partly filled order’s cancel apart from its fill, leading to the order that shows both (AC 7·11)', async () => {
+        const [a, b] = [await member(), await member()];
+        const market = await opened();
+        const bid = await rest(market.id, a.id, { outcome: 'NO', limitPriceCoin: 40, qty: 3 });
+        expect(await crossing(b, market.id)).toMatchObject({ status: 'filled', filledQty: 1 });
+        const [filled] = await inboxOf(a);
+        expect(filled).toMatchObject({
+          type: 'order_filled',
+          params: { qty: '1', fullyFilled: false, orderQty: '3', orderFilledQty: '1' },
+          target: { kind: 'order', orderId: bid.id },
+        });
+        expect((await pause(market.id)).statusCode).toBe(200);
+        // A second, separate notice (53-4: another type is its own), newest first.
+        expect(await inboxOf(a)).toEqual([
+          notices(
+            'orders_cancelled',
+            { reason: 'paused', orderCount: 1, marketCount: 1, marketTitle: market.title },
+            { kind: 'order', orderId: bid.id },
+          ),
+          filled,
+        ]);
+        // Its target, the order's detail: what filled and what the cancel ended (#123, ADR-0141).
+        const res = await get(`/api/v1/me/orders/${bid.id}`, a);
+        expect(res.statusCode, res.body).toBe(200);
+        expect(orderSchema.parse(data<Order>(res))).toMatchObject({
+          status: 'cancelled',
+          cancelReason: 'paused',
+          qty: 3,
+          filledQty: 1,
+          cancelledQty: 2,
+        });
+      });
     });
   });
 });

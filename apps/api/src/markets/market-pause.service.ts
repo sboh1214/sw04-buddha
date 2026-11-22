@@ -1,10 +1,14 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
   cancelledMarketIds,
+  createNotifications,
   currentMarketPause,
   endMarketPause,
   lockAdminRoles,
   lockMarketOrders,
+  marketEventKey,
+  notifiedUserIds,
+  orderEndNotificationInputs,
   pauseMarket,
   ReconciliationError,
   runMarketReconciliation,
@@ -17,6 +21,7 @@ import {
 import {
   MARKET_PAUSE_DECISION_APPROVAL_KIND,
   MARKET_PAUSE_REFUSALS,
+  notificationEvent,
   pauseDecisionRefusal,
   type AdminMarket,
   type AdminMarketPauseDecisionItem,
@@ -167,13 +172,18 @@ const END_SKIPS: Readonly<Record<EndPauseSkipReason, () => AppError>> = {
  * before the status changes (`endMarketPause`, 결정 4 #178 rows). Both take the market's orders and
  * their owners' Coin accounts (`lockMarketOrders`) before the clock, so balance rows come last: the
  * pause right after the market row (it takes no admin-roles lock), the decision's approval after
- * the row and `decidable`'s shared admin-roles lock. A refusal rolls every cancel back. After
+ * the row and `decidable`'s shared admin-roles lock. A refusal rolls every cancel back. Last in
+ * the transaction, the members' 거래 notices (#134, ADR-0158; 52-3·52-4): one `orders_cancelled`
+ * per member whose orders a pause or an approved end cancelled (`paused`, the market named), one
+ * `orders_expired` per member whose orders a 조기 마감 expired (52-5: 거래 마감 or 시장 취소). After
  * COMMIT, when it cancelled or expired any (a non-held 조기 마감's expiry, #120), `market:book`
- * beside `market:status` (#179, ADR-0114: the public book changed); a `ledger_failure` pause
- * cancels none and publishes the status alone (a lock change alone has no event). The intake (#119)
- * refuses new orders on a paused market as 일시 중단 (ADR-0112 10-13). The 조기 마감 of a market not held
- * gets the close's processing (#120, ADR-0115): an order still live then — none since #178's pause,
- * a leftover from before it — ends 만료 after the transition, as at `close_at`.
+ * beside `market:status` (#179, ADR-0114: the public book changed), and `user:notification` to
+ * each member a notice reached — still no `user:position` or `user:balance` (ADR-0113 12-11); a
+ * `ledger_failure` pause cancels none and publishes the status alone (a lock change alone has no
+ * event). The intake (#119) refuses new orders on a paused market as 일시 중단 (ADR-0112 10-13).
+ * The 조기 마감 of a market not held gets the close's processing (#120, ADR-0115): an order still
+ * live then — none since #178's pause, a leftover from before it — ends 만료 after the transition,
+ * as at `close_at`.
  */
 @Injectable()
 export class MarketPauseService {
@@ -193,15 +203,17 @@ export class MarketPauseService {
    * database clock's instant, read after the market lock, is the pause's). `pauseMarket` writes the
    * `paused` event (the admin its actor, payload `{pauseId, reason, resultPublishedAt}`) and the
    * pause row, then cancels the market's resting orders (the class's Orders); `market_pause`
-   * records the pause, the note and the market before and after. After COMMIT `market:status`
-   * (paused, the event's key) and, when it cancelled any order, `market:book` (#179).
+   * records the pause, the note and the market before and after; then, last, the `paused`
+   * `orders_cancelled` notice of each member whose orders it cancelled (#134, ADR-0158). After
+   * COMMIT `market:status` (paused, the event's key) and, when it cancelled any order,
+   * `market:book` (#179) and `user:notification` to each member a notice reached.
    */
   async pause(
     adminId: string,
     id: string,
     body: WithoutExpectedAccount<PauseMarketBody>,
   ): Promise<AdminMarket> {
-    const { market, book } = await this.db.transaction(async (tx) => {
+    const { market, book, notified } = await this.db.transaction(async (tx) => {
       await lockMarket(tx, id);
       const current = await lockedMarketRow(tx, id);
       // Its resting orders and their owners' Coin accounts, before the clock (#178): the pause
@@ -241,9 +253,20 @@ export class MarketPauseService {
         } satisfies MarketPauseActionPayload,
         createdAt: now,
       });
+      const market = await this.markets.toAdminMarket(tx, result.market, tags, sources);
+      // #134 (ADR-0158, 52-3·52-4): one 취소 notice per member whose orders it cancelled, last
+      // in the transaction (ADR-0157 결정 4). A `ledger_failure` pause cancelled none: none.
+      const notices = orderEndNotificationInputs(result.cancelled.cancelled, {
+        kind: 'cancelled',
+        reason: 'paused',
+        market: { id: result.market.id, title: result.market.title },
+        eventKey: marketEventKey(result.eventId),
+        occurredAt: now,
+      });
       return {
-        market: await this.markets.toAdminMarket(tx, result.market, tags, sources),
+        market,
         book: { marketIds: cancelledMarketIds(result.cancelled), at: now },
+        notified: notifiedUserIds(await createNotifications(tx, notices)),
       };
     });
     // Outside the transaction, as every market write publishes: a subscriber answers
@@ -251,6 +274,7 @@ export class MarketPauseService {
     await Promise.all([
       this.markets.publishStatus(market),
       this.publisher.publishBook(book.marketIds, book.at),
+      ...this.publishNotified(notified, book.at),
     ]);
     return market;
   }
@@ -383,10 +407,13 @@ export class MarketPauseService {
    * pause cancelled every order, so only a row from before #178 reaches it); and the pause's end
    * with the review result. `market_pause_decision_approve` records the request, the approver's
    * reason and the market before and after (`after.status` closed or cancelled for an early
-   * close). After COMMIT `market:status` (open, closed or cancelled, the event's key),
-   * `market:book` when the end cancelled or expired any order (#179) and, for an early close, the
-   * close job under `close_at` cancelled. No `user:` event: the end only moves locks (ADR-0113
-   * 12-11).
+   * close); then, last, the 거래 notices of the members whose orders the end cancelled
+   * (`orders_cancelled`, `paused`) or expired (`orders_expired`, the market's status after it as
+   * the cause), both keyed by the end's event (#134, ADR-0158). After COMMIT `market:status`
+   * (open, closed or cancelled, the event's key), `market:book` when the end cancelled or expired
+   * any order (#179), `user:notification` to each member a notice reached and, for an early
+   * close, the close job under `close_at` cancelled. No `user:position` or `user:balance`: the
+   * end only moves locks (ADR-0113 12-11).
    */
   async approve(
     adminId: string,
@@ -394,7 +421,7 @@ export class MarketPauseService {
     requestId: string,
     body: WithoutExpectedAccount<ApprovePauseDecisionBody>,
   ): Promise<AdminMarket> {
-    const { market, book, cancelCloseAt } = await this.db.transaction(async (tx) => {
+    const { market, book, cancelCloseAt, notified } = await this.db.transaction(async (tx) => {
       await lockMarket(tx, id);
       const current = await lockedMarketRow(tx, id);
       const request = await this.decidable(tx, adminId, id, requestId);
@@ -460,8 +487,32 @@ export class MarketPauseService {
         } satisfies MarketPauseDecisionApproveActionPayload,
         createdAt: at,
       });
+      const market = await this.markets.toAdminMarket(tx, result.market, tags, sources);
+      // #134 (ADR-0158, 52-3·52-4·52-5): the members whose orders the end cancelled (일시 중단,
+      // the ledger-failure recovery's included) and those whose orders a non-held 조기 마감
+      // expired — two types under the one event key (53-4), one call, last in the transaction.
+      const notices = [
+        ...orderEndNotificationInputs(result.cancelled.cancelled, {
+          kind: 'cancelled',
+          reason: 'paused',
+          market: { id: result.market.id, title: result.market.title },
+          eventKey: marketEventKey(result.eventId),
+          occurredAt: at,
+        }),
+        ...(result.expired.expired.length === 0
+          ? []
+          : orderEndNotificationInputs(result.expired.expired, {
+              kind: 'expired',
+              cause: expiryCause(result.market),
+              market: { id: result.market.id, title: result.market.title },
+              eventKey: marketEventKey(result.eventId),
+              occurredAt: at,
+            })),
+      ];
+      const notified = notifiedUserIds(await createNotifications(tx, notices));
       return {
-        market: await this.markets.toAdminMarket(tx, result.market, tags, sources),
+        market,
+        notified,
         // The early close's expiry is this market's alone; `publishBook` names it once.
         book: {
           marketIds: [
@@ -478,6 +529,7 @@ export class MarketPauseService {
     await Promise.all([
       this.markets.publishStatus(market),
       this.publisher.publishBook(book.marketIds, book.at),
+      ...this.publishNotified(notified, book.at),
       cancelCloseAt ? this.jobs.cancelClose(market.id, cancelCloseAt) : undefined,
     ]);
     return market;
@@ -561,6 +613,14 @@ export class MarketPauseService {
     });
   }
 
+  /**
+   * `user:notification` to each member the transaction's 거래 notices reached (#134, ADR-0158),
+   * after COMMIT and best effort, beside the market's events.
+   */
+  private publishNotified(userIds: readonly string[], at: Date): Promise<void>[] {
+    return userIds.map((userId) => this.publisher.publishUser(userId, notificationEvent(at)));
+  }
+
   /** `GET /admin/market-pause-decisions` (일시 중단 결정 대기): the oldest request first. */
   list(query: CursorQuery): Promise<Page<AdminMarketPauseDecisionItem>> {
     return listMarketPauseDecisions(this.db, query);
@@ -601,6 +661,18 @@ export class MarketPauseService {
     if (request.requestedBy === adminId) throw approvalNotAllowed('requester');
     return request;
   }
+}
+
+/**
+ * Why an early close expired its orders (#134, ADR-0158, 52-5): the market's status after it —
+ * 거래 마감 or 시장 취소. Only an early close expires (`endMarketPause`), so any other status
+ * with expired orders is a broken invariant: INTERNAL, rolling the approval back.
+ */
+function expiryCause(market: Pick<MarketRow, 'id' | 'status'>): 'closed' | 'cancelled' {
+  if (market.status === 'closed' || market.status === 'cancelled') return market.status;
+  throw new AppError('INTERNAL', {
+    message: `Market ${market.id} expired orders but is ${market.status}`,
+  });
 }
 
 /**

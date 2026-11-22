@@ -1,4 +1,7 @@
 import * as z from 'zod';
+import { serializeCoinAmount } from './api/coin-amount.js';
+import { uuidSchema } from './api/uuid.js';
+import { orderSideSchema, outcomeSchema, type OrderCancelReason } from './enums.js';
 import { marketSlugSchema } from './market.js';
 
 /**
@@ -16,9 +19,10 @@ import { marketSlugSchema } from './market.js';
  *
  * The product's types are NOTIFICATION_DEFINITIONS, and nothing else: the one write path
  * (@buddha/db `createNotifications`) refuses a type it does not list, and the database holds the
- * shape only (`notifications.type` is a pattern, not a list — ADR-0157). #53 ships no type
- * (52-20); the producers add theirs (#134 거래, #54 시장 상태, #188 판정·정산, #135 커뮤니티, #144
- * 정정·보상), each with its guard entry (guards/notifications.ts) and its web renderer.
+ * shape only (`notifications.type` is a pattern, not a list — ADR-0157). #53 shipped no type
+ * (52-20); the producers add theirs, each with its guard entry (guards/notifications.ts) and its
+ * web renderer: #134 the 거래 three (ADR-0158 — `order_filled`, `orders_cancelled`,
+ * `orders_expired`, below), then #54 시장 상태, #188 판정·정산, #135 커뮤니티, #144 정정·보상.
  */
 
 /**
@@ -83,20 +87,40 @@ export type NotificationParams = z.infer<typeof notificationParamsSchema>;
 
 /**
  * Where a notification leads: a typed target the web maps to its own path (no URL is stored, so
- * nothing redirects off the site and a route can move). #53 has one kind, a market by its slug —
- * a market's slug changes only in `draft` (`PATCH /admin/markets/:id`), and a market anybody can
- * be notified about is public (scheduled onward, CANCELLED included), so the stored slug never
- * goes stale and the detail answers in every public status (N05 §3, #53 AC 4). The producers add
- * the kinds they lead to (an order, the order history of one market, a post, a comment, the
- * moderation history, the proposals, the disputes) with their issues.
+ * nothing redirects off the site and a route can move). The kinds:
+ * - `market` (#53), a market by its slug — a market's slug changes only in `draft` (`PATCH
+ *   /admin/markets/:id`), and a market anybody can be notified about is public (scheduled onward,
+ *   CANCELLED included), so the stored slug never goes stale and the detail answers in every
+ *   public status (N05 §3, #53 AC 4);
+ * - `order` (#134, ADR-0158), one of the recipient's own orders by its id — its detail
+ *   (`/my/orders/<id>`, ADR-0141) answers 404 to anyone else, so the id tells nobody else a thing;
+ * - `order_history` (#134), the recipient's ended orders (`/my/history`, ADR-0143), of one market
+ *   (`marketId`, public: the history filter puts it in the URL) or of every market (`null`: an
+ *   account event's, 52-4).
+ * The later producers add the kinds they lead to (a post, a comment, the moderation history, the
+ * proposals, the disputes) with their issues.
  */
 export const notificationMarketTargetSchema = z
   .object({ kind: z.literal('market'), slug: marketSlugSchema })
   .meta({ id: 'NotificationMarketTarget' });
 export type NotificationMarketTarget = z.infer<typeof notificationMarketTargetSchema>;
 
+export const notificationOrderTargetSchema = z
+  .object({ kind: z.literal('order'), orderId: uuidSchema })
+  .meta({ id: 'NotificationOrderTarget' });
+export type NotificationOrderTarget = z.infer<typeof notificationOrderTargetSchema>;
+
+export const notificationOrderHistoryTargetSchema = z
+  .object({ kind: z.literal('order_history'), marketId: uuidSchema.nullable() })
+  .meta({ id: 'NotificationOrderHistoryTarget' });
+export type NotificationOrderHistoryTarget = z.infer<typeof notificationOrderHistoryTargetSchema>;
+
 export const notificationTargetSchema = z
-  .discriminatedUnion('kind', [notificationMarketTargetSchema])
+  .discriminatedUnion('kind', [
+    notificationMarketTargetSchema,
+    notificationOrderTargetSchema,
+    notificationOrderHistoryTargetSchema,
+  ])
   .meta({ id: 'NotificationTarget' });
 export type NotificationTarget = z.infer<typeof notificationTargetSchema>;
 export type NotificationTargetKind = NotificationTarget['kind'];
@@ -104,6 +128,8 @@ export type NotificationTargetKind = NotificationTarget['kind'];
 /** Every target kind, in the union's order (notifications.test.ts keeps the two equal). */
 export const NOTIFICATION_TARGET_KINDS = [
   'market',
+  'order',
+  'order_history',
 ] as const satisfies readonly NotificationTargetKind[];
 
 /**
@@ -151,15 +177,146 @@ export function defineNotification<
   return definition;
 }
 
+// ---- 거래 알림 (#134, ADR-0158) --------------------------------------------------------------
+
+/** A whole number ≥ 1 as a decimal string: a contract quantity or a Coin amount (ADR-0157 결정 3). */
+const positiveDecimalSchema = z.string().regex(/^[1-9][0-9]{0,15}$/);
+
+/** A count of orders or of markets (not a contract quantity): a whole number ≥ 1. */
+const countSchema = z.number().int().min(1);
+
 /**
- * The product's notification types (N05 §4). Empty in #53: 52-20 lists no type outside N05's but
- * the post-payout correction and compensation (#144), and 시작 Coin, a re-grant's result, a
- * review's rejection and a market's opening are not notifications. Each producer appends its own
- * here — #134 (거래), #54 (시장 상태), #188 (판정·정산), #135 (커뮤니티, 52-19's 제안 included),
- * #144 (정정·보상) — with its guard entry (NOTIFICATION_TYPE_REGISTRY) and its web renderer, and
- * edits the pin in notifications.test.ts.
+ * The market's title at the event (public, ADR-0157 결정 3). Bounded by the generic param cap, NOT
+ * MARKET_TITLE_MAX: `markets.title` is varchar(120) in code points while zod counts UTF-16 units,
+ * so a 120-character title with astral characters written outside `marketTitleSchema` (a fixture,
+ * a raw write) would fail validation — and a NotificationInputError rolls back the close, the
+ * pause or the fill it rides on (ADR-0158).
  */
-export const NOTIFICATION_DEFINITIONS = [] as const satisfies readonly NotificationDefinition[];
+const noticeTitleSchema = z.string().min(1).max(NOTIFICATION_PARAM_STRING_MAX);
+
+/** The larger of two decimal strings, compared as whole numbers. */
+const maxDecimal = (a: string, b: string): string => (BigInt(a) >= BigInt(b) ? a : b);
+
+/**
+ * `order_filled` (N05 §4 부분·전량 체결; 52-2, 52-6, 134-1·134-2·134-3): a fill of one of the
+ * recipient's RESTING orders — never the incoming order's own (its fills, IOC remainder,
+ * self-trade stop and rejection are the placing request's result, 52-2). Its contract and
+ * direction (`outcome`, `side`) are the resting order's; `qty` and `amountCoin` sum the fills this
+ * notification holds (Σ resting price × qty, so the 평균 가격 is `amountCoin / qty` — the order's
+ * own price, N01 §4); `fullyFilled` says the order has nothing left; `orderQty` and
+ * `orderFilledQty` are the order's quantity and its filled quantity after the latest fill held
+ * (134-3: the web shows them when this notification does not hold every fill of the order).
+ */
+export const orderFilledParamsSchema = z.object({
+  marketTitle: noticeTitleSchema,
+  outcome: outcomeSchema,
+  side: orderSideSchema,
+  qty: positiveDecimalSchema,
+  amountCoin: positiveDecimalSchema,
+  fullyFilled: z.boolean(),
+  orderQty: positiveDecimalSchema,
+  orderFilledQty: positiveDecimalSchema,
+});
+export type OrderFilledParams = z.infer<typeof orderFilledParamsSchema>;
+
+/**
+ * 52-6: while unread, the same order's fills merge into one notification (횟수 is the row's
+ * `event_count`); after it is read, the next fill makes a new one. Order-independent, as the write
+ * path's input order is by event-key string (`fill:10` < `fill:9`): sums, OR, the max, and a
+ * title, contract and direction that are equal for one order (taken from `next`).
+ */
+export const ORDER_FILLED_NOTIFICATION = defineNotification({
+  type: 'order_filled',
+  category: 'trade',
+  targets: ['order'],
+  params: orderFilledParamsSchema,
+  merge: (held, next) => ({
+    ...next,
+    qty: String(BigInt(held.qty) + BigInt(next.qty)),
+    amountCoin: serializeCoinAmount(BigInt(held.amountCoin) + BigInt(next.amountCoin)),
+    fullyFilled: held.fullyFilled || next.fullyFilled,
+    orderFilledQty: maxDecimal(held.orderFilledQty, next.orderFilledQty),
+  }),
+});
+
+/** 52-3: the cancel reasons that notify — a system batch the member did not make. */
+export const NOTIFIED_CANCEL_REASONS = [
+  'paused',
+  'admin_role',
+  'restricted',
+] as const satisfies readonly OrderCancelReason[];
+export type NotifiedCancelReason = (typeof NOTIFIED_CANCEL_REASONS)[number];
+
+/**
+ * `orders_cancelled` (N05 §4 취소 완료; 52-3, 52-4): the recipient's resting orders a system batch
+ * cancelled — one per event and member. `paused` is a market's event (일시 중단, the ledger-failure
+ * recovery's cancel included): its `marketTitle`, one market. `admin_role` and `restricted` are
+ * account events across markets (`marketCount`), with no title.
+ */
+export const ordersCancelledParamsSchema = z
+  .object({
+    reason: z.enum(NOTIFIED_CANCEL_REASONS),
+    orderCount: countSchema,
+    marketCount: countSchema,
+    marketTitle: noticeTitleSchema.nullable(),
+  })
+  .refine(
+    (params) =>
+      params.marketCount <= params.orderCount &&
+      (params.reason === 'paused'
+        ? params.marketTitle !== null && params.marketCount === 1
+        : params.marketTitle === null),
+    { message: 'a market event names its one market; an account event none' },
+  );
+export type OrdersCancelledParams = z.infer<typeof ordersCancelledParamsSchema>;
+
+export const ORDERS_CANCELLED_NOTIFICATION = defineNotification({
+  type: 'orders_cancelled',
+  category: 'trade',
+  targets: ['order', 'order_history'],
+  params: ordersCancelledParamsSchema,
+  merge: null,
+});
+
+/**
+ * Why a market's resting orders expired (52-4, 52-5): the market's status after its transition —
+ * `closed` 거래 마감, `cancelled` 시장 취소.
+ */
+export const ORDER_EXPIRY_CAUSES = ['closed', 'cancelled'] as const;
+export type OrderExpiryCause = (typeof ORDER_EXPIRY_CAUSES)[number];
+
+/**
+ * `orders_expired` (N05 §4 주문 만료; 52-4, 52-5): the recipient's resting orders a market's end
+ * expired — one per member and market.
+ */
+export const ordersExpiredParamsSchema = z.object({
+  marketTitle: noticeTitleSchema,
+  cause: z.enum(ORDER_EXPIRY_CAUSES),
+  orderCount: countSchema,
+});
+export type OrdersExpiredParams = z.infer<typeof ordersExpiredParamsSchema>;
+
+export const ORDERS_EXPIRED_NOTIFICATION = defineNotification({
+  type: 'orders_expired',
+  category: 'trade',
+  targets: ['order', 'order_history'],
+  params: ordersExpiredParamsSchema,
+  merge: null,
+});
+
+/**
+ * The product's notification types (N05 §4). #53 shipped none (52-20 lists no type outside N05's
+ * but the post-payout correction and compensation, #144; 시작 Coin, a re-grant's result, a
+ * review's rejection and a market's opening are not notifications). #134 ships the 거래 three
+ * (ADR-0158). Each later producer appends its own here — #54 (시장 상태), #188 (판정·정산), #135
+ * (커뮤니티, 52-19's 제안 included), #144 (정정·보상) — with its guard entry
+ * (NOTIFICATION_TYPE_REGISTRY) and its web renderer, and edits the pin in notifications.test.ts.
+ */
+export const NOTIFICATION_DEFINITIONS = [
+  ORDER_FILLED_NOTIFICATION,
+  ORDERS_CANCELLED_NOTIFICATION,
+  ORDERS_EXPIRED_NOTIFICATION,
+] as const satisfies readonly NotificationDefinition[];
 export type NotificationType = (typeof NOTIFICATION_DEFINITIONS)[number]['type'];
 
 // ---- DTOs ---------------------------------------------------------------------------------------

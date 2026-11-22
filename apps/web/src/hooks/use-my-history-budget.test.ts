@@ -34,8 +34,8 @@ import { orderHistoryQueryOptions } from './use-my-history';
  *
  * The bound counts one more window. The unread notification count beside MY (#53, ADR-0157) is in
  * the header on this page too, and its own window (`NOTIFICATION_REFRESH_MS`, owner answer 53-9)
- * reads it again on `user:notification`, 3 rounds a minute at most — once #134 ships, a resting
- * order's every later fill publishes one. So the steady state is 7 × K + 3, which moved the
+ * reads it again on `user:notification`, 3 rounds a minute at most — since #134 (ADR-0158), a
+ * resting order's every later fill publishes one. So the steady state is 7 × K + 3, which moved the
  * documented limit from 7 loaded pages to 6 (ADR-0148 '일부 대체됨'). use-wallet-budget.test.ts
  * pins the provider's wiring of that window; on /my/notifications a round reads the count and
  * every loaded page of the list (use-notifications.test.ts).

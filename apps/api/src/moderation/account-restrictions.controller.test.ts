@@ -53,11 +53,13 @@ import {
   adminUserModerationSchema,
   myModerationActionSchema,
   myRestrictionSchema,
+  notificationSchema,
   restrictedDetailsSchema,
   type AccountRestrictionDecision,
   type AccountRestrictionRequest,
   type AdminModerationAction,
   type MyModerationAction,
+  type Notification,
   type RestrictedDetails,
 } from '@buddha/shared';
 import { and, eq, inArray, notInArray } from 'drizzle-orm';
@@ -1786,6 +1788,20 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
         ]);
     };
 
+    /** The member's inbox (#53), newest first: its 거래 notices (#134). */
+    const inboxOf = async (who: TestUser) =>
+      notificationSchema
+        .array()
+        .parse(dataOf<Notification[]>(await read('/me/notifications', who)));
+    /** The `user:notification` signals published from here on (#134), as [account, ts]. */
+    const signals = () => {
+      const spy = vi.spyOn(t.app.get(MarketPublisher), 'publishUser');
+      return () =>
+        spy.mock.calls
+          .filter(([, event]) => event.type === 'user:notification')
+          .map(([userId, event]) => [userId, 'ts' in event ? event.ts : null]);
+    };
+
     beforeEach(async () => {
       vi.restoreAllMocks();
       await openOrderIntake(t.db, { adminId: admin.id });
@@ -1826,12 +1842,42 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
       });
       const request = requestOf(await ask(7));
       const published = marketEvents();
+      const signalled = signals();
+      // The fill notice the partial fill left (#134: the member's resting order met another's).
+      const [filled] = await inboxOf(member);
+      expect(filled).toMatchObject({ type: 'order_filled', target: { orderId: partly.id } });
       // The one who asked is refused: nothing is cancelled, nothing published.
       expect(approvalRefusalOf(await approve(request.id, admin))).toBe('requester');
       expect((await orderOf(resting.id)).status).toBe('open');
       expect(published()).toEqual([]);
+      expect(await inboxOf(member)).toEqual([filled]);
 
       const action = decisionOf(await approve(request.id)).action!;
+      // #134 (52-3·52-4): one 계정 제한 notice of both cancels — an account event across markets,
+      // leading to the ended orders of every market — apart from the fill's; only the member's.
+      expect(await inboxOf(member)).toEqual([
+        {
+          id: expect.any(String) as unknown,
+          type: 'orders_cancelled',
+          category: 'trade',
+          params: { reason: 'restricted', orderCount: 2, marketCount: 2, marketTitle: null },
+          target: { kind: 'order_history', marketId: null },
+          eventCount: 1,
+          occurredAt: action.createdAt,
+          readAt: null,
+        },
+        filled,
+      ]);
+      expect(
+        (
+          await t.db
+            .select()
+            .from(schema.notificationKeys)
+            .where(eq(schema.notificationKeys.type, 'orders_cancelled'))
+        ).map((key) => [key.userId, key.eventKey]),
+      ).toEqual([[member.id, `moderation_action:${action.id}`]]);
+      expect(await inboxOf(other)).toEqual([]);
+      expect(signalled()).toEqual([[member.id, action.createdAt]]);
       // After COMMIT, one `market:book` per market an order was cancelled in (#179).
       expect(published().sort()).toEqual(
         [
@@ -1857,12 +1903,16 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
       ).toEqual([partly.id, resting.id].sort());
       await expectSound();
 
-      // None comes back when the restriction is brought forward, lifted or cancelled.
+      // None comes back when the restriction is brought forward, lifted or cancelled, and
+      // nothing is notified then (they cancel nothing).
       const before = await t.db.select().from(schema.orders);
+      const notices = await t.db.select().from(schema.notifications);
       await change(action.id, 'shorten', { endsAt: new Date(Date.now() + DAY_MS).toISOString() });
       await change(action.id, 'lift');
       await change(action.id, 'cancel');
       expect(await t.db.select().from(schema.orders)).toEqual(before);
+      expect(await t.db.select().from(schema.notifications)).toEqual(notices);
+      expect(signalled()).toEqual([[member.id, action.createdAt]]);
     });
 
     it('cancels nothing at a 감경, lift or cancellation approval, even with an order of the member resting then (결정 7)', async () => {
@@ -1921,6 +1971,15 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
       const action = await restrict(null);
       // The held market's book did not change: its signal is the recovery's (#179).
       expect(published()).toEqual([[market.id, 'market:book', action.createdAt]]);
+      // #134: the cancel's notice counts the order it ended (N = 1: the order itself), not the
+      // held one, which its market's recovery notifies when it ends it.
+      expect(await inboxOf(member)).toEqual([
+        expect.objectContaining({
+          type: 'orders_cancelled',
+          params: { reason: 'restricted', orderCount: 1, marketCount: 1, marketTitle: null },
+          target: { kind: 'order', orderId: resting.id },
+        }),
+      ]);
       expect(await mine()).toMatchObject({ accountRestriction: { kind: 'account', endsAt: null } });
       expect(await orderOf(waiting.id)).toEqual(before);
       expect(await orderOf(resting.id)).toMatchObject({

@@ -136,7 +136,10 @@ export interface ExpiredOrders {
   expired: OrderRow[];
   /** Live orders it skipped in a held market: still live and locked (#93's recovery ends them). */
   held: OrderRow[];
-  /** People's position rows only (`touchedOf`), for #134's notice. */
+  /**
+   * People's position rows only (`touchedOf`). A batch publishes no `user:position` (ADR-0113
+   * 12-11); #134's `orders_expired` notices read the rows in `expired`, not this (ADR-0158).
+   */
   touched: CancelTouched;
 }
 

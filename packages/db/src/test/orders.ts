@@ -27,6 +27,7 @@ import {
 import { asc, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../client.js';
 import { closeMarketAtClose, type CloseMarketAtCloseResult } from '../market-close.js';
+import { createNotifications } from '../notifications.js';
 import {
   cancelLockedOrders,
   cancelOrder,
@@ -478,14 +479,17 @@ export interface PlaceTestOrderInput extends Partial<
  * Places an order through the real intake (`placeOrder`, its own transaction): a person's, or
  * the 운영 마켓메이커's. Defaults: a fresh request id, a GTC buy of one YES at 50 — `qty` 1
  * unless a `budgetCoin` is given (then an IOC buy). Intake must be open (`openOrderIntake`).
+ * Delivers the intake's fill notices in the same transaction, last, as the API does (#134,
+ * ADR-0158: `createNotifications` with the result's `notifications`), so every test trade —
+ * `tradeOnce` included — notifies the resting person as production does.
  */
 export async function placeTestOrder(
   db: Db,
   input: PlaceTestOrderInput,
 ): Promise<PlaceOrderResult> {
   const budgetCoin = input.budgetCoin ?? null;
-  return db.transaction((tx) =>
-    placeOrder(tx, {
+  return db.transaction(async (tx) => {
+    const result = await placeOrder(tx, {
       requestId: input.requestId ?? randomUUID(),
       outcome: input.outcome ?? 'YES',
       side: input.side ?? 'buy',
@@ -495,8 +499,10 @@ export async function placeTestOrder(
       budgetCoin,
       marketId: input.marketId,
       ownerId: input.ownerId,
-    }),
-  );
+    });
+    if (result.kind === 'placed') await createNotifications(tx, result.notifications);
+    return result;
+  });
 }
 
 /**
@@ -526,7 +532,8 @@ export async function passMarketClose(
  * transaction: OPEN or PAUSED → CLOSED — or CANCELLED when no fill a person's account is on
  * happened (#20; `tradeOnce` first for a CLOSED one) — with every live order ended 만료 (a held
  * market's kept), or a skip. The market must be due (`passMarketClose`, or a close already past).
- * Publishes nothing.
+ * Writes the close's `orders_expired` notices as the worker's transaction does (#134); publishes
+ * nothing.
  */
 export async function closeTestMarket(db: Db, marketId: string): Promise<CloseMarketAtCloseResult> {
   return db.transaction((tx) => closeMarketAtClose(tx, marketId));
@@ -547,9 +554,9 @@ export interface TradeOnceInput {
  * One real pair mint through the intake (`placeTestOrder`, each its own transaction): a GTC NO buy
  * of `noOwner` resting at 100 − `priceCoin`, then an IOC YES buy of `yesOwner` at `priceCoin` that
  * fills it whole — the fill, both positions, the collateral and the market's statistics, so
- * `checkOrderInvariants` and `checkMarketStats` stay empty. The way a test makes a market that
- * closes CLOSED rather than CANCELLED (#20). Intake must be open (`openOrderIntake`); throws unless
- * both orders filled.
+ * `checkOrderInvariants` and `checkMarketStats` stay empty, and the NO owner's `order_filled`
+ * notice (#134). The way a test makes a market that closes CLOSED rather than CANCELLED (#20).
+ * Intake must be open (`openOrderIntake`); throws unless both orders filled.
  */
 export async function tradeOnce(
   db: Db,

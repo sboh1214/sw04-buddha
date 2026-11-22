@@ -1377,6 +1377,9 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       );
       expect(forfeits).toHaveLength(1);
       expect(forfeits[0]).toMatchObject({ amountCoin: -1_000n });
+      // #134 (52-3): the closure's own cancels notify nobody — its inbox goes with it.
+      expect(await inboxOf(member.id)).toEqual({ inbox: 0, notifications: 0, keys: 0 });
+      expect(await t.db.select().from(schema.notifications)).toEqual([]);
       expect(await checkOrderInvariants(t.db)).toEqual([]);
     });
 
@@ -1438,6 +1441,9 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
               reason: 'unsettled_contracts',
             });
             expect(await orderOf(bid.id)).toMatchObject({ status: 'filled' });
+            // #134: its resting bid filled while the closure held its inbox, so the fill's
+            // notice was skipped (53-8) and is not sent again now the closure was refused.
+            expect(await inboxOf(who.id)).toEqual({ inbox: 1, notifications: 0, keys: 0 });
           } else {
             expect(res.statusCode, res.body).toBe(200);
             expect(cross).toMatchObject({
@@ -1448,6 +1454,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
               status: 'cancelled',
               cancelReason: 'account_closed',
             });
+            expect(await inboxOf(who.id)).toEqual({ inbox: 0, notifications: 0, keys: 0 });
           }
         } finally {
           release();

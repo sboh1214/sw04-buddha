@@ -8,6 +8,11 @@ import {
   NOTIFICATION_TARGET_KINDS,
   NOTIFICATION_TYPE_PATTERN,
   NOTIFICATION_UNREAD_COUNT_CAP,
+  NOTIFIED_CANCEL_REASONS,
+  ORDER_EXPIRY_CAUSES,
+  ORDER_FILLED_NOTIFICATION,
+  ORDERS_CANCELLED_NOTIFICATION,
+  ORDERS_EXPIRED_NOTIFICATION,
   defineNotification,
   notificationCategorySchema,
   notificationParamsSchema,
@@ -16,6 +21,7 @@ import {
   notificationTargetSchema,
   notificationUnreadCountSchema,
   type Notification,
+  type OrderFilledParams,
 } from './notifications.js';
 
 const notification: Notification = {
@@ -84,7 +90,7 @@ describe('notification targets', () => {
 
   it('refuses an unknown kind, a bad slug and a missing one', () => {
     for (const target of [
-      { kind: 'order', id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' },
+      { kind: 'post', id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' },
       { kind: 'url', href: 'https://elsewhere.example' },
       { kind: 'market', slug: 'Not A Slug' },
       { kind: 'market', slug: 'ab' },
@@ -99,7 +105,58 @@ describe('notification targets', () => {
     }
   });
 
+  it('lead to one of the recipient’s orders by its id, lower-cased (#134)', () => {
+    const orderId = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+    expect(notificationTargetSchema.parse({ kind: 'order', orderId })).toEqual({
+      kind: 'order',
+      orderId,
+    });
+    expect(
+      notificationTargetSchema.parse({ kind: 'order', orderId: orderId.toUpperCase() }),
+    ).toEqual({ kind: 'order', orderId });
+    // Nothing beside the id is kept: no URL, no owner.
+    expect(
+      notificationTargetSchema.parse({ kind: 'order', orderId, userId: 'u1', url: '/x' }),
+    ).toEqual({ kind: 'order', orderId });
+    for (const target of [
+      { kind: 'order', orderId: 'not-a-uuid' },
+      { kind: 'order', orderId: null },
+      { kind: 'order', id: orderId },
+      { kind: 'order' },
+    ]) {
+      expect(notificationTargetSchema.safeParse(target).success, JSON.stringify(target)).toBe(
+        false,
+      );
+    }
+  });
+
+  it('lead to the ended orders of one market or of every market (#134, 52-4)', () => {
+    const marketId = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+    expect(notificationTargetSchema.parse({ kind: 'order_history', marketId })).toEqual({
+      kind: 'order_history',
+      marketId,
+    });
+    expect(
+      notificationTargetSchema.parse({ kind: 'order_history', marketId: marketId.toUpperCase() }),
+    ).toEqual({ kind: 'order_history', marketId });
+    // null: every market (an account event).
+    expect(notificationTargetSchema.parse({ kind: 'order_history', marketId: null })).toEqual({
+      kind: 'order_history',
+      marketId: null,
+    });
+    for (const target of [
+      { kind: 'order_history' },
+      { kind: 'order_history', marketId: 'korea-rate-cut-2026' },
+      { kind: 'order_history', slug: 'korea-rate-cut-2026' },
+    ]) {
+      expect(notificationTargetSchema.safeParse(target).success, JSON.stringify(target)).toBe(
+        false,
+      );
+    }
+  });
+
   it('lists every kind of the union, in its order', () => {
+    expect(NOTIFICATION_TARGET_KINDS).toEqual(['market', 'order', 'order_history']);
     expect(notificationTargetSchema.options.map((option) => option.shape.kind.value)).toEqual([
       ...NOTIFICATION_TARGET_KINDS,
     ]);
@@ -153,7 +210,7 @@ describe('notification DTOs', () => {
       { occurredAt: '2026-11-21 03:00' },
       { readAt: undefined },
       { id: 'not-a-uuid' },
-      { target: { kind: 'order', id: '1' } },
+      { target: { kind: 'post', id: '1' } },
       { params: { nested: { a: 1 } } },
     ]) {
       expect(
@@ -181,12 +238,41 @@ describe('notification DTOs', () => {
   });
 });
 
-describe('NOTIFICATION_DEFINITIONS (#53, 52-20)', () => {
-  it('holds no type yet: #53 ships the inbox, the producers their types', () => {
-    // Pinned empty. Each producer edits this pin as it appends its own: #134 (거래), #54 (시장
-    // 상태), #188 (판정·정산), #135 (커뮤니티, 52-19's 제안), #144 (정정·보상). 시작 Coin, a
-    // re-grant's result, a review's rejection and a market's opening are no notification (52-20).
-    expect(NOTIFICATION_DEFINITIONS).toEqual([]);
+describe('NOTIFICATION_DEFINITIONS (#53, 52-20; #134)', () => {
+  it('holds the 거래 three of #134, each a 거래 notification', () => {
+    // Pinned. Each producer edits this pin as it appends its own: #54 (시장 상태), #188
+    // (판정·정산), #135 (커뮤니티, 52-19's 제안), #144 (정정·보상). 시작 Coin, a re-grant's
+    // result, a review's rejection and a market's opening are no notification (52-20).
+    expect(
+      NOTIFICATION_DEFINITIONS.map((definition) => ({
+        type: definition.type,
+        category: definition.category,
+        targets: definition.targets,
+        merges: definition.merge !== null,
+      })),
+    ).toEqual([
+      { type: 'order_filled', category: 'trade', targets: ['order'], merges: true },
+      {
+        type: 'orders_cancelled',
+        category: 'trade',
+        targets: ['order', 'order_history'],
+        merges: false,
+      },
+      {
+        type: 'orders_expired',
+        category: 'trade',
+        targets: ['order', 'order_history'],
+        merges: false,
+      },
+    ]);
+    expect(NOTIFICATION_DEFINITIONS).toEqual([
+      ORDER_FILLED_NOTIFICATION,
+      ORDERS_CANCELLED_NOTIFICATION,
+      ORDERS_EXPIRED_NOTIFICATION,
+    ]);
+    for (const definition of NOTIFICATION_DEFINITIONS) {
+      expect(NOTIFICATION_TYPE_PATTERN.test(definition.type), definition.type).toBe(true);
+    }
   });
 
   it('types a definition by its own params, its merge included', () => {
@@ -202,5 +288,158 @@ describe('NOTIFICATION_DEFINITIONS (#53, 52-20)', () => {
       total: 3,
     });
     expect(merged.params.parse({ label: 'x', total: 2 })).toEqual({ label: 'x', total: 2 });
+  });
+});
+
+/** A fill notice's params as the db builder writes them: one contract, NO 매수 at 40 of 3. */
+const filled = (change: Partial<OrderFilledParams> = {}): OrderFilledParams => ({
+  marketTitle: '첫눈이 올까',
+  outcome: 'NO',
+  side: 'buy',
+  qty: '1',
+  amountCoin: '40',
+  fullyFilled: false,
+  orderQty: '3',
+  orderFilledQty: '1',
+  ...change,
+});
+
+describe('order_filled (#134, 52-6, 134-1·134-3)', () => {
+  const { params, merge } = ORDER_FILLED_NOTIFICATION;
+
+  it('takes the resting order’s contract and direction, quantities and Coin as decimal strings', () => {
+    expect(params.parse(filled())).toEqual(filled());
+    expect(params.parse(filled({ outcome: 'YES', side: 'sell', fullyFilled: true }))).toEqual(
+      filled({ outcome: 'YES', side: 'sell', fullyFilled: true }),
+    );
+    // A 120-code-point title of astral characters is 240 UTF-16 units: still a title here.
+    const astral = '𝔸'.repeat(120);
+    expect(params.parse(filled({ marketTitle: astral })).marketTitle).toBe(astral);
+  });
+
+  it('refuses numbers, zero, negatives and padded strings for a quantity or an amount', () => {
+    for (const key of ['qty', 'amountCoin', 'orderQty', 'orderFilledQty'] as const) {
+      for (const value of [1, '0', '-1', '01', '1.5', ' 1', '', '1e3', '12345678901234567']) {
+        expect(params.safeParse({ ...filled(), [key]: value }).success, `${key} ${value}`).toBe(
+          false,
+        );
+      }
+    }
+    for (const bad of [
+      { outcome: 'MAYBE' },
+      { side: 'hold' },
+      { fullyFilled: 'true' },
+      { marketTitle: '' },
+      { marketTitle: 'x'.repeat(NOTIFICATION_PARAM_STRING_MAX + 1) },
+      { marketTitle: null },
+    ]) {
+      expect(params.safeParse({ ...filled(), ...bad }).success, JSON.stringify(bad)).toBe(false);
+    }
+    const { orderQty: _omitted, ...missing } = filled();
+    expect(params.safeParse(missing).success).toBe(false);
+  });
+
+  it('sums the held and the new fills as whole numbers, past 2^53', () => {
+    const big = merge!(
+      filled({ qty: '9007199254740993', amountCoin: '9007199254740993' }),
+      filled({ qty: '1', amountCoin: '1' }),
+    );
+    expect(big).toMatchObject({ qty: '9007199254740994', amountCoin: '9007199254740994' });
+    expect(params.safeParse(big).success).toBe(true);
+    // Two fills at the order's own 40: the average stays 40 (amount / qty).
+    expect(
+      merge!(
+        filled({ qty: '1', amountCoin: '40' }),
+        filled({ qty: '2', amountCoin: '80', orderFilledQty: '3', fullyFilled: true }),
+      ),
+    ).toEqual(filled({ qty: '3', amountCoin: '120', orderFilledQty: '3', fullyFilled: true }));
+  });
+
+  it('keeps 전량 체결 once reached, and the order’s latest filled quantity, in either order', () => {
+    const early = filled({ qty: '1', amountCoin: '40', orderFilledQty: '2' });
+    const late = filled({ qty: '1', amountCoin: '40', orderFilledQty: '3', fullyFilled: true });
+    for (const [held, next] of [
+      [early, late],
+      [late, early],
+    ] as const) {
+      expect(merge!(held, next)).toMatchObject({
+        qty: '2',
+        amountCoin: '80',
+        fullyFilled: true,
+        orderFilledQty: '3',
+        orderQty: '3',
+      });
+    }
+    expect(merge!(filled(), filled()).fullyFilled).toBe(false);
+    // Compared as numbers, not as strings ('10' > '9').
+    expect(
+      merge!(
+        filled({ orderQty: '20', orderFilledQty: '9' }),
+        filled({ orderQty: '20', orderFilledQty: '10' }),
+      ).orderFilledQty,
+    ).toBe('10');
+  });
+
+  it('takes the title, the contract and the direction from the newer event', () => {
+    expect(
+      merge!(filled({ marketTitle: '예전 제목' }), filled({ marketTitle: '새 제목' })).marketTitle,
+    ).toBe('새 제목');
+  });
+});
+
+describe('orders_cancelled (#134, 52-3·52-4)', () => {
+  const { params } = ORDERS_CANCELLED_NOTIFICATION;
+
+  it('notifies the system batches only: 일시 중단, 관리자 권한, 계정 제한', () => {
+    expect(NOTIFIED_CANCEL_REASONS).toEqual(['paused', 'admin_role', 'restricted']);
+    for (const reason of ['by_owner', 'ioc_remainder', 'self_trade', 'account_closed']) {
+      expect(
+        params.safeParse({ reason, orderCount: 1, marketCount: 1, marketTitle: null }).success,
+        reason,
+      ).toBe(false);
+    }
+  });
+
+  it('names one market for a pause, and none for an account event', () => {
+    const paused = { reason: 'paused', orderCount: 2, marketCount: 1, marketTitle: '첫눈이 올까' };
+    expect(params.parse(paused)).toEqual(paused);
+    for (const reason of ['admin_role', 'restricted'] as const) {
+      const account = { reason, orderCount: 3, marketCount: 2, marketTitle: null };
+      expect(params.parse(account)).toEqual(account);
+      expect(params.safeParse({ ...account, marketTitle: '첫눈이 올까' }).success, reason).toBe(
+        false,
+      );
+    }
+    for (const bad of [
+      { ...paused, marketTitle: null },
+      { ...paused, marketCount: 2 },
+      { ...paused, orderCount: 0 },
+      { ...paused, orderCount: 1.5 },
+      { ...paused, orderCount: '2' },
+      { reason: 'restricted', orderCount: 1, marketCount: 2, marketTitle: null },
+      { reason: 'restricted', orderCount: 1, marketCount: 0, marketTitle: null },
+    ]) {
+      expect(params.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+});
+
+describe('orders_expired (#134, 52-4·52-5)', () => {
+  const { params } = ORDERS_EXPIRED_NOTIFICATION;
+
+  it('says whether the market closed or was cancelled', () => {
+    expect(ORDER_EXPIRY_CAUSES).toEqual(['closed', 'cancelled']);
+    for (const cause of ORDER_EXPIRY_CAUSES) {
+      const expired = { marketTitle: '첫눈이 올까', cause, orderCount: 1 };
+      expect(params.parse(expired)).toEqual(expired);
+    }
+    for (const bad of [
+      { marketTitle: '첫눈이 올까', cause: 'settled', orderCount: 1 },
+      { marketTitle: '첫눈이 올까', cause: 'closed', orderCount: 0 },
+      { marketTitle: null, cause: 'closed', orderCount: 1 },
+      { marketTitle: '첫눈이 올까', orderCount: 1 },
+    ]) {
+      expect(params.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
   });
 });

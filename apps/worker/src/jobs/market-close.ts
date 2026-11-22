@@ -9,6 +9,8 @@ import {
   MARKET_SCAN_BATCH_MAX,
   marketBookEvent,
   marketChannel,
+  notificationEvent,
+  userChannel,
   type MarketStatusEvent,
 } from '@buddha/shared';
 import { and, asc, inArray, lte, sql } from 'drizzle-orm';
@@ -36,6 +38,11 @@ export type CloseResult =
       expiredOrders: number;
       /** A ledger-held market's live orders the close left live and locked, #93's to end. */
       heldOrders: number;
+      /**
+       * Members its `orders_expired` notices reached, one signal each (#134, ADR-0158). A count,
+       * never the ids: BullMQ stores the result as JSON.
+       */
+      notifiedMembers: number;
     }
   | { outcome: 'skipped'; marketId: string; reason: CloseSkipReason };
 
@@ -67,8 +74,11 @@ export interface CloseScanResult {
  * `closed_at_close` (`endPauseAtClose`: no review, no approval, ADR-0102 — a next-path request
  * still waiting is moot from then on), then every live order of every account type (people and
  * the 운영 마켓메이커) ended 만료 at that instant with its lock given back once, filled quantity kept
- * (ADR-0107 결정 4 '#120·#20', 결정 5 '#20·#120·#177 7항'). A market held for a ledger failure
- * closes on schedule too but keeps its orders live and locked for #93's recovery (결정 4 #178).
+ * (ADR-0107 결정 4 '#120·#20', 결정 5 '#20·#120·#177 7항'), and last one `orders_expired` notice
+ * per member whose orders it ended (#134, ADR-0158 — 52-4·52-5: 거래 마감 for CLOSED, 시장 취소 for
+ * CANCELLED; the 운영 마켓메이커 has no inbox). A market held for a ledger failure closes on
+ * schedule too but keeps its orders live and locked for #93's recovery (결정 4 #178), which
+ * notifies when it ends them.
  *
  * Every caller reaches this through the same transaction — the delayed job the API registered
  * at the approval (#21, ADR-0100: before the open, the close locked while SCHEDULED), the
@@ -94,10 +104,12 @@ export interface CloseScanResult {
  * `market:book` at the close's instant (#179, ADR-0114 결과 5 '#120': the public book emptied; the
  * worker cannot use the API's MarketPublisher, so it builds the same event). The lock is released
  * at COMMIT, so an event published from inside the transaction could reach a client before the row
- * it describes is visible. No `user:` event: the expiry only moves locks and follows #178's batch
- * cancels (ADR-0113 12-11) — an owner's sell cancel publishes `user:position`, the batches and the
- * expiry do not; the db result keeps whom it touched for #134. Nothing at `close_at` itself
- * before the close runs (#122's), nothing on a skip.
+ * it describes is visible. No `user:position` or `user:balance`: the expiry only moves locks and
+ * follows #178's batch cancels (ADR-0113 12-11) — an owner's sell cancel publishes `user:position`,
+ * the batches and the expiry do not. The one `user:` event is the inbox signal (#134, ADR-0158):
+ * `user:notification` at the close's instant to each member the notices reached (`notified`), sent
+ * together after the market's events. Nothing at `close_at` itself before the close runs (#122's),
+ * nothing on a skip.
  */
 export async function closeMarket(
   db: Db,
@@ -119,6 +131,10 @@ export async function closeMarket(
   if (done.expired.expired.length > 0) {
     await publish(marketChannel(marketId), marketBookEvent(marketId, done.closedAt));
   }
+  // #134: one inbox signal per member the close's 만료 notices reached (ADR-0158).
+  await Promise.all(
+    done.notified.map((userId) => publish(userChannel(userId), notificationEvent(done.closedAt))),
+  );
   return {
     outcome: done.status,
     marketId,
@@ -126,6 +142,7 @@ export async function closeMarket(
     closedAt: done.closedAt,
     expiredOrders: done.expired.expired.length,
     heldOrders: done.expired.held.length,
+    notifiedMembers: done.notified.length,
   };
 }
 

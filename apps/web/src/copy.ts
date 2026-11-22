@@ -3213,8 +3213,8 @@ export const copy = {
   // 알림함(#53, ADR-0157; 오너 답 53-1·53-2·53-3·53-11): MY › 알림은 발생 시각 최신순이고 다른 MY 목록처럼
   // 더 보기로 이어 본다. 안 읽은 알림은 굵은 제목과 점, 화면 낭독기에는 '안 읽음'으로 구별한다(색만으로 구별하지
   // 않는다). 누르면(그 대상으로 가면) 읽음이 되고, 목록을 여는 것만으로는 바뀌지 않는다. '모두 읽음'은 그때 안 읽은
-  // 알림을 모두 읽음으로 한다. #53에는 알림 유형이 없어 모두에게 '알림이 없습니다.'가 보인다(52-20 — 유형은 거래·
-  // 시장 상태·판정·정산·커뮤니티·정정 보상의 이슈가 더한다).
+  // 알림을 모두 읽음으로 한다. #53에는 알림 유형이 없었고(52-20), #134가 거래 알림을 더했다(아래) — 시장 상태·
+  // 판정·정산·커뮤니티·정정 보상의 알림은 그 이슈가 더한다.
   notificationsReadAll: '모두 읽음',
   notificationsEmpty: '알림이 없습니다.',
   notificationUnread: '안 읽음',
@@ -3225,6 +3225,23 @@ export const copy = {
   // 화면이 모르는 유형의 제목(53-11 ④): 그 분류의 이름 뒤에 이 말을 붙인다('시장 알림'). 누르면 읽음이 되고,
   // 대상이 화면이 아는 것이면 그리로 간다.
   notificationFallback: '알림',
+  // 거래 알림(#134, ADR-0158; 52-2~52-6, 134-1~134-4): 대기하던 내 주문에 나중에 생긴 체결과 내가 하지 않은
+  // 일괄 취소·만료. {…}는 lib/trade-notifications.ts가 채운다 — {contract}는 'NO 매수', {state}는
+  // '부분 체결'·'전량 체결', {price}는 평균 가격('40.00 Coin'), {count}는 체결 횟수나 주문 건수다. 체결
+  // 알림은 읽기 전까지 같은 주문의 체결을 합쳐 횟수·누적 수량을 싣고, 알림의 수량이 주문의 누적 체결과
+  // 다르면(읽은 뒤의 체결) '이번'과 주문 전체를 함께 보인다(134-3). 계정 사건의 {reason}은 '관리자 권한'·
+  // '계정 제한'이다.
+  notificationOrderFilled: '{market} {contract} 주문 {state} · {qty}계약 · 평균 {price}',
+  notificationOrderFilledMerged:
+    '{market} {contract} 주문 {state} · 체결 {count}회 · 누적 {qty}계약 · 평균 {price}',
+  notificationOrderFilledSince:
+    '{market} {contract} 주문 {state} · 이번 {qty}계약 · 평균 {price} (주문 {orderQty}계약 중 {orderFilledQty}계약 체결)',
+  notificationOrderFilledMergedSince:
+    '{market} {contract} 주문 {state} · 체결 {count}회 · 이번 {qty}계약 · 평균 {price} (주문 {orderQty}계약 중 {orderFilledQty}계약 체결)',
+  notificationOrdersCancelledMarket: '{market} 일시 중단으로 대기 주문 {count}건 취소',
+  notificationOrdersCancelledAccount: '{reason}으로 대기 주문 {count}건 취소(시장 {markets}곳)',
+  notificationOrdersExpiredClosed: '{market} 거래 마감으로 대기 주문 {count}건 만료',
+  notificationOrdersExpiredCancelled: '{market} 시장 취소로 대기 주문 {count}건 만료',
   // 안 읽은 수(53-1, 53-11 ①): MY 메뉴(머리·아래 탭)와 알림 탭 옆에 숫자로 보이고 99를 넘으면 '99+'다. 이
   // 말은 화면 낭독기가 그 링크의 설명으로 읽는다 — '안 읽은 알림 3개', 100개 이상이면 '안 읽은 알림 99개 넘게'.
   unreadNotifications: '안 읽은 알림',

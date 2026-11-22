@@ -1,12 +1,20 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ORDER_ACCEPTING_SETTING } from '@buddha/shared';
+import { and, eq } from 'drizzle-orm';
 import { marketMakerAccountId } from './account-types.js';
 import { runMarketMakerCycle } from './market-maker-cycle.js';
 import { burnAvailableMarketMakerPairs } from './market-maker-burn.js';
 import * as runtime from './market-maker-runtime.js';
 import * as orderIntake from './orders.js';
 import { lockForOrder } from './contracts.js';
-import { balances, ledgerEntries, marketMakerRuns, orders, positions } from './schema/index.js';
+import {
+  balances,
+  ledgerEntries,
+  marketMakerRuns,
+  notifications,
+  orders,
+  positions,
+} from './schema/index.js';
 import {
   createMarket,
   createMarketPause,
@@ -75,7 +83,10 @@ describe.skipIf(!hasTestDb())('operating market maker cycle (#129)', () => {
       cancelledOrderIds: [],
       burnedQty: 0,
       bookChanged: true,
+      // Nothing filled: no notice, and no SQL for one (#134).
+      notifiedUserIds: [],
     });
+    expect(await t.db.select().from(notifications)).toEqual([]);
     const first = await live(market.id);
     expect(
       first.map((o) => ({
@@ -271,6 +282,34 @@ describe.skipIf(!hasTestDb())('operating market maker cycle (#129)', () => {
     if (result.outcome !== 'ready') throw new Error('expected cycle');
     expect(result.orders).toHaveLength(1);
     expect(result.orders[0]!.fills).toHaveLength(1);
+    // #134: the bot's buy filled A's resting sell — A's notice, with the same params a member's
+    // fill gives (no maker flag, AC 8), delivered in the cycle's transaction.
+    expect(result.notifiedUserIds).toEqual([a]);
+    // A's resting sell — mintTestPairs left A an IOC buy of its own, so the side picks it.
+    const [sell] = await t.db
+      .select()
+      .from(orders)
+      .where(and(eq(orders.userId, a), eq(orders.side, 'sell')));
+    expect(await t.db.select().from(notifications)).toEqual([
+      expect.objectContaining({
+        userId: a,
+        type: 'order_filled',
+        category: 'trade',
+        mergeKey: sell!.id,
+        eventCount: 1,
+        target: { kind: 'order', orderId: sell!.id },
+        params: {
+          marketTitle: market.title,
+          outcome: 'YES',
+          side: 'sell',
+          qty: '1',
+          amountCoin: '1',
+          fullyFilled: true,
+          orderQty: '1',
+          orderFilledQty: '1',
+        },
+      }),
+    ]);
     expect((await live(market.id)).some((o) => o.outcome === 'NO')).toBe(false);
     expect(await runtime.readMarketMakerRuntime(t.db, market.id)).toMatchObject({
       generation: 2n,

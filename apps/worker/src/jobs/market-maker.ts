@@ -17,6 +17,7 @@ import {
   marketChannel,
   marketTickEvent,
   marketTradeEvent,
+  notificationEvent,
   serializeCoinAmount,
   userChannel,
   type UserBalanceEvent,
@@ -84,7 +85,8 @@ export async function refreshMarketMaker(
         );
         if (recorded && !recorded.stale && !recorded.runtime.desiredEnabled) {
           // Stop is durable even if this cleanup finds held/damaged assets. Intake omits this
-          // bot immediately, while the scan retries only its unfinished cleanup work.
+          // bot immediately, while the scan retries only its unfinished cleanup work. It only
+          // cancels the bot's own orders, so it fills nothing and notifies no one (#134).
           try {
             const cleaned = await db.transaction((tx) => runMarketMakerCycle(tx, { marketId }));
             if (cleaned.outcome !== 'skipped') await publishCycle(cleaned, publish);
@@ -119,6 +121,8 @@ export async function refreshMarketMaker(
     fills: result.orders.reduce((count, order) => count + order.fills.length, 0),
     burnedQty: result.burnedQty,
     nextGeneration: result.nextGeneration?.toString() ?? null,
+    // #134 (ADR-0158): a count, never the ids — BullMQ stores this result.
+    notifiedMembers: result.notifiedUserIds.length,
   };
 }
 
@@ -193,7 +197,10 @@ function positionEvent(row: PlaceOrderTouched['positions'][number]): UserPositio
   };
 }
 
-/** One committed snapshot per human/position and one book signal per cycle; fills retain ids. */
+/** One committed snapshot per human/position and one book signal per cycle; fills retain ids.
+ * Each member whose resting order a placement filled gets one `user:notification` (#134,
+ * ADR-0158: `notifiedUserIds`, delivered by the cycle's `finish()`); none when nothing filled.
+ */
 async function publishCycle(
   result: Exclude<MarketMakerCycleResult, { outcome: 'skipped' }>,
   publish: Publish,
@@ -220,6 +227,9 @@ async function publishCycle(
       publish(marketChannel(result.marketId), marketBookEvent(result.marketId, result.finishedAt)),
     ...fills.map((fill) =>
       publish(marketChannel(result.marketId), marketTradeEvent(result.marketId, fill)),
+    ),
+    ...result.notifiedUserIds.map((userId) =>
+      publish(userChannel(userId), notificationEvent(result.finishedAt)),
     ),
   ]);
 }

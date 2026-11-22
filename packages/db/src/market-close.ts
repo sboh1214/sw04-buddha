@@ -8,7 +8,9 @@ import type { Db } from './client.js';
 import { marketHasHumanFill } from './market-cancel.js';
 import { endPauseAtClose, type MarketPauseRow } from './market-pause.js';
 import { transitionMarket } from './market-transitions.js';
+import { createNotifications, notifiedUserIds } from './notifications.js';
 import { expireLockedOrders, lockMarketOrders, type ExpiredOrders } from './order-cancel.js';
+import { marketEventKey, orderEndNotificationInputs } from './order-notifications.js';
 import { markets } from './schema/index.js';
 import { clockTimestamp, lockMarket } from './tx-helpers.js';
 
@@ -47,6 +49,11 @@ export type CloseMarketAtCloseResult =
       pause: MarketPauseRow | null;
       /** The orders it ended 만료, and a held market's left live and locked (#93's). */
       expired: ExpiredOrders;
+      /**
+       * The members its `orders_expired` notices reached (#134, ADR-0158), for the caller's
+       * `user:notification` after COMMIT: the people with orders it ended, one notice each.
+       */
+      notified: string[];
     }
   | { closed: false; reason: CloseSkipReason };
 
@@ -84,13 +91,18 @@ export type CloseMarketAtCloseResult =
  *    (`expireLockedOrders`), the same for CLOSED and CANCELLED: no ledger entry, fill or contract
  *    move — the 운영 마켓메이커's Coin stays in the market's 마켓메이커 자금 for #181; a market held
  *    for a ledger failure keeps its orders live and locked until #93's recovery (결정 4 #178 '복구
- *    전에 마감이 오면').
+ *    전에 마감이 오면');
+ * 8. last, one `orders_expired` notice per member with orders it ended (#134, ADR-0158; 52-4·52-5:
+ *    거래 마감 for CLOSED, 시장 취소 for CANCELLED), keyed by the status event — the held market's
+ *    live orders get theirs when the recovery ends them (#93).
  *
  * It writes no `orders` row itself (order-cancel.ts does) and publishes nothing: the caller sends
- * `market:status`, and `market:book` when an order expired, after COMMIT. A lock that does not
- * hold what an order's remainder names (`ContractError`) rolls the whole close back — a ledger
- * inconsistency for #93 — and the market stays OPEN by status while the intake, the quote and the
- * book refuse it by the clock. Never 'not_found': an unknown id throws (see the worker's doc).
+ * `market:status`, `market:book` when an order expired, and `user:notification` to `notified`,
+ * after COMMIT. A lock that does not hold what an order's remainder names (`ContractError`) rolls
+ * the whole close back — a ledger inconsistency for #93 — and the market stays OPEN by status while
+ * the intake, the quote and the book refuse it by the clock; so does a notice the definitions
+ * refuse (ADR-0158 — the builder never makes one). Never 'not_found': an unknown id throws (see the
+ * worker's doc).
  */
 export async function closeMarketAtClose(
   tx: Tx,
@@ -144,6 +156,17 @@ export async function closeMarketAtClose(
       ? await endPauseAtClose(tx, { marketId, now: at, eventId: statusEventId })
       : null;
   const expired = await expireLockedOrders(tx, orders, { at });
+  // #134: the members' 만료 notices, the transaction's last statements (ADR-0157 결정 4).
+  const notified = await createNotifications(
+    tx,
+    orderEndNotificationInputs(expired.expired, {
+      kind: 'expired',
+      cause: traded ? 'closed' : 'cancelled',
+      market: { id: current.id, title: current.title },
+      eventKey: marketEventKey(statusEventId),
+      occurredAt: at,
+    }),
+  );
   return {
     closed: true,
     status: traded ? 'closed' : 'cancelled',
@@ -151,5 +174,6 @@ export async function closeMarketAtClose(
     closedAt: at,
     pause,
     expired,
+    notified: notifiedUserIds(notified),
   };
 }

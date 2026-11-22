@@ -23,6 +23,8 @@ import {
   selectReconciliationAccountTargets,
 } from './reconciliation-audit.js';
 import { recoverReconciliationHold } from './reconciliation-recovery.js';
+import { createNotifications } from './notifications.js';
+import { orderEndNotificationInputs, reconciliationHoldEventKey } from './order-notifications.js';
 import { previewReconciliationCorrections } from './reconciliation-correction.js';
 import {
   markets,
@@ -36,6 +38,7 @@ import {
   reconciliationRecoveries,
   reconciliationResults,
   auditFailures,
+  notifications,
 } from './schema/index.js';
 import {
   createApprovalRequest,
@@ -655,6 +658,8 @@ describe.skipIf(!hasTestDb())('reconciliation and persistent recovery (#93)', ()
     const input = await approve(clean.hold!, actors);
     const done = await t.db.transaction((tx) => recoverReconciliationHold(tx, input));
     expect(done.hold?.recoveredAt).not.toBeNull();
+    // An account hold touches no order: no market, nothing expired (#134: no notice).
+    expect(done).toMatchObject({ market: null, expired: { expired: [] } });
     await expect(t.db.transaction((tx) => recoverReconciliationHold(tx, input))).rejects.toThrow(
       'stale',
     );
@@ -753,13 +758,44 @@ describe.skipIf(!hasTestDb())('reconciliation and persistent recovery (#93)', ()
       reason: 'ledger_failure',
     });
     await passMarketClose(t.db, market.id);
-    await t.db.transaction((tx) => closeMarketAtClose(tx, market.id));
+    // The close leaves a held market's orders live: it notifies nothing (#134).
+    expect(await t.db.transaction((tx) => closeMarketAtClose(tx, market.id))).toMatchObject({
+      closed: true,
+      notified: [],
+      expired: { expired: [] },
+    });
     const clean = await audit(market.id);
     expect(clean.result.passed).toBe(true);
     expect(clean.hold?.failureResultId).toBeNull();
     const input = await approve(clean.hold!, actors);
-    const done = await t.db.transaction((tx) => recoverReconciliationHold(tx, input));
+    // As the API's approval (H, #134): the recovery, then its 만료 notice from the market row the
+    // recovery read, in the same transaction.
+    const { done, outcomes } = await t.db.transaction(async (tx) => {
+      const done = await recoverReconciliationHold(tx, input);
+      const outcomes = await createNotifications(
+        tx,
+        orderEndNotificationInputs(done.expired.expired, {
+          kind: 'expired',
+          cause: done.market!.status === 'cancelled' ? 'cancelled' : 'closed',
+          market: done.market!,
+          eventKey: reconciliationHoldEventKey(done.hold!.id),
+          occurredAt: done.expired.expired[0]!.endedAt!,
+        }),
+      );
+      return { done, outcomes };
+    });
+    expect(done.market).toEqual({ id: market.id, title: market.title, status: 'cancelled' });
     expect(done.expired.expired).toHaveLength(1);
+    expect(outcomes).toMatchObject([{ kind: 'created', userId: person }]);
+    expect(await t.db.select().from(notifications)).toEqual([
+      expect.objectContaining({
+        userId: person,
+        type: 'orders_expired',
+        occurredAt: done.expired.expired[0]!.endedAt,
+        target: { kind: 'order', orderId: done.expired.expired[0]!.id },
+        params: { marketTitle: market.title, cause: 'cancelled', orderCount: 1 },
+      }),
+    ]);
     expect((await balanceOf(t.db, person))!.lockedCoin).toBe(0n);
     expect((await ledgerHeldMarketIds(t.db, [market.id])).size).toBe(0);
     expect((await t.db.select().from(markets).where(eq(markets.id, market.id)))[0]?.status).toBe(
