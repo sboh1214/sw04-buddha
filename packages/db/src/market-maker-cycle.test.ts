@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ORDER_ACCEPTING_SETTING } from '@buddha/shared';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { marketMakerAccountId } from './account-types.js';
 import { runMarketMakerCycle } from './market-maker-cycle.js';
 import { burnAvailableMarketMakerPairs } from './market-maker-burn.js';
@@ -285,7 +285,11 @@ describe.skipIf(!hasTestDb())('operating market maker cycle (#129)', () => {
     // #134: the bot's buy filled A's resting sell — A's notice, with the same params a member's
     // fill gives (no maker flag, AC 8), delivered in the cycle's transaction.
     expect(result.notifiedUserIds).toEqual([a]);
-    const [sell] = await t.db.select().from(orders).where(eq(orders.userId, a));
+    // A's resting sell — mintTestPairs left A an IOC buy of its own, so the side picks it.
+    const [sell] = await t.db
+      .select()
+      .from(orders)
+      .where(and(eq(orders.userId, a), eq(orders.side, 'sell')));
     expect(await t.db.select().from(notifications)).toEqual([
       expect.objectContaining({
         userId: a,
