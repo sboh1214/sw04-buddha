@@ -1,10 +1,23 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { recordJudgementDelay, schema, type Db } from '@buddha/db';
+import {
+  createNotifications,
+  judgementNotificationInputs,
+  marketAudience,
+  marketEventKey,
+  notifiedUserIds,
+  readPublicJudgementDelay,
+  recordJudgementDelay,
+  schema,
+  type Db,
+  type MarketJudgementDelayRow,
+  type PublicJudgementDelayRead,
+} from '@buddha/db';
 import {
   JUDGEMENT_DELAY_REVIEW_MAX_DAYS,
   MARKET_JUDGEMENT_DELAY_REFUSALS,
   judgementDelayNextReviewRefusal,
   judgementDelayStatusRefusal,
+  notificationEvent,
   type AdminMarket,
   type JudgementDelayNextReviewRefusal,
   type JudgementDelayStatusRefusal,
@@ -15,6 +28,7 @@ import {
 import { AppError } from '../common/errors/app-error.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import { MarketAdminService } from './market-admin.service.js';
 import { fieldError, lockedMarketRow } from './market-item-rules.js';
 import { lockMarket } from './market-lock.js';
@@ -51,6 +65,25 @@ function refused(
 }
 
 /**
+ * 52-11 "처음 기록할 때와, 다시 기록해 사유나 다음 검토 시각이 바뀔 때마다 한 건" (#188, ADR-0160): a
+ * record tells the market's watchers and holders when its episode's current record (188-5: the
+ * same status and judgement version, `readPublicJudgementDelay` — read before it is written) is
+ * none, or says another reason or another next review time. Both sides compare exactly: the
+ * reason is stored trimmed (`approvalReasonSchema`), the time to the millisecond it was entered
+ * (`storableInstantSchema`, a JS Date into timestamptz and back).
+ */
+function isNotifiedDelay(
+  previous: PublicJudgementDelayRead | null,
+  delay: Pick<MarketJudgementDelayRow, 'reason' | 'nextReviewAt'>,
+): boolean {
+  return (
+    previous === null ||
+    previous.reason !== delay.reason ||
+    previous.nextReviewAt.getTime() !== delay.nextReviewAt.getTime()
+  );
+}
+
+/**
  * 판정 지연 기록 (#142, ADR-0106; ADR-0093 decision 1 #173 items 2·7·11·13, decision 2 #172 item
  * 14, decision 3 '#142 지연 사유', decision 4, the owner's answers of 2026-11-03 (1)–(4);
  * market-judgement-delay.ts in @buddha/shared and @buddha/db): one admin, at once and alone — no
@@ -65,14 +98,18 @@ function refused(
  * lock order: the market lock (`lockMarket`), the market row FOR UPDATE, then the database clock
  * (clock.ts) — so a record serialises with the worker's confirmation and with every judgement,
  * correction and 판정 이의 write of the market, and what it judges and records is the market as
- * that clock finds it. After COMMIT `market:status` again with the UNCHANGED key (A-M4-36, as a
- * 판정 이의 write): an open detail refetches its `judgementDelay`.
+ * that clock finds it. A record that is the first of its episode or changes the reason or the next
+ * review time tells the market's watchers and holders, in the same transaction (#188, ADR-0160;
+ * 52-11, 188-5); an identical re-record tells nobody. After COMMIT `market:status` again with the
+ * UNCHANGED key (A-M4-36, as a 판정 이의 write): an open detail refetches its `judgementDelay`; and
+ * `user:notification` to each member the notice reached.
  */
 @Injectable()
 export class MarketJudgementDelayService {
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly markets: MarketAdminService,
+    private readonly publisher: MarketPublisher,
   ) {}
 
   /**
@@ -86,14 +123,21 @@ export class MarketJudgementDelayService {
    * 'not delayed', `nextReviewAt` 'not after now', `nextReviewAt` 'more than 7 days ahead'.
    * `recordJudgementDelay` writes the `judgement_delay_recorded` event (the admin its actor) and
    * the record on the market's status and judgement version, at that clock; `market_delay_record`
-   * records the event's fields. Answers the admin detail, the new record current.
+   * records the event's fields. Then, last, only when the record is the first of the market's
+   * current episode or changes its current record's reason or next review time (`isNotifiedDelay`;
+   * 52-11, 188-5), the transaction's one `createNotifications` call: one
+   * `market_judgement_delayed` per watcher and holder (`marketAudience`; the recording admin as
+   * anyone, 53-5) with the public reason, the next review time and the market's 판정 기준 시간대,
+   * keyed by the `judgement_delay_recorded` event (#188, ADR-0160). An identical re-record is
+   * still a new record (owner answer (4)) and runs no notification statement. Answers the admin
+   * detail, the new record current — no list of who was told (ADR-0064).
    */
   async record(
     adminId: string,
     id: string,
     body: WithoutExpectedAccount<RecordJudgementDelayBody>,
   ): Promise<AdminMarket> {
-    const market = await this.db.transaction(async (tx) => {
+    const { market, at, notified } = await this.db.transaction(async (tx) => {
       await lockMarket(tx, id);
       const current = await lockedMarketRow(tx, id);
       // After the market lock (clock.ts): the record sorts after whatever committed on the market
@@ -105,7 +149,10 @@ export class MarketJudgementDelayService {
       const nextReviewAt = new Date(body.nextReviewAt);
       const timeRefusal = judgementDelayNextReviewRefusal(nextReviewAt, now.getTime());
       if (timeRefusal !== null) throw refused('nextReviewAt', timeRefusal);
-      const { delay } = await recordJudgementDelay(tx, {
+      // The episode's current record before this one (188-5): after the write, this one is it.
+      // Unlocked — the market lock serialises every delay writer.
+      const previous = await readPublicJudgementDelay(tx, current);
+      const { delay, eventId } = await recordJudgementDelay(tx, {
         market: current,
         reason: body.reason,
         nextReviewAt,
@@ -127,17 +174,37 @@ export class MarketJudgementDelayService {
         createdAt: now,
       });
       // The market row is the one read under the lock: the record changed nothing of it.
-      return this.markets.toAdminMarket(
+      const market = await this.markets.toAdminMarket(
         tx,
         current,
         await marketTagNames(tx, id),
         await readMarketSources(tx, id),
       );
+      // #188 (ADR-0160): the transaction's one call, last (ADR-0157 결정 4) — and none at all for
+      // a record that repeats the episode's current one (52-11).
+      const notified = isNotifiedDelay(previous, delay)
+        ? notifiedUserIds(
+            await createNotifications(
+              tx,
+              judgementNotificationInputs(await marketAudience(tx, id), current, {
+                kind: 'delayed',
+                reason: delay.reason,
+                nextReviewAt: delay.nextReviewAt,
+                eventKey: marketEventKey(eventId),
+                occurredAt: now,
+              }),
+            ),
+          )
+        : [];
+      return { market, at: now, notified };
     });
     // Outside the transaction, as every market write publishes: a subscriber answers
     // `market:status` with a REFETCH, which must find the committed record. The key is the
     // market's unchanged `status_event_id`, so no client applies it as a transition.
-    await this.markets.publishStatus(market);
+    await Promise.all([
+      this.markets.publishStatus(market),
+      ...notified.map((userId) => this.publisher.publishUser(userId, notificationEvent(at))),
+    ]);
     return market;
   }
 }

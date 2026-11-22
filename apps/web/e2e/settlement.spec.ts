@@ -10,6 +10,7 @@ import { formatCoin } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { formatKst } from '../src/lib/datetime';
 import {
+  DEFAULT_JUDGEMENT_TIME_ZONE,
   SETTLEMENT_WAIT_MS,
   adminAccount,
   accountIdOf,
@@ -22,11 +23,15 @@ import {
   expectNoSideScroll,
   judgementEvidenceLink,
   freshEmail,
+  inboxOf,
   judgeMarket,
   kstLocalOf,
   leaveNoJudgement,
   markDocument,
   meOf,
+  notificationRow,
+  onlyNoticeOf,
+  openCounted,
   pauseMarket,
   requestPauseDecision,
   resolveWaitMs,
@@ -37,6 +42,7 @@ import {
   subscribed,
   test,
   waitForSettled,
+  watchThroughApi,
 } from './helpers';
 
 /**
@@ -46,7 +52,11 @@ import {
  * 잠정 결과를, 그다음 지급 완료를 받는다(#174의 라벨).
  *
  * The lifecycle case uses the helper's pair. Separate payout cases mint a pair at YES 30 / NO 70
- * and check each member's balance, retired position and own ledger for YES, NO and VOID.
+ * and check each member's balance, retired position and own ledger for YES, NO and VOID — and,
+ * since #188 (ADR-0160; 52-1, 52-12, 52-15, 188-1), each holder's two 판정·정산 알림: the 잠정 결과
+ * and, at the payout, the 최종 정산 with the confirmed result and the member's own payout (0
+ * included, 무효 a 지급), whose row opens the settled market; the YES case adds a watcher who
+ * holds nothing and reads the sentence without a payout.
  *
  * The dispute window is the release setting `market.dispute_window`, which the suite's global
  * setup enters as 1분 while it is 미정 (global-setup.ts): the approval fixes the deadline a minute
@@ -350,6 +360,9 @@ test.describe('정산', () => {
       const viewport = page.viewportSize();
       const noContext = await browser.newContext({ baseURL, viewport });
       const yesContext = await browser.newContext({ baseURL, viewport });
+      // The YES case's watcher, who holds nothing at the payout (#188, 52-1).
+      const watcherContext =
+        result === 'YES' ? await browser.newContext({ baseURL, viewport }) : null;
       try {
         const noPage = await noContext.newPage();
         const yesPage = await yesContext.newPage();
@@ -357,9 +370,12 @@ test.describe('정산', () => {
         expect(noPage.viewportSize()?.width).toBe(viewport?.width);
         await signUp(noPage, freshEmail());
         await signUp(yesPage, freshEmail());
+        const watcherPage = watcherContext === null ? null : await watcherContext.newPage();
+        if (watcherPage !== null) await signUp(watcherPage, freshEmail());
         const noHolder = noPage.request;
         const yesHolder = yesPage.request;
         const market = await createOpenMarket(admin);
+        if (watcherPage !== null) await watchThroughApi(watcherPage, market.id);
         const order = async (
           context: APIRequestContext,
           outcome: 'YES' | 'NO',
@@ -388,12 +404,76 @@ test.describe('정산', () => {
         await pauseMarket(admin, market.id);
         await requestPauseDecision(admin, market.id, 'early_close', { reviewResult: 'judgeable' });
         expect((await approvePauseDecisionAsReviewer(admin, market.id)).status).toBe('closed');
-        await judgeMarket(admin, market.id, result);
+        const judged = await judgeMarket(admin, market.id, result);
         const settled = await waitForSettled(admin, market.id);
         expect(settled.resolvedResult).toBe(result);
         expect(settled.settlementSteps).toEqual([
           expect.objectContaining({ step: 'coin', status: 'done', lastError: null }),
         ]);
+
+        // 판정·정산 알림 (#188, ADR-0160): each holder heard of the 잠정 결과 once and, at the
+        // payout, of the 최종 정산 once — the confirmed result and the member's own payout, 0
+        // included, exactly (52-12, 52-15, AC 7, AC 11) — in the owner's sentence (188-1), never a
+        // refund (AC 8), and its row opens the settled market (AC 12). The NO holder's fill (#134)
+        // and the pause and close (#54) are in the inbox too: notices are found by type.
+        const label = resultLabelOf(result);
+        const provisionalParams = {
+          marketTitle: market.title,
+          result,
+          disputeDeadline: judged.disputeDeadline,
+          judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
+        };
+        for (const [holderPage, outcome] of [
+          [yesPage, 'YES'],
+          [noPage, 'NO'],
+        ] as const) {
+          const payout = result === 'VOID' ? 100n : result === outcome ? 200n : 0n;
+          const inbox = await inboxOf(holderPage.request);
+          expect(onlyNoticeOf(inbox, 'market_provisional_result').params).toEqual(
+            provisionalParams,
+          );
+          const notice = onlyNoticeOf(inbox, 'market_settled');
+          expect(notice).toMatchObject({
+            category: 'market',
+            target: { kind: 'market', slug: market.slug },
+            eventCount: 1,
+          });
+          expect(notice.params).toEqual({
+            marketTitle: market.title,
+            result,
+            payoutCoin: payout.toString(),
+          });
+          await openCounted(holderPage, '/my/notifications');
+          const row = notificationRow(holderPage, notice.id);
+          await expect(row.getByTestId('notification-row-title')).toHaveText(
+            `${market.title} 결과 확정: ${label} · 지급 완료 · 내 지급액 ${formatCoin(payout)}`,
+          );
+          await expect(row).not.toContainText('환불');
+          await expect(row).not.toContainText('원금');
+          await row.click();
+          await expect(holderPage).toHaveURL(`/markets/${market.slug}`);
+          await expect(holderPage.getByTestId('market-status-badge')).toHaveText(
+            copy.marketStatusSettled,
+          );
+          await expect(holderPage.getByTestId('market-detail-result')).toHaveText(label);
+        }
+        if (watcherPage !== null) {
+          // The watcher: the same two, the 최종 정산 with no payout (`payoutCoin` null).
+          const inbox = await inboxOf(watcherPage.request);
+          expect(onlyNoticeOf(inbox, 'market_provisional_result').params).toEqual(
+            provisionalParams,
+          );
+          const notice = onlyNoticeOf(inbox, 'market_settled');
+          expect(notice.params).toEqual({
+            marketTitle: market.title,
+            result: 'YES',
+            payoutCoin: null,
+          });
+          await openCounted(watcherPage, '/my/notifications');
+          await expect(
+            notificationRow(watcherPage, notice.id).getByTestId('notification-row-title'),
+          ).toHaveText(`${market.title} 결과 확정: YES · 지급 완료`);
+        }
 
         for (const [context, outcome, before, cost] of [
           [yesHolder, 'YES', beforeYes, 60n],
@@ -523,6 +603,7 @@ test.describe('정산', () => {
       } finally {
         await noContext.close();
         await yesContext.close();
+        await watcherContext?.close();
       }
     });
   }

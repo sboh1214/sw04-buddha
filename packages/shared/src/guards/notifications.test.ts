@@ -45,7 +45,7 @@ describe('NOTIFICATION_TYPES (#113, #53)', () => {
     }
   });
 
-  it('registers the 거래 three of #134 and the 시장 five of #54 with single-brace placeholders only (ADR-0158, ADR-0159)', () => {
+  it('registers the 거래 three of #134, the 시장 five of #54 and the 판정·정산 six of #188 with single-brace placeholders only (ADR-0158, ADR-0159, ADR-0160)', () => {
     expect(Object.keys(NOTIFICATION_TYPE_REGISTRY)).toEqual([
       'order_filled',
       'orders_cancelled',
@@ -55,7 +55,14 @@ describe('NOTIFICATION_TYPES (#113, #53)', () => {
       'market_resumed',
       'market_cancelled',
       'market_rules_supplemented',
+      'market_judgement_delayed',
+      'market_provisional_result',
+      'market_judgement_corrected',
+      'market_dispute_decided',
+      'market_dispute_closed_by_correction',
+      'market_settled',
     ]);
+    expect(Object.keys(NOTIFICATION_TYPE_REGISTRY)).toHaveLength(14);
     // `{{key}}` in the web's copy must be a business fact (legal.test.ts): never here.
     for (const candidate of NOTIFICATION_TYPES) {
       for (const text of candidate.text) {
@@ -97,6 +104,60 @@ describe('NOTIFICATION_TYPES (#113, #53)', () => {
       expect(findExcludedNotification({ type, ...NOTIFICATION_TYPE_REGISTRY[type] }), type).toEqual(
         [],
       );
+    }
+  });
+
+  it('words the 판정·정산 six as 188-1 answered: results and decisions as the detail and MY 판정 이의 show them', () => {
+    const results = ['YES', 'NO', '무효'];
+    const zoneLine = '판정 기준 시간대';
+    expect(NOTIFICATION_TYPE_REGISTRY.market_judgement_delayed.text).toEqual([
+      '{market} 판정 지연 · 다음 검토 {nextReview} · 사유: {reason}',
+      zoneLine,
+    ]);
+    expect(NOTIFICATION_TYPE_REGISTRY.market_provisional_result.text).toEqual([
+      '{market} 잠정 결과: {result} · 이의 기한 {deadline}',
+      ...results,
+      zoneLine,
+    ]);
+    expect(NOTIFICATION_TYPE_REGISTRY.market_judgement_corrected.text).toEqual([
+      '{market} 판정 정정 · 잠정 결과: {result} · 새 이의 기한 {deadline}',
+      ...results,
+      zoneLine,
+    ]);
+    expect(NOTIFICATION_TYPE_REGISTRY.market_dispute_decided.text).toEqual([
+      '{market} 판정 이의 {decision} · 사유: {reason}',
+      '기각',
+      '수용',
+    ]);
+    expect(NOTIFICATION_TYPE_REGISTRY.market_dispute_closed_by_correction.text).toEqual([
+      '{market} 판정 이의 정정으로 종결 · 새 이의 기한 {deadline}',
+      zoneLine,
+    ]);
+    // 52-12 '확정 결과와 지급 완료를 나눠 적는다'; no time in it (188-1); a watcher's has no payout.
+    expect(NOTIFICATION_TYPE_REGISTRY.market_settled.text).toEqual([
+      '{market} 결과 확정: {result} · 지급 완료 · 내 지급액 {payout}',
+      '{market} 결과 확정: {result} · 지급 완료',
+      ...results,
+    ]);
+    for (const type of [
+      'market_judgement_delayed',
+      'market_provisional_result',
+      'market_judgement_corrected',
+      'market_dispute_decided',
+      'market_dispute_closed_by_correction',
+      'market_settled',
+    ] as const) {
+      const { text, reason } = NOTIFICATION_TYPE_REGISTRY[type];
+      expect(reason, type).toContain('ADR-0160');
+      expect(findExcludedNotification({ type, text, reason }), type).toEqual([]);
+      for (const sentence of text) {
+        // A VOID payout is a 지급, never a refund (N03 §6); no P&L, score or rank (52-15, N04).
+        expect(sentence, type).not.toMatch(
+          /환불|원금|손익|순위|랭킹|실력|점수|스코어|수익률|승률|적중|정답|맞힌|배지|정산 기준/,
+        );
+        // No amount, count or time is written into the copy: each is a placeholder.
+        expect(sentence, type).not.toMatch(/[0-9]/);
+      }
     }
   });
 
@@ -148,7 +209,7 @@ const planted = (change: Partial<NotificationDefinition> = {}): NotificationDefi
 });
 
 describe('findNotificationDefinitionProblems (ADR-0157)', () => {
-  it('finds nothing in the product list (#134’s three, #54’s five) or in a definition that keeps the rules', () => {
+  it('finds nothing in the product list (#134’s three, #54’s five, #188’s six) or in a definition that keeps the rules', () => {
     expect(NOTIFICATION_DEFINITIONS.length).toBeGreaterThan(0);
     expect(findNotificationDefinitionProblems(NOTIFICATION_DEFINITIONS)).toEqual([]);
     expect(

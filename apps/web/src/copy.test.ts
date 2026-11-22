@@ -145,8 +145,41 @@ describe('copy', () => {
       copy.adminMarketJudgementDelayUnheld,
       copy.adminMarketJudgementDelayNoCurrent,
       copy.eventJudgementDelayRecorded,
+      // Its notice to watchers and holders (#188, ADR-0160; 52-11): the reason and the next review.
+      copy.notificationJudgementDelayed,
     ]) {
       expect(text).not.toMatch(/NO|환불|원금/);
+    }
+  });
+
+  it('words the 판정·정산 알림 with no refund, P&L, rank or score, and no amount of its own (#188)', () => {
+    // N03 §6: a 무효 payout is a 지급, never what was paid given back; N04 §1·§3·§4 and 52-15
+    // ('손익 없음'): nothing beside a result or a payout reads as a score, a rank or a return.
+    const notices = [
+      copy.notificationJudgementDelayed,
+      copy.notificationProvisionalResult,
+      copy.notificationJudgementCorrected,
+      copy.notificationDisputeDecided,
+      copy.notificationDisputeClosedByCorrection,
+      copy.notificationMarketSettled,
+      copy.notificationMarketSettledWatcher,
+    ];
+    for (const text of notices) {
+      expect(text).not.toMatch(
+        /환불|원금|순위|랭킹|실력|점수|스코어|수익률|승률|적중|정답|맞힌|손익|정산 기준/,
+      );
+    }
+    // The payout is the member's own, a placeholder — no amount is written into the sentence,
+    // and the watcher's sentence has none at all (52-15).
+    for (const text of [copy.notificationMarketSettled, copy.notificationMarketSettledWatcher]) {
+      expect(text).not.toMatch(/\d|Coin/);
+      expect(text).toContain('결과 확정: {result} · 지급 완료');
+    }
+    expect(copy.notificationMarketSettled).toContain('{payout}');
+    expect(copy.notificationMarketSettledWatcher).not.toContain('{payout}');
+    // No expected payout on a 잠정 결과 or its correction (52-15 '예상 지급액 없음').
+    for (const text of [copy.notificationProvisionalResult, copy.notificationJudgementCorrected]) {
+      expect(text).not.toMatch(/지급|\{payout\}/);
     }
   });
 

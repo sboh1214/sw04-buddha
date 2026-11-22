@@ -3213,8 +3213,8 @@ export const copy = {
   // 알림함(#53, ADR-0157; 오너 답 53-1·53-2·53-3·53-11): MY › 알림은 발생 시각 최신순이고 다른 MY 목록처럼
   // 더 보기로 이어 본다. 안 읽은 알림은 굵은 제목과 점, 화면 낭독기에는 '안 읽음'으로 구별한다(색만으로 구별하지
   // 않는다). 누르면(그 대상으로 가면) 읽음이 되고, 목록을 여는 것만으로는 바뀌지 않는다. '모두 읽음'은 그때 안 읽은
-  // 알림을 모두 읽음으로 한다. #53에는 알림 유형이 없었고(52-20), #134가 거래 알림을, #54가 시장 상태 알림을
-  // 더했다(아래) — 판정·정산·커뮤니티·정정 보상의 알림은 그 이슈가 더한다.
+  // 알림을 모두 읽음으로 한다. #53에는 알림 유형이 없었고(52-20), #134가 거래 알림을, #54가 시장 상태 알림을,
+  // #188이 판정·정산 알림을 더했다(아래) — 커뮤니티·정정 보상의 알림은 그 이슈가 더한다.
   notificationsReadAll: '모두 읽음',
   notificationsEmpty: '알림이 없습니다.',
   notificationUnread: '안 읽음',
@@ -3252,6 +3252,21 @@ export const copy = {
   notificationMarketResumed: '{market} 거래 재개 · 중단 사유: {reason}',
   notificationMarketCancelled: '{market} 시장 취소',
   notificationMarketRulesSupplemented: '{market} 규칙 보충 {version} · 사유: {reason}',
+  // 판정·정산 알림(#188, ADR-0160; 52-1·52-11~52-15): 관심 등록자와 계약 1개 이상 보유자에게 판정 지연·잠정
+  // 결과·판정 정정·지급 완료 때의 최종 정산, 이의를 낸 회원에게 처리 결과·정정으로 종결. {…}는
+  // lib/judgement-notifications.ts가 채운다 — {result}는 결과 라벨(YES·NO·무효), {deadline}·{nextReview}는
+  // 회원 시간대의 시각(판정 기준 시간대가 다르면 그 시각이 아래 줄에), {payout}은 그 회원의 지급액, {decision}은
+  // 기각·수용. 무효 지급은 환불이 아니다(N03 §6). 손익·점수·순위는 싣지 않는다(52-15, N04). 문구는 오너 답
+  // 188-1 — 관심 등록만 한 회원의 최종 정산은 지급액 없는 문장이다.
+  notificationJudgementDelayed: '{market} 판정 지연 · 다음 검토 {nextReview} · 사유: {reason}',
+  notificationProvisionalResult: '{market} 잠정 결과: {result} · 이의 기한 {deadline}',
+  notificationJudgementCorrected:
+    '{market} 판정 정정 · 잠정 결과: {result} · 새 이의 기한 {deadline}',
+  notificationDisputeDecided: '{market} 판정 이의 {decision} · 사유: {reason}',
+  notificationDisputeClosedByCorrection:
+    '{market} 판정 이의 정정으로 종결 · 새 이의 기한 {deadline}',
+  notificationMarketSettled: '{market} 결과 확정: {result} · 지급 완료 · 내 지급액 {payout}',
+  notificationMarketSettledWatcher: '{market} 결과 확정: {result} · 지급 완료',
   // 안 읽은 수(53-1, 53-11 ①): MY 메뉴(머리·아래 탭)와 알림 탭 옆에 숫자로 보이고 99를 넘으면 '99+'다. 이
   // 말은 화면 낭독기가 그 링크의 설명으로 읽는다 — '안 읽은 알림 3개', 100개 이상이면 '안 읽은 알림 99개 넘게'.
   unreadNotifications: '안 읽은 알림',

@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { TimeZoneScope } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { ME_QUERY_KEY } from '@/hooks/use-me';
 import { type InboxNotification, type Me } from '@/lib/api';
+import { SEOUL_TIME_ZONE, formatInTimeZone, formatKst } from '@/lib/datetime';
 import { MY_PREVIEW_ROWS } from '@/lib/my';
 import { type NotificationPage, notificationListKey } from '@/lib/notifications';
 import { byTestId, renderWithQueries, testIdsStartingWith } from '@/test/render';
@@ -264,6 +266,211 @@ describe('MyNotifications', () => {
     });
     // None drew the fallback title (53-11 ④).
     expect(html).not.toContain(`${copy.notificationCategoryMarket} ${copy.notificationFallback}`);
+  });
+
+  it('draws each 판정·정산 알림 with its own title under 시장 and leads it to the market’s detail (#188)', () => {
+    // ADR-0160: one row per type as the API answers them, every one targeting the market (188-4)
+    // — the settled one too (AC 12). Seoul's market for a Seoul member: one line each.
+    const target = { kind: 'market', slug: 'first-snow' } as const;
+    const deadline = '2026-09-07T06:00:00.000Z';
+    const at = formatKst(deadline);
+    const zone = SEOUL_TIME_ZONE;
+    const rows = [
+      [
+        'market_judgement_delayed',
+        {
+          marketTitle: '첫눈이 올까',
+          reason: '{x} $&',
+          nextReviewAt: deadline,
+          judgementTimeZone: zone,
+        },
+        `첫눈이 올까 판정 지연 · 다음 검토 ${at} · 사유: {x} $&`,
+      ],
+      [
+        'market_provisional_result',
+        {
+          marketTitle: '첫눈이 올까',
+          result: 'YES',
+          disputeDeadline: deadline,
+          judgementTimeZone: zone,
+        },
+        `첫눈이 올까 잠정 결과: YES · 이의 기한 ${at}`,
+      ],
+      [
+        'market_judgement_corrected',
+        {
+          marketTitle: '첫눈이 올까',
+          result: 'VOID',
+          disputeDeadline: deadline,
+          judgementTimeZone: null,
+        },
+        `첫눈이 올까 판정 정정 · 잠정 결과: 무효 · 새 이의 기한 ${at}`,
+      ],
+      [
+        'market_dispute_decided',
+        {
+          marketTitle: '첫눈이 올까',
+          decision: 'dismissed',
+          reason: '1차 출처의 발표가 같습니다.',
+        },
+        '첫눈이 올까 판정 이의 기각 · 사유: 1차 출처의 발표가 같습니다.',
+      ],
+      [
+        'market_dispute_closed_by_correction',
+        { marketTitle: '첫눈이 올까', disputeDeadline: deadline, judgementTimeZone: zone },
+        `첫눈이 올까 판정 이의 정정으로 종결 · 새 이의 기한 ${at}`,
+      ],
+      [
+        'market_settled',
+        { marketTitle: '첫눈이 올까', result: 'NO', payoutCoin: '0' },
+        '첫눈이 올까 결과 확정: NO · 지급 완료 · 내 지급액 0 Coin',
+      ],
+      [
+        'market_settled',
+        { marketTitle: '첫눈이 올까', result: 'YES', payoutCoin: null },
+        '첫눈이 올까 결과 확정: YES · 지급 완료',
+      ],
+    ] as const;
+    const ids = rows.map((_, index) => `9b2c8e4a-1f3d-4c6b-8a7e-5d4c3b2a1f4${String(index)}`);
+    const items = rows.map(([type, params], index) =>
+      notification(ids[index] ?? '', { type, category: 'market', params, target }),
+    );
+    // Settled in Seoul, as a Seoul member's MY is once the profile is known.
+    const html = renderWithQueries(
+      <TimeZoneScope zone={SEOUL_TIME_ZONE} settled>
+        <NotificationsBody
+          notifications={list([{ items, nextCursor: null }])}
+          accountId={ACCOUNT.id}
+          testId="my-notifications"
+        />
+      </TimeZoneScope>,
+    );
+    rows.forEach(([type, , title], index) => {
+      const drawnRow = rowOf(html, ids[index] ?? '') ?? '';
+      expect(byTestId(drawnRow, 'notification-row-category')?.text, type).toBe(
+        copy.notificationCategoryMarket,
+      );
+      expect(byTestId(drawnRow, 'notification-row-title')?.text, type).toBe(title);
+      expect(byTestId(drawnRow, 'notification-row-judgement-zone'), type).toBeUndefined();
+      expect(byTestId(drawnRow, 'notification-row')?.attributes.href, type).toBe(
+        '/markets/first-snow',
+      );
+      // A 무효 result is a payout, never a refund (N03 §6).
+      expect(drawnRow, type).not.toMatch(/환불|원금/);
+    });
+    // None drew the fallback title (53-11 ④).
+    expect(html).not.toContain(`${copy.notificationCategoryMarket} ${copy.notificationFallback}`);
+  });
+
+  it('draws a timed notice’s 판정 기준 시간대 on a line under its title, only once settled in another zone (52-15, #22)', () => {
+    // A Seoul member and a New York market: the sentence in Seoul, the second line in New York —
+    // the detail's rule (`DateTimeText`), inside the row's title element.
+    const deadline = '2026-09-07T06:00:00.000Z';
+    const newYork = 'America/New_York';
+    const timed = [
+      [
+        'market_judgement_delayed',
+        {
+          marketTitle: '첫눈이 올까',
+          reason: '사유',
+          nextReviewAt: deadline,
+          judgementTimeZone: newYork,
+        },
+        `첫눈이 올까 판정 지연 · 다음 검토 ${formatKst(deadline)} · 사유: 사유`,
+      ],
+      [
+        'market_provisional_result',
+        {
+          marketTitle: '첫눈이 올까',
+          result: 'NO',
+          disputeDeadline: deadline,
+          judgementTimeZone: newYork,
+        },
+        `첫눈이 올까 잠정 결과: NO · 이의 기한 ${formatKst(deadline)}`,
+      ],
+      [
+        'market_judgement_corrected',
+        {
+          marketTitle: '첫눈이 올까',
+          result: 'YES',
+          disputeDeadline: deadline,
+          judgementTimeZone: newYork,
+        },
+        `첫눈이 올까 판정 정정 · 잠정 결과: YES · 새 이의 기한 ${formatKst(deadline)}`,
+      ],
+      [
+        'market_dispute_closed_by_correction',
+        { marketTitle: '첫눈이 올까', disputeDeadline: deadline, judgementTimeZone: newYork },
+        `첫눈이 올까 판정 이의 정정으로 종결 · 새 이의 기한 ${formatKst(deadline)}`,
+      ],
+    ] as const;
+    const line = `${copy.rulesJudgementZoneLine} ${formatInTimeZone(deadline, newYork)}`;
+    expect(line).toMatch(/\(GMT-4\)$/);
+    const drawnIn = (
+      zone: string,
+      settled: boolean,
+      type: (typeof timed)[number][0],
+      params: InboxNotification['params'],
+    ) =>
+      renderWithQueries(
+        <TimeZoneScope zone={zone} settled={settled}>
+          <NotificationsBody
+            notifications={list([
+              {
+                items: [notification(UNREAD_ID, { type, category: 'market', params })],
+                nextCursor: null,
+              },
+            ])}
+            accountId={ACCOUNT.id}
+            testId="my-notifications"
+          />
+        </TimeZoneScope>,
+      );
+    for (const [type, params, title] of timed) {
+      const settled = drawnIn(SEOUL_TIME_ZONE, true, type, params);
+      expect(byTestId(settled, 'notification-row-judgement-zone')?.text, type).toBe(line);
+      // The title element holds both lines: the sentence first, the zone's line after it.
+      expect(byTestId(settled, 'notification-row-title')?.text, type).toBe(`${title}${line}`);
+      // Unsettled — the server's render, the hydrating one, the profile not yet known: one line.
+      const unsettled = drawnIn(SEOUL_TIME_ZONE, false, type, params);
+      expect(byTestId(unsettled, 'notification-row-judgement-zone'), type).toBeUndefined();
+      expect(byTestId(unsettled, 'notification-row-title')?.text, type).toBe(title);
+      // The member reads New York too: the sentence in New York, and no second line.
+      const sameZone = drawnIn(newYork, true, type, params);
+      expect(byTestId(sameZone, 'notification-row-judgement-zone'), type).toBeUndefined();
+      expect(byTestId(sameZone, 'notification-row-title')?.text, type).toBe(
+        title.replace(formatKst(deadline), formatInTimeZone(deadline, newYork)),
+      );
+      // No zone, or one the engine cannot read: no second line either.
+      for (const judgementTimeZone of [null, '', 'Mars/Olympus_Mons']) {
+        const html = drawnIn(SEOUL_TIME_ZONE, true, type, { ...params, judgementTimeZone });
+        expect(byTestId(html, 'notification-row-judgement-zone'), String(judgementTimeZone)).toBe(
+          undefined,
+        );
+        expect(byTestId(html, 'notification-row-title')?.text, type).toBe(title);
+      }
+    }
+    // The untimed two never draw one.
+    for (const [type, params] of [
+      ['market_dispute_decided', { marketTitle: '첫눈', decision: 'accepted', reason: '사유' }],
+      ['market_settled', { marketTitle: '첫눈', result: 'YES', payoutCoin: '200' }],
+    ] as const) {
+      const html = renderWithQueries(
+        <TimeZoneScope zone={SEOUL_TIME_ZONE} settled>
+          <NotificationsBody
+            notifications={list([
+              {
+                items: [notification(UNREAD_ID, { type, category: 'market', params })],
+                nextCursor: null,
+              },
+            ])}
+            accountId={ACCOUNT.id}
+            testId="my-notifications"
+          />
+        </TimeZoneScope>,
+      );
+      expect(byTestId(html, 'notification-row-judgement-zone'), type).toBeUndefined();
+    }
   });
 
   it('draws a target this web cannot lead to as a button that only marks it read', () => {

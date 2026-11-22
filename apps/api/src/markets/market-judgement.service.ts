@@ -3,13 +3,20 @@ import {
   approveMarketJudgement,
   confirmationHold,
   correctMarketJudgement,
+  createNotifications,
   currentMarketJudgement,
+  disputeClosureNotificationInputs,
   hasUnconflictedMarketAdmin,
+  judgementNotificationInputs,
   lockAdminRoles,
+  marketAudience,
+  marketEventKey,
+  notifiedUserIds,
   reopenAcceptedDisputes,
   schema,
   setCorrectionPending,
   type Db,
+  type MarketDisputeRow,
   type MarketJudgementRow,
 } from '@buddha/db';
 import {
@@ -18,6 +25,7 @@ import {
   isBeforeScheduledJudgement,
   judgementStatusRefusal,
   judgementVoidOnly,
+  notificationEvent,
   sameJudgementGrounds,
   type AdminMarket,
   type AdminMarketJudgementQueueItem,
@@ -46,6 +54,7 @@ import { AppError } from '../common/errors/app-error.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
 import { MarketJobs } from '../jobs/market-jobs.service.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import { type Page } from '../wallet/wallet.service.js';
 import { MarketAdminService, decisionInstant, snapshot } from './market-admin.service.js';
 import { fieldError, lockedMarketRow, type Tx } from './market-item-rules.js';
@@ -159,8 +168,9 @@ function groundsOf(judgement: MarketJudgementRow): JudgementGrounds {
 
 /**
  * What an approval wrote (#152, #176): the decision and its instant, the market as it left it, the
- * version it made and — a correction's — the version it replaced and the replaced version's
- * pending disputes it closed as 정정으로 종결.
+ * version it made, its event (`provisional` or `judgement_corrected` — the key of its notices,
+ * #188) and — a correction's — the version it replaced and the replaced version's pending disputes
+ * it closed as 정정으로 종결 (their submitters are told, #188's J2).
  */
 interface Approved {
   decided: ApprovalRequest;
@@ -168,7 +178,8 @@ interface Approved {
   market: MarketRow;
   judgement: MarketJudgementRow;
   previous: MarketJudgementRow | null;
-  closedDisputeIds: string[];
+  eventId: number;
+  closedDisputes: Pick<MarketDisputeRow, 'id' | 'userId' | 'status'>[];
 }
 
 /** A deadline passed with nothing holding: `market.resolve` at once, after COMMIT. */
@@ -226,11 +237,15 @@ interface CorrectionEnd {
  *   still PROVISIONAL at its base version — `correctMarketJudgement`: the base version's pending
  *   disputes closed as 정정으로 종결, the `judgement_corrected` event, the next version with the
  *   new result and a deadline of the base version's length from the instant (#173 item 5), the
- *   market's mirrors reset and its `status_event_id` moved. After COMMIT `market:status` and the
- *   `market.resolve` job at the deadline: the worker confirms the result then (PROVISIONAL →
- *   RESOLVED, the settlement steps, `market.finalize`), never an admin — unless a 판정 이의 holds
- *   it, when the last dismissal registers the job again (#175, MarketDisputeService). An earlier
- *   deadline's job finds the later deadline and skips (`not_due`): none is cancelled.
+ *   market's mirrors reset and its `status_event_id` moved. Either tells, in the same transaction
+ *   (#188, ADR-0160): the market's watchers and holders its 잠정 결과 or 판정 정정 (result, 이의
+ *   기한), and a correction's closed disputes' submitters their 정정으로 종결 (the new 이의 기한).
+ *   After COMMIT `market:status`, the `market.resolve` job at the deadline and
+ *   `user:notification` to each member a notice reached: the worker confirms the result then
+ *   (PROVISIONAL → RESOLVED, the settlement steps, `market.finalize`), never an admin — unless a
+ *   판정 이의 holds it, when the last dismissal registers the job again (#175,
+ *   MarketDisputeService). An earlier deadline's job finds the later deadline and skips
+ *   (`not_due`): none is cancelled.
  * - 반려 (an admin other than the registrant, with a reason) and 철회 (the registrant), in any
  *   status. A first judgement's: the record alone, the market as it was — a CLOSED one stays
  *   CLOSED and is registered again (#173 item 1), by any admin, the rejecting one included: only a
@@ -239,7 +254,8 @@ interface CorrectionEnd {
  *   disputes it answered that are still accepted go back to pending (owner answer 2026-11-02 — a
  *   철회 alike, this PR's choice: the correction they waited for is gone either way), the mirror is
  *   cleared, and after COMMIT `market:status` (unchanged) and — past the deadline with nothing
- *   holding — `market.resolve` with no delay, as the last dismissal's.
+ *   holding — `market.resolve` with no delay, as the last dismissal's. Nobody is told of a
+ *   registration, a 반려 or a 철회, nor of a dispute sent back to pending (#188: 52-13, 188-6).
  *
  * Every write here is one transaction with its `admin_actions` row
  * (`market_judgement_request|approve|reject|retract`), under MarketAdminService's lock order: the
@@ -258,6 +274,7 @@ export class MarketJudgementService {
     private readonly markets: MarketAdminService,
     private readonly approvals: ApprovalService,
     private readonly jobs: MarketJobs,
+    private readonly publisher: MarketPublisher,
   ) {}
 
   /**
@@ -422,9 +439,18 @@ export class MarketJudgementService {
    * item 5) — and the market at it, still PROVISIONAL, under the event's key.
    * `market_judgement_approve` records the request, the version, the result, the approver's
    * reason and confirmation, the window and deadline, a correction's replaced version, its
-   * `correction` and the disputes it closed, and the market before and after. After COMMIT
-   * `market:status` (provisional with its result, the event's key) and `market.resolve` delayed to
-   * the deadline.
+   * `correction` and the disputes it closed, and the market before and after. Then, last, the
+   * transaction's one `createNotifications` call (#188, ADR-0160; 52-1·52-12·52-14·52-15, 188-1):
+   * one `market_provisional_result` (a first judgement's, J1) or `market_judgement_corrected` (a
+   * correction's, J2 — a grounds-only one too) per watcher and holder of the market
+   * (`marketAudience`, read here under the market's locks; the approver and the registrant as
+   * anyone, 53-5), with the version's result, 이의 기한 and the market's 판정 기준 시간대, and — J2 —
+   * one `market_dispute_closed_by_correction` per submitter of a dispute it closed, with the new
+   * 이의 기한 alone: all keyed by the approval's event, so a submitter who also watches or holds
+   * gets both (53-4). A refused input or a failed write rolls the approval back (ADR-0157 결정 4의
+   * 7). After COMMIT `market:status` (provisional with its result, the event's key),
+   * `market.resolve` delayed to the deadline and `user:notification` to each member a notice
+   * reached; the answer names none of them (ADR-0064).
    */
   async approve(
     adminId: string,
@@ -432,7 +458,7 @@ export class MarketJudgementService {
     requestId: string,
     body: WithoutExpectedAccount<ApproveJudgementBody>,
   ): Promise<AdminMarket> {
-    const { market, disputeDeadline, at } = await this.db.transaction(async (tx) => {
+    const { market, disputeDeadline, at, notified } = await this.db.transaction(async (tx) => {
       await lockMarket(tx, id);
       const current = await lockedMarketRow(tx, id);
       const request = await this.decidable(tx, adminId, id, requestId);
@@ -474,24 +500,46 @@ export class MarketJudgementService {
                   disputeDeadline: previous.disputeDeadline.toISOString(),
                 },
           correction,
-          closedDisputeIds: approved.closedDisputeIds,
+          closedDisputeIds: approved.closedDisputes.map((dispute) => dispute.id),
           before: snapshot(current, tags, sources),
           after: snapshot(approved.market, tags, sources),
         } satisfies MarketJudgementApproveActionPayload,
         createdAt: approved.at,
       });
+      const market = await this.markets.toAdminMarket(tx, approved.market, tags, sources);
+      // #188 (ADR-0160): the transaction's one call, last (ADR-0157 결정 4) — J1 잠정 결과 or J2
+      // 판정 정정 to the market's watchers and holders (52-14 '대상은 관심·보유 기준 그대로다'), and
+      // J2's 정정으로 종결 to the closed disputes' submitters, under the approval event's key.
+      const eventKey = marketEventKey(approved.eventId);
+      const notices = [
+        ...judgementNotificationInputs(await marketAudience(tx, id), approved.market, {
+          kind: correction === null ? 'provisional' : 'corrected',
+          result: judgement.result,
+          disputeDeadline: judgement.disputeDeadline,
+          eventKey,
+          occurredAt: approved.at,
+        }),
+        ...disputeClosureNotificationInputs(approved.closedDisputes, approved.market, {
+          disputeDeadline: judgement.disputeDeadline,
+          eventKey,
+          occurredAt: approved.at,
+        }),
+      ];
       return {
-        market: await this.markets.toAdminMarket(tx, approved.market, tags, sources),
+        market,
         disputeDeadline: judgement.disputeDeadline,
         at: approved.at,
+        notified: notifiedUserIds(await createNotifications(tx, notices)),
       };
     });
     // Outside the transaction, as every market write publishes: a subscriber answers
     // `market:status` with a REFETCH, which must find the committed row. The job's delay is the
-    // deadline less the approval's instant, on the clock that fixed both.
+    // deadline less the approval's instant, on the clock that fixed both. `user:notification` to
+    // each member a notice reached (#188), once each though J2 may have told them twice.
     await Promise.all([
       this.markets.publishStatus(market),
       this.jobs.scheduleResolve(market.id, disputeDeadline, at),
+      ...notified.map((userId) => this.publisher.publishUser(userId, notificationEvent(at))),
     ]);
     return market;
   }
@@ -692,7 +740,8 @@ export class MarketJudgementService {
       market: result.market,
       judgement: result.judgement,
       previous: null,
-      closedDisputeIds: [],
+      eventId: result.eventId,
+      closedDisputes: [],
     };
   }
 
@@ -726,7 +775,8 @@ export class MarketJudgementService {
       market: result.market,
       judgement: result.judgement,
       previous: result.previous,
-      closedDisputeIds: result.closedDisputes.map((dispute) => dispute.id),
+      eventId: result.eventId,
+      closedDisputes: result.closedDisputes,
     };
   }
 

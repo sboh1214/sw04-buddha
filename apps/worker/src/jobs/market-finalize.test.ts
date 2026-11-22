@@ -16,6 +16,7 @@ import {
   createDb,
   ledgerKeys,
   lockForOrder,
+  marketEventKey,
   marketMakerAccountId,
   releaseForOrder,
   schema,
@@ -31,6 +32,7 @@ import {
   createProvisionalMarket,
   createSettlementStep,
   createUser,
+  createWatch,
   fundMarketMakerFunds,
   fundTestTreasury,
   hasTestDb,
@@ -40,6 +42,7 @@ import {
   openOrderIntake,
   passMarketClose,
   placeTestOrder,
+  plantNotificationInsertFailure,
   recordLegacyCorrectionForTest,
   resolveMarketNow,
   testDbUrls,
@@ -48,6 +51,7 @@ import {
   type TestDb,
 } from '@buddha/db/test';
 import {
+  MARKET_SETTLED_NOTIFICATION,
   MARKET_STATUSES,
   SETTLEMENT_STEP_ERROR_MAX,
   marketChannel,
@@ -401,6 +405,62 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     return { userId, message: shortOf(marketId, 1_000n) };
   }
 
+  /** A member's `market_settled` rows (#188, ADR-0160): the final settlement's notices. */
+  async function settledNoticesOf(userId: string) {
+    return t.db
+      .select()
+      .from(schema.notifications)
+      .where(
+        and(
+          eq(schema.notifications.userId, userId),
+          eq(schema.notifications.type, MARKET_SETTLED_NOTIFICATION.type),
+        ),
+      );
+  }
+
+  /** Every notification and every dedupe key, whoever's: what a run wrote to any inbox. */
+  async function inboxRows() {
+    return {
+      notifications: await t.db
+        .select()
+        .from(schema.notifications)
+        .orderBy(asc(schema.notifications.userId)),
+      keys: await t.db
+        .select()
+        .from(schema.notificationKeys)
+        .orderBy(asc(schema.notificationKeys.userId)),
+    };
+  }
+
+  /**
+   * The one `market_settled` row a member gets (#188, ADR-0160; 52-12, 52-15): the confirmed
+   * result and the member's own summed payout as a decimal string ('0' included; null for a
+   * watcher who held nothing), the settled market's detail as its target, at the payout's instant.
+   */
+  function settledNotice(
+    market: { title: string; slug: string },
+    result: MarketResult,
+    payoutCoin: string | null,
+    settledAt: Date,
+  ) {
+    return expect.objectContaining({
+      type: MARKET_SETTLED_NOTIFICATION.type,
+      category: 'market',
+      params: { marketTitle: market.title, result, payoutCoin },
+      target: { kind: 'market', slug: market.slug },
+      mergeKey: null,
+      eventCount: 1,
+      occurredAt: settledAt,
+      readAt: null,
+    }) as unknown;
+  }
+
+  /** `value` as JSON with a bigint as its decimal string: what a check for member ids reads. */
+  const jsonOf = (value: unknown) =>
+    JSON.stringify(value, (_key, item: unknown) =>
+      typeof item === 'bigint' ? item.toString() : item,
+    );
+
   it('pays the winning holders, closes out every row and settles the market (M5 AC 3)', async () => {
     const market = await resolved('YES');
     // alice: YES 10 for 500 Coin → paid 1,000 Coin, realised +500.
@@ -605,8 +665,8 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
 
       // --- published after COMMIT (PLAN 8) -----------------------------------------------
       await waitForMessages(subscriber.of(marketChannel(market.id)), 2, 'market:status');
-      await waitForMessages(subscriber.of(userChannel(alice)), 2, "alice's events");
-      await waitForMessages(subscriber.of(userChannel(bob)), 1, "bob's events");
+      await waitForMessages(subscriber.of(userChannel(alice)), 3, "alice's events");
+      await waitForMessages(subscriber.of(userChannel(bob)), 2, "bob's events");
       await waitForMessages(subscriber.of(userChannel(carol)), 1, "carol's events");
       await sleep(100);
       const ts = result.settledAt.toISOString();
@@ -647,6 +707,8 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
           version: 2,
           ts,
         },
+        // Then the inbox signal (#188, ADR-0160): its `market_settled` notice, below.
+        { type: 'user:notification', ts },
       ]);
       expect(subscriber.of(userChannel(bob))).toEqual([
         {
@@ -660,13 +722,28 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
           version: 2,
           ts,
         },
+        { type: 'user:notification', ts },
       ]);
+      // carol sold out before the close: closed out, but she held nothing at the payout (52-1).
       expect(subscriber.of(userChannel(carol))).toEqual([
         expect.objectContaining({ type: 'user:position', outcome: 'YES', realizedPnlCoin: '120' }),
       ]);
       expect(subscriber.of(userChannel(dave))).toEqual([]);
       // The 운영 마켓메이커 has no client: nothing is published to it.
       expect(subscriber.of(userChannel(maker))).toEqual([]);
+
+      // --- the final settlement's notices (#188, ADR-0160): the holders at the payout, each
+      // with its own payout — bob's 0 included (52-1, 52-15); the gate skips the 운영 마켓메이커
+      // (53-5), and carol and dave held nothing then.
+      expect(await settledNoticesOf(alice)).toEqual([
+        settledNotice(market, 'YES', '1000', result.settledAt),
+      ]);
+      expect(await settledNoticesOf(bob)).toEqual([
+        settledNotice(market, 'YES', '0', result.settledAt),
+      ]);
+      expect((await inboxRows()).notifications.map((row) => row.userId).sort()).toEqual(
+        [alice, bob].sort(),
+      );
 
       const records = await recordsOf(market.id);
       expect(records).toHaveLength(4);
@@ -916,13 +993,15 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       expect((await balanceOf(alice)).availableCoin).toBe(10_000n - 500n + 1_000n);
       expect(await positionOf(alice, market.id, 'YES')).toMatchObject({ qty: 0, settled: true });
       // One warn per event that could not go out: the two statuses (settling, settled), the
-      // balance and the position.
-      expect(warns).toHaveLength(4);
+      // balance, the position and the inbox signal (#188).
+      expect(warns).toHaveLength(5);
       expect(warns.every((line) => (line as { msg: string }).msg === 'realtime publish failed'));
-      // The step is done: a publish after COMMIT is not part of it.
+      // The step is done: a publish after COMMIT is not part of it — nor is the notice's signal,
+      // whose notice committed with the payout.
       expect(await stepsOf(market.id)).toEqual([
         expect.objectContaining({ step: 'coin', status: 'done', attempts: 1 }),
       ]);
+      expect(await settledNoticesOf(alice)).toHaveLength(1);
     } finally {
       dead.disconnect();
     }
@@ -1112,9 +1191,22 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       ]),
     );
     const humanEvents = published.filter((item) => item.channel === userChannel(alice));
-    expect(humanEvents).toHaveLength(3);
+    expect(humanEvents).toHaveLength(4);
     expect(humanEvents[0]?.event).toMatchObject({ type: 'user:balance', availableCoin: '10150' });
+    // One inbox signal, last, for her one notice (#188, ADR-0160).
+    expect(humanEvents.map((item) => (item.event as { type: string }).type)).toEqual([
+      'user:balance',
+      'user:position',
+      'user:position',
+      'user:notification',
+    ]);
     expect(published.filter((item) => item.channel === userChannel(maker))).toEqual([]);
+    // A holder of both outcomes is one recipient with the sum: 500 + 250, a 지급 never a refund
+    // (52-15, N03 §6).
+    if (result.outcome !== 'settled') return;
+    expect(await settledNoticesOf(alice)).toEqual([
+      settledNotice(market, 'VOID', '750', result.settledAt),
+    ]);
     const balance = await balanceOf(alice);
     const ledger = await ledgerOf(alice);
     await expect(finalizeMarket(t.db, market.id, publish, logger)).resolves.toMatchObject({
@@ -1127,6 +1219,7 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     expect(await balanceOf(alice)).toEqual(balance);
     expect(await ledgerOf(alice)).toEqual(ledger);
     expect(await recordsOf(market.id)).toEqual(records);
+    expect(await settledNoticesOf(alice)).toHaveLength(1);
     expect((await runLedgerAudit(t.db)).mismatches).toEqual([]);
   });
 
@@ -1221,6 +1314,8 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       ]);
       expect(subscriber.of(userChannel(alice))).toEqual([]);
       expect(subscriber.of(userChannel(bob))).toEqual([]);
+      // Nor did any notice survive the rollback (#188, AC 13 '정산 재시도').
+      expect(await inboxRows()).toEqual({ notifications: [], keys: [] });
 
       // The collateral is made whole (#93's 대사 정정); the next run (the job's retry, or the
       // scan) settles it all.
@@ -1228,6 +1323,21 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       const result = await finalizeMarket(t.db, market.id, publish, logger);
       expect(result).toMatchObject({ outcome: 'settled', paidAccounts: 2, paidCoin: 1_500n });
       if (result.outcome !== 'settled') return;
+      // The retry tells each holder once, with what it paid.
+      expect(await settledNoticesOf(alice)).toEqual([
+        settledNotice(market, 'YES', '1000', result.settledAt),
+      ]);
+      expect(await settledNoticesOf(bob)).toEqual([
+        settledNotice(market, 'YES', '500', result.settledAt),
+      ]);
+      const told = await inboxRows();
+      expect(told.notifications).toHaveLength(2);
+      // A third run (a duplicate job, the scan) skips at the status: nothing new (53-4).
+      await expect(finalizeMarket(t.db, market.id, publish, logger)).resolves.toMatchObject({
+        outcome: 'skipped',
+        reason: 'not_settling',
+      });
+      expect(await inboxRows()).toEqual(told);
       // The rerun starts from `settling`: no second settling event.
       expect(await eventsOf(market.id)).toEqual([
         settling,
@@ -1341,7 +1451,12 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       paidAccounts: 1,
       paidCoin: 1_000n,
     });
-    expect(published).toEqual([marketChannel(market.id)]);
+    // No balance or position event (nothing paid this run), but the notice: read from the
+    // records the earlier coin step committed, not from this run's empty settlements (#188).
+    expect(published).toEqual([marketChannel(market.id), userChannel(alice)]);
+    expect(await settledNoticesOf(alice)).toEqual([
+      settledNotice(market, 'YES', '1000', (await marketRow(market.id)).settledAt!),
+    ]);
     expect(await balanceOf(alice)).toEqual(before.balance);
     expect(await ledgerOf(alice)).toEqual(before.ledger);
     expect(await recordsOf(market.id)).toEqual(before.records);
@@ -1792,15 +1907,16 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
         }),
       ]);
 
-      await waitForMessages(subscriber.of(userChannel(alice)), 3, "alice's events");
+      await waitForMessages(subscriber.of(userChannel(alice)), 4, "alice's events");
       await sleep(100);
       const events = subscriber.of(userChannel(alice));
       // ONE balance event (the account's last state), then both rows in (user_id, outcome)
-      // order — YES before NO, the enum's order.
+      // order — YES before NO, the enum's order — then ONE inbox signal (#188).
       expect(events.map((event) => event.type)).toEqual([
         'user:balance',
         'user:position',
         'user:position',
+        'user:notification',
       ]);
       expect(events[0]).toMatchObject({
         availableCoin: balance.availableCoin.toString(),
@@ -1809,6 +1925,11 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       });
       expect(events[1]).toMatchObject({ outcome: 'YES', realizedPnlCoin: '200', settled: true });
       expect(events[2]).toMatchObject({ outcome: 'NO', realizedPnlCoin: '-300', settled: true });
+      // ONE notice with the sum of her two rows' payouts: 400 + 0 (52-15; no P&L in it).
+      if (result.outcome !== 'settled') return;
+      expect(await settledNoticesOf(alice)).toEqual([
+        settledNotice(market, 'YES', '400', result.settledAt),
+      ]);
 
       expect((await runLedgerAudit(t.db)).recorded).toBe(0);
     } finally {
@@ -1870,6 +1991,273 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       'SETTLEMENT_PAYOUT',
     ]);
     expectLedgerChain(ledger, balance.availableCoin);
+  });
+
+  it.each([
+    ['YES', { alice: '1000', bob: '0', carol: '400' }],
+    ['NO', { alice: '0', bob: '500', carol: '600' }],
+    ['VOID', { alice: '500', bob: '250', carol: '500' }],
+  ] as const)(
+    'J5: a %s payout tells each holder its own summed payout and each watcher the result, once, signalled last (#188, 52-1, 52-15)',
+    async (result, payouts) => {
+      const market = await resolved(result);
+      const member = async () => (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
+      const [alice, bob, carol, dave, erin, wendy] = [
+        await member(),
+        await member(),
+        await member(),
+        await member(),
+        await member(),
+        await member(),
+      ];
+      const on = { marketId: market.id };
+      // alice holds YES 10 and watches too: one notice, with her payout (53-4).
+      await hold({ userId: alice, ...on, outcome: 'YES', qty: 10, costBasisCoin: 500n });
+      await createWatch(t.db, { userId: alice, ...on });
+      // bob holds NO 5: told under YES too, his 지급 0 included (52-1 '지급 0이 될 보유 포함').
+      await hold({ userId: bob, ...on, outcome: 'NO', qty: 5, costBasisCoin: 300n });
+      // carol holds both outcomes: ONE notice with the sum (VOID 50 × each side, YES/NO 100 × the
+      // winning side + 0).
+      await hold({ userId: carol, ...on, outcome: 'YES', qty: 4, costBasisCoin: 200n });
+      await hold({ userId: carol, ...on, outcome: 'NO', qty: 6, costBasisCoin: 300n });
+      // dave sold out before the close: a qty-0 row, no record at the payout, no notice (52-1).
+      await hold({
+        userId: dave,
+        ...on,
+        outcome: 'YES',
+        qty: 0,
+        costBasisCoin: 0n,
+        realizedPnlCoin: 30n,
+      });
+      // erin holds and watches another market only.
+      const other = await createMarket(t.db, { status: 'closed' });
+      await hold({ userId: erin, marketId: other.id, outcome: 'YES', qty: 2, costBasisCoin: 90n });
+      await createWatch(t.db, { userId: erin, marketId: other.id });
+      // wendy only watches: the result, and no payout (null — never '0').
+      await createWatch(t.db, { userId: wendy, ...on });
+      const maker = await makerId();
+
+      const published: { channel: string; event: { type: string; status?: string } }[] = [];
+      const record: Publish = (channel, event) => {
+        published.push({ channel, event });
+        return Promise.resolve();
+      };
+      const finalized = await finalizeMarket(t.db, market.id, record, logger);
+      expect(finalized.outcome).toBe('settled');
+      if (finalized.outcome !== 'settled') return;
+      const { settledAt, statusEventId } = finalized;
+
+      // --- one `market_settled` per member told, its own payout, keyed by `finalized` --------
+      for (const [userId, payout] of [
+        [alice, payouts.alice],
+        [bob, payouts.bob],
+        [carol, payouts.carol],
+        [wendy, null],
+      ] as const) {
+        expect(await settledNoticesOf(userId), userId).toEqual([
+          settledNotice(market, result, payout, settledAt),
+        ]);
+      }
+      // Nobody else: not dave (sold out), not erin (another market), not the 운영 마켓메이커,
+      // whose payout rows are in the audience and whose inbox the gate refuses (53-5).
+      const told = [alice, bob, carol, wendy].sort();
+      const { notifications, keys } = await inboxRows();
+      expect(notifications.map((row) => row.userId).sort()).toEqual(told);
+      expect(
+        keys
+          .map(({ userId, type, eventKey }) => ({ userId, type, eventKey }))
+          .sort((x, y) => (x.userId < y.userId ? -1 : 1)),
+      ).toEqual(
+        told.map((userId) => ({
+          userId,
+          type: MARKET_SETTLED_NOTIFICATION.type,
+          eventKey: marketEventKey(statusEventId),
+        })),
+      );
+
+      // --- after COMMIT: one signal per member told, at the payout's instant, after the status
+      // and every balance and position event ---------------------------------------------------
+      const signals = published.filter(({ event }) => event.type === 'user:notification');
+      expect(signals.map(({ channel }) => channel).sort()).toEqual(told.map(userChannel).sort());
+      for (const { event } of signals) {
+        expect(event).toEqual({ type: 'user:notification', ts: settledAt.toISOString() });
+      }
+      const first = published.findIndex(({ event }) => event.type === 'user:notification');
+      expect(published.slice(first)).toEqual(signals);
+      expect(published.slice(0, first).map(({ event }) => event.type)).toEqual(
+        expect.arrayContaining(['market:status', 'user:balance', 'user:position']),
+      );
+      expect(published.find(({ channel }) => channel === userChannel(maker))).toBeUndefined();
+      expect(published.find(({ channel }) => channel === userChannel(erin))).toBeUndefined();
+      expect(
+        published.filter(({ channel }) => channel === userChannel(dave)).map(({ event }) => event),
+      ).toEqual([expect.objectContaining({ type: 'user:position', realizedPnlCoin: '30' })]);
+
+      // --- who was told reaches neither the result nor the event nor the log (ADR-0064) -------
+      const members = [alice, bob, carol, dave, erin, wendy];
+      expect(Object.keys(finalized).sort()).toEqual([
+        'marketId',
+        'outcome',
+        'paidAccounts',
+        'paidCoin',
+        'positions',
+        'settledAccounts',
+        'settledAt',
+        'statusEventId',
+      ]);
+      expect(members.filter((id) => jsonOf(finalized).includes(id))).toEqual([]);
+      const [, event] = await eventsOf(market.id);
+      expect(Object.keys(event!.payload as object).sort()).toEqual([
+        'paidAccounts',
+        'paidCoin',
+        'positions',
+        'result',
+        'settledAccounts',
+      ]);
+      expect(logs).toEqual([]);
+
+      // --- reprocessing: a duplicate job and the scan skip at the status, nothing new (53-4) ---
+      const sent = published.length;
+      await expect(finalizeMarket(t.db, market.id, record, logger)).resolves.toMatchObject({
+        outcome: 'skipped',
+        reason: 'not_settling',
+      });
+      await expect(finalizeDueMarkets(t.db, record, logger)).resolves.toMatchObject({
+        settled: 0,
+        failed: 0,
+      });
+      expect(await inboxRows()).toEqual({ notifications, keys });
+      expect(published).toHaveLength(sent);
+    },
+  );
+
+  it('188-2: a notice that fails to write rolls the payout back with it — still settling, recorded with no account — and the next run pays and notifies once', async () => {
+    // ADR-0157 결정 4의 7 as written: the payout, its records, the `finalized` transition and the
+    // notices are one transaction, no savepoint (188-2 — B′ stays the one exception, 54-6).
+    // Postgres refuses every notification row here, its message, DETAIL and HINT naming the
+    // row's account.
+    const market = await resolved('YES');
+    const alice = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
+    await hold({
+      userId: alice,
+      marketId: market.id,
+      outcome: 'YES',
+      qty: 10,
+      costBasisCoin: 500n,
+    });
+    const bob = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
+    await hold({ userId: bob, marketId: market.id, outcome: 'NO', qty: 5, costBasisCoin: 300n });
+    const wendy = (await createUser(t.db)).user.id;
+    await createWatch(t.db, { userId: wendy, marketId: market.id });
+    const maker = await makerId();
+    const members = [alice, bob, wendy, maker];
+    const named = (text: string) => members.filter((id) => text.includes(id));
+    const before = {
+      alice: { balance: await balanceOf(alice), ledger: await ledgerOf(alice) },
+      bob: { balance: await balanceOf(bob), ledger: await ledgerOf(bob) },
+      collateral: await coinOf(collateralOf(market.id)),
+      funds: await coinOf(fundsOf(market.id)),
+      positions: await positionsOf(market.id),
+    };
+    const [stepBefore] = await stepsOf(market.id);
+    const published: { channel: string; event: { type: string; status?: string } }[] = [];
+    const record: Publish = (channel, event) => {
+      published.push({ channel, event });
+      return Promise.resolve();
+    };
+    const message = 'P0001 notification write failed: planted failure for <recipient>';
+
+    const planted = await plantNotificationInsertFailure();
+    let err: unknown;
+    try {
+      err = await finalizeMarket(t.db, market.id, record, logger).catch((e: unknown) => e);
+    } finally {
+      await planted.remove();
+    }
+    // The job fails with the write path's error: its SQLSTATE, no recipient, no cause.
+    expect(err).toMatchObject({
+      name: 'NotificationWriteError',
+      code: 'P0001',
+      message: 'notification write failed: planted failure for <recipient>',
+    });
+    expect(err).not.toHaveProperty('cause');
+    const error = err as Error;
+    expect(named(`${String(error)}\n${error.stack ?? ''}\n${JSON.stringify(error)}`)).toEqual([]);
+
+    // --- the payout rolled back with it: 지급 중 (지급 지연), nothing paid or recorded ---------
+    const [settling, ...rest] = await eventsOf(market.id);
+    expect(settling).toMatchObject({ type: 'settling', toStatus: 'settling' });
+    expect(rest).toEqual([]);
+    expect(await marketRow(market.id)).toMatchObject({
+      status: 'settling',
+      settledAt: null,
+      statusEventId: settling!.id,
+    });
+    expect(await recordsOf(market.id)).toEqual([]);
+    expect(await positionsOf(market.id)).toEqual(before.positions);
+    for (const [userId, was] of [
+      [alice, before.alice],
+      [bob, before.bob],
+    ] as const) {
+      expect(await balanceOf(userId)).toEqual(was.balance);
+      expect(await ledgerOf(userId)).toEqual(was.ledger);
+    }
+    expect(await coinOf(collateralOf(market.id))).toBe(before.collateral);
+    expect(await coinOf(fundsOf(market.id))).toBe(before.funds);
+    expect(await inboxRows()).toEqual({ notifications: [], keys: [] });
+    // Recorded on `coin` (the rollback undid its `done`): the admin-visible reason names no
+    // account (ADR-0157 결정 4의 7, ADR-0159 12-22).
+    const [failed] = await stepsOf(market.id);
+    expect(failed).toMatchObject({
+      step: 'coin',
+      status: 'failed',
+      attempts: 1,
+      completedAt: null,
+      lastError: message,
+      createdAt: stepBefore!.createdAt,
+    });
+    expect(named(failed!.lastError!)).toEqual([]);
+    expect(logs).toEqual([]);
+    // Only the settling transition committed, so it is all anyone is told: no payout event, no
+    // inbox signal.
+    expect(published).toEqual([
+      {
+        channel: marketChannel(market.id),
+        event: expect.objectContaining({ type: 'market:status', status: 'settling' }) as unknown,
+      },
+    ]);
+
+    // --- fixed: the next run (the job's retry, the scan) pays and notifies together, once ----
+    published.length = 0;
+    const result = await finalizeMarket(t.db, market.id, record, logger);
+    expect(result).toMatchObject({ outcome: 'settled', paidAccounts: 2, paidCoin: 1_500n });
+    if (result.outcome !== 'settled') return;
+    expect(await settledNoticesOf(alice)).toEqual([
+      settledNotice(market, 'YES', '1000', result.settledAt),
+    ]);
+    expect(await settledNoticesOf(bob)).toEqual([
+      settledNotice(market, 'YES', '0', result.settledAt),
+    ]);
+    expect(await settledNoticesOf(wendy)).toEqual([
+      settledNotice(market, 'YES', null, result.settledAt),
+    ]);
+    const told = await inboxRows();
+    expect(told.notifications).toHaveLength(3);
+    expect(
+      published
+        .filter(({ event }) => event.type === 'user:notification')
+        .map(({ channel }) => channel)
+        .sort(),
+    ).toEqual([alice, bob, wendy].map(userChannel).sort());
+    // The failed attempt stays the step's history (ADR-0046).
+    expect(await stepsOf(market.id)).toEqual([
+      expect.objectContaining({ status: 'done', attempts: 2, lastError: message }),
+    ]);
+    expect((await runLedgerAudit(t.db)).recorded).toBe(0);
+    await expect(finalizeMarket(t.db, market.id, record, logger)).resolves.toMatchObject({
+      outcome: 'skipped',
+    });
+    expect(await inboxRows()).toEqual(told);
   });
 
   it('scan settles every resolved and settling market, judged longest ago first, and leaves the rest alone', async () => {

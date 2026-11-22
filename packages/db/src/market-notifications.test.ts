@@ -530,20 +530,37 @@ const RECONCILIATION_CALL = /\b(runMarketReconciliation|runAccountReconciliation
 const BUILDS = /\bmarketNotificationInputs\(/;
 const DELIVERS_B_PRIME = /\bdeliverReconciliationNotices\(/;
 const WRITES = /\bcreateNotifications\(/;
+/** #188's builders (judgement-notifications.ts, ADR-0160): J1/J2/J4, J5, J3, J2's closures. */
+const BUILDS_JUDGEMENT = /\bjudgementNotificationInputs\(/;
+const BUILDS_SETTLEMENT = /\bsettlementNotificationInputs\(/;
+/** Every market-notice builder or delivery (#54's and #188's) and both audience reads. */
+const MARKET_NOTICE_CALLS = [
+  'marketNotificationInputs',
+  'deliverReconciliationNotices',
+  'judgementNotificationInputs',
+  'settlementNotificationInputs',
+  'disputeDecisionNotificationInput',
+  'disputeClosureNotificationInputs',
+  'marketAudience',
+  'settlementAudience',
+];
+const ANY_MARKET_NOTICE = new RegExp(`\\b(${MARKET_NOTICE_CALLS.join('|')})\\(`);
 /** A caller that cannot pause asserts the run paused nothing. */
 const ASSERTS_NO_PAUSE = /\.systemPause\s*[!=]==\s*null/;
 
 type StatusChanger =
-  /** Its file holds the event's one call with #54's inputs. */
-  | { class: 'notifies'; event: string }
-  /** A core whose transaction owners build #54's inputs (`by`, each). */
-  | { class: 'core'; by: readonly string[]; event: string }
-  /** It changes a status no #54 notice covers. */
+  /** Its file holds the event's one call with its builder's inputs (`builds`, default #54's). */
+  | { class: 'notifies'; event: string; builds?: RegExp }
+  /** A core whose transaction owners (`by`, each) build its inputs (`builds`, default #54's). */
+  | { class: 'core'; by: readonly string[]; event: string; builds?: RegExp }
+  /** It changes a status no market notice covers. */
   | { class: 'excluded'; reason: string };
 
 /**
  * Every production file that changes a market's status (`transitionMarket(tx`), classified
- * (ADR-0159). A new caller fails the pin until it is classified here; a stale entry fails too.
+ * (ADR-0159; #188's two reclassified by ADR-0160). A new caller fails the pin until it is
+ * classified here; a stale entry fails too. #188's correction (J2), dispute decision (J3) and
+ * delay record (J4) change no status: judgement-notifications.test.ts pins their callers.
  */
 const STATUS_CHANGERS: Record<string, StatusChanger> = {
   'packages/db/src/market-close.ts': { class: 'notifies', event: 'G the close at close_at' },
@@ -565,6 +582,7 @@ const STATUS_CHANGERS: Record<string, StatusChanger> = {
       'apps/api/src/admin/reconciliation-corrections.service.ts',
     ],
     event: 'B′ the automatic ledger-failure pause (54-5)',
+    builds: DELIVERS_B_PRIME,
   },
   'packages/db/src/market-open.ts': { class: 'excluded', reason: '개장 (52-20)' },
   'apps/api/src/markets/market-admin.service.ts': {
@@ -572,12 +590,17 @@ const STATUS_CHANGERS: Record<string, StatusChanger> = {
     reason: '검수 제출·승인·반려·되돌리기 — before the open (52-20)',
   },
   'packages/db/src/market-judgement.ts': {
-    class: 'excluded',
-    reason: '판정·잠정 결과·정정 — #188 (52-11…52-15)',
+    class: 'core',
+    by: ['apps/api/src/markets/market-judgement.service.ts'],
+    event:
+      'J1 provisional, J2 correction (#188, ADR-0160); its `resolved` transition is the worker’s and silent (52-12)',
+    builds: BUILDS_JUDGEMENT,
   },
   'apps/worker/src/jobs/market-finalize.ts': {
-    class: 'excluded',
-    reason: '정산 확정 — #188 (52-11…52-15)',
+    class: 'notifies',
+    event:
+      'J5 지급 완료 (#188, ADR-0160; 188-2: all or nothing with the payout); its `settling` is silent',
+    builds: BUILDS_SETTLEMENT,
   },
 };
 
@@ -622,34 +645,52 @@ describe('who tells of a market’s state (#54, static)', () => {
     expect(changers).toEqual(Object.keys(STATUS_CHANGERS).sort());
   });
 
-  it('builds and delivers the notices where a status change notifies (G)', () => {
+  it('builds and delivers the notices where a status change notifies (G; #188’s J5)', () => {
+    const missing: string[] = [];
     for (const [file, changer] of Object.entries(STATUS_CHANGERS)) {
       if (changer.class !== 'notifies') continue;
-      expect(read(file), file).toMatch(BUILDS);
-      expect(read(file), file).toMatch(WRITES);
+      if (!(changer.builds ?? BUILDS).test(read(file))) missing.push(`${file}: no builder`);
+      if (!WRITES.test(read(file))) missing.push(`${file}: no write`);
     }
+    expect(missing).toEqual([]);
   });
 
-  it('builds the notices in every transaction owner of a core (B, C, E; B′ through its delivery)', () => {
+  it('builds the notices in every transaction owner of a core (B, C, E; B′ through its delivery; #188’s J1, J2)', () => {
     const missing: string[] = [];
     for (const [file, changer] of Object.entries(STATUS_CHANGERS)) {
       if (changer.class !== 'core') continue;
       for (const owner of changer.by) {
-        const source = read(owner);
-        const pattern =
-          file === 'packages/db/src/reconciliation-audit.ts' ? DELIVERS_B_PRIME : BUILDS;
-        if (!pattern.test(source)) missing.push(`${owner} (${file})`);
+        if (!(changer.builds ?? BUILDS).test(read(owner))) missing.push(`${owner} (${file})`);
       }
     }
     expect(missing).toEqual([]);
   });
 
-  it('builds no market notice where a change is excluded', () => {
+  it('builds no market notice where a change is excluded (#54’s builders, #188’s, either audience)', () => {
+    expect(
+      Object.entries(STATUS_CHANGERS)
+        .filter(([, changer]) => changer.class === 'excluded')
+        .map(([file]) => file)
+        .sort(),
+    ).toEqual(['apps/api/src/markets/market-admin.service.ts', 'packages/db/src/market-open.ts']);
     for (const [file, changer] of Object.entries(STATUS_CHANGERS)) {
       if (changer.class !== 'excluded') continue;
-      expect(read(file), file).not.toMatch(BUILDS);
-      expect(read(file), file).not.toMatch(/\bmarketAudience\(/);
+      expect(read(file), file).not.toMatch(ANY_MARKET_NOTICE);
     }
+    // The pattern matches each builder's and audience read's call, and no definition.
+    for (const text of [
+      'marketNotificationInputs(audience',
+      'judgementNotificationInputs(await',
+      'settlementNotificationInputs(recipients',
+      'disputeDecisionNotificationInput(result.dispute',
+      'disputeClosureNotificationInputs(closed',
+      'settlementAudience(tx',
+      'marketAudience(tx',
+      'deliverReconciliationNotices(tx',
+    ]) {
+      expect(ANY_MARKET_NOTICE.test(text), text).toBe(true);
+    }
+    expect(ANY_MARKET_NOTICE.test('type JudgementNotice =')).toBe(false);
   });
 
   it('tells of a supplement only where it is approved, and only one that changed a notified item (D, 52-10)', () => {
@@ -689,9 +730,7 @@ describe('who tells of a market’s state (#54, static)', () => {
     ]) {
       const source = read(file);
       expect(source, file).not.toMatch(/\btransitionMarket\(/);
-      expect(source, file).not.toMatch(BUILDS);
-      expect(source, file).not.toMatch(/\bmarketAudience\(/);
-      expect(source, file).not.toMatch(DELIVERS_B_PRIME);
+      expect(source, file).not.toMatch(ANY_MARKET_NOTICE);
     }
     // The control's own file writes no notification at all (the cycle's are its fills', F2).
     for (const file of [

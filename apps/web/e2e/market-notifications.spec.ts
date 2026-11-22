@@ -1,5 +1,4 @@
-import type { APIRequestContext, APIResponse } from '@playwright/test';
-import type { AdminMarket, Notification } from '@buddha/shared';
+import type { AdminMarket } from '@buddha/shared';
 import { copy } from '../src/copy';
 import {
   ONE_READ_MS,
@@ -13,6 +12,7 @@ import {
   detailCopyTestId,
   documentSurvived,
   expect,
+  expectDecided,
   freshEmail,
   inboxOf,
   leaveNoPauseDecision,
@@ -23,6 +23,8 @@ import {
   notificationRow,
   notificationRowIds,
   notificationRows,
+  noticeTypesOf,
+  onlyNoticeOf,
   openCounted,
   pauseMarket,
   placeOrder,
@@ -88,27 +90,6 @@ const YES_LOW_BID: OrderTerms = {
 
 /** The reason a re-sent approval gives (1..500 characters): it is refused before it is read. */
 const RESENT_APPROVAL_REASON = '같은 요청을 다시 승인합니다. 이미 결정된 요청입니다.';
-
-/** The types of a member's notices, sorted: rows of one event come in no set order. */
-async function typesOf(context: APIRequestContext): Promise<string[]> {
-  return (await inboxOf(context)).map((notice) => notice.type).sort();
-}
-
-/** The member's one notice of `type`; throws when there is none or more than one. */
-function onlyOf(inbox: readonly Notification[], type: string): Notification {
-  const [only, ...others] = inbox.filter((notice) => notice.type === type);
-  if (only === undefined || others.length > 0) throw new Error(`not one notice of ${type}`);
-  return only;
-}
-
-/** An approval refused as already decided (409 APPROVAL_NOT_ALLOWED, `decided`). */
-async function expectDecided(response: APIResponse): Promise<void> {
-  const body = await response.text();
-  expect(response.status(), body).toBe(409);
-  const { error } = JSON.parse(body) as { error: { code: string; details: unknown } };
-  expect(error.code).toBe('APPROVAL_NOT_ALLOWED');
-  expect(error.details).toEqual([{ path: ['request'], message: 'decided' }]);
-}
 
 test.describe('시장 상태 알림 (#54)', () => {
   test('일시 중단과 재개는 관심 등록자에게 공개 사유와 함께 새로 고침 없이 오고 누르면 시장 상세가 열리며, 그 전에 관심을 해제한 회원은 받지 않고 다시 보낸 승인은 아무것도 더하지 않는다', async ({
@@ -266,17 +247,17 @@ test.describe('시장 상태 알림 (#54)', () => {
       );
       await watchThroughApi(wPage, market.id);
       // A's fill is #134's notice; nobody else has one yet.
-      expect(await typesOf(a)).toEqual(['order_filled']);
-      for (const member of [b, c, w]) expect(await typesOf(member)).toEqual([]);
+      expect(await noticeTypesOf(a)).toEqual(['order_filled']);
+      for (const member of [b, c, w]) expect(await noticeTypesOf(member)).toEqual([]);
 
       // --- The admin pauses it for 사건 선공개: the resting orders cancelled (#134's notice to A
       // and C) and the pause told to the holders and the watcher — not to C, whose order alone it
       // touched (52-1).
       await pauseMarket(admin, market.id, 'early_result');
-      expect(await typesOf(a)).toEqual(['market_paused', 'order_filled', 'orders_cancelled']);
-      for (const member of [b, w]) expect(await typesOf(member)).toEqual(['market_paused']);
-      expect(await typesOf(c)).toEqual(['orders_cancelled']);
-      expect(onlyOf(await inboxOf(a), 'market_paused').params).toEqual({
+      expect(await noticeTypesOf(a)).toEqual(['market_paused', 'order_filled', 'orders_cancelled']);
+      for (const member of [b, w]) expect(await noticeTypesOf(member)).toEqual(['market_paused']);
+      expect(await noticeTypesOf(c)).toEqual(['orders_cancelled']);
+      expect(onlyNoticeOf(await inboxOf(a), 'market_paused').params).toEqual({
         marketTitle: market.title,
         reason: 'early_result',
       });
@@ -289,33 +270,33 @@ test.describe('시장 상태 알림 (#54)', () => {
       expect((await approvePauseDecisionAsReviewer(admin, market.id, requestId)).status).toBe(
         'closed',
       );
-      expect(await typesOf(a)).toEqual([
+      expect(await noticeTypesOf(a)).toEqual([
         'market_closed',
         'market_paused',
         'order_filled',
         'orders_cancelled',
       ]);
       for (const member of [b, w]) {
-        expect(await typesOf(member)).toEqual(['market_closed', 'market_paused']);
+        expect(await noticeTypesOf(member)).toEqual(['market_closed', 'market_paused']);
       }
-      expect(await typesOf(c)).toEqual(['orders_cancelled']);
+      expect(await noticeTypesOf(c)).toEqual(['orders_cancelled']);
       // Its params are the title and `early`, exactly: no count, no holding, nobody else (AC 8).
       const aInbox = await inboxOf(a);
-      const closed = onlyOf(aInbox, 'market_closed');
+      const closed = onlyNoticeOf(aInbox, 'market_closed');
       expect(closed).toMatchObject({
         category: 'market',
         target: { kind: 'market', slug: market.slug },
         eventCount: 1,
       });
       expect(closed.params).toEqual({ marketTitle: market.title, early: true });
-      expect(onlyOf(await inboxOf(w), 'market_closed').params).toEqual(closed.params);
+      expect(onlyNoticeOf(await inboxOf(w), 'market_closed').params).toEqual(closed.params);
 
       // --- A's 알림: four rows, the market's two in the owner's words (54-1).
       await openCounted(page, '/my/notifications');
       await expect(notificationRows(page)).toHaveCount(4);
       await expect(myUnread(page)).toHaveText('4');
       await expect(
-        notificationRow(page, onlyOf(aInbox, 'market_paused').id).getByTestId(
+        notificationRow(page, onlyNoticeOf(aInbox, 'market_paused').id).getByTestId(
           'notification-row-title',
         ),
       ).toHaveText(`${market.title} 거래 일시 중단 · 사유: 사건 선공개(조기 결과)`);

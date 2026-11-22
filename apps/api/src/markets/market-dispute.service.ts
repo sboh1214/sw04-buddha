@@ -1,8 +1,12 @@
 import { assertMarketDecisionEligibility } from './market-conflicts.js';
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  adminActionEventKey,
+  createNotifications,
   decideMarketDispute,
+  disputeDecisionNotificationInput,
   lockAdminRoles,
+  notifiedUserIds,
   readAdminDisputes,
   readMyDisputes,
   readMyMarketDispute,
@@ -19,6 +23,7 @@ import {
   disputeDecisionRefusal,
   encodeKeyset,
   isPublicMarketStatus,
+  notificationEvent,
   type AdminDisputeListQuery,
   type AdminDisputeQueueItem,
   type AdminMarket,
@@ -37,6 +42,7 @@ import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
 import { MarketJobs } from '../jobs/market-jobs.service.js';
 import { assertOnboarded } from '../onboarding/onboarded.guard.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import { type Page } from '../wallet/wallet.service.js';
 import { MarketAdminService, publishedStatusOf } from './market-admin.service.js';
 import { disputeNotAllowed, toAdminDisputeQueueItem, toMyDispute } from './market-dispute.js';
@@ -75,14 +81,17 @@ function marketRefOf(row: MarketRow): DisputeMarketRef {
  *   An account or a writing restriction refuses nothing (#173 item 6, ADR-0069 #45-12); an admin
  *   may not dispute (#173 item 15). No admin action: the member's own row.
  * - 철회 (`retract`, signed in is enough): the submitter's own, while pending and the deadline
- *   ahead (#173 item 6).
+ *   ahead (#173 item 6). Neither a submission nor a retraction tells anyone: the member's own act
+ *   (#188, ADR-0160).
  * - 기각·수용 (`decide`): one admin who did not register the dispute's judgement version — its
  *   approver may (#173 item 2) — with a reason the submitter reads (#173 item 7), written with its
  *   `admin_actions` row (`market_dispute_dismiss|accept`, payload the dispute, its version and the
- *   reason — never the submitter's body). An acceptance keeps holding the market: it is a
- *   correction (owner answer 2026-11-02), registered and approved by MarketJudgementService
- *   (#176, ADR-0105) — whose approval moves the version past it, and whose 반려 or 철회 sends it
- *   back to pending, to be decided here again.
+ *   reason — never the submitter's body), and the submitter's `market_dispute_decided` notice
+ *   (#188, ADR-0160; 52-14, 188-3: the decision and its public reason) keyed by that row. An
+ *   acceptance keeps holding the market: it is a correction (owner answer 2026-11-02), registered
+ *   and approved by MarketJudgementService (#176, ADR-0105) — whose approval moves the version
+ *   past it, and whose 반려 or 철회 sends it back to pending (silently, 188-6), to be decided here
+ *   again: a new decision, a new row, a new notice.
  * - The reads: the member's own (`listMine`, `myMarketDispute` — the dispute screen's standing,
  *   asked as the submission would), and 이의 접수 (`adminList`). A market's disputes on the admin
  *   detail are `AdminMarket.disputes` (`readAdminMarketDisputes`).
@@ -111,6 +120,7 @@ export class MarketDisputeService {
     @Inject(DB) private readonly db: Db,
     private readonly markets: MarketAdminService,
     private readonly jobs: MarketJobs,
+    private readonly publisher: MarketPublisher,
   ) {}
 
   /**
@@ -197,9 +207,14 @@ export class MarketDisputeService {
    * `registrant` for the admin who registered its judgement version and `own` for its submitter
    * (`disputeDecisionRefusal`); FORBIDDEN for an admin whose role was revoked while it waited.
    * Writes the decision (`decideMarketDispute`: a dismissal takes one off the hold count) and its
-   * `admin_actions` row at the database clock after the locks, and answers the admin detail. After
-   * COMMIT `market:status` (unchanged) and — a dismissal that left nothing holding, its deadline
-   * passed — `market.resolve` with no delay.
+   * `admin_actions` row at the database clock after the locks, then, last, the transaction's one
+   * `createNotifications` call (#188, ADR-0160; 52-14, 188-3·188-4): the submitter's
+   * `market_dispute_decided` — `dismissed` or `accepted` with the public reason, keyed by the
+   * decision's `admin_actions` row (a dispute decided again after a reopen is told again) — and
+   * answers the admin detail, which carries no list of who was told (ADR-0064). After COMMIT
+   * `market:status` (unchanged), `market.resolve` with no delay after a dismissal that left nothing
+   * holding past the deadline, and `user:notification` to the submitter when the notice reached
+   * them.
    */
   async decide(
     adminId: string,
@@ -208,7 +223,7 @@ export class MarketDisputeService {
     decision: MarketDisputeDecision,
     body: WithoutExpectedAccount<DecideDisputeBody>,
   ): Promise<AdminMarket> {
-    const { market, due } = await this.db.transaction(async (tx) => {
+    const { market, due, at, notified } = await this.db.transaction(async (tx) => {
       await lockMarket(tx, marketId);
       const current = await lockedMarketRow(tx, marketId);
       // The class's lock order: the admin roles after the market's rows, then the dispute's. The
@@ -253,27 +268,39 @@ export class MarketDisputeService {
       });
       // Asked above under the same locks.
       if (!result.decided) throw disputeNotAllowed(result.reason);
-      await tx.insert(schema.adminActions).values({
-        adminId,
-        type: MARKET_DISPUTE_DECISION_ACTION_TYPES[decision],
-        targetType: 'market',
-        targetId: marketId,
-        payload: {
-          disputeId,
-          noConflictConfirmed: true,
-          judgementVersion: result.dispute.judgementVersion,
-          reason: result.dispute.decisionReason ?? body.reason,
-        } satisfies MarketDisputeDecisionActionPayload,
-        createdAt: now,
-      });
+      const [action] = await tx
+        .insert(schema.adminActions)
+        .values({
+          adminId,
+          type: MARKET_DISPUTE_DECISION_ACTION_TYPES[decision],
+          targetType: 'market',
+          targetId: marketId,
+          payload: {
+            disputeId,
+            noConflictConfirmed: true,
+            judgementVersion: result.dispute.judgementVersion,
+            reason: result.dispute.decisionReason ?? body.reason,
+          } satisfies MarketDisputeDecisionActionPayload,
+          createdAt: now,
+        })
+        // #188: the decision's notice is keyed by this row (`admin_action:<id>`, ADR-0160).
+        .returning({ id: schema.adminActions.id });
+      if (!action) throw new AppError('INTERNAL', { message: 'Dispute decision insert failed' });
       const deadline = result.market.disputeDeadline;
+      const market = await this.markets.toAdminMarket(
+        tx,
+        result.market,
+        await marketTagNames(tx, marketId),
+        await readMarketSources(tx, marketId),
+      );
+      // #188 (ADR-0160; 52-14): the transaction's one call, last — the submitter alone, from the
+      // dispute row (a submitter needs fills, not a watch or a holding).
+      const notice = disputeDecisionNotificationInput(result.dispute, result.market, {
+        eventKey: adminActionEventKey(action.id),
+        occurredAt: now,
+      });
       return {
-        market: await this.markets.toAdminMarket(
-          tx,
-          result.market,
-          await marketTagNames(tx, marketId),
-          await readMarketSources(tx, marketId),
-        ),
+        market,
         // The last holding dispute dismissed past the deadline: nothing keeps the confirmation
         // (#173 item 7 '모두 기각되면 바로 확정'); before the deadline its own job confirms it.
         due:
@@ -283,6 +310,8 @@ export class MarketDisputeService {
           deadline.getTime() <= now.getTime()
             ? { deadline, now }
             : null,
+        at: now,
+        notified: notifiedUserIds(await createNotifications(tx, [notice])),
       };
     });
     // Outside the transaction, as every market write publishes: the refetch a subscriber makes
@@ -290,6 +319,7 @@ export class MarketDisputeService {
     await Promise.all([
       this.markets.publishStatus(market),
       due === null ? undefined : this.jobs.scheduleResolve(market.id, due.deadline, due.now),
+      ...notified.map((userId) => this.publisher.publishUser(userId, notificationEvent(at))),
     ]);
     return market;
   }

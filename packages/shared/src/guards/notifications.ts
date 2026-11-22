@@ -24,7 +24,8 @@ import {
  * notifications out of the initial product, and guards/notifications.test.ts fails on a type that
  * names any excluded feature (EXCLUDED_FEATURES), as a name or in its text. #53 shipped no type
  * (52-20); #134 registers the 거래 three (ADR-0158), #54 the 시장 five (ADR-0159, the wording of
- * 54-1 — owner's answer of 2026-11-22). The web's renderer words a type from its
+ * 54-1 — owner's answer of 2026-11-22), #188 the 판정·정산 six (ADR-0160, the wording of 188-1 —
+ * owner's answer of 2026-11-22). The web's renderer words a type from its
  * copy (`NOTIFICATION_RENDERERS[type].copy`), whose entries equal `text` here, in order
  * (apps/web lib/notifications.test.ts): whole sentences with single-brace placeholders the web
  * fills, and the words it fills some of them with. docs/GUARDS.md has the registration rule.
@@ -106,6 +107,57 @@ export const NOTIFICATION_TYPE_REGISTRY = {
     text: ['{market} 규칙 보충 {version} · 사유: {reason}', 'v'],
     reason:
       '개장 뒤 판정 항목·거래 마감이 바뀐 규칙 보충 — 버전과 공개 사유. N05 §4, N03 §4, ADR-0159, 52-10',
+  },
+  // #188 (ADR-0160, 188-1). The second line of a timed notice is '판정 기준 시간대 <time>' when the
+  // market's zone differs from the member's (the detail's rule, 52-15); the result labels fill
+  // `{result}` and the decision labels `{decision}`.
+  market_judgement_delayed: {
+    text: ['{market} 판정 지연 · 다음 검토 {nextReview} · 사유: {reason}', '판정 기준 시간대'],
+    reason:
+      '관심·보유 시장의 판정 지연 기록(처음과, 사유나 다음 검토 시각이 바뀐 기록) — 공개 지연 사유와 다음 검토 시각. N05 §4, N03 §4, ADR-0160, 52-1·52-11·52-15·188-5',
+  },
+  market_provisional_result: {
+    text: [
+      '{market} 잠정 결과: {result} · 이의 기한 {deadline}',
+      'YES',
+      'NO',
+      '무효',
+      '판정 기준 시간대',
+    ],
+    reason:
+      '관심·보유 시장의 잠정 결과(YES·NO·무효)와 이의 기한. N05 §4, N03 §5, ADR-0160, 52-1·52-12·52-13·52-15',
+  },
+  market_judgement_corrected: {
+    text: [
+      '{market} 판정 정정 · 잠정 결과: {result} · 새 이의 기한 {deadline}',
+      'YES',
+      'NO',
+      '무효',
+      '판정 기준 시간대',
+    ],
+    reason:
+      '지급 전 판정 정정 — 정정된 잠정 결과와 새 이의 기한, 같은 관심·보유 대상. N03 §7, ADR-0160, 52-12·52-14',
+  },
+  market_dispute_decided: {
+    text: ['{market} 판정 이의 {decision} · 사유: {reason}', '기각', '수용'],
+    reason:
+      '내가 낸 판정 이의의 기각·수용과 공개 처리 사유 — 제출자에게. N03 §5, ADR-0160, 52-14·188-3',
+  },
+  market_dispute_closed_by_correction: {
+    text: ['{market} 판정 이의 정정으로 종결 · 새 이의 기한 {deadline}', '판정 기준 시간대'],
+    reason: '정정으로 종결된 내 판정 이의와 새 이의 기한 — 제출자에게. N03 §7, ADR-0160, 52-14',
+  },
+  market_settled: {
+    // The second sentence for a watcher who held nothing at the payout (`payoutCoin` null).
+    text: [
+      '{market} 결과 확정: {result} · 지급 완료 · 내 지급액 {payout}',
+      '{market} 결과 확정: {result} · 지급 완료',
+      'YES',
+      'NO',
+      '무효',
+    ],
+    reason:
+      '관심·보유 시장의 최종 정산 — 지급이 끝난 때 확정 결과와 지급 완료를 나눠 적고 보유자에게는 자기 지급액(0 포함, 손익 없음). 무효 지급은 환불이 아니다. N05 §4, N03 §5·§6, ADR-0160, 52-1·52-12·52-15',
   },
 } as const satisfies Record<NotificationType, NotificationTypeText>;
 

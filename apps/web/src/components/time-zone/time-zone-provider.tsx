@@ -57,8 +57,8 @@ const TimeZoneContext = createContext<string>(SEOUL_TIME_ZONE);
 /**
  * Whether the zone in effect is the viewer's own (`timeZoneSettled`) rather than Seoul standing in
  * for it: false on the server, in the hydrating render, until the profile is known, and under
- * `KstTimeZone` — so the judgement zone's second line (`DateTimeText`, #22, ADR-0098) is never in
- * the server's HTML, never drawn by the server's ICU, and never on an admin screen.
+ * `KstTimeZone` — so the judgement zone's second line (`JudgementZoneLine`, #22, ADR-0098) is
+ * never in the server's HTML, never drawn by the server's ICU, and never on an admin screen.
  */
 const TimeZoneSettledContext = createContext<boolean>(false);
 
@@ -170,26 +170,40 @@ export interface DateTimeTextProps {
  * and, for a market's rules, the zone it is judged in (`judgementTimeZone`). The second line is
  * labelled (`rulesJudgementZoneLine`): a Seoul time carries no marker, so beside a marked viewer's
  * line it would not say which zone it is in. Its zone is told apart by name (`judgementLineZone`).
+ * The second line is `JudgementZoneLine`, which a notification's title draws under its sentence.
  */
 export function DateTimeText({ iso, judgementTimeZone, testId }: DateTimeTextProps) {
-  const zone = useDisplayTimeZone();
-  const settled = useContext(TimeZoneSettledContext);
-  const viewer = formatInTimeZone(iso, zone);
-  const second = settled ? judgementLineZone(zone, judgementTimeZone) : null;
+  const viewer = formatInTimeZone(iso, useDisplayTimeZone());
   return (
     <>
       {testId === undefined ? viewer : <span data-testid={`${testId}-viewer-zone`}>{viewer}</span>}
-      {second !== null && (
-        <Text
-          as="span"
-          display="block"
-          color="fg.muted"
-          data-testid={testId === undefined ? undefined : `${testId}-judgement-zone`}
-        >
-          {copy.rulesJudgementZoneLine} {formatInTimeZone(iso, second)}
-        </Text>
-      )}
+      <JudgementZoneLine iso={iso} judgementTimeZone={judgementTimeZone} testId={testId} />
     </>
+  );
+}
+
+/**
+ * `DateTimeText`'s second line alone: '판정 기준 시간대 <time>' in the market's zone, block-level
+ * under whatever the caller drew first — nothing at all unless the zone in effect is settled and
+ * another one by name (`judgementLineZone`: null, '', unknown or the same zone draw none). For a
+ * time written into a sentence, where the first line is the caller's own: a 판정·정산 알림's title
+ * (#188, ADR-0160; 52-15 — the inbox's rule is the detail's). `testId` is a prefix, as
+ * `DateTimeText`'s: the line is `<testId>-judgement-zone`.
+ */
+export function JudgementZoneLine({ iso, judgementTimeZone, testId }: DateTimeTextProps) {
+  const zone = useDisplayTimeZone();
+  const settled = useContext(TimeZoneSettledContext);
+  const second = settled ? judgementLineZone(zone, judgementTimeZone) : null;
+  if (second === null) return null;
+  return (
+    <Text
+      as="span"
+      display="block"
+      color="fg.muted"
+      data-testid={testId === undefined ? undefined : `${testId}-judgement-zone`}
+    >
+      {copy.rulesJudgementZoneLine} {formatInTimeZone(iso, second)}
+    </Text>
   );
 }
 

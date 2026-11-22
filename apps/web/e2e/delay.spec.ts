@@ -283,7 +283,8 @@ test.describe('판정 지연 기록', () => {
           current: true,
         },
       ]);
-      // Its event: no status change, admin 1's, with what the record says (#188 and #145 read it).
+      // Its event: no status change, admin 1's, with what the record says (#145 reads it; #188's
+      // notice is written from the record itself and takes only the event's id as its key).
       const [event] = delayEventsOf(recorded);
       if (event === undefined) throw new Error(`market ${market.id} has no delay record event`);
       expect(recorded.events[0]).toEqual(event);

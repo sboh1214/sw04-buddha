@@ -486,10 +486,12 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
       settledAt: row.settledAt!.toISOString(),
       statusEventId: row.statusEventId,
     });
-    // settling, then settled, on the market's channel; the balance and the position on alice's.
+    // settling, then settled, on the market's channel; the balance and the position on alice's,
+    // then her inbox signal (#188: her `market_settled` notice).
     expect(published.map((p) => p.channel)).toEqual([
       marketChannel(market.id),
       marketChannel(market.id),
+      userChannel(alice),
       userChannel(alice),
       userChannel(alice),
     ]);
@@ -497,8 +499,15 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
       'settling',
       'settled',
     ]);
+    expect(published.at(-1)?.event).toEqual({
+      type: 'user:notification',
+      ts: row.settledAt!.toISOString(),
+    });
     // The log line went through the same conversion: pino would have thrown on the bigint.
     expect(logs.find((line) => line.msg === 'market finalize')).toMatchObject({ paidCoin: '300' });
+    // Who was told is in neither what BullMQ stores nor the log (ADR-0064, ADR-0160).
+    expect(JSON.stringify(result)).not.toContain(alice);
+    expect(JSON.stringify(logs)).not.toContain(alice);
 
     // A second run is the skip, and the skip is JSON as it stands.
     const again = await run({ name: JOB_NAMES.marketFinalize, data: { marketId: market.id } });
@@ -550,6 +559,87 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
     });
     // The counts line is promoted to info when something failed, even with nothing settled.
     expect(logs.at(-1)).toMatchObject({ level: 30, msg: 'market finalize scan', failed: 1 });
+  });
+
+  it('market.finalize names none of the members its notices were for when they fail, and keeps the payout back with them (#188, 188-2)', async () => {
+    // The payout's one notification call binds every holder and watcher; Postgres refusing it
+    // (its message, DETAIL and HINT naming the row's account) rolls the payout back (188-2) and
+    // must reach neither what BullMQ stores — the scan's `failures[].message`, the single job's
+    // `failedReason` — nor the log, nor the admin-visible `last_error`.
+    const market = await judged();
+    const alice = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
+    const maker = await fundMarketMakerFunds(t.db, market.id, 150n);
+    await mintTestPairs(t.db, {
+      marketId: market.id,
+      yesHolderId: alice,
+      noHolderId: maker,
+      qty: 3,
+    });
+    const watcher = (await createUser(t.db)).user.id;
+    await createWatch(t.db, { userId: watcher, marketId: market.id });
+    const members = [alice, watcher, maker];
+    const named = (text: string) => members.some((id) => text.includes(id));
+    const message = 'P0001 notification write failed: planted failure for <recipient>';
+
+    const planted = await plantNotificationInsertFailure();
+    let failed: unknown;
+    try {
+      const scan = await run({ name: JOB_NAMES.marketFinalize, data: {} });
+      expect(scan).toEqual({
+        settled: 0,
+        skipped: 0,
+        failed: 1,
+        failures: [{ marketId: market.id, message }],
+      });
+      failed = await run({ name: JOB_NAMES.marketFinalize, data: { marketId: market.id } }).catch(
+        (e: unknown) => e,
+      );
+    } finally {
+      await planted.remove();
+    }
+    // 지급 중, nothing paid, the reason recorded per attempt with no account in it.
+    expect((await marketRow(market.id)).status).toBe('settling');
+    expect(await stepOf(market.id)).toMatchObject({
+      status: 'failed',
+      attempts: 2,
+      lastError: message,
+    });
+    expect(await t.db.select().from(schema.positionSettlements)).toEqual([]);
+    expect(await t.db.select().from(schema.notifications)).toEqual([]);
+    // Only the settling transition committed (the first run's); no payout event, no signal.
+    expect(published).toEqual([
+      {
+        channel: marketChannel(market.id),
+        event: expect.objectContaining({ type: 'market:status', status: 'settling' }) as unknown,
+      },
+    ]);
+    expect(logs.find((line) => line.msg === 'market finalize failed in scan')).toMatchObject({
+      level: 50,
+      marketId: market.id,
+      err: { type: 'NotificationWriteError', code: 'P0001' },
+    });
+    expect(named(JSON.stringify(logs))).toBe(false);
+    // The single job's rejection: BullMQ keeps its message as `failedReason`, main.ts logs it.
+    expect(failed).toMatchObject({ name: 'NotificationWriteError', code: 'P0001' });
+    const error = failed as Error;
+    expect(named(`${String(error)}\n${error.stack ?? ''}\n${JSON.stringify(error)}`)).toBe(false);
+    expect(error).not.toHaveProperty('cause');
+
+    // Fixed: the next job pays and tells together; its result and log line still name nobody.
+    published = [];
+    const settled = await run({ name: JOB_NAMES.marketFinalize, data: { marketId: market.id } });
+    expect(settled).toMatchObject({ outcome: 'settled', paidAccounts: 1, paidCoin: '300' });
+    expect(named(JSON.stringify(settled))).toBe(false);
+    expect(named(JSON.stringify(logs))).toBe(false);
+    expect(
+      (await t.db.select().from(schema.notifications)).map((row) => row.userId).sort(),
+    ).toEqual([alice, watcher].sort());
+    expect(
+      published
+        .filter((p) => p.event.type === 'user:notification')
+        .map((p) => p.channel)
+        .sort(),
+    ).toEqual([alice, watcher].map(userChannel).sort());
   });
 
   it('start_grant.pay reports JSON-safe counts, quietly while the amount is undecided (#70)', async () => {

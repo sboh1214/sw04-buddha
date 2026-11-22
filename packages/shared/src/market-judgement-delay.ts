@@ -266,9 +266,10 @@ export type RecordJudgementDelayBody = z.infer<typeof recordJudgementDelayBodySc
 // ---- records --------------------------------------------------------------------------
 /**
  * `judgement_delay_recorded`'s payload (enums.ts): the record row, its reason (public, so the
- * event carries it for #188's notices and #145's list), its next review time (ISO), and the status
- * and judgement version it was made on (null on CLOSED). The event's actor is the admin; it names
- * no other account.
+ * event carries it for #145's list), its next review time (ISO), and the status and judgement
+ * version it was made on (null on CLOSED). The event's actor is the admin; it names no other
+ * account. #188's notice reads none of it: the recording transaction writes it from the record
+ * itself, keyed by the event's id alone (ADR-0160).
  */
 export interface MarketJudgementDelayRecordedPayload {
   delayId: string;

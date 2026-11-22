@@ -120,6 +120,17 @@ export {
   type MarketTransition,
 } from './market-transitions.js';
 export {
+  disputeClosureNotificationInputs,
+  disputeDecisionNotificationInput,
+  judgementNotificationInputs,
+  settlementAudience,
+  settlementNotificationInputs,
+  type JudgementNotice,
+  type JudgementNoticeEvent,
+  type JudgementNoticeMarket,
+  type SettlementRecipient,
+} from './judgement-notifications.js';
+export {
   deliverReconciliationNotices,
   marketAudience,
   marketNotificationInputs,

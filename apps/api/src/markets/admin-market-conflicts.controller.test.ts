@@ -18,6 +18,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { ApprovalService } from '../approvals/approval.service.js';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { MarketJobs } from '../jobs/market-jobs.service.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 
@@ -294,7 +295,7 @@ describe.skipIf(!hasTestInfra)('market interests and decision eligibility (#143)
     expect((await requests(published.market.id))[0]?.status).toBe('approved');
   });
 
-  it('reopens accepted disputes when a declaration retracts a pending correction', async () => {
+  it('reopens accepted disputes when a declaration retracts a pending correction, telling nobody (#188, 188-6)', async () => {
     const { market } = await createProvisionalMarket(t.db, {
       registeredBy: first.id,
       approvedBy: second.id,
@@ -311,8 +312,12 @@ describe.skipIf(!hasTestInfra)('market interests and decision eligibility (#143)
     );
     expect(corrected.statusCode, corrected.body).toBe(200);
     const schedule = vi.spyOn(t.app.get(MarketJobs), 'scheduleResolve');
+    const publishUser = vi.spyOn(t.app.get(MarketPublisher), 'publishUser');
     const declared = await declare(market.id);
     expect(declared.statusCode, declared.body).toBe(200);
+    // The accepted dispute back to pending is no result: its submitter is not told (188-6).
+    expect(await t.db.select().from(schema.notifications)).toEqual([]);
+    expect(publishUser).not.toHaveBeenCalled();
     const snapshot = adminMarketConflictWriteSchema.parse(
       declared.json<{ data: unknown }>().data,
     ).market;

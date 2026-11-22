@@ -25,6 +25,7 @@ import type {
   MarketTimes,
   MarketLiquiditySettings,
   Me,
+  MyDispute,
   Notification,
   OrderQuote,
   PlaceOrderResult,
@@ -2748,9 +2749,10 @@ export async function leaveNoJudgement(
  * items 1·9 — the interim one-admin `POST /admin/markets/:id/resolve` is gone): `admin` registers
  * `result` on the 1차 출처 (무효 on none, with its reason) and the second seed admin approves it
  * (`approveJudgementAsReviewer`). The answer is the market PROVISIONAL — its 잠정 결과 public at once
- * — and the worker confirms it once its dispute deadline passes (`waitForResolved`): no spec
- * holds it with a 판정 이의 (#175, ADR-0104 — none can submit one without a fill on it), and a 판정
- * 정정 (#176, `registerCorrection`) holds it only until the spec approves or rejects it. The API,
+ * — and the worker confirms it once its dispute deadline passes (`waitForResolved`), unless a 판정
+ * 이의 holds it (#175, ADR-0104 — only members with a fill on it submit one, as conflicts.spec,
+ * judging-record.spec and judgement-notifications.spec do) or a 판정 정정 (#176,
+ * `registerCorrection`) holds it until the spec approves or rejects it. The API,
  * not the UI: judgement.spec.ts walks the screens. A confirmed 무효 pays 50 Coin per contract
  * on both outcomes (#126, ADR-0118), which settlement.spec.ts checks. Retracts what it left
  * waiting on a failure.
@@ -2856,6 +2858,64 @@ export async function leaveNoCorrection(
     await retractJudgement(context, marketId, pending.requestId);
   };
   await retract().catch(() => undefined);
+}
+
+// ---- 판정 이의 (#175) -----------------------------------------------------------------------
+
+/** The 이의 사유 every helper dispute gives (1..500 characters). */
+const HELPER_DISPUTE_REASON = '잠정 결과가 1차 출처의 발표와 다릅니다.';
+
+/**
+ * 판정 이의 (#175, ADR-0104; #173 items 5·6) of a PROVISIONAL market's `judgementVersion` through
+ * `POST /markets/:id/disputes` as the member `context` is signed in as (ADR-0092): one link under
+ * the market's own path and HELPER_DISPUTE_REASON — correction.spec.ts' `sendDispute`, its body —
+ * and the dispute as the API answers it, pending. Only a member with a fill on the market may
+ * submit one, once per version and before the version's 이의 기한 (the suite's 1분, global-setup.ts):
+ * a spec submits it right after the approval. A pending dispute holds the confirmation past the
+ * deadline until it is decided (`decideDispute`) or retracted.
+ */
+export async function submitDispute(
+  context: APIRequestContext,
+  marketId: string,
+  judgementVersion: number,
+): Promise<MyDispute> {
+  return unwrap<MyDispute>(
+    await context.post(`/api/v1/markets/${marketId}/disputes`, {
+      data: {
+        judgementVersion,
+        links: [`https://example.com/e2e/dispute/${marketId}/1`],
+        reason: HELPER_DISPUTE_REASON,
+        expectedAccountId: await accountIdOf(context),
+      },
+    }),
+  );
+}
+
+/**
+ * 기각 or 수용 (#175, ADR-0104) of a pending 판정 이의 through
+ * `POST /admin/markets/:id/disputes/:disputeId/<dismiss|accept>` as the second seed admin `admin`
+ * was handed with (`test`'s `reviewer`) — never the version's registrant, which `judgeMarket` and
+ * `registerCorrection` make `admin` — with its public reason (1..500 characters, #173 13항) and
+ * the conflict confirmation (#143). The answer is the admin market as the decision left it. The
+ * last 기각 past the 이의 기한 lets the worker confirm the market at once.
+ */
+export async function decideDispute(
+  admin: APIRequestContext,
+  marketId: string,
+  disputeId: string,
+  decision: 'dismiss' | 'accept',
+  reason: string,
+): Promise<AdminMarket> {
+  const reviewer = reviewerOf(admin);
+  return unwrap<AdminMarket>(
+    await reviewer.post(`/api/v1/admin/markets/${marketId}/disputes/${disputeId}/${decision}`, {
+      data: {
+        reason,
+        noConflictConfirmed: true,
+        expectedAccountId: await accountIdOf(reviewer),
+      },
+    }),
+  );
 }
 
 /**
@@ -3362,7 +3422,7 @@ export function toastsOf(page: Page): Locator {
   return page.locator('[data-scope="toast"][data-part="root"]');
 }
 
-// ---- 알림함 (#53; the inbox reads of #134's and #54's specs) -------------------------------
+// ---- 알림함 (#53; the inbox reads of #134's, #54's and #188's specs) -----------------------
 
 /** One read of the count after the signal: what a page may take past the realtime budget. */
 export const ONE_READ_MS = 5_000;
@@ -3411,4 +3471,33 @@ export async function inboxOf(context: APIRequestContext): Promise<Notification[
 
 export async function unreadCountOf(context: APIRequestContext): Promise<number> {
   return (await dataOf<{ unreadCount: number }>(await context.get(UNREAD_COUNT_PATH))).unreadCount;
+}
+
+/** The types of a member's notices, sorted: rows of one event come in no set order. */
+export async function noticeTypesOf(context: APIRequestContext): Promise<string[]> {
+  return (await inboxOf(context)).map((notice) => notice.type).sort();
+}
+
+/** The member's notices of `type`, newest first. */
+export function noticesOf(inbox: readonly Notification[], type: string): Notification[] {
+  return inbox.filter((notice) => notice.type === type);
+}
+
+/** The member's one notice of `type`; throws when there is none or more than one. */
+export function onlyNoticeOf(inbox: readonly Notification[], type: string): Notification {
+  const [only, ...others] = noticesOf(inbox, type);
+  if (only === undefined || others.length > 0) throw new Error(`not one notice of ${type}`);
+  return only;
+}
+
+/**
+ * An approval refused as already decided (409 APPROVAL_NOT_ALLOWED, `decided`): what a re-sent
+ * approval meets, writing nothing (#54's and #188's AC on reprocessing).
+ */
+export async function expectDecided(response: APIResponse): Promise<void> {
+  const body = await response.text();
+  expect(response.status(), body).toBe(409);
+  const { error } = JSON.parse(body) as { error: { code: string; details: unknown } };
+  expect(error.code).toBe('APPROVAL_NOT_ALLOWED');
+  expect(error.details).toEqual([{ path: ['request'], message: 'decided' }]);
 }
