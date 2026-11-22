@@ -10,10 +10,11 @@
  * `tradeOnce` (one pair mint between two members) makes a market a CLOSED one. The members whose
  * orders the close ended (#134, ADR-0158) and its watchers and holders (#54, ADR-0159) get one
  * `user:notification` each after COMMIT; the notices' rows are pinned on the db side, here the
- * signal and the job's counts — `notifiedMembers` counts the order owners alone, never a watcher.
+ * signal and the job's counts — `notifiedMembers` counts the order owners alone, never a watcher —
+ * and a member's 수신 설정 filters each notice of the one call apart (#56, ADR-0162).
  */
 import { randomUUID } from 'node:crypto';
-import { schema } from '@buddha/db';
+import { schema, setNotificationCategory } from '@buddha/db';
 import {
   balanceOf,
   checkOrderInvariants,
@@ -908,6 +909,40 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
         await sleep(100);
         expect(users.received).toHaveLength(3);
         expect(await t.db.select().from(schema.notifications)).toEqual(before);
+      } finally {
+        await users.quit();
+      }
+    });
+
+    it('filters the close’s one call per notice by each member’s settings: 거래 off keeps 거래 마감, 시장 off keeps the expiry, and the count is of owners reached (#56, ADR-0162)', async () => {
+      const due = await dueMarketWithOrders();
+      const { marketId, a, b, c, d } = due;
+      // A (order owner, NO holder): 거래 off. C (order owner, YES holder): 시장 off.
+      expect(await setNotificationCategory(t.db, a, 'trade', false)).toEqual(['trade']);
+      expect(await setNotificationCategory(t.db, c, 'market', false)).toEqual(['market']);
+      const users = await subscribeToUsers();
+      try {
+        const result = await closeMarket(t.db, marketId, publish);
+        if (result.outcome !== 'closed') throw new Error(`closed, got ${result.outcome}`);
+        // Every order expired as always; only C's expiry notice reached anyone.
+        expect(result).toMatchObject({ expiredOrders: 3, heldOrders: 0, notifiedMembers: 1 });
+        expect((await orderRow(due.partial.id)).status).toBe('expired');
+        expect((await orderRow(due.sell.id)).status).toBe('expired');
+        // The close's notices: those at its instant (A's earlier fill notice is not one).
+        const closeNotices = async (userId: string) =>
+          (await noticesOf(userId))
+            .filter((row) => row.occurredAt.getTime() === result.closedAt.getTime())
+            .map((row) => row.type);
+        expect(await closeNotices(a)).toEqual(['market_closed']);
+        expect(await closeNotices(c)).toEqual(['orders_expired']);
+        for (const holder of [b, d]) expect(await closeNotices(holder)).toEqual(['market_closed']);
+        // One signal to each member something reached — all four here.
+        await waitForMessages(users.received, 4, 'user:notification of A, B, C and D');
+        await sleep(100);
+        const signal = { type: 'user:notification', ts: result.closedAt.toISOString() };
+        expect(byChannel(users.received)).toEqual(
+          byChannel([a, b, c, d].map((id) => ({ channel: userChannel(id), event: signal }))),
+        );
       } finally {
         await users.quit();
       }

@@ -3320,6 +3320,40 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/notifications/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The account’s notification settings (수신 설정, #56): whether each category (trade, market, community — those with a notification type) is on; every one starts on */
+        get: operations["getMyNotificationSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/notifications/settings/{category}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Turn one notification category on or off for the account (repeating it changes nothing); while off no notification of it is made, and those already received stay. Answers every setting after it */
+        put: operations["updateMyNotificationSetting"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/notifications/unread-count": {
         parameters: {
             query?: never;
@@ -6916,6 +6950,13 @@ export type components = {
             notification: components["schemas"]["Notification"];
             unreadCount: number;
         };
+        NotificationSetting: {
+            category: components["schemas"]["NotificationCategory"];
+            enabled: boolean;
+        };
+        NotificationSettings: {
+            categories: components["schemas"]["NotificationSetting"][];
+        };
         NotificationTarget: components["schemas"]["NotificationMarketTarget"] | components["schemas"]["NotificationOrderTarget"] | components["schemas"]["NotificationOrderHistoryTarget"] | components["schemas"]["NotificationPostTarget"] | components["schemas"]["NotificationCommentTarget"] | components["schemas"]["NotificationModerationActionTarget"] | components["schemas"]["NotificationProposalTarget"];
         NotificationUnreadCount: {
             unreadCount: number;
@@ -8315,6 +8356,10 @@ export type components = {
             expectedEditedAt: string | null;
             /** @description Required, one line, at most 100 characters */
             title: string;
+        };
+        UpdateNotificationSettingBody: {
+            enabled: boolean;
+            expectedAccountId: string;
         };
         UpdatePostBody: {
             /** @description A PostDocument (the editor’s JSON). Formatting outside the allow-list is removed; at most 5000 characters of text and 10 images, each an upload of the author's own. */
@@ -24258,6 +24303,126 @@ export interface operations {
             };
             /** @description FORBIDDEN */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getMyNotificationSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["NotificationSettings"];
+                    };
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updateMyNotificationSetting: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                category: "trade" | "market" | "community";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateNotificationSettingBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["NotificationSettings"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

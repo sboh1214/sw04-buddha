@@ -54,12 +54,14 @@ export type CloseMarketAtCloseResult =
        * Every member its notices reached, once each, for the caller's `user:notification` after
        * COMMIT: the people with orders it ended (`orders_expired`, #134) and its watchers and
        * holders (`market_closed` or `market_cancelled`, #54) — never in a job result or a log.
+       * Reached only: not a member with that notice's category off (#56, `category_off`).
        */
       notified: string[];
       /**
        * How many members its `orders_expired` notices reached (#134's meaning of the worker's
        * `notifiedMembers`): order owners only — a count with the watchers in it would tell how
-       * many watch the market, which no surface shows (ADR-0064, ADR-0159).
+       * many watch the market, which no surface shows (ADR-0064, ADR-0159). Those with 거래 off
+       * are not in it (#56): nothing reached them.
        */
       expiryNotified: number;
     }

@@ -159,6 +159,9 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   'notifications.type': NOTIFICATION_TYPE_NAMES,
   'notifications.category': NOTIFICATION_CATEGORIES,
   'notification_keys.type': NOTIFICATION_TYPE_NAMES,
+  // #56 (ADR-0162): the categories a member turned off (a text[] held by a CHECK regenerated from
+  // the same list, as `market_rule_versions.changed_items` is) — no price item, no channel.
+  'notification_inboxes.categories_off': NOTIFICATION_CATEGORIES,
 };
 
 /**

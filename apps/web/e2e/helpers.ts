@@ -27,6 +27,8 @@ import type {
   Me,
   MyDispute,
   Notification,
+  NotificationCategory,
+  NotificationSettings,
   OrderQuote,
   PlaceOrderResult,
   ReleaseSetting,
@@ -3534,6 +3536,89 @@ export function onlyNoticeOf(inbox: readonly Notification[], type: string): Noti
   const [only, ...others] = noticesOf(inbox, type);
   if (only === undefined || others.length > 0) throw new Error(`not one notice of ${type}`);
   return only;
+}
+
+// ---- 알림 수신 설정 (#56, ADR-0162; 52-21) --------------------------------------------------
+
+/** The settings' path, as the browser asks it through the web's `/api` rewrite. */
+export const NOTIFICATION_SETTINGS_API_PATH = '/api/v1/me/notifications/settings';
+
+/** The member's 알림 수신 설정 through the API: each category with a type, on or off. */
+export async function notificationSettingsOf(
+  context: APIRequestContext,
+): Promise<NotificationSettings> {
+  return dataOf<NotificationSettings>(await context.get(NOTIFICATION_SETTINGS_API_PATH));
+}
+
+/** Whether `category` is on for the member, as the API answers. */
+export async function notificationCategoryOn(
+  context: APIRequestContext,
+  category: NotificationCategory,
+): Promise<boolean | undefined> {
+  return (await notificationSettingsOf(context)).categories.find(
+    (entry) => entry.category === category,
+  )?.enabled;
+}
+
+/**
+ * One category on or off through `PUT /me/notifications/settings/:category`, naming the account
+ * `context` is signed in as (`expectedAccountId`), as MY › 설정's switch does: the settings after
+ * it. For a spec whose subject is what the gate then does with an event, not the screen.
+ */
+export async function setNotificationCategory(
+  context: APIRequestContext,
+  category: NotificationCategory,
+  enabled: boolean,
+): Promise<NotificationSettings> {
+  return dataOf<NotificationSettings>(
+    await context.put(`${NOTIFICATION_SETTINGS_API_PATH}/${category}`, {
+      data: { enabled, expectedAccountId: await accountIdOf(context) },
+    }),
+  );
+}
+
+/** Each category's switch name on MY › 설정's '알림 수신' card (56-5). */
+export const NOTIFICATION_SETTING_LABELS: Readonly<Record<NotificationCategory, string>> = {
+  trade: copy.notificationSettingTrade,
+  market: copy.notificationSettingMarket,
+  community: copy.notificationSettingCommunity,
+};
+
+/** The '알림 수신' card's switch of `category`, as a screen reader finds it: by its name. */
+export function notificationSettingBox(page: Page, category: NotificationCategory): Locator {
+  return page
+    .getByTestId('settings-notifications')
+    .getByRole('checkbox', { name: NOTIFICATION_SETTING_LABELS[category] });
+}
+
+/**
+ * Presses `category`'s switch on MY › 설정 (the page must be on it) to turn it `enabled`: the write
+ * answers 200, its toast says so ('거래 알림을 껐습니다.') and the switch shows the new value.
+ */
+export async function switchNotificationCategoryOnScreen(
+  page: Page,
+  category: NotificationCategory,
+  enabled: boolean,
+): Promise<void> {
+  const box = notificationSettingBox(page, category);
+  if (enabled) await expect(box).not.toBeChecked();
+  else await expect(box).toBeChecked();
+  await expect(box).toBeEnabled();
+  const saved = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'PUT' &&
+      new URL(response.url()).pathname === `${NOTIFICATION_SETTINGS_API_PATH}/${category}`,
+  );
+  await page.getByTestId(`settings-notifications-${category}-switch`).click();
+  const response = await saved;
+  expect(response.status(), await response.text()).toBe(200);
+  const said = (enabled ? copy.notificationSettingOn : copy.notificationSettingOff).replace(
+    '{label}',
+    NOTIFICATION_SETTING_LABELS[category],
+  );
+  await expect(toastsOf(page).getByText(said)).toBeVisible();
+  if (enabled) await expect(box).toBeChecked();
+  else await expect(box).not.toBeChecked();
 }
 
 /**

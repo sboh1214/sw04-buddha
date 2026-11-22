@@ -20,7 +20,8 @@
  * (#134, ADR-0158): one `orders_cancelled` per member and pause or approved end, one
  * `orders_expired` per member at an early close, none for the 운영 마켓메이커, a refusal or a
  * `ledger_failure` pause, signalled after COMMIT; a crossing fill first keeps its own notice, and
- * a partly filled order's cancel is a notice apart. Skips when TEST_* are unset.
+ * a partly filled order's cancel is a notice apart. And 수신 설정 (#56, ADR-0162): the pause's one
+ * call filtered per notice by each member's own settings. Skips when TEST_* are unset.
  */
 import { randomUUID } from 'node:crypto';
 import { lockMarket, schema } from '@buddha/db';
@@ -71,6 +72,7 @@ import { AdminGuard } from '../auth/admin.guard.js';
 import { MARKETS_QUEUE, MarketJobs } from '../jobs/market-jobs.service.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
+import { setNotificationSetting } from '../test/notification-settings.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { sleep, waitForLockWaiter, waitForMessages } from '../test/wait.js';
 
@@ -2604,6 +2606,66 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
         expectNotAllowed(await approve(market.id, requestId), 'decided');
         expect(await t.db.select().from(schema.notifications)).toEqual(rows);
         expect(again()).toEqual([]);
+      });
+
+      it('filters a pause’s one call per notice by each member’s own settings — 거래 off keeps the 시장 notice, 시장 off keeps the cancel — and a category turned on again gets the 재개 (#56, ADR-0162; 52-22)', async () => {
+        const market = await opened();
+        const [a, c] = [await member(), await member()];
+        // Both rest a bid nothing meets and watch: each would get both notices of the pause.
+        const aOrder = await rest(market.id, a.id, { outcome: 'NO', limitPriceCoin: 30 });
+        const cOrder = await rest(market.id, c.id, { outcome: 'NO', limitPriceCoin: 30 });
+        await setWatch(a, market.id, true);
+        await setWatch(c, market.id, true);
+        await setNotificationSetting(t, a, 'trade', false);
+        await setNotificationSetting(t, c, 'market', false);
+
+        const sent = signals();
+        expect((await pause(market.id)).statusCode).toBe(200);
+        const pausedAt = (await lastEvent(market.id)).at;
+        // Both orders were cancelled as always; each member got only its on category's notice.
+        expect((await orderOf(aOrder.id)).status).toBe('cancelled');
+        expect((await orderOf(cOrder.id)).status).toBe('cancelled');
+        const paused = marketNotice(
+          market,
+          'market_paused',
+          { marketTitle: market.title, reason: 'basis_change' },
+          pausedAt,
+        );
+        expect(await inboxOf(a)).toEqual([paused]);
+        expect(await inboxOf(c)).toEqual([
+          expect.objectContaining({
+            type: 'orders_cancelled',
+            category: 'trade',
+            target: { kind: 'order', orderId: cOrder.id },
+            occurredAt: pausedAt,
+          }),
+        ]);
+        expect(sent()).toEqual(
+          signalled([
+            [a, pausedAt, 1],
+            [c, pausedAt, 1],
+          ]),
+        );
+        vi.restoreAllMocks();
+
+        // C turns 시장 on again: the approved 재개 reaches both (A's 시장 was on all along).
+        await setNotificationSetting(t, c, 'market', true);
+        expect(
+          (await requestDecision(market.id, { path: 'resume', reviewResult: 'judgeable' }))
+            .statusCode,
+        ).toBe(200);
+        expect((await approve(market.id, await pendingId(market.id))).statusCode).toBe(200);
+        const resumedAt = (await lastEvent(market.id)).at;
+        const resumed = marketNotice(
+          market,
+          'market_resumed',
+          { marketTitle: market.title, reason: 'basis_change' },
+          resumedAt,
+        );
+        expect(await ofType(a, 'market_resumed')).toEqual([resumed]);
+        expect(await ofType(c, 'market_resumed')).toEqual([resumed]);
+        // The pause's notice C did not get stays never made (52-22: no catch-up).
+        expect(await ofType(c, 'market_paused')).toEqual([]);
       });
 
       it('tells an early close as 조기 마감 to the watchers and holders, and one with no person’s fill as 시장 취소 to its watchers, never both (52-5·52-8)', async () => {

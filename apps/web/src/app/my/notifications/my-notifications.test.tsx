@@ -84,6 +84,21 @@ describe('MyNotifications', () => {
     expect(byTestId(html, 'my-notifications-read-all-failed')).toBeUndefined();
   });
 
+  it('links 수신 설정 beside 모두 읽음 to MY › 설정’s card, reading nothing (#56, 56-4)', () => {
+    const html = renderWithQueries(<MyNotifications />, [
+      [notificationListKey(ACCOUNT.id), { pages: [], pageParams: [] }],
+      [ME_QUERY_KEY, ACCOUNT],
+    ]);
+    const link = byTestId(html, 'my-notifications-settings-link');
+    expect(link?.text).toBe('수신 설정');
+    expect(link?.attributes.href).toBe('/my/settings#settings-notifications');
+    // In the heading's row, before 모두 읽음.
+    expect(html.indexOf('my-notifications-settings-link')).toBeLessThan(
+      html.indexOf('my-notifications-read-all'),
+    );
+    expect(byTestId(html, 'my-notifications')?.text).not.toContain(copy.settingsNotifications);
+  });
+
   it('says there is none while the member has no notification', () => {
     const html = drawn(list([{ items: [], nextCursor: null }]));
     expect(byTestId(html, 'my-notifications-empty')?.text).toBe('알림이 없습니다.');

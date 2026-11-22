@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import {
   NOTIFICATION_CATEGORIES,
   NOTIFICATION_DEFINITIONS,
+  NOTIFICATION_SETTING_CATEGORIES,
   NOTIFICATION_TYPE_REGISTRY,
   NOTIFICATION_UNREAD_COUNT_CAP,
   type NotificationCategory,
@@ -19,11 +20,18 @@ import {
   notificationView,
 } from '@/components/notifications/notification-renderers';
 import { copy } from '@/copy';
-import type { InboxNotification } from './api';
-import { MY_NOTIFICATIONS_PATH, MY_TABS } from './my';
+import { ApiError, type InboxNotification, type NotificationSettings } from './api';
+import { MY_NOTIFICATIONS_PATH, MY_SETTINGS_PATH, MY_TABS } from './my';
+import { historyFiltersFromSearchParams } from './my-history';
 import {
   NOTIFICATIONS_KEY,
+  NOTIFICATION_LIST_KEY,
   NOTIFICATION_REFRESH_MS,
+  NOTIFICATION_SETTINGS_ANCHOR,
+  NOTIFICATION_SETTINGS_HISTORY_PATH,
+  NOTIFICATION_SETTINGS_KEY,
+  NOTIFICATION_SETTINGS_PATH,
+  NOTIFICATION_UNREAD_KEY,
   type NotificationPages,
   UNREAD_COUNT_CAP,
   isUnread,
@@ -31,10 +39,17 @@ import {
   notificationFallbackTitle,
   notificationHref,
   notificationListKey,
+  notificationSettingFailure,
+  notificationSettingHint,
+  notificationSettingLabel,
+  notificationSettingRows,
+  notificationSettingSaved,
+  notificationSettingsKey,
   notificationUnreadKey,
   unreadCountLabel,
   unreadNotificationsText,
   withNotification,
+  withNotificationSetting,
 } from './notifications';
 
 const ACCOUNT = 'a1e1c0de-0000-4000-8000-000000000001';
@@ -756,8 +771,172 @@ describe('the inbox’s words (#113, N05 §4)', () => {
       '../components/layout/nav.tsx',
       '../components/layout/bottom-tabs.tsx',
       '../app/my/my-tabs.tsx',
+      '../app/my/settings/notification-settings-section.tsx',
+      '../app/my/settings/section.tsx',
     ]) {
       expect(source(file), file).not.toMatch(/badge|배지/i);
+    }
+  });
+});
+
+/** 알림 수신 설정's words (#56, ADR-0162; 56-5 — the §6 table approved as written). */
+const SETTINGS_COPY = [
+  copy.settingsNotifications,
+  copy.settingsNotificationsHint,
+  copy.notificationSettingTrade,
+  copy.notificationSettingTradeHint,
+  copy.notificationSettingMarket,
+  copy.notificationSettingMarketHint,
+  copy.notificationSettingCommunity,
+  copy.notificationSettingCommunityHint,
+  copy.notificationSettingsHistoryNote,
+  copy.notificationSettingsHistoryLink,
+  copy.notificationSettingOn,
+  copy.notificationSettingOff,
+  copy.errNotificationSetting,
+  copy.notificationsSettingsLink,
+];
+
+const settings = (...entries: [NotificationCategory, boolean][]): NotificationSettings => ({
+  categories: entries.map(([category, enabled]) => ({ category, enabled })),
+});
+
+describe('알림 수신 설정 (#56, ADR-0162)', () => {
+  it('keys the settings under the private root, the account last, apart from the count and the list', () => {
+    expect(NOTIFICATION_SETTINGS_KEY).toEqual(['notifications', 'settings']);
+    expect(notificationSettingsKey(ACCOUNT)).toEqual(['notifications', 'settings', ACCOUNT]);
+    expect(notificationSettingsKey(undefined)).toEqual(['notifications', 'settings', undefined]);
+    expect(notificationSettingsKey(ACCOUNT).slice(0, 1)).toEqual([...NOTIFICATIONS_KEY]);
+    // Not under the keys a `user:notification` round restarts (realtime-provider.tsx).
+    for (const restarted of [NOTIFICATION_LIST_KEY, NOTIFICATION_UNREAD_KEY]) {
+      expect(notificationSettingsKey(ACCOUNT).slice(0, restarted.length)).not.toEqual([
+        ...restarted,
+      ]);
+    }
+  });
+
+  it('opens the card on MY › 설정 at its anchor, and its line the 정산 list (56-3, 56-4, 52-23)', () => {
+    expect(NOTIFICATION_SETTINGS_ANCHOR).toBe('settings-notifications');
+    expect(NOTIFICATION_SETTINGS_PATH).toBe(`${MY_SETTINGS_PATH}#settings-notifications`);
+    expect(NOTIFICATION_SETTINGS_HISTORY_PATH).toBe('/my/history?kind=settlements');
+    expect(historyFiltersFromSearchParams({ kind: 'settlements' }).kind).toBe('settlements');
+  });
+
+  it('names a switch and what it covers for every category, and for every type’s category', () => {
+    expect(NOTIFICATION_CATEGORIES.map((category) => notificationSettingLabel(category))).toEqual([
+      '거래 알림',
+      '시장 알림',
+      '커뮤니티 알림',
+    ]);
+    for (const category of NOTIFICATION_CATEGORIES) {
+      expect(notificationSettingHint(category)?.trim(), category).toBeTruthy();
+    }
+    for (const definition of NOTIFICATION_DEFINITIONS) {
+      expect(notificationSettingLabel(definition.category), definition.type).toBeDefined();
+      expect(notificationSettingHint(definition.category), definition.type).toBeDefined();
+    }
+    // A category a newer server sends: no words, so no switch.
+    expect(notificationSettingLabel('price' as NotificationCategory)).toBeUndefined();
+    expect(notificationSettingHint('price' as NotificationCategory)).toBeUndefined();
+  });
+
+  it('draws one switch per category the answer lists, in the shared order (56-2)', () => {
+    expect(NOTIFICATION_SETTING_CATEGORIES).toEqual(['trade', 'market', 'community']);
+    // The answer's order is not the drawing's; the shared list is.
+    const rows = notificationSettingRows(
+      settings(['community', true], ['trade', true], ['market', false]),
+    );
+    expect(rows.map(({ category, enabled }) => [category, enabled])).toEqual([
+      ['trade', true],
+      ['market', false],
+      ['community', true],
+    ]);
+    expect(rows[1]).toEqual({
+      category: 'market',
+      enabled: false,
+      label: copy.notificationSettingMarket,
+      hint: copy.notificationSettingMarketHint,
+    });
+    // A category the answer does not list is not drawn; nor one this web has no words for.
+    expect(notificationSettingRows(settings(['market', true])).map((row) => row.category)).toEqual([
+      'market',
+    ]);
+    expect(
+      notificationSettingRows(settings(['trade', true], ['price' as NotificationCategory, true]), [
+        'trade',
+        'price' as NotificationCategory,
+      ]).map((row) => row.category),
+    ).toEqual(['trade']);
+    // Before a category has a type it has no switch, even if an answer listed it (56-2).
+    expect(
+      notificationSettingRows(settings(['trade', true], ['market', true]), ['market']).map(
+        (row) => row.category,
+      ),
+    ).toEqual(['market']);
+    expect(notificationSettingRows(settings())).toEqual([]);
+  });
+
+  it('takes a write’s answer for its own category only, the same object when nothing changed', () => {
+    const held = settings(['trade', true], ['market', true], ['community', true]);
+    // The answer of the market write, which an earlier trade write's answer had not reached yet.
+    const answer = settings(['trade', false], ['market', false], ['community', true]);
+    const after = withNotificationSetting(held, answer, 'market');
+    expect(after).toEqual(settings(['trade', true], ['market', false], ['community', true]));
+    expect(held.categories[1]?.enabled).toBe(true);
+    expect(withNotificationSetting(after, answer, 'market')).toBe(after);
+    // Nothing held: the answer whole.
+    expect(withNotificationSetting(undefined, answer, 'market')).toBe(answer);
+    // A category the answer or the held list does not name: as held.
+    expect(withNotificationSetting(held, settings(['trade', false]), 'market')).toBe(held);
+    expect(withNotificationSetting(settings(['trade', true]), answer, 'market')).toEqual(
+      settings(['trade', true]),
+    );
+  });
+
+  it('says what a press did, and why one was refused', () => {
+    expect(notificationSettingSaved('거래 알림', false)).toBe('거래 알림을 껐습니다.');
+    expect(notificationSettingSaved('커뮤니티 알림', true)).toBe('커뮤니티 알림을 켰습니다.');
+    for (const label of NOTIFICATION_CATEGORIES.map(notificationSettingLabel)) {
+      expect(notificationSettingSaved(label ?? '', true)).not.toContain('{');
+    }
+    const another = new ApiError(403, {
+      code: 'FORBIDDEN',
+      message: 'x',
+      details: [{ path: ['expectedAccountId'], message: 'another account' }],
+    } as never);
+    expect(notificationSettingFailure(another)).toBe(copy.sessionChanged);
+    expect(
+      notificationSettingFailure(new ApiError(400, { code: 'VALIDATION_ERROR', message: 'x' })),
+    ).toBe(copy.errNotificationSetting);
+    expect(notificationSettingFailure(new Error('down'))).toBe(
+      '알림 수신 설정을 저장하지 못했습니다. 다시 시도해 주세요.',
+    );
+  });
+
+  it('words it with no excluded item, no channel or price, nothing locked and no reward (AC 9)', () => {
+    for (const text of SETTINGS_COPY) {
+      expect(text.trim(), text).not.toBe('');
+      expect(findExcludedText(text), text).toEqual([]);
+      expect(text, text).not.toMatch(/배지|badge/i);
+      // #56 AC 9, N05 §4, N04 §7, N06: no price item, no channel, no score or rank, no paid Coin.
+      expect(text, text).not.toMatch(
+        /가격|이메일|푸시|채널|점수|순위|랭킹|Forecast|구매|충전|결제|유료/i,
+      );
+      // 52-20/52-23 leave 지급 후 보상 to #144; 52-21 locks nothing; 52-23 needs no '필수'.
+      expect(text, text).not.toMatch(/보상|필수|잠금|잠그|끌 수 없/);
+      // 예측 only inside 예측시장, which no line here names.
+      expect(text.replaceAll('예측시장', ''), text).not.toMatch(/예측/);
+    }
+    for (const name of [
+      'notificationSettingsKey',
+      'notificationSettingRows',
+      'withNotificationSetting',
+      'useNotificationSettings',
+      'useUpdateNotificationSetting',
+      'settings-notifications',
+      'categoriesOff',
+    ]) {
+      expect(findExcludedIdentifier(name, 'api'), name).toEqual([]);
     }
   });
 });

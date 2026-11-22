@@ -206,6 +206,35 @@ describe('copy', () => {
     }
   });
 
+  it('words 알림 수신 as the owner approved, with no channel, price item, lock or reward (#56)', () => {
+    // 56-5: the §6 table as written, the link '정산 기록 보기'; 56-3: the owner's sentence and a
+    // period. #56 AC 9 (N05 §4, N04 §7, N06): no channel choice and no price or score item; 52-21
+    // locks nothing; 52-20/52-23 leave 지급 후 보상 to #144.
+    expect(copy.settingsNotifications).toBe('알림 수신');
+    expect(copy.notificationsSettingsLink).toBe('수신 설정');
+    expect(copy.notificationSettingsHistoryNote).toBe(
+      '알림을 꺼도 정산 기록은 MY 거래·정산 이력에서 볼 수 있습니다.',
+    );
+    expect(copy.notificationSettingsHistoryLink).toBe('정산 기록 보기');
+    expect([copy.notificationSettingOn, copy.notificationSettingOff]).toEqual([
+      '{label}을 켰습니다.',
+      '{label}을 껐습니다.',
+    ]);
+    const settings = Object.entries(copy).filter(
+      ([key]) =>
+        key.startsWith('settingsNotifications') ||
+        key.startsWith('notificationSetting') ||
+        key === 'errNotificationSetting' ||
+        key === 'notificationsSettingsLink',
+    );
+    expect(settings).toHaveLength(14);
+    for (const [key, text] of settings) {
+      expect(text, key).not.toMatch(
+        /이메일|푸시|채널|가격|점수|순위|랭킹|Forecast|구매|충전|결제|보상|필수|잠금|잠그|끌 수 없|배지/,
+      );
+    }
+  });
+
   it('names no operator in the public 판정 지연 기록 and offers no withdrawal of one (#142)', () => {
     // #173 item 13, decision 3 '#142 지연 사유': the public detail shows the reason and the time,
     // never who recorded it nor when — those words are the admin section's alone.

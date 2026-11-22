@@ -1,6 +1,7 @@
 'use client';
 
-import { Alert, Button, Skeleton, Stack } from '@chakra-ui/react';
+import { Alert, Button, Link as ChakraLink, HStack, Skeleton, Stack } from '@chakra-ui/react';
+import NextLink from 'next/link';
 import { NotificationRow } from '@/components/notifications/notification-row';
 import { ProfileUnavailable } from '@/components/my/profile-unavailable';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -13,6 +14,7 @@ import {
   useReadAllNotifications,
   useReadNotification,
 } from '@/hooks/use-notifications';
+import { NOTIFICATION_SETTINGS_PATH } from '@/lib/notifications';
 import { listSection } from '@/lib/query-client';
 import { watchlistRows } from '@/lib/watchlist';
 import { LoadFailed, Section, SessionEnded, useSessionEnded } from '../portfolio';
@@ -38,6 +40,8 @@ export type Notifications = Pick<
  * member's notifications, newest first by 발생 시각 with 더 보기 as every MY list (53-3), unread
  * ones marked by more than colour; pressing one marks it read and opens its target (53-2), and
  * '모두 읽음' at the heading's right marks every unread one read. Opening the list marks nothing.
+ * Beside it '수신 설정' opens MY › 설정's '알림 수신' card (#56, ADR-0162; 56-4) — a link, no
+ * read: the settings are not drawn here.
  * #53 shipped no type (52-20); since #134 (ADR-0158) the 거래 three fill it, and a member with
  * none sees '알림이 없습니다.'. Personal and client-only like every MY list.
  */
@@ -54,18 +58,22 @@ export function MyNotifications() {
       title={copy.myNotifications}
       testId="my-notifications"
       action={
-        <NotificationsReadAll
-          unreadCount={unreadCount}
-          pending={readAll.isPending}
-          onPress={
-            accountId === undefined
-              ? undefined
-              : () => {
-                  // The account the list was drawn for rides along (`expectedAccountId`, ADR-0091).
-                  readAll.mutate({ expectedAccountId: accountId });
-                }
-          }
-        />
+        <HStack gap="3" ms="auto" flexShrink="0">
+          <NotificationsSettingsLink />
+          <NotificationsReadAll
+            unreadCount={unreadCount}
+            pending={readAll.isPending}
+            onPress={
+              accountId === undefined
+                ? undefined
+                : () => {
+                    // The account the list was drawn for rides along (`expectedAccountId`,
+                    // ADR-0091).
+                    readAll.mutate({ expectedAccountId: accountId });
+                  }
+            }
+          />
+        </HStack>
       }
     >
       <Stack gap="4">
@@ -91,6 +99,17 @@ export function MyNotifications() {
         )}
       </Stack>
     </Section>
+  );
+}
+
+/** '수신 설정' (56-4): MY › 설정's '알림 수신' card, at its anchor. */
+export function NotificationsSettingsLink() {
+  return (
+    <ChakraLink asChild fontSize="sm" colorPalette="brand" color="colorPalette.fg">
+      <NextLink href={NOTIFICATION_SETTINGS_PATH} data-testid="my-notifications-settings-link">
+        {copy.notificationsSettingsLink}
+      </NextLink>
+    </ChakraLink>
   );
 }
 

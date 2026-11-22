@@ -13,6 +13,7 @@ import {
   signIn,
   signUp,
   test,
+  switchNotificationCategoryOnScreen,
 } from './helpers';
 
 /**
@@ -552,6 +553,11 @@ test.describe('작성 제한', () => {
       await bioInput.fill('');
       await page.getByTestId('bio-save').click();
       await expect(page.getByText(copy.bioCleared)).toBeVisible();
+
+      // 알림 수신 (#56, ADR-0162): a private setting, so it changes under the restriction as at
+      // any time (ADR-0157 결과 6, ADR-0069 #37-9) — off and on again, each saved at once.
+      await switchNotificationCategoryOnScreen(page, 'community', false);
+      await switchNotificationCategoryOnScreen(page, 'community', true);
 
       // --- the operator's 감경: 무기한 to a time two days on, with a reason.
       await row.getByTestId('moderation-action-shorten').click();

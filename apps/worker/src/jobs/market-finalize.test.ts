@@ -8,7 +8,8 @@
  * `applyPairMintFill`): the person's position and the 운영 마켓메이커's opposite one, each buyer's
  * Coin moved into the market's collateral account by a PAIR_MINT_COLLATERAL event — so the
  * collateral holds unsettled pairs × 100 to pay from, and the audit (PLAN 5.6) can be run on the
- * result.
+ * result. A holder whose 시장 is off (#56, ADR-0162) is paid and recorded as always and told
+ * nothing (52-22, 52-23).
  */
 import { randomUUID } from 'node:crypto';
 import {
@@ -20,6 +21,7 @@ import {
   marketMakerAccountId,
   releaseForOrder,
   schema,
+  setNotificationCategory,
   settleMarketPositions,
   type Db,
   type LedgerAccountRef,
@@ -1221,6 +1223,109 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     expect(await recordsOf(market.id)).toEqual(records);
     expect(await settledNoticesOf(alice)).toHaveLength(1);
     expect((await runLedgerAudit(t.db)).mismatches).toEqual([]);
+  });
+
+  describe('수신 설정 (#56, ADR-0162; 52-22·52-23)', () => {
+    /** Turns `userId`'s 시장 off as the settings write does; the inbox must be there. */
+    async function marketOff(userId: string) {
+      expect(await setNotificationCategory(t.db, userId, 'market', false)).toEqual(['market']);
+    }
+    /** What went to `userId`'s room, by type. */
+    const typesTo = (published: { channel: string; event: unknown }[], userId: string) =>
+      published
+        .filter((item) => item.channel === userChannel(userId))
+        .map((item) => (item.event as { type: string }).type);
+
+    it('pays and records a holder whose 시장 is off — its zero payout too — and tells it nothing, while a holder with it on is told (52-23 지급 0 포함)', async () => {
+      const market = await resolved('YES');
+      const alice = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
+      const bob = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
+      const watcher = (await createUser(t.db)).user.id;
+      // Alice wins (YES 10 for 500), Bob loses (NO 5 for 200 — paid 0); a watcher.
+      await hold({
+        userId: alice,
+        marketId: market.id,
+        outcome: 'YES',
+        qty: 10,
+        costBasisCoin: 500n,
+      });
+      await hold({ userId: bob, marketId: market.id, outcome: 'NO', qty: 5, costBasisCoin: 200n });
+      await createWatch(t.db, { userId: watcher, marketId: market.id });
+      await marketOff(bob);
+      await marketOff(watcher);
+      const published: { channel: string; event: unknown }[] = [];
+      const result = await finalizeMarket(
+        t.db,
+        market.id,
+        (channel, event) => {
+          published.push({ channel, event });
+          return Promise.resolve();
+        },
+        logger,
+      );
+      expect(result).toMatchObject({ outcome: 'settled', paidCoin: 1_500n });
+      if (result.outcome !== 'settled') return;
+      // The payout and the records stand whatever the settings: Bob's zero payout is a record.
+      const records = await recordsOf(market.id);
+      expect(records.filter((row) => row.userId === bob)).toEqual([
+        expect.objectContaining({ outcome: 'NO', qty: 5, payoutCoin: 0n, result: 'YES' }),
+      ]);
+      expect(records.filter((row) => row.userId === alice)).toEqual([
+        expect.objectContaining({ outcome: 'YES', qty: 10, payoutCoin: 1_000n, result: 'YES' }),
+      ]);
+      expect((await marketRow(market.id)).status).toBe('settled');
+      // Alice is told; Bob and the watcher get no row and no key, and no inbox signal.
+      expect(await settledNoticesOf(alice)).toEqual([
+        settledNotice(market, 'YES', '1000', result.settledAt),
+      ]);
+      const { notifications, keys } = await inboxRows();
+      expect(notifications.map((row) => row.userId)).toEqual([alice]);
+      expect(keys.map((row) => row.userId)).toEqual([alice]);
+      expect(typesTo(published, alice)).toContain('user:notification');
+      // Bob's position closed (paid 0: no balance moved); no inbox signal.
+      expect(typesTo(published, bob)).toEqual(['user:position']);
+      expect(typesTo(published, watcher)).toEqual([]);
+      expect((await runLedgerAudit(t.db)).mismatches).toEqual([]);
+    });
+
+    it('records a VOID payout for a holder whose 시장 is off and tells it nothing (52-23 무효 지급 포함)', async () => {
+      const market = await resolved('VOID');
+      const carol = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
+      await hold({
+        userId: carol,
+        marketId: market.id,
+        outcome: 'YES',
+        qty: 10,
+        costBasisCoin: 300n,
+      });
+      await marketOff(carol);
+      const before = await balanceOf(carol);
+      const published: { channel: string; event: unknown }[] = [];
+      const result = await finalizeMarket(
+        t.db,
+        market.id,
+        (channel, event) => {
+          published.push({ channel, event });
+          return Promise.resolve();
+        },
+        logger,
+      );
+      expect(result).toMatchObject({ outcome: 'settled', paidCoin: 1_000n });
+      expect((await balanceOf(carol)).availableCoin).toBe(before.availableCoin + 500n);
+      expect((await recordsOf(market.id)).filter((row) => row.userId === carol)).toEqual([
+        expect.objectContaining({
+          outcome: 'YES',
+          qty: 10,
+          costBasisCoin: 300n,
+          payoutCoin: 500n,
+          settlementPnlCoin: 200n,
+          result: 'VOID',
+        }),
+      ]);
+      expect(await settledNoticesOf(carol)).toEqual([]);
+      expect(await inboxRows()).toEqual({ notifications: [], keys: [] });
+      expect(typesTo(published, carol)).toEqual(['user:balance', 'user:position']);
+    });
   });
 
   it('a failing step rolls the settlement back and is recorded, the market left settling; once fixed, a rerun settles (ADR-0046, ADR-0093 item 14)', async () => {

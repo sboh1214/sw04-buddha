@@ -13,6 +13,7 @@ import {
   signIn,
   signUp,
   test,
+  switchNotificationCategoryOnScreen,
 } from './helpers';
 
 /**
@@ -421,6 +422,11 @@ test.describe('계정 제한', () => {
       await bioInput.fill('');
       await page.getByTestId('bio-save').click();
       await expect(page.getByText(copy.bioCleared)).toBeVisible();
+
+      // 알림 수신 (#56, ADR-0162): a private setting, so it changes under the restriction as at
+      // any time (ADR-0157 결과 6, ADR-0069 #37-9) — off and on again, each saved at once.
+      await switchNotificationCategoryOnScreen(page, 'community', false);
+      await switchNotificationCategoryOnScreen(page, 'community', true);
 
       // An account restriction blocks no writing (#57-12): a post goes up, under no banner — the
       // account restriction's is MY 요약's and MY 설정's only (owner decision 2026-10-23).

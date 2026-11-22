@@ -1,4 +1,5 @@
 import {
+  NOTIFICATION_SETTING_CATEGORIES,
   NOTIFICATION_UNREAD_COUNT_CAP,
   type NotificationCategory,
   type NotificationTarget,
@@ -6,9 +7,14 @@ import {
   notificationTargetSchema,
 } from '@buddha/shared';
 import { copy } from '@/copy';
-import type { InboxNotification } from './api';
+import {
+  type InboxNotification,
+  type NotificationSetting,
+  type NotificationSettings,
+  isForAnotherAccount,
+} from './api';
 import { MY_MODERATION_PATH } from './moderation';
-import { myOrderPath } from './my';
+import { MY_SETTINGS_PATH, myOrderPath } from './my';
 import { myHistoryPath } from './my-history';
 import { postPath } from './posts';
 import { MY_PROPOSALS_PATH } from './proposals';
@@ -48,6 +54,15 @@ export const notificationListKey = (accountId: string | undefined) =>
 export const NOTIFICATION_UNREAD_KEY = [...NOTIFICATIONS_KEY, 'unread'] as const;
 export const notificationUnreadKey = (accountId: string | undefined) =>
   [...NOTIFICATION_UNREAD_KEY, accountId] as const;
+/**
+ * The account's 알림 수신 설정 (#56, ADR-0162), under the same private root — so SessionCacheGuard
+ * resets it and a reconnect reads it again while it is on screen — but never restarted by a
+ * `user:notification` round (the realtime provider restarts the count and the list only): nothing
+ * of the settings changes with a notification.
+ */
+export const NOTIFICATION_SETTINGS_KEY = [...NOTIFICATIONS_KEY, 'settings'] as const;
+export const notificationSettingsKey = (accountId: string | undefined) =>
+  [...NOTIFICATION_SETTINGS_KEY, accountId] as const;
 
 /**
  * The window of the unread count's and the list's re-read on `user:notification` (53-1, owner
@@ -203,4 +218,104 @@ export function withNotification(
     };
   });
   return changed ? { ...held, pages } : held;
+}
+
+// ---- 알림 수신 설정 (#56, ADR-0162; 52-21·52-22·56-1…56-5) --------------------------------------
+
+/** The '알림 수신' card's anchor on MY › 설정 (56-4), which MY › 알림's '수신 설정' link opens. */
+export const NOTIFICATION_SETTINGS_ANCHOR = 'settings-notifications';
+export const NOTIFICATION_SETTINGS_PATH = `${MY_SETTINGS_PATH}#${NOTIFICATION_SETTINGS_ANCHOR}`;
+
+/**
+ * Where the card's 56-3 line leads: 거래·정산 이력's 정산 list, the record 52-23 names (the history
+ * opens on 주문 by default, so the kind is passed; 56-5 '정산 기록 보기').
+ */
+export const NOTIFICATION_SETTINGS_HISTORY_PATH = myHistoryPath({ kind: 'settlements' });
+
+/** Each category's switch: its name and what it covers (56-5, the copy approved as written). */
+const SETTING_TEXTS: Readonly<Record<NotificationCategory, { label: string; hint: string }>> = {
+  trade: { label: copy.notificationSettingTrade, hint: copy.notificationSettingTradeHint },
+  market: { label: copy.notificationSettingMarket, hint: copy.notificationSettingMarketHint },
+  community: {
+    label: copy.notificationSettingCommunity,
+    hint: copy.notificationSettingCommunityHint,
+  },
+};
+
+/** A category's switch name ('거래 알림'); undefined for one a newer server sends. */
+export function notificationSettingLabel(category: NotificationCategory): string | undefined {
+  return Object.hasOwn(SETTING_TEXTS, category) ? SETTING_TEXTS[category].label : undefined;
+}
+
+/** The line under a category's switch: the notices it covers; undefined as the label. */
+export function notificationSettingHint(category: NotificationCategory): string | undefined {
+  return Object.hasOwn(SETTING_TEXTS, category) ? SETTING_TEXTS[category].hint : undefined;
+}
+
+/** One switch the card draws. */
+export interface NotificationSettingRow extends NotificationSetting {
+  label: string;
+  hint: string;
+}
+
+/**
+ * The switches to draw: one per category the answer lists, in the shared order
+ * (`NOTIFICATION_SETTING_CATEGORIES`, 56-2 — a category shows once it has a type). The answer is
+ * the source: a category it does not list is not drawn, nor one this web has no words for.
+ */
+export function notificationSettingRows(
+  settings: NotificationSettings,
+  categories: readonly NotificationCategory[] = NOTIFICATION_SETTING_CATEGORIES,
+): NotificationSettingRow[] {
+  return categories.flatMap((category) => {
+    const setting = settings.categories.find((entry) => entry.category === category);
+    const label = notificationSettingLabel(category);
+    const hint = notificationSettingHint(category);
+    if (setting === undefined || label === undefined || hint === undefined) return [];
+    return [{ category, enabled: setting.enabled, label, hint }];
+  });
+}
+
+/**
+ * The settings held with `category` as a write's answer says it — that category only: two rows'
+ * writes may answer out of order, and each answer is the server's word on its own category alone
+ * (the other entries may predate a later write). The answer whole when nothing is held; what is
+ * held, the same object, when it already says so or does not list the category.
+ */
+export function withNotificationSetting(
+  held: NotificationSettings | undefined,
+  answer: NotificationSettings,
+  category: NotificationCategory,
+): NotificationSettings {
+  if (held === undefined) return answer;
+  const written = answer.categories.find((entry) => entry.category === category);
+  const before = held.categories.find((entry) => entry.category === category);
+  if (written === undefined || before === undefined || before.enabled === written.enabled) {
+    return held;
+  }
+  return {
+    ...held,
+    categories: held.categories.map((entry) =>
+      entry.category === category ? { ...entry, enabled: written.enabled } : entry,
+    ),
+  };
+}
+
+/** The toast after a saved press: '거래 알림을 껐습니다.' / '… 켰습니다.'. */
+export function notificationSettingSaved(label: string, enabled: boolean): string {
+  // The one placeholder, filled here: trade-notifications' checked fill would pull the order
+  // panel's modules into every reader of this one.
+  return (enabled ? copy.notificationSettingOn : copy.notificationSettingOff).replace(
+    '{label}',
+    label,
+  );
+}
+
+/**
+ * The toast after a refused press: another account's refusal says the session changed (the
+ * session is read again, SessionCacheGuard redraws the screen); anything else, that the setting
+ * was not saved.
+ */
+export function notificationSettingFailure(error: unknown): string {
+  return isForAnotherAccount(error) ? copy.sessionChanged : copy.errNotificationSetting;
 }

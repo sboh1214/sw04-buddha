@@ -5,6 +5,7 @@ import {
   NOTIFICATION_UNREAD_COUNT_CAP,
   notificationParamsSchema,
   notificationTargetSchema,
+  type NotificationCategory,
   type NotificationDefinition,
   type NotificationParamValues,
   type NotificationTarget,
@@ -41,9 +42,27 @@ export type NotificationRow = typeof notifications.$inferSelect;
  *   a closed account, no account — or one a closure holds FOR UPDATE is `skipped`. It never waits,
  *   so no producer deadlocks with a closure whatever locks it holds; holding the KEY SHARE makes a
  *   closure that starts now wait for this COMMIT and then delete what it wrote. Row locks, not
- *   advisory ones: a market's close may notify thousands of members. This is also the step where
- *   #56 drops a recipient whose category is off (52-22: `skipped`, reason `category_off`), so it
- *   changes this one step, not every producer.
+ *   advisory ones: a market's close may notify thousands of members.
+ * - 수신 설정 (#56, ADR-0162; 52-21, 52-22, 56-1): the same statement reads the inbox's
+ *   `categories_off`, and an input whose type's category the member turned off is `skipped`
+ *   (`category_off`) — per input, never per call or per member: one call may mix categories (a
+ *   pause's `orders_cancelled` and `market_paused`), and a member with 거래 off and 시장 on gets
+ *   the second only. `no_inbox` comes first (a closed account has no settings). A skipped input
+ *   reaches no insert and no merge: no row, no key claimed (a key needs its row, so a later event
+ *   is never blocked by it), no `FOR UPDATE` of the unread row, its count and 발생 시각 untouched.
+ *   What the inbox already holds stays as it is (56-1) — the readers below never read the setting.
+ *   Turned on again, the next event is delivered as any: a merge joins the still-unread row of its
+ *   group (52-6, 52-7), which counts the delivered events only. Every producer, and every later
+ *   one (#144), passes this step: nothing else writes a notification (notifications.test.ts pins
+ *   it), so no producer is edited.
+ *   The switch is judged at the gate's moment, in READ COMMITTED: the gate sees the last committed
+ *   `categories_off`. A settings write (`setNotificationCategory`) is one plain UPDATE of a column
+ *   no unique index holds: FOR NO KEY UPDATE, which FOR KEY SHARE does not conflict with —
+ *   PostgreSQL grants the KEY SHARE without sleeping when the row's updater changed no key column
+ *   (the property the foreign keys to the inbox already rely on), so the gate neither waits for an
+ *   open settings write nor skips the member (it reads the old value until that write commits).
+ *   A settings write that took the row FOR UPDATE would make the gate skip the member as
+ *   `no_inbox` while open — never do it (the static pin, and the column grant of migration 0079).
  * - Dedupe (53-4): a key per member, type and event id (`notification_keys`). The same event
  *   reprocessed for a member is `duplicate` (silently: the event goes on); another type is its own
  *   notification. A concurrent duplicate waits on the key's unique index and ends `duplicate` once
@@ -92,8 +111,12 @@ export interface NotificationInput {
   readonly occurredAt?: Date | undefined;
 }
 
-/** Why a recipient got nothing: `no_inbox` — no person's open account, or a closure in flight. */
-export type NotificationSkipReason = 'no_inbox';
+/**
+ * Why a recipient got nothing: `no_inbox` — no person's open account, or a closure in flight;
+ * `category_off` — the member turned the input's category off (#56, 52-22: nothing is made while
+ * off; 56-1: what the inbox holds stays).
+ */
+export type NotificationSkipReason = 'no_inbox' | 'category_off';
 
 /** What became of one input, in the inputs' order. */
 export type NotificationOutcome =
@@ -470,33 +493,43 @@ export async function createNotifications(
   return outcomes;
 }
 
-/** Steps 2–4 of `createNotifications`: every statement it runs, for its `userIds` (sorted). */
+/**
+ * Steps 2–4 of `createNotifications`: every statement it runs, for its `userIds` (sorted). The
+ * gate (step 2) is where a recipient is dropped: no inbox (53-5), or the input's category off
+ * (#56, 52-22) — per input, after which only the inputs it reached are written.
+ */
 async function deliver(
   tx: Tx,
   checked: readonly CheckedInput[],
   userIds: readonly string[],
   outcomes: NotificationOutcome[],
 ): Promise<void> {
-  // 2. The gate (53-5): the inboxes not taken by a closure, in one statement that never waits.
-  const open = new Set(
-    (
-      await tx
-        .select({ userId: notificationInboxes.userId })
-        .from(notificationInboxes)
-        // One array parameter, however many recipients (a market's close may notify thousands).
-        .where(sql`${notificationInboxes.userId} = ANY(${sql.param(userIds)}::text[])`)
-        .orderBy(asc(notificationInboxes.userId))
-        .for('key share', { skipLocked: true })
-    ).map((row) => row.userId),
-  );
+  // 2. The gate (53-5): the inboxes not taken by a closure, in one statement that never waits,
+  // with each one's 수신 설정 (#56) — one more column, no statement or lock added.
+  const rows = await tx
+    .select({
+      userId: notificationInboxes.userId,
+      categoriesOff: notificationInboxes.categoriesOff,
+    })
+    .from(notificationInboxes)
+    // One array parameter, however many recipients (a market's close may notify thousands).
+    .where(sql`${notificationInboxes.userId} = ANY(${sql.param(userIds)}::text[])`)
+    .orderBy(asc(notificationInboxes.userId))
+    .for('key share', { skipLocked: true });
+  const off = new Map(rows.map((row) => [row.userId, new Set<string>(row.categoriesOff)]));
   // 3. One instant: the default 발생 시각 and the creation of every row this call makes.
   const at = await clockTimestamp(tx);
-  const reached = checked.filter((item) => open.has(item.input.userId));
   for (const item of checked) {
-    if (!open.has(item.input.userId)) {
-      outcomes[item.index] = { kind: 'skipped', userId: item.input.userId, reason: 'no_inbox' };
+    const { userId } = item.input;
+    const muted = off.get(userId);
+    if (muted === undefined) outcomes[item.index] = { kind: 'skipped', userId, reason: 'no_inbox' };
+    else if (muted.has(item.definition.category)) {
+      // 52-22: nothing of an off category is made or merged; no key is claimed for it.
+      outcomes[item.index] = { kind: 'skipped', userId, reason: 'category_off' };
     }
   }
+  // After the skips: an input skipped for either reason never reaches an insert or a merge.
+  const reached = checked.filter((item) => outcomes[item.index] === undefined);
   // 4. Every input that does not merge, in one statement (#54, ADR-0159); then the merges.
   await createMany(
     tx,
@@ -518,6 +551,54 @@ export function notifiedUserIds(outcomes: readonly NotificationOutcome[]): strin
         .map((outcome) => outcome.userId),
     ),
   ];
+}
+
+/**
+ * 수신 설정 (#56, ADR-0162; 52-21, 56-2): the categories the member turned off — empty when all
+ * are on (the default) — or null when the account has no inbox (closed, the 운영 마켓메이커, none).
+ * One statement, no lock.
+ */
+export async function notificationCategoriesOff(
+  executor: Executor,
+  userId: string,
+): Promise<string[] | null> {
+  const [row] = await executor
+    .select({ categoriesOff: notificationInboxes.categoriesOff })
+    .from(notificationInboxes)
+    .where(eq(notificationInboxes.userId, userId));
+  return row?.categoriesOff ?? null;
+}
+
+/**
+ * Turns one of the member's categories on or off (#56, ADR-0162; 52-21, 52-22): the off-list after
+ * it (sorted and distinct, so the stored value is canonical), or null when the account has no inbox
+ * — including a closure that took it first (this waits for it, then updates nothing). Idempotent.
+ *
+ * ONE plain UPDATE (FOR NO KEY UPDATE), never a `SELECT … FOR UPDATE` of the inbox: the producers'
+ * gate (FOR KEY SHARE SKIP LOCKED) neither waits for it nor skips the member, and would skip the
+ * member as `no_inbox` behind a FOR UPDATE (the module doc). The new list is computed from the row
+ * inside the statement, never read here and written back: of two writes at once the second waits
+ * for the first's row lock and recomputes on its committed value (READ COMMITTED), so two tabs
+ * switching two categories both stand. Nothing else changes: existing notifications stay (56-1).
+ */
+export async function setNotificationCategory(
+  executor: Executor,
+  userId: string,
+  category: NotificationCategory,
+  enabled: boolean,
+): Promise<string[] | null> {
+  const column = notificationInboxes.categoriesOff;
+  const [row] = await executor
+    .update(notificationInboxes)
+    .set({
+      categoriesOff: enabled
+        ? sql`array_remove(${column}, ${category}::text)`
+        : // Not `ORDER BY x COLLATE "C"`: with DISTINCT, PostgreSQL wants it in the select list.
+          sql`ARRAY(SELECT DISTINCT x FROM unnest(array_append(${column}, ${category}::text)) AS x ORDER BY x)`,
+    })
+    .where(eq(notificationInboxes.userId, userId))
+    .returning({ categoriesOff: notificationInboxes.categoriesOff });
+  return row?.categoriesOff ?? null;
 }
 
 /** A keyset position of the member's list: a notification's 발생 시각 and id. */

@@ -403,7 +403,9 @@ export async function finalizeMarket(
       // after the transition (ADR-0157 결정 4). The audience is the payout's own durable records
       // with the watchers now: `coin.settlements` holds qty-0 rows and is empty on a run whose
       // coin step was done before. `current` was read `settling`; the builder gets what the
-      // transition wrote. A failure rolls the payout back with it (188-2): no savepoint.
+      // transition wrote. A failure rolls the payout back with it (188-2): no savepoint. The
+      // gate skips a member whose 시장 is off (`category_off`, #56, ADR-0162): `notified` is the
+      // accounts something reached, and the payout and its records stand whatever the settings.
       const notified = notifiedUserIds(
         await createNotifications(
           tx,

@@ -6,7 +6,8 @@
  * Every position row is written straight to its table, with the instants spelled out: the route
  * sorts by them, and back-to-back inserts may share a millisecond. The settlement records are
  * the real settlement's (`settleMarketPositions`) where a payout is read, and
- * `createSettlementRecord`'s zero-payout ones where the instant must be chosen.
+ * `createSettlementRecord`'s zero-payout ones where the instant must be chosen. Every 알림 off
+ * leaves the records as they read (#56, ADR-0162; 52-23).
  */
 import { randomUUID } from 'node:crypto';
 import { schema, settleMarketPositions } from '@buddha/db';
@@ -32,6 +33,7 @@ import {
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
+import { turnOff } from '../test/notification-settings.js';
 import { hasTestInfra } from '../test/setup-env.js';
 
 type MarketRow = typeof schema.markets.$inferSelect;
@@ -536,6 +538,20 @@ describe.skipIf(!hasTestInfra)('positions (integration)', () => {
       .where(eq(schema.markets.id, market.id));
     expect((await settlementsOf(b, `?marketId=${market.id}`)).data).toEqual(before);
     expect((await settlementsOf(a, `?marketId=${market.id}`)).data).toEqual([aWon]);
+
+    // 52-23 (#56, ADR-0162; ADR-0143 결과 7): the list is the 필수 정산 기록, so turning every
+    // notification category off changes no byte of it — the zero payout and VOID's included.
+    const raw = async (who: TestUser) =>
+      (
+        await t.app.inject({
+          method: 'GET',
+          url: '/api/v1/me/settlements?limit=100',
+          headers: { cookie: who.cookie },
+        })
+      ).body;
+    const bodies = [await raw(a), await raw(b)];
+    for (const who of [a, b]) await turnOff(t, who, 'trade', 'market', 'community');
+    expect([await raw(a), await raw(b)]).toEqual(bodies);
   });
 
   it('GET /me/settlements pages two markets paid at one instant without a gap or a repeat, filters by market and period, and reads the session’s own alone', async () => {

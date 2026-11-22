@@ -121,7 +121,8 @@ export async function refreshMarketMaker(
     fills: result.orders.reduce((count, order) => count + order.fills.length, 0),
     burnedQty: result.burnedQty,
     nextGeneration: result.nextGeneration?.toString() ?? null,
-    // #134 (ADR-0158): a count, never the ids — BullMQ stores this result.
+    // #134 (ADR-0158): a count, never the ids — BullMQ stores this result. The accounts something
+    // reached: a member whose 거래 is off is not among them (#56, ADR-0162).
     notifiedMembers: result.notifiedUserIds.length,
   };
 }

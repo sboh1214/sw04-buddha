@@ -1,4 +1,10 @@
-import { findLedgerAccount, RECONCILIATION_NOTICES_FAILED_LOG, schema, type Db } from '@buddha/db';
+import {
+  findLedgerAccount,
+  RECONCILIATION_NOTICES_FAILED_LOG,
+  schema,
+  setNotificationCategory,
+  type Db,
+} from '@buddha/db';
 import {
   connectTestDb,
   createMarket,
@@ -268,7 +274,8 @@ describe.skipIf(!hasTestDb())('reconciliation jobs (#93, integration)', () => {
    * #54 B′ (ADR-0159; 54-5, 54-6): the automatic ledger-failure pause tells the market's watchers
    * and holders `market_paused`, reason `ledger_failure`, through every worker path
    * (`reconcileTarget`: the minute scan, `market.audit` with a target, the daily audit and the
-   * manual script). Who was told is in the inbox alone: never in a check, a batch or a log.
+   * manual script). Who was told is in the inbox alone: never in a check, a batch or a log. A
+   * member whose 시장 is off is not told (#56, ADR-0162).
    */
   describe('the automatic pause’s notices (#54 B′)', () => {
     /** The damaged market's holders (`yes`, `no`), a watcher, and another market's watcher. */
@@ -415,6 +422,30 @@ describe.skipIf(!hasTestDb())('reconciliation jobs (#93, integration)', () => {
       for (const id of told) {
         expect((await noticesOf(id)).map((notice) => notice.type)).toEqual(['market_paused']);
       }
+    });
+
+    it('tells nobody whose 시장 is off — the pause commits, the others are told (#56, ADR-0162; 52-22)', async () => {
+      const { market, watcher, told } = await watchedDamagedMarket();
+      expect(await setNotificationCategory(t.db, watcher, 'market', false)).toEqual(['market']);
+      const batch = await reconcileDueMarkets(t.db, publish, logger);
+      expect(batch).toMatchObject({ mismatched: 1, paused: 1, failed: 0 });
+      expect((await marketRow(market.id)).status).toBe('paused');
+      const reached = told.filter((id) => id !== watcher);
+      for (const id of reached) {
+        expect((await noticesOf(id)).map((notice) => notice.type)).toEqual(['market_paused']);
+      }
+      expect(await noticesOf(watcher)).toEqual([]);
+      expect(
+        (await t.db.select().from(schema.notificationKeys)).map((key) => key.userId).sort(),
+      ).toEqual(reached);
+      expect(
+        published
+          .filter(({ event }) => event.type === 'user:notification')
+          .map(({ channel }) => channel)
+          .sort(),
+      ).toEqual(reached.map((id) => userChannel(id)).sort());
+      // The savepoint's failure line is not written: a skipped member is no write failure.
+      expect(logs).toEqual([]);
     });
 
     it('keeps the pause when its notices cannot be written: the fixed line alone, no notice, no signal (54-6)', async () => {

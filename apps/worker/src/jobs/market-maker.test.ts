@@ -6,6 +6,7 @@ import {
   recordMarketMakerRun,
   requestMarketMakerRefresh,
   schema,
+  setNotificationCategory,
   type Db,
 } from '@buddha/db';
 import {
@@ -159,6 +160,51 @@ describe.skipIf(!hasTestDb())('maker worker transactions and delivery (#129)', (
         /generation|desiredEnabled|lastConfigVersion|riskReason/,
       );
     }
+  });
+
+  it('tells a resting owner whose 거래 is off nothing of the bot’s fill, its unread notice unchanged (#56, ADR-0162; 52-22·56-1)', async () => {
+    const market = await opened();
+    const a = (await createUser(t.db, { balanceCoin: 4_000n })).user.id;
+    const b = (await createUser(t.db, { balanceCoin: 4_000n })).user.id;
+    await mintTestPairs(t.db, { marketId: market.id, yesHolderId: a, noHolderId: b, qty: 2 });
+    const resting = await placeTestOrder(t.db, {
+      marketId: market.id,
+      ownerId: a,
+      outcome: 'YES',
+      side: 'sell',
+      limitPriceCoin: 1,
+      qty: 2,
+    });
+    if (resting.kind !== 'placed') throw new Error('Resting sell fixture was not placed');
+    // B takes one of A's two: A's notice (체결 1회), unread.
+    const taken = await placeTestOrder(t.db, {
+      marketId: market.id,
+      ownerId: b,
+      timeInForce: 'ioc',
+      limitPriceCoin: 99,
+      qty: 1,
+    });
+    expect(taken).toMatchObject({ kind: 'placed', order: { status: 'filled' } });
+    const notices = () =>
+      t.db.select().from(schema.notifications).where(eq(schema.notifications.userId, a));
+    const before = await notices();
+    expect(before).toEqual([
+      expect.objectContaining({ type: 'order_filled', eventCount: 1, readAt: null }),
+    ]);
+    expect(await setNotificationCategory(t.db, a, 'trade', false)).toEqual(['trade']);
+    const publish = vi.fn<Publish>().mockResolvedValue(undefined);
+    const result = await refreshMarketMaker(t.db, market.id, publish, vi.fn(), logger);
+    // The bot filled A's last one; nothing reached A — no merge, no signal, not counted.
+    expect(result).toMatchObject({ fills: 1, notifiedMembers: 0 });
+    const [order] = await t.db
+      .select()
+      .from(schema.orders)
+      .where(eq(schema.orders.id, resting.order.id));
+    expect(order).toMatchObject({ status: 'filled', filledQty: 2 });
+    expect(await notices()).toEqual(before);
+    expect(publish.mock.calls.filter(([, event]) => event.type === 'user:notification')).toEqual(
+      [],
+    );
   });
 
   it('rolls back economic writes before recording an error, emits nothing, and retries the same work', async () => {
