@@ -29,6 +29,8 @@
 
 마이그레이션 0078(#53, ADR-0157)도 DB를 초기화하지 않는다. 표 `notification_inboxes`·`notifications`·`notification_keys`와 그 트리거·권한을 더하고, 가입 트리거(`create_profile_for_user`)와 탈퇴의 완전성 검사(`profiles_closed_completely`)를 알림함을 다루도록 다시 만들며, 보존기간 처리 기록의 종류에 `notifications`를 더한다. 새 표에만 쓴다 — 그때 열린 사람 계정마다 알림함 한 행을 채우고(운영 마켓메이커와 탈퇴한 계정은 없다) 기존 행은 바꾸지 않는다. 초기화 뒤에는 시드와 가입이 같은 트리거로 알림함을 만든다.
 
+마이그레이션 0079(#56, ADR-0162)도 DB를 초기화하지 않는다. 알림함에 수신 설정의 열 `categories_off`(상수 기본값 `'{}'` — 행을 다시 쓰지 않고 기존 알림함은 모든 분류가 켜진 것으로 읽힌다)와 그 CHECK를 더하고, `buddha_app`의 알림함 UPDATE를 그 열로 좁힌다. 기존 행은 바꾸지 않는다. 초기화 뒤에도 가입이 만든 알림함은 빈 목록(모두 켜짐)으로 시작한다.
+
 ## 한 문장, 두 곳
 
 비우는 문장은 `packages/db/src/wipe.ts`의 `WIPE_PUBLIC_TABLES_SQL` 하나다. `public` 스키마의 테이블 목록을 실행할 때 `pg_tables`에서 읽어 `TRUNCATE … RESTART IDENTITY CASCADE`하므로, 뒤에 생기는 테이블도 빠지지 않는다. TRUNCATE는 테이블 소유자의 권한이라 `buddha_migrate`로 돈다(`buddha_app`은 할 수 없다).

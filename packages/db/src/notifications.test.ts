@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
-import { NOTIFICATION_UNREAD_COUNT_CAP, type NotificationDefinition } from '@buddha/shared';
+import {
+  NOTIFICATION_DEFINITIONS,
+  NOTIFICATION_SETTING_CATEGORIES,
+  NOTIFICATION_UNREAD_COUNT_CAP,
+  type NotificationCategory,
+  type NotificationDefinition,
+  type NotificationType,
+} from '@buddha/shared';
 import { DrizzleQueryError, asc, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Db } from './client.js';
@@ -8,10 +15,12 @@ import {
   createNotifications,
   markAllNotificationsRead,
   markNotificationRead,
+  notificationCategoriesOff,
   NotificationInputError,
   notificationPage,
   NotificationWriteError,
   notifiedUserIds,
+  setNotificationCategory,
   unreadNotificationCount,
   type NotificationInput,
   type NotificationOutcome,
@@ -643,7 +652,9 @@ describe.skipIf(!hasTestDb())('notifications (integration, #53)', () => {
           Promise.resolve({ rows: [{ ms: String(Date.parse('2026-11-21T00:00:00.000Z')) }] }),
         select: () =>
           chain(() =>
-            selects++ === 0 ? answer('gate', [{ userId }]) : answer('read merge target', []),
+            selects++ === 0
+              ? answer('gate', [{ userId, categoriesOff: [] }])
+              : answer('read merge target', []),
           ),
         insert: (table: unknown) =>
           chain(() => answer(table === notifications ? 'insert notification' : 'insert key', [])),
@@ -1184,6 +1195,526 @@ describe.skipIf(!hasTestDb())('notifications (integration, #53)', () => {
       expect(await unreadNotificationCount(t.db, userId)).toBe(1);
     });
   });
+
+  describe('수신 설정 (#56, ADR-0162; 52-21, 52-22, 56-1)', () => {
+    const setCategory = (
+      userId: string,
+      category: NotificationCategory,
+      enabled: boolean,
+      db: Db = t.db,
+    ) => setNotificationCategory(db, userId, category, enabled);
+    const inboxOf = async (userId: string) =>
+      (
+        await t.db.select().from(notificationInboxes).where(eq(notificationInboxes.userId, userId))
+      )[0];
+    const keyCount = async () =>
+      (await t.db.select({ n: sql<number>`count(*)::int` }).from(notificationKeys))[0]!.n;
+
+    /** `setNotificationCategory` in a transaction held open until `release`, telling `written`. */
+    function heldSetting(userId: string, category: NotificationCategory, enabled: boolean) {
+      const written = gate();
+      const release = gate();
+      let answer: string[] | null = null;
+      const done = t.db.transaction(async (tx) => {
+        answer = await setNotificationCategory(tx, userId, category, enabled);
+        written.open();
+        await release.opened;
+      });
+      return { written: written.opened, release: release.open, done: done.then(() => answer) };
+    }
+
+    /** A transaction that gives up on any lock wait after `ms` (55P03), so a regression fails. */
+    const timed = <T>(run: (tx: Tx) => Promise<T>, ms = 2_000) =>
+      t.db.transaction(async (tx) => {
+        await tx.execute(sql.raw(`SET LOCAL lock_timeout = '${String(ms)}ms'`));
+        return run(tx);
+      });
+
+    it('starts with every category on, and keeps one canonical off-list (52-21)', async () => {
+      const userId = await member();
+      const before = (await inboxOf(userId))!;
+      expect(before.categoriesOff).toEqual([]);
+      expect(await notificationCategoriesOff(t.db, userId)).toEqual([]);
+      expect(await setCategory(userId, 'market', false)).toEqual(['market']);
+      // Idempotent: off again changes nothing.
+      expect(await setCategory(userId, 'market', false)).toEqual(['market']);
+      // Sorted and distinct whatever order the switches went.
+      expect(await setCategory(userId, 'trade', false)).toEqual(['market', 'trade']);
+      expect(await setCategory(userId, 'community', false)).toEqual([
+        'community',
+        'market',
+        'trade',
+      ]);
+      expect(await setCategory(userId, 'market', true)).toEqual(['community', 'trade']);
+      expect(await setCategory(userId, 'market', true)).toEqual(['community', 'trade']);
+      expect(await notificationCategoriesOff(t.db, userId)).toEqual(['community', 'trade']);
+      // Every one can be turned off and on (52-21 '잠그는 알림은 없다').
+      for (const category of NOTIFICATION_SETTING_CATEGORIES) {
+        expect(await setCategory(userId, category, true)).not.toContain(category);
+      }
+      expect(await inboxOf(userId)).toEqual({ ...before, categoriesOff: [] });
+      // No inbox, no setting: the 운영 마켓메이커, no account, a closed account.
+      const marketMaker = await createMarketMakerAccount(t.db);
+      const closed = await member();
+      await setCategory(closed, 'trade', false);
+      await closeAccount(t.db, closed);
+      for (const none of [marketMaker, 'no-such-account', closed]) {
+        expect(await notificationCategoriesOff(t.db, none), none).toBeNull();
+        expect(await setCategory(none, 'trade', false), none).toBeNull();
+      }
+      expect(
+        await t.db
+          .select()
+          .from(notificationInboxes)
+          .where(eq(notificationInboxes.userId, marketMaker)),
+      ).toEqual([]);
+    });
+
+    it('skips an input of an off category: no row, no key, and the call’s other recipients as before (52-22)', async () => {
+      const [off, on] = [await member(), await member()];
+      const closed = await member();
+      await closeAccount(t.db, closed);
+      const market = await slug();
+      await setCategory(off, 'market', false);
+      const keys = await keyCount();
+      const outcomes = await deliver([
+        notice(off, market, 'event-1'),
+        notice(on, market, 'event-1'),
+        notice(closed, market, 'event-1'),
+      ]);
+      expect(outcomes).toEqual([
+        { kind: 'skipped', userId: off, reason: 'category_off' },
+        { kind: 'created', id: expect.any(String) as unknown, userId: on },
+        { kind: 'skipped', userId: closed, reason: 'no_inbox' },
+      ]);
+      expect(notifiedUserIds(outcomes)).toEqual([on]);
+      expect(await rowsOf(off)).toEqual([]);
+      expect(await keysOf(off)).toEqual([]);
+      expect(await keyCount()).toBe(keys + 1);
+      // Another category of the same member still arrives.
+      expect(kinds(await deliver([mergeable(off, market, 'fill-1', 'order-1')]))).toEqual([
+        'created',
+      ]);
+    });
+
+    it('answers `no_inbox` before `category_off`: a closure holding the inbox wins', async () => {
+      const userId = await member();
+      const market = await slug();
+      await setCategory(userId, 'market', false);
+      const closure = await holder();
+      try {
+        await closure.client.query(
+          'SELECT 1 FROM notification_inboxes WHERE user_id = $1 FOR UPDATE',
+          [userId],
+        );
+        expect(await deliver([notice(userId, market, 'e')])).toEqual([
+          { kind: 'skipped', userId, reason: 'no_inbox' },
+        ]);
+      } finally {
+        await closure.end();
+      }
+    });
+
+    it('filters per input, never per call or member: a mixed call delivers the categories on', async () => {
+      const [a, b] = [await member(), await member()];
+      const market = await slug();
+      // a: 거래 on, 시장 off; b: the opposite.
+      await setCategory(a, 'market', false);
+      await setCategory(b, 'trade', false);
+      const outcomes = await deliver([
+        notice(a, market, 'pause-1'),
+        mergeable(a, market, 'pause-1', 'order-a'),
+        notice(b, market, 'pause-1'),
+        mergeable(b, market, 'pause-1', 'order-b'),
+      ]);
+      expect(outcomes.map((o) => [o.userId, o.kind])).toEqual([
+        [a, 'skipped'],
+        [a, 'created'],
+        [b, 'created'],
+        [b, 'skipped'],
+      ]);
+      expect((await rowsOf(a)).map((row) => row.type)).toEqual(['test_merged_notice']);
+      expect((await rowsOf(b)).map((row) => row.type)).toEqual(['test_notice']);
+      expect((await keysOf(a)).map((key) => key.type)).toEqual(['test_merged_notice']);
+      expect((await keysOf(b)).map((key) => key.type)).toEqual(['test_notice']);
+    });
+
+    it('leaves an unread merged notification as it is while off, and merges into it once on again (56-1, 52-6)', async () => {
+      const userId = await member();
+      const market = await slug();
+      const t0 = new Date('2026-11-21T01:00:00.000Z');
+      const [created] = await deliver([
+        mergeable(userId, market, 'fill-1', 'order-1', 2, { occurredAt: t0 }),
+      ]);
+      const id = idOf(created);
+      const held = (await rowOf(id))!;
+      await setCategory(userId, 'trade', false);
+      // While off: nothing read or locked for the merge — the gate and the clock only.
+      const { outcome, selects } = await t.db.transaction(async (tx) => {
+        const spy = vi.spyOn(tx, 'select');
+        try {
+          const [only] = await createNotifications(
+            tx,
+            [
+              mergeable(userId, market, 'fill-2', 'order-1', 5, {
+                occurredAt: new Date('2026-11-21T02:00:00.000Z'),
+              }),
+            ],
+            { definitions },
+          );
+          return { outcome: only, selects: spy.mock.calls.length };
+        } finally {
+          spy.mockRestore();
+        }
+      });
+      expect(outcome).toEqual({ kind: 'skipped', userId, reason: 'category_off' });
+      expect(selects).toBe(1);
+      expect(await rowOf(id)).toEqual(held);
+      expect((await keysOf(userId)).map((key) => key.eventKey)).toEqual(['fill-1']);
+      // 56-1: still listed and counted.
+      expect((await notificationPage(t.db, userId, { after: null, limit: 10 })).items).toEqual([
+        held,
+      ]);
+      expect(await unreadNotificationCount(t.db, userId)).toBe(1);
+      // On again: the next event joins the still-unread row; the off period's never counted.
+      await setCategory(userId, 'trade', true);
+      const t3 = new Date('2026-11-21T03:00:00.000Z');
+      expect(
+        await deliver([mergeable(userId, market, 'fill-3', 'order-1', 1, { occurredAt: t3 })]),
+      ).toEqual([{ kind: 'merged', id, userId, paramsReset: false }]);
+      expect(await rowOf(id)).toEqual({
+        ...held,
+        params: { label: 'fill-3', total: 3 },
+        eventCount: 2,
+        occurredAt: t3,
+      });
+      // After reading, the next event makes a new one, as without the setting.
+      await t.db.transaction((tx) => markNotificationRead(tx, userId, id));
+      const [next] = await deliver([mergeable(userId, market, 'fill-4', 'order-1')]);
+      expect(next!.kind).toBe('created');
+      expect(idOf(next)).not.toBe(id);
+    });
+
+    it('claims no key for a skipped event: a later event arrives once on again (52-22)', async () => {
+      const userId = await member();
+      const market = await slug();
+      await setCategory(userId, 'market', false);
+      expect(kinds(await deliver([notice(userId, market, 'while-off')]))).toEqual(['skipped']);
+      await setCategory(userId, 'market', true);
+      expect(kinds(await deliver([notice(userId, market, 'after-on')]))).toEqual(['created']);
+      // The edge ADR-0162 accepts: the very event skipped while off, replayed after it committed
+      // and the category came back on, is delivered — no producer replays a committed event.
+      expect(kinds(await deliver([notice(userId, market, 'while-off')]))).toEqual(['created']);
+      expect((await rowsOf(userId)).map((row) => row.params)).toEqual([
+        { label: 'after-on' },
+        { label: 'while-off' },
+      ]);
+    });
+
+    it('never filters the readers: what the inbox holds stays listed, counted and readable (56-1)', async () => {
+      const userId = await member();
+      const market = await slug();
+      const outcomes = await deliver([
+        notice(userId, market, 'e-1'),
+        mergeable(userId, market, 'f-1', 'order-1'),
+      ]);
+      for (const category of NOTIFICATION_SETTING_CATEGORIES) {
+        await setCategory(userId, category, false);
+      }
+      const page = await notificationPage(t.db, userId, { after: null, limit: 10 });
+      expect(page.items.map((row) => row.id).sort()).toEqual(outcomes.map(idOf).sort());
+      expect(await unreadNotificationCount(t.db, userId)).toBe(2);
+      const read = await t.db.transaction((tx) =>
+        markNotificationRead(tx, userId, idOf(outcomes[0])),
+      );
+      expect(read?.changed).toBe(true);
+      expect(await t.db.transaction((tx) => markAllNotificationsRead(tx, userId))).toEqual({
+        changed: 1,
+      });
+      expect(await unreadNotificationCount(t.db, userId)).toBe(0);
+    });
+
+    describe('every product type passes the gate by its category (#56 AC 4)', () => {
+      const uuid = (n: number) => `3f2504e0-4f89-41d3-9a0c-${String(n).padStart(12, '0')}`;
+      const at = '2026-11-21T03:00:00.000Z';
+      const title = '시장 제목';
+      const slugTarget = { kind: 'market', slug: 'korea-rate-cut-2026' } as const;
+      type Sample = Pick<NotificationInput, 'params' | 'target' | 'mergeKey'>;
+      /**
+       * One valid sample per product type (its definition's params, a target it lists, a merge key
+       * iff it merges). A Record: a new type (#144's) fails to compile until it adds its own, so
+       * every type — the late ones too — is shown to pass the same gate.
+       */
+      const SAMPLES: Record<NotificationType, Sample> = {
+        order_filled: {
+          params: {
+            marketTitle: title,
+            outcome: 'YES',
+            side: 'buy',
+            qty: '1',
+            amountCoin: '50',
+            fullyFilled: false,
+            orderQty: '3',
+            orderFilledQty: '1',
+          },
+          target: { kind: 'order', orderId: uuid(1) },
+          mergeKey: uuid(1),
+        },
+        orders_cancelled: {
+          params: { reason: 'paused', orderCount: 2, marketCount: 1, marketTitle: title },
+          target: { kind: 'order_history', marketId: uuid(2) },
+        },
+        orders_expired: {
+          params: { marketTitle: title, cause: 'closed', orderCount: 1 },
+          target: { kind: 'order_history', marketId: null },
+        },
+        market_closed: { params: { marketTitle: title, early: false }, target: slugTarget },
+        market_paused: {
+          params: { marketTitle: title, reason: 'basis_change' },
+          target: slugTarget,
+        },
+        market_resumed: {
+          params: { marketTitle: title, reason: 'basis_change' },
+          target: slugTarget,
+        },
+        market_cancelled: { params: { marketTitle: title }, target: slugTarget },
+        market_rules_supplemented: {
+          params: { marketTitle: title, ruleVersion: 2, reason: '보충 사유' },
+          target: slugTarget,
+        },
+        market_judgement_delayed: {
+          params: {
+            marketTitle: title,
+            reason: '지연 사유',
+            nextReviewAt: at,
+            judgementTimeZone: null,
+          },
+          target: slugTarget,
+        },
+        market_provisional_result: {
+          params: {
+            marketTitle: title,
+            result: 'YES',
+            disputeDeadline: at,
+            judgementTimeZone: 'Asia/Seoul',
+          },
+          target: slugTarget,
+        },
+        market_judgement_corrected: {
+          params: {
+            marketTitle: title,
+            result: 'NO',
+            disputeDeadline: at,
+            judgementTimeZone: null,
+          },
+          target: slugTarget,
+        },
+        market_dispute_decided: {
+          params: { marketTitle: title, decision: 'dismissed', reason: '처리 사유' },
+          target: slugTarget,
+        },
+        market_dispute_closed_by_correction: {
+          params: { marketTitle: title, disputeDeadline: at, judgementTimeZone: null },
+          target: slugTarget,
+        },
+        market_settled: {
+          params: { marketTitle: title, result: 'VOID', payoutCoin: '0' },
+          target: slugTarget,
+        },
+        post_replied: {
+          params: { replyId: uuid(3), replyCreatedAt: at },
+          target: { kind: 'post', postId: uuid(4) },
+          mergeKey: uuid(4),
+        },
+        comment_replied: {
+          params: { replyId: uuid(5), replyCreatedAt: at },
+          target: { kind: 'comment', postId: uuid(4), commentId: uuid(6) },
+          mergeKey: uuid(6),
+        },
+        moderation_action_taken: {
+          params: { action: 'warning', endsAt: null },
+          target: { kind: 'moderation_action', actionId: uuid(7) },
+        },
+        moderation_action_cancelled: {
+          params: { action: 'hide' },
+          target: { kind: 'moderation_action', actionId: uuid(7) },
+        },
+        moderation_restriction_end_changed: {
+          params: { action: 'writing_restriction', change: 'shorten', endsAt: at },
+          target: { kind: 'moderation_action', actionId: uuid(8) },
+        },
+        proposal_decided: {
+          params: { decision: 'adopted', question: '내 질문' },
+          target: { kind: 'proposal', proposalId: uuid(9) },
+        },
+      };
+
+      it('has a sample of every product type and no other', () => {
+        expect(Object.keys(SAMPLES).sort()).toEqual(
+          NOTIFICATION_DEFINITIONS.map((definition) => definition.type).sort(),
+        );
+      });
+
+      it('skips each type for a member with its category off, and delivers it with only its own on', async () => {
+        // Per category: one member with it off (the others on), one with only it on.
+        const offOnly = new Map<NotificationCategory, string>();
+        const onOnly = new Map<NotificationCategory, string>();
+        for (const category of NOTIFICATION_SETTING_CATEGORIES) {
+          const [off, on] = [await member(), await member()];
+          await setCategory(off, category, false);
+          for (const other of NOTIFICATION_SETTING_CATEGORIES) {
+            if (other !== category) await setCategory(on, other, false);
+          }
+          offOnly.set(category, off);
+          onOnly.set(category, on);
+        }
+        for (const definition of NOTIFICATION_DEFINITIONS) {
+          const sample = SAMPLES[definition.type];
+          const input = (userId: string): NotificationInput => ({
+            userId,
+            type: definition.type,
+            eventKey: `${definition.type}:1`,
+            ...sample,
+          });
+          const off = offOnly.get(definition.category)!;
+          const on = onOnly.get(definition.category)!;
+          // The product's list: no `definitions` of the tests' own.
+          const outcomes = await t.db.transaction((tx) =>
+            createNotifications(tx, [input(off), input(on)]),
+          );
+          expect(outcomes, definition.type).toEqual([
+            { kind: 'skipped', userId: off, reason: 'category_off' },
+            { kind: 'created', id: expect.any(String) as unknown, userId: on },
+          ]);
+        }
+        for (const category of NOTIFICATION_SETTING_CATEGORIES) {
+          const off = offOnly.get(category)!;
+          const on = onOnly.get(category)!;
+          expect(await rowsOf(off), category).toEqual([]);
+          expect(await keysOf(off), category).toEqual([]);
+          const types = NOTIFICATION_DEFINITIONS.filter((d) => d.category === category)
+            .map((d) => d.type)
+            .sort();
+          expect((await rowsOf(on)).map((row) => row.type).sort(), category).toEqual(types);
+          expect(new Set((await rowsOf(on)).map((row) => row.category)), category).toEqual(
+            new Set([category]),
+          );
+        }
+      });
+    });
+
+    describe('with a settings write at once (READ COMMITTED; ADR-0162 결정 3)', () => {
+      it('neither waits for an open settings write nor skips the member: the last committed value applies', async () => {
+        const userId = await member();
+        const market = await slug();
+        const setting = heldSetting(userId, 'market', false);
+        await setting.written;
+        try {
+          // (a) The UPDATE is open: the gate takes its KEY SHARE at once and reads 'on'.
+          const started = Date.now();
+          expect(
+            kinds(
+              await timed((tx) =>
+                createNotifications(tx, [notice(userId, market, 'e-1')], { definitions }),
+              ),
+            ),
+          ).toEqual(['created']);
+          expect(Date.now() - started).toBeLessThan(2_000);
+        } finally {
+          setting.release();
+        }
+        expect(await setting.done).toEqual(['market']);
+        // (b) Committed: the next call applies it.
+        expect(await deliver([notice(userId, market, 'e-2')])).toEqual([
+          { kind: 'skipped', userId, reason: 'category_off' },
+        ]);
+      });
+
+      it('lets a settings write commit while a producer holds the KEY SHARE, which then still delivers', async () => {
+        const userId = await member();
+        const market = await slug();
+        const writer = heldDelivery([notice(userId, market, 'e-1')]);
+        await writer.written;
+        try {
+          // (b′) No wait on the producer's KEY SHARE: a no-key update does not conflict with it.
+          expect(await timed((tx) => setNotificationCategory(tx, userId, 'market', false))).toEqual(
+            ['market'],
+          );
+        } finally {
+          writer.release();
+        }
+        // The gate read before the switch: that event was "before" it.
+        expect(kinds(await writer.done)).toEqual(['created']);
+        expect(kinds(await deliver([notice(userId, market, 'e-2')]))).toEqual(['skipped']);
+      });
+
+      it('keeps both of two settings writes at once on different categories (no lost update)', async () => {
+        const userId = await member();
+        const first = heldSetting(userId, 'trade', false);
+        await first.written;
+        let second: Promise<string[] | null> | undefined;
+        try {
+          // (b″) The second waits on the first's row lock, then recomputes on its committed value.
+          second = t.db.transaction((tx) => setNotificationCategory(tx, userId, 'market', false));
+          const lock = await holder();
+          try {
+            await lock.waitFor('the second settings write waits on the first');
+          } finally {
+            await lock.end();
+          }
+        } finally {
+          first.release();
+        }
+        expect(await first.done).toEqual(['trade']);
+        expect(await second).toEqual(['market', 'trade']);
+        expect(await notificationCategoriesOff(t.db, userId)).toEqual(['market', 'trade']);
+        // And turning one on while another goes off at once keeps both too.
+        const on = heldSetting(userId, 'trade', true);
+        await on.written;
+        let off: Promise<string[] | null> | undefined;
+        try {
+          off = t.db.transaction((tx) => setNotificationCategory(tx, userId, 'community', false));
+          const lock = await holder();
+          try {
+            await lock.waitFor('the second settings write waits on the first');
+          } finally {
+            await lock.end();
+          }
+        } finally {
+          on.release();
+        }
+        expect(await on.done).toEqual(['market']);
+        expect(await off).toEqual(['community', 'market']);
+      });
+
+      it('waits for a closure holding the inbox, then answers no inbox (c)', async () => {
+        const userId = await member();
+        const market = await slug();
+        await setCategory(userId, 'trade', false);
+        const closure = await holder();
+        let setting: Promise<string[] | null> | undefined;
+        try {
+          await closure.client.query(
+            'SELECT 1 FROM notification_inboxes WHERE user_id = $1 FOR UPDATE',
+            [userId],
+          );
+          // The gate skips it as before (no_inbox), whatever its settings.
+          expect(await deliver([mergeable(userId, market, 'f', 'o')])).toEqual([
+            { kind: 'skipped', userId, reason: 'no_inbox' },
+          ]);
+          setting = t.db.transaction((tx) => setNotificationCategory(tx, userId, 'trade', true));
+          await closure.waitFor('the settings write waits on the closure');
+          await closure.client.query('DELETE FROM notification_inboxes WHERE user_id = $1', [
+            userId,
+          ]);
+        } finally {
+          await closure.end('COMMIT');
+        }
+        expect(await setting).toBeNull();
+        expect(await notificationCategoriesOff(t.db, userId)).toBeNull();
+      });
+    });
+  });
 });
 
 /** The restriction reason an account restriction takes (ACCOUNT_RESTRICTION_REASONS). */
@@ -1216,6 +1747,7 @@ describe('notifiedUserIds', () => {
         { kind: 'created', id: '1', userId: 'b' },
         { kind: 'duplicate', userId: 'c' },
         { kind: 'skipped', userId: 'd', reason: 'no_inbox' },
+        { kind: 'skipped', userId: 'e', reason: 'category_off' },
         { kind: 'merged', id: '2', userId: 'a', paramsReset: false },
         { kind: 'created', id: '3', userId: 'b' },
       ]),
@@ -1224,6 +1756,32 @@ describe('notifiedUserIds', () => {
   });
 });
 
+const ROOT = new URL('../../../', import.meta.url);
+
+/** The production sources: no test, spec, test helper, build output or dependency. */
+function productionSources(): { path: string; source: string }[] {
+  const files: { path: string; source: string }[] = [];
+  for (const group of ['apps', 'packages']) {
+    for (const name of readdirSync(new URL(`${group}/`, ROOT))) {
+      const src = new URL(`${group}/${name}/src/`, ROOT);
+      let entries: string[];
+      try {
+        entries = readdirSync(src, { recursive: true }) as string[];
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        const path = `${group}/${name}/src/${entry}`;
+        if (!/\.(?:ts|tsx|mts|js|mjs)$/.test(entry)) continue;
+        if (/(?:^|\/)(?:test|tests|__tests__|e2e|node_modules)\//.test(entry)) continue;
+        if (/\.(?:test|spec)\.[a-z]+$/.test(entry)) continue;
+        files.push({ path, source: readFileSync(new URL(path, ROOT), 'utf8') });
+      }
+    }
+  }
+  return files;
+}
+
 /**
  * The test types never reach production (#53, ADR-0157): no source under `apps/<app>/src` or
  * `packages/<package>/src` outside the tests passes `createNotifications` a definitions list of its
@@ -1231,8 +1789,6 @@ describe('notifiedUserIds', () => {
  * helpers (`@buddha/db/test`, a `/test/notifications` module). Reads files only.
  */
 describe('the test notification types stay in the tests (static)', () => {
-  const ROOT = new URL('../../../', import.meta.url);
-
   /** The top-level arguments of each `createNotifications(` call in `source`. */
   function callArguments(source: string): number[] {
     const counts: number[] = [];
@@ -1268,30 +1824,6 @@ describe('the test notification types stay in the tests (static)', () => {
       counts.push(args + (sawToken ? 1 : 0));
     }
     return counts;
-  }
-
-  /** The production sources: no test, spec, test helper, build output or dependency. */
-  function productionSources(): { path: string; source: string }[] {
-    const files: { path: string; source: string }[] = [];
-    for (const group of ['apps', 'packages']) {
-      for (const name of readdirSync(new URL(`${group}/`, ROOT))) {
-        const src = new URL(`${group}/${name}/src/`, ROOT);
-        let entries: string[];
-        try {
-          entries = readdirSync(src, { recursive: true }) as string[];
-        } catch {
-          continue;
-        }
-        for (const entry of entries) {
-          const path = `${group}/${name}/src/${entry}`;
-          if (!/\.(?:ts|tsx|mts|js|mjs)$/.test(entry)) continue;
-          if (/(?:^|\/)(?:test|tests|__tests__|e2e|node_modules)\//.test(entry)) continue;
-          if (/\.(?:test|spec)\.[a-z]+$/.test(entry)) continue;
-          files.push({ path, source: readFileSync(new URL(path, ROOT), 'utf8') });
-        }
-      }
-    }
-    return files;
   }
 
   /** A test type (TEST_NOTIFICATION*), or the test helper that delivers one, named. */
@@ -1375,5 +1907,136 @@ describe('the test notification types stay in the tests (static)', () => {
       (definition: NotificationDefinition) => definition.type,
     );
     expect(types).toEqual(['test_notice', 'test_merged_notice']);
+  });
+});
+
+/**
+ * Who writes notifications and the inbox (#56, ADR-0162): the gate's `category_off` covers every
+ * producer only because nothing but `createNotifications` inserts a notification or a key, and a
+ * settings write never makes the gate skip a member only because nothing but the closure takes the
+ * inbox FOR UPDATE. Builder calls (`.insert(notifications)`, `schema.` or not) and raw SQL
+ * (`INSERT INTO ${notifications}` or the quoted name — upper-case keywords, as every raw statement
+ * here is written) both count. Reads files only.
+ */
+describe('who writes notifications and the inbox (#56, static)', () => {
+  /** `name` as a builder references it: bare or through `schema.`. */
+  const ref = (name: string) => String.raw`(?:schema\.)?${name}`;
+  /** A raw SQL table reference: `${name}` in a template, or the table's (quoted) name. */
+  const rawRef = (name: string, table: string) =>
+    String.raw`(?:\$\{\s*${ref(name)}\s*\}|"?${table}\b)`;
+  const UPDATES_INBOX = new RegExp(
+    String.raw`\.update\(\s*${ref('notificationInboxes')}\s*\)|\bUPDATE\s+(?:ONLY\s+)?` +
+      rawRef('notificationInboxes', 'notification_inboxes'),
+  );
+  const INSERTS_NOTIFICATIONS = new RegExp(
+    String.raw`\.insert\(\s*${ref('(?:notifications|notificationKeys)')}\s*\)|\bINSERT\s+INTO\s+` +
+      String.raw`(?:${rawRef('notifications', 'notifications')}|${rawRef('notificationKeys', 'notification_keys')})`,
+  );
+  const DELETES_INBOX = new RegExp(
+    String.raw`\.delete\(\s*${ref('notificationInboxes')}\s*\)|\bDELETE\s+FROM\s+` +
+      rawRef('notificationInboxes', 'notification_inboxes'),
+  );
+  /** Where a read of the inbox starts: a builder's `.from(…)` or a raw `FROM …`. */
+  const FROM_INBOX = new RegExp(
+    String.raw`(\.from\(\s*${ref('notificationInboxes')}\s*\))|\bFROM\s+` +
+      rawRef('notificationInboxes', 'notification_inboxes'),
+    'g',
+  );
+  const FOR_UPDATE = /\.for\(\s*['"]update['"]|\bFOR\s+UPDATE\b/;
+
+  /**
+   * True when a read of the inbox in `source` takes it FOR UPDATE — statement-scoped: from the
+   * `.from(…)` to the end of its chain (`;`), or from a raw `FROM` to the end of its statement or
+   * template. FOR NO KEY UPDATE, FOR SHARE and FOR KEY SHARE do not conflict with the gate.
+   */
+  function locksInboxForUpdate(source: string): boolean {
+    for (const match of source.matchAll(FROM_INBOX)) {
+      const rest = source.slice(match.index);
+      const ends = [rest.indexOf(';'), match[1] === undefined ? rest.indexOf('`') : -1].filter(
+        (at) => at >= 0,
+      );
+      if (FOR_UPDATE.test(rest.slice(0, ends.length > 0 ? Math.min(...ends) : undefined))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  it('matches each way to write or lock, and nothing else (positive and negative controls)', () => {
+    const table: [string, RegExp | ((source: string) => boolean), boolean][] = [
+      ['await tx.update(notificationInboxes).set({ categoriesOff })', UPDATES_INBOX, true],
+      ['tx.update(schema.notificationInboxes)', UPDATES_INBOX, true],
+      ['tx.execute(sql`UPDATE ${notificationInboxes} SET user_id = ${id}`)', UPDATES_INBOX, true],
+      ['client.query(\'UPDATE "notification_inboxes" SET user_id = $1\')', UPDATES_INBOX, true],
+      ['UPDATE notification_inboxes SET categories_off = $1', UPDATES_INBOX, true],
+      ['tx.update(notifications).set({ readAt })', UPDATES_INBOX, false],
+      ['GRANT UPDATE ("categories_off") ON TABLE "notification_inboxes"', UPDATES_INBOX, false],
+      ['tx.insert(notifications).values(row)', INSERTS_NOTIFICATIONS, true],
+      ['tx.insert(schema.notificationKeys).values(key)', INSERTS_NOTIFICATIONS, true],
+      ['INSERT INTO ${notifications}\n (id, user_id)', INSERTS_NOTIFICATIONS, true],
+      ['INSERT INTO ${notificationKeys} (user_id)', INSERTS_NOTIFICATIONS, true],
+      ['INSERT INTO "notifications" (id)', INSERTS_NOTIFICATIONS, true],
+      ['INSERT INTO notification_keys (user_id)', INSERTS_NOTIFICATIONS, true],
+      ['INSERT INTO notification_inboxes (user_id)', INSERTS_NOTIFICATIONS, false],
+      ['tx.insert(notificationInboxes)', INSERTS_NOTIFICATIONS, false],
+      ['tx.delete(schema.notificationInboxes).where(mine)', DELETES_INBOX, true],
+      ['DELETE FROM ${notificationInboxes} WHERE user_id = ${id}', DELETES_INBOX, true],
+      ['DELETE FROM notification_inboxes WHERE user_id = $1', DELETES_INBOX, true],
+      ['tx.delete(notifications).where(old)', DELETES_INBOX, false],
+      [
+        "tx.select().from(schema.notificationInboxes)\n  .where(mine)\n  .for('update');",
+        locksInboxForUpdate,
+        true,
+      ],
+      ['sql`SELECT 1 FROM ${notificationInboxes} WHERE x FOR UPDATE`', locksInboxForUpdate, true],
+      [
+        "'SELECT 1 FROM notification_inboxes WHERE user_id = $1 FOR UPDATE'",
+        locksInboxForUpdate,
+        true,
+      ],
+      // The gate: KEY SHARE; and mergeOne's FOR UPDATE of a notification beside it.
+      [
+        "tx.select().from(notificationInboxes).where(sql`x`).for('key share', { skipLocked: true });\n" +
+          "const [held] = await tx.select().from(notifications).where(w).for('update');",
+        locksInboxForUpdate,
+        false,
+      ],
+      [
+        "tx.select().from(notificationInboxes).where(mine).for('no key update');",
+        locksInboxForUpdate,
+        false,
+      ],
+      ['sql`SELECT 1 FROM ${notificationInboxes} FOR NO KEY UPDATE`', locksInboxForUpdate, false],
+      ['sql`SELECT 1 FROM ${notifications} FOR UPDATE`', locksInboxForUpdate, false],
+    ];
+    for (const [source, matcher, expected] of table) {
+      const found = typeof matcher === 'function' ? matcher(source) : matcher.test(source);
+      expect(found, source).toBe(expected);
+    }
+  });
+
+  const sources = productionSources();
+  const where = (test: (source: string) => boolean) =>
+    sources
+      .filter(({ source }) => test(source))
+      .map(({ path }) => path)
+      .sort();
+
+  it('writes notifications and their keys in the write path only: the gate covers every producer', () => {
+    expect(where((source) => INSERTS_NOTIFICATIONS.test(source))).toEqual([
+      'packages/db/src/notifications.ts',
+    ]);
+  });
+
+  it('updates the inbox in the settings write only (`setNotificationCategory`)', () => {
+    expect(where((source) => UPDATES_INBOX.test(source))).toEqual([
+      'packages/db/src/notifications.ts',
+    ]);
+  });
+
+  it('takes the inbox FOR UPDATE and deletes it in the closure only', () => {
+    const closure = 'apps/api/src/account-closure/account-closure.service.ts';
+    expect(where(locksInboxForUpdate)).toEqual([closure]);
+    expect(where((source) => DELETES_INBOX.test(source))).toEqual([closure]);
   });
 });

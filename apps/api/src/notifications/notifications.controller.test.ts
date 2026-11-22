@@ -13,7 +13,12 @@
  * after one that did not (53-1). A reply notice (#135, ADR-0161; 52-15) answers its latest reply's
  * author's public face, read with the list and the read mark — the current nickname, '탈퇴한
  * 사용자', the 운영자 mark — and none for a reply hidden or deleted since; other types answer no
- * such field. Skips when TEST_* are unset.
+ * such field. And 수신 설정 (#56, ADR-0162; 52-21·52-22·56-1·56-2): `GET /me/notifications/settings`
+ * and `PUT /me/notifications/settings/:category` — every category starts on and each can be turned
+ * off (none locked), one category per write, idempotent; another account, a foreign Origin, no
+ * session or an unknown category writes nothing; a restricted member changes its own; a write
+ * publishes nothing; while off the gate makes nothing of the category and what the inbox holds
+ * stays listed and counted. Skips when TEST_* are unset.
  */
 import { randomUUID } from 'node:crypto';
 import {
@@ -35,25 +40,36 @@ import {
   createTestNotification,
 } from '@buddha/db/test';
 import {
+  NOTIFICATION_CATEGORIES,
+  NOTIFICATION_SETTING_CATEGORIES,
   NOTIFICATION_UNREAD_COUNT_CAP,
   errorEnvelopeSchema,
   notificationReadResultSchema,
   notificationSchema,
+  notificationSettingsSchema,
   notificationUnreadCountSchema,
   userChannel,
   type Notification,
+  type NotificationCategory,
   type NotificationReadResult,
+  type NotificationSettings,
   type ValidationIssue,
 } from '@buddha/shared';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, count, eq, isNull } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Redis } from 'ioredis';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { sleep, waitForMessages } from '../test/wait.js';
-import { replyAuthorsOf } from './notifications.service.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
+import {
+  NotificationsService,
+  assertSettingCategory,
+  replyAuthorsOf,
+  toNotificationSettings,
+} from './notifications.service.js';
 
 /** setup-env.ts fixes WEB_ORIGIN to this. */
 const TRUSTED_ORIGIN = 'http://localhost:3000';
@@ -615,6 +631,279 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/notifications (integration)', () => {
       const authors = await replyAuthorsOf(recording, [...rows, ...replies]);
       expect(statements).toHaveLength(1);
       expect([...authors.values()]).toEqual([await faceOf(replier)]);
+    });
+  });
+
+  // ---- 수신 설정 (#56, ADR-0162) -------------------------------------------------------------
+
+  describe('수신 설정 (#56, ADR-0162; 52-21·52-22·56-1·56-2)', () => {
+    const SETTINGS = `${BASE}/settings`;
+    const put = (
+      category: string,
+      payload: unknown,
+      who: TestUser | null = member,
+      headers: Record<string, string> = {},
+    ) =>
+      t.app.inject({
+        method: 'PUT',
+        url: `${SETTINGS}/${category}`,
+        headers: {
+          origin: TRUSTED_ORIGIN,
+          'content-type': 'application/json',
+          ...(who ? { cookie: who.cookie } : {}),
+          ...headers,
+        },
+        payload: JSON.stringify(payload),
+      });
+    /** The switches of a member whose off-list is `off`, in the order the API answers them. */
+    const switches = (...off: NotificationCategory[]): NotificationSettings => ({
+      categories: (['trade', 'market', 'community'] as const).map((category) => ({
+        category,
+        enabled: !off.includes(category),
+      })),
+    });
+    const settingsOf = async (who: TestUser = member) =>
+      notificationSettingsSchema.parse(dataOf(await get(SETTINGS, who)));
+    const setOf = async (category: string, enabled: boolean, who: TestUser = member) =>
+      notificationSettingsSchema.parse(
+        dataOf(await put(category, { enabled, expectedAccountId: who.id }, who)),
+      );
+    const storedOff = async (who: TestUser = member) =>
+      (
+        await t.db
+          .select({ off: schema.notificationInboxes.categoriesOff })
+          .from(schema.notificationInboxes)
+          .where(eq(schema.notificationInboxes.userId, who.id))
+      ).map((row) => row.off);
+    const keyCount = async () =>
+      (await t.db.select({ n: count() }).from(schema.notificationKeys))[0]!.n;
+
+    it('answers every category on to a member who never saved (52-21 처음엔 켜짐), in NOTIFICATION_CATEGORIES order', async () => {
+      expect(NOTIFICATION_SETTING_CATEGORIES).toEqual(['trade', 'market', 'community']);
+      const res = await get(SETTINGS);
+      expect(res.json()).toEqual({ data: switches() });
+      expect(await storedOff()).toEqual([[]]);
+    });
+
+    it('turns one category off and on again, idempotently, rewriting no other, and keeps it for the next read', async () => {
+      expect(await setOf('market', false)).toEqual(switches('market'));
+      expect(await settingsOf()).toEqual(switches('market'));
+      // Repeating it changes nothing (the stored list stays canonical: one entry).
+      expect(await setOf('market', false)).toEqual(switches('market'));
+      expect(await storedOff()).toEqual([['market']]);
+      // Another category joins it; turning market on leaves trade off.
+      expect(await setOf('trade', false)).toEqual(switches('trade', 'market'));
+      expect(await storedOff()).toEqual([['market', 'trade']]);
+      expect(await setOf('market', true)).toEqual(switches('trade'));
+      expect(await setOf('market', true)).toEqual(switches('trade'));
+      expect(await settingsOf()).toEqual(switches('trade'));
+      // Nobody else's changed.
+      expect(await settingsOf(other)).toEqual(switches());
+    });
+
+    it('lets every category be turned off — none is locked (52-21 잠그는 알림은 없다, AC 7)', async () => {
+      for (const category of NOTIFICATION_SETTING_CATEGORIES) {
+        const res = await put(category, { enabled: false, expectedAccountId: member.id });
+        expect({ category, status: res.statusCode }).toEqual({ category, status: 200 });
+      }
+      expect(await settingsOf()).toEqual(switches('trade', 'market', 'community'));
+      // Each entry is a category and a switch, nothing else (#56 AC 9: no channel, no price item).
+      for (const entry of (await settingsOf()).categories) {
+        expect(Object.keys(entry).sort()).toEqual(['category', 'enabled']);
+      }
+    });
+
+    it('refuses an unknown category and a malformed body (400), writing nothing', async () => {
+      for (const category of ['price', 'email', 'push', 'all', 'TRADE']) {
+        const details = errorOf(
+          await put(category, { enabled: false, expectedAccountId: member.id }),
+          400,
+          'VALIDATION_ERROR',
+        ) as ValidationIssue[];
+        // The path parameter is a bare enum, not an object: its one issue has an empty path.
+        expect({ category, paths: details.map((issue) => issue.path) }).toEqual({
+          category,
+          paths: [[]],
+        });
+      }
+      for (const payload of [
+        { expectedAccountId: member.id },
+        { enabled: 'false', expectedAccountId: member.id },
+        { enabled: null, expectedAccountId: member.id },
+      ]) {
+        const details = errorOf(await put('market', payload), 400, 'VALIDATION_ERROR');
+        expect({ payload, paths: (details as ValidationIssue[]).map((i) => i.path) }).toEqual({
+          payload,
+          paths: [['enabled']],
+        });
+      }
+      for (const payload of [{ enabled: false }, { enabled: false, expectedAccountId: '' }]) {
+        const details = errorOf(await put('market', payload), 400, 'VALIDATION_ERROR');
+        expect({ payload, paths: (details as ValidationIssue[]).map((i) => i.path) }).toEqual({
+          payload,
+          paths: [['expectedAccountId']],
+        });
+      }
+      expect(await storedOff()).toEqual([[]]);
+    });
+
+    it('refuses a category with no type yet (56-2) before anything is written — a planted list', () => {
+      // Every category has a type today, so the route cannot reach it; the check is the
+      // service's, against the list it is given.
+      expect(() => {
+        assertSettingCategory('community', ['trade', 'market']);
+      }).toThrow(expect.objectContaining({ code: 'VALIDATION_ERROR' }) as Error);
+      for (const category of NOTIFICATION_CATEGORIES) {
+        expect(() => {
+          assertSettingCategory(category);
+        }).not.toThrow();
+      }
+      // The answer lists only the categories with a type, in their order.
+      expect(toNotificationSettings(['community'], ['market', 'community'])).toEqual({
+        categories: [
+          { category: 'market', enabled: true },
+          { category: 'community', enabled: false },
+        ],
+      });
+    });
+
+    it('answers 401 without a session and 403 for a foreign Origin or another account (naming expectedAccountId), writing nothing (ADR-0091)', async () => {
+      errorOf(await get(SETTINGS, null), 401, 'UNAUTHENTICATED');
+      errorOf(
+        await put('market', { enabled: false, expectedAccountId: member.id }, null),
+        401,
+        'UNAUTHENTICATED',
+      );
+      for (const origin of ['https://evil.example', 'null']) {
+        const res = await put('market', { enabled: false, expectedAccountId: member.id }, member, {
+          origin,
+        });
+        expect({ origin, status: res.statusCode }).toEqual({ origin, status: 403 });
+        expect(errorEnvelopeSchema.parse(res.json()).error.code).toBe('FORBIDDEN');
+      }
+      // A window still showing `member` after `other` signed in: the cookie is the other's.
+      const details = errorOf(
+        await put('market', { enabled: false, expectedAccountId: member.id }, other),
+        403,
+        'FORBIDDEN',
+      ) as ValidationIssue[];
+      expect(details.map((issue) => issue.path)).toEqual([['expectedAccountId']]);
+      expect(await storedOff(member)).toEqual([[]]);
+      expect(await storedOff(other)).toEqual([[]]);
+      // The other's GET answers its own.
+      await setOf('community', false, other);
+      expect(await settingsOf(member)).toEqual(switches());
+      expect(await settingsOf(other)).toEqual(switches('community'));
+    });
+
+    it('answers NOT_FOUND once the inbox is gone with a closure (ADR-0157 결정 5)', async () => {
+      await closeAccount(t.db, member.id);
+      // A request that passed SessionGuard before the closure committed finds no inbox: the db
+      // function's null is NOT_FOUND, read or write, and nothing is written.
+      const service = t.app.get(NotificationsService);
+      await expect(service.settings(member.id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      await expect(service.setCategory(member.id, 'market', false)).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      });
+      expect(await storedOff(member)).toEqual([]);
+    });
+
+    it('lets a restricted account read and change its own settings — a private setting (ADR-0157 결과 6, ADR-0069 #37-9)', async () => {
+      const admins: TestUser[] = [];
+      for (let i = 0; i < 2; i += 1) {
+        const admin = await signUpTestUser(t);
+        await t.db
+          .update(schema.profiles)
+          .set({ role: 'admin' })
+          .where(eq(schema.profiles.userId, admin.id));
+        await completeOnboarding(t.db, { userId: admin.id });
+        await t.app.get(AdminGuard).invalidate(admin.id);
+        admins.push(admin);
+      }
+      await completeOnboarding(t.db, { userId: member.id });
+      await completeOnboarding(t.db, { userId: other.id });
+      // `member` under an account restriction, `other` under a writing restriction.
+      await createModerationAction(t.db, {
+        userId: member.id,
+        createdBy: admins[0]!.id,
+        type: 'account_restriction',
+        reason: 'multi_account',
+        approvedBy: admins[1]!.id,
+      });
+      await createModerationAction(t.db, {
+        userId: other.id,
+        createdBy: admins[0]!.id,
+        type: 'writing_restriction',
+        endsAt: new Date(Date.now() + 24 * 60 * 60 * 1_000),
+      });
+      for (const who of [member, other]) {
+        expect(await settingsOf(who)).toEqual(switches());
+        expect(await setOf('community', false, who)).toEqual(switches('community'));
+        expect(await setOf('community', true, who)).toEqual(switches());
+      }
+    });
+
+    it('publishes nothing on a write — the inbox did not change — and logs no line', async () => {
+      const publish = vi.spyOn(t.app.get(MarketPublisher), 'publishUser');
+      try {
+        const { received } = await heardBy(member, async () => {
+          await setOf('market', false);
+          await setOf('market', true);
+          await sleep(200);
+        });
+        expect(received).toEqual([]);
+        expect(publish).not.toHaveBeenCalled();
+      } finally {
+        publish.mockRestore();
+      }
+    });
+
+    it('makes nothing of an off category while it is off, keeps what the inbox holds listed and counted (56-1), and makes the next event once on again (52-22)', async () => {
+      // Before: one market notice (TEST_NOTIFICATION is `market`) and one trade one (merged).
+      const held = await notify(member, {
+        label: '끄기 전',
+        occurredAt: new Date(Date.now() - 1_000),
+      });
+      const merged = await notify(member, { label: '묶음', mergeKey: 'order-1', total: 1 });
+      const before = await rowsOf(member);
+      const keysBefore = await keyCount();
+      await setOf('market', false);
+      await setOf('trade', false);
+      // While off: both are skipped — no row, no merge, no key.
+      for (const input of [{ label: '끈 동안' }, { label: '끈 동안', mergeKey: 'order-1' }]) {
+        const outcome = await createTestNotification(t.db, {
+          userId: member.id,
+          slug: market.slug,
+          ...input,
+        });
+        expect(outcome).toEqual({ kind: 'skipped', userId: member.id, reason: 'category_off' });
+      }
+      expect(await rowsOf(member)).toEqual(before);
+      expect(await keyCount()).toBe(keysBefore);
+      // What it held stays: listed, counted, readable, and '모두 읽음' marks it (56-1).
+      expect((await pageOf()).items.map((item) => item.id).sort()).toEqual([held, merged].sort());
+      expect(await countOf()).toBe(2);
+      // Another member's own settings are its own: `other` (all on) is notified.
+      expect(
+        (await createTestNotification(t.db, { userId: other.id, slug: market.slug })).kind,
+      ).toBe('created');
+      // On again: the next event of the merge group joins the still-unread row (52-6), with the
+      // off-period event never counted; a new market event makes a new row.
+      await setOf('trade', true);
+      await setOf('market', true);
+      expect(
+        await createTestNotification(t.db, {
+          userId: member.id,
+          slug: market.slug,
+          label: '다시 켠 뒤',
+          mergeKey: 'order-1',
+        }),
+      ).toMatchObject({ kind: 'merged', id: merged });
+      expect((await notify(member, { label: '다시 켠 뒤' })) === held).toBe(false);
+      const [row] = (await rowsOf(member)).filter((stored) => stored.id === merged);
+      expect(row).toMatchObject({ eventCount: 2, params: { label: '다시 켠 뒤', total: 2 } });
+      expect(await countOf()).toBe(3);
+      expect(await readAllOf()).toBe(0);
     });
   });
 });

@@ -14,7 +14,8 @@
  * Every action, its cancellation and a writing restriction's 감경 and 조기 해제 tell the member acted
  * on in its transaction (#135, ADR-0161; 52-16, 135-2, 135-6) — the kind and a restriction's own
  * end, never the operator, a reporter or a reason; a dismissal and a refused action tell nobody,
- * nor are reporters ever told (135-1, 52-17). Skips when TEST_* are unset.
+ * nor are reporters ever told (135-1, 52-17) — nor the member while its 커뮤니티 is off (#56,
+ * ADR-0162). Skips when TEST_* are unset.
  */
 import * as crypto from 'node:crypto';
 import { schema } from '@buddha/db';
@@ -67,6 +68,7 @@ import {
 } from '../media/image-reads.js';
 import { memoryAdmission, memoryWaits } from '../media/memory-admission.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
+import { setNotificationSetting } from '../test/notification-settings.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { waitForLockWaiter } from '../test/wait.js';
 
@@ -2256,6 +2258,23 @@ describe.skipIf(!hasTestInfra)('/api/v1 moderation (integration)', () => {
       expect(Object.keys(audit!.payload as object).sort()).toEqual(
         ['actionId', 'note', 'postId', 'reason', 'reportIds', 'userId'].sort(),
       );
+    });
+
+    it('tells nothing of a warning while the member’s 커뮤니티 is off — none is locked (52-21) — and the next once on again (#56, ADR-0162; 52-22)', async () => {
+      await setNotificationSetting(t, author, 'community', false);
+      const signalled = signals();
+      const warned = await act(`/admin/moderation/users/${author.id}/warn`, {});
+      // The action stands as always; nothing reached the member.
+      expect(warned.type).toBe('warning');
+      expect(await rowsOf(author)).toEqual([]);
+      expect(await keysOf(author)).toEqual([]);
+      expect(signalled()).toEqual([]);
+      await setNotificationSetting(t, author, 'community', true);
+      const again = await act(`/admin/moderation/users/${author.id}/warn`, {});
+      const [notice, ...rest] = await rowsOf(author);
+      expect(rest).toEqual([]);
+      expect(notice).toMatchObject(takenNotice(again));
+      expect(signalled()).toEqual([[author.id, again.createdAt]]);
     });
 
     it('tells each of the other actions (M2, M3, M5–M7), a second warning as a second notice (53-4)', async () => {

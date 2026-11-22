@@ -5,6 +5,7 @@ import {
   ApiError,
   type InboxNotification,
   type NotificationReadResult,
+  type NotificationSettings,
   type NotificationUnreadCount,
   api,
 } from '@/lib/api';
@@ -13,17 +14,21 @@ import {
   NOTIFICATION_REFRESH_MS,
   type NotificationPages,
   notificationListKey,
+  notificationSettingsKey,
   notificationUnreadKey,
 } from '@/lib/notifications';
 import { getQueryClient } from '@/lib/query-client';
 import {
   type ReadAllNotificationsVariables,
   type ReadNotificationVariables,
+  type UpdateNotificationSettingVariables,
   myNotificationsInfiniteQueryOptions,
+  notificationSettingsQueryOptions,
   notificationUnreadCountQueryOptions,
   readAllNotificationsOptions,
   readNotificationOptions,
   storeNotificationRead,
+  updateNotificationSettingOptions,
 } from './use-notifications';
 
 /**
@@ -346,6 +351,360 @@ describe('the hooks’ wiring', () => {
     expect(source).toContain(
       'return useMutation(readAllNotificationsOptions(queryClient, () => void refetchSession()));',
     );
+    expect(source).toContain(
+      'return useMutation(updateNotificationSettingOptions(queryClient, () => void refetchSession()));',
+    );
     expect(source).not.toMatch(/session(?:\?)?\.user\.id/);
+  });
+});
+
+// ---- 알림 수신 설정 (#56, ADR-0162; 52-21, 56-1…56-5) ------------------------------------------
+
+const SETTINGS = notificationSettingsKey(ACCOUNT);
+
+const settings = (trade: boolean, market: boolean, community: boolean): NotificationSettings => ({
+  categories: [
+    { category: 'trade', enabled: trade },
+    { category: 'market', enabled: market },
+    { category: 'community', enabled: community },
+  ],
+});
+
+const enabledOf = (queryClient: QueryClient, account = ACCOUNT) =>
+  queryClient
+    .getQueryData<NotificationSettings>(notificationSettingsKey(account))
+    ?.categories.map((entry) => entry.enabled);
+
+/** A write's answer that waits for `release`, for answers that land out of order. */
+function held(answer: NotificationSettings) {
+  let release: () => void = () => undefined;
+  const promise = new Promise<NotificationSettings>((resolve) => {
+    release = () => resolve(answer);
+  });
+  return { promise, release: () => release() };
+}
+
+describe('the settings’ read', () => {
+  it('is private, waits for a session and the account, and keeps the app’s stale time (no polling)', async () => {
+    const options = notificationSettingsQueryOptions(ACCOUNT, { user: {} });
+    expect(options.queryKey).toEqual(['notifications', 'settings', ACCOUNT]);
+    expect(isPrivateQueryKey(options.queryKey)).toBe(true);
+    expect(options.enabled).toBe(true);
+    // The default 30 s (query-client.ts): a focus after it reads it again; nothing on a timer.
+    expect(options).not.toHaveProperty('staleTime');
+    expect(options).not.toHaveProperty('refetchInterval');
+    expect(notificationSettingsQueryOptions(ACCOUNT, null).enabled).toBe(false);
+    expect(notificationSettingsQueryOptions(ACCOUNT, undefined).enabled).toBe(false);
+    expect(notificationSettingsQueryOptions(undefined, { user: {} }).enabled).toBe(false);
+    const get = vi.spyOn(api, 'GET').mockResolvedValue({
+      data: { data: settings(true, false, true) },
+      response: new Response(null, { status: 200 }),
+    } as never);
+    try {
+      expect(await options.queryFn()).toEqual(settings(true, false, true));
+      expect(get).toHaveBeenLastCalledWith('/api/v1/me/notifications/settings');
+    } finally {
+      get.mockRestore();
+    }
+  });
+
+  it('stays out of the user:notification round, so MY › 알림’s budget is unchanged (ADR-0138)', () => {
+    // The realtime provider restarts the count and the list on the signal — never the settings,
+    // which no notification changes. A reconnect re-reads the whole private root (a snapshot key),
+    // and MY › 알림 draws no settings: its link to them reads nothing.
+    const provider = readFileSync(
+      new URL('../components/realtime/realtime-provider.tsx', import.meta.url),
+      'utf8',
+    );
+    const round = provider.slice(
+      provider.indexOf('const refreshNotifications = '),
+      provider.indexOf(
+        'const timer = setTimeout(',
+        provider.indexOf('const refreshNotifications = '),
+      ),
+    );
+    expect(round.match(/restartQueries\(/g)).toHaveLength(2);
+    expect(round).toContain('notificationUnreadKey(identity ?? undefined)');
+    expect(round).toContain('notificationListKey(identity ?? undefined)');
+    expect(provider).not.toContain('notificationSettingsKey');
+    expect(provider).not.toContain('NOTIFICATION_SETTINGS_KEY');
+    const myNotifications = readFileSync(
+      new URL('../app/my/notifications/my-notifications.tsx', import.meta.url),
+      'utf8',
+    );
+    expect(myNotifications).not.toContain('useNotificationSettings');
+  });
+
+  it('costs /my/settings one read on entry and one PUT per press — far below 50 a minute (§7)', async () => {
+    // Measured on the real options and QueryClient: the entry's reads, six presses' PUTs and the
+    // reads they cause, and a focus while fresh. Focus reads come from the stale time the observer
+    // resolved; a reconnect adds 1; a press that cancelled a read on its way (a focus or the
+    // reconnect) replaces it with one — so at most one per such read.
+    const queryClient = getQueryClient();
+    const get = vi.spyOn(api, 'GET').mockResolvedValue({
+      data: { data: settings(true, true, true) },
+      response: new Response(null, { status: 200 }),
+    } as never);
+    const put = vi.fn(({ category, enabled }: UpdateNotificationSettingVariables) =>
+      Promise.resolve({
+        categories: settings(true, true, true).categories.map((row) =>
+          row.category === category ? { ...row, enabled } : row,
+        ),
+      }),
+    );
+    const observer = new QueryObserver(
+      queryClient,
+      notificationSettingsQueryOptions(ACCOUNT, { user: {} }),
+    );
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      await vi.waitFor(() => expect(observer.getCurrentResult().isSuccess).toBe(true));
+      const entryReads = get.mock.calls.length;
+      expect(entryReads).toBe(1);
+      const mutation = new MutationObserver(
+        queryClient,
+        updateNotificationSettingOptions(queryClient, () => undefined, put),
+      );
+      const categories = ['trade', 'market', 'community'] as const;
+      for (const [index, category] of [...categories, ...categories].entries()) {
+        await mutation.mutate({ category, enabled: index >= 3, expectedAccountId: ACCOUNT });
+      }
+      // A focus while the answer is fresh reads nothing.
+      queryClient.getQueryCache().onFocus();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const pressReads = get.mock.calls.length - entryReads;
+      expect(pressReads).toBe(0);
+      expect(put).toHaveBeenCalledTimes(6);
+      const { staleTime, refetchInterval } = observer.options;
+      expect(refetchInterval).toBeFalsy();
+      expect(typeof staleTime).toBe('number');
+      const focusReads = Math.ceil(60_000 / (staleTime as number));
+      const reconnectReads = 1;
+      const replacedReads = focusReads + reconnectReads;
+      const minute =
+        entryReads +
+        focusReads +
+        reconnectReads +
+        put.mock.calls.length +
+        pressReads +
+        replacedReads;
+      expect(minute).toBeLessThan(50);
+    } finally {
+      unsubscribe();
+      get.mockRestore();
+      queryClient.clear();
+    }
+  });
+});
+
+describe('updateNotificationSettingOptions (52-21: one category on or off)', () => {
+  it('sends the category, the value and the account the card shows; writes that category only', async () => {
+    const queryClient = getQueryClient();
+    queryClient.setQueryData(SETTINGS, settings(true, true, true));
+    queryClient.setQueryData(notificationSettingsKey(OTHER), settings(true, true, true));
+    const put = vi.fn((_: UpdateNotificationSettingVariables) =>
+      // The server's whole list after the write: here it also says trade off (another tab).
+      Promise.resolve(settings(false, false, true)),
+    );
+    const variables: UpdateNotificationSettingVariables = {
+      category: 'market',
+      enabled: false,
+      expectedAccountId: ACCOUNT,
+    };
+    await new MutationObserver(
+      queryClient,
+      updateNotificationSettingOptions(queryClient, () => undefined, put),
+    ).mutate(variables);
+    expect(put.mock.calls[0]?.[0]).toEqual(variables);
+    // Only the market entry was taken from the answer; nothing is read again.
+    expect(enabledOf(queryClient)).toEqual([true, false, true]);
+    expect(invalidated(queryClient, SETTINGS)).toBe(false);
+    // Another account's entry stays as it was.
+    expect(enabledOf(queryClient, OTHER)).toEqual([true, true, true]);
+    queryClient.clear();
+  });
+
+  it('keeps each row’s own answer when two rows’ answers land out of order', async () => {
+    const queryClient = getQueryClient();
+    queryClient.setQueryData(SETTINGS, settings(true, true, true));
+    // Trade off first (its answer: trade off), then community off (its answer: both off). The
+    // community answer lands first, the trade answer — older, saying community on — after it.
+    const tradeAnswer = held(settings(false, true, true));
+    const communityAnswer = held(settings(false, true, false));
+    const put = vi.fn(({ category }: UpdateNotificationSettingVariables) =>
+      category === 'trade' ? tradeAnswer.promise : communityAnswer.promise,
+    );
+    const options = () => updateNotificationSettingOptions(queryClient, () => undefined, put);
+    const trade = new MutationObserver(queryClient, options()).mutate({
+      category: 'trade',
+      enabled: false,
+      expectedAccountId: ACCOUNT,
+    });
+    const community = new MutationObserver(queryClient, options()).mutate({
+      category: 'community',
+      enabled: false,
+      expectedAccountId: ACCOUNT,
+    });
+    communityAnswer.release();
+    await community;
+    expect(enabledOf(queryClient)).toEqual([true, true, false]);
+    tradeAnswer.release();
+    await trade;
+    // Neither undid the other.
+    expect(enabledOf(queryClient)).toEqual([false, true, false]);
+    queryClient.clear();
+  });
+
+  it('cancels a settings read on its way, which left before the write and would switch the row back', async () => {
+    const queryClient = getQueryClient();
+    queryClient.setQueryData(SETTINGS, settings(true, true, true));
+    let answer: (value: unknown) => void = () => undefined;
+    const get = vi.spyOn(api, 'GET').mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }) as never,
+    );
+    try {
+      // A focus after 30 s, or a reconnect's restart: a read in flight.
+      const read = notificationSettingsQueryOptions(ACCOUNT, { user: {} });
+      void queryClient.fetchQuery({ ...read, staleTime: 0 }).catch(() => undefined);
+      await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(1));
+      await new MutationObserver(
+        queryClient,
+        updateNotificationSettingOptions(
+          queryClient,
+          () => undefined,
+          () => Promise.resolve(settings(true, false, true)),
+        ),
+      ).mutate({ category: 'market', enabled: false, expectedAccountId: ACCOUNT });
+      expect(enabledOf(queryClient)).toEqual([true, false, true]);
+      // The read that left before lands with market on: it is not taken.
+      answer({ data: { data: settings(true, true, true) }, response: new Response(null) });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(enabledOf(queryClient)).toEqual([true, false, true]);
+    } finally {
+      get.mockRestore();
+      queryClient.clear();
+    }
+  });
+
+  it('reads again after cancelling a read on its way, so another tab’s change it carried still shows', async () => {
+    const queryClient = getQueryClient();
+    queryClient.setQueryData(SETTINGS, settings(true, true, true));
+    // The card on screen: an active observer of the account's settings.
+    const observer = new QueryObserver(
+      queryClient,
+      notificationSettingsQueryOptions(ACCOUNT, { user: {} }),
+    );
+    const unsubscribe = observer.subscribe(() => undefined);
+    const get = vi
+      .spyOn(api, 'GET')
+      // A focus read that left before the write (it would say community off — another tab's
+      // change), cancelled by the write's answer…
+      .mockImplementationOnce(() => new Promise(() => undefined) as never)
+      // …and the read after it: the server's state after the write.
+      .mockResolvedValue({
+        data: { data: settings(true, false, false) },
+        response: new Response(null),
+      } as never);
+    try {
+      void observer.refetch().catch(() => undefined);
+      await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(1));
+      await new MutationObserver(
+        queryClient,
+        updateNotificationSettingOptions(
+          queryClient,
+          () => undefined,
+          () => Promise.resolve(settings(true, false, false)),
+        ),
+      ).mutate({ category: 'market', enabled: false, expectedAccountId: ACCOUNT });
+      // Community comes from the read after the write; it is not left on, marked fresh.
+      await vi.waitFor(() => expect(enabledOf(queryClient)).toEqual([true, false, false]));
+      expect(get).toHaveBeenCalledTimes(2);
+    } finally {
+      unsubscribe();
+      get.mockRestore();
+      queryClient.clear();
+    }
+  });
+
+  it('reads nothing after a write when no read was on its way', async () => {
+    const queryClient = getQueryClient();
+    queryClient.setQueryData(SETTINGS, settings(true, true, true));
+    const observer = new QueryObserver(
+      queryClient,
+      notificationSettingsQueryOptions(ACCOUNT, { user: {} }),
+    );
+    const unsubscribe = observer.subscribe(() => undefined);
+    const get = vi.spyOn(api, 'GET');
+    try {
+      await new MutationObserver(
+        queryClient,
+        updateNotificationSettingOptions(
+          queryClient,
+          () => undefined,
+          () => Promise.resolve(settings(true, false, true)),
+        ),
+      ).mutate({ category: 'market', enabled: false, expectedAccountId: ACCOUNT });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(enabledOf(queryClient)).toEqual([true, false, true]);
+      expect(get).not.toHaveBeenCalled();
+      expect(invalidated(queryClient, SETTINGS)).toBe(false);
+    } finally {
+      unsubscribe();
+      get.mockRestore();
+      queryClient.clear();
+    }
+  });
+
+  it('asks for the session on a refusal as another account; any other refusal leaves the cache', async () => {
+    const queryClient = getQueryClient();
+    queryClient.setQueryData(SETTINGS, settings(true, true, true));
+    const sessionChanged = vi.fn();
+    const failWith = (error: Error) =>
+      new MutationObserver(
+        queryClient,
+        updateNotificationSettingOptions(queryClient, sessionChanged, () => Promise.reject(error)),
+      );
+    const variables: UpdateNotificationSettingVariables = {
+      category: 'trade',
+      enabled: false,
+      expectedAccountId: ACCOUNT,
+    };
+    await expect(failWith(forAnotherAccount()).mutate(variables)).rejects.toThrow();
+    expect(sessionChanged).toHaveBeenCalledTimes(1);
+    expect(enabledOf(queryClient)).toEqual([true, true, true]);
+    expect(invalidated(queryClient, SETTINGS)).toBe(false);
+    for (const error of [refused(400, 'VALIDATION_ERROR'), refused(404, 'NOT_FOUND')]) {
+      await expect(failWith(error).mutate(variables)).rejects.toThrow();
+    }
+    expect(sessionChanged).toHaveBeenCalledTimes(1);
+    expect(enabledOf(queryClient)).toEqual([true, true, true]);
+    expect(invalidated(queryClient, SETTINGS)).toBe(false);
+    queryClient.clear();
+  });
+
+  it('sends the body the API takes: the category in the path, the value and the account in the body', async () => {
+    const put = vi.spyOn(api, 'PUT').mockResolvedValue({
+      data: { data: settings(true, false, true) },
+      response: new Response(null, { status: 200 }),
+    });
+    const queryClient = getQueryClient();
+    try {
+      await new MutationObserver(
+        queryClient,
+        updateNotificationSettingOptions(queryClient, () => undefined),
+      ).mutate({ category: 'market', enabled: false, expectedAccountId: ACCOUNT });
+      expect(put).toHaveBeenLastCalledWith('/api/v1/me/notifications/settings/{category}', {
+        params: { path: { category: 'market' } },
+        body: { enabled: false, expectedAccountId: ACCOUNT },
+      });
+      // Nothing held (the card not drawn yet): the answer whole.
+      expect(enabledOf(queryClient)).toEqual([true, false, true]);
+    } finally {
+      put.mockRestore();
+      queryClient.clear();
+    }
   });
 });

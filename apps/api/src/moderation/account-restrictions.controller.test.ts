@@ -15,8 +15,8 @@
  * (the account restriction on a tie). The member reads the restriction, its reason and end, never
  * who asked or approved, nor does an admin it is about. Nothing of it is public. Its approval
  * cancels the member's resting orders in every market as 계정 제한 (#178, ADR-0113), but those in
- * a market held for a ledger failure, which its recovery ends; none comes back when it ends. Skips
- * when TEST_* are unset.
+ * a market held for a ledger failure, which its recovery ends; none comes back when it ends. Its
+ * notices pass the member's 수신 설정 per notice (#56, ADR-0162). Skips when TEST_* are unset.
  */
 import { randomUUID } from 'node:crypto';
 import { lockAdminRoles, lockMarket, schema } from '@buddha/db';
@@ -70,6 +70,7 @@ import { PhoneHasher } from '../identity/phone-hash.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
 import { PUBLIC_ROUTES } from '../surface/registry.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
+import { setNotificationSetting } from '../test/notification-settings.js';
 import { pngOf } from '../test/png.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { sleep, waitForLockWaiter } from '../test/wait.js';
@@ -1980,6 +1981,45 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
         [member.id, liftChange!.createdAt.toISOString()],
         [member.id, cancelledAction.cancelledAt],
       ]);
+    });
+
+    it('filters the approval’s one call per notice by the member’s settings: 커뮤니티 off keeps the cancel’s notice alone, 거래 off the restriction’s alone (#56, ADR-0162; 52-16 not locked)', async () => {
+      market = await createConfiguredOpenMarket(t.db, {
+        title: '기준금리 인하',
+        liquiditySettings: TEST_MM_TRADING_LIQUIDITY,
+      });
+      for (const [who, off] of [
+        [member, 'community'],
+        [other, 'trade'],
+      ] as const) {
+        const resting = await place({ marketId: market.id, ownerId: who.id, limitPriceCoin: 30 });
+        await setNotificationSetting(t, who, off, false);
+        const signalled = signals();
+        const action = await restrict(7, who);
+        // The order is cancelled as always; only the on category's notice was made.
+        expect(await orderOf(resting.id)).toMatchObject({
+          status: 'cancelled',
+          cancelReason: 'restricted',
+        });
+        const inbox = await inboxOf(who);
+        expect(inbox).toEqual([
+          off === 'community'
+            ? expect.objectContaining({ type: 'orders_cancelled', category: 'trade' })
+            : expect.objectContaining({
+                type: 'moderation_action_taken',
+                category: 'community',
+                target: { kind: 'moderation_action', actionId: action.id },
+              }),
+        ]);
+        // No key for the skipped one: the gate claims none.
+        const keys = await t.db
+          .select({ type: schema.notificationKeys.type })
+          .from(schema.notificationKeys)
+          .where(eq(schema.notificationKeys.userId, who.id));
+        expect(keys.map((key) => key.type)).toEqual([inbox[0]!.type]);
+        expect(signalled()).toEqual([[who.id, action.createdAt]]);
+        vi.restoreAllMocks();
+      }
     });
 
     it('cancels nothing at a 감경, lift or cancellation approval, even with an order of the member resting then (결정 7)', async () => {

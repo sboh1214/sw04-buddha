@@ -2,14 +2,17 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   markAllNotificationsRead,
   markNotificationRead,
+  notificationCategoriesOff,
   notificationPage,
   schema,
+  setNotificationCategory,
   unreadNotificationCount,
   type Db,
   type NotificationRow,
 } from '@buddha/db';
 import {
   COMMENT_REPLIED_NOTIFICATION,
+  NOTIFICATION_SETTING_CATEGORIES,
   POST_REPLIED_NOTIFICATION,
   decodeKeyset,
   encodeKeyset,
@@ -18,7 +21,9 @@ import {
   replyParamsSchema,
   type CursorQuery,
   type Notification,
+  type NotificationCategory,
   type NotificationReadResult,
+  type NotificationSettings,
   type NotificationUnreadCount,
   type PostAuthor,
 } from '@buddha/shared';
@@ -104,6 +109,42 @@ export function toNotification(
 }
 
 /**
+ * 수신 설정 (#56, ADR-0162): the member's switches from its off-list — one per `categories` (the
+ * categories with a type, 56-2), in that order; on unless the list holds it (52-21 '처음엔 켜짐').
+ */
+export function toNotificationSettings(
+  categoriesOff: readonly string[],
+  categories: readonly NotificationCategory[] = NOTIFICATION_SETTING_CATEGORIES,
+): NotificationSettings {
+  return {
+    categories: categories.map((category) => ({
+      category,
+      enabled: !categoriesOff.includes(category),
+    })),
+  };
+}
+
+/**
+ * Refuses a category 수신 설정 does not take (56-2: one with no type yet has no switch) — 400 that
+ * names the path parameter, before anything is written. Unreachable today: all three have types.
+ */
+export function assertSettingCategory(
+  category: NotificationCategory,
+  categories: readonly NotificationCategory[] = NOTIFICATION_SETTING_CATEGORIES,
+): void {
+  if (categories.includes(category)) return;
+  throw new AppError('VALIDATION_ERROR', {
+    message: 'This notification category has no setting',
+    details: [{ path: ['category'], message: 'no notification type of this category yet' }],
+  });
+}
+
+/** The answer when the account has no inbox: closed (a closure committed first), or none. */
+function inboxNotFound(): AppError {
+  return new AppError('NOT_FOUND', { message: 'Notification inbox not found' });
+}
+
+/**
  * 앱 내 알림함 (#53, ADR-0157; N05 §4·§8): the member's reads and read marks of its own inbox. The
  * rows, the locks and the write path are @buddha/db's (notifications.ts — `createNotifications`
  * is the producers' one writer, and nothing here creates a notification); this adds the answers
@@ -120,6 +161,10 @@ export function toNotification(
  *   nothing. After the COMMIT, and only when something changed, `user:notification` goes to the
  *   member's room (53-1: the member's other tabs and devices re-read their count and list; best
  *   effort, MarketPublisher) — a repeated mark publishes nothing.
+ * - 수신 설정 (#56, ADR-0162; 52-21·52-22·56-1·56-2): the member's switch per category, read and
+ *   set one category at a time. Setting one changes nothing in the inbox — what it holds stays
+ *   listed and counted (56-1) — so it publishes nothing and logs nothing; the producers' gate reads
+ *   the value (`category_off`, @buddha/db notifications.ts).
  *
  * Read and written whatever the account's restriction (53-6). A request that passed SessionGuard
  * before a closure of the account committed finds the inbox gone with it: its mark reaches nothing
@@ -192,5 +237,33 @@ export class NotificationsService {
       await this.publisher.publishUser(userId, notificationEvent(marked.at));
     }
     return { unreadCount: marked.unreadCount };
+  }
+
+  /**
+   * The member's 수신 설정 (52-21, 56-2): one switch per category that has a type, on unless the
+   * member turned it off. One statement, no lock. NOT_FOUND without an inbox (a closure first).
+   */
+  async settings(userId: string): Promise<NotificationSettings> {
+    const off = await notificationCategoriesOff(this.db, userId);
+    if (off === null) throw inboxNotFound();
+    return toNotificationSettings(off);
+  }
+
+  /**
+   * Turns one category on or off (52-21; idempotent) and answers every switch after it. One plain
+   * UPDATE (`setNotificationCategory` — never a lock the producers' gate would skip the member
+   * behind); another category is never rewritten, so two tabs' switches both stand. From now on
+   * only: while off nothing of the category is made or merged (52-22), and what the inbox holds
+   * stays (56-1). No `user:notification` (the inbox did not change), no log line.
+   */
+  async setCategory(
+    userId: string,
+    category: NotificationCategory,
+    enabled: boolean,
+  ): Promise<NotificationSettings> {
+    assertSettingCategory(category);
+    const off = await setNotificationCategory(this.db, userId, category, enabled);
+    if (off === null) throw inboxNotFound();
+    return toNotificationSettings(off);
   }
 }

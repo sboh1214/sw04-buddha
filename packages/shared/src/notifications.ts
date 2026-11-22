@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { serializeCoinAmount } from './api/coin-amount.js';
 import { uuidSchema } from './api/uuid.js';
+import { expectedAccountIdSchema } from './expected-account.js';
 import {
   MARKET_RESULTS,
   MODERATION_ACTION_TYPES,
@@ -46,9 +47,12 @@ import { postAuthorSchema } from './post.js';
 
 /**
  * The three settings units a notification belongs to (N05 §4, 52-21): every type carries exactly
- * one, and #56's 수신 설정 turns a category off. The Korean labels (거래·시장·커뮤니티) are the
- * web's copy. A fourth (N05 §4's 가격 변동, #146 — post-MVP) comes with a migration of its own:
- * the column's CHECK is generated from this list, as a retention purge kind's is.
+ * one, and #56's 수신 설정 (ADR-0162) turns a category off. The Korean labels (거래·시장·커뮤니티)
+ * are the web's copy. A fourth (N05 §4's 가격 변동, #146 — post-MVP) comes with a migration of its
+ * own: two CHECKs are generated from this list, as a retention purge kind's is —
+ * `notifications_category_check` and the off-list's `notification_inboxes_categories_off_check`
+ * (migration 0079) — and it decides its own default first: under the off-list a new category
+ * starts on, which 52-21 decided for these three only (N05 §4 makes price alerts opt-in).
  */
 export const NOTIFICATION_CATEGORIES = ['trade', 'market', 'community'] as const;
 export type NotificationCategory = (typeof NOTIFICATION_CATEGORIES)[number];
@@ -864,6 +868,23 @@ export const NOTIFICATION_DEFINITIONS = [
 ] as const satisfies readonly NotificationDefinition[];
 export type NotificationType = (typeof NOTIFICATION_DEFINITIONS)[number]['type'];
 
+/**
+ * 56-2 (ADR-0162): the categories with at least one type of `definitions`, in
+ * NOTIFICATION_CATEGORIES order — what 수신 설정 shows and takes. A category gains its switch the
+ * day its first type is added, with no settings code changed.
+ */
+export function notificationSettingCategories(
+  definitions: readonly Pick<NotificationDefinition, 'category'>[],
+): NotificationCategory[] {
+  return NOTIFICATION_CATEGORIES.filter((category) =>
+    definitions.some((definition) => definition.category === category),
+  );
+}
+
+/** The categories 수신 설정 shows and takes (52-21, 56-2): today all three. */
+export const NOTIFICATION_SETTING_CATEGORIES: readonly NotificationCategory[] =
+  notificationSettingCategories(NOTIFICATION_DEFINITIONS);
+
 // ---- DTOs ---------------------------------------------------------------------------------------
 
 /** The unread count: 0 to NOTIFICATION_UNREAD_COUNT_CAP, the cap meaning "the cap or more". */
@@ -909,3 +930,42 @@ export const notificationReadResultSchema = z
   .object({ notification: notificationSchema, unreadCount: unreadCountSchema })
   .meta({ id: 'NotificationReadResult' });
 export type NotificationReadResult = z.infer<typeof notificationReadResultSchema>;
+
+// ---- 수신 설정 (#56, ADR-0162; 52-21·52-22·56-1·56-2) -----------------------------------------
+
+/**
+ * One category's switch: on (`enabled`) while the member receives its new notifications. Off,
+ * nothing of it is made or merged (52-22); what the inbox already holds stays (56-1). Every
+ * category starts on and none is locked (52-21 '처음엔 켜짐', '잠그는 알림은 없다').
+ */
+export const notificationSettingSchema = z
+  .object({ category: notificationCategorySchema, enabled: z.boolean() })
+  .meta({ id: 'NotificationSetting' });
+export type NotificationSetting = z.infer<typeof notificationSettingSchema>;
+
+/**
+ * `GET /me/notifications/settings` and what `PUT /me/notifications/settings/:category` answers:
+ * one entry per NOTIFICATION_SETTING_CATEGORIES, in that order (56-2: a category with no type
+ * yet has no entry).
+ */
+export const notificationSettingsSchema = z
+  .object({ categories: z.array(notificationSettingSchema) })
+  .meta({ id: 'NotificationSettings' });
+export type NotificationSettings = z.infer<typeof notificationSettingsSchema>;
+
+/**
+ * The `:category` of `PUT /me/notifications/settings/:category`: a plain enum, no `.meta({ id })`
+ * (a schema with an id becomes a `$ref` path parameter in the generated OpenAPI; this one is an
+ * inline enum there). The service also refuses a category
+ * NOTIFICATION_SETTING_CATEGORIES does not list (56-2).
+ */
+export const notificationSettingCategoryParamSchema = z.enum(NOTIFICATION_CATEGORIES);
+
+/**
+ * `PUT /me/notifications/settings/:category`: on or off, and the account on screen (ADR-0091,
+ * ADR-0092). One category per write, so two tabs switching different ones never undo each other.
+ */
+export const updateNotificationSettingBodySchema = z
+  .object({ enabled: z.boolean(), expectedAccountId: expectedAccountIdSchema })
+  .meta({ id: 'UpdateNotificationSettingBody' });
+export type UpdateNotificationSettingBody = z.infer<typeof updateNotificationSettingBodySchema>;

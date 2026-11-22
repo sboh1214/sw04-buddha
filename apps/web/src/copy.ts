@@ -287,6 +287,30 @@ export const copy = {
   // 2차, ADR-0088).
   settingsTheme: '화면 모드',
   settingsThemeHint: '라이트/다크 모드를 전환합니다.',
+  // 알림 수신 설정(#56, ADR-0162; 52-21·52-22·56-1~56-5): 분류(거래·시장·커뮤니티)마다 켜고 끈다. 처음엔 모두
+  // 켜짐이고 잠그는 알림은 없다. 끈 동안의 알림은 만들지 않고 다시 켜도 보이지 않으며, 이미 받은 알림은 그대로다.
+  // 정산 기록은 MY 거래·정산 이력이 그 기록이다(52-23). 카드는 화면 모드 다음, 조치·신고 내역 앞이고 MY › 알림
+  // 머리에 이리로 오는 '수신 설정' 링크가 있다(56-4). 문구는 오너가 승인한 그대로다(56-5). 분류마다 이름과 그
+  // 분류가 담는 것 한 줄이고, 누를 때마다 바로 저장한다. {label}은 분류의 이름('거래 알림')이다.
+  settingsNotifications: '알림 수신',
+  settingsNotificationsHint:
+    '분류마다 새 알림을 받을지 정합니다. 끈 동안 생긴 일은 다시 켜도 알림으로 오지 않고, 이미 받은 알림은 그대로 남습니다.',
+  notificationSettingTrade: '거래 알림',
+  notificationSettingTradeHint: '대기 주문의 체결과 만료, 내가 하지 않은 대기 주문의 일괄 취소',
+  notificationSettingMarket: '시장 알림',
+  notificationSettingMarketHint:
+    '관심·보유 시장의 마감·일시 중단·재개·취소·규칙 보충, 판정 지연·잠정 결과·판정 정정·최종 정산, 내 판정 이의의 처리 결과',
+  notificationSettingCommunity: '커뮤니티 알림',
+  notificationSettingCommunityHint:
+    '내 글의 댓글과 내 댓글의 답글, 나에게 내린 운영 조치와 그 취소·감경·조기 해제, 내 시장 제안의 채택·반려',
+  // 56-3: 오너의 문장에 마침표만 더했다. 링크는 거래·정산 이력의 정산 목록으로 간다(52-23, 56-5).
+  notificationSettingsHistoryNote: '알림을 꺼도 정산 기록은 MY 거래·정산 이력에서 볼 수 있습니다.',
+  notificationSettingsHistoryLink: '정산 기록 보기',
+  notificationSettingOn: '{label}을 켰습니다.',
+  notificationSettingOff: '{label}을 껐습니다.',
+  errNotificationSetting: '알림 수신 설정을 저장하지 못했습니다. 다시 시도해 주세요.',
+  // MY › 알림 머리의 '모두 읽음' 옆, MY › 설정의 '알림 수신' 카드로 가는 링크(56-4).
+  notificationsSettingsLink: '수신 설정',
   // 시간대 (ADR-0061 #60-8, ADR-0063). 고르지 않으면 브라우저 시간대를 따르고, 그 선택지 뒤에
   // 지금 브라우저의 시간대를 괄호로 붙인다. 시간대는 선택지마다 IANA 이름과 브라우저가 주는
   // 한국어 이름이다('America/New_York — 미 동부 시간', 오너 결정 2026-10-16, lib/time-zone.ts).

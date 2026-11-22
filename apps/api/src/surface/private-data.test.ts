@@ -923,6 +923,18 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
     body: (fixture) => ({ expectedAccountId: fixture.a.id }),
     status: 403,
   },
+  // B's own 수신 설정 (#56, ADR-0162): a switch per category with no record in it, so no `own`
+  // label can show the check is not blind; below, A's own write shows in A's read and not in B's.
+  'GET /me/notifications/settings': {
+    status: 200,
+  },
+  // B's cookie naming A's account: refused before anything is written — A's settings stay all on
+  // (below), where B's own write reaches B alone.
+  'PUT /me/notifications/settings/:category': {
+    params: { category: () => 'market' },
+    body: (fixture) => ({ enabled: false, expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
   // B's cookie naming A's account (#46): refused before anything is read or written — no post of
   // B's, A's post as it was (below). B naming itself on A's post is refused there too.
   'POST /posts': {
@@ -3266,6 +3278,37 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       (await call(countRoute, { cookie })).json<{ data: unknown }>().data;
     expect(await countOf(f.b.cookie)).toEqual({ unreadCount: 0 });
     expect(await countOf(f.a.cookie)).toEqual({ unreadCount: 2 });
+
+    // B's refused setting write left A's 수신 설정 all on (#56, ADR-0162). Each account's write
+    // reaches its own settings alone, and each read answers the cookie's own: A's market off shows
+    // to A and not to B, B's community off to B and not to A.
+    const settingsRoute = routeOf('GET /me/notifications/settings');
+    const settingsOf = async (cookie: string) =>
+      (await call(settingsRoute, { cookie })).json<{ data: unknown }>().data;
+    const switches = (off: readonly string[]) => ({
+      categories: ['trade', 'market', 'community'].map((category) => ({
+        category,
+        enabled: !off.includes(category),
+      })),
+    });
+    expect(await settingsOf(f.a.cookie)).toEqual(switches([]));
+    const setRoute = routeOf('PUT /me/notifications/settings/:category');
+    for (const [who, category] of [
+      [f.a, 'market'],
+      [f.b, 'community'],
+    ] as const) {
+      const res = await call(setRoute, {
+        params: { category },
+        body: { enabled: false, expectedAccountId: who.id },
+        cookie: who.cookie,
+      });
+      expect({ status: res.statusCode, leaks: leaked(res.body) }).toEqual({
+        status: 200,
+        leaks: [],
+      });
+    }
+    expect(await settingsOf(f.a.cookie)).toEqual(switches(['market']));
+    expect(await settingsOf(f.b.cookie)).toEqual(switches(['community']));
 
     // B's refused post writes and upload wrote nothing (#46). B naming itself on A's post is
     // refused too — only its author changes a post — and A's post stays as it was.

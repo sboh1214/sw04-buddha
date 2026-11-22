@@ -10,6 +10,7 @@ import {
   ORDER_STATUSES,
   NICKNAME_HOLD_DAYS,
   NOTICE_PIN_LIMIT,
+  NOTIFICATION_CATEGORIES,
   LEDGER_ENTRY_TYPES,
   PUBLIC_ID_PATTERN,
   MARKET_JUDGEMENT_APPROVAL_KIND,
@@ -47,7 +48,7 @@ import {
   type TimeOrderRule,
   type TimeRuleInput,
 } from '@buddha/shared';
-import { TransactionRollbackError, and, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { TransactionRollbackError, and, eq, inArray, isNull, lt, sql, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -10949,8 +10950,9 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       const { user: member } = await createUser(t.db);
       const { user: admin } = await createUser(t.db, { role: 'admin' });
       const marketMaker = await createMarketMakerAccount(t.db);
+      // Every category on (#56, 52-21 '처음엔 켜짐'): the off-list starts empty.
       expect(await inboxOf(member.id)).toEqual([
-        { userId: member.id, createdAt: expect.any(Date) as unknown },
+        { userId: member.id, createdAt: expect.any(Date) as unknown, categoriesOff: [] },
       ]);
       expect(await inboxOf(admin.id)).toHaveLength(1);
       expect(await inboxOf(marketMaker)).toEqual([]);
@@ -11214,6 +11216,35 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       });
     });
 
+    it('holds the 수신 설정 to the categories, no null among them (#56, migration 0079)', async () => {
+      const { user: member } = await createUser(t.db);
+      const where = eq(notificationInboxes.userId, member.id);
+      const set = (value: SQL) =>
+        t.db.update(notificationInboxes).set({ categoriesOff: value }).where(where);
+      // Every subset of the three is a setting (52-21: each can be off, none is locked).
+      for (let mask = 0; mask < 1 << NOTIFICATION_CATEGORIES.length; mask++) {
+        const off = NOTIFICATION_CATEGORIES.filter((_, bit) => (mask & (1 << bit)) !== 0);
+        await t.db.update(notificationInboxes).set({ categoriesOff: off }).where(where);
+        expect((await inboxOf(member.id))[0]!.categoriesOff, off.join()).toEqual(off);
+      }
+      // No price item and no channel (#56 AC 9), no null, no unknown word.
+      for (const bad of [
+        sql`ARRAY['price']::text[]`,
+        sql`ARRAY['email']::text[]`,
+        sql`ARRAY['push']::text[]`,
+        sql`ARRAY['trade', 'price']::text[]`,
+        sql`ARRAY[NULL]::text[]`,
+        sql`ARRAY['market', NULL]::text[]`,
+        sql`ARRAY['TRADE']::text[]`,
+      ]) {
+        expect(await refusal(set(bad))).toEqual({
+          state: '23514',
+          constraint: 'notification_inboxes_categories_off_check',
+        });
+      }
+      expect((await refusal(set(sql`NULL`))).state).toBe('23502');
+    });
+
     it('lets buddha_app change four columns of a notification and no key, and lock an inbox', async () => {
       const { rows } = await t.db.execute<{ table: string; privilege: string }>(sql`
         SELECT table_name AS "table", privilege_type AS privilege
@@ -11223,19 +11254,33 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         ORDER BY 1, 2`);
       const privs = (table: string) =>
         rows.filter((row) => row.table === table).map((row) => row.privilege);
-      expect(privs('notification_inboxes')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+      // The inbox: its 수신 설정 only, since migration 0079 (#56).
+      expect(privs('notification_inboxes')).toEqual(['DELETE', 'INSERT', 'SELECT']);
       expect(privs('notifications')).toEqual(['DELETE', 'INSERT', 'SELECT']);
       expect(privs('notification_keys')).toEqual(['DELETE', 'INSERT', 'SELECT']);
-      const { rows: columns } = await t.db.execute<{ column: string }>(sql`
-        SELECT column_name AS "column" FROM information_schema.column_privileges
-        WHERE grantee = 'buddha_app' AND table_schema = 'public' AND table_name = 'notifications'
-          AND privilege_type = 'UPDATE'
-        ORDER BY 1`);
-      expect(columns.map((row) => row.column)).toEqual([
+      const updatable = async (table: string) =>
+        (
+          await t.db.execute<{ column: string }>(sql`
+            SELECT column_name AS "column" FROM information_schema.column_privileges
+            WHERE grantee = 'buddha_app' AND table_schema = 'public' AND table_name = ${table}
+              AND privilege_type = 'UPDATE'
+            ORDER BY 1`)
+        ).rows.map((row) => row.column);
+      expect(await updatable('notifications')).toEqual([
         'event_count',
         'occurred_at',
         'params',
         'read_at',
+      ]);
+      expect(await updatable('notification_inboxes')).toEqual(['categories_off']);
+      const { rows: inboxColumns } = await t.db.execute<{ column: string; held: boolean }>(sql`
+        SELECT c AS "column",
+          has_column_privilege('buddha_app', 'notification_inboxes', c, 'UPDATE') AS held
+        FROM unnest(ARRAY['user_id', 'created_at', 'categories_off']) AS c`);
+      expect(inboxColumns).toEqual([
+        { column: 'user_id', held: false },
+        { column: 'created_at', held: false },
+        { column: 'categories_off', held: true },
       ]);
       const { member, row } = await notified();
       const [key] = await t.db
@@ -11249,6 +11294,19 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
               .update(notificationKeys)
               .set({ eventKey: 'moved' })
               .where(eq(notificationKeys.eventKey, key!.eventKey)),
+          )
+        ).state,
+      ).toBe('42501');
+      // No app write moves an inbox to another account or another creation (#56, 0079).
+      const inbox = eq(notificationInboxes.userId, member.id);
+      expect(
+        (await refusal(t.db.update(notificationInboxes).set({ userId: 'moved' }).where(inbox)))
+          .state,
+      ).toBe('42501');
+      expect(
+        (
+          await refusal(
+            t.db.update(notificationInboxes).set({ createdAt: new Date() }).where(inbox),
           )
         ).state,
       ).toBe('42501');

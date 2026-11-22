@@ -647,6 +647,9 @@ describe('the public API document (static)', () => {
       'POST /me/phone-verification/confirm',
       'PUT /me/real-name',
       'PUT /me/time-zone',
+      // 알림 수신 설정 (#56, ADR-0162): a private setting like the time zone — ADR-0157 결과 6 and
+      // ADR-0069 decision 3 #37-9 «시간대 같은 비공개 설정은 고칠 수 있다».
+      'PUT /me/notifications/settings/:category',
       'PUT /me/watchlist/:marketId',
       'POST /me/search-history',
       'POST /me/search-history/:id/delete',

@@ -10,7 +10,8 @@
  * hidden or deleted post or 댓글 takes no new comment; writing never touches a balance, an order or
  * a position. A new comment tells the author right above it in its transaction (#135, ADR-0161;
  * 52-7, 52-18, 135-3): a 댓글 the post's author, a 대댓글 its thread 댓글's, merged while unread, never
- * the writer, and nothing for an edit, a deletion or a refused write. Skips when TEST_* are unset.
+ * the writer, and nothing for an edit, a deletion or a refused write — nor while the author's
+ * 커뮤니티 is off (#56, ADR-0162). Skips when TEST_* are unset.
  */
 import { randomUUID } from 'node:crypto';
 import { closeDb, createDb, schema, type Db } from '@buddha/db';
@@ -45,6 +46,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LinkReviewService } from '../link-review/link-review.service.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
+import { setNotificationSetting } from '../test/notification-settings.js';
 import { PostsService } from '../posts/posts.service.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
 import { hasTestInfra } from '../test/setup-env.js';
@@ -1689,6 +1691,35 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
       expect((await remove(answer.id, third)).statusCode).toBe(200);
       expect(await allRows()).toEqual(before);
       expect(signalled().map(([userId]) => userId)).toEqual([author.id, other.id]);
+    });
+
+    it('makes nothing for an author whose 커뮤니티 is off — its unread notice stays as it was — and merges the next reply once on again (#56, ADR-0162; 52-22·56-1·52-7)', async () => {
+      const first = await written({ body: '하나' }, other);
+      const [notice] = await rowsOf(author);
+      expect(notice).toMatchObject({ type: 'post_replied', eventCount: 1 });
+      const keys = async () =>
+        (await t.db.select().from(schema.notificationKeys)).map((key) => key.eventKey).sort();
+      await setNotificationSetting(t, author, 'community', false);
+      const signalled = signals();
+      // While off: a reply makes nothing — no merge into the unread row, no key, no signal.
+      const whileOff = await written({ body: '끈 동안' }, third);
+      expect(await rowsOf(author)).toEqual([notice]);
+      expect(await keys()).toEqual([`comment:${first.id}`]);
+      expect(signalled()).toEqual([]);
+      // The comment itself stands (the event happens as always).
+      expect(whileOff.body).toBe('끈 동안');
+      // On again: the next reply joins the still-unread row; the off-period one is never counted.
+      await setNotificationSetting(t, author, 'community', true);
+      const next = await written({ body: '다시 켠 뒤' }, other);
+      const [merged, ...rest] = await rowsOf(author);
+      expect(rest).toEqual([]);
+      expect(merged).toMatchObject({
+        id: notice!.id,
+        eventCount: 2,
+        params: replyParams(next),
+      });
+      expect(await keys()).toEqual([`comment:${first.id}`, `comment:${next.id}`].sort());
+      expect(signalled()).toEqual([[author.id, next.createdAt]]);
     });
 
     it('merges the replies of one post while unread, the later one held whatever the order; a read notice is never merged (52-7)', async () => {

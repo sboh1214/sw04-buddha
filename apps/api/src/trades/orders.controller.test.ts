@@ -12,7 +12,8 @@
  * `market:book` signal (#179, ADR-0114) both publish after COMMIT when the live book changed, and
  * an intake that filled publishes its anonymous `market:trade` rows and one `market:tick` after it
  * (#121, ADR-0116). And the resting owner's fill notice (#134, ADR-0158): merged while unread,
- * never the incoming owner's, nothing for a replay or the owner's cancel, with its signal.
+ * never the incoming owner's, nothing for a replay or the owner's cancel, with its signal — and
+ * none while the owner's 거래 is off (#56, ADR-0162).
  */
 import { randomUUID } from 'node:crypto';
 import { lockAdminRoles, lockLedgerAccounts, lockMarket, schema } from '@buddha/db';
@@ -68,6 +69,7 @@ import { REDIS } from '../infra/redis/redis.provider.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
 import { OrderService } from './order.service.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
+import { setNotificationSetting } from '../test/notification-settings.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { waitForLockWaiter } from '../test/wait.js';
 
@@ -820,6 +822,45 @@ describe.skipIf(!hasTestInfra)('orders (integration)', () => {
       status: 'filled',
       filledQty: 3,
     });
+  });
+
+  it('skips the fill notice of a resting owner whose 거래 is off — its unread notice stays as it was — while another owner in the same fill gets its own (#56, ADR-0162; 52-22·56-1)', async () => {
+    await open();
+    const publish = vi.spyOn(t.app.get(MarketPublisher), 'publishUser');
+    // A bids NO at 40 for 2; B takes one: A's notice (체결 1회), unread.
+    const resting = placed(await send(a, { outcome: 'NO', qty: 2 })).order;
+    const take = (qty: number) => send(b, { timeInForce: 'ioc', limitPriceCoin: 99, qty });
+    expect(placed(await take(1)).order).toMatchObject({ status: 'filled', filledQty: 1 });
+    const [notice] = await inboxOf(a);
+    expect(notice).toMatchObject({ type: 'order_filled', eventCount: 1 });
+    // A turns 거래 off; C, all on, rests the same bid behind A's.
+    await setNotificationSetting(t, a, 'trade', false);
+    const c = await member();
+    const cResting = placed(await send(c, { outcome: 'NO', qty: 1 })).order;
+    publish.mockClear();
+    // B takes two: A's last one and C's — one intake, one gate call for both owners.
+    const taken = placed(await take(2)).order;
+    expect(taken).toMatchObject({ status: 'filled', filledQty: 2 });
+    expect(dataOf<Order>(await read(`/me/orders/${resting.id}`, a))).toMatchObject({
+      status: 'filled',
+      filledQty: 2,
+    });
+    // A's notice is byte-equal (no merge while off), still unread and counted (56-1).
+    expect(await inboxOf(a)).toEqual([notice]);
+    expect(
+      notificationUnreadCountSchema.parse(dataOf(await read('/me/notifications/unread-count', a))),
+    ).toEqual({ unreadCount: 1 });
+    expect(await inboxOf(c)).toEqual([
+      expect.objectContaining({
+        type: 'order_filled',
+        category: 'trade',
+        target: { kind: 'order', orderId: cResting.id },
+        eventCount: 1,
+        occurredAt: taken.createdAt,
+      }),
+    ]);
+    // The signal goes to C alone: nothing reached A.
+    expect(signalsOf(publish)).toEqual([[c.id, taken.createdAt]]);
   });
 
   it('publishes market:book after COMMIT for an order that rested or filled, and none for one that changed no live order (#179)', async () => {

@@ -1,4 +1,14 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  Put,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiCookieAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import {
   NOTIFICATION_UNREAD_COUNT_CAP,
@@ -6,13 +16,19 @@ import {
   expectedAccountBodySchema,
   notificationReadResultSchema,
   notificationSchema,
+  notificationSettingCategoryParamSchema,
+  notificationSettingsSchema,
   notificationUnreadCountSchema,
+  updateNotificationSettingBodySchema,
   uuidParamSchema,
   type CursorQuery,
   type ExpectedAccountBody,
   type Notification,
+  type NotificationCategory,
   type NotificationReadResult,
+  type NotificationSettings,
   type NotificationUnreadCount,
+  type UpdateNotificationSettingBody,
 } from '@buddha/shared';
 import { type SessionUser } from '../auth/auth.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
@@ -41,6 +57,9 @@ const CAP = String(NOTIFICATION_UNREAD_COUNT_CAP);
  * Each write names the account the screen shows (`expectedAccountId`, ADR-0091·0092): a window
  * still showing account A after another one signed in as B would otherwise mark B's notifications
  * read. `cursorQuerySchema` carries a component id, so its two parameters are declared by hand.
+ *
+ * 수신 설정 (#56, ADR-0162) lives here too: a private setting, so read and written under an account
+ * or a writing restriction as the time zone is (ADR-0157 결과 6, ADR-0069 #37-9) — no RESTRICTED.
  */
 @ApiTags('notifications')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -126,5 +145,46 @@ export class MeNotificationsController {
   ): Promise<NotificationUnreadCount> {
     assertExpectedAccount(user.id, body.expectedAccountId);
     return this.notifications.readAll(user.id);
+  }
+
+  /** 수신 설정 (#56, 52-21·56-2): one switch per category that has a type, on until turned off. */
+  @Get('settings')
+  @ApiOperation({
+    operationId: 'getMyNotificationSettings',
+    summary:
+      'The account’s notification settings (수신 설정, #56): whether each category (trade, ' +
+      'market, community — those with a notification type) is on; every one starts on',
+  })
+  @ApiData(notificationSettingsSchema)
+  @ApiErrors('UNAUTHENTICATED', 'NOT_FOUND')
+  settings(@CurrentUser() user: SessionUser): Promise<NotificationSettings> {
+    return this.notifications.settings(user.id);
+  }
+
+  /**
+   * One category on or off (52-21: every one can be turned off, none is locked), idempotent; one
+   * category per write so two tabs' switches never undo each other. While off, nothing of it is
+   * made or merged (52-22); what the inbox already holds stays (56-1).
+   */
+  @Put('settings/:category')
+  @ApiOperation({
+    operationId: 'updateMyNotificationSetting',
+    summary:
+      'Turn one notification category on or off for the account (repeating it changes ' +
+      'nothing); while off no notification of it is made, and those already received stay. ' +
+      'Answers every setting after it',
+  })
+  @ApiData(notificationSettingsSchema)
+  // FORBIDDEN: a mutation whose Origin is not ours (SessionGuard's CSRF check), or a body whose
+  // `expectedAccountId` is not the cookie's account (details name the field; nothing written).
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'VALIDATION_ERROR', 'NOT_FOUND')
+  updateSetting(
+    @CurrentUser() user: SessionUser,
+    @Param('category', { schema: notificationSettingCategoryParamSchema })
+    category: NotificationCategory,
+    @Body({ schema: updateNotificationSettingBodySchema }) body: UpdateNotificationSettingBody,
+  ): Promise<NotificationSettings> {
+    assertExpectedAccount(user.id, body.expectedAccountId);
+    return this.notifications.setCategory(user.id, category, body.enabled);
   }
 }

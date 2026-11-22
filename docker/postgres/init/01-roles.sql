@@ -29,13 +29,14 @@
 --                   profile_item_removals, restriction_end_changes, write_limit_events,
 --                   link_uses, notification_keys: no UPDATE; link_flags: no UPDATE but of its
 --                   review_action_id column; notifications: no UPDATE but of its params,
---                   event_count, occurred_at and read_at columns; post_comment_counts: SELECT
+--                   event_count, occurred_at and read_at columns; notification_inboxes: no
+--                   UPDATE but of its categories_off column; post_comment_counts: SELECT
 --                   only, written by its trigger) are
 --                   applied later by migrations with REVOKE
 --                   (0001, 0015, 0020, 0021, 0023, 0026, 0030, 0031, 0032, 0033, 0034, 0035,
 --                   0036, 0039, 0040, 0041, 0044, 0045, 0049, 0053, 0054, 0055, 0056, 0058,
 --                   0060, 0062, 0064, 0065, 0066, 0067, 0069, 0070, 0072, 0073, 0075, 0076, 0077,
---                   0078),
+--                   0078, 0079),
 --                   see bottom.
 
 CREATE ROLE buddha_migrate LOGIN PASSWORD 'buddha';
@@ -123,6 +124,9 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO buddha_app;
 -- 0078 (#53: notification_keys: UPDATE; notifications: UPDATE — then GRANT UPDATE (params,
 -- event_count, occurred_at, read_at), what a merge and a read write): a dedupe key is never
 -- changed, and a trigger holds a notification's other columns, its first read and a read one's
--- content to every role. notification_inboxes keeps the default DML: the writers and the closure
--- lock its rows, which needs UPDATE privilege on some column.
+-- content to every role. notification_inboxes kept the default DML until 0079: the writers and
+-- the closure lock its rows, which needs UPDATE privilege on some column.
+-- 0079 (#56: notification_inboxes: UPDATE — then GRANT UPDATE (categories_off), the member's
+-- 수신 설정): the column grant is enough for the row locks, and no app write moves an inbox's
+-- user_id (a key update the writers' gate would skip) or created_at.
 -- Default privileges are applied at CREATE time, so a REVOKE afterwards sticks.

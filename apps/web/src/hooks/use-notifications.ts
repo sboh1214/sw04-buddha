@@ -8,7 +8,9 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 import {
+  type NotificationCategory,
   type NotificationReadResult,
+  type NotificationSettings,
   type NotificationUnreadCount,
   api,
   isForAnotherAccount,
@@ -18,8 +20,10 @@ import {
   type NotificationPage,
   type NotificationPages,
   notificationListKey,
+  notificationSettingsKey,
   notificationUnreadKey,
   withNotification,
+  withNotificationSetting,
 } from '@/lib/notifications';
 import { restartQueries } from '@/lib/query-client';
 import { useSession } from '@/lib/use-session';
@@ -38,6 +42,9 @@ import { useSession } from '@/lib/use-session';
  * `refreshNotifications`, at most once per `NOTIFICATION_REFRESH_MS` after the first), a
  * reconnect's resnapshot (`PRIVATE_SNAPSHOT_KEYS`), and this tab's own writes, whose answers carry
  * the count after them. So its `staleTime` is infinite: a focus or a remount reads nothing.
+ *
+ * And since #56 (ADR-0162) the member's 알림 수신 설정 on MY › 설정 — a read with the default stale
+ * time and a write per switch (below).
  *
  * The query and mutation options are exported apart from the hooks so they can be tested under
  * the node runner (use-notifications.test.ts), as use-disputes.ts does.
@@ -265,4 +272,113 @@ export function useReadAllNotifications() {
   const queryClient = useQueryClient();
   const { refetch: refetchSession } = useSession();
   return useMutation(readAllNotificationsOptions(queryClient, () => void refetchSession()));
+}
+
+// ---- 알림 수신 설정 (#56, ADR-0162; 52-21·52-22·56-1…56-5) --------------------------------------
+
+/**
+ * `GET /me/notifications/settings` of the account the screen shows: each category with a type on
+ * or off. Read once signed in and that account known, with the app's default `staleTime` (30 s):
+ * a focus after it reads it again — how another tab's change shows here — and a reconnect while
+ * it is on screen (the `['notifications']` root is a snapshot key). No signal re-reads it.
+ */
+export function notificationSettingsQueryOptions(
+  accountId: string | undefined,
+  session?: SessionLike,
+) {
+  return {
+    queryKey: notificationSettingsKey(accountId),
+    queryFn: async (): Promise<NotificationSettings> =>
+      unwrap(await api.GET('/api/v1/me/notifications/settings')).data,
+    enabled: session != null && accountId !== undefined,
+  };
+}
+
+/** MY › 설정's '알림 수신' card, for `accountId` (the `Me` it is drawn from). */
+export function useNotificationSettings(accountId: string | undefined) {
+  const { data: session } = useSession();
+  return useQuery(notificationSettingsQueryOptions(accountId, session));
+}
+
+/** What a press of one switch sends: its category, on or off, and the account the card shows. */
+export interface UpdateNotificationSettingVariables {
+  category: NotificationCategory;
+  enabled: boolean;
+  expectedAccountId: string;
+}
+
+async function putNotificationSetting({
+  category,
+  enabled,
+  expectedAccountId,
+}: UpdateNotificationSettingVariables): Promise<NotificationSettings> {
+  return unwrap(
+    await api.PUT('/api/v1/me/notifications/settings/{category}', {
+      params: { path: { category } },
+      body: { enabled, expectedAccountId },
+    }),
+  ).data;
+}
+
+/**
+ * A write's answer into the account's settings — its own category only
+ * (`withNotificationSetting`): the answers of two rows' writes may land out of order. A settings
+ * read on its way left before the write committed (a focus after 30 s, a reconnect's restart) and
+ * would land after it with the old value, switching the row back: it is cancelled first, as
+ * `storeMe` does for `['me']`. That read may have been the one carrying another row's newer value
+ * (another tab's change), and `setQueryData` marks the entry fresh: when one was cancelled, the
+ * entry is read again after the answer is stored — that read leaves after the write committed, so
+ * it cannot switch this row back. Only into `account`'s entry — the `expectedAccountId` the server
+ * compared with the cookie.
+ */
+export async function storeNotificationSetting(
+  queryClient: QueryClient,
+  answer: NotificationSettings,
+  {
+    category,
+    expectedAccountId,
+  }: Pick<UpdateNotificationSettingVariables, 'category' | 'expectedAccountId'>,
+): Promise<void> {
+  const key = notificationSettingsKey(expectedAccountId);
+  const readOnItsWay = queryClient.getQueryState(key)?.fetchStatus === 'fetching';
+  await queryClient.cancelQueries({ queryKey: key, exact: true });
+  queryClient.setQueryData<NotificationSettings>(key, (held) =>
+    withNotificationSetting(held, answer, category),
+  );
+  if (readOnItsWay) void queryClient.invalidateQueries({ queryKey: key, exact: true });
+}
+
+/**
+ * `PUT /me/notifications/settings/:category` as mutation options (52-21: one category on or off;
+ * 56-1: what the inbox holds stays). The answer goes into the cache before `mutateAsync` settles
+ * (returned), so the switch never shows the old value for a render in between. A refusal as
+ * another account asks for the session again; any other leaves the cache as it was — nothing was
+ * written, and the switch shows the held value again.
+ */
+export function updateNotificationSettingOptions(
+  queryClient: QueryClient,
+  onSessionChanged: () => void,
+  put: (
+    variables: UpdateNotificationSettingVariables,
+  ) => Promise<NotificationSettings> = putNotificationSetting,
+) {
+  return {
+    mutationFn: put,
+    onSuccess: (answer: NotificationSettings, variables: UpdateNotificationSettingVariables) =>
+      storeNotificationSetting(queryClient, answer, variables),
+    onError: (error: Error) => {
+      if (isForAnotherAccount(error)) onSessionChanged();
+    },
+  };
+}
+
+/**
+ * One switch's write — one per row, so a pending row disables itself alone. Its body names the
+ * account the card was drawn for — the `Me`'s id — never the session's (ADR-0090/0091), so it
+ * offers no account of its own.
+ */
+export function useUpdateNotificationSetting() {
+  const queryClient = useQueryClient();
+  const { refetch: refetchSession } = useSession();
+  return useMutation(updateNotificationSettingOptions(queryClient, () => void refetchSession()));
 }

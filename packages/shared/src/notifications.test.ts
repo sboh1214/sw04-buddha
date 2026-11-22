@@ -27,6 +27,7 @@ import {
   NOTIFICATION_DEFINITIONS,
   NOTIFICATION_EVENT_KEY_PATTERN,
   NOTIFICATION_PARAM_STRING_MAX,
+  NOTIFICATION_SETTING_CATEGORIES,
   NOTIFICATION_TARGET_KINDS,
   NOTIFICATION_TYPE_PATTERN,
   NOTIFICATION_UNREAD_COUNT_CAP,
@@ -45,9 +46,14 @@ import {
   notificationParamsSchema,
   notificationReadResultSchema,
   notificationSchema,
+  notificationSettingCategories,
+  notificationSettingCategoryParamSchema,
+  notificationSettingSchema,
+  notificationSettingsSchema,
   notificationTargetSchema,
   notificationUnreadCountSchema,
   replyParamsSchema,
+  updateNotificationSettingBodySchema,
   type Notification,
   type OrderFilledParams,
   type ReplyParams,
@@ -72,6 +78,88 @@ describe('notification categories (N05 §4, 52-21)', () => {
     }
     // N05 §4's 가격 변동 (#146) is post-MVP: a fourth category comes with its own migration.
     expect(notificationCategorySchema.safeParse('price').success).toBe(false);
+  });
+});
+
+describe('수신 설정 (#56, ADR-0162; 52-21, 56-2)', () => {
+  it('lists the categories that have a type, in the categories’ order — today all three', () => {
+    expect(NOTIFICATION_SETTING_CATEGORIES).toEqual(['trade', 'market', 'community']);
+    for (const category of NOTIFICATION_SETTING_CATEGORIES) {
+      expect(NOTIFICATION_CATEGORIES).toContain(category);
+    }
+    expect(NOTIFICATION_SETTING_CATEGORIES).toEqual(
+      notificationSettingCategories(NOTIFICATION_DEFINITIONS),
+    );
+  });
+
+  it('shows a category only once its first type exists (56-2)', () => {
+    expect(notificationSettingCategories([])).toEqual([]);
+    expect(notificationSettingCategories([{ category: 'market' }, { category: 'market' }])).toEqual(
+      ['market'],
+    );
+    // The order is NOTIFICATION_CATEGORIES’, not the definitions’.
+    expect(
+      notificationSettingCategories([
+        { category: 'community' },
+        { category: 'market' },
+        { category: 'trade' },
+      ]),
+    ).toEqual(['trade', 'market', 'community']);
+    expect(
+      notificationSettingCategories([{ category: 'community' }, { category: 'trade' }]),
+    ).toEqual(['trade', 'community']);
+  });
+
+  it('answers a category and whether it is on, and nothing else (#56 AC 7·9)', () => {
+    const setting = { category: 'trade', enabled: false };
+    expect(notificationSettingSchema.parse(setting)).toEqual(setting);
+    // No field but the two: no lock, no channel, no price item (extra keys are stripped).
+    expect(notificationSettingSchema.parse({ ...setting, locked: true, channel: 'email' })).toEqual(
+      setting,
+    );
+    expect(Object.keys(notificationSettingSchema.shape).sort()).toEqual(['category', 'enabled']);
+    for (const bad of [
+      { category: 'price', enabled: true },
+      { category: 'trade', enabled: 'false' },
+      { category: 'trade' },
+    ]) {
+      expect(notificationSettingSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+    const settings = {
+      categories: NOTIFICATION_SETTING_CATEGORIES.map((category) => ({ category, enabled: true })),
+    };
+    expect(notificationSettingsSchema.parse(settings)).toEqual(settings);
+    expect(Object.keys(notificationSettingsSchema.shape)).toEqual(['categories']);
+  });
+
+  it('takes one category on or off with the account on screen', () => {
+    const body = { enabled: false, expectedAccountId: 'user-a' };
+    expect(updateNotificationSettingBodySchema.parse(body)).toEqual(body);
+    expect(updateNotificationSettingBodySchema.parse({ ...body, category: 'market' })).toEqual(
+      body,
+    );
+    for (const bad of [
+      { enabled: false },
+      { expectedAccountId: 'user-a' },
+      { enabled: 'off', expectedAccountId: 'user-a' },
+      { enabled: 0, expectedAccountId: 'user-a' },
+      { enabled: true, expectedAccountId: '' },
+    ]) {
+      expect(updateNotificationSettingBodySchema.safeParse(bad).success, JSON.stringify(bad)).toBe(
+        false,
+      );
+    }
+  });
+
+  it('names the category in the path by the list, never a channel or a price item', () => {
+    for (const category of NOTIFICATION_CATEGORIES) {
+      expect(notificationSettingCategoryParamSchema.parse(category)).toBe(category);
+    }
+    for (const bad of ['price', 'email', 'push', 'all', 'TRADE', '']) {
+      expect(notificationSettingCategoryParamSchema.safeParse(bad).success, bad).toBe(false);
+    }
+    // A plain enum, no OpenAPI id: an inline enum path parameter, not a `$ref`.
+    expect(z.globalRegistry.get(notificationSettingCategoryParamSchema)).toBeUndefined();
   });
 });
 

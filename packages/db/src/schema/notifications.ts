@@ -28,6 +28,11 @@ const CATEGORIES_SQL = sql.raw(
   NOTIFICATION_CATEGORIES.map((category) => `'${category}'`).join(', '),
 );
 
+/** NOTIFICATION_CATEGORIES as the SQL array the off-list is held inside (#56, migration 0079). */
+const CATEGORIES_ARRAY_SQL = sql.raw(
+  `ARRAY[${NOTIFICATION_CATEGORIES.map((category) => `'${category}'`).join(', ')}]::text[]`,
+);
+
 /** NOTIFICATION_TYPE_PATTERN as the SQL literal the CHECKs match a type with. */
 const TYPE_PATTERN_SQL = sql.raw(`'${NOTIFICATION_TYPE_PATTERN.source}'`);
 
@@ -46,14 +51,44 @@ const EVENT_KEY_PATTERN_SQL = sql.raw(`'${NOTIFICATION_EVENT_KEY_PATTERN.source}
  * closure holds FOR UPDATE is skipped, never waited on (53-5 «탈퇴한 계정은 받지 않음»). The
  * closure takes its member's inbox FOR UPDATE first and deletes it, which cascades its
  * notifications and their keys (53-7 «탈퇴하면 한 번에 지움»; `profiles_closed_completely` checks
- * it went). buddha_app keeps the default DML: a row lock needs UPDATE privilege on some column.
+ * it went) — and with them the member's 수신 설정 (`categories_off`, #56).
+ *
+ * `categories_off` (#56, ADR-0162; 52-21·52-22): the categories the member turned off, an opt-out
+ * list — empty (the default, no backfill) is every category on (52-21 '처음엔 켜짐'). The gate
+ * reads it in the same statement and lock (one more column: no statement and no lock added to a
+ * producer) and skips an input of an off category (`category_off`). The CHECK holds it to
+ * NOTIFICATION_CATEGORIES (`<@` also refuses a NULL element); a fourth category regenerates it
+ * with `notifications_category_check` in its own migration, and decides its own default first —
+ * under this list it would start on, which 52-21 decided for the three only (N05 §4 makes #146's
+ * price alerts opt-in per watched market). Written only by `setNotificationCategory`, one plain
+ * UPDATE (FOR NO KEY UPDATE, which the producers' FOR KEY SHARE never waits on or skips).
+ *
+ * buddha_app keeps SELECT, INSERT and DELETE, and UPDATE of `categories_off` only (migration
+ * 0079): enough for a row lock (FOR KEY SHARE, FOR UPDATE need UPDATE on some column), and no
+ * update of `user_id` — a key update the gate would skip as `no_inbox`, and a way round the
+ * inbox's insert-only guards — or of `created_at`.
  */
-export const notificationInboxes = pgTable('notification_inboxes', {
-  userId: text()
-    .primaryKey()
-    .references(() => user.id, { onDelete: 'cascade' }),
-  createdAt: createdAt(),
-});
+export const notificationInboxes = pgTable(
+  'notification_inboxes',
+  {
+    userId: text()
+      .primaryKey()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    createdAt: createdAt(),
+    /** 수신 설정 (#56, ADR-0162; 52-21·52-22): the categories the member turned off. */
+    categoriesOff: text()
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+  },
+  (t) => [
+    /** Categories of NOTIFICATION_CATEGORIES only, no null among them. */
+    check(
+      'notification_inboxes_categories_off_check',
+      sql`${t.categoriesOff} <@ ${CATEGORIES_ARRAY_SQL}`,
+    ),
+  ],
+);
 
 /**
  * One notification of a member's inbox (#53, ADR-0157; N05 §4): a type, its flat parameters and a

@@ -12,6 +12,7 @@ import { LinkedAccounts } from './linked-accounts';
 import { MarketingSection } from './marketing-section';
 import { ModerationSection } from './moderation-section';
 import { NicknameForm } from './nickname-form';
+import { NotificationSettingsSection } from './notification-settings-section';
 import { PasswordForm } from './password-form';
 import { ProfileImageSection } from './profile-image-section';
 import { ProposalsSection } from './proposals-section';
@@ -25,9 +26,10 @@ export const metadata: Metadata = { title: `${copy.settingsTitle} | ${copy.appNa
 /**
  * MY's 설정 (`/my/settings`, #16). The public profile's items come first — the nickname (#58), the
  * image (#141), the 소개 and the interest categories (#41, ADR-0069 decision 4 #41: «MY 설정») —
- * then the account's own settings, the way to 조치·신고 내역 (#50, ADR-0081 — a MY page of its own,
- * linked from here, ADR-0069 decision 4 #50), the ways to 내 제안 (#77) and MY '판정 이의' (#175,
- * ADR-0104), and last the way to 탈퇴 (#140, ADR-0086 — its
+ * then the account's own settings, since #56 the '알림 수신' card among them after 화면 모드
+ * (ADR-0162; 56-4 — MY › 알림's '수신 설정' link opens it at its anchor), the way to 조치·신고 내역
+ * (#50, ADR-0081 — a MY page of its own, linked from here, ADR-0069 decision 4 #50), the ways to
+ * 내 제안 (#77) and MY '판정 이의' (#175, ADR-0104), and last the way to 탈퇴 (#140, ADR-0086 — its
  * confirmation screen under this one, `/my/settings/closure`). Above them all, while a writing or an
  * account restriction stands, its banner (`SanctionBanner`, #185, ADR-0082; #139, ADR-0085 — the
  * restriction state ADR-0078 결과 5 left to #185 and #139 for MY 설정: each end and the way to
@@ -60,6 +62,8 @@ export default async function SettingsPage({
       <MarketingSection />
       <TimeZoneSection />
       <ThemeSection />
+      {/* 알림 수신 (#56, ADR-0162; 56-4): with the private display settings, not beside 마케팅. */}
+      <NotificationSettingsSection />
       <ModerationSection />
       {/* 내 제안 (#77): linked from 설정 as from the summary, since it has no tab. */}
       <ProposalsSection />

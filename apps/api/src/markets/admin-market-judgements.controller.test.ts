@@ -27,8 +27,8 @@
  * the admin on screen; and the interim one-admin `POST …/resolve`, gone. And the notices (#188,
  * ADR-0160): an approval's 잠정 결과 to the market's watchers and holders, a correction's 판정 정정
  * to them and 정정으로 종결 to its closed disputes' submitters, nothing for a registration, a 반려
- * or a 철회. The worker's confirmation at the deadline is apps/worker's (market-resolve.test.ts).
- * Skips when TEST_* are unset.
+ * or a 철회 — and none to a member whose 시장 is off (#56, ADR-0162). The worker's confirmation at
+ * the deadline is apps/worker's (market-resolve.test.ts). Skips when TEST_* are unset.
  */
 import { clockTimestamp, schema } from '@buddha/db';
 import {
@@ -70,6 +70,7 @@ import { AdminGuard } from '../auth/admin.guard.js';
 import { MARKETS_QUEUE } from '../jobs/market-jobs.service.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
+import { setNotificationSetting } from '../test/notification-settings.js';
 import { discoverRoutes } from '../test/routes.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { sleep, waitForLockWaiter, waitForMessages } from '../test/wait.js';
@@ -2444,6 +2445,31 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
       );
       expect(await t.db.select().from(schema.notifications)).toEqual(rows);
       expect(again()).toEqual([]);
+    });
+
+    it('tells the 잠정 결과 to nobody whose 시장 is off — a watcher, a holder — while a holder with it on gets it (#56, ADR-0162; 52-21 not locked, 52-22)', async () => {
+      const [a, b, w] = [await trader(), await trader(), await trader()];
+      const market = await tradedThenClosed(async (id) => {
+        await tradeOnce(t.db, id, { noOwner: a.id, yesOwner: b.id });
+      });
+      await setWatch(w, market.id, true);
+      // W (watcher) and A (holder) turn 시장 off; B (holder) keeps it on.
+      for (const who of [w, a]) await setNotificationSetting(t, who, 'market', false);
+      const sent = signals();
+      await judge(market.id);
+      const event = (await eventsFor(market.id)).at(-1)!;
+      expect(event.type).toBe('provisional');
+      expect(await noticesOf(b.id, 'market_provisional_result')).toEqual([
+        expect.objectContaining({ type: 'market_provisional_result', occurredAt: event.createdAt }),
+      ]);
+      for (const who of [w, a]) {
+        expect(await noticesOf(who.id, 'market_provisional_result'), who.id).toEqual([]);
+      }
+      // One key, B's: the skipped ones claimed none; the signal goes to B alone.
+      expect(await keysOf('market_provisional_result')).toEqual([
+        `market_event:${String(event.id)}`,
+      ]);
+      expect(sent()).toEqual(await signalled([b], event.createdAt));
     });
 
     it('tells a VOID the same way, and a market with no 판정 기준 시간대 (opened before #22) null (#173 item 9)', async () => {

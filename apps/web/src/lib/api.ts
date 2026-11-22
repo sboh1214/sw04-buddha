@@ -372,6 +372,13 @@ export type NotificationParams = components['schemas']['NotificationParams'];
 export type NotificationTarget = components['schemas']['NotificationTarget'];
 export type NotificationUnreadCount = components['schemas']['NotificationUnreadCount'];
 export type NotificationReadResult = components['schemas']['NotificationReadResult'];
+/**
+ * 알림 수신 설정 (#56, ADR-0162; 52-21): `GET /me/notifications/settings` and the answer of
+ * `PUT /me/notifications/settings/:category` — one entry per category that has a type (56-2), in
+ * the shared order, each on or off.
+ */
+export type NotificationSettings = components['schemas']['NotificationSettings'];
+export type NotificationSetting = components['schemas']['NotificationSetting'];
 /** `POST /media/images`'s answer: the stored image's id, which the editor's image node carries. */
 export type UploadedImage = components['schemas']['UploadedImage'];
 /**
