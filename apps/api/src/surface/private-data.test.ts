@@ -133,6 +133,7 @@ import {
   marketChannel,
   namesPersonalProbability,
   type AdminMarket,
+  type Notification,
   type UserRealtimeEvent,
 } from '@buddha/shared';
 import { eq, isNotNull } from 'drizzle-orm';
@@ -3878,5 +3879,58 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         ],
       }).toEqual({ event, leaks: [] });
     }
+  });
+
+  it('answers B’s reply notice with the replier’s public face alone, and none once the reply is hidden (#135, ADR-0161; 52-15)', async () => {
+    // A third account replies — A's nickname and public id are sentinels of every B answer. The
+    // comment goes through the real path, which writes B's notice in its transaction.
+    const replier = await signUpTestUser(t);
+    await completeOnboarding(t.db, { userId: replier.id });
+    const bPost = await createPost(t.db, { marketId: f.market.id, authorId: f.b.id });
+    const written = await t.app.inject({
+      method: 'POST',
+      url: `/api/v1/posts/${bPost.id}/comments`,
+      headers: { origin: ORIGIN, 'content-type': 'application/json', cookie: replier.cookie },
+      payload: { body: '답글', expectedAccountId: replier.id },
+    });
+    expect(written.statusCode, written.body).toBe(201);
+    const commentId = written.json<{ data: { id: string } }>().data.id;
+    const [face] = await t.db
+      .select({ publicId: schema.profiles.publicId, nickname: schema.profiles.nickname })
+      .from(schema.profiles)
+      .where(eq(schema.profiles.userId, replier.id));
+    const inboxOfB = async () => {
+      const res = await t.app.inject({
+        method: 'GET',
+        url: '/api/v1/me/notifications',
+        headers: { cookie: f.b.cookie },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      // Never the replier's account id, and none of A's values.
+      expect({ replier: res.body.includes(replier.id), leaks: leaked(res.body) }).toEqual({
+        replier: false,
+        leaks: [],
+      });
+      const items = res.json<{ data: Notification[] }>().data;
+      return items.filter((item) => item.type === 'post_replied');
+    };
+    expect(await inboxOfB()).toEqual([
+      expect.objectContaining({
+        params: { replyId: commentId, replyCreatedAt: expect.any(String) as unknown },
+        target: { kind: 'post', postId: bPost.id },
+        replyAuthor: {
+          kind: 'member',
+          publicId: face!.publicId,
+          nickname: face!.nickname,
+          imageUrl: null,
+          isAdmin: false,
+        },
+      }),
+    ]);
+    await t.db
+      .update(schema.postComments)
+      .set({ hiddenAt: new Date() })
+      .where(eq(schema.postComments.id, commentId));
+    expect((await inboxOfB()).map((item) => item.replyAuthor)).toEqual([null]);
   });
 });

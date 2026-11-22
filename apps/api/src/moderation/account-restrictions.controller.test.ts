@@ -1855,28 +1855,56 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
       const action = decisionOf(await approve(request.id)).action!;
       // #134 (52-3·52-4): one 계정 제한 notice of both cancels — an account event across markets,
       // leading to the ended orders of every market — apart from the fill's; only the member's.
-      expect(await inboxOf(member)).toEqual([
-        {
-          id: expect.any(String) as unknown,
-          type: 'orders_cancelled',
-          category: 'trade',
-          params: { reason: 'restricted', orderCount: 2, marketCount: 2, marketTitle: null },
-          target: { kind: 'order_history', marketId: null },
-          eventCount: 1,
-          occurredAt: action.createdAt,
-          readAt: null,
-        },
-        filled,
-      ]);
+      // #135 (52-16, 135-6): the restriction's own notice in the same call, under the same key.
+      const inbox = await inboxOf(member);
+      expect(inbox).toHaveLength(3);
+      expect(inbox[2]).toEqual(filled);
+      expect(inbox.slice(0, 2)).toEqual(
+        expect.arrayContaining([
+          {
+            id: expect.any(String) as unknown,
+            type: 'orders_cancelled',
+            category: 'trade',
+            params: { reason: 'restricted', orderCount: 2, marketCount: 2, marketTitle: null },
+            target: { kind: 'order_history', marketId: null },
+            eventCount: 1,
+            occurredAt: action.createdAt,
+            readAt: null,
+          },
+          {
+            id: expect.any(String) as unknown,
+            type: 'moderation_action_taken',
+            category: 'community',
+            params: { action: 'account_restriction', endsAt: action.endsAt },
+            target: { kind: 'moderation_action', actionId: action.id },
+            eventCount: 1,
+            occurredAt: action.createdAt,
+            readAt: null,
+          },
+        ]),
+      );
       expect(
         (
           await t.db
             .select()
             .from(schema.notificationKeys)
-            .where(eq(schema.notificationKeys.type, 'orders_cancelled'))
-        ).map((key) => [key.userId, key.eventKey]),
-      ).toEqual([[member.id, `moderation_action:${action.id}`]]);
+            .where(
+              inArray(schema.notificationKeys.type, [
+                'orders_cancelled',
+                'moderation_action_taken',
+              ]),
+            )
+        )
+          .map((key) => [key.userId, key.type, key.eventKey])
+          .sort(),
+      ).toEqual(
+        [
+          [member.id, 'moderation_action_taken', `moderation_action:${action.id}`],
+          [member.id, 'orders_cancelled', `moderation_action:${action.id}`],
+        ].sort(),
+      );
       expect(await inboxOf(other)).toEqual([]);
+      // ONE signal however many types reached the member.
       expect(signalled()).toEqual([[member.id, action.createdAt]]);
       // After COMMIT, one `market:book` per market an order was cancelled in (#179).
       expect(published().sort()).toEqual(
@@ -1903,16 +1931,55 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
       ).toEqual([partly.id, resting.id].sort());
       await expectSound();
 
-      // None comes back when the restriction is brought forward, lifted or cancelled, and
-      // nothing is notified then (they cancel nothing).
+      // None comes back when the restriction is brought forward, lifted or cancelled (they
+      // cancel nothing, #134), but each change is the member's #135 notice (52-16).
       const before = await t.db.select().from(schema.orders);
       const notices = await t.db.select().from(schema.notifications);
-      await change(action.id, 'shorten', { endsAt: new Date(Date.now() + DAY_MS).toISOString() });
-      await change(action.id, 'lift');
-      await change(action.id, 'cancel');
+      const shortened = await change(action.id, 'shorten', {
+        endsAt: new Date(Date.now() + DAY_MS).toISOString(),
+      });
+      const lifted = await change(action.id, 'lift');
+      const cancelledAction = await change(action.id, 'cancel');
       expect(await t.db.select().from(schema.orders)).toEqual(before);
-      expect(await t.db.select().from(schema.notifications)).toEqual(notices);
-      expect(signalled()).toEqual([[member.id, action.createdAt]]);
+      const added = (await t.db.select().from(schema.notifications))
+        .filter((row) => !notices.some((kept) => kept.id === row.id))
+        .sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime());
+      const [shortenChange, liftChange] = await t.db
+        .select()
+        .from(schema.restrictionEndChanges)
+        .where(eq(schema.restrictionEndChanges.actionId, action.id))
+        .orderBy(schema.restrictionEndChanges.createdAt);
+      expect(added.map((row) => [row.userId, row.type, row.params, row.target])).toEqual([
+        [
+          member.id,
+          'moderation_restriction_end_changed',
+          { action: 'account_restriction', change: 'shorten', endsAt: shortened.endsAt },
+          { kind: 'moderation_action', actionId: action.id },
+        ],
+        [
+          member.id,
+          'moderation_restriction_end_changed',
+          { action: 'account_restriction', change: 'lift', endsAt: lifted.endsAt },
+          { kind: 'moderation_action', actionId: action.id },
+        ],
+        [
+          member.id,
+          'moderation_action_cancelled',
+          { action: 'account_restriction' },
+          { kind: 'moderation_action', actionId: action.id },
+        ],
+      ]);
+      expect(added.map((row) => row.occurredAt.getTime())).toEqual([
+        shortenChange!.createdAt.getTime(),
+        liftChange!.createdAt.getTime(),
+        Date.parse(cancelledAction.cancelledAt!),
+      ]);
+      expect(signalled()).toEqual([
+        [member.id, action.createdAt],
+        [member.id, shortenChange!.createdAt.toISOString()],
+        [member.id, liftChange!.createdAt.toISOString()],
+        [member.id, cancelledAction.cancelledAt],
+      ]);
     });
 
     it('cancels nothing at a 감경, lift or cancellation approval, even with an order of the member resting then (결정 7)', async () => {
@@ -1945,6 +2012,22 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
       await change(standing.id, 'lift');
       await change(standing.id, 'cancel');
       await change(ended.id, 'cancel');
+      // #135 (52-16 '그 취소'): each change is the member's notice — the ended one's cancellation
+      // too — and none of them an order's.
+      expect(
+        (await inboxOf(member)).map((notice) => [notice.type, notice.target]).reverse(),
+      ).toEqual([
+        [
+          'moderation_restriction_end_changed',
+          { kind: 'moderation_action', actionId: standing.id },
+        ],
+        [
+          'moderation_restriction_end_changed',
+          { kind: 'moderation_action', actionId: standing.id },
+        ],
+        ['moderation_action_cancelled', { kind: 'moderation_action', actionId: standing.id }],
+        ['moderation_action_cancelled', { kind: 'moderation_action', actionId: ended.id }],
+      ]);
       expect(await orderOf(resting.id)).toEqual(before);
       expect(await balanceOf(t.db, member.id)).toEqual(balance);
       const approvals = await audits('account_restriction_approve');
@@ -1961,6 +2044,46 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
       await expectSound();
     });
 
+    it('tells nobody of a request, a rejection, a retraction or a re-sent approval (#135, ADR-0085: nothing in force)', async () => {
+      const signalled = signals();
+      const rejected = requestOf(await ask(7));
+      decisionOf(await reject(rejected.id));
+      const retracted = requestOf(await ask(3));
+      dataOf(
+        await send(
+          `/admin/moderation/account-restriction-requests/${retracted.id}/retract`,
+          {},
+          admin,
+        ),
+      );
+      expect(await t.db.select().from(schema.notifications)).toEqual([]);
+      const action = await restrict(7);
+      const notices = await t.db.select().from(schema.notifications);
+      expect(notices.map((row) => row.type)).toEqual(['moderation_action_taken']);
+      const shorten = requestOf(
+        await askChange(action.id, 'shorten', {
+          endsAt: new Date(Date.now() + DAY_MS).toISOString(),
+        }),
+      );
+      decisionOf(await reject(shorten.id));
+      const cancel = requestOf(await askChange(action.id, 'cancel'));
+      decisionOf(await approve(cancel.id));
+      const afterCancel = await t.db.select().from(schema.notifications);
+      expect(afterCancel).toHaveLength(2);
+      // Re-sent: decided already, nothing written.
+      expect(approvalRefusalOf(await approve(cancel.id, await anAdmin()))).toBe('decided');
+      expect(await t.db.select().from(schema.notifications)).toEqual(afterCancel);
+      expect(signalled()).toEqual([
+        [member.id, action.createdAt],
+        [
+          member.id,
+          afterCancel
+            .find((row) => row.type === 'moderation_action_cancelled')!
+            .occurredAt.toISOString(),
+        ],
+      ]);
+    });
+
     it('skips an order in a market held for a ledger failure — the restriction applies all the same — and the recovery cancels it', async () => {
       const held = await createMarket(t.db);
       const waiting = await place({ marketId: held.id, ownerId: member.id, limitPriceCoin: 40 });
@@ -1972,14 +2095,23 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
       // The held market's book did not change: its signal is the recovery's (#179).
       expect(published()).toEqual([[market.id, 'market:book', action.createdAt]]);
       // #134: the cancel's notice counts the order it ended (N = 1: the order itself), not the
-      // held one, which its market's recovery notifies when it ends it.
-      expect(await inboxOf(member)).toEqual([
-        expect.objectContaining({
-          type: 'orders_cancelled',
-          params: { reason: 'restricted', orderCount: 1, marketCount: 1, marketTitle: null },
-          target: { kind: 'order', orderId: resting.id },
-        }),
-      ]);
+      // held one, which its market's recovery notifies when it ends it; #135: the restriction's
+      // own notice beside it (무기한: no end).
+      expect(await inboxOf(member)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'orders_cancelled',
+            params: { reason: 'restricted', orderCount: 1, marketCount: 1, marketTitle: null },
+            target: { kind: 'order', orderId: resting.id },
+          }),
+          expect.objectContaining({
+            type: 'moderation_action_taken',
+            params: { action: 'account_restriction', endsAt: null },
+            target: { kind: 'moderation_action', actionId: action.id },
+          }),
+        ]),
+      );
+      expect(await inboxOf(member)).toHaveLength(2);
       expect(await mine()).toMatchObject({ accountRestriction: { kind: 'account', endsAt: null } });
       expect(await orderOf(waiting.id)).toEqual(before);
       expect(await orderOf(resting.id)).toMatchObject({
@@ -2054,6 +2186,12 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
       }
       expect(decisionOf(await approve(request.id)).action).not.toBeNull();
       expect(await audits('account_restriction_approve')).toHaveLength(1);
+      // The rolled-back attempts left no notice: one of each type from the approval that went
+      // through (#134's and #135's).
+      expect((await inboxOf(member)).map((notice) => notice.type).sort()).toEqual([
+        'moderation_action_taken',
+        'orders_cancelled',
+      ]);
       const [order] = await t.db
         .select()
         .from(schema.orders)

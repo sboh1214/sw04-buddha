@@ -1,10 +1,17 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { schema, type Db } from '@buddha/db';
+import {
+  createNotifications,
+  notifiedUserIds,
+  proposalDecisionNotificationInput,
+  schema,
+  type Db,
+} from '@buddha/db';
 import {
   canLinkProposalMarket,
   canMoveProposal,
   decodeKeyset,
   encodeKeyset,
+  notificationEvent,
   proposalDraftCloseAt,
   type AdminProposal,
   type AdminProposalListQuery,
@@ -23,6 +30,7 @@ import { keysetPredicate } from '../common/keyset.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
 import { MarketAdminService } from '../markets/market-admin.service.js';
+import { MarketPublisher } from '../realtime/market-publisher.js';
 import { type Page } from '../wallet/wallet.service.js';
 import { adminProposalQuery, toAdminProposal, type Executor } from './proposal-rows.js';
 
@@ -55,12 +63,19 @@ function fieldError(path: string[], message: string, detail: string): AppError {
  * in the same transaction, with its `created` event and `market_create` record. The proposer's
  * 철회 takes the same row lock (ProposalsService.retract), so it and a review start cannot both
  * win.
+ *
+ * Notices (#135, ADR-0161; 52-19 "채택·반려 결론만"): a 채택 and a 반려 tell the proposer — the
+ * decision and their own question, never the reason, the explanation or a memo — last in the
+ * transaction, and after COMMIT `user:notification` goes to them; the deciding admin who proposed
+ * it is told too (ADR-0160 12-12). 검토 시작, a later market link and the internal memo tell
+ * nobody, nor does the proposer's own 철회. A notice's failure fails the decision (500 — 188-2).
  */
 @Injectable()
 export class AdminProposalsService {
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly markets: MarketAdminService,
+    private readonly publisher: MarketPublisher,
   ) {}
 
   /** `GET /admin/proposals`: newest first, every status or one, keyset-paginated. */
@@ -125,14 +140,15 @@ export class AdminProposalsService {
    * leaves — the proposal form offers either level — is refused as no category ('required'), so
    * a draft never lands on such a parent without the operator choosing it. A category the
    * operator gives is held to what the market API holds a new market's to (#17,
-   * `readCategorySelectability`), naming the adoption's field.
+   * `readCategorySelectability`), naming the adoption's field. The proposer is told '채택' (#135,
+   * P1 — `proposal_decided`).
    */
   async adopt(
     adminId: string,
     id: string,
     body: WithoutExpectedAccount<AdoptProposalBody>,
   ): Promise<AdminProposal> {
-    return this.db.transaction(async (tx) => {
+    const done = await this.db.transaction(async (tx) => {
       const current = await this.lockedMove(tx, id, 'adopted');
       const market = body.market ?? null;
       const { marketId, marketCreated } =
@@ -159,8 +175,11 @@ export class AdminProposalsService {
         marketCreated,
         memo,
       });
-      return this.read(tx, id);
+      const answer = await this.read(tx, id);
+      const notified = await this.notifyDecision(tx, { ...current, status: 'adopted' }, now);
+      return { answer, notified, at: now };
     });
+    return this.answered(done);
   }
 
   /**
@@ -205,14 +224,15 @@ export class AdminProposalsService {
   /**
    * `POST /admin/proposals/:id/reject`: 접수 or 검토 → 반려, with the reason, the explanation the
    * proposer reads and, for a 중복, the existing market (any status; the proposer sees its link
-   * only while it is public). An unknown market is NOT_FOUND naming `duplicateMarketId`.
+   * only while it is public). An unknown market is NOT_FOUND naming `duplicateMarketId`. The
+   * proposer is told '반려' (#135, P2 — `proposal_decided`; the reason is read in MY 내 제안).
    */
   async reject(
     adminId: string,
     id: string,
     body: WithoutExpectedAccount<RejectProposalBody>,
   ): Promise<AdminProposal> {
-    return this.db.transaction(async (tx) => {
+    const done = await this.db.transaction(async (tx) => {
       const current = await this.lockedMove(tx, id, 'rejected');
       const duplicateMarketId =
         body.reason === 'duplicate' ? (body.duplicateMarketId ?? null) : null;
@@ -238,8 +258,33 @@ export class AdminProposalsService {
         explanation: body.explanation,
         duplicateMarketId,
       });
-      return this.read(tx, id);
+      const answer = await this.read(tx, id);
+      const notified = await this.notifyDecision(tx, { ...current, status: 'rejected' }, now);
+      return { answer, notified, at: now };
     });
+    return this.answered(done);
+  }
+
+  /**
+   * The proposer's `proposal_decided` notice (#135, 52-19): the transaction's ONE
+   * `createNotifications` call, last — after the answer's read (ADR-0158 12-20). Answers whom it
+   * reached.
+   */
+  private async notifyDecision(tx: Tx, decided: ProposalRecord, at: Date): Promise<string[]> {
+    const input = proposalDecisionNotificationInput(decided, at);
+    return notifiedUserIds(await createNotifications(tx, [input]));
+  }
+
+  /** After COMMIT: `user:notification` to whom the notice reached (best effort), then the answer. */
+  private async answered(done: {
+    answer: AdminProposal;
+    notified: string[];
+    at: Date;
+  }): Promise<AdminProposal> {
+    await Promise.all(
+      done.notified.map((userId) => this.publisher.publishUser(userId, notificationEvent(done.at))),
+    );
+    return done.answer;
   }
 
   /**

@@ -1,10 +1,20 @@
 import * as z from 'zod';
 import { serializeCoinAmount } from './api/coin-amount.js';
 import { uuidSchema } from './api/uuid.js';
-import { MARKET_RESULTS, orderSideSchema, outcomeSchema, type OrderCancelReason } from './enums.js';
+import {
+  MARKET_RESULTS,
+  MODERATION_ACTION_TYPES,
+  RESTRICTION_END_CHANGE_KINDS,
+  orderSideSchema,
+  outcomeSchema,
+  type ModerationActionType,
+  type OrderCancelReason,
+  type ProposalStatus,
+} from './enums.js';
 import type { MarketDisputeStatus } from './market-dispute.js';
 import { MARKET_PAUSE_REASONS } from './market-pause.js';
 import { marketSlugSchema } from './market.js';
+import { postAuthorSchema } from './post.js';
 
 /**
  * 앱 내 알림함 (#53, ADR-0157; N05 §4·§8, owner answers 53-1…53-11 and #52's 52-1…52-23): what a
@@ -16,8 +26,9 @@ import { marketSlugSchema } from './market.js';
  * carry only the recipient's own values or public values (N04 §2): times as ISO strings (the web
  * renders them in the member's zone, 52-15), Coin amounts and quantities as decimal strings
  * (`serializeCoinAmount`), never JS numbers. Another member's identity (a nickname, an account
- * id, a public id, an address) is never stored: a type that shows one reads it when the list is
- * read, through the object its target names (52-15's reply author, ADR-0086's '탈퇴한 사용자').
+ * id, a public id, an address) is never stored: a type that shows one keeps the id of the object
+ * that names it and the API reads the person when the list is read — 52-15's reply author through
+ * `replyId` (ADR-0161), so ADR-0086's '탈퇴한 사용자' and a forced nickname change show at once.
  *
  * The product's types are NOTIFICATION_DEFINITIONS, and nothing else: the one write path
  * (@buddha/db `createNotifications`) refuses a type it does not list, and the database holds the
@@ -28,7 +39,9 @@ import { marketSlugSchema } from './market.js';
  * `market_resumed`, `market_cancelled`, `market_rules_supplemented`), #188 the 판정·정산 six
  * (ADR-0160 — `market_judgement_delayed`, `market_provisional_result`,
  * `market_judgement_corrected`, `market_dispute_decided`, `market_dispute_closed_by_correction`,
- * `market_settled`), then #135 커뮤니티, #144 정정·보상.
+ * `market_settled`), #135 the 커뮤니티 six (ADR-0161 — `post_replied`, `comment_replied`,
+ * `moderation_action_taken`, `moderation_action_cancelled`, `moderation_restriction_end_changed`,
+ * `proposal_decided`), then #144 정정·보상.
  */
 
 /**
@@ -102,9 +115,17 @@ export type NotificationParams = z.infer<typeof notificationParamsSchema>;
  *   (`/my/orders/<id>`, ADR-0141) answers 404 to anyone else, so the id tells nobody else a thing;
  * - `order_history` (#134), the recipient's ended orders (`/my/history`, ADR-0143), of one market
  *   (`marketId`, public: the history filter puts it in the URL) or of every market (`null`: an
- *   account event's, 52-4).
- * The later producers add the kinds they lead to (a post, a comment, the moderation history, the
- * proposals, the disputes) with their issues.
+ *   account event's, 52-4);
+ * - `post` (#135, ADR-0161), the recipient's own post (`postId`) a 댓글 was written on, and
+ *   `comment`, the recipient's own 댓글 (`commentId`, with its `postId`) a 대댓글 was written under:
+ *   public objects — their ids are in every public comment list — so the ids tell nobody a thing;
+ * - `moderation_action` (#135), an action taken on the recipient (`actionId`), led to MY 조치·신고
+ *   내역 (`/my/moderation`, 135-2), and `proposal` (#135), the recipient's own 시장 제안
+ *   (`proposalId`), led to MY 내 제안 (`/my/proposals`): the recipient's own, read only on their
+ *   own MY pages, so the ids tell nobody else a thing either.
+ * The web leads `post` and `comment` to the post's page and the other two to their MY pages, each
+ * at its top (135-7); the ids not used by a path yet stay for a later anchor without a data change
+ * (a stored target never changes, ADR-0157 결정 3).
  */
 export const notificationMarketTargetSchema = z
   .object({ kind: z.literal('market'), slug: marketSlugSchema })
@@ -121,11 +142,37 @@ export const notificationOrderHistoryTargetSchema = z
   .meta({ id: 'NotificationOrderHistoryTarget' });
 export type NotificationOrderHistoryTarget = z.infer<typeof notificationOrderHistoryTargetSchema>;
 
+export const notificationPostTargetSchema = z
+  .object({ kind: z.literal('post'), postId: uuidSchema })
+  .meta({ id: 'NotificationPostTarget' });
+export type NotificationPostTarget = z.infer<typeof notificationPostTargetSchema>;
+
+export const notificationCommentTargetSchema = z
+  .object({ kind: z.literal('comment'), postId: uuidSchema, commentId: uuidSchema })
+  .meta({ id: 'NotificationCommentTarget' });
+export type NotificationCommentTarget = z.infer<typeof notificationCommentTargetSchema>;
+
+export const notificationModerationActionTargetSchema = z
+  .object({ kind: z.literal('moderation_action'), actionId: uuidSchema })
+  .meta({ id: 'NotificationModerationActionTarget' });
+export type NotificationModerationActionTarget = z.infer<
+  typeof notificationModerationActionTargetSchema
+>;
+
+export const notificationProposalTargetSchema = z
+  .object({ kind: z.literal('proposal'), proposalId: uuidSchema })
+  .meta({ id: 'NotificationProposalTarget' });
+export type NotificationProposalTarget = z.infer<typeof notificationProposalTargetSchema>;
+
 export const notificationTargetSchema = z
   .discriminatedUnion('kind', [
     notificationMarketTargetSchema,
     notificationOrderTargetSchema,
     notificationOrderHistoryTargetSchema,
+    notificationPostTargetSchema,
+    notificationCommentTargetSchema,
+    notificationModerationActionTargetSchema,
+    notificationProposalTargetSchema,
   ])
   .meta({ id: 'NotificationTarget' });
 export type NotificationTarget = z.infer<typeof notificationTargetSchema>;
@@ -136,6 +183,10 @@ export const NOTIFICATION_TARGET_KINDS = [
   'market',
   'order',
   'order_history',
+  'post',
+  'comment',
+  'moderation_action',
+  'proposal',
 ] as const satisfies readonly NotificationTargetKind[];
 
 /**
@@ -606,12 +657,186 @@ export const MARKET_SETTLED_NOTIFICATION = defineNotification({
   merge: null,
 });
 
+// ---- 커뮤니티 알림 (#135, ADR-0161) ----------------------------------------------------------
+//
+// The six 커뮤니티 types (52-21: category `community` — N05 §4 "커뮤니티: 내 글의 답글·운영 처리
+// 결과", 52-16 "이 알림은 N05 §4의 커뮤니티 분류다", 52-19 "커뮤니티 분류로 두고"). A reply goes to
+// the author right above it (52-18): a 댓글 to the post's author (`post_replied`), a 대댓글 — one
+// answering a 대댓글 included — to its 댓글's author (`comment_replied`); never to the writer
+// (135-3). The two merge while unread, per post and per 댓글 (52-7, no cap), and keep only the
+// latest reply's id and time: never its body (135-4) nor its author, whom the API reads through
+// `replyId` when the list is read (52-15). An action taken on the recipient (52-16: every one,
+// account restrictions of any reason included), its cancellation and a restriction's 감경 or 조기
+// 해제 carry the action's kind and, for a restriction, its own end (135-2, 135-6) — never the
+// reason, the operator, an approval, a report or a reporter (#45 13항). A proposal's 채택 or 반려
+// carries the decision and the recipient's own question (52-19 "결론만"). The words are 135-5's.
+
+/**
+ * A reply (#48): the latest one a reply notice holds — its id and its `created_at` as
+ * `toISOString()` writes it (52-7, 52-15). The id is public (every comment list answers it); the
+ * author is read through it when the list is read (the API's `replyAuthor`), never stored.
+ */
+export const replyParamsSchema = z.object({
+  replyId: uuidSchema,
+  replyCreatedAt: noticeInstantSchema,
+});
+export type ReplyParams = z.infer<typeof replyParamsSchema>;
+
+/**
+ * 52-7: the later of two replies by (created_at, id) — the order the post page lists them in.
+ * Commutative and associative (a max), so the write path's event-key order never matters
+ * (ADR-0158 결정 1), and with the producer's `occurredAt` the reply's own `created_at`, the row's
+ * 발생 시각 (GREATEST) and the params name the same reply under concurrent merges too.
+ */
+const laterReply = (held: ReplyParams, next: ReplyParams): ReplyParams => {
+  const heldAt = Date.parse(held.replyCreatedAt);
+  const nextAt = Date.parse(next.replyCreatedAt);
+  if (heldAt !== nextAt) return heldAt > nextAt ? held : next;
+  return held.replyId >= next.replyId ? held : next;
+};
+
+export type PostRepliedParams = ReplyParams;
+
+/**
+ * `post_replied` (N05 §2·§4 내 글의 답글; 52-7, 52-15, 52-18, 135-3, 135-4): a 댓글 another member
+ * wrote on the recipient's post, merged per post while unread (the merge key is the post: the
+ * target, which cannot change as replies merge).
+ */
+export const POST_REPLIED_NOTIFICATION = defineNotification({
+  type: 'post_replied',
+  category: 'community',
+  targets: ['post'],
+  params: replyParamsSchema,
+  merge: laterReply,
+});
+
+export type CommentRepliedParams = ReplyParams;
+
+/**
+ * `comment_replied` (52-7, 52-15, 52-18, 135-3, 135-4): a 대댓글 another member wrote under the
+ * recipient's 댓글 — one answering a 대댓글 there included (52-18) — merged per 댓글 while unread
+ * (the merge key is that 댓글, the target; never the reply).
+ */
+export const COMMENT_REPLIED_NOTIFICATION = defineNotification({
+  type: 'comment_replied',
+  category: 'community',
+  targets: ['comment'],
+  params: replyParamsSchema,
+  merge: laterReply,
+});
+
+/**
+ * MODERATION_ACTION_TYPES as a plain enum: moderationActionTypeSchema carries `.meta({ id })`, a
+ * `$ref` the definitions' flatness check refuses (ADR-0159 12-8).
+ */
+const noticeActionSchema = z.enum(MODERATION_ACTION_TYPES);
+
+/** The two restrictions (#185, #139): the only actions with an end, a 감경 and a 조기 해제. */
+export const RESTRICTION_ACTION_TYPES = [
+  'writing_restriction',
+  'account_restriction',
+] as const satisfies readonly ModerationActionType[];
+export type RestrictionActionType = (typeof RESTRICTION_ACTION_TYPES)[number];
+
+/** Whether an action is one of the two restrictions. */
+const isRestrictionAction = (action: string): action is RestrictionActionType =>
+  (RESTRICTION_ACTION_TYPES as readonly string[]).includes(action);
+
+/**
+ * `moderation_action_taken` (N05 §4·§5 운영 처리 결과; 52-16, 135-2, 135-6): an action taken on
+ * the recipient — a hiding of their post or comment, a warning, a profile item's action, a writing
+ * restriction or an account restriction (at its approval, any reason). `endsAt` is a restriction's
+ * own end (135-6: the value its MY card shows), null for 무기한 and for the five others; what it
+ * hid, why, by whom and on whose report stay in MY 조치·신고 내역 (135-2).
+ */
+export const moderationActionTakenParamsSchema = z
+  .object({ action: noticeActionSchema, endsAt: noticeInstantSchema.nullable() })
+  .refine((params) => params.endsAt === null || isRestrictionAction(params.action), {
+    message: 'only a restriction has an end',
+  });
+export type ModerationActionTakenParams = z.infer<typeof moderationActionTakenParamsSchema>;
+
+export const MODERATION_ACTION_TAKEN_NOTIFICATION = defineNotification({
+  type: 'moderation_action_taken',
+  category: 'community',
+  targets: ['moderation_action'],
+  params: moderationActionTakenParamsSchema,
+  merge: null,
+});
+
+/**
+ * `moderation_action_cancelled` (52-16 '그 취소'): an operator's cancellation of an action taken on
+ * the recipient — #50's cancel, an approved account-restriction cancel, an accepted 제재 이의's
+ * (ADR-0084: the appeal itself is answered by email) — an ended restriction's included.
+ */
+export const moderationActionCancelledParamsSchema = z.object({ action: noticeActionSchema });
+export type ModerationActionCancelledParams = z.infer<typeof moderationActionCancelledParamsSchema>;
+
+export const MODERATION_ACTION_CANCELLED_NOTIFICATION = defineNotification({
+  type: 'moderation_action_cancelled',
+  category: 'community',
+  targets: ['moderation_action'],
+  params: moderationActionCancelledParamsSchema,
+  merge: null,
+});
+
+/**
+ * `moderation_restriction_end_changed` (52-16 '감경·조기 해제', 135-2, 135-5 (h)): a restriction's
+ * end brought forward — `shorten` (감경) to `endsAt`, the new end, or `lift` (조기 해제) at once
+ * (`endsAt` its instant). One per change: never the expiry itself (52-16 "기간이 끝나 저절로
+ * 풀리는 것은 알리지 않는다").
+ */
+export const moderationRestrictionEndChangedParamsSchema = z.object({
+  action: z.enum(RESTRICTION_ACTION_TYPES),
+  change: z.enum(RESTRICTION_END_CHANGE_KINDS),
+  endsAt: noticeInstantSchema,
+});
+export type ModerationRestrictionEndChangedParams = z.infer<
+  typeof moderationRestrictionEndChangedParamsSchema
+>;
+
+export const MODERATION_RESTRICTION_END_CHANGED_NOTIFICATION = defineNotification({
+  type: 'moderation_restriction_end_changed',
+  category: 'community',
+  targets: ['moderation_action'],
+  params: moderationRestrictionEndChangedParamsSchema,
+  merge: null,
+});
+
+/** 52-19 "채택·반려 결론만": the decisions told to a proposal's proposer — both final. */
+export const NOTIFIED_PROPOSAL_DECISIONS = [
+  'adopted',
+  'rejected',
+] as const satisfies readonly ProposalStatus[];
+export type NotifiedProposalDecision = (typeof NOTIFIED_PROPOSAL_DECISIONS)[number];
+
+/**
+ * `proposal_decided` (N05 §6; 52-19): the 채택 or 반려 of the recipient's own 시장 제안 and its
+ * question — never the rejection's reason or explanation, nor an operator's memo (MY 내 제안 shows
+ * them). The question is the proposer's own (≤ PROPOSAL_QUESTION_MAX, never edited); no `.min(1)`
+ * and the generic cap — noticeTitleSchema's reasoning (ADR-0158 12-16): a raw value outside the
+ * entry schema must not roll a decision back.
+ */
+export const proposalDecidedParamsSchema = z.object({
+  decision: z.enum(NOTIFIED_PROPOSAL_DECISIONS),
+  question: z.string().max(NOTIFICATION_PARAM_STRING_MAX),
+});
+export type ProposalDecidedParams = z.infer<typeof proposalDecidedParamsSchema>;
+
+export const PROPOSAL_DECIDED_NOTIFICATION = defineNotification({
+  type: 'proposal_decided',
+  category: 'community',
+  targets: ['proposal'],
+  params: proposalDecidedParamsSchema,
+  merge: null,
+});
+
 /**
  * The product's notification types (N05 §4). #53 shipped none (52-20 lists no type outside N05's
  * but the post-payout correction and compensation, #144; 시작 Coin, a re-grant's result, a
  * review's rejection and a market's opening are not notifications). #134 ships the 거래 three
- * (ADR-0158), #54 the 시장 five (ADR-0159), #188 the 판정·정산 six (ADR-0160). Each later producer
- * appends its own here — #135 (커뮤니티, 52-19's 제안 included), #144 (정정·보상) — with its guard
+ * (ADR-0158), #54 the 시장 five (ADR-0159), #188 the 판정·정산 six (ADR-0160), #135 the 커뮤니티
+ * six (ADR-0161, 52-19's 제안 included). #144 (정정·보상) appends its own here with its guard
  * entry (NOTIFICATION_TYPE_REGISTRY) and its web renderer, and edits the pin in
  * notifications.test.ts.
  */
@@ -630,6 +855,12 @@ export const NOTIFICATION_DEFINITIONS = [
   MARKET_DISPUTE_DECIDED_NOTIFICATION,
   MARKET_DISPUTE_CLOSED_BY_CORRECTION_NOTIFICATION,
   MARKET_SETTLED_NOTIFICATION,
+  POST_REPLIED_NOTIFICATION,
+  COMMENT_REPLIED_NOTIFICATION,
+  MODERATION_ACTION_TAKEN_NOTIFICATION,
+  MODERATION_ACTION_CANCELLED_NOTIFICATION,
+  MODERATION_RESTRICTION_END_CHANGED_NOTIFICATION,
+  PROPOSAL_DECIDED_NOTIFICATION,
 ] as const satisfies readonly NotificationDefinition[];
 export type NotificationType = (typeof NOTIFICATION_DEFINITIONS)[number]['type'];
 
@@ -644,6 +875,13 @@ const unreadCountSchema = z.number().int().min(0).max(NOTIFICATION_UNREAD_COUNT_
  * category's fallback title (53-11 ④). `eventCount` is how many events a merged one holds (52-6
  * 횟수); `occurredAt` is its 발생 시각 — a merge raises it to the latest event's (134-2); `readAt`
  * is when the member first opened it (53-2), null while unread.
+ *
+ * `replyAuthor` (#135, ADR-0161; 52-15 '답글 작성자 닉네임'): on the two reply types only, the public
+ * face of the latest reply's author (`params.replyId`) as the post page shows it — read by the API
+ * when the list is read, never stored: '탈퇴한 사용자' (`former_member`) for a closed account, the
+ * nickname as it is now, '운영자' for an admin; null when that reply is hidden or deleted (its
+ * placeholder hides its author, 135-4) or gone. Absent on every other type. A DTO field, not a
+ * param: the flatness and identity rules of the params do not apply.
  */
 export const notificationSchema = z
   .object({
@@ -655,6 +893,7 @@ export const notificationSchema = z
     eventCount: z.number().int().min(1),
     occurredAt: z.iso.datetime(),
     readAt: z.iso.datetime().nullable(),
+    replyAuthor: postAuthorSchema.nullable().optional(),
   })
   .meta({ id: 'Notification' });
 export type Notification = z.infer<typeof notificationSchema>;

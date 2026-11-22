@@ -3,29 +3,91 @@ import {
   markAllNotificationsRead,
   markNotificationRead,
   notificationPage,
+  schema,
   unreadNotificationCount,
   type Db,
   type NotificationRow,
 } from '@buddha/db';
 import {
+  COMMENT_REPLIED_NOTIFICATION,
+  POST_REPLIED_NOTIFICATION,
   decodeKeyset,
   encodeKeyset,
   notificationCategorySchema,
   notificationEvent,
+  replyParamsSchema,
   type CursorQuery,
   type Notification,
   type NotificationReadResult,
   type NotificationUnreadCount,
+  type PostAuthor,
 } from '@buddha/shared';
+import { eq, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
+import { authorColumns, postAuthorOf } from '../posts/posts.service.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
 import { type Page } from '../wallet/wallet.service.js';
 
-/** One notification as the API answers it (`notificationSchema`): what its row stores. */
-export function toNotification(row: NotificationRow): Notification {
-  return {
+/** Whatever reads: the pool or a transaction. */
+type Executor = Pick<Db, 'select'>;
+
+/** The two types whose notice names a reply (#135): their params hold its id (`replyId`). */
+const REPLY_TYPES: ReadonlySet<string> = new Set([
+  POST_REPLIED_NOTIFICATION.type,
+  COMMENT_REPLIED_NOTIFICATION.type,
+]);
+
+/** The reply a reply notice holds (its params' `replyId`), or null when they do not parse. */
+function replyIdOf(row: NotificationRow): string | null {
+  if (!REPLY_TYPES.has(row.type)) return null;
+  const params = replyParamsSchema.safeParse(row.params);
+  return params.success ? params.data.replyId : null;
+}
+
+/**
+ * The public face of each reply the rows' reply notices hold (#135, ADR-0161; 52-15 '답글 작성자
+ * 닉네임', ADR-0157 결정 3: read when the list is read, never stored), by reply id: in ONE
+ * statement, no lock, and none when no row holds a reply. The face every public answer gives
+ * (`postAuthorOf`: the public id, the CURRENT nickname, the image, the 운영자 mark; '탈퇴한 사용자'
+ * for a closed account) — never the account id. A reply hidden or deleted since, or gone, has none
+ * (null): its public placeholder hides its author (ADR-0074, #45-5; 135-4).
+ */
+export async function replyAuthorsOf(
+  executor: Executor,
+  rows: readonly NotificationRow[],
+): Promise<Map<string, PostAuthor | null>> {
+  const ids = [...new Set(rows.flatMap((row) => replyIdOf(row) ?? []))];
+  const authors = new Map<string, PostAuthor | null>();
+  if (ids.length === 0) return authors;
+  const { postComments, profiles } = schema;
+  const found = await executor
+    .select({
+      id: postComments.id,
+      deletedAt: postComments.deletedAt,
+      hiddenAt: postComments.hiddenAt,
+      ...authorColumns,
+    })
+    .from(postComments)
+    .innerJoin(profiles, eq(profiles.userId, postComments.authorId))
+    .where(sql`${postComments.id} = ANY(${sql.param(ids)}::uuid[])`);
+  for (const { id, deletedAt, hiddenAt, ...author } of found) {
+    authors.set(id, deletedAt !== null || hiddenAt !== null ? null : postAuthorOf(author));
+  }
+  return authors;
+}
+
+/**
+ * One notification as the API answers it (`notificationSchema`): what its row stores and, on the
+ * two reply types only, `replyAuthor` from `authors` (`replyAuthorsOf` — null when the reply is
+ * hidden, deleted or gone, or the params do not parse). Every other row's answer has no such key.
+ */
+export function toNotification(
+  row: NotificationRow,
+  authors: ReadonlyMap<string, PostAuthor | null> = new Map(),
+): Notification {
+  const notification: Notification = {
     id: row.id,
     type: row.type,
     // The column's CHECK holds it to NOTIFICATION_CATEGORIES (migration 0078).
@@ -36,6 +98,9 @@ export function toNotification(row: NotificationRow): Notification {
     occurredAt: row.occurredAt.toISOString(),
     readAt: row.readAt === null ? null : row.readAt.toISOString(),
   };
+  if (!REPLY_TYPES.has(row.type)) return notification;
+  const replyId = replyIdOf(row);
+  return { ...notification, replyAuthor: replyId === null ? null : (authors.get(replyId) ?? null) };
 }
 
 /**
@@ -67,15 +132,19 @@ export class NotificationsService {
     private readonly publisher: MarketPublisher,
   ) {}
 
-  /** The member's notifications, newest first, one cursor page (53-3). */
+  /**
+   * The member's notifications, newest first, one cursor page (53-3); a reply notice with its
+   * reply's author's public face (`replyAuthorsOf` — one more statement when the page holds one).
+   */
   async list(userId: string, query: CursorQuery): Promise<Page<Notification>> {
     const keyset = decodeKeyset(query.cursor, 'uuid');
     const { items, next } = await notificationPage(this.db, userId, {
       after: keyset ? { at: keyset.createdAt, id: keyset.id } : null,
       limit: query.limit,
     });
+    const authors = await replyAuthorsOf(this.db, items);
     return {
-      items: items.map(toNotification),
+      items: items.map((row) => toNotification(row, authors)),
       nextCursor: next ? encodeKeyset({ createdAt: next.at, id: next.id }) : null,
     };
   }
@@ -88,7 +157,9 @@ export class NotificationsService {
   /**
    * Marks one of the member's notifications read (53-2) and answers it as it now stands with the
    * unread count after it. NOT_FOUND when the member has none of that id — another account's
-   * answers the same, untouched. One already read answers as it is, its first `read_at` kept.
+   * answers the same, untouched. One already read answers as it is, its first `read_at` kept. A
+   * reply notice answers with its reply's author as the list does (#135) — the web puts this
+   * answer in place of the listed row.
    */
   async read(userId: string, id: string): Promise<NotificationReadResult> {
     const marked = await this.db.transaction(async (tx) => {
@@ -99,7 +170,8 @@ export class NotificationsService {
     if (marked.changed && marked.row.readAt !== null) {
       await this.publisher.publishUser(userId, notificationEvent(marked.row.readAt));
     }
-    return { notification: toNotification(marked.row), unreadCount: marked.unreadCount };
+    const authors = await replyAuthorsOf(this.db, [marked.row]);
+    return { notification: toNotification(marked.row, authors), unreadCount: marked.unreadCount };
   }
 
   /**

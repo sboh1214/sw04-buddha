@@ -3214,7 +3214,7 @@ export const copy = {
   // 더 보기로 이어 본다. 안 읽은 알림은 굵은 제목과 점, 화면 낭독기에는 '안 읽음'으로 구별한다(색만으로 구별하지
   // 않는다). 누르면(그 대상으로 가면) 읽음이 되고, 목록을 여는 것만으로는 바뀌지 않는다. '모두 읽음'은 그때 안 읽은
   // 알림을 모두 읽음으로 한다. #53에는 알림 유형이 없었고(52-20), #134가 거래 알림을, #54가 시장 상태 알림을,
-  // #188이 판정·정산 알림을 더했다(아래) — 커뮤니티·정정 보상의 알림은 그 이슈가 더한다.
+  // #188이 판정·정산 알림을, #135가 커뮤니티 알림을 더했다(아래) — 정정 보상의 알림은 #144가 더한다.
   notificationsReadAll: '모두 읽음',
   notificationsEmpty: '알림이 없습니다.',
   notificationUnread: '안 읽음',
@@ -3267,6 +3267,29 @@ export const copy = {
     '{market} 판정 이의 정정으로 종결 · 새 이의 기한 {deadline}',
   notificationMarketSettled: '{market} 결과 확정: {result} · 지급 완료 · 내 지급액 {payout}',
   notificationMarketSettledWatcher: '{market} 결과 확정: {result} · 지급 완료',
+  // 커뮤니티 알림(#135, ADR-0161; 52-7·52-15~52-19, 135-1~135-7): 내 글의 댓글·내 댓글의 답글은 바로 위
+  // 작성자에게 — 읽기 전까지 같은 글·같은 댓글의 것을 합쳐 수와 마지막 작성자를 보이고(작성자는 목록을 읽을
+  // 때, 숨기거나 지운 답글이면 이름 없이), 나에게 내린 운영 조치와 그 취소·감경·조기 해제는 종류와 제한이면
+  // 그 조치의 끝나는 때만(사유·운영자·신고자 없음 — 조치·신고 내역에서), 시장 제안은 채택·반려만. {…}는
+  // lib/community-notifications.ts가 채운다 — {author}는 닉네임(관리자면 '닉네임(운영자)', 탈퇴한 회원이면
+  // '탈퇴한 사용자'), {count}는 합친 수, {action}은 조치 종류, {term}은 회원 시간대의 '…까지'나 '무기한',
+  // {decision}은 채택·반려, {question}은 내 제안의 질문 그대로. 수를 점수·실력으로 적지 않는다(N05 §2).
+  // 문구는 오너 답 135-5.
+  notificationPostReplied: '내 글에 새 댓글 · {author}',
+  notificationPostRepliedMerged: '내 글에 새 댓글 {count}개 · 마지막: {author}',
+  notificationPostRepliedNoAuthor: '내 글에 새 댓글',
+  notificationPostRepliedMergedNoAuthor: '내 글에 새 댓글 {count}개',
+  notificationCommentReplied: '내 댓글에 새 답글 · {author}',
+  notificationCommentRepliedMerged: '내 댓글에 새 답글 {count}개 · 마지막: {author}',
+  notificationCommentRepliedNoAuthor: '내 댓글에 새 답글',
+  notificationCommentRepliedMergedNoAuthor: '내 댓글에 새 답글 {count}개',
+  notificationReplyAuthorAdmin: '{nickname}(운영자)',
+  notificationModerationTaken: '운영 조치: {action}',
+  notificationModerationTakenTerm: '운영 조치: {action} · {term}',
+  notificationModerationCancelled: '운영 조치 취소: {action}',
+  notificationRestrictionShortened: '운영 조치 감경: {action} · {term}',
+  notificationRestrictionLifted: '운영 조치 조기 해제: {action}',
+  notificationProposalDecided: '시장 제안 {decision} · {question}',
   // 안 읽은 수(53-1, 53-11 ①): MY 메뉴(머리·아래 탭)와 알림 탭 옆에 숫자로 보이고 99를 넘으면 '99+'다. 이
   // 말은 화면 낭독기가 그 링크의 설명으로 읽는다 — '안 읽은 알림 3개', 100개 이상이면 '안 읽은 알림 99개 넘게'.
   unreadNotifications: '안 읽은 알림',
@@ -3687,7 +3710,8 @@ export const copy = {
   reportDescriptionPlaceholder: '무엇이 문제인지 적어 주세요.',
   reportLengthUnit: '자',
   reportSubmit: '신고하기',
-  // 접수 확인(#45-13): 결과는 MY 설정에서 여는 조치·신고 내역에서 본다(알림은 M13).
+  // 접수 확인(#45-13): 결과는 MY 설정에서 여는 조치·신고 내역에서 본다
+  // (신고자에게는 알림이 없다 — 52-17, ADR-0161).
   reportSubmitted: '신고를 접수했습니다. 처리 결과는 MY 설정의 조치·신고 내역에서 볼 수 있습니다.',
   errReportReasonRequired: '신고 사유를 골라 주세요.',
   errReportDescriptionRequired: "'기타'를 고르면 설명을 적어 주세요.",

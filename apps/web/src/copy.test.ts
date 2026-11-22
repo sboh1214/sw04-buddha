@@ -183,6 +183,29 @@ describe('copy', () => {
     }
   });
 
+  it('words the 커뮤니티 알림 with no score, rank or reward, and never the reporter or the operator (#135)', () => {
+    // N05 §2, N04 §4, #135 AC 5: a merged count of replies is never a score or a skill, and no
+    // reward sits near a reply; #45 13항, 135-2: what an action names is its kind and end alone.
+    const notices = Object.entries(copy).filter(
+      ([key]) =>
+        key.startsWith('notificationPostReplied') ||
+        key.startsWith('notificationCommentReplied') ||
+        key === 'notificationReplyAuthorAdmin' ||
+        key.startsWith('notificationModeration') ||
+        key.startsWith('notificationRestriction') ||
+        key === 'notificationProposalDecided',
+    );
+    expect(notices).toHaveLength(15);
+    for (const [key, text] of notices) {
+      expect(text, key).not.toMatch(
+        /점수|순위|랭킹|실력|평판|등급|스코어|보상|보너스|지급|배지|예측|좋아요/,
+      );
+      expect(text, key).not.toMatch(/신고|관리자|사유|처리한/);
+      // '운영자' only as the tag on an admin replier's own nickname (#45-9).
+      if (text.includes('운영자')) expect(key).toBe('notificationReplyAuthorAdmin');
+    }
+  });
+
   it('names no operator in the public 판정 지연 기록 and offers no withdrawal of one (#142)', () => {
     // #173 item 13, decision 3 '#142 지연 사유': the public detail shows the reason and the time,
     // never who recorded it nor when — those words are the admin section's alone.

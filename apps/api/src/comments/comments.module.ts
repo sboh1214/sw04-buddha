@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module.js';
 import { DbModule } from '../infra/db/db.module.js';
 import { LinkReviewModule } from '../link-review/link-review.module.js';
+import { RealtimeModule } from '../realtime/realtime.module.js';
 import { WriteLimitsModule } from '../write-limits/write-limits.module.js';
 import { CommentCursors } from './comment-cursor.js';
 import { CommentsController, PostCommentsController } from './comments.controller.js';
@@ -14,8 +15,9 @@ import { CommentsService } from './comments.service.js';
  */
 @Module({
   // DbModule and AuthModule also serve the guards (SessionGuard, OnboardedGuard); the write limits
-  // and the repeated-link rules (#187) count every comment and edit.
-  imports: [DbModule, AuthModule, WriteLimitsModule, LinkReviewModule],
+  // and the repeated-link rules (#187) count every comment and edit; RealtimeModule signals the
+  // one a new comment's notice reached (#135, `user:notification`).
+  imports: [DbModule, AuthModule, WriteLimitsModule, LinkReviewModule, RealtimeModule],
   controllers: [PostCommentsController, CommentsController],
   providers: [CommentsService, CommentCursors],
 })

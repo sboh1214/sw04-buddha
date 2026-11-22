@@ -245,6 +245,8 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/proposals (integration)', () => {
     const res = await retract(own.id, fresh);
     expect(res.statusCode, res.body).toBe(200);
     expect(proposalSchema.parse(res.json<{ data: unknown }>().data).status).toBe('retracted');
+    // The proposer's own 철회 tells nobody (#135, 52-19 "결론만").
+    expect(await t.db.select().from(schema.notifications)).toEqual([]);
     // Still only its own: another account's proposal is not there for it, and stays 접수.
     const others = await createProposal(t.db, { userId: user.id, phoneHash });
     const refused = await retract(others.id, fresh);

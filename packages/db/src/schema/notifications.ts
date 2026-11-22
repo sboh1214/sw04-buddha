@@ -58,11 +58,12 @@ export const notificationInboxes = pgTable('notification_inboxes', {
 /**
  * One notification of a member's inbox (#53, ADR-0157; N05 §4): a type, its flat parameters and a
  * typed target — never a sentence (the web renders the copy by type) and never another member's
- * identity (read through the target when the list is read, 52-15). Written only by
- * `createNotifications` in the transaction of the event it tells (53-4), which holds the type list
- * (NOTIFICATION_DEFINITIONS): the database holds the shape only — the type's pattern, the category
- * list, an object of params and a target with a kind — so a producer adds a type without a
- * migration, and the tests' own types never ship in the product's list.
+ * identity (52-15: the API reads it when the list is read, through the id the type keeps — a
+ * reply's author through `replyId`, ADR-0161). Written only by `createNotifications` in the
+ * transaction of the event it tells (53-4), which holds the type list (NOTIFICATION_DEFINITIONS):
+ * the database holds the shape only — the type's pattern, the category list, an object of params
+ * and a target with a kind — so a producer adds a type without a migration, and the tests' own
+ * types never ship in the product's list.
  *
  * - `id` is a uuid, not a bigserial: what the member reads by, and a sequence would tell every
  *   member how many notifications everybody gets (as `market_searches`).

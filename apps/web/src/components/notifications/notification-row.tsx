@@ -82,7 +82,15 @@ export function NotificationRow({
         color={unread ? 'fg' : 'fg.muted'}
         data-testid="notification-row-title"
       >
-        {view.known ? <view.Title params={view.params} eventCount={view.eventCount} /> : view.title}
+        {view.known ? (
+          <view.Title
+            params={view.params}
+            eventCount={view.eventCount}
+            replyAuthor={view.replyAuthor}
+          />
+        ) : (
+          view.title
+        )}
       </Text>
       <Text
         as="span"

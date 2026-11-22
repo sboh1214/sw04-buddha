@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import * as z from 'zod';
 import { APPROVAL_REASON_MAX_LENGTH, approvalReasonSchema } from './approvals.js';
 import { MARKET_PAUSE_REASONS } from './market-pause.js';
-import { MARKET_RESULTS } from './enums.js';
+import { MARKET_RESULTS, MODERATION_ACTION_TYPES, RESTRICTION_END_CHANGE_KINDS } from './enums.js';
 import { NOTIFICATION_IDENTITY_PARAM } from './guards/notifications.js';
 import { decideDisputeBodySchema } from './market-dispute.js';
 import { recordJudgementDelayBodySchema } from './market-judgement-delay.js';
+import { PROPOSAL_QUESTION_MAX, PROPOSAL_TRANSITIONS } from './proposals.js';
 import {
+  COMMENT_REPLIED_NOTIFICATION,
   MARKET_CANCELLED_NOTIFICATION,
   MARKET_CLOSED_NOTIFICATION,
   MARKET_DISPUTE_CLOSED_BY_CORRECTION_NOTIFICATION,
@@ -18,6 +20,9 @@ import {
   MARKET_RESUMED_NOTIFICATION,
   MARKET_RULES_SUPPLEMENTED_NOTIFICATION,
   MARKET_SETTLED_NOTIFICATION,
+  MODERATION_ACTION_CANCELLED_NOTIFICATION,
+  MODERATION_ACTION_TAKEN_NOTIFICATION,
+  MODERATION_RESTRICTION_END_CHANGED_NOTIFICATION,
   NOTIFICATION_CATEGORIES,
   NOTIFICATION_DEFINITIONS,
   NOTIFICATION_EVENT_KEY_PATTERN,
@@ -27,10 +32,14 @@ import {
   NOTIFICATION_UNREAD_COUNT_CAP,
   NOTIFIED_CANCEL_REASONS,
   NOTIFIED_DISPUTE_DECISIONS,
+  NOTIFIED_PROPOSAL_DECISIONS,
   ORDER_EXPIRY_CAUSES,
   ORDER_FILLED_NOTIFICATION,
   ORDERS_CANCELLED_NOTIFICATION,
   ORDERS_EXPIRED_NOTIFICATION,
+  POST_REPLIED_NOTIFICATION,
+  PROPOSAL_DECIDED_NOTIFICATION,
+  RESTRICTION_ACTION_TYPES,
   defineNotification,
   notificationCategorySchema,
   notificationParamsSchema,
@@ -38,8 +47,10 @@ import {
   notificationSchema,
   notificationTargetSchema,
   notificationUnreadCountSchema,
+  replyParamsSchema,
   type Notification,
   type OrderFilledParams,
+  type ReplyParams,
 } from './notifications.js';
 
 const notification: Notification = {
@@ -108,7 +119,8 @@ describe('notification targets', () => {
 
   it('refuses an unknown kind, a bad slug and a missing one', () => {
     for (const target of [
-      { kind: 'post', id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' },
+      // A kind no producer leads to yet (#135 made 'post' one).
+      { kind: 'dispute', id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' },
       { kind: 'url', href: 'https://elsewhere.example' },
       { kind: 'market', slug: 'Not A Slug' },
       { kind: 'market', slug: 'ab' },
@@ -173,8 +185,88 @@ describe('notification targets', () => {
     }
   });
 
+  it('lead to the recipient’s own post or 댓글, by ids lower-cased (#135, 52-18, 135-7)', () => {
+    const postId = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+    const commentId = '6fa459ea-ee8a-3ca4-894e-db77e160355e';
+    expect(notificationTargetSchema.parse({ kind: 'post', postId: postId.toUpperCase() })).toEqual({
+      kind: 'post',
+      postId,
+    });
+    expect(
+      notificationTargetSchema.parse({
+        kind: 'comment',
+        postId: postId.toUpperCase(),
+        commentId: commentId.toUpperCase(),
+      }),
+    ).toEqual({ kind: 'comment', postId, commentId });
+    // Nothing beside the ids is kept: no reply, no author, no URL.
+    expect(
+      notificationTargetSchema.parse({
+        kind: 'comment',
+        postId,
+        commentId,
+        replyId: postId,
+        authorId: 'u1',
+        url: '/x',
+      }),
+    ).toEqual({ kind: 'comment', postId, commentId });
+    for (const target of [
+      { kind: 'post' },
+      { kind: 'post', id: postId },
+      { kind: 'post', postId: 'not-a-uuid' },
+      { kind: 'post', postId: null },
+      { kind: 'comment', postId },
+      { kind: 'comment', commentId },
+      { kind: 'comment', postId, commentId: 'not-a-uuid' },
+    ]) {
+      expect(notificationTargetSchema.safeParse(target).success, JSON.stringify(target)).toBe(
+        false,
+      );
+    }
+  });
+
+  it('lead to an action taken on the recipient and to their own proposal (#135, 135-2, 135-7)', () => {
+    const id = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+    expect(
+      notificationTargetSchema.parse({ kind: 'moderation_action', actionId: id.toUpperCase() }),
+    ).toEqual({ kind: 'moderation_action', actionId: id });
+    expect(
+      notificationTargetSchema.parse({ kind: 'proposal', proposalId: id.toUpperCase() }),
+    ).toEqual({ kind: 'proposal', proposalId: id });
+    // Nothing of the report, the operator or the member is kept beside the id.
+    expect(
+      notificationTargetSchema.parse({
+        kind: 'moderation_action',
+        actionId: id,
+        reportId: id,
+        createdBy: 'admin-1',
+        userId: 'u1',
+      }),
+    ).toEqual({ kind: 'moderation_action', actionId: id });
+    for (const target of [
+      { kind: 'moderation_action' },
+      { kind: 'moderation_action', id },
+      { kind: 'moderation_action', actionId: 'not-a-uuid' },
+      { kind: 'proposal' },
+      { kind: 'proposal', id },
+      { kind: 'proposal', proposalId: null },
+    ]) {
+      expect(notificationTargetSchema.safeParse(target).success, JSON.stringify(target)).toBe(
+        false,
+      );
+    }
+  });
+
   it('lists every kind of the union, in its order', () => {
-    expect(NOTIFICATION_TARGET_KINDS).toEqual(['market', 'order', 'order_history']);
+    expect(NOTIFICATION_TARGET_KINDS).toEqual([
+      'market',
+      'order',
+      'order_history',
+      'post',
+      'comment',
+      'moderation_action',
+      'proposal',
+    ]);
     expect(notificationTargetSchema.options.map((option) => option.shape.kind.value)).toEqual([
       ...NOTIFICATION_TARGET_KINDS,
     ]);
@@ -228,12 +320,56 @@ describe('notification DTOs', () => {
       { occurredAt: '2026-11-21 03:00' },
       { readAt: undefined },
       { id: 'not-a-uuid' },
-      { target: { kind: 'post', id: '1' } },
+      { target: { kind: 'dispute', id: '1' } },
       { params: { nested: { a: 1 } } },
     ]) {
       expect(
         notificationSchema.safeParse({ ...notification, ...bad }).success,
         JSON.stringify(bad),
+      ).toBe(false);
+    }
+  });
+
+  it('answers the latest reply’s author on a reply notice, or none (#135, 52-15, 135-4)', () => {
+    const reply: Notification = {
+      ...notification,
+      type: 'post_replied',
+      category: 'community',
+      params: {
+        replyId: '6fa459ea-ee8a-3ca4-894e-db77e160355e',
+        replyCreatedAt: '2026-11-21T03:00:00.000Z',
+      },
+      target: { kind: 'post', postId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' },
+    };
+    const member = {
+      kind: 'member' as const,
+      publicId: '7k2m9q4xab',
+      nickname: '첫눈러버',
+      imageUrl: null,
+      isAdmin: false,
+    };
+    for (const replyAuthor of [member, { ...member, isAdmin: true }, { kind: 'former_member' }]) {
+      expect(notificationSchema.parse({ ...reply, replyAuthor })).toEqual({
+        ...reply,
+        replyAuthor,
+      });
+    }
+    // null: the reply hidden, deleted or gone; absent: any other type (its JSON unchanged).
+    expect(notificationSchema.parse({ ...reply, replyAuthor: null })).toEqual({
+      ...reply,
+      replyAuthor: null,
+    });
+    expect(notificationSchema.parse(notification)).toEqual(notification);
+    expect('replyAuthor' in notificationSchema.parse(notification)).toBe(false);
+    for (const replyAuthor of [
+      '7k2m9q4xab',
+      { kind: 'member', nickname: '첫눈러버' },
+      { ...member, publicId: 'not-a-public-id' },
+      { kind: 'guest' },
+    ]) {
+      expect(
+        notificationSchema.safeParse({ ...reply, replyAuthor }).success,
+        JSON.stringify(replyAuthor),
       ).toBe(false);
     }
   });
@@ -256,16 +392,22 @@ describe('notification DTOs', () => {
   });
 });
 
-describe('NOTIFICATION_DEFINITIONS (#53, 52-20; #134; #54; #188)', () => {
-  it('holds the 거래 three of #134, then the 시장 five of #54, then the 판정·정산 six of #188', () => {
-    // Pinned. Each producer edits this pin as it appends its own: #135 (커뮤니티, 52-19's 제안),
-    // #144 (정정·보상). 시작 Coin, a re-grant's result, a review's rejection and a market's
-    // opening are no notification (52-20).
+describe('NOTIFICATION_DEFINITIONS (#53, 52-20; #134; #54; #188; #135)', () => {
+  it('holds the 거래 three of #134, the 시장 five of #54, the 판정·정산 six of #188, then the 커뮤니티 six of #135', () => {
+    // Pinned. Each producer edits this pin as it appends its own: #144 (정정·보상) next. 시작
+    // Coin, a re-grant's result, a review's rejection and a market's opening are no notification
+    // (52-20); nor is a like or a report's intake (D5, 52-20).
     const market = (type: string) => ({
       type,
       category: 'market',
       targets: ['market'],
       merges: false,
+    });
+    const community = (type: string, target: string, merges = false) => ({
+      type,
+      category: 'community',
+      targets: [target],
+      merges,
     });
     expect(
       NOTIFICATION_DEFINITIONS.map((definition) => ({
@@ -301,6 +443,14 @@ describe('NOTIFICATION_DEFINITIONS (#53, 52-20; #134; #54; #188)', () => {
       market('market_dispute_decided'),
       market('market_dispute_closed_by_correction'),
       market('market_settled'),
+      // #135 (ADR-0161; 52-21: every one a 커뮤니티 notification; only the two reply types merge,
+      // 52-7; each leads where 135-7 says).
+      community('post_replied', 'post', true),
+      community('comment_replied', 'comment', true),
+      community('moderation_action_taken', 'moderation_action'),
+      community('moderation_action_cancelled', 'moderation_action'),
+      community('moderation_restriction_end_changed', 'moderation_action'),
+      community('proposal_decided', 'proposal'),
     ]);
     expect(NOTIFICATION_DEFINITIONS).toEqual([
       ORDER_FILLED_NOTIFICATION,
@@ -317,11 +467,44 @@ describe('NOTIFICATION_DEFINITIONS (#53, 52-20; #134; #54; #188)', () => {
       MARKET_DISPUTE_DECIDED_NOTIFICATION,
       MARKET_DISPUTE_CLOSED_BY_CORRECTION_NOTIFICATION,
       MARKET_SETTLED_NOTIFICATION,
+      POST_REPLIED_NOTIFICATION,
+      COMMENT_REPLIED_NOTIFICATION,
+      MODERATION_ACTION_TAKEN_NOTIFICATION,
+      MODERATION_ACTION_CANCELLED_NOTIFICATION,
+      MODERATION_RESTRICTION_END_CHANGED_NOTIFICATION,
+      PROPOSAL_DECIDED_NOTIFICATION,
     ]);
-    expect(NOTIFICATION_DEFINITIONS).toHaveLength(14);
+    expect(NOTIFICATION_DEFINITIONS).toHaveLength(20);
     for (const definition of NOTIFICATION_DEFINITIONS) {
       expect(NOTIFICATION_TYPE_PATTERN.test(definition.type), definition.type).toBe(true);
     }
+  });
+
+  it('keeps 시장 for the market_ names and 커뮤니티 for #135’s, the two reply types merging alone', () => {
+    // The web holds every `market_*` type to `market` and the market target: no #135 type takes
+    // the prefix (`proposal_decided`, not `market_proposal_decided`).
+    const COMMUNITY = [
+      'post_replied',
+      'comment_replied',
+      'moderation_action_taken',
+      'moderation_action_cancelled',
+      'moderation_restriction_end_changed',
+      'proposal_decided',
+    ];
+    for (const definition of NOTIFICATION_DEFINITIONS) {
+      if (definition.type.startsWith('market_')) {
+        expect(definition.category, definition.type).toBe('market');
+        expect(definition.targets, definition.type).toEqual(['market']);
+      }
+      expect(definition.category === 'community', definition.type).toBe(
+        COMMUNITY.includes(definition.type),
+      );
+    }
+    expect(
+      NOTIFICATION_DEFINITIONS.filter(
+        (definition) => definition.category === 'community' && definition.merge !== null,
+      ).map((definition) => definition.type),
+    ).toEqual(['post_replied', 'comment_replied']);
   });
 
   it('types a definition by its own params, its merge included', () => {
@@ -880,6 +1063,259 @@ describe('판정·정산 알림 (#188, ADR-0160; 52-1·52-11~52-15, 188-1~188-6)
         expect(NOTIFICATION_IDENTITY_PARAM.test(key), `${definition.type}.${key}`).toBe(false);
         expect(
           /qty|quantity|count|pnl|profit|loss|expected|previous|holder|watcher|operator|admin|submitter|decider/i.test(
+            key,
+          ),
+          `${definition.type}.${key}`,
+        ).toBe(false);
+      }
+    }
+  });
+});
+
+describe('커뮤니티 알림 (#135, ADR-0161; 52-7·52-15~52-19, 135-1~135-7)', () => {
+  const tooLong = 'x'.repeat(NOTIFICATION_PARAM_STRING_MAX + 1);
+  const at = '2026-09-07T06:00:00.000Z';
+  // Instants as `toISOString()` writes them: anything else is refused.
+  const notInstants = ['2026-09-07 15:00', '2026-09-07', 'tomorrow', '', 1_788_000_000_000, null];
+  const keys = (definition: { params: z.ZodType }) =>
+    Object.keys((definition.params as z.ZodObject).shape).sort();
+  const ID_A = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+  const ID_B = '6fa459ea-ee8a-3ca4-894e-db77e160355e';
+  const reply = (replyId: string, replyCreatedAt: string): ReplyParams => ({
+    replyId,
+    replyCreatedAt,
+  });
+
+  it('post_replied and comment_replied: the latest reply’s id and time, never its body or author (52-15, 135-4)', () => {
+    for (const { params } of [POST_REPLIED_NOTIFICATION, COMMENT_REPLIED_NOTIFICATION]) {
+      expect(params).toBe(replyParamsSchema);
+      expect(params.parse(reply(ID_A, at))).toEqual(reply(ID_A, at));
+      // An id as a request may spell it is lower-cased: the row's id, as the lists answer it.
+      expect(params.parse(reply(ID_A.toUpperCase(), at))).toEqual(reply(ID_A, at));
+      // What is beside them is not kept: the body, the author, the post (135-4, ADR-0157 결정 3).
+      expect(
+        params.parse({ ...reply(ID_A, at), body: '답글 본문', authorId: 'u1', nickname: '눈사람' }),
+      ).toEqual(reply(ID_A, at));
+      for (const replyId of ['not-a-uuid', '', 42, null]) {
+        expect(params.safeParse({ replyId, replyCreatedAt: at }).success, String(replyId)).toBe(
+          false,
+        );
+      }
+      for (const replyCreatedAt of notInstants) {
+        expect(
+          params.safeParse({ replyId: ID_A, replyCreatedAt }).success,
+          String(replyCreatedAt),
+        ).toBe(false);
+      }
+      expect(params.safeParse({ replyId: ID_A }).success).toBe(false);
+    }
+  });
+
+  it('merges to the later reply by (created_at, id), whatever the order (52-7, ADR-0158 결정 1)', () => {
+    for (const { merge } of [POST_REPLIED_NOTIFICATION, COMMENT_REPLIED_NOTIFICATION]) {
+      const earlier = reply(ID_B, '2026-09-07T06:00:00.000Z');
+      const later = reply(ID_A, '2026-09-07T06:00:00.001Z');
+      // The later instant wins though its id is the smaller.
+      expect(merge!(earlier, later)).toEqual(later);
+      expect(merge!(later, earlier)).toEqual(later);
+      // Equal instants: the larger id, the post page's order.
+      const tieLow = reply(ID_A, at);
+      const tieHigh = reply(ID_B, at);
+      expect(merge!(tieLow, tieHigh)).toEqual(tieHigh);
+      expect(merge!(tieHigh, tieLow)).toEqual(tieHigh);
+      // The same reply again stays itself.
+      expect(merge!(tieLow, tieLow)).toEqual(tieLow);
+      // Associative: three replies in every order end on the same one.
+      const third = reply('00000000-0000-4000-8000-000000000000', '2026-09-08T00:00:00.000Z');
+      const all = [earlier, later, third];
+      const orders = [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+      ];
+      for (const order of orders) {
+        const [a, b, c] = order.map((i) => all[i]!);
+        expect(merge!(merge!(a!, b!), c!), order.join()).toEqual(third);
+        expect(merge!(a!, merge!(b!, c!)), order.join()).toEqual(third);
+      }
+      // Compared as instants, not as strings: a held row written without milliseconds.
+      expect(
+        merge!(reply(ID_A, '2026-09-07T06:00:01Z'), reply(ID_B, '2026-09-07T06:00:00.999Z')),
+      ).toEqual(reply(ID_A, '2026-09-07T06:00:01Z'));
+    }
+  });
+
+  it('moderation_action_taken: the action’s kind and, for a restriction only, its own end (52-16, 135-2, 135-6)', () => {
+    const { params } = MODERATION_ACTION_TAKEN_NOTIFICATION;
+    expect(RESTRICTION_ACTION_TYPES).toEqual(['writing_restriction', 'account_restriction']);
+    for (const action of MODERATION_ACTION_TYPES) {
+      // null: 무기한 for a restriction, nothing for the five others.
+      expect(params.parse({ action, endsAt: null }), action).toEqual({ action, endsAt: null });
+    }
+    for (const action of RESTRICTION_ACTION_TYPES) {
+      expect(params.parse({ action, endsAt: at })).toEqual({ action, endsAt: at });
+      for (const endsAt of notInstants.filter((value) => value !== null)) {
+        expect(params.safeParse({ action, endsAt }).success, String(endsAt)).toBe(false);
+      }
+    }
+    // Only a restriction has an end.
+    for (const action of MODERATION_ACTION_TYPES.filter(
+      (type) => !(RESTRICTION_ACTION_TYPES as readonly string[]).includes(type),
+    )) {
+      expect(params.safeParse({ action, endsAt: at }).success, action).toBe(false);
+    }
+    for (const bad of [
+      { action: 'dismiss', endsAt: null },
+      { action: 'report', endsAt: null },
+      { action: 'cancel', endsAt: null },
+      { action: 'hide' },
+      { endsAt: null },
+    ]) {
+      expect(params.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+    // Nothing of the reason, the note, the subject, the operator or a report is kept (135-2).
+    expect(
+      params.parse({
+        action: 'hide',
+        endsAt: null,
+        reason: 'spam',
+        note: '설명',
+        postId: ID_A,
+        createdBy: 'admin-1',
+        reportCount: 3,
+      }),
+    ).toEqual({ action: 'hide', endsAt: null });
+  });
+
+  it('moderation_action_cancelled: the cancelled action’s kind only (52-16)', () => {
+    const { params } = MODERATION_ACTION_CANCELLED_NOTIFICATION;
+    for (const action of MODERATION_ACTION_TYPES) {
+      expect(params.parse({ action })).toEqual({ action });
+    }
+    expect(
+      params.parse({ action: 'warning', cancelReason: '이의를 받아들임', cancelledBy: 'admin-1' }),
+    ).toEqual({ action: 'warning' });
+    for (const bad of [{}, { action: 'dismiss' }, { action: 'report' }, { action: null }]) {
+      expect(params.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it('moderation_restriction_end_changed: a restriction, 감경 or 조기 해제, and the new end (52-16, 135-5 (h))', () => {
+    const { params } = MODERATION_RESTRICTION_END_CHANGED_NOTIFICATION;
+    expect(RESTRICTION_END_CHANGE_KINDS).toEqual(['shorten', 'lift']);
+    for (const action of RESTRICTION_ACTION_TYPES) {
+      for (const change of RESTRICTION_END_CHANGE_KINDS) {
+        const changed = { action, change, endsAt: at };
+        expect(params.parse(changed)).toEqual(changed);
+      }
+    }
+    for (const bad of [
+      { action: 'warning', change: 'shorten', endsAt: at },
+      { action: 'hide', change: 'lift', endsAt: at },
+      { action: 'writing_restriction', change: 'cancel', endsAt: at },
+      { action: 'writing_restriction', change: 'extend', endsAt: at },
+      { action: 'writing_restriction', change: 'lift', endsAt: null },
+      { action: 'writing_restriction', change: 'lift' },
+      ...notInstants.map((endsAt) => ({
+        action: 'account_restriction',
+        change: 'shorten',
+        endsAt,
+      })),
+    ]) {
+      expect(params.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+    // Not the end before, the reason, the operator or the approval (ADR-0082, 135-2).
+    expect(
+      params.parse({
+        action: 'writing_restriction',
+        change: 'shorten',
+        endsAt: at,
+        previousEndsAt: null,
+        reason: '감경 사유',
+        approvalId: ID_A,
+      }),
+    ).toEqual({ action: 'writing_restriction', change: 'shorten', endsAt: at });
+  });
+
+  it('proposal_decided: 채택 or 반려 and the proposer’s own question, never a reason (52-19)', () => {
+    const { params } = PROPOSAL_DECIDED_NOTIFICATION;
+    expect(NOTIFIED_PROPOSAL_DECISIONS).toEqual(['adopted', 'rejected']);
+    // Both final: a proposal is decided once, so `proposal:<id>` keys it soundly.
+    for (const decision of NOTIFIED_PROPOSAL_DECISIONS) {
+      expect(PROPOSAL_TRANSITIONS[decision]).toEqual([]);
+      const decided = { decision, question: '첫눈이 서울에 올까?' };
+      expect(params.parse(decided)).toEqual(decided);
+    }
+    const question = (text: string) => params.safeParse({ decision: 'adopted', question: text });
+    // The generic cap in UTF-16 units; no minimum: a raw value never rolls a decision back.
+    expect(question('가'.repeat(NOTIFICATION_PARAM_STRING_MAX)).success).toBe(true);
+    expect(question('𝔸'.repeat(NOTIFICATION_PARAM_STRING_MAX / 2)).success).toBe(true);
+    expect(question(tooLong).success).toBe(false);
+    expect(question('').success).toBe(true);
+    expect(question('{question} $& $1 $$ {{x}}').success).toBe(true);
+    for (const bad of [
+      { decision: 'submitted', question: '질문' },
+      { decision: 'reviewing', question: '질문' },
+      { decision: 'retracted', question: '질문' },
+      { decision: '채택', question: '질문' },
+      { decision: 'adopted', question: null },
+      { decision: 'adopted' },
+    ]) {
+      expect(params.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+    // Not the rejection's reason or explanation, the memo, the market or the deciding operator.
+    expect(
+      params.parse({
+        decision: 'rejected',
+        question: '질문',
+        rejectionReason: 'duplicate',
+        rejectionExplanation: '설명',
+        adoptionMemo: '메모',
+        marketId: ID_A,
+        decidedBy: 'admin-1',
+      }),
+    ).toEqual({ decision: 'rejected', question: '질문' });
+  });
+
+  it('keeps the proposal question cap within the param cap: a raised one would roll decisions back', () => {
+    // The question is the proposer's (varchar(PROPOSAL_QUESTION_MAX) in code points ≤ 2 UTF-16
+    // units each): raising the cap past half the param cap would make a 채택 or 반려 refused.
+    expect(PROPOSAL_QUESTION_MAX).toBeLessThanOrEqual(NOTIFICATION_PARAM_STRING_MAX);
+    expect(2 * PROPOSAL_QUESTION_MAX).toBeLessThanOrEqual(NOTIFICATION_PARAM_STRING_MAX);
+    expect(
+      PROPOSAL_DECIDED_NOTIFICATION.params.safeParse({
+        decision: 'adopted',
+        question: '𝔸'.repeat(PROPOSAL_QUESTION_MAX),
+      }).success,
+    ).toBe(true);
+  });
+
+  it('stores flat values only, none naming an author, an operator, a reporter, a reason or a body (#135 AC 4)', () => {
+    expect(keys(POST_REPLIED_NOTIFICATION)).toEqual(['replyCreatedAt', 'replyId']);
+    expect(keys(COMMENT_REPLIED_NOTIFICATION)).toEqual(['replyCreatedAt', 'replyId']);
+    expect(keys(MODERATION_ACTION_TAKEN_NOTIFICATION)).toEqual(['action', 'endsAt']);
+    expect(keys(MODERATION_ACTION_CANCELLED_NOTIFICATION)).toEqual(['action']);
+    expect(keys(MODERATION_RESTRICTION_END_CHANGED_NOTIFICATION)).toEqual([
+      'action',
+      'change',
+      'endsAt',
+    ]);
+    expect(keys(PROPOSAL_DECIDED_NOTIFICATION)).toEqual(['decision', 'question']);
+    for (const definition of [
+      POST_REPLIED_NOTIFICATION,
+      COMMENT_REPLIED_NOTIFICATION,
+      MODERATION_ACTION_TAKEN_NOTIFICATION,
+      MODERATION_ACTION_CANCELLED_NOTIFICATION,
+      MODERATION_RESTRICTION_END_CHANGED_NOTIFICATION,
+      PROPOSAL_DECIDED_NOTIFICATION,
+    ]) {
+      for (const key of keys(definition)) {
+        expect(NOTIFICATION_IDENTITY_PARAM.test(key), `${definition.type}.${key}`).toBe(false);
+        expect(
+          /operator|admin|reporter|report|reason|note|memo|explanation|author|body|text|by$|count|subject|post|comment|holding|order|balance/i.test(
             key,
           ),
           `${definition.type}.${key}`,

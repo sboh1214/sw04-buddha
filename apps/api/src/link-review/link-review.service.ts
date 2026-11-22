@@ -85,7 +85,11 @@ type UsesBefore = {
  *    ModerationService) — so a write waiting for a link's lock never holds up the one that has it.
  *    The write may hold its post's comment count by then (its comment's insert, #48's trigger),
  *    which a hiding's `hidden_at` moves: were that hiding to hold the comment named FOR UPDATE, the
- *    two would wait for each other (ADR-0083 7-13);
+ *    two would wait for each other (ADR-0083 7-13). One step comes after `record` in a new
+ *    comment's transaction: its reply notice (#135, ADR-0161 결정 5 — `createNotifications`,
+ *    whose gate never waits and whose only wait is the recipient's unread reply notice FOR
+ *    UPDATE, held otherwise only by another replier past its own link locks, the recipient's read
+ *    marks or the retention run, SKIP LOCKED) — so no lock cycle comes back through it;
  * 2. the database clock, and each link's uses in the window before this write: the writer's posts
  *    and comments (`same_account`) and the people (`many_accounts`);
  * 3. the uses (`link_uses`), all in one insert;

@@ -7,8 +7,11 @@ import {
 } from '@buddha/shared';
 import { copy } from '@/copy';
 import type { InboxNotification } from './api';
+import { MY_MODERATION_PATH } from './moderation';
 import { myOrderPath } from './my';
 import { myHistoryPath } from './my-history';
+import { postPath } from './posts';
+import { MY_PROPOSALS_PATH } from './proposals';
 
 /**
  * 알림함 (#53, ADR-0157; N05 §4·§8, owner answers 53-1…53-11) as the member's screens read it: MY ›
@@ -121,7 +124,12 @@ type TargetOfKind = {
  * status, so the path is the same whatever the market has become since. #134's two (ADR-0158,
  * 52-4): one of the member's own orders, its 주문 상세 (ADR-0141 — the final state, the filled and
  * the ended quantity); and the member's ended orders on 거래·정산 이력 (ADR-0143, the default
- * list), of one market or, for an account event, of all.
+ * list), of one market or, for an account event, of all. #135's four (ADR-0161, 135-7 '화면 맨
+ * 위'): a reply notice's post or 댓글 leads to the post page's top — published, its placeholder with
+ * its comments, or 'post-gone' (135-4: the notice stays, the page says what is there); an action
+ * on the member to MY 조치·신고 내역 (135-2) and a proposal's decision to MY 내 제안, each at its
+ * top. The 댓글, action and proposal ids the targets keep are not read yet: a later anchor can use
+ * them with no data change (targets are frozen, `notifications_kept`).
  */
 const NOTIFICATION_TARGET_PATHS: {
   [Kind in NotificationTargetKind]: (target: TargetOfKind[Kind]) => string;
@@ -133,6 +141,10 @@ const NOTIFICATION_TARGET_PATHS: {
   order: (target) => myOrderPath(target.orderId),
   order_history: (target) =>
     myHistoryPath(target.marketId === null ? {} : { market: target.marketId }),
+  post: (target) => postPath(target.postId),
+  comment: (target) => postPath(target.postId),
+  moderation_action: () => MY_MODERATION_PATH,
+  proposal: () => MY_PROPOSALS_PATH,
 };
 
 /** A target's path, by its kind's entry (generic, so the entry and the target are one kind's). */

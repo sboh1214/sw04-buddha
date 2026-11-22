@@ -4,6 +4,7 @@ import { IdentityModule } from '../identity/identity.module.js';
 import { DbModule } from '../infra/db/db.module.js';
 import { RedisModule } from '../infra/redis/redis.module.js';
 import { MarketsModule } from '../markets/markets.module.js';
+import { RealtimeModule } from '../realtime/realtime.module.js';
 import { AdminProposalsController } from './admin-proposals.controller.js';
 import { AdminProposalsService } from './admin-proposals.service.js';
 import { ProposalRestrictions } from './proposal-restrictions.js';
@@ -17,9 +18,10 @@ import { ProposalsService } from './proposals.service.js';
  * RedisModule for the guards: AdminGuard reads the role through the Redis cache, OnboardedGuard the
  * onboarding from Postgres. `ProposalRestrictions` asks the writing and the account restriction
  * (#185, #139) through moderation/restrictions.ts, plain functions of the transaction.
+ * RealtimeModule signals the proposer a 채택's or a 반려's notice reached (#135).
  */
 @Module({
-  imports: [DbModule, RedisModule, AuthModule, IdentityModule, MarketsModule],
+  imports: [DbModule, RedisModule, AuthModule, IdentityModule, MarketsModule, RealtimeModule],
   controllers: [MeProposalsController, AdminProposalsController],
   providers: [ProposalsService, AdminProposalsService, ProposalRestrictions],
 })

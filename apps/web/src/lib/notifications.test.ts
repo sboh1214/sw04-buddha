@@ -52,8 +52,8 @@ const notification = (id: string, fields: Partial<InboxNotification> = {}): Inbo
 });
 
 /**
- * The copy of #53, #134's 거래 알림 (ADR-0158), #54's 시장 상태 알림 (ADR-0159) and #188's 판정·정산
- * 알림 (ADR-0160): what a member reads of the inbox.
+ * The copy of #53, #134's 거래 알림 (ADR-0158), #54's 시장 상태 알림 (ADR-0159), #188's 판정·정산
+ * 알림 (ADR-0160) and #135's 커뮤니티 알림 (ADR-0161): what a member reads of the inbox.
  */
 const NOTIFICATION_COPY = [
   copy.notificationsReadAll,
@@ -88,10 +88,30 @@ const NOTIFICATION_COPY = [
   copy.notificationDisputeClosedByCorrection,
   copy.notificationMarketSettled,
   copy.notificationMarketSettledWatcher,
+  copy.notificationPostReplied,
+  copy.notificationPostRepliedMerged,
+  copy.notificationPostRepliedNoAuthor,
+  copy.notificationPostRepliedMergedNoAuthor,
+  copy.notificationCommentReplied,
+  copy.notificationCommentRepliedMerged,
+  copy.notificationCommentRepliedNoAuthor,
+  copy.notificationCommentRepliedMergedNoAuthor,
+  copy.notificationReplyAuthorAdmin,
+  copy.notificationModerationTaken,
+  copy.notificationModerationTakenTerm,
+  copy.notificationModerationCancelled,
+  copy.notificationRestrictionShortened,
+  copy.notificationRestrictionLifted,
+  copy.notificationProposalDecided,
 ];
 
 const ORDER_ID = '7d0f9a2e-4b1c-4e8d-9a3f-1c2b3d4e5f60';
 const MARKET_ID = '3e5a7c9b-2d4f-4a6b-8c1d-0e2f4a6b8c0d';
+const POST_ID = '5c1e9f3a-7b2d-4e6f-8a0c-2d4f6a8c0e1b';
+const COMMENT_ID = '6d2f0a4b-8c3e-4f7a-9b1d-3e5a7b9d1f2c';
+const ACTION_ID = '8f4b2c6d-0e5a-4b9c-8d3f-5a7c9e1b3d4e';
+const PROPOSAL_ID = '9a5c3d7e-1f6b-4cad-9e4a-6b8dae2c4e5f';
+const REPLY_ID = '1b6d4e8f-2a7c-4dbe-8f5b-7c9ebf3d5f60';
 
 describe('알림함 keys (#53, ADR-0157)', () => {
   it('keys the count and the list under one private root, the account last (ADR-0091)', () => {
@@ -180,8 +200,32 @@ describe('a notification’s words and its link', () => {
     expect(notificationHref({ kind: 'order_history' })).toBeNull();
   });
 
+  it('leads a reply notice to its post’s top, an action to 조치·신고 내역 and a decision to 내 제안 (#135)', () => {
+    // ADR-0161, 135-7 '화면 맨 위': the post page — published, its placeholder or 'post-gone'
+    // (135-4) — for a 댓글 on the member's post and for a 대댓글 under the member's 댓글 alike; MY
+    // 조치·신고 내역 (135-2) and MY 내 제안 at their tops. The ids the targets keep beside are for a
+    // later anchor (no path reads them yet).
+    expect(notificationHref({ kind: 'post', postId: POST_ID })).toBe(`/community/posts/${POST_ID}`);
+    expect(notificationHref({ kind: 'post', postId: POST_ID.toUpperCase() })).toBe(
+      `/community/posts/${POST_ID}`,
+    );
+    expect(notificationHref({ kind: 'comment', postId: POST_ID, commentId: COMMENT_ID })).toBe(
+      `/community/posts/${POST_ID}`,
+    );
+    expect(notificationHref({ kind: 'moderation_action', actionId: ACTION_ID })).toBe(
+      '/my/moderation',
+    );
+    expect(notificationHref({ kind: 'proposal', proposalId: PROPOSAL_ID })).toBe('/my/proposals');
+    // A missing or malformed id: nowhere (the schema refuses it).
+    expect(notificationHref({ kind: 'post', id: POST_ID })).toBeNull();
+    expect(notificationHref({ kind: 'post', postId: '../admin' })).toBeNull();
+    expect(notificationHref({ kind: 'comment', postId: POST_ID })).toBeNull();
+    expect(notificationHref({ kind: 'moderation_action' })).toBeNull();
+    expect(notificationHref({ kind: 'proposal', proposalId: 'first-snow' })).toBeNull();
+  });
+
   it('leads nowhere for a kind it does not know or a target it cannot read (never a URL from data)', () => {
-    expect(notificationHref({ kind: 'post', id: 'p1' })).toBeNull();
+    expect(notificationHref({ kind: 'dispute', id: 'p1' })).toBeNull();
     expect(notificationHref({ kind: 'market' })).toBeNull();
     expect(notificationHref({ kind: 'market', slug: '../admin' })).toBeNull();
     expect(notificationHref({ kind: 'market', slug: 'https://example.com' })).toBeNull();
@@ -237,8 +281,8 @@ describe('a notification’s words and its link', () => {
 
   it('has one renderer per type, its words the guard registry’s text (#113)', () => {
     // #53 shipped none (52-20); #134 the 거래 three (ADR-0158), #54 the 시장 five (ADR-0159), #188
-    // the 판정·정산 six (ADR-0160). Each producer adds the definition, the guard entry and the
-    // renderer.
+    // the 판정·정산 six (ADR-0160), #135 the 커뮤니티 six (ADR-0161). Each producer adds the
+    // definition, the guard entry and the renderer.
     const types = NOTIFICATION_DEFINITIONS.map((definition: { type: string }) => definition.type);
     expect(types).toEqual([
       'order_filled',
@@ -255,6 +299,12 @@ describe('a notification’s words and its link', () => {
       'market_dispute_decided',
       'market_dispute_closed_by_correction',
       'market_settled',
+      'post_replied',
+      'comment_replied',
+      'moderation_action_taken',
+      'moderation_action_cancelled',
+      'moderation_restriction_end_changed',
+      'proposal_decided',
     ]);
     expect(Object.keys(NOTIFICATION_RENDERERS).sort()).toEqual([...types].sort());
     expect(Object.keys(NOTIFICATION_TYPE_REGISTRY).sort()).toEqual([...types].sort());
@@ -279,6 +329,12 @@ describe('a notification’s words and its link', () => {
     expect(NOTIFICATION_RENDERERS.market_dispute_decided.copy).toHaveLength(3);
     expect(NOTIFICATION_RENDERERS.market_dispute_closed_by_correction.copy).toHaveLength(2);
     expect(NOTIFICATION_RENDERERS.market_settled.copy).toHaveLength(5);
+    expect(NOTIFICATION_RENDERERS.post_replied.copy).toHaveLength(6);
+    expect(NOTIFICATION_RENDERERS.comment_replied.copy).toHaveLength(6);
+    expect(NOTIFICATION_RENDERERS.moderation_action_taken.copy).toHaveLength(11);
+    expect(NOTIFICATION_RENDERERS.moderation_action_cancelled.copy).toHaveLength(8);
+    expect(NOTIFICATION_RENDERERS.moderation_restriction_end_changed.copy).toHaveLength(5);
+    expect(NOTIFICATION_RENDERERS.proposal_decided.copy).toHaveLength(3);
     // Every 시장 type — #54's five and #188's six — is category `market` (52-21) and leads to the
     // market's detail alone (54-4, 188-4).
     for (const definition of NOTIFICATION_DEFINITIONS.filter((each) =>
@@ -287,6 +343,27 @@ describe('a notification’s words and its link', () => {
       expect(definition.category, definition.type).toBe('market');
       expect(definition.targets, definition.type).toEqual(['market']);
       expect(definition.merge, definition.type).toBeNull();
+    }
+    // Every 커뮤니티 type — #135's six — is category `community` (52-16, 52-19, 52-21; N05 §4),
+    // and only the two reply types merge (52-7).
+    const community = [
+      'post_replied',
+      'comment_replied',
+      'moderation_action_taken',
+      'moderation_action_cancelled',
+      'moderation_restriction_end_changed',
+      'proposal_decided',
+    ];
+    expect(
+      NOTIFICATION_DEFINITIONS.filter((each) => each.category === 'community').map(
+        (each) => each.type,
+      ),
+    ).toEqual(community);
+    for (const definition of NOTIFICATION_DEFINITIONS.filter((each) =>
+      community.includes(each.type),
+    )) {
+      const merges = definition.type === 'post_replied' || definition.type === 'comment_replied';
+      expect(definition.merge === null, definition.type).toBe(!merges);
     }
   });
 
@@ -494,6 +571,134 @@ describe('a notification’s words and its link', () => {
     }
   });
 
+  it('draws each 커뮤니티 type through its renderer with the row’s count and replyAuthor, and the fallback for params its definition refuses (#135)', () => {
+    const replyParams = { replyId: REPLY_ID, replyCreatedAt: '2026-11-21T03:00:00.000Z' };
+    const viewOf = (fields: Partial<InboxNotification>) =>
+      notificationView(notification('n1', { category: 'community', ...fields }));
+    const titleOf = (fields: Partial<InboxNotification>) => {
+      const view = viewOf(fields);
+      if (!view.known) throw new Error(`${String(fields.type)} is a type this web renders`);
+      return view.Title({
+        params: view.params,
+        eventCount: view.eventCount,
+        replyAuthor: view.replyAuthor,
+      });
+    };
+    const author = {
+      kind: 'member',
+      publicId: 'k7m2p9qx4z',
+      nickname: '눈사람',
+      imageUrl: null,
+      isAdmin: false,
+    } as const;
+    const postTarget = { kind: 'post', postId: POST_ID } as const;
+    const commentTarget = { kind: 'comment', postId: POST_ID, commentId: COMMENT_ID } as const;
+    // The view carries the row's replyAuthor to the Title (52-15).
+    expect(
+      viewOf({
+        type: 'post_replied',
+        params: replyParams,
+        target: postTarget,
+        replyAuthor: author,
+      }),
+    ).toMatchObject({ known: true, replyAuthor: author, eventCount: 1 });
+    expect(
+      titleOf({
+        type: 'post_replied',
+        params: replyParams,
+        target: postTarget,
+        eventCount: 3,
+        replyAuthor: author,
+      }),
+    ).toBe('내 글에 새 댓글 3개 · 마지막: 눈사람');
+    expect(
+      titleOf({
+        type: 'comment_replied',
+        params: replyParams,
+        target: commentTarget,
+        replyAuthor: { ...author, isAdmin: true },
+      }),
+    ).toBe('내 댓글에 새 답글 · 눈사람(운영자)');
+    // The latest reply hidden or deleted (null), and a closed replier.
+    expect(
+      titleOf({
+        type: 'comment_replied',
+        params: replyParams,
+        target: commentTarget,
+        eventCount: 2,
+        replyAuthor: null,
+      }),
+    ).toBe('내 댓글에 새 답글 2개');
+    expect(
+      titleOf({
+        type: 'post_replied',
+        params: replyParams,
+        target: postTarget,
+        replyAuthor: { kind: 'former_member' },
+      }),
+    ).toBe('내 글에 새 댓글 · 탈퇴한 사용자');
+    const actionTarget = { kind: 'moderation_action', actionId: ACTION_ID } as const;
+    expect(
+      titleOf({
+        type: 'moderation_action_taken',
+        params: { action: 'hide', endsAt: null },
+        target: actionTarget,
+      }),
+    ).toBe('운영 조치: 숨김');
+    // A restriction's end is drawn through a component — the hook for the member's zone lives in
+    // it (my-notifications.test.tsx draws it); 무기한 too.
+    expect(
+      isValidElement(
+        titleOf({
+          type: 'moderation_action_taken',
+          params: { action: 'writing_restriction', endsAt: '2026-09-08T06:00:00.000Z' },
+          target: actionTarget,
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      titleOf({
+        type: 'moderation_action_cancelled',
+        params: { action: 'account_restriction' },
+        target: actionTarget,
+      }),
+    ).toBe('운영 조치 취소: 계정 제한');
+    expect(
+      titleOf({
+        type: 'moderation_restriction_end_changed',
+        params: {
+          action: 'writing_restriction',
+          change: 'lift',
+          endsAt: '2026-09-01T06:00:00.000Z',
+        },
+        target: actionTarget,
+      }),
+    ).toBe('운영 조치 조기 해제: 작성 제한');
+    expect(
+      titleOf({
+        type: 'proposal_decided',
+        params: { decision: 'rejected', question: '{x} $&' },
+        target: { kind: 'proposal', proposalId: PROPOSAL_ID },
+      }),
+    ).toBe('시장 제안 반려 · {x} $&');
+    // Params the definition refuses — a reply id that is no uuid, an end on a hide, a change of a
+    // warning, a decision not told — draw the category's fallback, never a broken sentence.
+    for (const [type, params] of [
+      ['post_replied', { replyId: 'r1', replyCreatedAt: '2026-11-21T03:00:00.000Z' }],
+      ['comment_replied', { replyId: REPLY_ID }],
+      ['moderation_action_taken', { action: 'hide', endsAt: '2026-09-08T06:00:00.000Z' }],
+      ['moderation_action_taken', { action: 'dismiss', endsAt: null }],
+      ['moderation_action_cancelled', {}],
+      [
+        'moderation_restriction_end_changed',
+        { action: 'warning', change: 'shorten', endsAt: '2026-09-08T06:00:00.000Z' },
+      ],
+      ['proposal_decided', { decision: 'reviewing', question: '첫눈' }],
+    ] as const) {
+      expect(viewOf({ type, params }), type).toEqual({ known: false, title: '커뮤니티 알림' });
+    }
+  });
+
   it('says unread by readAt alone, and puts a read’s answer in place of its row', () => {
     expect(isUnread(notification('n1'))).toBe(true);
     expect(isUnread(notification('n1', { readAt: '2026-11-21T04:00:00.000Z' }))).toBe(false);
@@ -544,6 +749,7 @@ describe('the inbox’s words (#113, N05 §4)', () => {
       './trade-notifications.ts',
       './market-notifications.ts',
       './judgement-notifications.ts',
+      './community-notifications.ts',
       '../components/notifications/notification-row.tsx',
       '../components/notifications/unread-count.tsx',
       '../app/my/notifications/my-notifications.tsx',

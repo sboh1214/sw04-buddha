@@ -7,6 +7,19 @@ export {
 } from './account-types.js';
 export { closeDb, createDb, type CreateDbOptions, type Db } from './client.js';
 export {
+  commentEventKey,
+  moderationActionNotificationInput,
+  moderationCancelNotificationInput,
+  proposalDecisionNotificationInput,
+  proposalEventKey,
+  replyNotificationInput,
+  restrictionEndChangeEventKey,
+  restrictionEndChangeNotificationInput,
+  type ReplyNoticeParent,
+  type ReplyNoticeReply,
+  type RestrictionEndChangeNotice,
+} from './community-notifications.js';
+export {
   confirmationHold,
   decideMarketDispute,
   hasMarketFill,

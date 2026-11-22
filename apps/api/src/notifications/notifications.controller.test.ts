@@ -10,16 +10,28 @@
  * NOT_FOUND and touches nothing; every write names the account on screen (403), comes from our
  * Origin (403) and needs a session (401); a restricted account reads and marks its inbox (53-6);
  * `user:notification` reaches the member's room after a write that changed something and never
- * after one that did not (53-1). Skips when TEST_* are unset.
+ * after one that did not (53-1). A reply notice (#135, ADR-0161; 52-15) answers its latest reply's
+ * author's public face, read with the list and the read mark — the current nickname, '탈퇴한
+ * 사용자', the 운영자 mark — and none for a reply hidden or deleted since; other types answer no
+ * such field. Skips when TEST_* are unset.
  */
 import { randomUUID } from 'node:crypto';
-import { createNotifications, schema, type NotificationInput } from '@buddha/db';
+import {
+  createNotifications,
+  replyNotificationInput,
+  schema,
+  type Db,
+  type NotificationInput,
+} from '@buddha/db';
 import {
   TEST_NOTIFICATION,
   TEST_NOTIFICATION_DEFINITIONS,
+  closeAccount,
   completeOnboarding,
+  createComment,
   createMarket,
   createModerationAction,
+  createPost,
   createTestNotification,
 } from '@buddha/db/test';
 import {
@@ -34,12 +46,14 @@ import {
   type ValidationIssue,
 } from '@buddha/shared';
 import { and, eq, isNull } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { sleep, waitForMessages } from '../test/wait.js';
+import { replyAuthorsOf } from './notifications.service.js';
 
 /** setup-env.ts fixes WEB_ORIGIN to this. */
 const TRUSTED_ORIGIN = 'http://localhost:3000';
@@ -477,5 +491,130 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/notifications (integration)', () => {
     const [, all] = received as { ts: string }[];
     const [row] = (await rowsOf(member)).filter((stored) => stored.id !== id);
     expect(Date.parse(all!.ts)).toBeGreaterThanOrEqual(row!.readAt!.getTime());
+  });
+
+  // ---- the reply author (#135, ADR-0161; 52-15) ----------------------------------------------
+
+  describe('the reply author (#135, ADR-0161; 52-15)', () => {
+    let replier: TestUser;
+    let postRow: Awaited<ReturnType<typeof createPost>>;
+    beforeEach(async () => {
+      replier = await signUpTestUser(t);
+      await completeOnboarding(t.db, { userId: replier.id });
+      postRow = await createPost(t.db, { marketId: market.id, authorId: member.id });
+    });
+
+    /** A 댓글 of `who` on the member's post and its notice through the real write path. */
+    async function replied(who: TestUser = replier) {
+      const comment = await createComment(t.db, { postId: postRow.id, authorId: who.id });
+      const input = replyNotificationInput(
+        { id: comment.id, createdAt: comment.createdAt, authorId: who.id },
+        { kind: 'post', postId: postRow.id, authorId: member.id },
+      );
+      await t.db.transaction((tx) => createNotifications(tx, [input!]));
+      return comment;
+    }
+    const faceOf = async (who: TestUser) => {
+      const [profile] = await t.db
+        .select()
+        .from(schema.profiles)
+        .where(eq(schema.profiles.userId, who.id));
+      return {
+        kind: 'member',
+        publicId: profile!.publicId,
+        nickname: profile!.nickname,
+        imageUrl: null,
+        isAdmin: profile!.role === 'admin',
+      };
+    };
+    const onlyItem = async () => {
+      const { items } = await pageOf();
+      expect(items).toHaveLength(1);
+      return items[0]!;
+    };
+
+    it('answers the latest reply’s author’s public face on the list and on the read mark, never the account id', async () => {
+      await replied(other);
+      const comment = await replied();
+      const listed = await onlyItem();
+      expect(listed).toMatchObject({
+        type: 'post_replied',
+        eventCount: 2,
+        params: { replyId: comment.id },
+        replyAuthor: await faceOf(replier),
+      });
+      const res = await get(BASE);
+      expect(res.body).not.toContain(replier.id);
+      const read = await readOf(listed.id);
+      expect(read.notification).toEqual({ ...listed, readAt: read.notification.readAt });
+      expect(read.notification.readAt).not.toBeNull();
+    });
+
+    it('follows the author’s current face: a new nickname, the 운영자 mark, then 탈퇴한 사용자', async () => {
+      await replied();
+      await t.db
+        .update(schema.profiles)
+        .set({ nickname: 'user_zz99' })
+        .where(eq(schema.profiles.userId, replier.id));
+      expect((await onlyItem()).replyAuthor).toMatchObject({
+        kind: 'member',
+        nickname: 'user_zz99',
+      });
+      await t.db
+        .update(schema.profiles)
+        .set({ role: 'admin' })
+        .where(eq(schema.profiles.userId, replier.id));
+      await t.app.get(AdminGuard).invalidate(replier.id);
+      expect((await onlyItem()).replyAuthor).toEqual(await faceOf(replier));
+      expect((await onlyItem()).replyAuthor).toMatchObject({ isAdmin: true });
+      await t.db
+        .update(schema.profiles)
+        .set({ role: 'user' })
+        .where(eq(schema.profiles.userId, replier.id));
+      await closeAccount(t.db, replier.id);
+      expect((await onlyItem()).replyAuthor).toEqual({ kind: 'former_member' });
+    });
+
+    it('answers no author once the latest reply is hidden or deleted (135-4), and none for other types', async () => {
+      const comment = await replied();
+      await t.db
+        .update(schema.postComments)
+        .set({ hiddenAt: new Date() })
+        .where(eq(schema.postComments.id, comment.id));
+      const hidden = await onlyItem();
+      expect(hidden.replyAuthor).toBeNull();
+      expect(hidden.eventCount).toBe(1);
+      await t.db
+        .update(schema.postComments)
+        .set({ hiddenAt: null, deletedAt: new Date() })
+        .where(eq(schema.postComments.id, comment.id));
+      expect((await onlyItem()).replyAuthor).toBeNull();
+      expect((await readOf(hidden.id)).notification.replyAuthor).toBeNull();
+      await notify(member);
+      const { items } = await pageOf();
+      const other = items.find((item) => item.type === TEST_NOTIFICATION.type)!;
+      expect('replyAuthor' in other).toBe(false);
+      expect('replyAuthor' in (await readOf(other.id)).notification).toBe(false);
+    });
+
+    it('reads the authors of a page in one statement, and none for a page without a reply notice', async () => {
+      await replied();
+      await notify(member);
+      const statements: string[] = [];
+      const recording: Db = drizzle({
+        client: t.db.$client,
+        schema,
+        casing: 'snake_case',
+        logger: { logQuery: (text) => statements.push(text) },
+      });
+      const rows = await rowsOf(member);
+      const replies = rows.filter((row) => row.type === 'post_replied');
+      const others = rows.filter((row) => row.type !== 'post_replied');
+      expect(await replyAuthorsOf(recording, others)).toEqual(new Map());
+      expect(statements).toEqual([]);
+      const authors = await replyAuthorsOf(recording, [...rows, ...replies]);
+      expect(statements).toHaveLength(1);
+      expect([...authors.values()]).toEqual([await faceOf(replier)]);
+    });
   });
 });
