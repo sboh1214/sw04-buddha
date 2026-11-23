@@ -34,6 +34,7 @@ import { THEME_MARKETS_KEY, THEME_RESULTS_KEY } from '@/lib/themes';
 import { ADMIN_THEME_MARKETS_KEY } from './use-admin-themes';
 import { ADMIN_RECONCILIATION_KEY } from './use-reconciliation';
 import { adminMarketMakerKey } from './use-admin-market-maker';
+import { ADMIN_MARKET_WORK_KEY } from './use-admin-market-work';
 import { ADMIN_OPERATIONS_KEY } from './use-admin-operations';
 import { treasuryBalanceKey } from './use-treasury';
 
@@ -178,6 +179,20 @@ export function useAdminMarket(routeId: string) {
     ...adminMarketQueryOptions(routeId),
     refetchInterval: (query) => adminMarketPollInterval(query.state),
   });
+}
+
+/**
+ * The same market read for the header of its 작업 이력 (#145, ADR-0164): the title and the status,
+ * under the detail's key, but never re-read by a timer — the detail's poll while the payout runs
+ * (`adminMarketPollInterval`) is that screen's alone, and the history asks nothing every few
+ * seconds (ADR-0138; the budget is use-admin-market-work.test.ts').
+ */
+export function adminMarketHeaderQueryOptions(routeId: string) {
+  return { ...adminMarketQueryOptions(routeId), refetchInterval: false as const };
+}
+
+export function useAdminMarketHeader(routeId: string) {
+  return useQuery(adminMarketHeaderQueryOptions(routeId));
 }
 
 /** One market's links (`GET /admin/markets/:id/related`): any status, the latest link first. */
@@ -476,10 +491,11 @@ export function useMarketFills(id: string, enabled: boolean) {
  * its rows), the 일시 중단 결정 대기 queue (#114, alike), the 판정 승인 대기 queue (#152: a
  * registration, an approval, a 반려 and a 철회 each change it), both halves of 이의 접수 (#175: a 기각
  * and a 수용 move a dispute from one to the other), 운영 대기열's three lists (#145: a pause, a
- * close, a judgement or a payout moves a market into, along or out of them), every other market's
- * 관련 시장 list, and every public 관련 시장 list. Each row of an admin list badges the market at
- * its other end with its status and title, so a market linked to this one would otherwise go on
- * showing it as it was — a market just approved still '검수 중' under the hint that says one in
+ * close, a judgement or a payout moves a market into, along or out of them), every market's 작업 이력
+ * (#145, ADR-0164: a write adds an entry to this one's, and a link's to its other end's), every
+ * other market's 관련 시장 list, and every public 관련 시장 list. Each row of an admin list badges the
+ * market at its other end with its status and title, so a market linked to this one would otherwise
+ * go on showing it as it was — a market just approved still '검수 중' under the hint that says one in
  * review is not shown, for as long as `staleTime` keeps that list fresh (review on #65). Which
  * lists hold this market is the server's to say, so every one but this market's own is asked; its
  * own holds only other markets, and on this market's screen it is mounted, so including it would
@@ -518,6 +534,8 @@ export function invalidateMarket(queryClient: QueryClient, id: string) {
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_DISPUTES_KEY }),
     // 운영 대기열 (#145, ADR-0163): a write can add a row to a list, move it or take it away.
     queryClient.invalidateQueries({ queryKey: ADMIN_OPERATIONS_KEY }),
+    // 작업 이력 (#145, ADR-0164): every market's, as a link's other end records the write too.
+    queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_WORK_KEY }),
     queryClient.invalidateQueries({
       queryKey: ADMIN_RELATED_MARKETS_KEY,
       predicate: (query) => query.queryHash !== ownLinks,

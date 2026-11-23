@@ -28713,6 +28713,122 @@
         ]
       }
     },
+    "/api/v1/admin/categories/changes": {
+      "get": {
+        "operationId": "adminListCategoryChanges",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "Opaque; `meta.nextCursor` of the previous page.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AdminCategoryChange"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/PageMeta"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "카테고리 변경 기록 (145-10): every add, rename, reorder, hide and show, newest first, with its admin, its time and the values before and after; categories by their current names",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/v1/admin/categories/order": {
       "put": {
         "operationId": "adminReorderCategories",
@@ -30458,6 +30574,146 @@
           }
         ],
         "summary": "Run one payout attempt of a settling market now (정산 다시 시도), by one admin with a reason: the same checks as the worker’s automatic retry every minute, nothing of the payout or the checks changeable. 200 answers the attempt’s outcome — `settled`, or `failed` with the step’s error and attempts — and both are recorded with the reason",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/markets/{id}/work-history": {
+      "get": {
+        "operationId": "adminListMarketWorkHistory",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 20,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "kind",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "edit",
+                "pause",
+                "judgement",
+                "settlement",
+                "other"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AdminMarketWorkEntry"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/PageMeta"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "시장별 작업 이력 (145-5): the market’s admin actions, approval requests and decisions, the records bound to it and its system events (actor null, 시스템), oldest first, each with its actor, time and reason or the basis that stands for one; `kind` keeps one of 수정·중단·판정·지급·그 밖. Bot controls and themes are not in it; an unknown market is empty",
         "tags": [
           "admin"
         ]
@@ -48798,6 +49054,349 @@
         ],
         "additionalProperties": false
       },
+      "AdminCategoryChange": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AdminCategoryCreated"
+          },
+          {
+            "$ref": "#/components/schemas/AdminCategoryRenamed"
+          },
+          {
+            "$ref": "#/components/schemas/AdminCategoryReordered"
+          },
+          {
+            "$ref": "#/components/schemas/AdminCategoryHidden"
+          },
+          {
+            "$ref": "#/components/schemas/AdminCategoryShown"
+          }
+        ]
+      },
+      "AdminCategoryCreated": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/AdminAccountActor"
+          },
+          "category": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminCategoryRef"
+              }
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "category_create"
+            ]
+          },
+          "details": {
+            "type": "object",
+            "properties": {
+              "nameKo": {
+                "type": "string"
+              },
+              "parent": {
+                "nullable": true,
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/AdminCategoryRef"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "nameKo",
+              "parent"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "at",
+          "actor",
+          "category",
+          "type",
+          "details"
+        ],
+        "additionalProperties": false
+      },
+      "AdminCategoryRef": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "nameKo": {
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "nameKo"
+        ],
+        "additionalProperties": false
+      },
+      "AdminCategoryRenamed": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/AdminAccountActor"
+          },
+          "category": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminCategoryRef"
+              }
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "category_rename"
+            ]
+          },
+          "details": {
+            "type": "object",
+            "properties": {
+              "before": {
+                "type": "string"
+              },
+              "after": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "before",
+              "after"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "at",
+          "actor",
+          "category",
+          "type",
+          "details"
+        ],
+        "additionalProperties": false
+      },
+      "AdminCategoryReordered": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/AdminAccountActor"
+          },
+          "category": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminCategoryRef"
+              }
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "category_reorder"
+            ]
+          },
+          "details": {
+            "type": "object",
+            "properties": {
+              "parent": {
+                "nullable": true,
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/AdminCategoryRef"
+                  }
+                ]
+              },
+              "before": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AdminCategoryRef"
+                }
+              },
+              "after": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AdminCategoryRef"
+                }
+              }
+            },
+            "required": [
+              "parent",
+              "before",
+              "after"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "at",
+          "actor",
+          "category",
+          "type",
+          "details"
+        ],
+        "additionalProperties": false
+      },
+      "AdminCategoryHidden": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/AdminAccountActor"
+          },
+          "category": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminCategoryRef"
+              }
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "category_hide"
+            ]
+          },
+          "details": {
+            "type": "object",
+            "properties": {
+              "before": {
+                "type": "boolean"
+              },
+              "after": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "before",
+              "after"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "at",
+          "actor",
+          "category",
+          "type",
+          "details"
+        ],
+        "additionalProperties": false
+      },
+      "AdminCategoryShown": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/AdminAccountActor"
+          },
+          "category": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminCategoryRef"
+              }
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "category_show"
+            ]
+          },
+          "details": {
+            "type": "object",
+            "properties": {
+              "before": {
+                "type": "boolean"
+              },
+              "after": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "before",
+              "after"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "at",
+          "actor",
+          "category",
+          "type",
+          "details"
+        ],
+        "additionalProperties": false
+      },
       "CreateCategoryBody": {
         "type": "object",
         "properties": {
@@ -49953,6 +50552,268 @@
           "outcome",
           "settlementLastError",
           "settlementAttempts"
+        ],
+        "additionalProperties": false
+      },
+      "AdminMarketWorkEntry": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "market_event",
+              "admin_action",
+              "settlement_step"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "fill_classification_request",
+              "fill_classification_approve",
+              "fill_classification_reject",
+              "fill_classification_retract",
+              "market_conflict_declare",
+              "reconciliation_run",
+              "reconciliation_recovery_request",
+              "reconciliation_recovery_approve",
+              "reconciliation_recovery_reject",
+              "reconciliation_recovery_retract",
+              "market_create",
+              "market_update",
+              "market_submit",
+              "market_approve",
+              "market_reject",
+              "market_revert",
+              "market_reschedule",
+              "market_supplement_request",
+              "market_supplement_approve",
+              "market_supplement_reject",
+              "market_supplement_retract",
+              "market_pause",
+              "market_pause_decision_request",
+              "market_pause_decision_approve",
+              "market_pause_decision_reject",
+              "market_pause_decision_retract",
+              "market_judgement_request",
+              "market_judgement_approve",
+              "market_judgement_reject",
+              "market_judgement_retract",
+              "market_dispute_dismiss",
+              "market_dispute_accept",
+              "market_delay_record",
+              "market_open",
+              "market_close",
+              "market_resolve",
+              "market_link",
+              "market_unlink",
+              "proposal_adopt",
+              "proposal_link",
+              "market_price_protection_change",
+              "market_cancel_request",
+              "market_cancel_approve",
+              "market_cancel_reject",
+              "market_cancel_retract",
+              "market_settlement_retry",
+              "created",
+              "submitted",
+              "approved",
+              "rejected",
+              "reverted",
+              "open_rescheduled",
+              "opened",
+              "closed",
+              "finalized",
+              "rules_edited",
+              "resolved",
+              "settling",
+              "rules_supplemented",
+              "paused",
+              "resumed",
+              "provisional",
+              "judgement_corrected",
+              "judgement_delay_recorded",
+              "price_protection_changed",
+              "cancelled",
+              "settlement_step"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "edit",
+              "pause",
+              "judgement",
+              "settlement",
+              "other"
+            ]
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "actor": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminAccountActor"
+              }
+            ]
+          },
+          "reason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "reasonBasis": {
+            "type": "string",
+            "enum": [
+              "recorded",
+              "changed_items",
+              "actor_time",
+              "retracted",
+              "system"
+            ]
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminMarketWorkChange"
+            }
+          },
+          "relatedMarket": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminMarketWorkRelatedMarket"
+              }
+            ]
+          },
+          "settlement": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminMarketWorkSettlement"
+              }
+            ]
+          },
+          "retryOutcome": {
+            "nullable": true,
+            "type": "string",
+            "enum": [
+              "settled",
+              "failed"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "type",
+          "kind",
+          "at",
+          "actor",
+          "reason",
+          "reasonBasis",
+          "details",
+          "changes",
+          "relatedMarket",
+          "settlement",
+          "retryOutcome"
+        ],
+        "additionalProperties": false
+      },
+      "AdminMarketWorkChange": {
+        "type": "object",
+        "properties": {
+          "field": {
+            "type": "string",
+            "enum": [
+              "slug",
+              "title",
+              "description",
+              "yesCondition",
+              "noCondition",
+              "eventDeadline",
+              "primarySource",
+              "fallbackSources",
+              "fallbackCondition",
+              "longDelayDays",
+              "delayHandling",
+              "categoryId",
+              "tags",
+              "imageUrl",
+              "scheduledOpenAt",
+              "scheduledAnnouncementAt",
+              "scheduledJudgementAt",
+              "judgementTimeZone",
+              "closeAt",
+              "leadCloseGapMinutes",
+              "priceProtectionTicks",
+              "currentLiquidityVersion"
+            ]
+          },
+          "before": {},
+          "after": {}
+        },
+        "required": [
+          "field",
+          "before",
+          "after"
+        ],
+        "additionalProperties": false
+      },
+      "AdminMarketWorkRelatedMarket": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title"
+        ],
+        "additionalProperties": false
+      },
+      "AdminMarketWorkSettlement": {
+        "type": "object",
+        "properties": {
+          "stepStatus": {
+            "$ref": "#/components/schemas/SettlementStepStatus"
+          },
+          "settlementAttempts": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "settlementLastError": {
+            "type": "string"
+          },
+          "completedAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "stepStatus",
+          "settlementAttempts",
+          "settlementLastError",
+          "completedAt"
         ],
         "additionalProperties": false
       }

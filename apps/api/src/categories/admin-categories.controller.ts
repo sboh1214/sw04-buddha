@@ -7,17 +7,22 @@ import {
   Patch,
   Post,
   Put,
+  Query,
   UseGuards,
 } from '@nestjs/common';
-import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiCookieAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import {
   INT4_MAX,
+  adminCategoryChangeSchema,
+  adminCategoryChangesQuerySchema,
   adminCategorySchema,
   createCategoryBodySchema,
   expectedAccountBodySchema,
   renameCategoryBodySchema,
   reorderCategoriesBodySchema,
   type AdminCategory,
+  type AdminCategoryChange,
+  type AdminCategoryChangesQuery,
   type CreateCategoryBody,
   type ExpectedAccountBody,
   type RenameCategoryBody,
@@ -29,7 +34,9 @@ import { type SessionUser } from '../auth/auth.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import { assertExpectedAccount } from '../auth/expected-account.js';
 import { SessionGuard } from '../auth/session.guard.js';
-import { ApiData, ApiErrors } from '../common/openapi/api-response.decorators.js';
+import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
+import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
+import { CURSOR_QUERY_PARAMS } from '../common/openapi/cursor-query.js';
 import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { CategoryAdminService } from './category-admin.service.js';
@@ -52,7 +59,9 @@ export const categoryIdParamSchema = z
  * OnboardedGuard (409 for an admin that has not finished the onboarding, ADR-0072). Every write
  * records the admin, the time and the value before and after in `admin_actions` when it changes
  * something (admin-audit.test.ts's AUDITED); none asks a reason or a second admin (ADR-0093
- * decision 2 #172 item 1). There is no DELETE: a category is hidden, and shown again.
+ * decision 2 #172 item 1). There is no DELETE: a category is hidden, and shown again. Those
+ * records are read back as 변경 기록 (`GET changes`, 145-10, ADR-0164), declared right after the
+ * list GET and before the `:id` routes.
  *
  * Every write names the admin the screen shows (`expectedAccountId` in the body;
  * assertExpectedAccount, ADR-0092): a mismatch with the cookie is refused (403 FORBIDDEN naming the
@@ -76,6 +85,24 @@ export class AdminCategoriesController {
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED')
   adminListCategories(): Promise<AdminCategory[]> {
     return this.categories.list();
+  }
+
+  @Get('changes')
+  @ApiOperation({
+    operationId: 'adminListCategoryChanges',
+    summary:
+      '카테고리 변경 기록 (145-10): every add, rename, reorder, hide and show, newest first, with ' +
+      'its admin, its time and the values before and after; categories by their current names',
+  })
+  @ApiQuery(CURSOR_QUERY_PARAMS[0])
+  @ApiQuery(CURSOR_QUERY_PARAMS[1])
+  @ApiPageOf(adminCategoryChangeSchema)
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'VALIDATION_ERROR')
+  async adminListCategoryChanges(
+    @Query({ schema: adminCategoryChangesQuerySchema }) query: AdminCategoryChangesQuery,
+  ): Promise<ApiPage<AdminCategoryChange>> {
+    const page = await this.categories.changes(query);
+    return new ApiPage(page.data, page.meta);
   }
 
   @Post()

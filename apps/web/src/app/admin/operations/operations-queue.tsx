@@ -25,11 +25,13 @@ export interface OperationsQueueQuery {
  * scrolls inside, never the page — under a notice with 다시 시도 when a refresh failed over rows
  * held (`-stale`), and 더 보기 (`-more`) while a page follows, with the notice of a 더 보기 that
  * failed above it (`-more-failed`, `LoadMoreFailed`). `prefix` is the list's test id
- * (`admin-operations-closing`…), on the root too.
+ * (`admin-operations-closing`…), on the root too. A market's 작업 이력 and 카테고리 변경 기록 (#145
+ * part 2, ADR-0164) are drawn in the same frame.
  */
 export function OperationsQueue({
   prefix,
   title,
+  intro,
   empty,
   list,
   count,
@@ -38,6 +40,8 @@ export function OperationsQueue({
 }: {
   prefix: string;
   title: string;
+  /** A line under the heading (카테고리 변경 기록's, #145 part 2); none on 운영 대기열. */
+  intro?: string;
   empty: string;
   list: OperationsQueueQuery;
   /** How many rows are held: 0 draws the empty sentence. */
@@ -50,6 +54,11 @@ export function OperationsQueue({
       <Heading as="h4" size="md">
         {title}
       </Heading>
+      {intro !== undefined && (
+        <Text fontSize="sm" color="fg.muted" data-testid={`${prefix}-intro`}>
+          {intro}
+        </Text>
+      )}
       {list.isPending ? (
         <Skeleton height="24" />
       ) : list.isLoadingError ? (

@@ -1,7 +1,16 @@
 import { type APIRequestContext, type APIResponse, type Page } from '@playwright/test';
 import type { AdminCategory, Category } from '@buddha/shared';
 import { copy } from '../src/copy';
-import { accountIdOf, adminAccount, expect, freshTag, signIn, test } from './helpers';
+import {
+  accountIdOf,
+  adminAccount,
+  expect,
+  expectNoSideScroll,
+  freshTag,
+  meOf,
+  signIn,
+  test,
+} from './helpers';
 
 /**
  * 카테고리 관리 (#17, ADR-0093 decision 2 #172 item 1 and decision 3's #17 rows): an admin adds a
@@ -20,7 +29,9 @@ import { accountIdOf, adminAccount, expect, freshTag, signIn, test } from './hel
  * (a new category goes last among its siblings), behind every position the others read. Its
  * names and slugs carry a fresh tag, so the checks are presence and absence of its own rows, never
  * the whole list. The top-level category is hidden at the end — through the API if the test
- * stopped before it did — so it leaves the header of every later run.
+ * stopped before it did — so it leaves the header of every later run. Under the tree, the 변경 기록
+ * (#145, ADR-0164; 145-10) shows the rename first, with the operator and the names before and
+ * after.
  */
 
 /** `{ data }` out of the success envelope, the body in the message on a failure. */
@@ -173,6 +184,21 @@ test.describe('카테고리 관리 (#17)', () => {
       await expect(page.getByTestId(`admin-category-rename-form-${subA.slug}`)).toHaveCount(0);
       await expect(childNames).toHaveText([renamedA, subB.name]);
       await expect(page.getByTestId(`admin-category-row-${subA.slug}`)).toContainText(subA.slug);
+
+      // --- 변경 기록 (#145, ADR-0164; 145-10), under the tree: the rename comes first — newest
+      // first — as 이름 바꾸기, with the category's name, the operator and its names before → after.
+      const changes = page.getByTestId('category-changes');
+      await expect(changes).toContainText(copy.adminCategoryChanges);
+      await expect(page.getByTestId('category-changes-intro')).toHaveText(
+        copy.adminCategoryChangesHint,
+      );
+      const latest = page.getByTestId('category-changes-list').locator('tbody > tr').first();
+      await expect(latest).toHaveAttribute('data-type', 'category_rename');
+      await expect(latest.getByTestId(/-type$/)).toHaveText(copy.adminCategoryRename);
+      await expect(latest.getByTestId(/-category$/)).toHaveText(renamedA);
+      await expect(latest.getByTestId(/-actor$/)).toHaveText((await meOf(admin)).profile.nickname);
+      await expect(latest.getByTestId(/-values$/)).toHaveText(`${subA.name} → ${renamedA}`);
+      await expectNoSideScroll(page);
 
       // --- 위로: within its parent, the whole group sent in its new order.
       await letToastsGo(page);

@@ -158,6 +158,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/categories/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 카테고리 변경 기록 (145-10): every add, rename, reorder, hide and show, newest first, with its admin, its time and the values before and after; categories by their current names */
+        get: operations["adminListCategoryChanges"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/categories/order": {
         parameters: {
             query?: never;
@@ -1180,6 +1197,23 @@ export type paths = {
         put?: never;
         /** Retract a waiting supplement the acting admin requested (철회), in any status, before anyone decides it; nothing changes */
         post: operations["adminRetractMarketSupplement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/work-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 시장별 작업 이력 (145-5): the market’s admin actions, approval requests and decisions, the records bound to it and its system events (actor null, 시스템), oldest first, each with its actor, time and reason or the basis that stands for one; `kind` keeps one of 수정·중단·판정·지급·그 밖. Bot controls and themes are not in it; an unknown market is empty */
+        get: operations["adminListMarketWorkHistory"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4421,6 +4455,82 @@ export type components = {
             slug: string;
             sortOrder: number;
         };
+        AdminCategoryChange: components["schemas"]["AdminCategoryCreated"] | components["schemas"]["AdminCategoryRenamed"] | components["schemas"]["AdminCategoryReordered"] | components["schemas"]["AdminCategoryHidden"] | components["schemas"]["AdminCategoryShown"];
+        AdminCategoryCreated: {
+            actor: components["schemas"]["AdminAccountActor"];
+            /** Format: date-time */
+            at: string;
+            category: components["schemas"]["AdminCategoryRef"] | null;
+            details: {
+                nameKo: string;
+                parent: components["schemas"]["AdminCategoryRef"] | null;
+            };
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            type: "category_create";
+        };
+        AdminCategoryHidden: {
+            actor: components["schemas"]["AdminAccountActor"];
+            /** Format: date-time */
+            at: string;
+            category: components["schemas"]["AdminCategoryRef"] | null;
+            details: {
+                after: boolean;
+                before: boolean;
+            };
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            type: "category_hide";
+        };
+        AdminCategoryRef: {
+            id: number;
+            nameKo: string | null;
+        };
+        AdminCategoryRenamed: {
+            actor: components["schemas"]["AdminAccountActor"];
+            /** Format: date-time */
+            at: string;
+            category: components["schemas"]["AdminCategoryRef"] | null;
+            details: {
+                after: string;
+                before: string;
+            };
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            type: "category_rename";
+        };
+        AdminCategoryReordered: {
+            actor: components["schemas"]["AdminAccountActor"];
+            /** Format: date-time */
+            at: string;
+            category: components["schemas"]["AdminCategoryRef"] | null;
+            details: {
+                after: components["schemas"]["AdminCategoryRef"][];
+                before: components["schemas"]["AdminCategoryRef"][];
+                parent: components["schemas"]["AdminCategoryRef"] | null;
+            };
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            type: "category_reorder";
+        };
+        AdminCategoryShown: {
+            actor: components["schemas"]["AdminAccountActor"];
+            /** Format: date-time */
+            at: string;
+            category: components["schemas"]["AdminCategoryRef"] | null;
+            details: {
+                after: boolean;
+                before: boolean;
+            };
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            type: "category_show";
+        };
         AdminClassifiableFill: {
             amountCoin: components["schemas"]["CoinAmount"];
             classification: components["schemas"]["FillClassification"] | null;
@@ -5202,6 +5312,47 @@ export type components = {
             /** @enum {string} */
             status: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
             title: string;
+        };
+        AdminMarketWorkChange: {
+            after: unknown;
+            before: unknown;
+            /** @enum {string} */
+            field: "slug" | "title" | "description" | "yesCondition" | "noCondition" | "eventDeadline" | "primarySource" | "fallbackSources" | "fallbackCondition" | "longDelayDays" | "delayHandling" | "categoryId" | "tags" | "imageUrl" | "scheduledOpenAt" | "scheduledAnnouncementAt" | "scheduledJudgementAt" | "judgementTimeZone" | "closeAt" | "leadCloseGapMinutes" | "priceProtectionTicks" | "currentLiquidityVersion";
+        };
+        AdminMarketWorkEntry: {
+            actor: components["schemas"]["AdminAccountActor"] | null;
+            /** Format: date-time */
+            at: string;
+            changes: components["schemas"]["AdminMarketWorkChange"][];
+            details: {
+                [key: string]: unknown;
+            };
+            id: string;
+            /** @enum {string} */
+            kind: "edit" | "pause" | "judgement" | "settlement" | "other";
+            reason: string | null;
+            /** @enum {string} */
+            reasonBasis: "recorded" | "changed_items" | "actor_time" | "retracted" | "system";
+            relatedMarket: components["schemas"]["AdminMarketWorkRelatedMarket"] | null;
+            /** @enum {string|null} */
+            retryOutcome: "settled" | "failed" | null;
+            settlement: components["schemas"]["AdminMarketWorkSettlement"] | null;
+            /** @enum {string} */
+            source: "market_event" | "admin_action" | "settlement_step";
+            /** @enum {string} */
+            type: "fill_classification_request" | "fill_classification_approve" | "fill_classification_reject" | "fill_classification_retract" | "market_conflict_declare" | "reconciliation_run" | "reconciliation_recovery_request" | "reconciliation_recovery_approve" | "reconciliation_recovery_reject" | "reconciliation_recovery_retract" | "market_create" | "market_update" | "market_submit" | "market_approve" | "market_reject" | "market_revert" | "market_reschedule" | "market_supplement_request" | "market_supplement_approve" | "market_supplement_reject" | "market_supplement_retract" | "market_pause" | "market_pause_decision_request" | "market_pause_decision_approve" | "market_pause_decision_reject" | "market_pause_decision_retract" | "market_judgement_request" | "market_judgement_approve" | "market_judgement_reject" | "market_judgement_retract" | "market_dispute_dismiss" | "market_dispute_accept" | "market_delay_record" | "market_open" | "market_close" | "market_resolve" | "market_link" | "market_unlink" | "proposal_adopt" | "proposal_link" | "market_price_protection_change" | "market_cancel_request" | "market_cancel_approve" | "market_cancel_reject" | "market_cancel_retract" | "market_settlement_retry" | "created" | "submitted" | "approved" | "rejected" | "reverted" | "open_rescheduled" | "opened" | "closed" | "finalized" | "rules_edited" | "resolved" | "settling" | "rules_supplemented" | "paused" | "resumed" | "provisional" | "judgement_corrected" | "judgement_delay_recorded" | "price_protection_changed" | "cancelled" | "settlement_step";
+        };
+        AdminMarketWorkRelatedMarket: {
+            /** Format: uuid */
+            id: string;
+            title: string;
+        };
+        AdminMarketWorkSettlement: {
+            /** Format: date-time */
+            completedAt: string | null;
+            settlementAttempts: number;
+            settlementLastError: string;
+            stepStatus: components["schemas"]["SettlementStepStatus"];
         };
         AdminModerationAction: {
             /** @description True when the record is about the admin reading it: the reporter, the description and the operators are withheld (null) */
@@ -9431,6 +9582,77 @@ export interface operations {
             };
             /** @description NOT_FOUND */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListCategoryChanges: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminCategoryChange"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14750,6 +14972,79 @@ export interface operations {
                 };
             };
             /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListMarketWorkHistory: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                kind?: "edit" | "pause" | "judgement" | "settlement" | "other";
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarketWorkEntry"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -636,6 +636,13 @@ const KST_CALLERS: Readonly<Record<string, { names: readonly string[]; reason: s
     reason:
       '운영 대기열 (#145, ADR-0163): when a 처리 멈춤 row’s automatic transition was due (145-4)',
   },
+  'lib/market-work.ts': {
+    names: ['actionRows', 'instant', 'marketWorkValueText'],
+    reason:
+      '작업 이력 (#145, ADR-0164): a changed time item, and the times an action’s details hold ' +
+      '(a reschedule, a judgement’s dispute deadline, a delay record’s next review), with the ' +
+      'event rows it reads as the event log does',
+  },
 };
 
 /**
