@@ -240,6 +240,11 @@ export const ledgerKeys = {
   approvalRequest: (approvalRequestId: string) => approvalRequestId,
   /** BOT_RECALL: a market has one immutable terminal completion, including a zero completion. */
   marketMakerRecall: (marketId: string) => marketId,
+  /**
+   * JUDGEMENT_COMPENSATION (#144, ADR-0166): the approved compensation request and the account it
+   * pays — one request pays every listed account once (144-2; #73 8항 "승인 요청 id로 한 번만").
+   */
+  judgementCompensation: (approvalId: string, userId: string) => `${approvalId}:${userId}`,
 } as const;
 
 export interface LedgerEntryInput {

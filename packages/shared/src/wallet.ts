@@ -87,9 +87,10 @@ export const ledgerEntrySchema = z
     refType: ledgerRefTypeSchema,
     refId: z.string(),
     /**
-     * A correction's member-facing reason; null on a market's event (a settlement's memo names
-     * the market as it was titled, which a market no longer public may not show); otherwise the
-     * event's own memo (a kept coupon's …).
+     * A correction's member-facing reason, and a 판정 오류 보상's (#144, ADR-0166; 144-12: the
+     * reason its request wrote for the members, never the internal one); null on any other
+     * market's event (a settlement's memo names the market as it was titled, which a market no
+     * longer public may not show); otherwise the event's own memo (a kept coupon's …).
      */
     memo: z.string().nullable(),
     /** The event's market (`ledger_entries.market_id`); null for a grant, a correction … */

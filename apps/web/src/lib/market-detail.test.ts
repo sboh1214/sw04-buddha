@@ -273,7 +273,11 @@ describe('the judging record anchor (#124, ADR-0143 결정 11-8)', () => {
     expect(detail).toContain(
       'if (!ready || window.location.hash !== `#${JUDGING_RECORD_ANCHOR}`) return;',
     );
-    expect(detail).toContain("drawnAnchor(copies)?.element.scrollIntoView({ block: 'start' });");
+    // The scroll itself is lib/market-detail.ts' (`scrollToJudgingRecord`), which the 결과 줄's
+    // 판정 정정 mark and the recap's 판정 기록 보기 share (#144).
+    expect(detail).toContain('scrollToJudgingRecord();');
+    const lib = readFileSync(path.join(SRC, 'lib/market-detail.ts'), 'utf8');
+    expect(lib).toContain("drawnAnchor(copies)?.element.scrollIntoView({ block: 'start' });");
   });
 });
 

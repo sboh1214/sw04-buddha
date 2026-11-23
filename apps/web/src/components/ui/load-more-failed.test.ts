@@ -137,6 +137,8 @@ describe('the notice above a 더 보기 that failed', () => {
         'app/admin/disputes/admin-disputes.tsx',
         'app/admin/fill-classifications/fill-classifications.tsx',
         'app/admin/markets/[id]/admin-market-detail.tsx',
+        // 판정 오류 보상's 대상 계정 (#144 part 2, ADR-0166)
+        'app/admin/markets/[id]/market-judgement-compensation-recipients.tsx',
         'app/admin/markets/[id]/market-maker-controls.tsx',
         'app/admin/markets/admin-markets.tsx',
         // 검수 대기 (#78, ADR-0099), 규칙 보충 대기 (#80, ADR-0101), 일시 중단 결정 대기 (#114,
@@ -260,6 +262,7 @@ describe('the notice above a 더 보기 that failed', () => {
       [
         'useAdminAccountRequests',
         'useAdminGrantCandidates',
+        'useAdminJudgementCompensationRecipients',
         'useAdminMarketCancelRequests',
         'useAdminMarketDisputes',
         'useAdminMarketJudgementIncidents',

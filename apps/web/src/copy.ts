@@ -542,6 +542,10 @@ export const copy = {
   // 재지급(#74, ADR-0155): 지갑에서 신청해 받은 Coin의 원장 유형 REGRANT. 시작 지급과도 쿠폰의 보너스와도
   // 다른 낱말이다(N04 §5: 지급 출처를 가른다).
   ledgerTypeRegrant: '재지급',
+  // 판정 오류 보상(#144 2부, ADR-0166; 144-10·144-12·144-19): 지급 뒤 판정 오류가 확인된 시장에서 받은
+  // Coin의 원장 유형 JUDGEMENT_COMPENSATION. 손익이 아니고(144-10) 지갑의 별도 유형·필터다. 줄에는 요청할 때
+  // 회원에게 보이려고 따로 쓴 사유('사유: …', ledgerCorrectionReason)와 시장 링크, 판정 기록 링크를 보인다.
+  ledgerTypeJudgementCompensation: '판정 오류 보상',
   /** The forfeiture of the Coin left when a member closes the account (#140, #57-16). */
   ledgerTypeClosureForfeit: '탈퇴 소멸',
 
@@ -2006,8 +2010,119 @@ export const copy = {
   adminMarketJudgementIncidentsColStatus: '상태',
   adminMarketJudgementIncidentsColOriginal: '지급한 결과',
   adminMarketJudgementIncidentsColCorrected: '올바른 결과',
-  adminMarketJudgementIncidentsColRequestedBy: '등록한 관리자',
-  adminMarketJudgementIncidentsColRequestedAt: '등록 시각',
+  // 보상 요청(#144 2부)도 같은 표에 오므로 '등록·요청'이다(ADR-0166 T13).
+  adminMarketJudgementIncidentsColRequestedBy: '등록·요청한 관리자',
+  adminMarketJudgementIncidentsColRequestedAt: '등록·요청 시각',
+  // 판정 오류 보상 (#144 2부, ADR-0166; 오너 답 144-1·144-2·144-4·144-6·144-7·144-12·144-15·144-16·
+  // 144-19): 확인된 사건이 있는 시장의 관리자 상세, 판정 오류 사건 아래. 서버가 정산 기록으로 계산한 대상
+  // 계정·금액(관리자는 고치지 않는다)을 한 관리자가 회원에게 보일 사유와 함께 요청하고, 요청하지 않았고 지급한
+  // 판정을 등록하지도 않은 다른 관리자가 승인하면 같은 거래에서 계정마다 한 번 지급한다. 반려는 사유만 받는다
+  // (정리 목적의 반려, ADR-0120 결정 5). 사건 쪽 낱말과 섞지 않게 이 접두어를 따로 쓴다(ADR-0165의 문구 검사).
+  adminMarketJudgementCompensation: '판정 오류 보상',
+  adminMarketJudgementCompensationIntro:
+    '확인된 판정 오류 사건의 보상입니다. 서버가 각 계정의 정산 기록으로 올바른 결과였다면 받았을 지급과 실제로 받은 지급의 차이를 YES·NO를 합쳐 계산하고, 0보다 큰 계정만 대상으로 삼습니다. 관리자는 계정과 금액을 고치지 않습니다. 한 관리자가 회원에게 보일 사유와 함께 보상 요청하고, 요청하지 않았고 지급한 판정을 등록하지도 않은 다른 관리자가 보상 승인하면 그때 대상 계정마다 한 번 지급합니다. 탈퇴한 계정은 탈퇴로 지급 못 함으로 남고, 계정 제한 중인 계정도 받습니다. 더 받은 계정에서 회수하지 않습니다.',
+  adminMarketJudgementCompensationPreview: '지금 계산한 보상',
+  adminMarketJudgementCompensationSummary: '대상 계정 {n}개 · 총 {coin}',
+  adminMarketJudgementCompensationClosedCount: '탈퇴 {n}개',
+  adminMarketJudgementCompensationBlockedCount: '원장 확인 필요 {n}개',
+  adminMarketJudgementCompensationNone: '더 받을 계정이 없어 보상 대상이 없습니다.',
+  adminMarketJudgementCompensationHeld:
+    '원장 대사로 보류된 시장이라 보상을 요청하거나 승인할 수 없습니다. 대사 보류를 먼저 복구해 주세요.',
+  // 144-16: 원장 확인이 필요한 계정이 하나라도 있으면 승인 전체를 막고 어느 계정인지 대상 계정 목록에 보인다.
+  adminMarketJudgementCompensationBlockedNote:
+    '원장 확인 필요 계정 {n}개가 있어 보상을 승인할 수 없습니다. 대상 계정 보기에서 확인하고 대사 정정으로 고친 뒤 다시 승인해 주세요.',
+  adminMarketJudgementCompensationRequest: '보상 요청',
+  adminMarketJudgementCompensationRequestTitle: '판정 오류 보상 요청',
+  adminMarketJudgementCompensationRequestBody:
+    '서버가 계산한 대상 계정과 금액을 이 요청에 고정합니다. 다른 관리자가 승인하면 그때 지급합니다. 회원에게 보일 사유는 보상받은 회원의 지갑 이용 내역에 그대로 보이고, 요청 사유는 관리자에게만 보입니다.',
+  adminMarketJudgementCompensationRequested: '보상을 요청했습니다.',
+  adminMarketJudgementCompensationReason: '요청 사유',
+  adminMarketJudgementCompensationReasonHint: '관리자에게만 보입니다. 1~500자로 적습니다.',
+  adminMarketJudgementCompensationUserReason: '회원에게 보일 사유',
+  adminMarketJudgementCompensationUserReasonHint:
+    '보상받은 회원의 지갑 이용 내역에 보입니다. 관리자 이름이나 내부 검토 내용은 적지 않습니다. 1~500자로 적습니다.',
+  adminMarketJudgementCompensationUnrequestable:
+    '승인을 기다리는 보상 요청이 있습니다. 한 사건에 기다리는 요청은 하나입니다.',
+  adminMarketJudgementCompensationPending: '승인을 기다리는 보상 요청',
+  adminMarketJudgementCompensationRequestedBy: '요청한 관리자',
+  adminMarketJudgementCompensationRequestedAt: '요청 시각',
+  adminMarketJudgementCompensationApprove: '보상 승인',
+  adminMarketJudgementCompensationReject: '보상 반려',
+  adminMarketJudgementCompensationRetract: '철회',
+  adminMarketJudgementCompensationOwnNote:
+    '내가 요청한 보상은 다른 관리자가 승인하거나 반려합니다.',
+  // 144-4: 지급한 판정의 등록자는 보상 승인만 못 한다. 반려는 정리 목적의 반려라 할 수 있다(ADR-0120 결정 5).
+  adminMarketJudgementCompensationRegistrantNote:
+    '지급한 판정을 등록한 관리자는 이 보상을 승인할 수 없습니다. 반려는 할 수 있습니다.',
+  adminMarketJudgementCompensationPaid: '지급한 보상',
+  adminMarketJudgementCompensationPaidSummary: '대상 계정 {n}개 중 {m}개 지급 · 총 {coin}',
+  adminMarketJudgementCompensationClosedUnpaid: '탈퇴로 지급 못 함 {n}개',
+  adminMarketJudgementCompensationApprovedBy: '승인한 관리자',
+  adminMarketJudgementCompensationDecisionReason: '결정 사유',
+  adminMarketJudgementCompensationDecisionReasonHint: '관리자에게만 보입니다. 1~500자로 적습니다.',
+  adminMarketJudgementCompensationRecipients: '대상 계정',
+  adminMarketJudgementCompensationRecipientsShow: '대상 계정 보기',
+  adminMarketJudgementCompensationRecipientsHide: '대상 계정 닫기',
+  adminMarketJudgementCompensationRecipientsEmpty: '대상 계정이 없습니다.',
+  // 대상 계정 표의 머리(열 이름 — 금액은 그 계정의 보상액, 상태는 아래 넷).
+  adminMarketJudgementCompensationRecipientsColAccount: '계정',
+  adminMarketJudgementCompensationRecipientsColAmount: '보상액',
+  adminMarketJudgementCompensationRecipientsColState: '상태',
+  adminMarketJudgementCompensationStatePending: '지급 대기',
+  adminMarketJudgementCompensationStateBlocked: '원장 확인 필요',
+  adminMarketJudgementCompensationStateClosed: '탈퇴로 지급 못 함',
+  adminMarketJudgementCompensationStatePaid: '지급 완료',
+  adminMarketJudgementCompensationLog: '보상 요청 기록',
+  adminMarketJudgementCompensationLogEmpty: '보상 요청이 없습니다.',
+  adminMarketJudgementCompensationStatusPending: '승인 대기',
+  adminMarketJudgementCompensationStatusApproved: '지급 완료',
+  adminMarketJudgementCompensationStatusRejected: '반려',
+  adminMarketJudgementCompensationStatusRetracted: '철회',
+  adminMarketJudgementCompensationDecidedBy: '결정한 관리자',
+  adminMarketJudgementCompensationRetractedAt: '철회 시각',
+  adminMarketJudgementCompensationApproveTitle: '판정 오류 보상 승인',
+  adminMarketJudgementCompensationApproveBody:
+    '승인하면 이 요청에 고정된 대상 계정마다 한 번씩 바로 지급하고, 받은 회원에게 알림을 보냅니다. 탈퇴한 계정은 탈퇴로 지급 못 함으로 남습니다. 승인은 되돌릴 수 없습니다. 결정 사유는 관리자에게만 보입니다.',
+  adminMarketJudgementCompensationApproved: '보상을 승인하고 지급했습니다.',
+  adminMarketJudgementCompensationRejectTitle: '판정 오류 보상 반려',
+  adminMarketJudgementCompensationRejectBody:
+    '반려하면 아무것도 지급되지 않고 새 보상 요청을 올릴 수 있습니다(회원에게 보일 사유를 고칠 때처럼). 결정 사유는 관리자에게만 보입니다.',
+  adminMarketJudgementCompensationRejected: '보상 요청을 반려했습니다.',
+  adminMarketJudgementCompensationRetractTitle: '보상 요청 철회',
+  adminMarketJudgementCompensationRetractBody:
+    '요청한 보상을 거둡니다. 아무것도 지급되지 않고 새 보상 요청을 올릴 수 있습니다. 철회할까요?',
+  adminMarketJudgementCompensationRetracted: '보상 요청을 철회했습니다.',
+  adminMarketJudgementCompensationChanged:
+    '이 보상 요청이 그사이 결정되거나 철회되었습니다. 창을 닫고 화면을 확인해 주세요.',
+  // 보상의 거절(VALIDATION_ERROR가 짚는 곳마다, MARKET_JUDGEMENT_COMPENSATION_REFUSALS).
+  errMarketJudgementCompensationIncident:
+    '확인된 판정 오류 사건이 없습니다. 화면을 새로 고쳐 주세요.',
+  errMarketJudgementCompensationHeld:
+    '원장 대사로 보류된 시장이라 보상을 다룰 수 없습니다. 대사 보류를 먼저 복구해 주세요.',
+  errMarketJudgementCompensationPending:
+    '승인을 기다리는 보상 요청이 있습니다. 화면을 새로 고쳐 주세요.',
+  errMarketJudgementCompensationPaid:
+    '이 사건의 보상은 이미 지급했습니다. 화면을 새로 고쳐 주세요.',
+  errMarketJudgementCompensationNone: '더 받을 계정이 없어 보상할 대상이 없습니다.',
+  errMarketJudgementCompensationStale:
+    '요청한 뒤 대상 계정이나 금액이 달라졌습니다. 이 요청을 반려하고 다시 요청해 주세요.',
+  errMarketJudgementCompensationBlocked:
+    '원장 확인 필요 계정이 있어 승인할 수 없습니다. 대상 계정 보기에서 확인하고 대사 정정으로 고친 뒤 다시 승인해 주세요.',
+  errMarketJudgementCompensationRegistrant:
+    '지급한 판정을 등록한 관리자는 이 보상을 승인할 수 없습니다.',
+  errMarketJudgementCompensationRequester:
+    '내가 요청한 보상은 다른 관리자가 승인하거나 반려합니다.',
+  errMarketJudgementCompensationNoDecider:
+    '이 보상을 승인할 다른 관리자가 없습니다. 요청한 관리자, 지급한 판정을 등록한 관리자, 이해충돌이 있는 관리자는 승인할 수 없습니다.',
+  errMarketJudgementCompensationUnknown: '이 시장의 보상 요청이 아닙니다. 화면을 새로 고쳐 주세요.',
+  errMarketJudgementCompensationReason: '요청 사유를 1~500자로 입력해 주세요.',
+  errMarketJudgementCompensationUserReason: '회원에게 보일 사유를 1~500자로 입력해 주세요.',
+  // 검토 대기 표의 보상 승인 줄(ADR-0166 T13: 사건 검토와 한 표, 요청 시각 순).
+  adminMarketJudgementCompensationQueueIntro:
+    '보상 요청도 이 표에서 기다립니다. 요청하지 않았고 지급한 판정을 등록하지도 않은 관리자가 시장 상세에서 보상 승인합니다. 보상 반려는 요청한 관리자가 아니면 할 수 있습니다.',
+  adminMarketJudgementCompensationQueueColKind: '종류',
+  adminMarketJudgementCompensationQueueKindIncident: '사건 검토',
+  adminMarketJudgementCompensationQueueKindCompensation: '보상 승인',
   // 관리자 상세의 거래 현황: 체결·포지션에서 나온 값만 보인다(직접 AMM 상태는 #125에서 지웠다).
   adminMarketTradeStats: '거래 현황',
   tradeStatsLastPrice: '현재가',
@@ -3058,6 +3173,16 @@ export const copy = {
   marketHistoryFills: '이 시장 체결 이력',
   marketHistorySettlements: '이 시장 정산 이력',
   marketHistoryOrders: '이 시장 끝난 주문',
+  // 복기의 판정 정정 줄(#144 2부, ADR-0166; 144-11·144-19): 원래 정산 내역은 그대로 두고 그 아래에 정정된
+  // 결과와 이 계정이 받은 보상을 덧붙여 공개 판정 기록으로 잇는다. 지급하기 전에는 '보상 없음'이라 하지 않고
+  // (승인 대기·준비 중), 지급한 뒤 이 계정이 받은 것이 없거나 보상 대상이 없으면 '보상 없음'이다.
+  recapCorrection: '판정 정정',
+  recapCorrectedResult: '정정된 결과 {result}',
+  recapCompensationAmount: '내 보상 {coin}',
+  recapCompensationNone: '보상 없음',
+  recapCompensationPending: '보상 승인 대기',
+  recapCompensationPreparing: '보상 준비 중',
+  recapJudgingRecord: '판정 기록 보기',
   // 내 포지션's empty line once trading has ended (거래 마감 to 취소): the positions list is its ground,
   // so it says only that nothing is held; whether the account traded is marketMyTradesEmpty's.
   marketMyPositionEmptyEnded: '이 시장에서 보유한 계약이 없습니다.',
@@ -3307,6 +3432,9 @@ export const copy = {
   historyResolvedAt: '결과 확정',
   historySettledAt: '지급 완료',
   historyJudgingRecord: '판정 기록',
+  // 144-17: 지급 뒤 판정 오류가 확인된 시장의 정산 줄에 붙는 표시. 금액은 없다(보상액은 지갑과 복기에서
+  // 본다). 줄의 결과·지급액은 원래 결과의 정산 기록 그대로다.
+  historySettlementCorrected: '판정 정정 · 결과 {result}',
   // 빈 상태: 필터가 없으면 종류마다 제 문구(주문의 두 문구는 위의 오너 결정 그대로), 필터가 있으면 하나.
   historyFillsEmpty: '아직 체결 내역이 없습니다.',
   historySettlementsEmpty: '아직 정산 기록이 없습니다.',
@@ -3398,6 +3526,11 @@ export const copy = {
     '{market} 판정 이의 정정으로 종결 · 새 이의 기한 {deadline}',
   notificationMarketSettled: '{market} 결과 확정: {result} · 지급 완료 · 내 지급액 {payout}',
   notificationMarketSettledWatcher: '{market} 결과 확정: {result} · 지급 완료',
+  // 판정 오류 보상 알림(#144 2부, ADR-0166; 52-20, 144-18): 보상을 지급할 때 받은 회원에게 한 건, '시장'
+  // 분류, 시장 상세로. {result}는 정정된 결과(YES·NO·무효 모두 '로'를 받아 144-18의 '(으)로'는 '로'),
+  // {coin}은 이 회원이 받은 보상('100 Coin'). 오류 확인 때·탈퇴 계정·보상 없는 보유자·관심 등록자에게는 없다.
+  notificationJudgementCompensated:
+    '{market} 판정 정정 · 결과를 {result}로 바로잡고 {coin}을 보상했습니다.',
   // 커뮤니티 알림(#135, ADR-0161; 52-7·52-15~52-19, 135-1~135-7): 내 글의 댓글·내 댓글의 답글은 바로 위
   // 작성자에게 — 읽기 전까지 같은 글·같은 댓글의 것을 합쳐 수와 마지막 작성자를 보이고(작성자는 목록을 읽을
   // 때, 숨기거나 지운 답글이면 이름 없이), 나에게 내린 운영 조치와 그 취소·감경·조기 해제는 종류와 제한이면
@@ -5080,6 +5213,19 @@ export const copy = {
   adminMarketWorkIncidentConfirm: '판정 오류 확인',
   adminMarketWorkIncidentDismiss: '판정 오류 사건 기각',
   adminMarketWorkIncidentRetract: '판정 오류 사건 철회',
+  // 판정 오류 보상(#144 2부, ADR-0166)의 네 단계 — 지급으로 분류한다(T10, 145-12의 '대사 보류 복구는 지급'과
+  // 같은 까닭). 기록에는 계정 수와 총액만 있고 대상 계정은 없다(ADR-0064).
+  adminMarketWorkCompensationRequest: '판정 오류 보상 요청',
+  adminMarketWorkCompensationApprove: '판정 오류 보상 승인',
+  adminMarketWorkCompensationReject: '판정 오류 보상 반려',
+  adminMarketWorkCompensationRetract: '판정 오류 보상 요청 철회',
+  adminMarketWorkCompensationAccounts: '대상 계정',
+  adminMarketWorkCompensationTotal: '총액',
+  adminMarketWorkCompensationClosed: '탈퇴로 지급 못 함',
+  adminMarketWorkCompensationPaidAccounts: '지급한 계정',
+  adminMarketWorkCompensationPaidCoin: '지급한 Coin',
+  adminMarketWorkCompensationUserReason: '회원에게 보일 사유',
+  adminMarketWorkCompensationCount: '{n}개',
   adminMarketWorkResolveInterim: '1인 판정(이전 방식)',
   adminMarketWorkRecoveryRequest: '대사 보류 복구 요청',
   adminMarketWorkRecoveryApprove: '대사 보류 복구 승인',
@@ -5369,6 +5515,15 @@ export const copy = {
   judgingCorrectionNoClawback: '원래 결과로 지급했고, 지급한 Coin은 회수하지 않습니다.',
   judgingCorrectionDescription: '오류 내용',
   judgingCorrectionConfirmedAt: '오류 확인 시각',
+  // 판정 정정의 보상(#144 2부, ADR-0166; 144-6·144-15): 대상 계정 수·지급한 Coin 총액·상태만. 계정·닉네임과
+  // 개별 금액은 없다. 탈퇴로 지급하지 못한 대상이 있으면 대상 수 중 지급한 수를 따로 센다. {coin}은 총액
+  // ('100 Coin').
+  judgingCompensation: '보상',
+  judgingCompensationPreparing: '보상 준비 중',
+  judgingCompensationNone: '보상 대상 없음',
+  judgingCompensationPending: '승인 대기 · 대상 계정 {n}개',
+  judgingCompensationPaid: '지급 완료 · 대상 계정 {n}개 · 총 {coin}',
+  judgingCompensationPaidPartly: '지급 완료 · 대상 계정 {n}개 중 {m}개 지급 · 총 {coin}',
   // 144-9: 결과 확정 뒤 시장의 판정 기록에 한 줄. 주소는 사업자 정보의 고객센터 이메일이다(appealGuidance처럼).
   judgingPostPayoutReport: '결과 확정 뒤의 판정 오류는 고객센터 이메일({{email}})로 알려 주세요.',
   adminTradingAnomalies: '거래 패턴 검토',

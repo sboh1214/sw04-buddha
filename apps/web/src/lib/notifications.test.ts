@@ -296,8 +296,8 @@ describe('a notification’s words and its link', () => {
 
   it('has one renderer per type, its words the guard registry’s text (#113)', () => {
     // #53 shipped none (52-20); #134 the 거래 three (ADR-0158), #54 the 시장 five (ADR-0159), #188
-    // the 판정·정산 six (ADR-0160), #135 the 커뮤니티 six (ADR-0161). Each producer adds the
-    // definition, the guard entry and the renderer.
+    // the 판정·정산 six (ADR-0160), #135 the 커뮤니티 six (ADR-0161), #144 the 판정 오류 보상's one
+    // (ADR-0166). Each producer adds the definition, the guard entry and the renderer.
     const types = NOTIFICATION_DEFINITIONS.map((definition: { type: string }) => definition.type);
     expect(types).toEqual([
       'order_filled',
@@ -320,6 +320,7 @@ describe('a notification’s words and its link', () => {
       'moderation_action_cancelled',
       'moderation_restriction_end_changed',
       'proposal_decided',
+      'market_judgement_compensated',
     ]);
     expect(Object.keys(NOTIFICATION_RENDERERS).sort()).toEqual([...types].sort());
     expect(Object.keys(NOTIFICATION_TYPE_REGISTRY).sort()).toEqual([...types].sort());
@@ -350,8 +351,9 @@ describe('a notification’s words and its link', () => {
     expect(NOTIFICATION_RENDERERS.moderation_action_cancelled.copy).toHaveLength(8);
     expect(NOTIFICATION_RENDERERS.moderation_restriction_end_changed.copy).toHaveLength(5);
     expect(NOTIFICATION_RENDERERS.proposal_decided.copy).toHaveLength(3);
-    // Every 시장 type — #54's five and #188's six — is category `market` (52-21) and leads to the
-    // market's detail alone (54-4, 188-4).
+    expect(NOTIFICATION_RENDERERS.market_judgement_compensated.copy).toHaveLength(4);
+    // Every 시장 type — #54's five, #188's six and #144's one (144-18) — is category `market` (52-21)
+    // and leads to the market's detail alone (54-4, 188-4).
     for (const definition of NOTIFICATION_DEFINITIONS.filter((each) =>
       each.type.startsWith('market_'),
     )) {

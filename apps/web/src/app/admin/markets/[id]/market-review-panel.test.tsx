@@ -89,6 +89,7 @@ const base: AdminMarket = {
     pending: null,
     confirmed: null,
     log: [],
+    compensation: null,
   },
   missingOpenItems: [],
   leadCloseGapMinutes: 60,

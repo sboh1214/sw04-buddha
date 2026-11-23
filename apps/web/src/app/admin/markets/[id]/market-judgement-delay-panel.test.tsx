@@ -111,6 +111,7 @@ const closed: AdminMarket = {
     pending: null,
     confirmed: null,
     log: [],
+    compensation: null,
   },
 };
 

@@ -431,6 +431,8 @@ describe.skipIf(!hasTestInfra)('positions (integration)', () => {
       marketTitle: market.title,
       resolvedAt: resolvedAt.toISOString(),
       settledAt: paidAt,
+      // #144 (144-17): no confirmed 판정 오류 사건 on either market.
+      correctedResult: null,
     };
     const aVoided = {
       marketId: voided.id,
@@ -441,6 +443,7 @@ describe.skipIf(!hasTestInfra)('positions (integration)', () => {
       // The market row carries no 결과 확정 time here: the line says so rather than guess one.
       resolvedAt: null,
       settledAt: voidedAt,
+      correctedResult: null,
     };
     const aWon = {
       ...aMarket,
@@ -616,6 +619,7 @@ describe.skipIf(!hasTestInfra)('positions (integration)', () => {
       settlementPnlCoin: '-120',
       resolvedAt: null,
       settledAt: paidAt.toISOString(),
+      correctedResult: null,
     });
     expect(whole.data[1]).toMatchObject({ result: 'NO', qty: 5, settlementPnlCoin: '-200' });
 

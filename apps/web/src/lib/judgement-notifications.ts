@@ -1,6 +1,7 @@
 import {
   type MarketDisputeClosedByCorrectionParams,
   type MarketDisputeDecidedParams,
+  type MarketJudgementCompensatedParams,
   type MarketJudgementCorrectedParams,
   type MarketJudgementDelayedParams,
   type MarketProvisionalResultParams,
@@ -124,5 +125,20 @@ export function marketSettledTitle(params: MarketSettledParams): string {
     market,
     result,
     payout: formatCoin(parseCoinAmount(params.payoutCoin)),
+  });
+}
+
+/**
+ * A `market_judgement_compensated` title (#144, ADR-0166; 52-20, 144-18 — the owner's sentence
+ * '{시장} 판정 정정 · 결과를 {정정된 결과}(으)로 바로잡고 {n} Coin을 보상했습니다.'): the market, the
+ * corrected result as the detail's result row names it — every label takes '로' — and the
+ * member's own compensation as Coin. The paid result is in the params (the API's) but not in the
+ * sentence the owner approved; no P&L, no count, nobody else's amount (52-15).
+ */
+export function judgementCompensatedTitle(params: MarketJudgementCompensatedParams): string {
+  return fillNotificationText(copy.notificationJudgementCompensated, {
+    market: params.marketTitle,
+    result: MARKET_RESULT_LABEL[params.correctedResult],
+    coin: formatCoin(parseCoinAmount(params.compensationCoin)),
   });
 }

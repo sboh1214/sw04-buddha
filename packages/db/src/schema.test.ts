@@ -8351,6 +8351,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           'regrants.available_before_coin',
           'regrants_amount_coin_check',
           'regrants_available_before_coin_check',
+          // The 판정 오류 보상 (migration 0081, #144): what the correction owes the account.
+          'judgement_compensations.amount_coin',
         ].sort(),
       );
     });
@@ -11411,6 +11413,134 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
   });
 
+  describe('judgement_compensations (migration 0081, #144)', () => {
+    it('adds the table with its keys, CHECKs, references and triggers', async () => {
+      const { rows: columns } = await t.db.execute<{
+        column: string;
+        type: string;
+        nullable: string;
+        default: string | null;
+      }>(sql`
+        SELECT column_name AS "column", data_type AS type, is_nullable AS nullable,
+          column_default AS "default"
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'judgement_compensations'
+        ORDER BY ordinal_position`);
+      const instant = 'timestamp with time zone';
+      expect(columns).toEqual([
+        { column: 'id', type: 'uuid', nullable: 'NO', default: 'gen_random_uuid()' },
+        { column: 'incident_id', type: 'uuid', nullable: 'NO', default: null },
+        { column: 'market_id', type: 'uuid', nullable: 'NO', default: null },
+        { column: 'user_id', type: 'text', nullable: 'NO', default: null },
+        { column: 'approval_id', type: 'uuid', nullable: 'NO', default: null },
+        { column: 'amount_coin', type: 'bigint', nullable: 'NO', default: null },
+        { column: 'outcome', type: 'character varying', nullable: 'NO', default: null },
+        { column: 'ledger_entry_id', type: 'bigint', nullable: 'YES', default: null },
+        { column: 'user_reason', type: 'text', nullable: 'NO', default: null },
+        { column: 'requested_by', type: 'text', nullable: 'NO', default: null },
+        { column: 'approved_by', type: 'text', nullable: 'NO', default: null },
+        { column: 'applied_txid', type: 'text', nullable: 'NO', default: null },
+        { column: 'created_at', type: instant, nullable: 'NO', default: null },
+      ]);
+      const { rows: constraints } = await t.db.execute<{
+        name: string;
+        type: string;
+        action: string;
+      }>(sql`
+        SELECT conname AS name, contype AS type, confdeltype AS action FROM pg_constraint
+        WHERE conrelid = 'judgement_compensations'::regclass ORDER BY conname`);
+      // Every reference RESTRICTs (`r`); once per account per incident (144-2), one entry per row.
+      expect(constraints).toEqual([
+        { name: 'judgement_compensations_amount_check', type: 'c', action: ' ' },
+        {
+          name: 'judgement_compensations_approval_id_approval_requests_id_fk',
+          type: 'f',
+          action: 'r',
+        },
+        { name: 'judgement_compensations_approved_by_user_id_fk', type: 'f', action: 'r' },
+        { name: 'judgement_compensations_approver_check', type: 'c', action: ' ' },
+        { name: 'judgement_compensations_incident_fk', type: 'f', action: 'r' },
+        { name: 'judgement_compensations_incident_id_user_id_unique', type: 'u', action: ' ' },
+        {
+          name: 'judgement_compensations_ledger_entry_id_ledger_entries_id_fk',
+          type: 'f',
+          action: 'r',
+        },
+        { name: 'judgement_compensations_ledger_entry_id_unique', type: 'u', action: ' ' },
+        { name: 'judgement_compensations_market_id_markets_id_fk', type: 'f', action: 'r' },
+        { name: 'judgement_compensations_outcome_check', type: 'c', action: ' ' },
+        { name: 'judgement_compensations_pkey', type: 'p', action: ' ' },
+        { name: 'judgement_compensations_requested_by_user_id_fk', type: 'f', action: 'r' },
+        { name: 'judgement_compensations_user_id_user_id_fk', type: 'f', action: 'r' },
+        { name: 'judgement_compensations_user_reason_check', type: 'c', action: ' ' },
+      ]);
+      const { rows: indexes } = await t.db.execute<{ name: string }>(sql`
+        SELECT indexname AS name FROM pg_indexes
+        WHERE schemaname = 'public' AND tablename = 'judgement_compensations' ORDER BY 1`);
+      expect(indexes.map((row) => row.name)).toEqual([
+        'judgement_compensations_approval_id_idx',
+        'judgement_compensations_incident_id_user_id_unique',
+        'judgement_compensations_ledger_entry_id_unique',
+        'judgement_compensations_market_id_user_id_idx',
+        'judgement_compensations_pkey',
+      ]);
+      const { rows: triggers } = await t.db.execute<{
+        table: string;
+        name: string;
+        deferred: boolean;
+      }>(sql`
+        SELECT tgrelid::regclass::text AS "table", tgname AS name, tginitdeferred AS deferred
+        FROM pg_trigger
+        WHERE NOT tgisinternal AND (tgrelid = 'judgement_compensations'::regclass
+          OR tgname LIKE 'approval_requests_compensation_%'
+          OR tgname = 'ledger_entries_judgement_compensation_record')
+        ORDER BY 1, 2`);
+      // The completeness checks run at COMMIT (deferred), the rest at the statement.
+      expect(triggers).toEqual([
+        {
+          table: 'approval_requests',
+          name: 'approval_requests_compensation_record',
+          deferred: true,
+        },
+        {
+          table: 'approval_requests',
+          name: 'approval_requests_compensation_registrant',
+          deferred: false,
+        },
+        {
+          table: 'judgement_compensations',
+          name: 'judgement_compensations_check',
+          deferred: false,
+        },
+        {
+          table: 'judgement_compensations',
+          name: 'judgement_compensations_keep_record',
+          deferred: false,
+        },
+        {
+          table: 'judgement_compensations',
+          name: 'judgement_compensations_own_entry',
+          deferred: false,
+        },
+        {
+          table: 'ledger_entries',
+          name: 'ledger_entries_judgement_compensation_record',
+          deferred: true,
+        },
+      ]);
+      // The amount's SQL function reads with a fixed search path, as every guard does.
+      const { rows: functions } = await t.db.execute<{ name: string; config: string[] | null }>(sql`
+        SELECT proname AS name, proconfig AS config FROM pg_proc
+        WHERE proname = 'judgement_compensation_owed'`);
+      expect(functions).toEqual([
+        {
+          name: 'judgement_compensation_owed',
+          config: ['search_path=pg_catalog, public, pg_temp'],
+        },
+      ]);
+    });
+  });
+
   describe('buddha_app privileges (PLAN 6.4)', () => {
     it('can INSERT and SELECT ledger_entries but not UPDATE or DELETE', async () => {
       await createUser(t.db, { balanceCoin: 500n });
@@ -11440,7 +11570,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
             'write_limit_events', 'link_uses', 'link_flags', 'retention_purges',
             'themes', 'theme_markets', 'theme_notices', 'tags', 'market_tags', 'categories',
             'market_sources', 'market_rule_versions', 'market_judgement_delays', 'orders',
-            'fills', 'fill_realizations', 'regrants', 'market_judgement_incidents')
+            'fills', 'fill_realizations', 'regrants', 'market_judgement_incidents',
+            'judgement_compensations')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
@@ -11463,6 +11594,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(privs('regrants')).toEqual(['INSERT', 'SELECT']);
       // Migration 0080 (#144): a confirmed 판정 오류 사건 is a permanent fact.
       expect(privs('market_judgement_incidents')).toEqual(['INSERT', 'SELECT']);
+      // Migration 0081 (#144): a 판정 오류 보상 is a permanent fact like its entry.
+      expect(privs('judgement_compensations')).toEqual(['INSERT', 'SELECT']);
       expect(privs('payments')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       // Migration 0028 (#183): the real name changes in place and the row goes with the account;
       // a code's wrong entries, its use and what the provider said (0030) are written in place,

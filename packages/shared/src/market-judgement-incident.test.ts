@@ -308,8 +308,14 @@ describe('the incident records and read models', () => {
           retractedAt: at,
         },
       ],
+      // The 판정 오류 보상's state (ADR-0166, judgement-compensation.test.ts): null before one is
+      // confirmed, required either way.
+      compensation: null,
     };
     expect(adminMarketJudgementIncidentSchema.parse(state)).toEqual(state);
+    expect(
+      paths(adminMarketJudgementIncidentSchema.safeParse({ ...state, compensation: undefined })),
+    ).toEqual(['compensation']);
     expect(
       adminMarketJudgementIncidentSchema.parse({ ...state, pending, confirmed: null }).pending,
     ).toEqual(pending);
@@ -317,6 +323,7 @@ describe('the incident records and read models', () => {
       paths(adminMarketJudgementIncidentSchema.safeParse({ ...state, registrable: undefined })),
     ).toEqual(['registrable']);
     const item = {
+      kind: 'incident',
       requestId,
       marketId,
       slug: 'market-a',
@@ -326,8 +333,27 @@ describe('the incident records and read models', () => {
       correctedResult: 'NO',
       requestedBy: registrant,
       requestedAt: at,
+      accountCount: null,
+      totalCoin: null,
     };
     expect(adminMarketJudgementIncidentQueueItemSchema.parse(item)).toEqual(item);
+    // #144 part 2 (ADR-0166 T13): a compensation request waits in the same queue, with its count
+    // and total — never an account of its list.
+    const compensation = {
+      ...item,
+      kind: 'compensation',
+      status: 'settled',
+      accountCount: 2,
+      totalCoin: '300',
+    };
+    expect(adminMarketJudgementIncidentQueueItemSchema.parse(compensation)).toEqual(compensation);
+    expect(
+      paths(adminMarketJudgementIncidentQueueItemSchema.safeParse({ ...item, kind: 'other' })),
+    ).toEqual(['kind']);
+    expect(
+      adminMarketJudgementIncidentQueueItemSchema.safeParse({ ...compensation, accountCount: 0 })
+        .success,
+    ).toBe(false);
   });
 
   it('publish only the allowlisted correction fields, no private or excluded name', () => {

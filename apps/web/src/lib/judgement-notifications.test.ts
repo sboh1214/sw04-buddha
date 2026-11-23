@@ -19,6 +19,7 @@ import {
   disputeDecidedTitle,
   judgementCorrectedTitle,
   judgementDelayedTitle,
+  judgementCompensatedTitle,
   marketSettledTitle,
   provisionalResultTitle,
 } from './judgement-notifications';
@@ -420,5 +421,62 @@ describe('the templates (ADR-0158 구현의 선택: single-brace placeholders)',
         );
       }
     }
+  });
+});
+
+/**
+ * 판정 오류 보상 알림 (#144, ADR-0166; 52-20, owner answer 144-18 — '{시장} 판정 정정 · 결과를 {정정된
+ * 결과}(으)로 바로잡고 {n} Coin을 보상했습니다.'): one title, the member's own compensation as Coin,
+ * every result label taking '로', the registry's words, no P&L and nobody else's amount.
+ */
+describe('the 판정 오류 보상 sentence (144-18)', () => {
+  it('is the owner’s, with each corrected result and the member’s own Coin', () => {
+    expect(copy.notificationJudgementCompensated).toBe(
+      '{market} 판정 정정 · 결과를 {result}로 바로잡고 {coin}을 보상했습니다.',
+    );
+    expect(
+      judgementCompensatedTitle({
+        marketTitle: TITLE,
+        originalResult: 'YES',
+        correctedResult: 'NO',
+        compensationCoin: '100',
+      }),
+    ).toBe('첫눈이 올까 판정 정정 · 결과를 NO로 바로잡고 100 Coin을 보상했습니다.');
+    expect(
+      judgementCompensatedTitle({
+        marketTitle: TITLE,
+        originalResult: 'NO',
+        correctedResult: 'VOID',
+        compensationCoin: '12345',
+      }),
+    ).toBe('첫눈이 올까 판정 정정 · 결과를 무효로 바로잡고 12,345 Coin을 보상했습니다.');
+    // A stored title holding a placeholder or a replacement pattern stays as written.
+    for (const text of FREE_TEXTS) {
+      expect(
+        judgementCompensatedTitle({
+          marketTitle: text,
+          originalResult: 'VOID',
+          correctedResult: 'YES',
+          compensationCoin: '50',
+        }),
+      ).toBe(`${text} 판정 정정 · 결과를 YES로 바로잡고 50 Coin을 보상했습니다.`);
+    }
+  });
+
+  it('draws the registry’s words, under 시장, with no P&L, refund or 정답', () => {
+    const renderer = NOTIFICATION_RENDERERS.market_judgement_compensated;
+    expect(renderer.copy).toEqual([
+      copy.notificationJudgementCompensated,
+      ...Object.values(RESULT_LABELS),
+    ]);
+    expect(renderer.copy).toEqual(NOTIFICATION_TYPE_REGISTRY.market_judgement_compensated.text);
+    for (const text of renderer.copy) {
+      expect(findExcludedText(text), text).toEqual([]);
+      expect(text, text).not.toMatch(
+        /환불|원금|손익|순위|랭킹|실력|점수|스코어|수익률|승률|적중|정답|맞힌|정산 기준|정산 오류/,
+      );
+    }
+    // The sentence carries no amount of its own: the member's is the placeholder (52-15).
+    expect(copy.notificationJudgementCompensated).not.toMatch(/\d/);
   });
 });

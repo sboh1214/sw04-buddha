@@ -61,6 +61,7 @@ describe('LEDGER_KIND_LABEL', () => {
       '시작 지급',
       'Coin 보정',
       '재지급',
+      '판정 오류 보상',
     ]);
     for (const kind of LEDGER_FILTER_KINDS) {
       expect(LEDGER_KIND_LABEL[kind], kind).not.toMatch(/환불|원금|대금|담보|정정/);
@@ -86,10 +87,19 @@ describe('LEDGER_KIND_LABEL', () => {
     expect(LEDGER_KIND_LABEL.REGRANT).not.toBe(LEDGER_KIND_LABEL.BONUS);
     expect(findExcludedText(LEDGER_KIND_LABEL.REGRANT)).toEqual([]);
   });
+
+  it("calls the compensation '판정 오류 보상', a source of its own and no P&L (#144, 144-10)", () => {
+    expect(LEDGER_KIND_LABEL.JUDGEMENT_COMPENSATION).toBe('판정 오류 보상');
+    for (const other of ['SETTLEMENT_PAYOUT', 'RECONCILIATION_CORRECTION', 'REGRANT'] as const) {
+      expect(LEDGER_KIND_LABEL.JUDGEMENT_COMPENSATION).not.toBe(LEDGER_KIND_LABEL[other]);
+    }
+    expect(LEDGER_KIND_LABEL.JUDGEMENT_COMPENSATION).not.toMatch(/손익|환불|정산 오류|리워드|적립/);
+    expect(findExcludedText(LEDGER_KIND_LABEL.JUDGEMENT_COMPENSATION)).toEqual([]);
+  });
 });
 
 describe('LEDGER_FILTER_OPTIONS', () => {
-  it("offers '전체' first, then the five names in the owner's order (ADR-0135 H5) and 재지급 (#74)", () => {
+  it("offers '전체' first, then the five names in the owner's order (ADR-0135 H5), 재지급 (#74) and 판정 오류 보상 (#144)", () => {
     expect(LEDGER_FILTER_OPTIONS.map((option) => option.label)).toEqual([
       copy.ledgerKindAll,
       '매수 체결',
@@ -98,6 +108,7 @@ describe('LEDGER_FILTER_OPTIONS', () => {
       '시작 지급',
       'Coin 보정',
       '재지급',
+      '판정 오류 보상',
     ]);
     expect(LEDGER_FILTER_OPTIONS.map((option) => option.kind)).toEqual([
       undefined,
@@ -121,6 +132,7 @@ describe('the wallet address', () => {
       'start-grant',
       'reconciliation-correction',
       'regrant',
+      'judgement-compensation',
     ]);
   });
 

@@ -384,6 +384,72 @@ describe('an entry’s details', () => {
     }
   });
 
+  it('names a 판정 오류 보상’s four steps and reads counts and totals, never an account (#144)', () => {
+    const action = (type: AdminMarketWorkEntry['type'], details: Record<string, unknown>) =>
+      workEntry({ source: 'admin_action', id: 'a:x', type, details, reasonBasis: 'recorded' });
+    expect(
+      (
+        [
+          'market_judgement_compensation_request',
+          'market_judgement_compensation_approve',
+          'market_judgement_compensation_reject',
+          'market_judgement_compensation_retract',
+        ] as const
+      ).map((type) => marketWorkLabel({ type, details: {} })),
+    ).toEqual([
+      '판정 오류 보상 요청',
+      '판정 오류 보상 승인',
+      '판정 오류 보상 반려',
+      '판정 오류 보상 요청 철회',
+    ]);
+    // The request: the frozen list's count and total, its closed accounts, the members' reason
+    // (the internal reason is the reason column's, 145-16).
+    expect(
+      marketWorkRows(
+        action('market_judgement_compensation_request', {
+          approvalId: ID,
+          incidentId: ID,
+          reason: '정정 확인 뒤 보상합니다',
+          accountCount: 3,
+          totalCoin: '1250',
+          closedCount: 1,
+          userReason: '판정을 바로잡았습니다',
+        }),
+      ),
+    ).toEqual([
+      { label: '대상 계정', value: '3개' },
+      { label: '총액', value: '1,250 Coin' },
+      { label: '탈퇴로 지급 못 함', value: '1개' },
+      { label: '회원에게 보일 사유', value: '판정을 바로잡았습니다' },
+    ]);
+    // The approval: what was paid, and no closed line when none was closed.
+    expect(
+      marketWorkRows(
+        action('market_judgement_compensation_approve', {
+          approvalId: ID,
+          incidentId: ID,
+          reason: '목록을 확인했습니다',
+          paidCount: 2,
+          paidCoin: '1150',
+          closedCount: 0,
+        }),
+      ),
+    ).toEqual([
+      { label: '지급한 계정', value: '2개' },
+      { label: '지급한 Coin', value: '1,150 Coin' },
+    ]);
+    for (const type of [
+      'market_judgement_compensation_reject',
+      'market_judgement_compensation_retract',
+    ] as const) {
+      expect(marketWorkRows(action(type, { approvalId: ID, incidentId: ID })), type).toEqual([]);
+    }
+    // A shape not of this request reads as JSON, not as made-up rows.
+    expect(
+      marketWorkRows(action('market_judgement_compensation_request', { approvalId: ID })),
+    ).toBeUndefined();
+  });
+
   it('leaves out of the JSON line what the row already says: the reason and a retry’s error', () => {
     const retry = workEntry({
       source: 'admin_action',

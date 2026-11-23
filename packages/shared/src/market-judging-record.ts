@@ -1,5 +1,6 @@
 import * as z from 'zod';
 import { marketResultSchema } from './enums.js';
+import { publicJudgementCompensationSchema } from './judgement-compensation.js';
 import {
   judgementEvidenceSchema,
   judgementSourceSchema,
@@ -60,7 +61,8 @@ export type PublicMarketJudgementDelay = z.infer<typeof publicMarketJudgementDel
  * judgements and its settlement records never move), when the error was confirmed, and what went
  * wrong with its evidence links and collection instant. Never who registered or confirmed it, the
  * reviewer's reason, a dismissed or waiting incident, or anything about an account. #144 part 2
- * adds the compensation figures (144-6).
+ * (ADR-0166) adds the compensation's figures and status (144-6, 144-15): counts and totals, never
+ * an account or one account's amount.
  */
 export const publicMarketJudgementCorrectionSchema = z
   .object({
@@ -74,6 +76,8 @@ export const publicMarketJudgementCorrectionSchema = z
     /** 오류 내용. */
     description: z.string(),
     evidence: judgementEvidenceSchema,
+    /** 판정 오류 보상 (#144 part 2, ADR-0166; 144-6, 144-15). */
+    compensation: publicJudgementCompensationSchema,
   })
   .meta({ id: 'PublicMarketJudgementCorrection' });
 export type PublicMarketJudgementCorrection = z.infer<typeof publicMarketJudgementCorrectionSchema>;

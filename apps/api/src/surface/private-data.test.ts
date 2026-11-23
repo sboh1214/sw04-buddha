@@ -72,7 +72,14 @@
  * fails the run until a case is written here.
  */
 import { randomInt, randomUUID } from 'node:crypto';
-import { ledgerKeys, lockForOrder, lockMarket, recordLedgerEntry, schema } from '@buddha/db';
+import {
+  ledgerKeys,
+  lockForOrder,
+  lockMarket,
+  recordLedgerEntry,
+  schema,
+  settleMarketPositions,
+} from '@buddha/db';
 import {
   completeOnboarding,
   createApprovalRequest,
@@ -114,6 +121,7 @@ import {
   createUser,
   createWatch,
   fundMarketMakerFunds,
+  mintTestPairs,
   openOrderIntake,
   resolveMarketNow,
   resumeMarket,
@@ -2751,6 +2759,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
             evidence: { links: [text.link] },
           });
           expect(Object.keys(correction as object).sort()).toEqual([
+            'compensation',
             'confirmedAt',
             'description',
             'evidence',
@@ -2762,6 +2771,132 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
           expect(correction).toBeNull();
         }
       }
+    }
+  });
+
+  it('publishes a 판정 오류 보상 as counts and a total alone: never A, A’s amount as such, or the members’ reason (#144, ADR-0166; 144-6)', async () => {
+    // A held NO on a market paid YES; the confirmed correction to NO owes A 200, paid by another
+    // admin's approval. A is the one recipient, so the public total is A's amount — 144-6
+    // accepted publishing counts and totals (ADR-0166's privacy paragraph); nothing names A, and
+    // the members' reason is A's wallet's alone.
+    const reviewer = await signUpTestUser(t);
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'admin' })
+      .where(eq(schema.profiles.userId, reviewer.id));
+    await completeOnboarding(t.db, { userId: reviewer.id });
+    await t.app.get(AdminGuard).invalidate(reviewer.id);
+    const tag = randomUUID().replaceAll('-', '').slice(0, 10);
+    const text = {
+      userReason: `leak-compensation-user-reason-${tag}`,
+      reason: `leak-compensation-request-reason-${tag}`,
+      approval: `leak-compensation-approval-${tag}`,
+    };
+    const { market, judgement } = await createProvisionalMarket(t.db, {
+      market: { createdBy: f.admin.id },
+    });
+    await resolveMarketNow(t.db, market.id);
+    const { user: yesHolder } = await createUser(t.db);
+    await createStartGrant(t.db, { userId: yesHolder.id, amountCoin: 10_000n });
+    await mintTestPairs(t.db, {
+      marketId: market.id,
+      yesHolderId: yesHolder.id,
+      noHolderId: f.a.id,
+      qty: 2,
+    });
+    await t.db
+      .update(schema.markets)
+      .set({ status: 'settling' })
+      .where(eq(schema.markets.id, market.id));
+    await t.db.transaction((tx) => settleMarketPositions(tx, market.id));
+    await t.db
+      .update(schema.markets)
+      .set({ status: 'settled', settledAt: new Date() })
+      .where(eq(schema.markets.id, market.id));
+    const write = (url: string, who: TestUser, body: Record<string, unknown>) =>
+      t.app.inject({
+        method: 'POST',
+        url: `/api/v1/admin/markets/${market.id}/${url}`,
+        headers: { origin: ORIGIN, 'content-type': 'application/json', cookie: who.cookie },
+        payload: { expectedAccountId: who.id, noConflictConfirmed: true, ...body },
+      });
+    const registered = await write('judgement-incidents', f.admin, {
+      correctedResult: 'NO',
+      description: '판정 기준 시각의 발표를 잘못 읽었다.',
+      evidence: {
+        links: ['https://example.com/compensation-evidence'],
+        collectedAt: new Date(Date.now() - 60_000).toISOString(),
+      },
+    });
+    expect(registered.statusCode, registered.body).toBe(200);
+    const incidentRequest = (
+      parse(registered.body) as { data: { judgementIncident: { pending: { requestId: string } } } }
+    ).data.judgementIncident.pending.requestId;
+    const confirmed = await write(`judgement-incidents/${incidentRequest}/confirm`, reviewer, {
+      reason: '원문을 다시 확인했다.',
+    });
+    expect(confirmed.statusCode, confirmed.body).toBe(200);
+    const requested = await write('judgement-compensations', f.admin, {
+      reason: text.reason,
+      userReason: text.userReason,
+    });
+    expect(requested.statusCode, requested.body).toBe(200);
+    const requestId = (
+      parse(requested.body) as {
+        data: { judgementIncident: { compensation: { pending: { requestId: string } } } };
+      }
+    ).data.judgementIncident.compensation.pending.requestId;
+    const approved = await write(`judgement-compensations/${requestId}/approve`, reviewer, {
+      reason: text.approval,
+    });
+    expect(approved.statusCode, approved.body).toBe(200);
+    const [row] = await t.db
+      .select()
+      .from(schema.judgementCompensations)
+      .where(eq(schema.judgementCompensations.marketId, market.id));
+    expect(row).toMatchObject({ userId: f.a.id, amountCoin: 200n, outcome: 'paid' });
+
+    const hidden = [
+      text.userReason,
+      text.reason,
+      text.approval,
+      f.a.id,
+      f.admin.id,
+      reviewer.id,
+      judgement.registeredBy,
+      row!.id,
+      requestId,
+    ];
+    for (const cookie of [undefined, f.b.cookie, f.a.cookie]) {
+      const res = await call(routeOf('GET /markets/:idOrSlug'), {
+        params: { idOrSlug: market.slug },
+        cookie,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(hidden.filter((value) => res.body.includes(value))).toEqual([]);
+      expect([...leaked(res.body), ...forbiddenFields(res.body)]).toEqual([]);
+      const { compensation } = (
+        parse(res.body) as {
+          data: { judgingRecord: { correction: { compensation: Record<string, unknown> } } };
+        }
+      ).data.judgingRecord.correction;
+      // One recipient: the total is A's amount, under no name (144-6).
+      expect(compensation).toEqual({
+        status: 'paid',
+        accountCount: 1,
+        paidCount: 1,
+        totalCoin: '200',
+      });
+    }
+    // B's own wallet never carries A's compensation; A's does, with the members' reason only.
+    const bLedger = await call(routeOf('GET /me/ledger'), { cookie: f.b.cookie });
+    expect(bLedger.statusCode).toBe(200);
+    expect(bLedger.body).not.toContain(text.userReason);
+    const aLedger = await call(routeOf('GET /me/ledger'), { cookie: f.a.cookie });
+    expect(aLedger.statusCode).toBe(200);
+    expect(aLedger.body).toContain(text.userReason);
+    for (const value of [text.reason, text.approval, requestId, f.admin.id, reviewer.id]) {
+      expect(aLedger.body).not.toContain(value);
     }
   });
 

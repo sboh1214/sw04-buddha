@@ -78,6 +78,9 @@ const OPERATION_RECORDS = [
   'GET /admin/categories/changes',
   // #144: 판정 오류 사건 검토 대기 — the registrations with who registered them (ADR-0165).
   'GET /admin/market-judgement-incidents',
+  // #144 part 2: the accounts a correction compensates, each named with its amount (ADR-0166) —
+  // an empty page for a market without a confirmed incident, the walk's placeholder id included.
+  'GET /admin/markets/:id/judgement-compensations/recipients',
 ];
 
 describe('admin access (static)', () => {

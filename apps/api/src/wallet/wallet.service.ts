@@ -69,6 +69,11 @@ export interface LedgerEntryLinks {
     mode: ReconciliationCorrectionMode;
     balanceDeltaCoin: bigint;
   } | null;
+  /**
+   * A 판정 오류 보상's event (#144, ADR-0166): the member's compensation row, joined by its entry
+   * and the member (never by `ref_id`) — its members' reason (144-12).
+   */
+  compensation?: { userReason: string } | null;
 }
 
 /**
@@ -89,6 +94,7 @@ export function toLedgerEntry(
   const side = row.toAccountId === accountId ? 'to' : 'from';
   const corrected = row.type === 'RECONCILIATION_CORRECTION';
   const correction = links.correction ?? null;
+  const compensated = row.type === 'JUDGEMENT_COMPENSATION';
   const market = links.market ?? null;
   // The slug and title only while the market is public, as an order's (`toOrder`, ADR-0099).
   const shown = market !== null && isPublicMarketStatus(market.status) ? market : null;
@@ -107,8 +113,16 @@ export function toLedgerEntry(
     refType: corrected ? 'reconciliation_correction' : (row.refType as LedgerEntry['refType']),
     refId: corrected ? (correction?.id ?? `legacy:${row.id}`) : row.refId,
     // A market's event carries no memo: a settlement's names the market's title as it was, which
-    // a market no longer public may not show (marketTitle is null then).
-    memo: corrected ? (correction?.userReason ?? null) : row.marketId === null ? row.memo : null,
+    // a market no longer public may not show (marketTitle is null then). A 판정 오류 보상 names its
+    // market too, and answers the reason its request wrote for the members instead (144-12: never
+    // the internal reasons, the request, the incident or an admin; `ref_id` is the row's own id).
+    memo: corrected
+      ? (correction?.userReason ?? null)
+      : compensated
+        ? (links.compensation?.userReason ?? null)
+        : row.marketId === null
+          ? row.memo
+          : null,
     marketId: row.marketId,
     marketSlug: shown?.slug ?? null,
     marketTitle: shown?.title ?? null,
@@ -677,6 +691,7 @@ export class WalletService {
     if (!account) return { items: [], nextCursor: null };
     const entries = schema.ledgerEntries;
     const corrections = schema.reconciliationCorrections;
+    const compensations = schema.judgementCompensations;
     const { markets } = schema;
     const pageIds = ledgerPageIdsSql(account.id, query, keyset, query.limit + 1);
     const rows = await this.db
@@ -689,12 +704,19 @@ export class WalletService {
           mode: corrections.mode,
           balanceDeltaCoin: corrections.balanceDeltaCoin,
         },
+        compensation: { userReason: compensations.userReason },
       })
       .from(entries)
       .leftJoin(markets, eq(markets.id, entries.marketId))
       .leftJoin(
         corrections,
         and(eq(corrections.ledgerEntryId, entries.id), eq(corrections.userId, userId)),
+      )
+      // #144 (ADR-0166 T23): by the entry (UNIQUE `ledger_entry_id`) and the member — never a cast
+      // of `ref_id`, which holds fill ids and other uuids too.
+      .leftJoin(
+        compensations,
+        and(eq(compensations.ledgerEntryId, entries.id), eq(compensations.userId, userId)),
       )
       .where(sql`${entries.id} = ANY (${pageIds})`)
       .orderBy(desc(entries.createdAt), desc(entries.id));
@@ -710,6 +732,7 @@ export class WalletService {
         toLedgerEntry(row.entry, account.id, {
           market: row.market,
           correction: row.correction,
+          compensation: row.compensation,
           orderId: row.entry.refType === 'fill' ? (orders.get(row.entry.refId) ?? null) : null,
         }),
     );

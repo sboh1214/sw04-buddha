@@ -95,6 +95,7 @@ const scheduled: AdminMarket = {
     pending: null,
     confirmed: null,
     log: [],
+    compensation: null,
   },
 };
 

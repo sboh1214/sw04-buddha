@@ -16,6 +16,7 @@ import { MarketAdminService } from './market-admin.service.js';
 import { marketTagNames } from './market.service.js';
 import { readMarketSources } from './market-sources.js';
 import { MarketJudgementService } from './market-judgement.service.js';
+import { MarketJudgementCompensationService } from './market-judgement-compensation.service.js';
 import { MarketJudgementIncidentService } from './market-judgement-incident.service.js';
 import { lockMarket } from './market-lock.js';
 
@@ -26,6 +27,7 @@ export class MarketConflictsService {
     @Inject(DB) private readonly db: Db,
     private readonly judgements: MarketJudgementService,
     private readonly incidents: MarketJudgementIncidentService,
+    private readonly compensations: MarketJudgementCompensationService,
     private readonly markets: MarketAdminService,
   ) {}
 
@@ -65,6 +67,7 @@ export class MarketConflictsService {
             ),
           },
           retraction: null,
+          compensationsRetracted: [] as string[],
         };
       const at = await clockTimestamp(tx);
       const adminActionId = randomUUID();
@@ -88,6 +91,14 @@ export class MarketConflictsService {
       // registration that chooses a result is a 정정 등록), before the judgements' retraction,
       // which answers the admin detail as both left it.
       await this.incidents.retractOwnPendingForConflict(tx, adminId, marketId, declaration.id);
+      // ADR-0166 T19: and the declarer's own waiting 판정 오류 보상 request (#144 part 2), whose
+      // retraction moves the public compensation status back to 'preparing' (decision 8).
+      const compensationsRetracted = await this.compensations.retractOwnPendingForConflict(
+        tx,
+        adminId,
+        marketId,
+        declaration.id,
+      );
       const retraction = await this.judgements.retractOwnPendingForConflict(
         tx,
         adminId,
@@ -97,9 +108,19 @@ export class MarketConflictsService {
       return {
         answer: { conflicts: await this.read(tx, adminId, marketId), market: retraction.market },
         retraction,
+        compensationsRetracted,
       };
     });
     if (done.retraction !== null) await this.judgements.publishConflictRetraction(done.retraction);
+    // ADR-0166 decision 6: every compensation write repeats the same-key `market:status` so open
+    // pages refetch the moved public status. The judgements' republish above sends one only when a
+    // correction ended, which never happens on a settled market, so a retracted compensation
+    // request sends its own unless that one already went out.
+    if (
+      done.compensationsRetracted.length > 0 &&
+      (done.retraction === null || done.retraction.ended === null)
+    )
+      await this.markets.publishStatus(done.answer.market);
     return done.answer;
   }
 

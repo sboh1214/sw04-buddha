@@ -3,7 +3,9 @@ import type {
   AdminMarket,
   AdminMarketJudgementIncidentQueueItem,
   AdminMarketWorkEntry,
+  LedgerEntry,
   Market,
+  MySettlement,
 } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { test } from './admin-role-fixture';
@@ -15,10 +17,17 @@ import {
   detailCopyTestId,
   documentSurvived,
   expect,
+  expectNoSideScroll,
+  helperTraders,
+  inboxOf,
   judgeMarket,
   judgementEvidenceLink,
   kstLocalOf,
   markDocument,
+  meOf,
+  noticesOf,
+  notificationRow,
+  openCounted,
   secondAdminAccount,
   signIn,
   skipUnlessResolvable,
@@ -112,6 +121,21 @@ async function leaveNoIncident(context: APIRequestContext, marketId: string): Pr
   if (requestId === undefined) return;
   await context
     .post(`/api/v1/admin/markets/${marketId}/judgement-incidents/${requestId}/retract`, {
+      data: { expectedAccountId: await accountIdOf(context) },
+    })
+    .catch(() => undefined);
+}
+
+/** Retracts the compensation request `context`'s admin left waiting, for a `finally`. */
+async function leaveNoCompensationRequest(
+  context: APIRequestContext,
+  marketId: string,
+): Promise<void> {
+  const market = await adminMarketOf(context, marketId).catch(() => null);
+  const requestId = market?.judgementIncident.compensation?.pending?.requestId;
+  if (requestId === undefined) return;
+  await context
+    .post(`/api/v1/admin/markets/${marketId}/judgement-compensations/${requestId}/retract`, {
       data: { expectedAccountId: await accountIdOf(context) },
     })
     .catch(() => undefined);
@@ -455,6 +479,357 @@ test.describe('판정 오류 사건 (#144, ADR-0165)', () => {
       await leaveNoIncident(admin, market.id);
       await firstContext.close();
       await secondContext.close();
+    }
+  });
+});
+
+/**
+ * 판정 오류 보상 (#144 part 2, ADR-0166; owner answers 144-1·144-2·144-4·144-6·144-7·144-10·144-11·
+ * 144-12, 144-15·144-17·144-18·144-19; #144 AC 3·5·6·8, N03 §9 '지급 후 오류 시험'): a market judged YES
+ * and paid — the helper's NO buyer (`traders[0]`) paid 0, the YES buyer (`traders[1]`) 100 — then
+ * its 판정 오류 사건 (correct result NO) registered by the paid judgement's registrant (`admin`) and
+ * confirmed by the second admin, through the API (the screens are spec A's). On the admin detail
+ * the 판정 오류 보상 panel shows what the server computed — one account, 100 Coin — and `admin`
+ * (144-4 lets the paid registrant ask) asks for it with an internal reason and the reason members
+ * read; the public 판정 정정 says '승인 대기 · 대상 계정 1개' and nothing is paid. The second admin
+ * approves it on the same panel: the NO buyer is paid 100 at once — the wallet's '판정 오류 보상'
+ * row with '사유: …', the market and its 판정 기록, under the kind's filter; the recap's '내 보상
+ * 100 Coin'; one 시장 notification in 144-18's sentence — and the YES buyer, over-paid by the
+ * original result, keeps every Coin (no claw-back, AC 3), reads '보상 없음' and its MY 정산 이력 row
+ * still says YES and 100 Coin with the '판정 정정 · 결과 NO' mark alone (144-17). The public record
+ * says '지급 완료 · 대상 계정 1개 · 총 100 Coin', no account; the work history lists the request and
+ * the approval under 지급. A 375 width scrolls nothing sideways.
+ *
+ * Every refusal (held, blocked, stale, registrant, conflict), the database's guards, the
+ * reconciliations after a payout and the public answers' private fields are the API's and the
+ * database's tests (admin-market-judgement-compensations.controller.test.ts, packages/db
+ * judgement-compensation.test.ts, private-data.test.ts); the panel, its dialogs, the recipients
+ * list, the recap and the wallet row are unit-tested.
+ */
+test.describe('판정 오류 보상 (#144, ADR-0166)', () => {
+  test('오류가 확인된 지급 완료 시장에서 지급한 판정의 등록자가 보상을 요청하고 다른 관리자가 승인하면 더 받을 회원만 그 차액을 판정 오류 보상으로 받아 지갑·복기·알림에 보이고, 더 받은 회원의 Coin과 정산 기록은 그대로이며 공개 판정 기록은 건수와 총액만 싣는다', async ({
+    browser,
+    baseURL,
+    admin,
+    reviewer,
+    page,
+  }) => {
+    // The dispute window, a minute, is waited out, then the payout.
+    test.slow();
+    await skipUnlessResolvable(admin);
+    // `closeMarket`'s one pair: the first buys NO (paid 0 by YES), the second YES (paid 100).
+    const [noHolder, yesHolder] = await helperTraders(admin);
+    const market = await createOpenMarket(admin);
+    await closeMarket(admin, market.id);
+    await judgeMarket(admin, market.id, 'YES');
+    await waitForSettled(admin, market.id);
+    const first = await accountIdOf(admin);
+    const second = await accountIdOf(reviewer);
+    const [noMe, yesMe] = await Promise.all([meOf(noHolder), meOf(yesHolder)]);
+
+    // --- the incident, registered by the paid registrant and confirmed by the second admin.
+    const registered = await dataOf<AdminMarket>(
+      await sendIncidentRegistration(admin, market.id, {
+        correctedResult: 'NO',
+        description: `1차 출처가 발표를 정정해 결과는 NO입니다 ${market.tag}`,
+        links: [judgementEvidenceLink(market.id)],
+      }),
+    );
+    const incidentRequest = registered.judgementIncident.pending?.requestId;
+    if (incidentRequest === undefined) throw new Error(`no incident waits on ${market.id}`);
+    const confirmed = await dataOf<AdminMarket>(
+      await reviewer.post(
+        `/api/v1/admin/markets/${market.id}/judgement-incidents/${incidentRequest}/confirm`,
+        {
+          data: {
+            reason: `정정 발표를 확인했습니다 ${market.tag}`,
+            noConflictConfirmed: true,
+            expectedAccountId: second,
+          },
+        },
+      ),
+    );
+    // 144-1: the NO buyer is owed 1 × 100 − 0; the YES buyer 0 − 100, so not a target.
+    expect(confirmed.judgementIncident.compensation).toMatchObject({
+      preview: { accountCount: 1, totalCoin: '100', closedCount: 0, blockedCount: 0 },
+      held: false,
+      pending: null,
+      paid: null,
+    });
+    const publicOf = async () =>
+      (await dataOf<Market>(await page.request.get(`/api/v1/markets/${market.id}`))).judgingRecord
+        .correction;
+    expect((await publicOf())?.compensation).toEqual({
+      status: 'preparing',
+      accountCount: null,
+      paidCount: null,
+      totalCoin: null,
+    });
+    // Each holder's ledger rows of this market (the helper's members trade on other markets of
+    // the worker too, whose payouts may land meanwhile: the market's rows alone are compared).
+    const marketRowsOf = async (holder: APIRequestContext) =>
+      (
+        await dataOf<LedgerEntry[]>(
+          await holder.get(`/api/v1/me/ledger?marketId=${market.id}&limit=100`),
+        )
+      ).map(({ id, kind, amountCoin }) => ({ id, kind, amountCoin }));
+    const noBefore = await marketRowsOf(noHolder);
+    const yesBefore = await marketRowsOf(yesHolder);
+
+    const reason = `정정된 결과로 보상을 요청합니다 ${market.tag}`;
+    const userReason = `1차 출처의 정정 발표에 따라 결과를 NO로 바로잡았습니다 ${market.tag}`;
+    const approval = `대상 계정과 금액을 확인했습니다 ${market.tag}`;
+    const firstContext = await browser.newContext();
+    const secondContext = await browser.newContext();
+    const contexts = [firstContext, secondContext];
+    try {
+      // --- admin 1 (the paid registrant, 144-4) asks for it on the detail.
+      const firstPage = await firstContext.newPage();
+      await signIn(firstPage, adminAccount.email, adminAccount.password);
+      await firstPage.goto(`/admin/markets/${market.id}`);
+      const panel = firstPage.getByTestId('market-judgement-compensation');
+      await expect(panel.getByTestId('market-judgement-compensation-preview')).toHaveText(
+        '대상 계정 1개 · 총 100 Coin',
+      );
+      await letToastsGo(firstPage);
+      await panel.getByTestId('market-judgement-compensation-request').click();
+      const dialog = firstPage.getByTestId('market-judgement-compensation-request-dialog');
+      await dialog.getByTestId('market-judgement-compensation-request-reason').fill(reason);
+      await dialog
+        .getByTestId('market-judgement-compensation-request-user-reason')
+        .fill(userReason);
+      const confirmRequest = dialog.getByTestId(
+        'market-judgement-compensation-request-dialog-confirm',
+      );
+      await expect(confirmRequest).toBeDisabled();
+      await dialog.getByTestId('market-judgement-compensation-request-confirm-conflict').click();
+      await expect(confirmRequest).toBeEnabled();
+      const requested = nextWrite(firstPage, market.id, '/judgement-compensations');
+      await confirmRequest.click();
+      // No account and no amount in the body (144-1).
+      expect((await requested).postDataJSON()).toEqual({
+        reason,
+        userReason,
+        noConflictConfirmed: true,
+        expectedAccountId: first,
+      });
+      await expect(
+        firstPage.getByText(copy.adminMarketJudgementCompensationRequested),
+      ).toBeVisible();
+      await expect(dialog).toHaveCount(0);
+      await expect(panel.getByTestId('market-judgement-compensation-pending-summary')).toHaveText(
+        '대상 계정 1개 · 총 100 Coin',
+      );
+      // Its requester decides nothing (#171).
+      await expect(panel.getByTestId('market-judgement-compensation-approve')).toHaveCount(0);
+      await expect(panel.getByTestId('market-judgement-compensation-retract')).toBeEnabled();
+      // 승인 대기 in public with the 대상 count alone; nothing paid yet.
+      expect((await publicOf())?.compensation).toEqual({
+        status: 'pending',
+        accountCount: 1,
+        paidCount: null,
+        totalCoin: null,
+      });
+      expect(await marketRowsOf(noHolder)).toEqual(noBefore);
+
+      // --- admin 2 approves it on the same panel; the approval pays at once (144-2).
+      const secondPage = await secondContext.newPage();
+      await signIn(secondPage, secondAdminAccount.email, secondAdminAccount.password);
+      await secondPage.goto(`/admin/markets/${market.id}`);
+      const reviewPanel = secondPage.getByTestId('market-judgement-compensation');
+      await expect(
+        reviewPanel.getByTestId('market-judgement-compensation-pending-user-reason'),
+      ).toHaveText(userReason);
+      await letToastsGo(secondPage);
+      await reviewPanel.getByTestId('market-judgement-compensation-approve').click();
+      const approveDialog = secondPage.getByTestId('market-judgement-compensation-approve-dialog');
+      const confirmApprove = approveDialog.getByTestId(
+        'market-judgement-compensation-approve-dialog-confirm',
+      );
+      await approveDialog
+        .getByTestId('market-judgement-compensation-approve-dialog-reason')
+        .fill(approval);
+      await expect(confirmApprove).toBeDisabled();
+      await approveDialog
+        .getByTestId('market-judgement-compensation-approve-confirm-conflict')
+        .click();
+      await expect(confirmApprove).toBeEnabled();
+      const requestId = (await adminMarketOf(admin, market.id)).judgementIncident.compensation
+        ?.pending?.requestId;
+      if (requestId === undefined) throw new Error(`no compensation waits on ${market.id}`);
+      const approved = nextWrite(
+        secondPage,
+        market.id,
+        `/judgement-compensations/${requestId}/approve`,
+      );
+      await confirmApprove.click();
+      expect((await approved).postDataJSON()).toEqual({
+        reason: approval,
+        noConflictConfirmed: true,
+        expectedAccountId: second,
+      });
+      await expect(
+        secondPage.getByText(copy.adminMarketJudgementCompensationApproved),
+      ).toBeVisible();
+      await expect(
+        reviewPanel.getByTestId('market-judgement-compensation-paid-summary'),
+      ).toHaveText('대상 계정 1개 중 1개 지급 · 총 100 Coin');
+      await expect(reviewPanel.getByTestId('market-judgement-compensation-request')).toHaveCount(0);
+
+      // --- the Coin: the NO buyer +100 on top, the YES buyer untouched (no claw-back, AC 3).
+      const noAfter = await marketRowsOf(noHolder);
+      expect(noAfter.slice(1)).toEqual(noBefore);
+      expect(noAfter[0]).toMatchObject({ kind: 'JUDGEMENT_COMPENSATION', amountCoin: '100' });
+      // Nothing written from the over-paid account, nothing taken back.
+      expect(await marketRowsOf(yesHolder)).toEqual(yesBefore);
+      const compensationEntries = async (holder: APIRequestContext) =>
+        dataOf<LedgerEntry[]>(
+          await holder.get(`/api/v1/me/ledger?kind=JUDGEMENT_COMPENSATION&marketId=${market.id}`),
+        );
+      const [entry, ...more] = await compensationEntries(noHolder);
+      expect(more).toEqual([]);
+      expect(entry).toMatchObject({
+        kind: 'JUDGEMENT_COMPENSATION',
+        amountCoin: '100',
+        memo: userReason,
+        marketId: market.id,
+        marketSlug: market.slug,
+        refType: 'judgement_compensation',
+      });
+      expect(await compensationEntries(yesHolder)).toEqual([]);
+      // The paid records never move (AC 2); MY 정산 이력 carries the corrected result (144-17).
+      const settlements = await dataOf<MySettlement[]>(
+        await yesHolder.get(`/api/v1/me/settlements?marketId=${market.id}`),
+      );
+      expect(settlements).toEqual([
+        expect.objectContaining({
+          outcome: 'YES',
+          result: 'YES',
+          payoutCoin: '100',
+          correctedResult: 'NO',
+        }),
+      ]);
+      // 144-18: one 시장 notification to the one paid, none to the over-paid.
+      const [notice, ...again] = noticesOf(await inboxOf(noHolder), 'market_judgement_compensated');
+      expect(again).toEqual([]);
+      expect(notice).toMatchObject({
+        category: 'market',
+        params: {
+          marketTitle: market.title,
+          originalResult: 'YES',
+          correctedResult: 'NO',
+          compensationCoin: '100',
+        },
+      });
+      expect(noticesOf(await inboxOf(yesHolder), 'market_judgement_compensated')).toEqual([]);
+      // In public: counts and the total, no account, nickname or members' reason (144-6).
+      expect((await publicOf())?.compensation).toEqual({
+        status: 'paid',
+        accountCount: 1,
+        paidCount: 1,
+        totalCoin: '100',
+      });
+      const shown = JSON.stringify(
+        await dataOf<Market>(await page.request.get(`/api/v1/markets/${market.id}`)),
+      );
+      for (const secret of [
+        noMe.id,
+        yesMe.id,
+        noMe.profile.nickname ?? noMe.id,
+        userReason,
+        reason,
+        approval,
+        first,
+        second,
+      ]) {
+        expect(shown).not.toContain(secret);
+      }
+
+      // --- the paid member's screens: the wallet row, its filter, the recap, the notification.
+      const noContext = await browser.newContext({
+        baseURL,
+        storageState: await noHolder.storageState(),
+        viewport: page.viewportSize() ?? undefined,
+      });
+      contexts.push(noContext);
+      const noPage = await noContext.newPage();
+      await noPage.goto(`/my/wallet?kind=judgement-compensation&market=${market.id}`);
+      await expect(noPage.getByTestId('wallet-kind')).toHaveValue('JUDGEMENT_COMPENSATION');
+      const ledger = noPage.getByTestId('ledger-list');
+      await expect(ledger.getByTestId('ledger-type')).toHaveText([
+        copy.ledgerTypeJudgementCompensation,
+      ]);
+      await expect(ledger.getByTestId('ledger-amount')).toHaveText(['+100 Coin']);
+      await expect(ledger.getByTestId('ledger-reason')).toHaveText([`사유: ${userReason}`]);
+      await expect(ledger.getByTestId('ledger-market')).toContainText(market.title);
+      await expect(ledger.getByTestId('ledger-judging-link')).toHaveAttribute(
+        'href',
+        `/markets/${market.slug}#judging-record`,
+      );
+      await noPage.goto(`/markets/${market.slug}`);
+      const noPosition = noPage.getByTestId('market-my-position');
+      await expect(noPosition.getByTestId('market-settled-corrected-result')).toHaveText(
+        '정정된 결과 NO',
+      );
+      await expect(noPosition.getByTestId('market-settled-compensation')).toHaveText(
+        '내 보상 100 Coin',
+      );
+      const recordId = detailCopyTestId(noPage, 'market-judging-record');
+      await expect(noPage.getByTestId(`${recordId}-correction-compensation`)).toHaveText(
+        '지급 완료 · 대상 계정 1개 · 총 100 Coin',
+      );
+      await openCounted(noPage, '/my/notifications');
+      if (notice === undefined) throw new Error('no compensation notice');
+      await expect(
+        notificationRow(noPage, notice.id).getByTestId('notification-row-title'),
+      ).toHaveText(`${market.title} 판정 정정 · 결과를 NO로 바로잡고 100 Coin을 보상했습니다.`);
+      await expect(
+        notificationRow(noPage, notice.id).getByTestId('notification-row-category'),
+      ).toHaveText(copy.notificationCategoryMarket);
+
+      // --- the over-paid member: 보상 없음, the record and its MY 정산 이력 row as they were.
+      const yesContext = await browser.newContext({
+        baseURL,
+        storageState: await yesHolder.storageState(),
+        viewport: page.viewportSize() ?? undefined,
+      });
+      contexts.push(yesContext);
+      const yesPage = await yesContext.newPage();
+      await yesPage.goto(`/markets/${market.slug}`);
+      const yesPosition = yesPage.getByTestId('market-my-position');
+      await expect(yesPosition.getByTestId('market-settled-compensation')).toHaveText('보상 없음');
+      await expect(
+        yesPosition.getByTestId('market-settled-yes').getByTestId('market-settled-payout'),
+      ).toHaveText('100 Coin');
+      await yesPage.goto(`/my/history?kind=settlements&market=${market.id}`);
+      const row = yesPage.getByTestId(`history-settlement-${market.id}-YES`);
+      await expect(row.getByTestId('history-settlement-result')).toHaveText(copy.yes);
+      await expect(row.getByTestId('history-settlement-payout')).toHaveText('100 Coin');
+      await expect(row.getByTestId('history-settlement-corrected')).toHaveText(
+        '판정 정정 · 결과 NO',
+      );
+
+      // --- 375 wide, the record with its 판정 정정 and 보상 scrolls nothing sideways.
+      await noPage.setViewportSize({ width: 375, height: 812 });
+      await noPage.goto(`/markets/${market.slug}`);
+      await expect(
+        noPage.getByTestId(`${detailCopyTestId(noPage, 'market-judging-record')}-correction`),
+      ).toBeVisible();
+      await expectNoSideScroll(noPage);
+
+      // --- 작업 이력 under 지급: the request and the approval, counts only.
+      const history = await dataOf<AdminMarketWorkEntry[]>(
+        await admin.get(
+          `/api/v1/admin/markets/${market.id}/work-history?kind=settlement&limit=100`,
+        ),
+      );
+      const types = history.map((each) => each.type);
+      expect(types).toContain('market_judgement_compensation_request');
+      expect(types).toContain('market_judgement_compensation_approve');
+      expect(JSON.stringify(history)).not.toContain(noMe.id);
+    } finally {
+      await leaveNoCompensationRequest(admin, market.id);
+      for (const context of contexts) await context.close();
     }
   });
 });

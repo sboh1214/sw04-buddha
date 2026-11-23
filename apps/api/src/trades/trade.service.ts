@@ -108,7 +108,8 @@ export class TradeService {
    * the payout per contract, the payout and the settlement P&L are never worked out again nor
    * read from the market row, so a line stays what it was whatever happens to the market
    * afterwards. The market gives its slug and title — a settled market is public and stays so —
-   * and `resolved_at`, the one value from outside the record. Neither the ledger nor any
+   * and `resolved_at`, the one value from outside the record — beside the market's confirmed
+   * 판정 정정's result (#144, 144-17: a mark, never an amount). Neither the ledger nor any
    * notification setting is read: a start grant or a regrant is in no figure (N04 §3), and the
    * list is there whatever the account chose to be told (N05 §4).
    *
@@ -139,9 +140,16 @@ export class TradeService {
         settlementPnlCoin: records.settlementPnlCoin,
         resolvedAt: schema.markets.resolvedAt,
         settledAt: records.settledAt,
+        correctedResult: schema.marketJudgementIncidents.correctedResult,
       })
       .from(records)
       .innerJoin(schema.markets, eq(schema.markets.id, records.marketId))
+      // #144 (144-17): the market's confirmed 판정 정정 (UNIQUE `market_id`, never two rows) marks
+      // the line; the record's own result and figures stay what was paid.
+      .leftJoin(
+        schema.marketJudgementIncidents,
+        eq(schema.marketJudgementIncidents.marketId, records.marketId),
+      )
       .where(
         and(
           eq(records.userId, userId),
@@ -179,6 +187,7 @@ export class TradeService {
         settlementPnlCoin: serializeCoinAmount(row.settlementPnlCoin),
         resolvedAt: row.resolvedAt === null ? null : row.resolvedAt.toISOString(),
         settledAt: row.settledAt.toISOString(),
+        correctedResult: row.correctedResult,
       })),
       nextCursor:
         hasMore && last

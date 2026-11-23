@@ -26,7 +26,8 @@ import {
  * (52-20); #134 registers the 거래 three (ADR-0158), #54 the 시장 five (ADR-0159, the wording of
  * 54-1 — owner's answer of 2026-11-22), #188 the 판정·정산 six (ADR-0160, the wording of 188-1 —
  * owner's answer of 2026-11-22), #135 the 커뮤니티 six (ADR-0161, the wording of 135-5 — owner's
- * answer of 2026-11-22). The web's renderer words a type from its
+ * answer of 2026-11-22), #144 the 판정 오류 보상's one (ADR-0166, the wording of 144-18 — owner's
+ * answer of 2026-11-23). The web's renderer words a type from its
  * copy (`NOTIFICATION_RENDERERS[type].copy`), whose entries equal `text` here, in order
  * (apps/web lib/notifications.test.ts): whole sentences with single-brace placeholders the web
  * fills, and the words it fills some of them with. docs/GUARDS.md has the registration rule.
@@ -234,6 +235,18 @@ export const NOTIFICATION_TYPE_REGISTRY = {
     text: ['시장 제안 {decision} · {question}', '채택', '반려'],
     reason:
       '내 시장 제안의 채택·반려 결론만(접수·검토·시장 연결은 알리지 않는다) — 사유는 MY 내 제안에서. N05 §6, ADR-0161, 52-19·135-5',
+  },
+  // #144 (ADR-0166, the wording of 144-18 — owner's answer of 2026-11-23). `{result}` is the
+  // corrected result's label; every label (YES, NO, 무효) takes '로', so 144-18's '(으)로' is '로'.
+  market_judgement_compensated: {
+    text: [
+      '{market} 판정 정정 · 결과를 {result}로 바로잡고 {coin}을 보상했습니다.',
+      'YES',
+      'NO',
+      '무효',
+    ],
+    reason:
+      '지급 완료 뒤 판정 오류가 확인된 시장의 판정 오류 보상을 받은 회원에게, 지급한 때 한 건 — 정정된 결과와 내가 받은 보상 Coin. 오류 확인 때·탈퇴 계정·보상 없는 보유자·관심 등록자에게는 보내지 않는다. N03 §7, ADR-0166, 52-20·52-21·144-18',
   },
 } as const satisfies Record<NotificationType, NotificationTypeText>;
 

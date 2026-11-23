@@ -22,6 +22,7 @@ const WON: MySettlement = {
   settlementPnlCoin: '180',
   resolvedAt: '2026-11-15T01:00:00.000Z',
   settledAt: '2026-11-16T02:00:00.000Z',
+  correctedResult: null,
 };
 
 const ONLY = `/my/history?kind=settlements&market=${MARKET}`;
@@ -64,6 +65,25 @@ describe('SettlementHistoryRow', () => {
     ]) {
       expect(html, label).toContain(label);
     }
+  });
+
+  it('marks a corrected market’s row with the corrected result alone, its figures the paid ones (#144, 144-17)', () => {
+    expect(byTestId(row(), 'history-settlement-corrected')).toBeUndefined();
+    const html = row({ correctedResult: 'NO' });
+    expect(byTestId(html, 'history-settlement-corrected')?.text).toBe('판정 정정 · 결과 NO');
+    // The record's own columns stay the paid result's: YES, 100 a contract, 300 paid.
+    expect(cell(html, 'result')).toBe(copy.yes);
+    expect(cell(html, 'each')).toBe('100 Coin');
+    expect(cell(html, 'payout')).toBe('300 Coin');
+    // No amount in the mark (the compensation is the wallet's and the recap's).
+    expect(byTestId(html, 'history-settlement-corrected')?.text).not.toMatch(/\d|Coin|보상/);
+    expect(byTestId(row({ correctedResult: 'VOID' }), 'history-settlement-corrected')?.text).toBe(
+      '판정 정정 · 결과 무효',
+    );
+    // 판정 기록 still leads to the record, where the correction is.
+    expect(byTestId(html, 'history-settlement-judging')?.attributes.href).toBe(
+      `/markets/${WON.marketSlug}#judging-record`,
+    );
   });
 
   it('keeps a losing contract’s line: a payout of 0 Coin and the cost as its loss', () => {

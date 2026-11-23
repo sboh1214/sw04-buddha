@@ -1,6 +1,8 @@
 import * as z from 'zod';
 import { adminAccountActorSchema } from './admin-accounts.js';
+import { coinAmountSchema } from './api/coin-amount.js';
 import { approvalReasonSchema } from './approvals.js';
+import { adminMarketJudgementCompensationSchema } from './judgement-compensation.js';
 import {
   type MarketResult,
   type MarketStatus,
@@ -49,7 +51,8 @@ import { storableInstantSchema } from './market-rules.js';
  * - 철회 (`…/retract`): the registrant's, in any status, before a decision; a self-declared
  *   conflict retracts the declarer's own waiting incident (ADR-0120 decision 6).
  *
- * No Coin moves here (판정 오류 보상 is #144 part 2, ADR-0166).
+ * No Coin moves here: 판정 오류 보상 is #144 part 2 (ADR-0166, judgement-compensation.ts), whose
+ * state the admin record carries beside the incident's (`compensation`).
  */
 
 /** `approval_requests.kind` of a 판정 오류 사건 (#171: lower-case words, `_`; never the judgement's). */
@@ -353,19 +356,36 @@ export const adminMarketJudgementIncidentSchema = z
     confirmed: marketJudgementIncidentConfirmedSchema.nullable(),
     /** Every incident registration of the market, the newest first, the waiting one included. */
     log: z.array(marketJudgementIncidentLogEntrySchema),
+    /**
+     * The confirmed incident's 판정 오류 보상 (#144 part 2, ADR-0166; judgement-compensation.ts);
+     * null while none is confirmed.
+     */
+    compensation: adminMarketJudgementCompensationSchema.nullable(),
   })
   .meta({ id: 'AdminMarketJudgementIncident' });
 export type AdminMarketJudgementIncident = z.infer<typeof adminMarketJudgementIncidentSchema>;
 
 // ---- the queue ------------------------------------------------------------------------
 /**
+ * What a row of the 판정 오류 사건 검토 대기 queue waits for (ADR-0166 T13 — one queue for both):
+ * `incident`, a registration's 오류 확인 or 기각 (`market_judgement_incident`); `compensation`, a
+ * 보상 request's 승인 or 반려 (`market_judgement_compensation`, #144 part 2).
+ */
+export const MARKET_JUDGEMENT_INCIDENT_QUEUE_KINDS = ['incident', 'compensation'] as const;
+export type MarketJudgementIncidentQueueKind =
+  (typeof MARKET_JUDGEMENT_INCIDENT_QUEUE_KINDS)[number];
+
+/**
  * One row of `GET /admin/market-judgement-incidents` (판정 오류 사건 검토 대기; query
- * `cursorQuerySchema`): a waiting incident and its market, the oldest request first — its status
- * (a confirmation waits for SETTLED, 144-13), the paid result and the corrected one, who
- * registered it and when.
+ * `cursorQuerySchema`): a waiting incident registration or compensation request (`kind`) and its
+ * market, the oldest request first — its status (a confirmation waits for SETTLED, 144-13; a
+ * compensation is asked on a SETTLED market alone), the paid result and the corrected one (a
+ * compensation's from its confirmed incident), who asked and when, and — for a compensation — its
+ * frozen list's length and total (null for an incident). Never an account of the list.
  */
 export const adminMarketJudgementIncidentQueueItemSchema = z
   .object({
+    kind: z.enum(MARKET_JUDGEMENT_INCIDENT_QUEUE_KINDS),
     requestId: z.uuid(),
     marketId: z.uuid(),
     slug: z.string(),
@@ -375,6 +395,10 @@ export const adminMarketJudgementIncidentQueueItemSchema = z
     correctedResult: marketResultSchema,
     requestedBy: adminAccountActorSchema,
     requestedAt: z.iso.datetime(),
+    /** A compensation request's 대상 계정 count (its frozen list); null for an incident. */
+    accountCount: z.number().int().min(1).nullable(),
+    /** A compensation request's total, Coin as a decimal string; null for an incident. */
+    totalCoin: coinAmountSchema.nullable(),
   })
   .meta({ id: 'AdminMarketJudgementIncidentQueueItem' });
 export type AdminMarketJudgementIncidentQueueItem = z.infer<

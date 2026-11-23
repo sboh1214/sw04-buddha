@@ -224,8 +224,8 @@ test.describe('재지급 (#74)', () => {
         copy.regrantRefusalNotExhaustedTail,
     );
     await expect(card.getByTestId('regrant-apply')).toBeDisabled();
-    // The ledger's filter offers 재지급 after the five (#74).
-    await expect(page.getByTestId('wallet-kind').locator('option').last()).toHaveText(
+    // The ledger's filter offers 재지급 after the five (#74), before 판정 오류 보상 (#144).
+    await expect(page.getByTestId('wallet-kind').locator('option').nth(-2)).toHaveText(
       copy.ledgerTypeRegrant,
     );
     await expectNoSideScroll(page);

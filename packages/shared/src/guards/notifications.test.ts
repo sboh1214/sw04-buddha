@@ -45,7 +45,7 @@ describe('NOTIFICATION_TYPES (#113, #53)', () => {
     }
   });
 
-  it('registers the 거래 three of #134, the 시장 five of #54, the 판정·정산 six of #188 and the 커뮤니티 six of #135 with single-brace placeholders only (ADR-0158~ADR-0161)', () => {
+  it('registers the 거래 three of #134, the 시장 five of #54, the 판정·정산 six of #188, the 커뮤니티 six of #135 and #144’s 판정 오류 보상 with single-brace placeholders only (ADR-0158~ADR-0161, ADR-0166)', () => {
     expect(Object.keys(NOTIFICATION_TYPE_REGISTRY)).toEqual([
       'order_filled',
       'orders_cancelled',
@@ -67,8 +67,9 @@ describe('NOTIFICATION_TYPES (#113, #53)', () => {
       'moderation_action_cancelled',
       'moderation_restriction_end_changed',
       'proposal_decided',
+      'market_judgement_compensated',
     ]);
-    expect(Object.keys(NOTIFICATION_TYPE_REGISTRY)).toHaveLength(20);
+    expect(Object.keys(NOTIFICATION_TYPE_REGISTRY)).toHaveLength(21);
     // `{{key}}` in the web's copy must be a business fact (legal.test.ts): never here.
     for (const candidate of NOTIFICATION_TYPES) {
       for (const text of candidate.text) {
@@ -164,6 +165,28 @@ describe('NOTIFICATION_TYPES (#113, #53)', () => {
         // No amount, count or time is written into the copy: each is a placeholder.
         expect(sentence, type).not.toMatch(/[0-9]/);
       }
+    }
+  });
+
+  it('words the 판정 오류 보상 as 144-18 answered: the corrected result and the compensation, no claw-back word', () => {
+    const { text, reason } = NOTIFICATION_TYPE_REGISTRY.market_judgement_compensated;
+    expect(text).toEqual([
+      '{market} 판정 정정 · 결과를 {result}로 바로잡고 {coin}을 보상했습니다.',
+      'YES',
+      'NO',
+      '무효',
+    ]);
+    expect(reason).toContain('ADR-0166');
+    expect(reason).toContain('144-18');
+    expect(
+      findExcludedNotification({ type: 'market_judgement_compensated', text, reason }),
+    ).toEqual([]);
+    for (const sentence of text) {
+      // #188's banned words (copy.test.ts): no refund, P&L, score, rank or 정답 (N03 §6, N04).
+      expect(sentence).not.toMatch(
+        /환불|원금|손익|순위|랭킹|실력|점수|스코어|수익률|승률|적중|정답|맞힌|배지|정산 기준|회수/,
+      );
+      expect(sentence).not.toMatch(/[0-9]/);
     }
   });
 

@@ -119,6 +119,17 @@ describe('public judging record', () => {
       confirmedAt: at,
       description: '발표 원문의 수치를 잘못 읽었다.',
       evidence: { links: ['https://example.com/source'], collectedAt: at, memo: 'private' },
+      // #144 part 2 (ADR-0166; 144-6, 144-15): counts, the total and the status — never an
+      // account, a nickname, one account's amount or the members' reason.
+      compensation: {
+        status: 'paid',
+        accountCount: 2,
+        paidCount: 1,
+        totalCoin: '100',
+        recipients: [{ userId: 'private', amountCoin: '100' }],
+        userReason: 'private',
+        approvedBy: 'private',
+      },
       // What the admin record has and the public one must not carry (#173 item 13).
       incidentId: 'private',
       requestId: 'private',
@@ -137,9 +148,11 @@ describe('public judging record', () => {
       confirmedAt: at,
       description: '발표 원문의 수치를 잘못 읽었다.',
       evidence: { links: ['https://example.com/source'], collectedAt: at },
+      compensation: { status: 'paid', accountCount: 2, paidCount: 1, totalCoin: '100' },
     });
     expect(JSON.stringify(parsed)).not.toContain('private');
     expect(Object.keys(publicMarketJudgementCorrectionSchema.shape).sort()).toEqual([
+      'compensation',
       'confirmedAt',
       'description',
       'evidence',

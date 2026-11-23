@@ -1,4 +1,9 @@
-import { CONTRACT_TERMS, PAYOUT_PER_CONTRACT_COIN, formatCoin } from '@buddha/shared';
+import {
+  CONTRACT_TERMS,
+  PAYOUT_PER_CONTRACT_COIN,
+  findExcludedText,
+  formatCoin,
+} from '@buddha/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { copy } from './copy';
 import {
@@ -107,6 +112,96 @@ describe('copy', () => {
     // 사건 등록's no_decider names the 144-4 exclusion too, not a conflict alone (the judgement's).
     expect(copy.errMarketJudgementIncidentNoDecider).not.toBe(copy.marketConflictNoDecider);
     expect(copy.errMarketJudgementIncidentNoDecider).toContain('지급한 판정을 등록한 관리자');
+  });
+
+  it('words the 판정 오류 보상 as 144-15·144-18·144-19 approved, with no refund, P&L or 정답 (#144)', () => {
+    // Public (144-6, 144-15): the 보상 line's four states, the closed targets counted apart.
+    expect([
+      copy.judgingCompensationPreparing,
+      copy.judgingCompensationNone,
+      copy.judgingCompensationPending,
+      copy.judgingCompensationPaid,
+      copy.judgingCompensationPaidPartly,
+    ]).toEqual([
+      '보상 준비 중',
+      '보상 대상 없음',
+      '승인 대기 · 대상 계정 {n}개',
+      '지급 완료 · 대상 계정 {n}개 · 총 {coin}',
+      '지급 완료 · 대상 계정 {n}개 중 {m}개 지급 · 총 {coin}',
+    ]);
+    // Member (144-10, 144-11, 144-17, 144-18, 144-19): the wallet's kind, the recap's lines, MY
+    // 정산 이력's mark and the notification.
+    expect(copy.ledgerTypeJudgementCompensation).toBe('판정 오류 보상');
+    expect([
+      copy.recapCorrection,
+      copy.recapCorrectedResult,
+      copy.recapCompensationAmount,
+      copy.recapCompensationNone,
+      copy.recapCompensationPending,
+      copy.recapCompensationPreparing,
+      copy.recapJudgingRecord,
+    ]).toEqual([
+      '판정 정정',
+      '정정된 결과 {result}',
+      '내 보상 {coin}',
+      '보상 없음',
+      '보상 승인 대기',
+      '보상 준비 중',
+      '판정 기록 보기',
+    ]);
+    expect(copy.historySettlementCorrected).toBe('판정 정정 · 결과 {result}');
+    expect(copy.notificationJudgementCompensated).toBe(
+      '{market} 판정 정정 · 결과를 {result}로 바로잡고 {coin}을 보상했습니다.',
+    );
+    // Admin (144-19): the approved words.
+    expect([
+      copy.adminMarketJudgementCompensationRequest,
+      copy.adminMarketJudgementCompensationUserReason,
+      copy.adminMarketJudgementCompensationApprove,
+      copy.adminMarketJudgementCompensationReject,
+      copy.adminMarketJudgementCompensationRecipients,
+      copy.adminMarketJudgementCompensationStateClosed,
+      copy.adminMarketJudgementCompensationStateBlocked,
+    ]).toEqual([
+      '보상 요청',
+      '회원에게 보일 사유',
+      '보상 승인',
+      '보상 반려',
+      '대상 계정',
+      '탈퇴로 지급 못 함',
+      '원장 확인 필요',
+    ]);
+    // The queue intro bars the paid registrant from 보상 승인 alone; 보상 반려 is a 정리 목적의
+    // 반려 any admin but the requester may give (ADR-0120 decision 5, panel registrant note).
+    const [approveRule, rejectRule] = copy.adminMarketJudgementCompensationQueueIntro
+      .split('. ')
+      .slice(1);
+    expect(approveRule).toMatch(/지급한 판정을 등록하지도 않은 관리자가 .*보상 승인합니다$/);
+    expect(approveRule).not.toMatch(/반려/);
+    expect(rejectRule).toBe('보상 반려는 요청한 관리자가 아니면 할 수 있습니다.');
+    expect(rejectRule).not.toMatch(/지급한 판정/);
+    // Every new 보상·지급 string passes the excluded words (활동·접속·글… never before 보상·지급).
+    const texts = Object.entries(copy).filter(
+      ([key]) =>
+        key.startsWith('adminMarketJudgementCompensation') ||
+        key.startsWith('errMarketJudgementCompensation') ||
+        key.startsWith('adminMarketWorkCompensation') ||
+        key.startsWith('judgingCompensation') ||
+        key.startsWith('recapC') ||
+        [
+          'recapJudgingRecord',
+          'historySettlementCorrected',
+          'ledgerTypeJudgementCompensation',
+          'notificationJudgementCompensated',
+        ].includes(key),
+    );
+    expect(texts.length).toBeGreaterThan(90);
+    for (const [key, text] of texts) {
+      expect(findExcludedText(text), key).toEqual([]);
+      expect(text, key).not.toMatch(
+        /환불|원금|송금|이체|리워드|적립|정산 오류|손익|정답|맞힌|\d+ Coin씩|수익률|순위|점수/,
+      );
+    }
   });
 
   it('words the recap’s links and its empty line with no score, rank or refund (#34)', () => {

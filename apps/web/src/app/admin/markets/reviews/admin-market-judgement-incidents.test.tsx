@@ -17,6 +17,7 @@ const row = (
   requestId: string,
   fields: Partial<AdminMarketJudgementIncidentQueueItem> = {},
 ): AdminMarketJudgementIncidentQueueItem => ({
+  kind: 'incident',
   requestId,
   marketId: MARKET,
   slug: 'first-snow',
@@ -26,6 +27,8 @@ const row = (
   correctedResult: 'NO',
   requestedBy: { id: 'registrant', nickname: '등록한이' },
   requestedAt: '2026-11-30T02:00:00.000Z',
+  accountCount: null,
+  totalCoin: null,
   ...fields,
 });
 
@@ -72,6 +75,7 @@ describe('AdminMarketJudgementIncidents', () => {
     ]);
     expect(byTagName(html, 'th').map((cell) => cell.text)).toEqual([
       copy.adminMarketJudgementIncidentsColTitle,
+      copy.adminMarketJudgementCompensationQueueColKind,
       copy.adminMarketJudgementIncidentsColStatus,
       copy.adminMarketJudgementIncidentsColOriginal,
       copy.adminMarketJudgementIncidentsColCorrected,
@@ -104,6 +108,43 @@ describe('AdminMarketJudgementIncidents', () => {
     expect(byTestId(html, 'admin-market-judgement-incidents-more')).toBeUndefined();
     // Nothing of the description, the evidence or a reason: the detail's to show.
     expect(section?.text).not.toContain('https://');
+  });
+
+  it('holds the 보상 승인 requests in the same table, with their count and total (#144, T13)', () => {
+    const html = drawn([
+      {
+        items: [
+          row(FIRST),
+          row(SECOND, {
+            kind: 'compensation',
+            requestedBy: { id: 'asker', nickname: '요청한이' },
+            accountCount: 3,
+            totalCoin: '1250',
+          }),
+        ],
+        nextCursor: null,
+      },
+    ]);
+    expect(
+      byTestId(html, `admin-market-judgement-incident-${FIRST}`)?.attributes['data-kind'],
+    ).toBe('incident');
+    expect(byTestId(html, `admin-market-judgement-incident-kind-${FIRST}`)?.text).toBe('사건 검토');
+    expect(byTestId(html, `admin-market-judgement-incident-summary-${FIRST}`)).toBeUndefined();
+    expect(
+      byTestId(html, `admin-market-judgement-incident-${SECOND}`)?.attributes['data-kind'],
+    ).toBe('compensation');
+    expect(byTestId(html, `admin-market-judgement-incident-kind-${SECOND}`)?.text).toContain(
+      '보상 승인',
+    );
+    expect(byTestId(html, `admin-market-judgement-incident-summary-${SECOND}`)?.text).toBe(
+      '대상 계정 3개 · 총 1,250 Coin',
+    );
+    expect(byTestId(html, `admin-market-judgement-incident-requested-by-${SECOND}`)?.text).toBe(
+      '요청한이',
+    );
+    expect(byTestId(html, 'admin-market-judgement-incidents')?.text).toContain(
+      copy.adminMarketJudgementCompensationQueueIntro,
+    );
   });
 
   it('offers 더 보기 while another page follows', () => {

@@ -61,11 +61,11 @@ import {
   copyTestId,
   delta24h,
   detailViewOf,
-  drawnAnchor,
   marketRefreshNotice,
   nextReviewWaitAt,
   perWidth,
   personalAreaView,
+  scrollToJudgingRecord,
   showsOrderArea,
   shownJudgementDelay,
   statusNotice,
@@ -150,14 +150,6 @@ function useJudgingRecordAnchor(ready: boolean) {
     if (!ready || window.location.hash !== `#${JUDGING_RECORD_ANCHOR}`) return;
     scrollToJudgingRecord();
   }, [ready]);
-}
-
-/** Scrolls to the copy of 공개 판정 기록 this width draws (`drawnAnchor`); nothing when none is. */
-function scrollToJudgingRecord() {
-  const copies = [
-    ...document.querySelectorAll<HTMLElement>(`[data-anchor="${JUDGING_RECORD_ANCHOR}"]`),
-  ].map((element) => ({ element, drawn: element.getClientRects().length > 0 }));
-  drawnAnchor(copies)?.element.scrollIntoView({ block: 'start' });
 }
 
 export interface MarketDetailProps {
@@ -310,7 +302,12 @@ export function MarketDetail({
             the price above it. `undefined` while the row is unknown, which is each prop's
             documented default; the page seeds the cache before the first client render, so that
             is a fallback and not the path. */}
-        <MyPosition marketId={marketId} status={data?.status} live={data} />
+        <MyPosition
+          marketId={marketId}
+          status={data?.status}
+          live={data}
+          correction={data?.judgingRecord.correction ?? null}
+        />
         {/* 내 대기 주문 (#123, ADR-0141): this market's live orders of the account, the rows MY
             draws with 주문 취소 and '취소 요청 중'. */}
         <MarketMyOpenOrders marketId={marketId} />

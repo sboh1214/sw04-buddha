@@ -1547,6 +1547,16 @@ describe.skipIf(!hasTestDb())('notifications (integration, #53)', () => {
           params: { decision: 'adopted', question: '내 질문' },
           target: { kind: 'proposal', proposalId: uuid(9) },
         },
+        // #144 (ADR-0166, 144-18): a 시장 notification, so `market` off skips it too.
+        market_judgement_compensated: {
+          params: {
+            marketTitle: title,
+            originalResult: 'YES',
+            correctedResult: 'NO',
+            compensationCoin: '100',
+          },
+          target: slugTarget,
+        },
       };
 
       it('has a sample of every product type and no other', () => {

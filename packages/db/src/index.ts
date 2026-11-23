@@ -72,6 +72,27 @@ export {
   type RecordMarketJudgementIncidentInput,
 } from './market-judgement-incident.js';
 export {
+  JudgementCompensationBlockedError,
+  judgementCompensationNotificationInputs,
+  judgementCompensationPayloadOf,
+  judgementCompensationTargets,
+  lockJudgementCompensationRecipients,
+  payJudgementCompensation,
+  prepareJudgementCompensationPayout,
+  readJudgementCompensationFacts,
+  readJudgementCompensationRequests,
+  readJudgementCompensationRows,
+  type JudgementCompensationPaid,
+  type JudgementCompensationPayoutCheck,
+  type JudgementCompensationRecipients,
+  type JudgementCompensationRequestRead,
+  type JudgementCompensationRow,
+  type JudgementCompensationTarget,
+  type LockedJudgementCompensationRecipient,
+  type PayJudgementCompensationInput,
+  type PayJudgementCompensationResult,
+} from './judgement-compensation.js';
+export {
   approveMarketJudgement,
   correctMarketJudgement,
   currentMarketJudgement,

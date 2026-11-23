@@ -582,7 +582,10 @@ export type MyFillsQuery = z.infer<typeof myFillsQuerySchema>;
  * cost (N02 §8); start grants and regrants are in no figure (N04 §3). `settledAt` is when this
  * account's payout completed, the time the list is ordered and filtered by; `resolvedAt` is the
  * market's 결과 확정 (N03 §5: the two are shown apart), the one value read from the market row.
- * Owner only: no account, ledger entry id, judgement or rule version, fee or total.
+ * `correctedResult` is the market's confirmed 판정 오류 사건's corrected result (#144, ADR-0166;
+ * 144-17 "'판정 정정 · 결과 {정정된 결과}' 표시만 — 금액은 더하지 않는다"), null without one: the record's
+ * `result` and figures stay what was paid. Owner only: no account, ledger entry id, judgement or
+ * rule version, fee or total, and no compensation amount (the wallet and the recap show it).
  */
 export const mySettlementSchema = z
   .object({
@@ -601,6 +604,8 @@ export const mySettlementSchema = z
     settlementPnlCoin: coinAmountSchema,
     resolvedAt: z.iso.datetime().nullable(),
     settledAt: z.iso.datetime(),
+    /** The confirmed 판정 정정's result (#144, 144-17); null when the market has none. */
+    correctedResult: marketResultSchema.nullable(),
   })
   .meta({ id: 'MySettlement' });
 export type MySettlement = z.infer<typeof mySettlementSchema>;

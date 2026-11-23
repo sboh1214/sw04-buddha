@@ -13,6 +13,7 @@ import {
   MARKET_DISPUTE_STATUSES,
   MARKET_EVENT_TYPES,
   MARKET_JUDGEMENT_APPROVAL_KIND,
+  MARKET_JUDGEMENT_COMPENSATION_APPROVAL_KIND,
   MARKET_JUDGEMENT_INCIDENT_APPROVAL_KIND,
   MARKET_PAUSE_DECISION_APPROVAL_KIND,
   MARKET_PAUSE_END_KINDS,
@@ -137,9 +138,13 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
     MARKET_JUDGEMENT_APPROVAL_KIND,
     MARKET_CANCEL_APPROVAL_KIND,
     RECONCILIATION_RECOVERY_APPROVAL_KIND,
-    // #144: a SETTLED market's judgement incident (ADR-0165).
+    // #144: a SETTLED market's judgement incident (ADR-0165) and its compensation (ADR-0166).
     MARKET_JUDGEMENT_INCIDENT_APPROVAL_KIND,
+    MARKET_JUDGEMENT_COMPENSATION_APPROVAL_KIND,
   ],
+  // #144 (ADR-0166): what became of a listed account at the approval — paid, or 'closed' (탈퇴로
+  // 지급 못 함, 144-7; never the cash-out's `withdraw*`), held by a CHECK.
+  'judgement_compensations.outcome': schema.JUDGEMENT_COMPENSATION_OUTCOMES,
   // #80: the items a rule version changed (a text[] of the version items' keys, held by a CHECK).
   'market_rule_versions.changed_items': RULE_VERSION_ITEMS,
   // #114: a pause's reason (three only, ADR-0093 #173 item 3), a `basis_change` pause's review
@@ -555,6 +560,42 @@ describe('excluded features in stored data (#113)', () => {
           'market_judgement_incident_confirm',
           'market_judgement_incident_dismiss',
           'market_judgement_incident_retract',
+        ].map((name) => ({ where: 'admin_actions.type value', name })),
+      ]),
+    );
+  });
+
+  it('names the judgement compensations, their CHECKs and the compensation’s stored values, each read above (#144)', () => {
+    // ADR-0166, migration 0081: the table of a confirmed incident's compensation, its keys and
+    // CHECKs under the names the schema test spells, its outcome values, the ledger type and
+    // reference, and the compensation's approval kind and admin action types, which the test above
+    // reads for an excluded feature ('compensation', 'judgement', 'closed', 'paid' name none —
+    // never reward, bonus, withdraw or transfer).
+    expect(storageNames()).toEqual(
+      expect.arrayContaining([
+        { where: 'table', name: 'judgement_compensations' },
+        ...[
+          'judgement_compensations_amount_check',
+          'judgement_compensations_outcome_check',
+          'judgement_compensations_user_reason_check',
+          'judgement_compensations_approver_check',
+          'judgement_compensations_incident_fk',
+          'judgement_compensations_incident_id_user_id_unique',
+          'judgement_compensations_market_id_user_id_idx',
+          'judgement_compensations_approval_id_idx',
+        ].map((name) => ({ where: 'judgement_compensations constraint', name })),
+        ...['paid', 'closed'].map((name) => ({
+          where: 'judgement_compensations.outcome value',
+          name,
+        })),
+        { where: 'ledger_entry_type value', name: 'JUDGEMENT_COMPENSATION' },
+        { where: 'ledger_entries.ref_type value', name: 'judgement_compensation' },
+        { where: 'approval_requests.kind value', name: 'market_judgement_compensation' },
+        ...[
+          'market_judgement_compensation_request',
+          'market_judgement_compensation_approve',
+          'market_judgement_compensation_reject',
+          'market_judgement_compensation_retract',
         ].map((name) => ({ where: 'admin_actions.type value', name })),
       ]),
     );

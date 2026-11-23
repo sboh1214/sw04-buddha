@@ -1098,6 +1098,35 @@ describe('who tells of a judgement or a payout (#188, static)', () => {
     expect(SETTLED.test("the one `to: 'settled'` transition")).toBe(false);
   });
 
+  it('tells of a 판정 오류 보상 with its payout only (#144, 52-20, 144-18)', () => {
+    // The approval that pays (`payJudgementCompensation`, ADR-0166) builds its payees' notices and
+    // writes them in its one call; the builder is called nowhere else, and its file writes none
+    // (pure, as #188's). A 오류 확인 is silent (144-18): no caller of the incident's writer builds
+    // the compensation's notice unless it also pays.
+    const PAYS = callOf('payJudgementCompensation');
+    const BUILDS = /\bjudgementCompensationNotificationInputs\(/;
+    const definition = 'packages/db/src/judgement-compensation.ts';
+    const payers = files.filter((file) => PAYS.test(read(file)));
+    // The API's 보상 승인 alone pays (ADR-0166 §6.2) — no worker job, no other route.
+    expect(payers).toEqual(['apps/api/src/markets/market-judgement-compensation.service.ts']);
+    for (const file of payers) {
+      expect(read(file), file).toMatch(BUILDS);
+      expect(read(file), file).toMatch(WRITES);
+    }
+    expect(files.filter((file) => file !== definition && BUILDS.test(read(file))).sort()).toEqual(
+      [...payers].sort(),
+    );
+    expect(read(definition)).not.toMatch(WRITES);
+    expect(read(definition)).not.toMatch(/\.transaction\(/);
+    for (const file of files.filter((file) =>
+      callOf('recordMarketJudgementIncident').test(read(file)),
+    )) {
+      if (!PAYS.test(read(file))) expect(read(file), file).not.toMatch(BUILDS);
+    }
+    expect(PAYS.test('await payJudgementCompensation(tx, {')).toBe(true);
+    expect(PAYS.test('export async function payJudgementCompensation(\n  tx: Tx,')).toBe(false);
+  });
+
   it('keeps the final settlement’s notices in the payout’s transaction: no savepoint, no second delivery (188-2)', () => {
     const builders = read('packages/db/src/judgement-notifications.ts');
     expect(builders).not.toMatch(/\.transaction\(/);

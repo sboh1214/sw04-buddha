@@ -367,6 +367,8 @@ describe.skipIf(!hasTestInfra)('admin market judgement incidents (integration)',
             retractedAt: null,
           }),
         ],
+        // #144 part 2 (ADR-0166): no incident confirmed, so no compensation.
+        compensation: null,
       });
       const actions = await actionsFor(market.id);
       expect(actions.map((row) => [row.type, row.adminId])).toEqual([
@@ -553,6 +555,8 @@ describe.skipIf(!hasTestInfra)('admin market judgement incidents (integration)',
       confirmedAt: request!.decidedAt!.toISOString(),
       description: DESCRIPTION,
       evidence: { links: [LINK], collectedAt: incident!.evidenceCollectedAt.toISOString() },
+      // #144 part 2 (ADR-0166; 144-15): the NO holder is owed, nothing asked yet — 보상 준비 중.
+      compensation: { status: 'preparing', accountCount: null, paidCount: null, totalCoin: null },
     });
     const body = JSON.stringify(shown);
     for (const hidden of [CONFIRM_REASON, reviewer.id, registrant.id, requestId, incident!.id]) {
@@ -773,6 +777,7 @@ describe.skipIf(!hasTestInfra)('admin market judgement incidents (integration)',
     const firstPage = page.json<Page<AdminMarketJudgementIncidentQueueItem>>();
     expect(firstPage.data).toEqual([
       {
+        kind: 'incident',
         requestId: one,
         marketId: first.id,
         slug: first.slug,
@@ -782,6 +787,8 @@ describe.skipIf(!hasTestInfra)('admin market judgement incidents (integration)',
         correctedResult: 'VOID',
         requestedBy: await actorOf(registrant),
         requestedAt: expect.any(String) as string,
+        accountCount: null,
+        totalCoin: null,
       },
     ]);
     expect(firstPage.meta.nextCursor).not.toBeNull();

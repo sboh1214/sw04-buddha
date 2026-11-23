@@ -130,6 +130,7 @@ const open: AdminMarket = {
     pending: null,
     confirmed: null,
     log: [],
+    compensation: null,
   },
 };
 

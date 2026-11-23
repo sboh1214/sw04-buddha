@@ -10,9 +10,9 @@
  * test keeps equal to `isLedgerDirectionAllowed` for every type and pair).
  *
  * The plan's words (N01 §2·§9) and the types that carry them:
- * - 발행: START_GRANT (mint → user), REGRANT (재지급, mint → user, #74, ADR-0155) and
- *   TREASURY_MINT (mint → treasury); 판정 오류 보상 (#144) is added later, a mint → user under its
- *   own type;
+ * - 발행: START_GRANT (mint → user), REGRANT (재지급, mint → user, #74, ADR-0155),
+ *   JUDGEMENT_COMPENSATION (판정 오류 보상, mint → user naming its market, #144, ADR-0166) and
+ *   TREASURY_MINT (mint → treasury);
  * - 운영금 이전: BOT_ALLOCATION (treasury → 마켓메이커 자금) and BOT_RECALL (back);
  * - 지원 (N01 §9): BOT_ALLOCATION — a recall is 운영금 이전, not 지원 — and REGRANT (#74; ADR-0107
  *   결정 2 #73 1항);
@@ -22,7 +22,9 @@
  *   another any other way;
  * - 수수료: none while fees are 0 (15항, #91): no FEE type and no fee row;
  * - 정산: SETTLEMENT_PAYOUT (collateral → holder, VOID's 50·50 too);
- * - 보상: 판정 오류 보상 (#144), not yet;
+ * - 보상: 판정 오류 보상 (#144, ADR-0166) — JUDGEMENT_COMPENSATION, whose plan word is 발행 (#73
+ *   8항 "받는 계정에 신규 발행한다"): 보상 is the source's name, which the wallet's label carries
+ *   ('판정 오류 보상', 144-10), not a LedgerPlanWord of its own;
  * - 실제 소각: CLOSURE_FORFEIT (user → burn), the only burn (16항); no generic burn type;
  * - 대사 정정 (10항): RECONCILIATION_CORRECTION, the treasury against the account that differs
  *   (the collateral, a 마켓메이커 자금, or a user's — which it only ever credits: a correction never
@@ -192,6 +194,18 @@ export const LEDGER_ENTRY_RULES: { readonly [T in LedgerEntryType]: LedgerEntryR
     debitsLocked: false,
     plan: '발행',
   },
+  /**
+   * 판정 오류 보상 (#144, ADR-0166; #73 8항): a new issue straight into the compensated account,
+   * naming the market it compensates (144-12's 시장 링크 and the wallet's `?marketId=` filter read
+   * `ledger_entries.market_id`; migration 0081 lets this type name one, as TRADE_FILL does).
+   */
+  JUDGEMENT_COMPENSATION: {
+    flow: 'mint',
+    pairs: [[null, USER]],
+    market: 'required',
+    debitsLocked: false,
+    plan: '발행',
+  },
 };
 
 /** Whether `type` may move Coin from a `fromKind` account to a `toKind` one (null: mint/burn). */
@@ -214,22 +228,27 @@ export const LEDGER_BURN_TYPES: readonly LedgerEntryType[] = typesWhere((r) => r
 export const PRESERVED_LEDGER_TYPES: readonly LedgerEntryType[] = typesWhere(
   (r) => r.plan === '보존',
 );
-/** The grant sources, apart from trading (#116 수용 기준): 시작 지급, 재지급 (#74); 보상 joins (#144). */
+/**
+ * The grant sources, apart from trading (#116 수용 기준): 시작 지급, 재지급 (#74, ADR-0155) and 판정
+ * 오류 보상 (#144, ADR-0166).
+ */
 export const LEDGER_GRANT_TYPES = [
   'START_GRANT',
   'REGRANT',
+  'JUDGEMENT_COMPENSATION',
 ] as const satisfies readonly LedgerEntryType[];
 
 /**
  * 사용자 계정 유입 (ADR-0107 결정 2 #73 3항): the only types that may increase a user's ledger
- * account — the grants (시작 지급, and 재지급 since #74 by ADR-0155; 판정 오류 보상 when #144 adds
- * it), 체결 대금 and 정산 지급. Written out by hand on purpose: 목록을 바꾸려면 ADR이 필요하다. The
- * shared test fails when any type's rule credits a user's account and the type is in neither this
- * list nor USER_INFLOW_EXCEPTIONS.
+ * account — the grants (시작 지급, 재지급 since #74 by ADR-0155, 판정 오류 보상 since #144 by
+ * ADR-0166 — "시작 지급·재지급·판정 오류 보상 셋뿐인 닫힌 목록"), 체결 대금 and 정산 지급. Written
+ * out by hand on purpose: 목록을 바꾸려면 ADR이 필요하다. The shared test fails when any type's rule
+ * credits a user's account and the type is in neither this list nor USER_INFLOW_EXCEPTIONS.
  */
 export const USER_INFLOW_TYPES = [
   'START_GRANT',
   'REGRANT',
+  'JUDGEMENT_COMPENSATION',
   'TRADE_FILL',
   'SETTLEMENT_PAYOUT',
 ] as const satisfies readonly LedgerEntryType[];
@@ -244,6 +263,21 @@ export const USER_INFLOW_EXCEPTIONS = [
   'BONUS',
   'PAYMENT_CANCEL_REVERSAL',
   'RECONCILIATION_CORRECTION',
+] as const satisfies readonly LedgerEntryType[];
+
+/**
+ * 사용자 계정 차감 (#144 AC 3, ADR-0166; N03 §7 "자동 회수·음수 잔액을 만들지 않는다"): the only
+ * types whose rule takes Coin out of a user's ledger account — a buyer's collateral and payment
+ * (paid from the order's lock), 탈퇴 소멸 and the kept payment cancel. None is written because of a
+ * judgement or a settlement: no type claws a paid settlement or a compensation back, and 대사 정정
+ * only ever credits a user. Written out by hand: the shared test fails when a type's rule debits a
+ * user's account and the type is not here, so a recovery path cannot be added without an ADR.
+ */
+export const USER_DEBIT_TYPES = [
+  'PAIR_MINT_COLLATERAL',
+  'TRADE_FILL',
+  'CLOSURE_FORFEIT',
+  'PAYMENT_CANCEL',
 ] as const satisfies readonly LedgerEntryType[];
 
 /**
@@ -263,6 +297,7 @@ export const MEMBER_LEDGER_ENTRY_TYPES = [
   'PAYMENT_CANCEL',
   'PAYMENT_CANCEL_REVERSAL',
   'REGRANT',
+  'JUDGEMENT_COMPENSATION',
 ] as const satisfies readonly LedgerEntryType[];
 export type MemberLedgerEntryType = (typeof MEMBER_LEDGER_ENTRY_TYPES)[number];
 export const memberLedgerEntryTypeSchema = z.enum(MEMBER_LEDGER_ENTRY_TYPES);
@@ -273,10 +308,10 @@ export type LedgerAccountSide = 'from' | 'to';
 /**
  * What the wallet calls an event of a person's ledger (#69, ADR-0144; ADR-0135 H1·H5·결과 4): the
  * stored type and the side the person's account stands on, one kind for each pair of them. The
- * first six, in this order, are the wallet's filter (LEDGER_FILTER_KINDS); the kept paid-Coin and
- * coupon types and 탈퇴 소멸 are kinds too — the kept payment answers carry the same entry — but no
- * filter offers them. 재지급 (#74, ADR-0155) came after the first five as the sixth; 보상 (#144)
- * adds its own after it.
+ * first seven, in this order, are the wallet's filter (LEDGER_FILTER_KINDS); the kept paid-Coin
+ * and coupon types and 탈퇴 소멸 are kinds too — the kept payment answers carry the same entry — but
+ * no filter offers them. 재지급 (#74, ADR-0155) came after the first five as the sixth, 판정 오류
+ * 보상 (#144, ADR-0166; 144-10 "별도 출처와 유형 필터") after it as the seventh.
  */
 export const LEDGER_ENTRY_KINDS = [
   'BUY_FILL',
@@ -285,6 +320,7 @@ export const LEDGER_ENTRY_KINDS = [
   'START_GRANT',
   'RECONCILIATION_CORRECTION',
   'REGRANT',
+  'JUDGEMENT_COMPENSATION',
   'CLOSURE_FORFEIT',
   'DEPOSIT',
   'BONUS',
@@ -319,6 +355,7 @@ export const LEDGER_KIND_SOURCES: { readonly [K in LedgerEntryKind]: readonly Le
     START_GRANT: [{ type: 'START_GRANT', side: 'to' }],
     RECONCILIATION_CORRECTION: [{ type: 'RECONCILIATION_CORRECTION', side: 'to' }],
     REGRANT: [{ type: 'REGRANT', side: 'to' }],
+    JUDGEMENT_COMPENSATION: [{ type: 'JUDGEMENT_COMPENSATION', side: 'to' }],
     CLOSURE_FORFEIT: [{ type: 'CLOSURE_FORFEIT', side: 'from' }],
     DEPOSIT: [{ type: 'DEPOSIT', side: 'to' }],
     BONUS: [{ type: 'BONUS', side: 'to' }],
@@ -340,8 +377,8 @@ export function ledgerEntryKind(type: LedgerEntryType, side: LedgerAccountSide):
 }
 
 /**
- * The wallet's kind filter (ADR-0135 H5): '전체' is no value, then these six in this order —
- * 재지급 (#74, ADR-0155) the sixth.
+ * The wallet's kind filter (ADR-0135 H5): '전체' is no value, then these seven in this order —
+ * 재지급 (#74, ADR-0155) the sixth, 판정 오류 보상 (#144, ADR-0166; 144-10) the seventh.
  */
 export const LEDGER_FILTER_KINDS = [
   'BUY_FILL',
@@ -350,6 +387,7 @@ export const LEDGER_FILTER_KINDS = [
   'START_GRANT',
   'RECONCILIATION_CORRECTION',
   'REGRANT',
+  'JUDGEMENT_COMPENSATION',
 ] as const satisfies readonly LedgerEntryKind[];
 export type LedgerFilterKind = (typeof LEDGER_FILTER_KINDS)[number];
 

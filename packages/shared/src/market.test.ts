@@ -126,13 +126,14 @@ const market = {
   },
   lastPrice24hAgo: 48,
 };
-/** `AdminMarket.judgementIncident` of a market with none (#144, ADR-0165). */
+/** `AdminMarket.judgementIncident` of a market with none (#144, ADR-0165; no 보상, ADR-0166). */
 const noJudgementIncident = {
   registrable: false,
   confirmable: false,
   pending: null,
   confirmed: null,
   log: [],
+  compensation: null,
 };
 const event = {
   id: '1',
@@ -998,8 +999,13 @@ describe('own order and fill DTOs (#119)', () => {
       settlementPnlCoin: '-120',
       resolvedAt: at,
       settledAt: at,
+      correctedResult: null,
     };
     expect(mySettlementSchema.parse(lost)).toEqual(lost);
+    // #144 (144-17): a confirmed 판정 정정 marks the line with its result — the record's own
+    // `result` and figures unchanged, no compensation amount.
+    const corrected = { ...lost, correctedResult: 'NO' };
+    expect(mySettlementSchema.parse(corrected)).toEqual(corrected);
     const voided = {
       ...lost,
       result: 'VOID',
@@ -1039,6 +1045,8 @@ describe('own order and fill DTOs (#119)', () => {
       { payoutCoin: 0 },
       { settledAt: null },
       { marketSlug: null },
+      { correctedResult: 'CANCELLED' },
+      { correctedResult: undefined },
     ]) {
       expect(mySettlementSchema.safeParse({ ...lost, ...bad }).success, JSON.stringify(bad)).toBe(
         false,

@@ -16,6 +16,7 @@ import { DateTimeText } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { fillBusinessInfo } from '@/legal/business-info';
 import { type Market } from '@/lib/api';
+import { publicCompensationText } from '@/lib/judgement-correction';
 import { JUDGING_RECORD_ANCHOR, ORDER_COLUMN_TOP } from '@/lib/market-detail';
 import {
   MARKET_RESULT_LABEL,
@@ -451,6 +452,8 @@ function JudgementEntry({
  * paid version, 144-5's fact that the payout followed the original and nothing paid is taken back,
  * what went wrong with its evidence and collection instant, and when the error was confirmed. The
  * paid version keeps its name '현재 판정' below (144-19 (나)). No operator, no reviewer's reason.
+ * Its 보상 (#144 part 2, ADR-0166; 144-6, 144-15): the status, the 대상 count and the Coin paid in
+ * all (`publicCompensationText`) — no account, nickname or one account's amount.
  */
 function CorrectionEntry({
   value,
@@ -514,6 +517,11 @@ function CorrectionEntry({
           zone={zone}
           id={`${id}-confirmed-at`}
         />
+        <TextRow label={copy.judgingCompensation} id={`${id}-compensation`}>
+          <Box as="span" data-status={value.compensation.status}>
+            {publicCompensationText(value.compensation)}
+          </Box>
+        </TextRow>
       </DataList.Root>
     </Stack>
   );

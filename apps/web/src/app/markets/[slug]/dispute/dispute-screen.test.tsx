@@ -168,6 +168,12 @@ describe('DisputeScreen', () => {
               links: ['https://example.com/fix'],
               collectedAt: '2026-12-02T00:00:00.000Z',
             },
+            compensation: {
+              status: 'preparing',
+              accountCount: null,
+              paidCount: null,
+              totalCoin: null,
+            },
           },
         },
       },

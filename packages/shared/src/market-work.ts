@@ -36,7 +36,9 @@ export type MarketWorkKind = (typeof MARKET_WORK_KINDS)[number];
  * - 판정: 판정 등록·승인·반려·철회(정정 포함), 이의 기각·수용, 판정 지연 기록, 이해충돌 신고, the
  *   retired interim judgement, and 판정 오류 사건의 등록·오류 확인·기각·철회 (#144, ADR-0165 —
  *   a judgement's review after the payout);
- * - 지급: 정산 다시 시도 (145-7), 대사 보류 복구 (145-12 "대사 보류 복구는 지급");
+ * - 지급: 정산 다시 시도 (145-7), 대사 보류 복구 (145-12 "대사 보류 복구는 지급"), and 판정 오류
+ *   보상의 요청·승인·반려·철회 (#144, ADR-0166 — Coin paid out of the market's outcome, the same
+ *   parity);
  * - 그 밖: 개설 검수 (제출·승인·반려·되돌림·일정 변경), 취소, 관련 시장, 대사 실행, 비정상 체결 분류,
  *   시장 제안 채택·연결, and the retired interim open and one-admin close.
  * Which of these are bound to a market by something other than their target (145-13: the other
@@ -70,6 +72,10 @@ export const MARKET_WORK_ACTION_KIND = {
   market_judgement_incident_dismiss: 'judgement',
   market_judgement_incident_retract: 'judgement',
   market_settlement_retry: 'settlement',
+  market_judgement_compensation_request: 'settlement',
+  market_judgement_compensation_approve: 'settlement',
+  market_judgement_compensation_reject: 'settlement',
+  market_judgement_compensation_retract: 'settlement',
   reconciliation_recovery_request: 'settlement',
   reconciliation_recovery_approve: 'settlement',
   reconciliation_recovery_reject: 'settlement',
@@ -319,6 +325,10 @@ export const MARKET_WORK_ACTION_REASON: Readonly<
   market_judgement_incident_dismiss: 'recorded',
   market_judgement_incident_retract: 'retracted',
   market_settlement_retry: 'recorded',
+  market_judgement_compensation_request: 'recorded',
+  market_judgement_compensation_approve: 'recorded',
+  market_judgement_compensation_reject: 'recorded',
+  market_judgement_compensation_retract: 'retracted',
   reconciliation_recovery_request: 'recorded',
   reconciliation_recovery_approve: 'recorded',
   reconciliation_recovery_reject: 'recorded',

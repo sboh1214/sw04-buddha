@@ -1,5 +1,6 @@
 'use client';
 import { MarketMakerControlsPanel } from './market-maker-controls';
+import { MarketJudgementCompensationPanel } from './market-judgement-compensation-panel';
 import { MarketJudgementIncidentPanel } from './market-judgement-incident-panel';
 
 import {
@@ -242,6 +243,8 @@ export function AdminMarketDetail({ id }: { id: string }) {
           judgement panel is — its dialogs name the market and the incident they were opened on.
           Drawn from 결과 확정 on (144-8) and on any market with an incident. */}
       <MarketJudgementIncidentPanel key={`judgement-incident-${data.id}`} market={data} />
+      {/* 판정 오류 보상 (#144 part 2, ADR-0166): once the incident above is confirmed. */}
+      <MarketJudgementCompensationPanel key={`judgement-compensation-${data.id}`} market={data} />
       {/* 검수 (#78, ADR-0099): keyed by the market, so a dialog held on one market's detail never
           names the next one a same-condition link opens on this route. Prefixed: a sibling below
           (RelatedMarketsPanel) is keyed by the id too, and two equal keys in one list leave the

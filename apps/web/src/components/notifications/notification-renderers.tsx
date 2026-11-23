@@ -4,6 +4,7 @@ import {
   MARKET_CLOSED_NOTIFICATION,
   MARKET_DISPUTE_CLOSED_BY_CORRECTION_NOTIFICATION,
   MARKET_DISPUTE_DECIDED_NOTIFICATION,
+  MARKET_JUDGEMENT_COMPENSATED_NOTIFICATION,
   MARKET_JUDGEMENT_CORRECTED_NOTIFICATION,
   MARKET_JUDGEMENT_DELAYED_NOTIFICATION,
   MARKET_PAUSED_NOTIFICATION,
@@ -41,6 +42,7 @@ import {
   type FormatDateTime,
   disputeClosedByCorrectionTitle,
   disputeDecidedTitle,
+  judgementCompensatedTitle,
   judgementCorrectedTitle,
   judgementDelayedTitle,
   marketSettledTitle,
@@ -323,6 +325,12 @@ export const NOTIFICATION_RENDERERS = {
       copy.marketResultVoid,
     ],
     marketSettledTitle,
+  ),
+  // #144 (ADR-0166; 144-18): the 판정 오류 보상's one, a 시장 notification to the market's detail.
+  market_judgement_compensated: rendererOf(
+    MARKET_JUDGEMENT_COMPENSATED_NOTIFICATION,
+    [copy.notificationJudgementCompensated, copy.yes, copy.no, copy.marketResultVoid],
+    judgementCompensatedTitle,
   ),
   post_replied: rendererOf(
     POST_REPLIED_NOTIFICATION,
