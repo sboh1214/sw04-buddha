@@ -1,4 +1,4 @@
-import { ledgerHeldMarketSql, schema } from '@buddha/db';
+import { payoutDelayedSql, schema } from '@buddha/db';
 import {
   marketDisputeStatusSchema,
   withCurrentJudgementDelay,
@@ -17,7 +17,6 @@ const {
   marketDisputes,
   adminActions,
   marketEvents,
-  marketSettlementSteps,
   markets,
 } = schema;
 
@@ -99,9 +98,8 @@ export async function readMarketJudgingRecord(
     market.status === 'settling'
       ? await reader
           .select({
-            delayed: sql<boolean>`(${ledgerHeldMarketSql(sql`${market.id}`)} OR EXISTS (SELECT 1 FROM ${marketSettlementSteps}
-      WHERE ${marketSettlementSteps.marketId}=${market.id}
-        AND (${marketSettlementSteps.status}='failed' OR ${marketSettlementSteps.lastError} IS NOT NULL)))`,
+            // @buddha/db's fragment, shared with the admin 정산 실패 list (#145, ADR-0163).
+            delayed: payoutDelayedSql(sql`${market.id}`),
           })
           .from(markets)
           .where(eq(markets.id, market.id))

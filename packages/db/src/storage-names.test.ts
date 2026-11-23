@@ -742,6 +742,16 @@ describe('excluded features in stored data (#113)', () => {
     expect(MARKET_PAUSE_END_KINDS).toEqual(['resumed', 'early_closed', 'closed_at_close']);
   });
 
+  it('names the operator settlement retry’s stored value, read above (#145)', () => {
+    // ADR-0163, no migration: `admin_actions.type` is varchar(40) with no CHECK, so 145-7's one
+    // admin action type is a value the test above reads for an excluded feature.
+    expect(storageNames()).toEqual(
+      expect.arrayContaining([
+        { where: 'admin_actions.type value', name: 'market_settlement_retry' },
+      ]),
+    );
+  });
+
   it('names the account type, its values and its index, each read above (#115)', () => {
     // ADR-0108, migration 0059: better-auth's "user" row carries the type (an enum of two values,
     // no varchar list), and the partial unique index keeps one 운영 마켓메이커. The test above reads

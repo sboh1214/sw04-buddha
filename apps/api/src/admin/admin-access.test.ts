@@ -68,6 +68,10 @@ const OPERATION_RECORDS = [
   'GET /admin/market-disputes',
   // #74: 재지급 기록, every re-grant given with its account (owner answer 2026-11-21 3).
   'GET /admin/regrants',
+  // #145: 운영 목록·작업 이력·실패 기록 (N04 §6, ADR-0056 1-2) — the three queue lists (ADR-0163).
+  'GET /admin/operations/closing',
+  'GET /admin/operations/judgements',
+  'GET /admin/operations/failures',
 ];
 
 describe('admin access (static)', () => {

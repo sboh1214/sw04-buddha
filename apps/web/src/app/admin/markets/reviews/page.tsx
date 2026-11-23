@@ -4,6 +4,7 @@ import { AdminMarketJudgements } from './admin-market-judgements';
 import { AdminMarketPauseDecisions } from './admin-market-pause-decisions';
 import { AdminMarketReviews } from './admin-market-reviews';
 import { AdminMarketSupplements } from './admin-market-supplements';
+import { ReviewsHashScroll } from './reviews-hash-scroll';
 
 /**
  * 검수 대기 (#78, ADR-0099): the markets waiting for another admin's approval or 반려 — and under
@@ -21,6 +22,7 @@ export default function AdminMarketReviewsPage() {
       <AdminMarketPauseDecisions />
       <AdminMarketJudgements />
       <AdminMarketCancelRequests />
+      <ReviewsHashScroll />
     </Stack>
   );
 }

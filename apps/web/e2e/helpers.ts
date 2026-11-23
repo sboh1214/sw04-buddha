@@ -31,6 +31,8 @@ import type {
   NotificationSettings,
   OrderQuote,
   PlaceOrderResult,
+  ReconciliationHoldDetail,
+  ReconciliationRun,
   ReleaseSetting,
 } from '@buddha/shared';
 import { copy } from '../src/copy';
@@ -3152,6 +3154,64 @@ export async function expectNoSideScroll(page: Page): Promise<void> {
  * (`resolveWaitMs`).
  */
 export const SETTLEMENT_WAIT_MS = 30_000;
+
+/** The reason every helper recovery request and approval of a ledger hold gives (1..500). */
+const HELPER_RECOVERY_REASON = '자동화 테스트의 복구입니다. 최신 대사가 통과한 것을 확인했습니다.';
+
+/**
+ * #93's recovery of a market's ledger hold through the API (reconciliation.spec.ts walks the same
+ * steps on screen): `admin` runs the market's reconciliation — the hold comes back with the run, a
+ * clean audit being evidence only — and requests its recovery, and `approver`, another admin,
+ * approves it (two admins, #93). The hold is recovered once this returns: a ledger-held
+ * market's orders and payout go on (operations.spec.ts — a SETTLING market's payout then runs on
+ * the worker's next scan or an operator's 정산 다시 시도, #145). A request left waiting by a failed
+ * approval is retracted before the error is thrown.
+ */
+export async function recoverMarketHold(
+  admin: APIRequestContext,
+  approver: APIRequestContext,
+  marketId: string,
+  reason: string = HELPER_RECOVERY_REASON,
+): Promise<void> {
+  const root = '/api/v1/admin/reconciliation';
+  const run = await unwrap<ReconciliationRun>(
+    await admin.post(`${root}/run`, {
+      data: { expectedAccountId: await accountIdOf(admin), target: { scope: 'market', marketId } },
+    }),
+  );
+  const hold = run.hold;
+  if (!run.result.passed || hold === null) {
+    throw new Error(
+      `market ${marketId}: no clean audit with its hold to recover (${JSON.stringify(run)})`,
+    );
+  }
+  const requested = await unwrap<ReconciliationHoldDetail>(
+    await admin.post(`${root}/holds/${hold.id}/recovery-requests`, {
+      data: {
+        expectedAccountId: await accountIdOf(admin),
+        failureResultId: hold.failureResultId,
+        reason,
+      },
+    }),
+  );
+  const pending = requested.requests.find((request) => request.status === 'pending');
+  if (pending === undefined) throw new Error(`hold ${hold.id}: no recovery request waiting`);
+  try {
+    const approved = await unwrap<ReconciliationHoldDetail>(
+      await approver.post(`${root}/holds/${hold.id}/recovery-requests/${pending.id}/approve`, {
+        data: { expectedAccountId: await accountIdOf(approver), reason },
+      }),
+    );
+    if (approved.hold.recoveredAt === null) throw new Error(`hold ${hold.id} is not recovered`);
+  } catch (error) {
+    await admin
+      .post(`${root}/holds/${hold.id}/recovery-requests/${pending.id}/retract`, {
+        data: { expectedAccountId: await accountIdOf(admin) },
+      })
+      .catch(() => undefined);
+    throw error;
+  }
+}
 
 /**
  * True when the worker's health listener is switched off (`WORKER_HEALTH_PORT=0`, worker env.ts),

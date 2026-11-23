@@ -20,10 +20,11 @@ export interface LabelledMarket {
  * ADR-0098; #175, ADR-0104): a CLOSED market whose scheduled judgement has passed (예정 판정 시각이
  * 지나면 운영자 기록이 없어도 '판정 지연'으로 보인다), and a PROVISIONAL one a 판정 이의 or a correction
  * waiting for its approval (#176, ADR-0105, decision 3 '#176 정정 대기') still holds once its 이의
- * 기한 has passed (owner answer 2026-11-03). A display, not a status — no list filters by
- * it (ADR-0095 8-6). The status is checked here as well as on the server: a `market:status` moves
- * a cached row's status and resets the flags (`applyStatus`), and a flag read for one status must
- * never label another — no other status reads delayed, whatever a cached row still holds.
+ * 기한 has passed (owner answer 2026-11-03). A display, not a status — no public list filters
+ * by it (ADR-0095 8-6; the admin 운영 대기열's '지연만' does, #145). The status is checked here
+ * as well as on the server: a `market:status` moves a cached row's status and resets the flags
+ * (`applyStatus`), and a flag read for one status must never label another — no other status
+ * reads delayed, whatever a cached row still holds.
  */
 export function readsJudgementDelayed(market: LabelledMarket): boolean {
   return (market.status === 'closed' || market.status === 'provisional') && market.judgementDelayed;

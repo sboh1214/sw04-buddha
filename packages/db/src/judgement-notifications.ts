@@ -42,8 +42,9 @@ type MarketRow = typeof markets.$inferSelect;
  *   the submitter alone (52-14), keyed by the decision's `admin_actions` row;
  * - J4 a 판정 지연 record that is the first of its episode or changes the reason or the next
  *   review time (market-judgement-delay.service.ts; 52-11, 188-5): `judgementNotificationInputs`;
- * - J5 the finalize's settling → settled (the worker's market-finalize.ts): `settlementAudience`
- *   and `settlementNotificationInputs`, all or nothing with the payout (188-2 — no savepoint).
+ * - J5 the finalize's settling → settled (`settleSettlingMarket`, market-finalize.ts — run by the
+ *   worker's finalize and the operator retry, #145, ADR-0163): `settlementAudience` and
+ *   `settlementNotificationInputs`, all or nothing with the payout (188-2 — no savepoint).
  *
  * Never: 결과 확정 (`resolveProvisionalMarket`, 52-12), 지급 중, a deadline drawing near or a
  * payout held (52-13), a time passing (ADR-0106 결정 6), a judgement's or a correction's

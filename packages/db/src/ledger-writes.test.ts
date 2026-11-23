@@ -57,6 +57,8 @@ describe('one writer of the books (#116, static)', () => {
         'packages/db/src/start-grants.ts',
         'apps/api/src/wallet/wallet.service.ts',
         'apps/worker/src/jobs/market-finalize.ts',
+        // The payout core the worker and the operator retry share (#145, ADR-0163).
+        'packages/db/src/market-finalize.ts',
       ]),
     );
   });

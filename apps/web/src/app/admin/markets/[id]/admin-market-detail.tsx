@@ -48,6 +48,7 @@ import {
   useApplyMarket,
   useMarketFills,
 } from '@/hooks/use-admin-markets';
+import { useHashScrollOnce } from '@/hooks/use-hash-scroll-once';
 import { useHeldForOperator, useOperatorId } from '@/hooks/use-operator';
 import { useSessionChanged } from '@/hooks/use-session-changed';
 import {
@@ -124,6 +125,10 @@ export function AdminMarketDetail({ id }: { id: string }) {
   // URL would otherwise read a key that `market.id` — what every child below writes
   // through — does not name (A-M3-29).
   const market = useAdminMarket(id);
+  // A link that names a block of this screen — 운영 대기열's '회수 칸 보기' (#145, ADR-0163; 145-8)
+  // opens `#market-maker-recall` — finds nothing at load, as this screen draws after a skeleton
+  // and each panel reads on its own: once the market is drawn, scroll to the block as it comes.
+  useHashScrollOnce(market.data !== undefined);
 
   // The alerts keep the way back too: without it, a wrong address leaves only the layout nav.
   if (!validId || (market.isError && isApiError(market.error, 'NOT_FOUND'))) {

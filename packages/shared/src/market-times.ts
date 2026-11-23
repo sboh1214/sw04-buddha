@@ -337,8 +337,9 @@ const DAY_MS = 86_400_000;
  * 장기 지연 기한 as an instant (#172 item 10): `days` × 24 hours after the scheduled judgement, an
  * addition of instants, so across a daylight-saving change the wall clock of the judgement zone
  * moves by the hour. Null while either is not filled in. The public detail shows it, the admin
- * 판정 panel warns from it (`isLongDelayDeadlineReached`, #142, ADR-0106) and #145's list is to
- * reuse it, so the instant the operators act on and the shown one are the same.
+ * 판정 panel warns from it (`isLongDelayDeadlineReached`, #142, ADR-0106) and 운영 대기열's 판정
+ * 대기·지연 list computes the same instant in SQL, a test pinning the two equal (#145, ADR-0163), so
+ * the instant the operators act on and the shown one are the same.
  */
 export function longDelayDeadline(judgementIso: string | null, days: number | null): string | null {
   if (judgementIso === null || days === null) return null;
@@ -373,10 +374,11 @@ export interface MarketDisplayState {
  *   대기') — the instant the submission closes (`isDisputeOpen` false) and the confirmation could
  *   come. A waiting correction alone reads '잠정 결과' before the deadline: no dispute is under
  *   review (`isDisputeUnderReview`).
- * It is a display, not a status: nothing changes at either instant, and no list filters by it
- * (ADR-0095 8-6). An operator's 판정 지연 기록 (#142, ADR-0106, market-judgement-delay.ts) adds a
- * reason and a next review time while it holds; a record is taken only then, and never makes a
- * market read delayed.
+ * It is a display, not a status: nothing changes at either instant, and the public search does
+ * not filter by it (ADR-0095 8-6). One admin list does: 운영 대기열's '지연만' (#145, ADR-0163), in
+ * SQL a test keeps equal to this. An operator's 판정 지연 기록 (#142, ADR-0106,
+ * market-judgement-delay.ts) adds a reason and a next review time while it holds; a record is
+ * taken only then, and never makes a market read delayed.
  */
 export function isJudgementDelayed(market: MarketDisplayState, nowMs: number): boolean {
   if (market.status === 'closed') {

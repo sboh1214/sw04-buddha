@@ -989,6 +989,15 @@ export const ADMIN_ACTION_TYPES = [
   'market_cancel_reject',
   /** Its requester retracted it before anyone decided it: payload `{approvalId}`. */
   'market_cancel_retract',
+  /**
+   * 정산 다시 시도 (#145, ADR-0163; 145-7, 145-14): one admin with a reason ran the worker's own
+   * payout core on a SETTLING market. Target `market` / its id; payload
+   * `MarketSettlementRetryActionPayload` (admin-operations.ts) — `{reason, outcome: 'settled'}` in
+   * the payout's transaction, before the core so its notices stay last, committed only with the
+   * payout; or `{reason, outcome: 'failed', error}` with the step's attempt in the failure record's
+   * own transaction (the effect of a failed attempt). A refused click writes nothing.
+   */
+  'market_settlement_retry',
 ] as const;
 export type AdminActionType = (typeof ADMIN_ACTION_TYPES)[number];
 export const adminActionTypeSchema = z.enum(ADMIN_ACTION_TYPES);

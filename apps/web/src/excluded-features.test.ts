@@ -538,6 +538,11 @@ describe('excluded features on screens (#113)', () => {
       // 판정 지연 기록's operator side (#142): who recorded a delay and when are no member's (#173
       // 13, decision 3) — the 판정 panel's section and its dialog alone read it.
       at('lib', 'market-judgement-delay.ts'),
+      // 운영 대기열's (#145): a payout's attempts and error and a bot recall's are no member's (the
+      // PRIVATE_DATA item `operation-records`) — its screens and the admin detail alone read it.
+      at('lib', 'admin-operations.ts'),
+      at('app', 'admin', 'operations', 'settlement-retry-dialog.tsx'),
+      at('hooks', 'use-hash-scroll-once.ts'),
     ]) {
       expect(ADMIN.has(file), file).toBe(true);
     }

@@ -37,7 +37,8 @@ import { type MarketDisplayState, isJudgementDelayed, longDelayDeadline } from '
  *   keeps the last reason and the admin detail warns that the update is late.
  * - 장기 지연 (owner answer (3), `isLongDelayDeadlineReached`): a CLOSED market past its long-delay
  *   deadline (`longDelayDeadline`) gets a warning in its admin 판정 panel to apply the rule's
- *   지연·취소·무효 처리 through 판정 등록 (#152) — nothing is automatic; the list is #145's.
+ *   지연·취소·무효 처리 through 판정 등록 (#152) — nothing is automatic; 운영 대기열's 판정
+ *   대기·지연 list marks it (#145, ADR-0163; CLOSED rows only, 145-17).
  *
  * Each record writes the market event `judgement_delay_recorded` (no status change, the market's
  * `status_event_id` unmoved, so `market:status` republishes the unchanged key) and the admin action
@@ -266,10 +267,10 @@ export type RecordJudgementDelayBody = z.infer<typeof recordJudgementDelayBodySc
 // ---- records --------------------------------------------------------------------------
 /**
  * `judgement_delay_recorded`'s payload (enums.ts): the record row, its reason (public, so the
- * event carries it for #145's list), its next review time (ISO), and the status and judgement
- * version it was made on (null on CLOSED). The event's actor is the admin; it names no other
- * account. #188's notice reads none of it: the recording transaction writes it from the record
- * itself, keyed by the event's id alone (ADR-0160).
+ * event carries it; 운영 대기열, #145, reads the record row itself), its next review time (ISO),
+ * and the status and judgement version it was made on (null on CLOSED). The event's actor is the
+ * admin; it names no other account. #188's notice reads none of it: the recording transaction
+ * writes it from the record itself, keyed by the event's id alone (ADR-0160).
  */
 export interface MarketJudgementDelayRecordedPayload {
   delayId: string;
