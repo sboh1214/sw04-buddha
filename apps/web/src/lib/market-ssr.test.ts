@@ -71,6 +71,7 @@ const market: Market = {
     disputes: { total: 0, byVersion: [], decisions: [] },
     cancellation: null,
     payoutDelayed: false,
+    correction: null,
   },
   ruleVersions: [],
 };

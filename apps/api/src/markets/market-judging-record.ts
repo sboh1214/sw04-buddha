@@ -12,6 +12,7 @@ import type { MarketRow } from './market.service.js';
 
 const {
   marketJudgements,
+  marketJudgementIncidents,
   marketPauses,
   marketJudgementDelays,
   marketDisputes,
@@ -82,6 +83,22 @@ export async function readMarketJudgingRecord(
     .where(eq(marketJudgementDelays.marketId, market.id))
     .orderBy(desc(marketJudgementDelays.eventId));
   const disputes = await readDisputes(reader, market.id);
+  // #144 (ADR-0165; 144-5, #173 item 13): the confirmed 판정 오류 사건's public facts, column by
+  // column — never who registered or confirmed it, the reviewer's reason or the request (UNIQUE
+  // `market_id`: one at most, 144-14). A waiting or dismissed incident has no row.
+  const [correction] = await reader
+    .select({
+      result: marketJudgementIncidents.correctedResult,
+      originalResult: marketJudgementIncidents.originalResult,
+      judgementVersion: marketJudgementIncidents.judgementVersion,
+      confirmedAt: marketJudgementIncidents.confirmedAt,
+      description: marketJudgementIncidents.description,
+      links: marketJudgementIncidents.evidenceLinks,
+      collectedAt: marketJudgementIncidents.evidenceCollectedAt,
+    })
+    .from(marketJudgementIncidents)
+    .where(eq(marketJudgementIncidents.marketId, market.id))
+    .limit(1);
   const [cancelled] =
     market.status === 'cancelled'
       ? await reader
@@ -145,6 +162,20 @@ export async function readMarketJudgingRecord(
         ? { reason: cancelled.reason, cancelledAt: cancelled.cancelledAt.toISOString() }
         : null,
     payoutDelayed: payout?.delayed ?? false,
+    correction:
+      correction === undefined
+        ? null
+        : {
+            result: correction.result,
+            originalResult: correction.originalResult,
+            judgementVersion: correction.judgementVersion,
+            confirmedAt: correction.confirmedAt.toISOString(),
+            description: correction.description,
+            evidence: {
+              links: correction.links,
+              collectedAt: correction.collectedAt.toISOString(),
+            },
+          },
   };
 }
 

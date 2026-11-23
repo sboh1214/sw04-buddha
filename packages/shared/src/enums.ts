@@ -998,6 +998,30 @@ export const ADMIN_ACTION_TYPES = [
    * own transaction (the effect of a failed attempt). A refused click writes nothing.
    */
   'market_settlement_retry',
+  /**
+   * 판정 오류 사건 (#144 part 1, ADR-0165; 144-3, 144-4, 144-8, 144-13, 144-14): target `market` /
+   * its id, as each incident record below. No market event: the market's status, result and
+   * judgement version never move. An admin registered an incident on a market whose result is
+   * confirmed (RESOLVED, SETTLING or SETTLED), which opens a `market_judgement_incident` approval
+   * request and changes nothing else: payload `{approvalId, judgementVersion, originalResult,
+   * correctedResult, description, evidence}` (`MarketJudgementIncidentRegisterActionPayload`,
+   * market-judgement-incident.ts) — the registration as the request froze it.
+   */
+  'market_judgement_incident_register',
+  /**
+   * An admin who is neither the registrant nor the paid version's registrant confirmed it (오류
+   * 확인, SETTLED), writing the permanent `market_judgement_incidents` row in the same transaction
+   * at the decision's instant: payload `{approvalId, incidentId, correctedResult, reason}`.
+   */
+  'market_judgement_incident_confirm',
+  /** Such an admin dismissed it (기각), nothing changed: `{approvalId, correctedResult, reason}`. */
+  'market_judgement_incident_dismiss',
+  /**
+   * Its registrant retracted it before anyone decided it, nothing changed: payload `{approvalId,
+   * correctedResult}`, and `conflictDeclarationId` when a self-declared conflict retracted it
+   * (ADR-0120 decision 6).
+   */
+  'market_judgement_incident_retract',
 ] as const;
 export type AdminActionType = (typeof ADMIN_ACTION_TYPES)[number];
 export const adminActionTypeSchema = z.enum(ADMIN_ACTION_TYPES);

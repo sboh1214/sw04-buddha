@@ -9,6 +9,7 @@
  * `admin-market-pauses.controller.test` for the pauses and their next paths (#114),
  * `admin-market-judgements.controller.test` for the judgements (#152),
  * `admin-market-judgement-delays.controller.test` for the judgement delay records (#142),
+ * `admin-market-judgement-incidents.controller.test` for the judgement incidents (#144),
  * `related-markets.controller.test` for the links between markets,
  * `moderation.controller.test` for the moderation actions and the dismissals of reports (#50),
  * `restrictions.controller.test` for the writing restrictions and their shortenings and lifts
@@ -122,6 +123,15 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'POST /admin/markets/:id/judgements/:requestId/approve': 'market_judgement_approve',
   'POST /admin/markets/:id/judgements/:requestId/reject': 'market_judgement_reject',
   'POST /admin/markets/:id/judgements/:requestId/retract': 'market_judgement_retract',
+  // #144 (ADR-0165): a 판정 오류 사건 is a registration, then another admin's 오류 확인 or 기각 or its
+  // registrant's retraction; only the confirmation also writes the incident row — no market event.
+  'POST /admin/markets/:id/judgement-incidents': 'market_judgement_incident_register',
+  'POST /admin/markets/:id/judgement-incidents/:requestId/confirm':
+    'market_judgement_incident_confirm',
+  'POST /admin/markets/:id/judgement-incidents/:requestId/dismiss':
+    'market_judgement_incident_dismiss',
+  'POST /admin/markets/:id/judgement-incidents/:requestId/retract':
+    'market_judgement_incident_retract',
   // #175: a 판정 이의 is decided by one admin, not an approval request; neither decision writes a
   // market event (the member's submission and 철회 are no admin route and write none).
   'POST /admin/markets/:id/disputes/:disputeId/dismiss': 'market_dispute_dismiss',

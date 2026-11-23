@@ -458,6 +458,43 @@ describe('statusNotice (PLAN 11.3, #174)', () => {
     ).toBe(copy.marketSettledPayout);
   });
 
+  it('says the payout followed the original result once a 판정 정정 is confirmed (#144, 144-5)', () => {
+    // The 결과 줄 above shows the corrected result: the winning-side sentence keyed on either
+    // result would be false — YES→NO is not "NO contracts were paid 100", VOID→YES paid no
+    // 100 Coin per YES contract, YES→VOID paid no 50 Coin per contract.
+    const settled = (
+      resolvedResult: 'YES' | 'NO' | 'VOID',
+      correction: { originalResult: 'YES' | 'NO' | 'VOID' } | null,
+    ) =>
+      statusNotice({
+        status: 'settled',
+        judgementDelayed: false,
+        disputeUnderReview: false,
+        resolvedResult,
+        judgingRecord: { correction },
+      });
+    for (const [paid, label] of [
+      ['YES', copy.yes],
+      ['NO', copy.no],
+      ['VOID', copy.marketResultVoid],
+    ] as const) {
+      const notice = settled(paid, { originalResult: paid });
+      expect(notice?.tone, paid).toBe('success');
+      expect(notice?.message, paid).toBe(copy.marketSettledNotice);
+      expect(notice?.detail, paid).toBe(copy.marketSettledCorrected.replace('{paid}', label));
+      expect(notice?.detail, paid).not.toContain('{paid}');
+      expect(notice?.detail, paid).not.toContain('정답인 계약은 100 Coin씩');
+      expect(notice?.detail, paid).not.toContain('50 Coin씩');
+      expect(notice?.detail, paid).toContain('회수하지 않습니다');
+    }
+    expect(settled('YES', { originalResult: 'YES' })?.detail).toBe(
+      '원래 결과(YES)로 지급했고, 지급한 Coin은 회수하지 않습니다. 판정 정정은 판정 기록에서 볼 수 있습니다.',
+    );
+    // No correction: today's sentences.
+    expect(settled('NO', null)?.detail).toBe(copy.marketSettledPayout);
+    expect(settled('VOID', null)?.detail).toBe(copy.marketSettledPayoutVoid);
+  });
+
   it('never claims 100 Coin for a 무효 result, which has no winning side', () => {
     const notice = statusNotice({
       status: 'settled',

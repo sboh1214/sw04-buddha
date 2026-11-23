@@ -122,8 +122,17 @@ const market = {
     disputes: { total: 0, byVersion: [], decisions: [] },
     cancellation: null,
     payoutDelayed: false,
+    correction: null,
   },
   lastPrice24hAgo: 48,
+};
+/** `AdminMarket.judgementIncident` of a market with none (#144, ADR-0165). */
+const noJudgementIncident = {
+  registrable: false,
+  confirmable: false,
+  pending: null,
+  confirmed: null,
+  log: [],
 };
 const event = {
   id: '1',
@@ -312,11 +321,13 @@ describe('read DTOs', () => {
       },
       disputes: { holding: 0, items: [] },
       judgementDelays: [],
+      judgementIncident: noJudgementIncident,
     };
     expect(adminMarketSchema.parse(admin)).toEqual(admin);
     // So are the judgement's registrations (#152) and the 판정 이의 (#175, #173 item 13): the
     // admin's, in every status; the public shape keeps none of them.
-    for (const field of ['judgement', 'disputes'] as const) {
+    // So is the 판정 오류 사건 (#144, ADR-0165): the public record has its 판정 정정 alone.
+    for (const field of ['judgement', 'disputes', 'judgementIncident'] as const) {
       expect(marketSchema.parse(admin)).not.toHaveProperty(field);
       const { [field]: _gone, ...without } = admin;
       expect(issuePaths(adminMarketSchema.safeParse(without)), field).toEqual([field]);
@@ -773,6 +784,7 @@ describe('read DTOs', () => {
       },
       disputes: { holding: 0, items: [] },
       judgementDelays: [record, earlier],
+      judgementIncident: noJudgementIncident,
     };
     expect(adminMarketSchema.parse(admin)).toEqual(admin);
     expect(marketSchema.parse(admin)).not.toHaveProperty('judgementDelays');

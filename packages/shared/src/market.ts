@@ -24,6 +24,7 @@ import { expectedAccountIdSchema, namesAFieldBesideAccount } from './expected-ac
 import { marketTitleSchema, ruleItemFields, timeItemFields } from './market-fields.js';
 import { adminMarketDisputesSchema } from './market-dispute.js';
 import { adminMarketJudgementStateSchema, judgementVersionSchema } from './market-judgement.js';
+import { adminMarketJudgementIncidentSchema } from './market-judgement-incident.js';
 import { adminJudgementDelaySchema, marketJudgementDelaySchema } from './market-judgement-delay.js';
 import { openItemSchema } from './market-open-items.js';
 import { MATCH_STOPS, type BookOrder } from './matching.js';
@@ -1134,6 +1135,13 @@ export const adminMarketSchema = marketSchema
      * recording time (#173 item 13).
      */
     judgementDelays: z.array(adminJudgementDelaySchema),
+    /**
+     * 판정 오류 사건 (#144, ADR-0165), in every status: whether one is registrable and confirmable
+     * now, the waiting one, the confirmed one (at most one, 144-14) and every registration with
+     * how it ended. The public judgingRecord has the confirmed one's 판정 정정 (144-5, #173 item 13)
+     * without identities or the reviewer's reason.
+     */
+    judgementIncident: adminMarketJudgementIncidentSchema,
   })
   .meta({ id: 'AdminMarket' });
 export type AdminMarket = z.infer<typeof adminMarketSchema>;

@@ -62,6 +62,7 @@ const delayed: Market = {
     disputes: { total: 0, byVersion: [], decisions: [] },
     cancellation: null,
     payoutDelayed: false,
+    correction: null,
   },
   ruleVersions: [],
 };
@@ -314,5 +315,60 @@ describe('a settled market’s price and result (#34)', () => {
     expect(byTestId(price, 'market-detail-result')).toBeUndefined();
     expect(price).not.toContain(copy.marketResolvedResult);
     expect(price).not.toContain(copy.marketDelta24h);
+  });
+});
+
+describe('a settled market’s 판정 정정 (#144, 144-5)', () => {
+  const settled: Market = {
+    ...delayed,
+    status: 'settled',
+    judgementDelayed: false,
+    resolvedResult: 'YES',
+    resolvedAt: '2026-11-15T01:00:00.000Z',
+    settledAt: '2026-11-16T02:00:00.000Z',
+  };
+  const corrected = (originalResult: 'YES' | 'VOID', result: 'NO' | 'YES'): Market => ({
+    ...settled,
+    // The market row keeps the paid result: only the record carries the correction.
+    resolvedResult: originalResult,
+    judgingRecord: {
+      ...settled.judgingRecord,
+      correction: {
+        result,
+        originalResult,
+        judgementVersion: 1,
+        confirmedAt: '2026-11-17T01:00:00.000Z',
+        description: '1차 출처가 발표를 정정했습니다.',
+        evidence: { links: ['https://example.com/fix'], collectedAt: '2026-11-17T00:00:00.000Z' },
+      },
+    },
+  });
+
+  it('shows the corrected result in the 결과 줄 with the 판정 정정 mark leading to the record', () => {
+    const html = notice(corrected('YES', 'NO'));
+    expect(byTestId(html, 'market-detail-result')?.text).toBe(copy.no);
+    const mark = byTestId(html, 'market-detail-result-corrected');
+    expect(mark?.text).toBe(copy.marketResultCorrected);
+    expect(mark?.attributes.href).toBe('#judging-record');
+    // The settled line states 144-5's fact, never the winning side's payout of either result.
+    const detail = byTestId(html, 'market-status-notice-detail')?.text ?? '';
+    expect(detail).toBe(copy.marketSettledCorrected.replace('{paid}', copy.yes));
+    expect(detail).not.toContain('정답인 계약은 100 Coin씩');
+  });
+
+  it('never claims a 50 Coin payout on a VOID→YES correction', () => {
+    const html = notice(corrected('VOID', 'YES'));
+    expect(byTestId(html, 'market-detail-result')?.text).toBe(copy.yes);
+    const detail = byTestId(html, 'market-status-notice-detail')?.text ?? '';
+    expect(detail).toContain(`원래 결과(${copy.marketResultVoid})로 지급했고`);
+    expect(detail).not.toContain('50 Coin씩');
+    expect(detail).not.toContain('100 Coin씩');
+  });
+
+  it('keeps today’s result and sentence, with no mark, while nothing is corrected', () => {
+    const html = notice(settled);
+    expect(byTestId(html, 'market-detail-result')?.text).toBe(copy.yes);
+    expect(byTestId(html, 'market-detail-result-corrected')).toBeUndefined();
+    expect(byTestId(html, 'market-status-notice-detail')?.text).toBe(copy.marketSettledPayout);
   });
 });

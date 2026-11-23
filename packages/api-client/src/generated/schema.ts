@@ -485,6 +485,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/market-judgement-incidents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The judgement incidents waiting for review, the oldest first, with their market (its status: a confirmation waits for settled), the paid and the corrected result, and who registered it and when */
+        get: operations["adminListMarketJudgementIncidents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/market-judgements": {
         parameters: {
             query?: never;
@@ -735,7 +752,7 @@ export type paths = {
         /** Read the acting administrator’s trading interest and immutable declarations for a market */
         get: operations["adminGetMarketConflicts"];
         put?: never;
-        /** Declare the acting administrator’s interest irrevocably, retracting their pending judgement or correction atomically */
+        /** Declare the acting administrator’s interest irrevocably, retracting their pending judgement, correction or judgement incident atomically */
         post: operations["adminDeclareMarketConflict"];
         delete?: never;
         options?: never;
@@ -788,6 +805,74 @@ export type paths = {
         put?: never;
         /** Record why a delayed market’s judgement is late and when it is next reviewed (판정 지연 기록) by one admin, at once: on a closed market past its scheduled judgement or a provisional one a dispute or a waiting correction holds past its dispute deadline, a public reason and a next review time after now and at most 7 days ahead. Each record is a new one — the earlier ones stay as history, none is edited or withdrawn — and the public detail shows the current one without who recorded it. Nothing of the market changes: no status, no result, no scheduled judgement, and the time passing creates nothing */
         post: operations["adminRecordMarketJudgementDelay"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/judgement-incidents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register a judgement incident (판정 오류 사건 등록) on a market whose result is confirmed (resolved, settling or settled; no deadline) for another admin’s review: the correct result (not the paid one), what went wrong, 1–5 evidence links and when the evidence was collected (not after now). Nothing else changes and nothing is public until another admin confirms it; one registration waits per market at a time, and none is taken once one is confirmed */
+        post: operations["adminRegisterMarketJudgementIncident"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/judgement-incidents/{requestId}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm a waiting judgement incident (오류 확인) on a settled market, with a reason, by an admin who is neither its registrant nor the registrant of the paid judgement and has no interest in the market: the market’s one permanent incident is written and the public judging record shows the correction; the paid result, the judgement versions and the settlement records stay as they are, and no Coin moves */
+        post: operations["adminConfirmMarketJudgementIncident"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/judgement-incidents/{requestId}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Dismiss a waiting judgement incident (기각) on a market whose result is confirmed, with a reason, by an admin who could confirm it: nothing public changes, and another incident may be registered */
+        post: operations["adminDismissMarketJudgementIncident"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/judgement-incidents/{requestId}/retract": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retract a waiting judgement incident the acting admin registered (철회), in any status, before anyone decides it; nothing else changes */
+        post: operations["adminRetractMarketJudgementIncident"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4744,6 +4829,7 @@ export type components = {
             judgementDelay: components["schemas"]["MarketJudgementDelay"] | null;
             judgementDelayed: boolean;
             judgementDelays: components["schemas"]["AdminJudgementDelay"][];
+            judgementIncident: components["schemas"]["AdminMarketJudgementIncident"];
             judgementTimeZone: string | null;
             judgementVersion: number | null;
             judgingRecord: components["schemas"]["MarketJudgingRecord"];
@@ -4877,6 +4963,28 @@ export type components = {
             source: components["schemas"]["JudgementSource"] | null;
             version: number;
             voidReason: string | null;
+        };
+        AdminMarketJudgementIncident: {
+            confirmable: boolean;
+            confirmed: components["schemas"]["MarketJudgementIncidentConfirmed"] | null;
+            log: components["schemas"]["MarketJudgementIncidentLogEntry"][];
+            pending: components["schemas"]["MarketJudgementIncidentPending"] | null;
+            registrable: boolean;
+        };
+        AdminMarketJudgementIncidentQueueItem: {
+            correctedResult: components["schemas"]["MarketResult"];
+            /** Format: uuid */
+            marketId: string;
+            originalResult: components["schemas"]["MarketResult"];
+            /** Format: date-time */
+            requestedAt: string;
+            requestedBy: components["schemas"]["AdminAccountActor"];
+            /** Format: uuid */
+            requestId: string;
+            slug: string;
+            /** @enum {string} */
+            status: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
+            title: string;
         };
         AdminMarketJudgementQueueItem: {
             /** Format: date-time */
@@ -5340,7 +5448,7 @@ export type components = {
             /** @enum {string} */
             source: "market_event" | "admin_action" | "settlement_step";
             /** @enum {string} */
-            type: "fill_classification_request" | "fill_classification_approve" | "fill_classification_reject" | "fill_classification_retract" | "market_conflict_declare" | "reconciliation_run" | "reconciliation_recovery_request" | "reconciliation_recovery_approve" | "reconciliation_recovery_reject" | "reconciliation_recovery_retract" | "market_create" | "market_update" | "market_submit" | "market_approve" | "market_reject" | "market_revert" | "market_reschedule" | "market_supplement_request" | "market_supplement_approve" | "market_supplement_reject" | "market_supplement_retract" | "market_pause" | "market_pause_decision_request" | "market_pause_decision_approve" | "market_pause_decision_reject" | "market_pause_decision_retract" | "market_judgement_request" | "market_judgement_approve" | "market_judgement_reject" | "market_judgement_retract" | "market_dispute_dismiss" | "market_dispute_accept" | "market_delay_record" | "market_open" | "market_close" | "market_resolve" | "market_link" | "market_unlink" | "proposal_adopt" | "proposal_link" | "market_price_protection_change" | "market_cancel_request" | "market_cancel_approve" | "market_cancel_reject" | "market_cancel_retract" | "market_settlement_retry" | "created" | "submitted" | "approved" | "rejected" | "reverted" | "open_rescheduled" | "opened" | "closed" | "finalized" | "rules_edited" | "resolved" | "settling" | "rules_supplemented" | "paused" | "resumed" | "provisional" | "judgement_corrected" | "judgement_delay_recorded" | "price_protection_changed" | "cancelled" | "settlement_step";
+            type: "fill_classification_request" | "fill_classification_approve" | "fill_classification_reject" | "fill_classification_retract" | "market_conflict_declare" | "reconciliation_run" | "reconciliation_recovery_request" | "reconciliation_recovery_approve" | "reconciliation_recovery_reject" | "reconciliation_recovery_retract" | "market_create" | "market_update" | "market_submit" | "market_approve" | "market_reject" | "market_revert" | "market_reschedule" | "market_supplement_request" | "market_supplement_approve" | "market_supplement_reject" | "market_supplement_retract" | "market_pause" | "market_pause_decision_request" | "market_pause_decision_approve" | "market_pause_decision_reject" | "market_pause_decision_retract" | "market_judgement_request" | "market_judgement_approve" | "market_judgement_reject" | "market_judgement_retract" | "market_dispute_dismiss" | "market_dispute_accept" | "market_delay_record" | "market_open" | "market_close" | "market_resolve" | "market_link" | "market_unlink" | "proposal_adopt" | "proposal_link" | "market_price_protection_change" | "market_cancel_request" | "market_cancel_approve" | "market_cancel_reject" | "market_cancel_retract" | "market_settlement_retry" | "market_judgement_incident_register" | "market_judgement_incident_confirm" | "market_judgement_incident_dismiss" | "market_judgement_incident_retract" | "created" | "submitted" | "approved" | "rejected" | "reverted" | "open_rescheduled" | "opened" | "closed" | "finalized" | "rules_edited" | "resolved" | "settling" | "rules_supplemented" | "paused" | "resumed" | "provisional" | "judgement_corrected" | "judgement_delay_recorded" | "price_protection_changed" | "cancelled" | "settlement_step";
         };
         AdminMarketWorkRelatedMarket: {
             /** Format: uuid */
@@ -6064,6 +6172,12 @@ export type components = {
             /** @description The cursor of GET /comments/:commentId/replies for the 대댓글 after these (opaque, sealed for this 댓글’s list); null when every one is here */
             repliesNextCursor: string | null;
         };
+        ConfirmJudgementIncidentBody: {
+            expectedAccountId: string;
+            /** @enum {boolean} */
+            noConflictConfirmed: true;
+            reason: string;
+        };
         ConfirmPhoneVerificationBody: {
             code: string;
             expectedAccountId: string;
@@ -6258,6 +6372,12 @@ export type components = {
         };
         DismissedReports: {
             reports: components["schemas"]["AdminReport"][];
+        };
+        DismissJudgementIncidentBody: {
+            expectedAccountId: string;
+            /** @enum {boolean} */
+            noConflictConfirmed: true;
+            reason: string;
         };
         DismissReportsBody: {
             expectedAccountId: string;
@@ -6548,6 +6668,51 @@ export type components = {
             nextReviewPassed: boolean;
             reason: string;
         };
+        MarketJudgementIncidentConfirmed: {
+            /** Format: date-time */
+            confirmedAt: string;
+            confirmedBy: components["schemas"]["AdminAccountActor"];
+            correctedResult: components["schemas"]["MarketResult"];
+            description: string;
+            evidence: components["schemas"]["JudgementEvidence"];
+            /** Format: uuid */
+            incidentId: string;
+            judgementVersion: number;
+            originalResult: components["schemas"]["MarketResult"];
+            reason: string;
+            /** Format: date-time */
+            registeredAt: string;
+            registeredBy: components["schemas"]["AdminAccountActor"];
+            /** Format: uuid */
+            requestId: string;
+        };
+        MarketJudgementIncidentLogEntry: {
+            correctedResult: components["schemas"]["MarketResult"];
+            /** Format: date-time */
+            decidedAt: string | null;
+            decidedBy: components["schemas"]["AdminAccountActor"] | null;
+            decisionReason: string | null;
+            description: string;
+            evidence: components["schemas"]["JudgementEvidence"];
+            /** Format: date-time */
+            requestedAt: string;
+            requestedBy: components["schemas"]["AdminAccountActor"];
+            /** Format: uuid */
+            requestId: string;
+            /** Format: date-time */
+            retractedAt: string | null;
+            status: components["schemas"]["ApprovalStatus"];
+        };
+        MarketJudgementIncidentPending: {
+            correctedResult: components["schemas"]["MarketResult"];
+            description: string;
+            evidence: components["schemas"]["JudgementEvidence"];
+            /** Format: date-time */
+            requestedAt: string;
+            requestedBy: components["schemas"]["AdminAccountActor"];
+            /** Format: uuid */
+            requestId: string;
+        };
         MarketJudgementLogEntry: {
             correction: components["schemas"]["MarketJudgementCorrection"] | null;
             /** Format: date-time */
@@ -6592,6 +6757,7 @@ export type components = {
                 cancelledAt: string;
                 reason: string;
             } | null;
+            correction: components["schemas"]["PublicMarketJudgementCorrection"] | null;
             delays: components["schemas"]["PublicMarketJudgementDelay"][];
             disputes: components["schemas"]["PublicMarketDisputes"];
             pauses: components["schemas"]["PublicMarketPause"][];
@@ -7766,6 +7932,15 @@ export type components = {
             version: number;
             voidReason: string | null;
         };
+        PublicMarketJudgementCorrection: {
+            /** Format: date-time */
+            confirmedAt: string;
+            description: string;
+            evidence: components["schemas"]["JudgementEvidence"];
+            judgementVersion: number;
+            originalResult: components["schemas"]["MarketResult"];
+            result: components["schemas"]["MarketResult"];
+        };
         PublicMarketJudgementDelay: {
             current: boolean;
             /** Format: date-time */
@@ -8040,6 +8215,18 @@ export type components = {
                 priority: number;
             } | null;
             voidReason?: string | null;
+        };
+        RegisterJudgementIncidentBody: {
+            correctedResult: components["schemas"]["MarketResult"];
+            description: string;
+            evidence: {
+                /** Format: date-time */
+                collectedAt: string;
+                links: string[];
+            };
+            expectedAccountId: string;
+            /** @enum {boolean} */
+            noConflictConfirmed: true;
         };
         RegisterResult: {
             /** @enum {string} */
@@ -8466,6 +8653,7 @@ export type components = {
             title: string;
         };
         ThemeResult: {
+            corrected: boolean;
             /** Format: date-time */
             decidedAt: string;
             /** Format: uuid */
@@ -11322,6 +11510,77 @@ export interface operations {
             };
         };
     };
+    adminListMarketJudgementIncidents: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarketJudgementIncidentQueueItem"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     adminListMarketJudgements: {
         parameters: {
             query?: {
@@ -12915,6 +13174,333 @@ export interface operations {
                 };
             };
             /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRegisterMarketJudgementIncident: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterJudgementIncidentBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminConfirmMarketJudgementIncident: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmJudgementIncidentBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminDismissMarketJudgementIncident: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DismissJudgementIncidentBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRetractMarketJudgementIncident: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedAccountBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
             409: {
                 headers: {
                     [name: string]: unknown;

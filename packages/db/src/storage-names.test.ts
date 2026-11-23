@@ -13,6 +13,7 @@ import {
   MARKET_DISPUTE_STATUSES,
   MARKET_EVENT_TYPES,
   MARKET_JUDGEMENT_APPROVAL_KIND,
+  MARKET_JUDGEMENT_INCIDENT_APPROVAL_KIND,
   MARKET_PAUSE_DECISION_APPROVAL_KIND,
   MARKET_PAUSE_END_KINDS,
   MARKET_PAUSE_REASONS,
@@ -136,6 +137,8 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
     MARKET_JUDGEMENT_APPROVAL_KIND,
     MARKET_CANCEL_APPROVAL_KIND,
     RECONCILIATION_RECOVERY_APPROVAL_KIND,
+    // #144: a SETTLED market's judgement incident (ADR-0165).
+    MARKET_JUDGEMENT_INCIDENT_APPROVAL_KIND,
   ],
   // #80: the items a rule version changed (a text[] of the version items' keys, held by a CHECK).
   'market_rule_versions.changed_items': RULE_VERSION_ITEMS,
@@ -529,6 +532,30 @@ describe('excluded features in stored data (#113)', () => {
           'market_judgement_retract',
         ].map((name) => ({ where: 'admin_actions.type value', name })),
         { where: 'release_settings.key value', name: 'market.dispute_window' },
+      ]),
+    );
+  });
+
+  it('names the judgement incidents, their CHECKs and the incident’s stored values, each read above (#144)', () => {
+    // ADR-0165, migration 0080: the table of a SETTLED market's confirmed judgement incident, its
+    // keys and CHECKs under the names the schema test spells, and the incident's approval kind and
+    // admin action types, which the test above reads for an excluded feature ('incident', 'corrected',
+    // 'original', 'evidence' name none).
+    expect(storageNames()).toEqual(
+      expect.arrayContaining([
+        { where: 'table', name: 'market_judgement_incidents' },
+        ...[
+          'market_judgement_incidents_result_check',
+          'market_judgement_incidents_confirmer_check',
+          'market_judgement_incidents_evidence_check',
+        ].map((name) => ({ where: 'market_judgement_incidents constraint', name })),
+        { where: 'approval_requests.kind value', name: 'market_judgement_incident' },
+        ...[
+          'market_judgement_incident_register',
+          'market_judgement_incident_confirm',
+          'market_judgement_incident_dismiss',
+          'market_judgement_incident_retract',
+        ].map((name) => ({ where: 'admin_actions.type value', name })),
       ]),
     );
   });

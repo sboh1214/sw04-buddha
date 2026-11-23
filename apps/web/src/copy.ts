@@ -1903,6 +1903,111 @@ export const copy = {
   adminMarketJudgementsColCloseAt: '거래 마감',
   adminMarketJudgementsEarly: '예정 판정 전',
   adminMarketJudgementsCorrection: '판정 정정',
+  // 판정 오류 사건 (#144 1부, ADR-0165; 오너 답 144-3·144-4·144-8·144-13·144-14·144-19): 결과 확정 뒤 시장의
+  // 관리자 상세 판정 칸 아래. 한 관리자가 오류 내용·근거·올바른 결과로 등록하고, 등록하지 않았고 지급한 판정을
+  // 등록하지도 않은 다른 관리자가 사유와 함께 오류 확인(지급 완료 뒤에만)하거나 기각한다. 등록한 관리자는 결정
+  // 전에 철회한다. 관리자 화면은 지급 전 정정(#176)의 '판정 정정'과 구분해 '판정 오류 사건'이라 부른다(144-19).
+  // 등록 창의 안내는 확인되면 공개되는 것을 미리 말한다(ADR-0121 결정 6, 체크 칸 없음).
+  adminMarketJudgementIncident: '판정 오류 사건',
+  adminMarketJudgementIncidentIntro:
+    '결과 확정 뒤에 드러난 판정 오류를 다룹니다. 한 관리자가 오류 내용·근거·올바른 결과로 사건을 등록하고, 등록하지 않았고 지급한 판정을 등록하지도 않은 다른 관리자가 사유와 함께 오류 확인하거나 기각합니다. 오류 확인은 지급이 끝난 뒤에 할 수 있고, 확인하면 공개 판정 기록에 판정 정정이 올라가며 시장 상세의 결과·테마 결과·관련 시장이 정정된 결과를 따릅니다. 원래 판정과 정산 기록, 지급한 Coin은 그대로입니다. 한 시장에 확인된 사건은 하나입니다.',
+  adminMarketJudgementIncidentRegister: '사건 등록',
+  adminMarketJudgementIncidentRegisterTitle: '판정 오류 사건 등록',
+  adminMarketJudgementIncidentRegisterBody:
+    '결과 확정 뒤에 드러난 판정 오류를 적습니다. 등록만으로는 아무것도 바뀌지 않습니다. 다른 관리자가 오류 확인하면 올바른 결과와 오류 내용·근거·수집 시각이 판정 정정으로 모든 방문자에게 보입니다. 관리자 신원과 검토 사유는 공개되지 않습니다.',
+  adminMarketJudgementIncidentRegistered: '판정 오류 사건을 등록했습니다.',
+  adminMarketJudgementIncidentCorrectedResult: '올바른 결과',
+  adminMarketJudgementIncidentCorrectedResultHint: '지급한 결과와 다른 결과를 고릅니다.',
+  adminMarketJudgementIncidentPaidResult: '지급한 결과',
+  adminMarketJudgementIncidentPaidVersion: '지급한 판정',
+  adminMarketJudgementIncidentDescription: '오류 내용',
+  adminMarketJudgementIncidentDescriptionHint:
+    '무엇이 잘못되었는지 1~500자로 적습니다. 오류 확인되면 모든 방문자에게 보입니다.',
+  adminMarketJudgementIncidentEvidence: '근거',
+  adminMarketJudgementIncidentLinksHint:
+    '오류를 보여 주는 링크를 1~5개 적습니다. 오류 확인되면 모든 방문자에게 보입니다.',
+  adminMarketJudgementIncidentCollectedAt: '근거 수집 시각',
+  adminMarketJudgementIncidentCollectedAtHint: '한국 시간으로 적습니다. 지금보다 뒤일 수 없습니다.',
+  adminMarketJudgementIncidentPending: '검토를 기다리는 사건',
+  adminMarketJudgementIncidentConfirmed: '확인된 사건',
+  adminMarketJudgementIncidentRegisteredBy: '등록한 관리자',
+  adminMarketJudgementIncidentRegisteredAt: '등록 시각',
+  adminMarketJudgementIncidentConfirmedBy: '오류 확인한 관리자',
+  adminMarketJudgementIncidentReviewReason: '검토 사유',
+  adminMarketJudgementIncidentReviewReasonHint: '관리자에게만 보입니다. 1~500자로 적습니다.',
+  adminMarketJudgementIncidentConfirm: '오류 확인',
+  adminMarketJudgementIncidentDismiss: '기각',
+  adminMarketJudgementIncidentRetract: '철회',
+  // 144-13: 결과 확정·지급 중에는 등록·기각·철회만 하고 오류 확인 단추는 이 말과 함께 꺼 둔다.
+  adminMarketJudgementIncidentConfirmWaits: '지급이 끝난 뒤 확인할 수 있습니다.',
+  // 144-4: 지급한 판정 버전을 등록한 관리자는 검토(오류 확인·기각)를 하지 못한다. 등록은 할 수 있다.
+  adminMarketJudgementIncidentRegistrantNote:
+    '지급한 판정을 등록한 관리자는 이 사건을 오류 확인하거나 기각할 수 없습니다.',
+  adminMarketJudgementIncidentOwnNote:
+    '내가 등록한 사건은 다른 관리자가 오류 확인하거나 기각합니다.',
+  adminMarketJudgementIncidentUnregistrableStatus:
+    '결과 확정 뒤의 시장에서 사건을 등록할 수 있습니다.',
+  adminMarketJudgementIncidentUnregistrableLegacy:
+    '판정 버전이 없는 이전 방식의 시장이라 사건을 등록할 수 없습니다.',
+  // 144-14: 확인된 사건이 있으면 새 사건을 받지 않는다. 기각·철회 뒤에는 다시 등록할 수 있다.
+  adminMarketJudgementIncidentUnregistrableConfirmed: '확인된 사건이 있어 새 사건을 받지 않습니다.',
+  adminMarketJudgementIncidentUnregistrablePending:
+    '검토를 기다리는 사건이 있습니다. 한 시장에 기다리는 사건은 하나입니다.',
+  adminMarketJudgementIncidentLog: '사건 기록',
+  adminMarketJudgementIncidentLogEmpty: '등록된 판정 오류 사건이 없습니다.',
+  adminMarketJudgementIncidentStatusPending: '검토 중',
+  adminMarketJudgementIncidentStatusApproved: '오류 확인',
+  adminMarketJudgementIncidentStatusRejected: '기각',
+  adminMarketJudgementIncidentStatusRetracted: '철회',
+  adminMarketJudgementIncidentDecidedBy: '결정한 관리자',
+  adminMarketJudgementIncidentRetractedAt: '철회 시각',
+  adminMarketJudgementIncidentConfirmTitle: '판정 오류 확인',
+  adminMarketJudgementIncidentConfirmBody:
+    '오류 확인하면 공개 판정 기록에 판정 정정(정정된 결과·원래 결과·오류 내용·근거)이 바로 올라가고, 시장 상세의 결과·테마 결과·관련 시장이 정정된 결과를 따릅니다. 원래 판정과 정산 기록, 지급한 Coin은 그대로이고, 오류 확인은 되돌릴 수 없습니다. 검토 사유는 관리자에게만 보입니다.',
+  adminMarketJudgementIncidentConfirmDone: '판정 오류를 확인했습니다.',
+  adminMarketJudgementIncidentDismissTitle: '판정 오류 사건 기각',
+  adminMarketJudgementIncidentDismissBody:
+    '기각하면 사건은 공개되지 않고 사건 기록에만 남습니다. 기각한 뒤에는 새 사건을 등록할 수 있습니다. 검토 사유는 관리자에게만 보입니다.',
+  adminMarketJudgementIncidentDismissed: '판정 오류 사건을 기각했습니다.',
+  adminMarketJudgementIncidentRetractTitle: '판정 오류 사건 철회',
+  adminMarketJudgementIncidentRetractBody:
+    '등록한 사건을 거둡니다. 사건은 공개되지 않고 사건 기록에만 남으며, 새 사건을 등록할 수 있습니다. 철회할까요?',
+  adminMarketJudgementIncidentRetracted: '판정 오류 사건을 철회했습니다.',
+  adminMarketJudgementIncidentChanged:
+    '이 사건이 그사이 결정되거나 철회되었습니다. 창을 닫고 화면을 확인해 주세요.',
+  // 관리자 상세의 결과 줄: 지급한 결과 → 판정 정정 정정된 결과(시장 행의 결과는 지급한 결과 그대로다).
+  adminMarketResultCorrected: '판정 정정',
+  // 사건의 거절(VALIDATION_ERROR가 짚는 곳마다, MARKET_JUDGEMENT_INCIDENT_REFUSALS).
+  errMarketJudgementIncidentResult: '올바른 결과를 골라 주세요.',
+  errMarketJudgementIncidentSameResult: '지급한 결과와 같은 결과입니다. 다른 결과를 골라 주세요.',
+  errMarketJudgementIncidentDescription: '오류 내용을 1~500자로 입력해 주세요.',
+  errMarketJudgementIncidentStatus:
+    '결과 확정 뒤의 시장에서만 할 수 있습니다. 화면을 새로 고쳐 주세요.',
+  errMarketJudgementIncidentNotSettled:
+    '지급이 끝난 뒤 확인할 수 있습니다. 화면을 새로 고쳐 주세요.',
+  errMarketJudgementIncidentLegacy:
+    '판정 버전이 없는 이전 방식의 시장이라 사건을 다룰 수 없습니다.',
+  errMarketJudgementIncidentConfirmed:
+    '이 시장에는 이미 확인된 사건이 있습니다. 화면을 새로 고쳐 주세요.',
+  errMarketJudgementIncidentPending: '검토를 기다리는 사건이 있습니다. 화면을 새로 고쳐 주세요.',
+  errMarketJudgementIncidentRegistrant:
+    '지급한 판정을 등록한 관리자는 이 사건을 오류 확인하거나 기각할 수 없습니다.',
+  errMarketJudgementIncidentRequester: '내가 등록한 사건은 다른 관리자가 결정합니다.',
+  // 사건 등록의 no_decider: 등록자에 더해 지급한 판정의 등록자도 빠지므로(144-4) 이해충돌만 탓하지 않는다.
+  errMarketJudgementIncidentNoDecider:
+    '이 사건을 검토할 다른 관리자가 없습니다. 등록한 관리자, 지급한 판정을 등록한 관리자, 이해충돌이 있는 관리자는 검토할 수 없습니다.',
+  errMarketJudgementIncidentUnknown: '이 시장의 사건이 아닙니다. 화면을 새로 고쳐 주세요.',
+  // 판정 오류 사건 검토 대기 (GET /admin/market-judgement-incidents): 검수 대기 화면에서 판정 승인 대기 다음.
+  adminMarketJudgementIncidents: '판정 오류 사건 검토 대기',
+  adminMarketJudgementIncidentsIntro:
+    '검토를 기다리는 판정 오류 사건입니다. 오래 기다린 것부터 보입니다. 등록한 관리자도, 지급한 판정을 등록한 관리자도 아닌 관리자가 시장 상세에서 오류 확인하거나 기각합니다. 오류 확인은 지급이 끝난 뒤에 할 수 있습니다.',
+  adminMarketJudgementIncidentsEmpty: '검토를 기다리는 판정 오류 사건이 없습니다.',
+  adminMarketJudgementIncidentsColTitle: '질문',
+  adminMarketJudgementIncidentsColStatus: '상태',
+  adminMarketJudgementIncidentsColOriginal: '지급한 결과',
+  adminMarketJudgementIncidentsColCorrected: '올바른 결과',
+  adminMarketJudgementIncidentsColRequestedBy: '등록한 관리자',
+  adminMarketJudgementIncidentsColRequestedAt: '등록 시각',
   // 관리자 상세의 거래 현황: 체결·포지션에서 나온 값만 보인다(직접 AMM 상태는 #125에서 지웠다).
   adminMarketTradeStats: '거래 현황',
   tradeStatsLastPrice: '현재가',
@@ -1993,7 +2098,8 @@ export const copy = {
   // 상태 라벨(MARKET_STATUS_LABEL)과 결과 라벨(marketResultVoid)로 적어 같은 카드의 배지와 같다.
   adminRelatedHint: '연결한 두 시장은 서로의 상세에 관련 시장으로 보입니다.',
   adminRelatedHintHiddenStatusTail: '인 시장과 결과가',
-  adminRelatedHintHiddenResultTail: '인 시장은 상세에 보이지 않습니다.',
+  // 144-19 (다): 무효 결과에는 판정 정정으로 무효가 된 시장도 든다(정정된 결과를 따른다, 144-5).
+  adminRelatedHintHiddenResultTail: '인 시장(정정된 결과 포함)은 상세에 보이지 않습니다.',
   adminRelatedHintNoEffect: '연결은 두 시장의 규칙·거래·판정·정산을 바꾸지 않습니다.',
   adminRelatedEmpty: '연결된 관련 시장이 없습니다.',
   adminRelatedLinkedAt: '연결',
@@ -4249,6 +4355,12 @@ export const copy = {
     '정답인 계약은 100 Coin씩 지급되었습니다. 정산 때 계약을 보유한 계정은 내 포지션에서 자기 정산 내역을 볼 수 있습니다.',
   marketSettledPayoutVoid:
     '무효로 끝나 YES·NO 계약마다 50 Coin씩 지급되었습니다. 매입가에 따라 손익이 생깁니다. 정산 때 계약을 보유한 계정은 내 포지션에서 자기 정산 내역을 볼 수 있습니다.',
+  // 판정 정정이 확인된 시장의 지급 완료 안내(#144, 144-5·144-19): 결과 줄은 정정된 결과를 보이므로, 정답·무효의
+  // 지급 문장 대신 원래 결과로 지급했고 회수하지 않는다는 사실을 적는다({paid}는 원래 결과의 라벨).
+  marketSettledCorrected:
+    '원래 결과({paid})로 지급했고, 지급한 Coin은 회수하지 않습니다. 판정 정정은 판정 기록에서 볼 수 있습니다.',
+  // 상세 결과 줄과 테마 결과 목록의 표시(144-5, 144-19 (가)).
+  marketResultCorrected: '판정 정정',
   // 관리자 이벤트 로그의 정산 행: 정산 요약(worker market-finalize).
   eventSettledAccounts: '정산 계정 수',
   eventPaidAccounts: '지급 계정 수',
@@ -4963,6 +5075,11 @@ export const copy = {
   adminMarketWorkReopenedDisputes: '검토 중으로 돌아간 판정 이의',
   adminMarketWorkDisputeDismiss: '이의 기각',
   adminMarketWorkDisputeAccept: '이의 수용',
+  // 판정 오류 사건(#144, ADR-0165)의 네 단계 — 판정으로 분류한다(T10). 등록의 사유 칸은 그 오류 내용(145-16).
+  adminMarketWorkIncidentRegister: '판정 오류 사건 등록',
+  adminMarketWorkIncidentConfirm: '판정 오류 확인',
+  adminMarketWorkIncidentDismiss: '판정 오류 사건 기각',
+  adminMarketWorkIncidentRetract: '판정 오류 사건 철회',
   adminMarketWorkResolveInterim: '1인 판정(이전 방식)',
   adminMarketWorkRecoveryRequest: '대사 보류 복구 요청',
   adminMarketWorkRecoveryApprove: '대사 보류 복구 승인',
@@ -5244,6 +5361,16 @@ export const copy = {
   judgingCurrentDelay: '최신 지연 기록',
   judgingPreviousDelay: '이전 지연 기록',
   judgingNextReviewAt: '다음 검토 시각',
+  // 판정 정정(#144, ADR-0165; 144-5, #173 13항): 확인된 판정 오류 사건 — 정정된 결과, 원래 결과(그 판정 버전),
+  // 144-5의 사실, 오류 내용·근거·수집 시각, 확인 시각. 등록·검토한 관리자와 검토 사유는 없다.
+  judgingCorrection: '판정 정정',
+  judgingCorrectedResult: '정정된 결과',
+  judgingOriginalResult: '원래 결과',
+  judgingCorrectionNoClawback: '원래 결과로 지급했고, 지급한 Coin은 회수하지 않습니다.',
+  judgingCorrectionDescription: '오류 내용',
+  judgingCorrectionConfirmedAt: '오류 확인 시각',
+  // 144-9: 결과 확정 뒤 시장의 판정 기록에 한 줄. 주소는 사업자 정보의 고객센터 이메일이다(appealGuidance처럼).
+  judgingPostPayoutReport: '결과 확정 뒤의 판정 오류는 고객센터 이메일({{email}})로 알려 주세요.',
   adminTradingAnomalies: '거래 패턴 검토',
   anomalyPurpose:
     '반복 체결과 짧은 시간의 매수·매도 왕복을 검토할 근거입니다. 이 목록만으로 비정상 거래를 확정하지 않으며, 거래 제외나 계정 조치는 별도 검토와 승인이 필요합니다.',

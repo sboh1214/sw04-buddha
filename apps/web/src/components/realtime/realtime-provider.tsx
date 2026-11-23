@@ -94,6 +94,7 @@ import {
 import { restartQueries, setResnapshotOwed } from '@/lib/query-client';
 import { handleMarketStats } from '@/lib/market-stats-event';
 import { refreshThemeResultsOnStatus } from '@/lib/themes';
+import { refreshRelatedMarketsOnStatus } from '@/lib/related-markets';
 import { type CachedSeries, appendTick } from '@/lib/ticks';
 
 /**
@@ -990,6 +991,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // again (`refetchType` 'active'), so it costs a request where a theme page is open and
         // nowhere else.
         void refreshThemeResultsOnStatus(queryClient, event.status);
+        // And the details' 관련 시장 lists on 지급 완료 (#144, ADR-0165 T12): a confirmed 판정 오류 사건
+        // republishes the settled status unchanged, and a corrected 무효 leaves or joins them.
+        void refreshRelatedMarketsOnStatus(queryClient, event.status);
         // The first kind once more: the member's own 판정 이의 on this market (#175, ADR-0104) — a
         // 기각 or 수용 republishes this event unchanged, and no event carries the decision or its
         // reason. Only an open submission screen asks again (`refreshMyMarketDisputeOnStatus`).

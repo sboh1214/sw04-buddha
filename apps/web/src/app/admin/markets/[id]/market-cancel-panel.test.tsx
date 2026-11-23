@@ -75,6 +75,7 @@ const scheduled: AdminMarket = {
     disputes: { total: 0, byVersion: [], decisions: [] },
     cancellation: null,
     payoutDelayed: false,
+    correction: null,
   },
   ruleVersions: [],
   supplement: { pending: null, log: [] },
@@ -88,6 +89,13 @@ const scheduled: AdminMarket = {
   judgementDelay: null,
   judgementDelays: [],
   judgement: { current: null, history: [], pending: null, log: [], disputeWindowUndecided: false },
+  judgementIncident: {
+    registrable: false,
+    confirmable: false,
+    pending: null,
+    confirmed: null,
+    log: [],
+  },
 };
 
 const pending: MarketCancelRequest = {

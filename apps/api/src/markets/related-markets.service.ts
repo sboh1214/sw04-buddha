@@ -1,6 +1,6 @@
 import { MarketRankingCursors } from './market-ranking-cursor.js';
 import { Inject, Injectable } from '@nestjs/common';
-import { schema, type Db } from '@buddha/db';
+import { effectiveResultSql, schema, type Db } from '@buddha/db';
 import {
   RELATED_MARKET_STATUSES,
   relatedMarketPair,
@@ -88,8 +88,10 @@ export class RelatedMarketsService {
    * answer. A cursor that does not decode serves the first page.
    *
    * The linked markets shown are `isRelatedMarketShown`'s: a status in RELATED_MARKET_STATUSES and
-   * a result other than VOID, in whatever status it holds that result — a PROVISIONAL VOID too,
-   * since the result is not a status. `IS DISTINCT FROM`, so a market with no result yet stays.
+   * an effective result other than VOID — the corrected one once a 판정 오류 사건 is confirmed, else
+   * the market's (#144, 144-5, `effectiveResultSql`) — in whatever status it holds that result —
+   * a PROVISIONAL VOID too, since the result is not a status. `IS DISTINCT FROM`, so a market with
+   * no result yet stays.
    *
    * `marketOrder`'s status is `undefined`, "every public status", for what it says about the list
    * — it can hold ended markets — which only 마감 임박 reads; 추천 does not.
@@ -100,12 +102,15 @@ export class RelatedMarketsService {
     limit: number,
   ): Promise<Page<MarketSummary>> {
     await this.markets.requirePublic(marketId);
-    const { markets, categories } = schema;
+    const { markets, categories, marketJudgementIncidents: incidents } = schema;
     const order = marketOrder(this.db, 'recommended', cursor, undefined, this.rankingCursors.codec);
     let select = this.db
       .select({ ...marketWithCategory, order: order.fields })
       .from(markets)
       .innerJoin(categories, eq(categories.id, markets.categoryId))
+      // #144 (144-5): a confirmed 판정 오류 사건's corrected result; UNIQUE `market_id`, so the join
+      // never multiplies a market's row.
+      .leftJoin(incidents, eq(incidents.marketId, markets.id))
       .$dynamic();
     if (order.lateral) select = select.crossJoinLateral(order.lateral);
     const rows = await select
@@ -113,7 +118,7 @@ export class RelatedMarketsService {
         and(
           linkedTo(this.db, marketId),
           inArray(markets.status, [...RELATED_MARKET_STATUSES]),
-          sql`${markets.resolvedResult} IS DISTINCT FROM 'VOID'`,
+          sql`${effectiveResultSql(markets, incidents)} IS DISTINCT FROM 'VOID'`,
           order.after,
         ),
       )

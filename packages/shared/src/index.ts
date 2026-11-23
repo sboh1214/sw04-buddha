@@ -39,6 +39,7 @@ export * from './market-dispute.js';
 export * from './market-edits.js';
 export * from './market-judgement.js';
 export * from './market-judgement-delay.js';
+export * from './market-judgement-incident.js';
 export * from './market-lifecycle.js';
 export * from './market-open-items.js';
 export * from './market-pause.js';

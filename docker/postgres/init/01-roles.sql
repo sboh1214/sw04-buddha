@@ -13,7 +13,8 @@
 --                   market_judgements, market_judgement_delays, ledger_accounts, fills, position_settlements, reconciliation_results,
 --                   reconciliation_recoveries, market_conflict_declarations, market_liquidity_versions, treasury_issuances,
 --                   market_maker_allocations, market_maker_runs, market_maker_recalls, market_maker_controls, fill_classifications,
---                   fill_realizations, regrants): INSERT/SELECT only;
+--                   fill_realizations, regrants,
+--                   market_judgement_incidents): INSERT/SELECT only;
 --                   reconciliation_corrections: no INSERT, UPDATE, DELETE (only its guarded function writes);
 --                   market_maker_supply_pending, market_maker_supply_states,
 --                   market_maker_supply_intervals: SELECT only, written by their observer triggers;
@@ -36,7 +37,7 @@
 --                   (0001, 0015, 0020, 0021, 0023, 0026, 0030, 0031, 0032, 0033, 0034, 0035,
 --                   0036, 0039, 0040, 0041, 0044, 0045, 0049, 0053, 0054, 0055, 0056, 0058,
 --                   0060, 0062, 0064, 0065, 0066, 0067, 0069, 0070, 0072, 0073, 0075, 0076, 0077,
---                   0078, 0079),
+--                   0078, 0079, 0080),
 --                   see bottom.
 
 CREATE ROLE buddha_migrate LOGIN PASSWORD 'buddha';
@@ -129,4 +130,8 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO buddha_app;
 -- 0079 (#56: notification_inboxes: UPDATE — then GRANT UPDATE (categories_off), the member's
 -- 수신 설정): the column grant is enough for the row locks, and no app write moves an inbox's
 -- user_id (a key update the writers' gate would skip) or created_at.
+-- 0080 (#144: market_judgement_incidents: UPDATE, DELETE): a confirmed 판정 오류 사건 is a
+-- permanent fact; a trigger refuses both to every role, another binds a row at INSERT to its
+-- SETTLED market's paid version and its approved request, and triggers on approval_requests refuse
+-- the paid version's registrant as an incident's decider and an approval without its row.
 -- Default privileges are applied at CREATE time, so a REVOKE afterwards sticks.

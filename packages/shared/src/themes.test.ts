@@ -348,6 +348,21 @@ describe('the answers', () => {
     expect(adminThemeMarketSchema.shape.linkedBy).toBe(adminAccountActorSchema);
   });
 
+  it('mark a result a 판정 정정 made, and require the mark (#144, 144-5, 144-19 (가))', () => {
+    const row = {
+      marketId: '0b6c1f5e-6e0c-4b8f-9a3d-2f1e4c5d6a7b',
+      slug: 'market-a',
+      title: '시장 A',
+      status: 'settled',
+      result: 'NO',
+      corrected: true,
+      decidedAt: '2026-11-23T03:00:00.000Z',
+    };
+    expect(themeResultSchema.parse(row)).toEqual(row);
+    const { corrected: _corrected, ...withoutMark } = row;
+    expect(themeResultSchema.safeParse(withoutMark).success).toBe(false);
+  });
+
   it('carry nothing private and name no excluded feature in public (#113)', () => {
     const publicKeys = [
       ...Object.keys(themeSummarySchema.shape),

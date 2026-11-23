@@ -336,6 +336,54 @@ describe('an entry’s details', () => {
     expect(marketWorkDetailsJson(link)).toBe(`{"marketId":"${ID}","relatedMarketId":"b"}`);
   });
 
+  it('names a 판정 오류 사건’s four steps and reads their results, never the evidence (#144)', () => {
+    const action = (type: AdminMarketWorkEntry['type'], details: Record<string, unknown>) =>
+      workEntry({ source: 'admin_action', id: 'a:x', type, details, reasonBasis: 'recorded' });
+    expect(
+      (
+        [
+          'market_judgement_incident_register',
+          'market_judgement_incident_confirm',
+          'market_judgement_incident_dismiss',
+          'market_judgement_incident_retract',
+        ] as const
+      ).map((type) => marketWorkLabel({ type, details: {} })),
+    ).toEqual([
+      '판정 오류 사건 등록',
+      '판정 오류 확인',
+      '판정 오류 사건 기각',
+      '판정 오류 사건 철회',
+    ]);
+    // The registration: the paid version and result and the correct one (오류 내용 is the reason
+    // column's, 145-16).
+    expect(
+      marketWorkRows(
+        action('market_judgement_incident_register', {
+          approvalId: ID,
+          judgementVersion: 1,
+          originalResult: 'YES',
+          correctedResult: 'VOID',
+          description: '정정 발표가 있었습니다',
+          evidence: { links: ['https://example.com/fix'], collectedAt: '2026-11-25T03:00:00.000Z' },
+        }),
+      ),
+    ).toEqual([
+      { label: copy.adminMarketJudgementIncidentPaidVersion, value: judgementVersionName(1) },
+      { label: copy.adminMarketJudgementIncidentPaidResult, value: 'YES' },
+      { label: copy.adminMarketJudgementIncidentCorrectedResult, value: '무효' },
+    ]);
+    for (const type of [
+      'market_judgement_incident_confirm',
+      'market_judgement_incident_dismiss',
+      'market_judgement_incident_retract',
+    ] as const) {
+      expect(
+        marketWorkRows(action(type, { approvalId: ID, correctedResult: 'NO', reason: 'r' })),
+        type,
+      ).toEqual([{ label: copy.adminMarketJudgementIncidentCorrectedResult, value: 'NO' }]);
+    }
+  });
+
   it('leaves out of the JSON line what the row already says: the reason and a retry’s error', () => {
     const retry = workEntry({
       source: 'admin_action',

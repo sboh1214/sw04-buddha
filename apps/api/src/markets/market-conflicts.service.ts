@@ -16,6 +16,7 @@ import { MarketAdminService } from './market-admin.service.js';
 import { marketTagNames } from './market.service.js';
 import { readMarketSources } from './market-sources.js';
 import { MarketJudgementService } from './market-judgement.service.js';
+import { MarketJudgementIncidentService } from './market-judgement-incident.service.js';
 import { lockMarket } from './market-lock.js';
 
 /** Admin-only interests. A declaration is immutable and always names the session's account. */
@@ -24,6 +25,7 @@ export class MarketConflictsService {
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly judgements: MarketJudgementService,
+    private readonly incidents: MarketJudgementIncidentService,
     private readonly markets: MarketAdminService,
   ) {}
 
@@ -82,6 +84,10 @@ export class MarketConflictsService {
         adminActionId,
         at,
       });
+      // ADR-0120 decision 6: the declarer's own waiting 판정 오류 사건 too (#144, ADR-0165 — a
+      // registration that chooses a result is a 정정 등록), before the judgements' retraction,
+      // which answers the admin detail as both left it.
+      await this.incidents.retractOwnPendingForConflict(tx, adminId, marketId, declaration.id);
       const retraction = await this.judgements.retractOwnPendingForConflict(
         tx,
         adminId,

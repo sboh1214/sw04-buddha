@@ -62,6 +62,16 @@ export {
   type RecordJudgementDelayResult,
 } from './market-judgement-delay.js';
 export {
+  effectiveResultSql,
+  judgementIncidentPayloadOf,
+  readMarketJudgementIncident,
+  readMarketJudgementIncidentRequests,
+  recordMarketJudgementIncident,
+  type MarketJudgementIncidentRequestRead,
+  type MarketJudgementIncidentRow,
+  type RecordMarketJudgementIncidentInput,
+} from './market-judgement-incident.js';
+export {
   approveMarketJudgement,
   correctMarketJudgement,
   currentMarketJudgement,

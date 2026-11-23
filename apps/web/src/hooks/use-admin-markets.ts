@@ -11,6 +11,7 @@ import {
 import {
   type AdminDisputeQueueItem,
   type AdminMarket,
+  type AdminMarketJudgementIncidentQueueItem,
   type AdminMarketJudgementQueueItem,
   type AdminMarketCancelItem,
   type AdminMarketPauseDecisionItem,
@@ -90,6 +91,18 @@ export const ADMIN_MARKET_CANCEL_REQUESTS_KEY = ['admin', 'market-cancel-request
  * market.
  */
 export const ADMIN_MARKET_JUDGEMENTS_KEY = ['admin', 'market-judgements'] as const;
+
+/**
+ * 판정 오류 사건 검토 대기 (#144, ADR-0165): `GET /admin/market-judgement-incidents`, the incident
+ * registrations waiting for another admin's 오류 확인 or 기각, under the private `['admin']` root
+ * and a segment of its own, as the other queues: every admin write to a market asks it again
+ * (`invalidateMarket`) — a registration adds a row, a decision or a 철회 takes one, and a status move
+ * (지급 완료 lets a 오류 확인 through, 144-13) changes what a row shows.
+ */
+export const ADMIN_MARKET_JUDGEMENT_INCIDENTS_KEY = [
+  'admin',
+  'market-judgement-incidents',
+] as const;
 
 /**
  * 이의 접수 (#175, ADR-0104): `GET /admin/market-disputes?status=`, the members' 판정 이의 in two
@@ -411,6 +424,40 @@ export function useAdminMarketJudgements() {
   return useInfiniteQuery(adminMarketJudgementsQueryOptions());
 }
 
+/** One page of the 판정 오류 사건 검토 대기 queue. */
+export interface AdminMarketJudgementIncidentPage {
+  items: AdminMarketJudgementIncidentQueueItem[];
+  nextCursor: string | null;
+}
+
+/**
+ * The 판정 오류 사건 검토 대기 queue (#144): the oldest registration first, 20 per page with 더 보기
+ * (the API's default page), as the other queues page. No filter, no polling (ADR-0138).
+ */
+export function adminMarketJudgementIncidentsQueryOptions() {
+  return {
+    queryKey: ADMIN_MARKET_JUDGEMENT_INCIDENTS_KEY,
+    queryFn: async ({
+      pageParam,
+    }: {
+      pageParam: string | undefined;
+    }): Promise<AdminMarketJudgementIncidentPage> => {
+      const { data, meta } = unwrap(
+        await api.GET('/api/v1/admin/market-judgement-incidents', {
+          params: { query: pageParam === undefined ? {} : { cursor: pageParam } },
+        }),
+      );
+      return { items: data, nextCursor: meta.nextCursor };
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last: AdminMarketJudgementIncidentPage) => last.nextCursor ?? undefined,
+  };
+}
+
+export function useAdminMarketJudgementIncidents() {
+  return useInfiniteQuery(adminMarketJudgementIncidentsQueryOptions());
+}
+
 /** One page of an 이의 접수 half. */
 export interface AdminMarketDisputePage {
   items: AdminDisputeQueueItem[];
@@ -531,6 +578,7 @@ export function invalidateMarket(queryClient: QueryClient, id: string) {
     queryClient.invalidateQueries({ queryKey: ADMIN_RECONCILIATION_KEY }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_CANCEL_REQUESTS_KEY }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_JUDGEMENTS_KEY }),
+    queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_JUDGEMENT_INCIDENTS_KEY }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_DISPUTES_KEY }),
     // 운영 대기열 (#145, ADR-0163): a write can add a row to a list, move it or take it away.
     queryClient.invalidateQueries({ queryKey: ADMIN_OPERATIONS_KEY }),

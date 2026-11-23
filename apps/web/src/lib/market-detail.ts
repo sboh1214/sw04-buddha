@@ -10,7 +10,7 @@ import {
 import { copy } from '@/copy';
 import { system } from '@/theme/system';
 import { type Market, type MarketJudgementDelay, isApiError } from './api';
-import { formatNoPrice, formatPricePerContract } from './market-admin';
+import { MARKET_RESULT_LABEL, formatNoPrice, formatPricePerContract } from './market-admin';
 import { readsDisputeUnderReview, readsJudgementDelayed } from './market-status';
 import { BOTTOM_TABS_HEIGHT_PX, HEADER_HEIGHT_PX, ORDER_ENTRY_BAR_HEIGHT_PX } from './nav';
 
@@ -326,12 +326,21 @@ const STATUS_NOTICE: Partial<Record<MarketStatus, Omit<StatusNotice, 'detail'>>>
  * which the public row carries as the flags alone): the line says the judgement is being reviewed
  * again, never that the result will change — the correction may be rejected. The deadline row and
  * the submission link are the detail's (`StatusNotice`).
+ *
+ * A settled market with a confirmed 판정 오류 사건 (#144, ADR-0165 — `judgingRecord.correction`)
+ * says instead that the payout followed the original result and nothing paid is taken back
+ * (`copy.marketSettledCorrected`, 144-5): the 결과 줄 above it shows the corrected result, so the
+ * winning-side sentence keyed on the paid result would read as a payout of the corrected one (a
+ * YES→NO correction is not "NO contracts were paid 100"), and one keyed on the corrected result
+ * would claim a payout that never happened (a YES→VOID correction paid no 50 Coin per contract).
+ * `resolvedResult` stays the paid result.
  */
 export function statusNotice(market: {
   status: MarketStatus;
   judgementDelayed: boolean;
   disputeUnderReview: boolean;
   resolvedResult: MarketResult | null;
+  judgingRecord?: { correction: { originalResult: MarketResult } | null };
 }): StatusNotice | undefined {
   if (market.status === 'closed' && readsJudgementDelayed(market)) {
     return { tone: 'warning', message: copy.marketJudgementDelayedNotice };
@@ -354,6 +363,16 @@ export function statusNotice(market: {
     return notice;
   }
   if (market.status !== 'settled' || market.resolvedResult === null) return notice;
+  const correction = market.judgingRecord?.correction ?? null;
+  if (correction !== null) {
+    return {
+      ...notice,
+      detail: copy.marketSettledCorrected.replace(
+        '{paid}',
+        MARKET_RESULT_LABEL[correction.originalResult],
+      ),
+    };
+  }
   return {
     ...notice,
     detail:

@@ -22,7 +22,12 @@ import { useTheme, useThemeMarkets, useThemeResults } from '@/hooks/use-themes';
 import { type Theme, type ThemeNotice } from '@/lib/api';
 import { MARKET_STATUS_LABEL } from '@/lib/market-admin';
 import { listSection } from '@/lib/query-client';
-import { formatThemePeriod, linkedTextParts, themeResultLabel } from '@/lib/themes';
+import {
+  formatThemePeriod,
+  linkedTextParts,
+  themeResultLabel,
+  themeResultMark,
+} from '@/lib/themes';
 import { MarketGrid } from '../../market-list';
 
 /**
@@ -192,7 +197,8 @@ function LinkedText({ text }: { text: string }) {
 /**
  * 결과 목록 (ADR-0069 decision 4): the theme's markets whose result is confirmed — 결과 확정·지급
  * 중·지급 완료, never a provisional result (ADR-0093 decision 3, the #174 row) — each with its
- * status label, its result — YES, NO or 무효 — and when it was confirmed, the latest first. The
+ * status label, its result — YES, NO or 무효; a confirmed 판정 오류 사건's corrected one, marked 판정
+ * 정정 (#144, 144-5, 144-19 (가)) — and when it was confirmed, the latest first. The
  * markets' own outcome only: nobody's trades, performance or PnL. A row opens its market. A 더 보기
  * that failed keeps the rows read so far and says so above its button (`LoadMoreFailed`, the first
  * read's `copy.errUnknown` — owner decision 2026-10-20 7, ADR-0075 5-14, as every 더 보기 list).
@@ -251,14 +257,24 @@ function ThemeResults({ themeId }: { themeId: string }) {
                   {MARKET_STATUS_LABEL[row.status]} · <DateTimeText iso={row.decidedAt} />
                 </Text>
               </Stack>
-              <Badge
-                variant="outline"
-                size="lg"
-                flexShrink="0"
-                data-testid={`theme-result-outcome-${row.marketId}`}
-              >
-                {themeResultLabel(row)}
-              </Badge>
+              <HStack gap="2" flexShrink="0">
+                {themeResultMark(row) !== null && (
+                  <Badge
+                    colorPalette="orange"
+                    variant="subtle"
+                    data-testid={`theme-result-corrected-${row.marketId}`}
+                  >
+                    {themeResultMark(row)}
+                  </Badge>
+                )}
+                <Badge
+                  variant="outline"
+                  size="lg"
+                  data-testid={`theme-result-outcome-${row.marketId}`}
+                >
+                  {themeResultLabel(row)}
+                </Badge>
+              </HStack>
             </HStack>
           ))}
           {results.hasNextPage && (

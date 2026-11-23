@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { schema, type Db } from '@buddha/db';
+import { effectiveResultSql, schema, type Db } from '@buddha/db';
 import {
   THEME_RESULT_STATUSES,
   decodeKeyset,
@@ -166,7 +166,9 @@ export class ThemesService {
    * 중·지급 완료 (`THEME_RESULT_STATUSES`) — each with that result (YES·NO·VOID), the most
    * recently confirmed first, keyset-paged on `(decided, id)`. A PROVISIONAL result, which may
    * still be corrected, is not in it, and a CANCELLED market has no result (ADR-0093 decision 3,
-   * the #174 row). The markets' own outcome only: nobody's trades, performance or PnL.
+   * the #174 row). A market whose 판정 오류 사건 was confirmed shows the corrected result, marked
+   * `corrected` (#144: 144-5, 144-19 (가); `effectiveResultSql`); its order and time stay the
+   * confirmation's. The markets' own outcome only: nobody's trades, performance or PnL.
    */
   async listResults(
     themeId: string,
@@ -174,7 +176,7 @@ export class ThemesService {
     limit: number,
   ): Promise<Page<ThemeResult>> {
     await this.requirePublished(eq(schema.themes.id, themeId));
-    const { markets } = schema;
+    const { markets, marketJudgementIncidents: incidents } = schema;
     const keyset = decodeKeyset(cursor, 'uuid');
     const rows = await this.db
       .select({
@@ -182,10 +184,15 @@ export class ThemesService {
         slug: markets.slug,
         title: markets.title,
         status: markets.status,
-        resolvedResult: markets.resolvedResult,
+        // #144 (144-5): the corrected result once a 판정 오류 사건 is confirmed, else the paid one.
+        result: effectiveResultSql(markets, incidents),
+        // `corrected_result` is NOT NULL: set exactly when the market has a confirmed incident.
+        corrected: sql<boolean>`(${incidents.correctedResult} IS NOT NULL)`,
         decidedAtMs: sql<string>`(extract(epoch FROM ${decidedAt}) * 1000)::bigint::text`,
       })
       .from(markets)
+      // UNIQUE `market_id` (144-14): never more than one row per market.
+      .leftJoin(incidents, eq(incidents.marketId, markets.id))
       .where(
         and(
           inTheme(this.db, themeId),
@@ -213,7 +220,8 @@ export class ThemesService {
         title: row.title,
         // Narrowed by the WHERE above: a status of THEME_RESULT_STATUSES, with a result.
         status: row.status as ThemeResultStatus,
-        result: row.resolvedResult!,
+        result: row.result!,
+        corrected: row.corrected,
         decidedAt: new Date(Number(row.decidedAtMs)).toISOString(),
       })),
       nextCursor:

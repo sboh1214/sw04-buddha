@@ -208,13 +208,19 @@ export function shownLongDelayDeadline(
 export const MARKET_JUDGEMENTS_ANCHOR = 'market-judgements';
 
 /**
+ * The id the 판정 오류 사건 검토 대기 section of `/admin/markets/reviews` carries (#144, ADR-0165),
+ * scrolled to again once the lists above it have drawn (`ReviewsHashScroll`), as the one above.
+ */
+export const MARKET_JUDGEMENT_INCIDENTS_ANCHOR = 'market-judgement-incidents';
+
+/**
  * The id the market maker panel's 시장 자금 회수 block carries (145-8 "회수 칸으로 연결만"). The admin
  * detail draws after a skeleton, so it scrolls to the hash itself once the block is drawn.
  */
 export const MARKET_MAKER_RECALL_ANCHOR = 'market-maker-recall';
 
 /**
- * The `scrollMarginTop` both anchors above carry (Chakra spacing 20 = 80px): a scroll to them
+ * The `scrollMarginTop` the anchors above carry (Chakra spacing 20 = 80px): a scroll to them
  * stops below the sticky header — row 1 and its rule, 65px on admin screens (`HEADER_HEIGHT_PX`'s
  * note) — rather than under it, as MY 설정's anchors do.
  */

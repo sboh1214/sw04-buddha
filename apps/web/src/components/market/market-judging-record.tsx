@@ -10,9 +10,11 @@ import {
   Stack,
   Text,
 } from '@chakra-ui/react';
+import { JUDGEMENT_INCIDENT_STATUSES, type MarketStatus } from '@buddha/shared';
 import { type ReactNode } from 'react';
 import { DateTimeText } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
+import { fillBusinessInfo } from '@/legal/business-info';
 import { type Market } from '@/lib/api';
 import { JUDGING_RECORD_ANCHOR, ORDER_COLUMN_TOP } from '@/lib/market-detail';
 import {
@@ -37,6 +39,21 @@ export type JudgingRecordMarket = Pick<
 >;
 type Judgement = Market['judgingRecord']['versions'][number];
 type Pause = Market['judgingRecord']['pauses'][number];
+type Correction = NonNullable<Market['judgingRecord']['correction']>;
+
+/**
+ * Whether the record carries 144-9's line — 결과 확정 뒤의 판정 오류는 고객센터 이메일로 — on a
+ * market whose result is confirmed (RESOLVED, SETTLING or SETTLED: where an operator registers a
+ * 판정 오류 사건, 144-8). The line is the only way a member reports one: no form in the app.
+ */
+export function showsPostPayoutReport(status: MarketStatus): boolean {
+  return (JUDGEMENT_INCIDENT_STATUSES as readonly MarketStatus[]).includes(status);
+}
+
+/** 144-9's line with the customer centre's address (business info, ADR-0069 결과 3). */
+export function postPayoutReportText(): string {
+  return fillBusinessInfo(copy.judgingPostPayoutReport);
+}
 
 /**
  * Public allowlisted facts only. Both responsive copies read the same live market snapshot.
@@ -73,6 +90,11 @@ export function MarketJudgingRecord({
             <Text fontSize="sm" data-testid={`${testId}-status`}>
               {copy.judgingCurrentStatus}:{' '}
               <Badge variant="subtle">{marketStatusLabel(market)}</Badge>
+            </Text>
+          )}
+          {market && showsPostPayoutReport(market.status) && (
+            <Text fontSize="sm" color="fg.muted" data-testid={`${testId}-report`}>
+              {postPayoutReportText()}
             </Text>
           )}
         </Stack>
@@ -130,6 +152,9 @@ export function MarketJudgingRecord({
                   />
                 </Text>
               </Stack>
+            )}
+            {record?.correction && (
+              <CorrectionEntry value={record.correction} zone={zone} id={`${testId}-correction`} />
             )}
             {!record || record.versions.length === 0 ? (
               <Stack gap="2" data-testid={`${testId}-empty`}>
@@ -414,6 +439,80 @@ function JudgementEntry({
           iso={value.disputeDeadline}
           zone={zone}
           id={`${id}-dispute-deadline`}
+        />
+      </DataList.Root>
+    </Stack>
+  );
+}
+
+/**
+ * 판정 정정 (#144, ADR-0165; 144-5, #173 item 13): the market's confirmed 판정 오류 사건 above the
+ * versions — it now answers what the result is — the corrected result, the original one with the
+ * paid version, 144-5's fact that the payout followed the original and nothing paid is taken back,
+ * what went wrong with its evidence and collection instant, and when the error was confirmed. The
+ * paid version keeps its name '현재 판정' below (144-19 (나)). No operator, no reviewer's reason.
+ */
+function CorrectionEntry({
+  value,
+  zone,
+  id,
+}: {
+  value: Correction;
+  zone: string | null;
+  id: string;
+}) {
+  return (
+    <Stack gap="3" data-testid={id}>
+      <HStack gap="2" flexWrap="wrap">
+        <Heading as="h3" size="sm">
+          {copy.judgingCorrection}
+        </Heading>
+        <Badge
+          variant="subtle"
+          colorPalette={value.result === 'YES' ? 'yes' : value.result === 'NO' ? 'no' : 'gray'}
+        >
+          {MARKET_RESULT_LABEL[value.result]}
+        </Badge>
+      </HStack>
+      <Text fontSize="sm" data-testid={`${id}-no-clawback`}>
+        {copy.judgingCorrectionNoClawback}
+      </Text>
+      <DataList.Root orientation={{ base: 'vertical', md: 'horizontal' }} size="sm">
+        <TextRow label={copy.judgingCorrectedResult} id={`${id}-result`}>
+          {MARKET_RESULT_LABEL[value.result]}
+        </TextRow>
+        <TextRow label={copy.judgingOriginalResult} id={`${id}-original`}>
+          {`${MARKET_RESULT_LABEL[value.originalResult]} (v${String(value.judgementVersion)})`}
+        </TextRow>
+        <TextRow label={copy.judgingCorrectionDescription} id={`${id}-description`}>
+          {value.description}
+        </TextRow>
+        <TextRow label={copy.judgingEvidence} id={`${id}-evidence`}>
+          <Stack gap="1">
+            {value.evidence.links.map((url) => (
+              <ChakraLink
+                key={url}
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                overflowWrap="anywhere"
+              >
+                {url}
+              </ChakraLink>
+            ))}
+          </Stack>
+        </TextRow>
+        <TimeRow
+          label={copy.judgingCollectedAt}
+          iso={value.evidence.collectedAt}
+          zone={zone}
+          id={`${id}-collected-at`}
+        />
+        <TimeRow
+          label={copy.judgingCorrectionConfirmedAt}
+          iso={value.confirmedAt}
+          zone={zone}
+          id={`${id}-confirmed-at`}
         />
       </DataList.Root>
     </Stack>

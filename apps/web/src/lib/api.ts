@@ -150,6 +150,22 @@ export type JudgementSource = components['schemas']['JudgementSource'];
 export type RegisterJudgementBody = components['schemas']['RegisterJudgementBody'];
 export type AdminMarketJudgementQueueItem = components['schemas']['AdminMarketJudgementQueueItem'];
 /**
+ * 판정 오류 사건 (#144, ADR-0165): the admin detail's state (`AdminMarket.judgementIncident` — the
+ * waiting incident, the confirmed one and the log) and a row of the 판정 오류 사건 검토 대기 queue
+ * (`GET /admin/market-judgement-incidents`); the public 판정 정정 (`Market.judgingRecord.correction`).
+ */
+export type AdminMarketJudgementIncident = components['schemas']['AdminMarketJudgementIncident'];
+export type MarketJudgementIncidentPending =
+  components['schemas']['MarketJudgementIncidentPending'];
+export type MarketJudgementIncidentConfirmed =
+  components['schemas']['MarketJudgementIncidentConfirmed'];
+export type MarketJudgementIncidentLogEntry =
+  components['schemas']['MarketJudgementIncidentLogEntry'];
+export type AdminMarketJudgementIncidentQueueItem =
+  components['schemas']['AdminMarketJudgementIncidentQueueItem'];
+export type PublicMarketJudgementCorrection =
+  components['schemas']['PublicMarketJudgementCorrection'];
+/**
  * 운영 대기열 (#145, ADR-0163): a row of 마감 예정 (`GET /admin/operations/closing`), of 판정 대기·지연
  * (`…/judgements`, with its current-episode delay record) and of 정산 실패 (`…/failures`: a failed
  * payout, a 처리 멈춤 or a failed bot recall, told apart by `kind`), and the 정산 다시 시도 body and

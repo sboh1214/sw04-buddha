@@ -335,6 +335,14 @@ export function themeResultLabel(row: Pick<ThemeResult, 'result'>): string {
   return MARKET_RESULT_LABEL[row.result];
 }
 
+/**
+ * The mark a row's result carries when it is a 판정 정정's (#144, 144-5: the list follows the
+ * corrected result; 144-19 (가): and marks it, as the detail's 결과 줄 does), or null.
+ */
+export function themeResultMark(row: Pick<ThemeResult, 'corrected'>): string | null {
+  return row.corrected ? copy.marketResultCorrected : null;
+}
+
 /** The address of a theme's page: its slug (owner decision 2026-10-19). */
 export function themePath(slug: string): string {
   return `/themes/${slug}`;
