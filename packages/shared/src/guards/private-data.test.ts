@@ -50,6 +50,7 @@ describe('PRIVATE_DATA (#113)', () => {
         'reports',
         'market-maker',
         'account-type',
+        'operation-records',
       ]),
     );
     expect(
@@ -218,6 +219,11 @@ describe('findPrivateField', () => {
     ['isHuman', 'account-type'],
     ['humanAccount', 'account-type'],
     ['humans', 'account-type'],
+    ['settlementLastError', 'operation-records'],
+    ['settlementAttempts', 'operation-records'],
+    ['recallAttempts', 'operation-records'],
+    ['reasonBasis', 'operation-records'],
+    ['retryOutcome', 'operation-records'],
   ])('finds %s (%s)', (name, item) => {
     expect(items(name)).toContain(item);
   });

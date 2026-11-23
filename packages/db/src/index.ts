@@ -6,6 +6,7 @@ export {
   marketMakerAccountId,
 } from './account-types.js';
 export { closeDb, createDb, type CreateDbOptions, type Db } from './client.js';
+export { errorMessageOf, sqlStateOf } from './error-message.js';
 export {
   commentEventKey,
   moderationActionNotificationInput,
@@ -289,7 +290,11 @@ export {
   type LedgerEntryRow,
   type RecordLedgerEntryResult,
 } from './ledger.js';
-export { ledgerHeldMarketIds, ledgerHeldMarketSql } from './ledger-held-markets.js';
+export {
+  ledgerHeldMarketIds,
+  ledgerHeldMarketSql,
+  payoutDelayedSql,
+} from './ledger-held-markets.js';
 export {
   applyPairMintFill,
   applyTradeFill,
@@ -319,6 +324,8 @@ export {
   type StatementExecutor,
 } from './tx-helpers.js';
 export * from './market-settlement.js';
+export * from './market-finalize.js';
+export * from './operations-queues.js';
 export * from './reconciliation-audit.js';
 export * from './reconciliation-recovery.js';
 export * from './reconciliation-correction.js';

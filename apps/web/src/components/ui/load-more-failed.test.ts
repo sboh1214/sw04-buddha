@@ -151,6 +151,8 @@ describe('the notice above a 더 보기 that failed', () => {
         'app/admin/moderation/link-flags/admin-link-flags.tsx',
         'app/admin/notices/admin-notices.tsx',
         'app/admin/notices/notice-history.tsx',
+        // 운영 대기열 (#145, ADR-0163): the frame its three lists share
+        'app/admin/operations/operations-queue.tsx',
         'app/admin/payments/admin-payments.tsx',
         'app/admin/proposals/[id]/market-picker.tsx',
         'app/admin/proposals/admin-proposals.tsx',

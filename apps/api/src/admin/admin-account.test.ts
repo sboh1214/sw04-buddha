@@ -24,6 +24,10 @@ describe('the admin on screen (ADR-0092)', () => {
     // A guard on the discovery: a walk that found nothing would pass everything below.
     expect(writes.length).toBeGreaterThanOrEqual(40);
     expect(writes.map((route) => route.key)).toContain('POST /admin/markets/:id/approve');
+    // #145 (ADR-0163): the 정산 다시 시도 moves Coin and is one admin's, so it names its admin too.
+    expect(writes.map((route) => route.key)).toContain(
+      'POST /admin/markets/:id/settlement-retries',
+    );
   });
 
   it('names the account in the body — or, for a DELETE, the query — of every admin write', () => {

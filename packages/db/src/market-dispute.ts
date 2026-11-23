@@ -69,7 +69,10 @@ const HOLDING_SQL = sql.raw(HOLDING_DISPUTE_STATUSES.map((status) => `'${status}
  * values — as `market_disputes_holding_idx` serves them: pending or accepted (#173 items 1·7;
  * owner answer 2026-11-02).
  */
-function holdingDisputesOf(marketId: SQLWrapper | string, version: SQLWrapper | number): SQL {
+export function holdingDisputesOf(
+  marketId: SQLWrapper | string,
+  version: SQLWrapper | number,
+): SQL {
   return sql`${marketDisputes.marketId} = ${marketId} AND ${marketDisputes.judgementVersion} = ${version} AND ${marketDisputes.status} IN (${HOLDING_SQL})`;
 }
 
@@ -84,7 +87,7 @@ const JUDGEMENT_KIND_SQL = sql.raw(`'${MARKET_JUDGEMENT_APPROVAL_KIND}'`);
  * one, without reading its payload: on a PROVISIONAL market only a correction waits through the
  * routes (a first judgement's needs CLOSED), so this errs toward holding.
  */
-function waitingJudgementsOf(marketId: SQL | string): SQL {
+export function waitingJudgementsOf(marketId: SQL | string): SQL {
   return sql`${approvalRequests.targetType} = 'market' AND ${approvalRequests.targetId} = ${marketId} AND ${approvalRequests.kind} = ${JUDGEMENT_KIND_SQL} AND ${approvalRequests.status} = 'pending'`;
 }
 

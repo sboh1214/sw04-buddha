@@ -150,6 +150,19 @@ export type JudgementSource = components['schemas']['JudgementSource'];
 export type RegisterJudgementBody = components['schemas']['RegisterJudgementBody'];
 export type AdminMarketJudgementQueueItem = components['schemas']['AdminMarketJudgementQueueItem'];
 /**
+ * 운영 대기열 (#145, ADR-0163): a row of 마감 예정 (`GET /admin/operations/closing`), of 판정 대기·지연
+ * (`…/judgements`, with its current-episode delay record) and of 정산 실패 (`…/failures`: a failed
+ * payout, a 처리 멈춤 or a failed bot recall, told apart by `kind`), and the 정산 다시 시도 body and
+ * answer (`POST /admin/markets/:id/settlement-retries`: `settled` or `failed`, 145-7).
+ */
+export type AdminClosingMarket = components['schemas']['AdminClosingMarket'];
+export type AdminAwaitingJudgementMarket = components['schemas']['AdminAwaitingJudgementMarket'];
+export type AdminOperationsJudgementDelay = components['schemas']['AdminOperationsJudgementDelay'];
+export type AdminOperationsFailure = components['schemas']['AdminOperationsFailure'];
+export type AdminOperationsSettlement = components['schemas']['AdminOperationsSettlement'];
+export type AdminSettlementRetryBody = components['schemas']['AdminSettlementRetryBody'];
+export type AdminSettlementRetryResult = components['schemas']['AdminSettlementRetryResult'];
+/**
  * 판정 지연 기록 (#142, ADR-0106): the current record as every detail reads it while the market reads
  * '판정 지연' (`Market.judgementDelay`: the reason, the next review time and whether it has passed —
  * nobody's name, no record time), one record as the admin's history lists it

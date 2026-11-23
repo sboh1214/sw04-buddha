@@ -17,6 +17,7 @@ import { formatCoin } from '@buddha/shared';
 import NextLink from 'next/link';
 import { copy } from '@/copy';
 import { useAdminMarketMaker } from '@/hooks/use-admin-market-maker';
+import { ANCHOR_SCROLL_MARGIN_TOP, MARKET_MAKER_RECALL_ANCHOR } from '@/lib/admin-operations';
 import type { AdminMarketMaker } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
 import { formatReleaseSettingState } from '@/lib/release-settings';
@@ -27,6 +28,11 @@ import {
   marketMakerReason,
 } from '@/lib/market-maker';
 
+/**
+ * 시장 자금 회수 (#181, ADR-0125): the recall's record and its last observation. It carries the
+ * anchor 운영 대기열's '봇 자금 회수 실패' row links to (#145, ADR-0163; 145-8 "회수 칸으로 연결만"),
+ * which the detail scrolls to once it is drawn (`useHashScrollOnce`).
+ */
 function MarketMakerRecall({
   recall,
   attempt,
@@ -35,7 +41,15 @@ function MarketMakerRecall({
   attempt: AdminMarketMaker['recallAttempt'];
 }) {
   return (
-    <Stack gap="2" p="3" borderWidth="1px" borderRadius="l2" data-testid="market-maker-recall">
+    <Stack
+      gap="2"
+      p="3"
+      borderWidth="1px"
+      borderRadius="l2"
+      id={MARKET_MAKER_RECALL_ANCHOR}
+      scrollMarginTop={ANCHOR_SCROLL_MARGIN_TOP}
+      data-testid="market-maker-recall"
+    >
       <Text fontWeight="medium">{copy.marketMakerRecallTitle}</Text>
       {recall.status === 'not_due' ? (
         <Text fontSize="sm">{copy.marketMakerRecallNotDue}</Text>

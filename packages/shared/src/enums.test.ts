@@ -407,11 +407,24 @@ describe('enums', () => {
       'market_cancel_reject',
       'market_cancel_retract',
     ]);
-    expect(enums.ADMIN_ACTION_TYPES.slice(-4)).toEqual(cancel);
+    // #145's operator 정산 다시 시도 (ADR-0163) is appended after them.
+    expect(enums.ADMIN_ACTION_TYPES.slice(-5, -1)).toEqual(cancel);
     // admin_actions.type and market_events.type are varchar(40).
     for (const type of [...cancel, 'cancelled']) expect(type.length).toBeLessThanOrEqual(40);
     expect(new Set(enums.MARKET_EVENT_TYPES).size).toBe(enums.MARKET_EVENT_TYPES.length);
     expect(new Set(enums.ADMIN_ACTION_TYPES).size).toBe(enums.ADMIN_ACTION_TYPES.length);
+  });
+
+  it('appends the operator 정산 다시 시도 as one admin action type (#145, ADR-0163)', () => {
+    // 145-7: one admin, a reason, at once — no approval kind, no market event type of its own.
+    expect(enums.ADMIN_ACTION_TYPES.at(-1)).toBe('market_settlement_retry');
+    expect(enums.ADMIN_ACTION_TYPES.filter((type) => type.includes('settlement'))).toEqual([
+      'market_settlement_retry',
+    ]);
+    expect('market_settlement_retry'.length).toBeLessThanOrEqual(40);
+    expect(enums.adminActionTypeSchema.parse('market_settlement_retry')).toBe(
+      'market_settlement_retry',
+    );
   });
 
   it('lists the settlement steps and their statuses (O-6, ADR-0046)', () => {

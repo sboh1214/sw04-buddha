@@ -1084,6 +1084,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/markets/{id}/settlement-retries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run one payout attempt of a settling market now (정산 다시 시도), by one admin with a reason: the same checks as the worker’s automatic retry every minute, nothing of the payout or the checks changeable. 200 answers the attempt’s outcome — `settled`, or `failed` with the step’s error and attempts — and both are recorded with the reason */
+        post: operations["adminRetryMarketSettlement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/markets/{id}/submit": {
         parameters: {
             query?: never;
@@ -1812,6 +1829,57 @@ export type paths = {
         put?: never;
         /** Unpin a notice: out of the fixed area and out of the public (its page and images answer NOT_FOUND), kept on the admin screen, and may be pinned again. One not pinned changes nothing */
         post: operations["adminUnpinNotice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/operations/closing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 마감 예정 (145-1): open and paused markets whose scheduled close is at most the chosen window ahead (24h, 3d or 7d; 24h by default), nearest close first. A market whose close time passed before its close ran stays listed with `overdue` */
+        get: operations["adminListOperationsClosingMarkets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/operations/failures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 정산 실패 (145-4, 145-8): settling markets whose payout failed or waits on a ledger hold (the public 지급 지연), markets an automatic transition left untouched for 30 minutes (처리 멈춤) and settled or cancelled markets whose bot recall failed, oldest first */
+        get: operations["adminListOperationsFailures"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/operations/judgements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 판정 대기·지연 (145-2): every closed market, and every provisional one a dispute or a correction holds past its dispute deadline, by scheduled judgement (none last), each with its stage, its current 판정 지연 기록, 갱신 대기 and the long-delay deadline; `filter=delayed` keeps the rows that read 판정 지연. Reading changes nothing */
+        get: operations["adminListOperationsAwaitingJudgements"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4318,6 +4386,32 @@ export type components = {
             id: string;
             nickname: string | null;
         };
+        AdminAwaitingJudgementMarket: {
+            /** Format: date-time */
+            closeAt: string;
+            correctionPending: boolean;
+            delay: components["schemas"]["AdminOperationsJudgementDelay"] | null;
+            delayed: boolean;
+            /** Format: date-time */
+            disputeDeadline: string | null;
+            holdingDisputes: number;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            judgementRequestId: string | null;
+            /** Format: date-time */
+            longDelayDeadline: string | null;
+            longDelayReached: boolean;
+            reviewOverdue: boolean;
+            /** Format: date-time */
+            scheduledJudgementAt: string | null;
+            slug: string;
+            /** @enum {string} */
+            stage: "unregistered" | "awaiting_approval" | "dispute_or_correction";
+            /** @enum {string} */
+            status: "closed" | "provisional";
+            title: string;
+        };
         AdminCategory: {
             id: number;
             isActive: boolean;
@@ -4342,6 +4436,19 @@ export type components = {
             outcome: "YES" | "NO";
             priceCoin: number;
             qty: number;
+        };
+        AdminClosingMarket: {
+            /** Format: date-time */
+            closeAt: string;
+            /** Format: uuid */
+            id: string;
+            overdue: boolean;
+            /** Format: date-time */
+            scheduledJudgementAt: string | null;
+            slug: string;
+            /** @enum {string} */
+            status: "open" | "paused";
+            title: string;
         };
         AdminCommentModeration: {
             actions: components["schemas"]["AdminModerationAction"][];
@@ -5177,6 +5284,73 @@ export type components = {
             changed: boolean;
             notice: components["schemas"]["AdminNotice"];
         };
+        AdminOperationsFailure: components["schemas"]["AdminOperationsSettlementFailure"] | components["schemas"]["AdminOperationsStuck"] | components["schemas"]["AdminOperationsRecallFailure"];
+        AdminOperationsJudgementDelay: {
+            /** Format: date-time */
+            nextReviewAt: string;
+            reason: string;
+            /** Format: date-time */
+            recordedAt: string;
+        };
+        AdminOperationsRecallFailure: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            kind: "recall_failed";
+            recall: {
+                /** Format: date-time */
+                lastFailureAt: string | null;
+                recallAttempts: number;
+                /** @enum {string} */
+                recallReason: "books_inconsistent" | "recall_inconsistent" | "execution_failed";
+            };
+            /** @enum {boolean} */
+            retryable: false;
+            /** Format: date-time */
+            since: string;
+            slug: string;
+            /** @enum {string} */
+            status: "open" | "paused" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
+            title: string;
+        };
+        AdminOperationsSettlement: {
+            /** Format: date-time */
+            lastAttemptAt: string | null;
+            ledgerHeld: boolean;
+            settlementAttempts: number;
+            settlementLastError: string | null;
+            stepStatus: components["schemas"]["SettlementStepStatus"] | null;
+        };
+        AdminOperationsSettlementFailure: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            kind: "settlement_failed";
+            /** @enum {boolean} */
+            retryable: true;
+            settlement: components["schemas"]["AdminOperationsSettlement"];
+            /** Format: date-time */
+            since: string;
+            slug: string;
+            /** @enum {string} */
+            status: "open" | "paused" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
+            title: string;
+        };
+        AdminOperationsStuck: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            kind: "stuck";
+            retryable: boolean;
+            /** Format: date-time */
+            since: string;
+            slug: string;
+            /** @enum {string} */
+            stage: "close" | "confirm" | "start" | "complete";
+            /** @enum {string} */
+            status: "open" | "paused" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
+            title: string;
+        };
         AdminPayment: {
             amountCoin: components["schemas"]["CoinAmount"];
             /** Format: date-time */
@@ -5425,6 +5599,22 @@ export type components = {
             requestedBy: components["schemas"]["AdminAccountActor"] | null;
             settlementImpact: string | null;
             version: number;
+        };
+        AdminSettlementRetryBody: {
+            expectedAccountId: string;
+            reason: string;
+        };
+        AdminSettlementRetryFailed: {
+            /** @enum {string} */
+            outcome: "failed";
+            settlementAttempts: number | null;
+            settlementLastError: string | null;
+        };
+        AdminSettlementRetryResult: components["schemas"]["AdminSettlementRetrySettled"] | components["schemas"]["AdminSettlementRetryFailed"];
+        AdminSettlementRetrySettled: {
+            /** @enum {string} */
+            outcome: "settled";
+            statusEventId: string;
         };
         AdminSettlementStep: {
             attempts: number;
@@ -14063,6 +14253,87 @@ export interface operations {
             };
         };
     };
+    adminRetryMarketSettlement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminSettlementRetryBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminSettlementRetryResult"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | TRANSACTION_BUSY */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     adminSubmitMarket: {
         parameters: {
             query?: never;
@@ -17728,6 +17999,219 @@ export interface operations {
             };
             /** @description NOT_FOUND */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListOperationsClosingMarkets: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                within?: "24h" | "3d" | "7d";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminClosingMarket"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListOperationsFailures: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminOperationsFailure"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListOperationsAwaitingJudgements: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                filter?: "all" | "delayed";
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminAwaitingJudgementMarket"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

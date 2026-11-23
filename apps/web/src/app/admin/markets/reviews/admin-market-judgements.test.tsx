@@ -62,6 +62,8 @@ describe('AdminMarketJudgements', () => {
       },
     ]);
     expect(byTestId(html, 'admin-market-judgements')?.text).toContain(copy.adminMarketJudgements);
+    // 운영 대기열's '판정 승인 대기로' lands here (#145, ADR-0163; 145-2).
+    expect(byTestId(html, 'admin-market-judgements')?.attributes.id).toBe('market-judgements');
     expect(
       testIdsStartingWith(html, 'admin-market-judgement-').filter((id) =>
         /^admin-market-judgement-[0-9a-f-]{36}$/.test(id),

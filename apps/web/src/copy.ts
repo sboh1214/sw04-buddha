@@ -1860,7 +1860,8 @@ export const copy = {
   adminMarketJudgementDelayLate:
     '다음 검토 시각이 지났습니다. 공개 상세에는 갱신 대기로 보입니다. 새 지연 기록으로 사유와 다음 검토 시각을 알려 주세요. 시각이 지난 것만으로 결과가 생기지는 않습니다.',
   // 장기 지연 경고(오너 답 (3)): 장기 지연 기한(예정 판정 시각 + 장기 지연 기한의 날수)이 지난 거래 마감 시장의
-  // 판정 칸 맨 위. 규칙의 처리를 판정 등록으로 적용한다(무효도 등록과 다른 관리자의 승인, #152). 목록은 #145.
+  // 판정 칸 맨 위. 규칙의 처리를 판정 등록으로 적용한다(무효도 등록과 다른 관리자의 승인, #152). 목록은 운영
+  // 대기열의 판정 대기·지연(#145, ADR-0163 — 거래 마감 줄의 '장기 지연 기한 도달', 145-17).
   adminMarketJudgementLongDelay:
     '장기 지연 기한이 지났습니다. 규칙의 지연·취소·무효 처리를 적용하려면 판정을 등록하고 다른 관리자의 승인을 받습니다. 자동으로 처리되는 것은 없습니다.',
   adminMarketJudgementLongDelayDeadline: '장기 지연 기한',
@@ -4823,6 +4824,76 @@ export const copy = {
   errAdminDisputeDecided: '이미 처리된 판정 이의입니다. 새로 읽은 내용을 확인해 주세요.',
   errAdminDisputeRetracted: '회원이 철회한 판정 이의입니다. 새로 읽은 내용을 확인해 주세요.',
   errAdminDisputeNotFound: '이 시장의 판정 이의를 찾을 수 없습니다.',
+
+  // --- admin: 운영 대기열 (#145, ADR-0163; 145-1~145-11, 145-14·145-15·145-17·145-18) ---
+  // 운영 대기열(#145, ADR-0163; 145-1~145-11): 관리자 메뉴 '이의 접수' 다음. 마감 예정(24시간·3일·7일, 처음 값
+  // 24시간 — 145-1, 코드 값), 판정 대기·지연(거래 마감 시장 전부와 기한이 지났는데 이의·정정이 남은 잠정 결과
+  // 시장 — 145-2, '지연만' 거르기, 단계는 145-11의 말), 정산 실패(공개 '지급 지연'과 같은 시장, 30분 넘게 그대로인
+  // 자동 전이의 '처리 멈춤' — 145-4, 실패한 봇 자금 회수 — 145-8·145-15)를 한 화면에서 하나씩 본다. 개설 검수와
+  // 이의 접수는 만들지 않고 연결만 둔다. 문구는 오너가 승인한 그대로다(145-18): 마감 시각이 지났는데 마감되지 않은
+  // 시장은 마감 예정에 '마감 시각 지남'으로 남고 30분 뒤 처리 멈춤에도 나온다, 마지막 오류는 저장된 글 그대로 두
+  // 줄까지 보이고 펼친다, 버튼은 '정산 다시 시도', 회수 줄 이름은 '봇 자금 회수 실패'. 장기 지연 기한 도달은 거래
+  // 마감 줄에만 보인다(145-17). 정산 다시 시도는 지급 중(SETTLING) 줄에만 있다(145-14): 관리자 한 명이 사유를
+  // 적고 바로 실행하며 매 분 자동 재시도와 같은 검사를 한다(145-7). 바깥 알림은 없다(145-9).
+  adminOperations: '운영 대기열',
+  adminOperationsIntro:
+    '마감 예정·판정 대기·정산 실패 시장을 모아 보고, 시장을 눌러 처리 화면으로 갑니다. 예정 시각이 지나도 목록이 시장의 상태나 결과를 바꾸지는 않습니다.',
+  // 소개 아래 고정 줄: 뒤에 '검수 대기'(adminMarketReviews)와 '이의 접수'(adminDisputes) 링크가 붙는다.
+  adminOperationsOtherLists: '개설 검수와 이의 접수는 각 목록에서 봅니다.',
+  adminOperationsClosing: '마감 예정',
+  adminOperationsJudgements: '판정 대기·지연',
+  adminOperationsFailures: '정산 실패',
+  adminOperationsWithin: '마감까지',
+  adminOperationsWithin24h: '24시간',
+  adminOperationsWithin3d: '3일',
+  adminOperationsWithin7d: '7일',
+  // 마감 시각이 지났는데 아직 마감되지 않은 줄의 표시. '마감 처리 중'이 아니다: 같은 시장이 30분 뒤에는 처리
+  // 멈춤에도 나온다(145-18).
+  adminOperationsOverdue: '마감 시각 지남',
+  adminOperationsFilterAll: '전체',
+  adminOperationsFilterDelayed: '지연만',
+  adminOperationsStageUnregistered: '판정 등록 전',
+  adminOperationsStageAwaitingApproval: '판정 승인 대기',
+  adminOperationsStageDisputeOrCorrection: '이의·정정 대기',
+  adminOperationsDelayed: '판정 지연',
+  adminOperationsDelayReason: '지연 사유',
+  adminOperationsNextReview: '다음 검토',
+  adminOperationsReviewOverdue: '갱신 대기',
+  adminOperationsLongDelayReached: '장기 지연 기한 도달',
+  adminOperationsNoDelayRecord: '지연 기록 없음',
+  adminOperationsNoDelayRecordVersion: '이 판정 버전의 지연 기록 없음',
+  adminOperationsToApprovals: '판정 승인 대기로',
+  adminOperationsToDisputes: '이의 접수로',
+  adminOperationsKindSettlementFailed: '정산 실패',
+  adminOperationsKindStuck: '처리 멈춤',
+  adminOperationsKindRecallFailed: '봇 자금 회수 실패',
+  // 처리 멈춤의 단계: '처리 멈춤 · 지급 시작'으로 보인다(145-4의 네 자동 전이).
+  adminOperationsStuckClose: '거래 마감',
+  adminOperationsStuckConfirm: '결과 확정',
+  adminOperationsStuckStart: '지급 시작',
+  adminOperationsStuckComplete: '지급 완료',
+  // {time}은 그 전이가 일어났어야 할 때(한국 시간)다. 30은 OPERATIONS_STUCK_AFTER_MINUTES와 같아야 한다.
+  adminOperationsStuckSince: '{time}에 일어났어야 했는데 30분 넘게 그대로입니다',
+  // {n}은 시도 횟수다.
+  adminOperationsAttempts: '시도 {n}회',
+  adminOperationsLastError: '마지막 오류',
+  adminOperationsLastAttempt: '마지막 시도',
+  adminOperationsLedgerHeld: '대사 보류',
+  adminOperationsToLedger: '대사 보류 보기',
+  adminOperationsToRecall: '회수 칸 보기',
+  // 표의 마지막 칸(종류마다 시도 횟수·마지막 오류·멈춘 때·회수 사유와 연결)의 머리.
+  adminOperationsColDetail: '내용',
+  adminOperationsClosingEmpty: '마감 예정 시장이 없습니다.',
+  adminOperationsJudgementsEmpty: '판정을 기다리는 시장이 없습니다.',
+  adminOperationsFailuresEmpty: '정산 실패·처리 멈춤·회수 실패 시장이 없습니다.',
+  // 정산 다시 시도(145-7, 145-14): 줄의 버튼과 대화상자의 제목이 같다(145-18). 사유는 필수이고 1~500자다.
+  adminSettlementRetry: '정산 다시 시도',
+  adminSettlementRetryTitle: '정산 다시 시도',
+  adminSettlementRetryHint:
+    '매 분 자동 재시도와 같은 검사로 지금 한 번 지급을 시도합니다. 지급액과 검사는 바꿀 수 없고, 사유와 결과가 작업 이력에 남습니다.',
+  adminSettlementRetryDone: '지급을 마쳤습니다.',
+  adminSettlementRetryFailed: '다시 시도했지만 지급하지 못했습니다.',
+  adminSettlementRetryNotSettling: '이 시장은 이미 지급 중이 아닙니다. 목록을 다시 읽었습니다.',
 
   // --- reconciliation (#93) ---
   reconciliationTitle: '장부 대사와 복구',

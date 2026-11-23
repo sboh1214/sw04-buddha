@@ -895,10 +895,25 @@ const PRODUCERS: Record<
     event: 'J4 판정 지연, only the first of its episode or a changed one (52-11, 188-5)',
   },
   settleMarketPositions: {
-    callers: ['apps/worker/src/jobs/market-finalize.ts'],
+    // The payout core moved to @buddha/db for the operator retry (#145, ADR-0163).
+    callers: ['packages/db/src/market-finalize.ts'],
     holds: [READS_SETTLEMENT, BUILDS_SETTLEMENT, WRITES],
     event: 'J5 지급 완료, all or nothing with the payout (52-12, 188-2)',
   },
+};
+
+/**
+ * The payout core's production callers (#145, ADR-0163; 145-7 "같은 검사"): `settleSettlingMarket`
+ * is run by the worker's finalize and by `retrySettlingMarket` (the operator's 정산 다시 시도, in
+ * the same file), and `retrySettlingMarket` by the API's retry service alone. Neither caller
+ * builds or writes a notice of its own: J5 stays inside the core, last in its transaction.
+ */
+const PAYOUT_CORE_CALLERS: Record<string, readonly string[]> = {
+  settleSettlingMarket: [
+    'apps/worker/src/jobs/market-finalize.ts',
+    'packages/db/src/market-finalize.ts',
+  ],
+  retrySettlingMarket: ['apps/api/src/operations/settlement-retry.service.ts'],
 };
 
 /**
@@ -1023,12 +1038,33 @@ describe('who tells of a judgement or a payout (#188, static)', () => {
     }
   });
 
-  it('notifies from the worker at the payout only: no confirmation, deadline or time-driven notice (52-12, 52-13, AC 5)', () => {
+  it('notifies of the payout from the shared core only: no confirmation, deadline or time-driven notice (52-12, 52-13, AC 5)', () => {
     const worker = files.filter((file) => file.startsWith('apps/worker/src/'));
     expect(worker.length).toBeGreaterThan(0);
+    // J5's builder is in packages/db/src/market-finalize.ts, run by the worker's finalize and
+    // the API's retry only (#145, ADR-0163): the worker itself builds and writes no notice.
     expect(
       worker.filter((file) => ANY_188.test(read(file)) || WRITES.test(read(file))).sort(),
-    ).toEqual(['apps/worker/src/jobs/market-finalize.ts']);
+    ).toEqual([]);
+    expect(
+      files
+        .filter((file) => file !== 'packages/db/src/judgement-notifications.ts')
+        .filter((file) => BUILDS_SETTLEMENT.test(read(file)) || READS_SETTLEMENT.test(read(file))),
+    ).toEqual(['packages/db/src/market-finalize.ts']);
+    const problems: string[] = [];
+    for (const [name, expected] of Object.entries(PAYOUT_CORE_CALLERS)) {
+      const callers = callersOf(name);
+      if (JSON.stringify(callers) !== JSON.stringify([...expected].sort())) {
+        problems.push(`${name}: called by ${callers.join(', ')}`);
+      }
+      for (const file of callers) {
+        if (file === 'packages/db/src/market-finalize.ts') continue;
+        if (ANY_188.test(read(file)) || WRITES.test(read(file))) {
+          problems.push(`${file} (${name}): builds or writes a notice beside the core's`);
+        }
+      }
+    }
+    expect(problems).toEqual([]);
     // #54's B′ delivery is the worker's one other notice path (its reconciliation run).
     expect(
       worker
@@ -1039,6 +1075,27 @@ describe('who tells of a judgement or a payout (#188, static)', () => {
         )
         .sort(),
     ).toEqual(['apps/worker/src/jobs/reconciliation.ts']);
+  });
+
+  it('settles a market in one place, after the reconciliation (#145, ADR-0163; ADR-0118 결정 6)', () => {
+    // The one `to: 'settled'` transition is the shared core's, and it follows the final
+    // reconciliation in the same function: no path (the operator retry included) reaches
+    // SETTLED without the books checked.
+    const SETTLED = /\bto:\s*'settled'\s*,/;
+    expect(files.filter((file) => SETTLED.test(read(file)))).toEqual([
+      'packages/db/src/market-finalize.ts',
+    ]);
+    const core = read('packages/db/src/market-finalize.ts');
+    const start = core.indexOf('export async function settleSettlingMarket(');
+    const end = core.indexOf('\n}\n', start);
+    expect(start).toBeGreaterThan(-1);
+    const body = core.slice(start, end);
+    const settledAt = body.search(SETTLED);
+    expect(settledAt).toBeGreaterThan(-1);
+    expect(body.lastIndexOf('reconcileMarketSettlement(', settledAt)).toBeGreaterThan(-1);
+    expect(core.slice(end).search(SETTLED)).toBe(-1);
+    expect(SETTLED.test("    to: 'settled',")).toBe(true);
+    expect(SETTLED.test("the one `to: 'settled'` transition")).toBe(false);
   });
 
   it('keeps the final settlement’s notices in the payout’s transaction: no savepoint, no second delivery (188-2)', () => {

@@ -23,6 +23,7 @@ import { NoticesModule } from './notices/notices.module.js';
 import { NotificationsModule } from './notifications/notifications.module.js';
 import { ModerationModule } from './moderation/moderation.module.js';
 import { OnboardingModule } from './onboarding/onboarding.module.js';
+import { OperationsModule } from './operations/operations.module.js';
 import { AdminSmsStatusModule } from './phone-verification/admin-sms-status.module.js';
 import { PhoneVerificationModule } from './phone-verification/phone-verification.module.js';
 import { PostsModule } from './posts/posts.module.js';
@@ -126,6 +127,10 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     // 앱 내 알림함 (#53, ADR-0157): the member's /me/notifications — the list, the unread count and
     // the read marks. After the modules above, so the document keeps their routes where they were.
     NotificationsModule,
+    // 운영 대기열 (#145, ADR-0163): the operators' /admin/operations lists and the 정산 다시 시도
+    // of a settling market. After the modules above, so the document keeps their routes where
+    // they were.
+    OperationsModule,
   ],
   controllers: [HealthController],
 })

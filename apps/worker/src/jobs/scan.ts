@@ -1,3 +1,5 @@
+import { errorMessageOf as messageOf } from '@buddha/db';
+
 /** One market the scan gave up on: the per-market function rejected, and the loop moved on. */
 export interface ScanFailure {
   marketId: string;
@@ -14,40 +16,13 @@ export interface ScanOutcome<Result> {
   failures: ScanFailure[];
 }
 
-/** node-postgres's DatabaseError, as far as `messageOf` reads it: `code` is the SQLSTATE. */
-interface DriverError {
-  code: string;
-  message: string;
-}
-
-function isDriverError(value: unknown): value is DriverError {
-  if (typeof value !== 'object' || value === null) return false;
-  const { code, message } = value as { code?: unknown; message?: unknown };
-  return typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) && typeof message === 'string';
-}
-
 /**
- * What a failure says — the scan's result, the step's `last_error`, the log: `err.message` for
- * a thrown Error, `String(err)` otherwise, led by the driver's SQLSTATE and message when
- * Postgres refused a statement. drizzle-orm 0.45 throws every failed query as DrizzleQueryError,
- * whose message is `Failed query: <sql>\nparams: <params>`, and keeps the driver error in
- * `cause` (apps/api pg-error.ts unwraps it for the same reason): without the lead a database
- * failure reads as the SQL it ran, and the SETTLEMENT_STEP_ERROR_MAX cut of `last_error` can
- * drop the reason altogether. So `40P01 deadlock detected — Failed query: update "positions" …`;
- * a plain Error reads exactly as its message. The cause chain is followed a bounded few links.
+ * What a failure says — the scan's result, the step's `last_error`, the log: @buddha/db's
+ * `errorMessageOf`, moved there unchanged for the API's settlement retry (#145, ADR-0163) so a
+ * message written by either app reads the same — `err.message`, led by the driver's SQLSTATE and
+ * message when Postgres refused a statement.
  */
-export function messageOf(err: unknown): string {
-  const message = err instanceof Error ? err.message : String(err);
-  let link = err;
-  for (let depth = 0; depth < 4 && typeof link === 'object' && link !== null; depth += 1) {
-    if (isDriverError(link)) {
-      // A driver error thrown as itself (no wrapper) carries the message already.
-      return link === err ? `${link.code} ${message}` : `${link.code} ${link.message} — ${message}`;
-    }
-    link = 'cause' in link ? link.cause : undefined;
-  }
-  return message;
-}
+export { errorMessageOf as messageOf } from '@buddha/db';
 
 /**
  * Runs the per-market function over a scan's candidates one at a time, each failure caught

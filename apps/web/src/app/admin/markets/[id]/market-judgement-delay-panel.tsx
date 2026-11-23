@@ -200,8 +200,8 @@ export function JudgementDelaysBody({
  * on the clock from `readAt`, drawn again at the deadline since a CLOSED market is not polled) —
  * is told to apply the rule's 지연·취소·무효 처리 through 판정 등록 below: VOID too needs the
  * registration and another admin's approval (#152), and nothing is automatic (#173 item 11). It
- * shows the deadline in KST and the rule's own text. Records change nothing of it; the list of such
- * markets is #145's.
+ * shows the deadline in KST and the rule's own text. Records change nothing of it; such markets
+ * are listed in 운영 대기열's 판정 대기·지연 with '장기 지연 기한 도달' (#145, ADR-0163; 145-17).
  */
 export function JudgementLongDelay({ market, readAt }: { market: AdminMarket; readAt: number }) {
   const deadline = judgementLongDelayDeadline(market);

@@ -35,7 +35,9 @@
  * judgement, and on a PROVISIONAL one a waiting 판정 정정 holds past its deadline one made while it was
  * CLOSED and one on its version: the detail shows the current record's reason and next review time
  * and previous reasons and review times in judgingRecord (#24), never who recorded one, when
- * or its id (#173 item 13, decision 3). Then:
+ * or its id (#173 item 13, decision 3); and on A's settling market a failed payout an operator
+ * retried with a reason (#145): its attempts, stored error and the retry's reason are the
+ * operators', the public detail saying `payoutDelayed` alone (ADR-0121). Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability — except that a route registered
@@ -618,6 +620,10 @@ const NEVER_SHOWN: readonly string[] = [
   'pending supplement text',
   'pending supplement reason',
   'pending supplement impact',
+  // #145 (ADR-0163): a failed payout's stored error and an operator's retry reason are the
+  // operators' records (운영 목록·작업 이력, ADR-0056 1-2) — the public keeps `payoutDelayed`.
+  'settlement last error',
+  'settlement retry reason',
 ];
 
 interface OwnerCase {
@@ -1755,6 +1761,37 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       qty: AMOUNTS.settlementQty,
       costBasisCoin: AMOUNTS.settlementCost,
     });
+    // #145 (ADR-0163): that payout failed and an operator retried it with a reason — the step's
+    // attempts and stored error and the retry's reason and outcome are the operators' alone
+    // (ADR-0056 1-2); the public detail keeps `payoutDelayed` (ADR-0121), nobody's answer more.
+    const settlementText = {
+      lastError: `XX000 leak-settlement-error-${tag}`,
+      retryReason: `leak-settlement-retry-reason-${tag}`,
+    };
+    await t.db
+      .insert(schema.marketSettlementSteps)
+      .values({
+        marketId: settledMarket.id,
+        step: 'coin',
+        status: 'failed',
+        attempts: 3,
+        lastError: settlementText.lastError,
+      })
+      .onConflictDoUpdate({
+        target: [schema.marketSettlementSteps.marketId, schema.marketSettlementSteps.step],
+        set: { status: 'failed', attempts: 3, lastError: settlementText.lastError },
+      });
+    await t.db.insert(schema.adminActions).values({
+      adminId: admin.id,
+      type: 'market_settlement_retry',
+      targetType: 'market',
+      targetId: settledMarket.id,
+      payload: {
+        reason: settlementText.retryReason,
+        outcome: 'failed',
+        error: settlementText.lastError,
+      },
+    });
 
     // A's watches (#89), each with its `watch` event: a closed market nobody else watches, whose
     // id and slug are sentinels (a public list of A's watches), and the market every public call
@@ -2455,6 +2492,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('correction evidence link', correctionText.link),
         text('correction approval reason', correctionText.approval),
         text('correction request id', correction.id),
+        text('settlement last error', settlementText.lastError),
+        text('settlement retry reason', settlementText.retryReason),
         text('earlier delay reason', delayText.earlier),
         text('earlier delay next review', earlierDelay.nextReviewAt.toISOString()),
         text('closed-era delay reason', delayText.closedEra),
@@ -2604,6 +2643,18 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     });
     for (const body of [JSON.stringify(book), quote.body]) {
       expect([...leaked(body), ...forbiddenFields(body)]).toEqual([]);
+    }
+  });
+
+  it('shows a failed payout as `payoutDelayed` alone: no attempts, error or retry reason (#145, ADR-0121)', async () => {
+    for (const cookie of [undefined, f.b.cookie, f.a.cookie]) {
+      const res = await call(routeOf('GET /markets/:idOrSlug'), {
+        params: { idOrSlug: f.settledMarket.slug },
+        cookie,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(parse(res.body)).toMatchObject({ data: { judgingRecord: { payoutDelayed: true } } });
+      expect([...leaked(res.body), ...forbiddenFields(res.body)]).toEqual([]);
     }
   });
 

@@ -17,6 +17,7 @@ import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { useAdminMarketJudgements } from '@/hooks/use-admin-markets';
 import { nicknameShown } from '@/lib/account-closure';
+import { ANCHOR_SCROLL_MARGIN_TOP, MARKET_JUDGEMENTS_ANCHOR } from '@/lib/admin-operations';
 import { formatKst } from '@/lib/datetime';
 import {
   MARKET_RESULT_LABEL,
@@ -44,7 +45,15 @@ export function AdminMarketJudgements() {
   const list = useAdminMarketJudgements();
   const rows = list.data?.pages.flatMap((page) => page.items) ?? [];
   return (
-    <Stack gap="4" data-testid="admin-market-judgements">
+    // The anchor 운영 대기열's 판정 대기·지연 links to (#145, ADR-0163): the page is rendered on the
+    // server, so the browser scrolls to it at load, and ReviewsHashScroll again once the lists
+    // above it have drawn.
+    <Stack
+      gap="4"
+      id={MARKET_JUDGEMENTS_ANCHOR}
+      scrollMarginTop={ANCHOR_SCROLL_MARGIN_TOP}
+      data-testid="admin-market-judgements"
+    >
       <Heading as="h3" size="lg">
         {copy.adminMarketJudgements}
       </Heading>

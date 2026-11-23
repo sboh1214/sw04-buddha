@@ -60,6 +60,7 @@ export const PRIVATE_DATA_IDS = [
   'reports',
   'market-maker',
   'account-type',
+  'operation-records',
 ] as const;
 export type PrivateDataId = (typeof PRIVATE_DATA_IDS)[number];
 
@@ -615,6 +616,21 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
     // account's type (`accountType`, `account_kind`) or says whether one is a person (`isHuman`,
     // `humanAccount`); an author's `kind` (member or closed) is a profile's state, not this.
     fields: [['account', 'type'], ['account', 'types'], ['account', 'kind'], ['human'], ['humans']],
+  },
+  {
+    id: 'operation-records',
+    name: '운영 목록·작업 이력·정산 실패 기록(시도 수·마지막 오류·회수 시도·재시도 결과)',
+    basis: 'ADR-0056 결정 1-2(#171), ADR-0121, ADR-0163(#145), N04 §6',
+    // The operators' queue and work records (#145) are every admin's and no one else's: the
+    // public keeps only `payoutDelayed` (ADR-0121) — never the attempts, the stored error, a
+    // recall's attempts, a retry's outcome or a history entry's reason basis.
+    fields: [
+      ['settlement', 'last', 'error'],
+      ['settlement', 'attempts'],
+      ['recall', 'attempts'],
+      ['reason', 'basis'],
+      ['retry', 'outcome'],
+    ],
   },
 ];
 

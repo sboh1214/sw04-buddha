@@ -31,8 +31,10 @@ export const metadata: Metadata = { title: `${copy.adminTitle} | ${copy.appName}
  * #17's (ADR-0093 — after 테마: the tree markets are filed under, added to, renamed, ordered and
  * hidden, never deleted), 검수 대기 #78's (ADR-0099 — right after 시장: the markets waiting for
  * another admin's approval), 이의 접수 #175's (ADR-0104 — right after 테마, so the first three stay
- * the markets' own: the members' 판정 이의, pending and decided). The row wraps rather than
- * scrolling sideways at phone width.
+ * the markets' own: the members' 판정 이의, pending and decided), 운영 대기열 #145's (ADR-0163 —
+ * right after 이의 접수, before 카테고리: 마감 예정, 판정 대기·지연 and 정산 실패, linking to 검수 대기 and
+ * 이의 접수 for the other two lists of N03 §8). The row wraps rather than scrolling sideways at
+ * phone width.
  */
 const NAV: { href: Route; label: string }[] = [
   { href: '/admin/markets', label: copy.adminMarkets },
@@ -40,6 +42,9 @@ const NAV: { href: Route; label: string }[] = [
   { href: '/admin/themes', label: copy.adminThemes },
   // 이의 접수 (#175, ADR-0104): the members' 판정 이의, 검토 대기 and 처리됨.
   { href: '/admin/disputes', label: copy.adminDisputes },
+  // 운영 대기열 (#145, ADR-0163): 마감 예정, 판정 대기·지연 and 정산 실패 — right after 이의 접수, so
+  // the first four stay as they were.
+  { href: '/admin/operations', label: copy.adminOperations },
   { href: '/admin/categories', label: copy.adminCategories },
   // 시장 제안 (#77, ADR-0089): the members' proposals and their review.
   { href: '/admin/proposals', label: copy.adminProposals },

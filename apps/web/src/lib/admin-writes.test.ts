@@ -101,6 +101,12 @@ const SCREENS: Readonly<Record<string, readonly string[]>> = {
     "await api.POST('/api/v1/admin/markets/{id}/disputes/{disputeId}/dismiss', {\n            params: { path: { id: market.id, disputeId } },\n            body: { reason, expectedAccountId: by, noConflictConfirmed: true },",
     "await api.POST('/api/v1/admin/markets/{id}/disputes/{disputeId}/accept', {\n            params: { path: { id: market.id, disputeId } },\n            body: { reason, expectedAccountId: by, noConflictConfirmed: true },",
   ],
+  // 정산 다시 시도 (#145, ADR-0163; 145-7), new since and written the same way: one admin's attempt
+  // from its dialog, the reason and the admin on screen alone, the 정산 실패 list holding it for the
+  // admin who opened it
+  '../app/admin/operations/settlement-retry-dialog.tsx': [
+    "await api.POST('/api/v1/admin/markets/{id}/settlement-retries', {\n      params: { path: { id: marketId } },\n      body: { reason, expectedAccountId: by },",
+  ],
   '../app/admin/themes/admin-themes.tsx': [
     '.mutateAsync({ ...toCreateThemeBody(values), expectedAccountId: operatorId })',
   ],
@@ -228,6 +234,10 @@ describe('the admin the admin writes name (ADR-0092)', () => {
       '../app/admin/markets/[id]/market-dispute-panel.tsx': 3,
       // the confirm of 기각 or 수용 (#175: one dialog, its kind's route)
       '../app/admin/markets/[id]/market-dispute-dialogs.tsx': 1,
+      // the buttons opening 정산 다시 시도 on the 지급 중 rows (#145, 145-14)
+      '../app/admin/operations/operations-failures.tsx': 1,
+      // the confirm of 정산 다시 시도, and its reason's fieldset (#145, 145-7)
+      '../app/admin/operations/settlement-retry-dialog.tsx': 2,
       // 만들기, and the form's fields
       '../app/admin/themes/admin-themes.tsx': 2,
       // 공개, 비공개의 confirm, 저장, 넣기, 빼기의 confirm, 공지 쓰기·고치기, 보이기, 숨기기의 confirm;
@@ -351,6 +361,10 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
     // 판정 지연 기록 (#142): the 지연 기록 등록 dialog, with the reason and the time typed
     '../app/admin/markets/[id]/market-judgement-delay-panel.tsx': [
       'const [action, setAction] = useHeldForOperator<JudgementDelayAction>();',
+    ],
+    // 정산 다시 시도 (#145, 145-7): the dialog, with the market it was opened on and the reason typed
+    '../app/admin/operations/operations-failures.tsx': [
+      'const [retrying, setRetrying] = useHeldForOperator<SettlementRetryTarget>();',
     ],
     // 비공개로 돌리기, a market's 빼기, the notice opened for editing and a notice's 숨기기
     '../app/admin/themes/[id]/admin-theme-detail.tsx': [
@@ -505,6 +519,10 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
     expect(source('../app/admin/moderation/link-flags/admin-link-flags.tsx')).toContain(
       '{marking !== null && (',
     );
+    // And the 정산 다시 시도 dialog (#145), drawn below the 정산 실패 list.
+    expect(source('../app/admin/operations/operations-failures.tsx')).toContain(
+      '{retrying !== null && (\n        <SettlementRetryDialog market={retrying} onClose={() => setRetrying(null)} />',
+    );
     // The refund dialog too, with the reason typed in it.
     expect(source('../app/admin/payments/admin-payments.tsx')).toContain(
       '{refunding !== null && (\n        <RefundDialog payment={payment} action={refunding} onClose={() => setRefunding(null)} />',
@@ -560,6 +578,10 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
       ],
       '../app/admin/payments/admin-payments.tsx': [
         'disabled={operatorId === undefined}\n            onClick={() => setRefunding(action)}',
+      ],
+      // 정산 다시 시도 on each 지급 중 row of 정산 실패 (#145, 145-14)
+      '../app/admin/operations/operations-failures.tsx': [
+        'disabled={operatorId === undefined}\n                    onClick={() => setRetrying({ id: row.id, title: row.title })}',
       ],
       // The panel is drawn for the admin `MarketReviewPanel` passes in (`useOperatorId`).
       '../app/admin/markets/[id]/market-review-panel.tsx': [

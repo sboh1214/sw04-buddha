@@ -596,11 +596,17 @@ const STATUS_CHANGERS: Record<string, StatusChanger> = {
       'J1 provisional, J2 correction (#188, ADR-0160); its `resolved` transition is the worker’s and silent (52-12)',
     builds: BUILDS_JUDGEMENT,
   },
-  'apps/worker/src/jobs/market-finalize.ts': {
+  // The payout core moved here for the operator retry (#145, ADR-0163): the file holds the
+  // builder call and the one `createNotifications`, so its callers (the worker's finalize, the
+  // API's retry) hold neither — `notifies`, not `core`.
+  'packages/db/src/market-finalize.ts': {
     class: 'notifies',
-    event:
-      'J5 지급 완료 (#188, ADR-0160; 188-2: all or nothing with the payout); its `settling` is silent',
+    event: 'J5 지급 완료 (#188, ADR-0160; 188-2: all or nothing with the payout)',
     builds: BUILDS_SETTLEMENT,
+  },
+  'apps/worker/src/jobs/market-finalize.ts': {
+    class: 'excluded',
+    reason: '지급 시작(settling) — 52-12, silent; its 지급 완료 is the shared core’s',
   },
 };
 
@@ -672,7 +678,11 @@ describe('who tells of a market’s state (#54, static)', () => {
         .filter(([, changer]) => changer.class === 'excluded')
         .map(([file]) => file)
         .sort(),
-    ).toEqual(['apps/api/src/markets/market-admin.service.ts', 'packages/db/src/market-open.ts']);
+    ).toEqual([
+      'apps/api/src/markets/market-admin.service.ts',
+      'apps/worker/src/jobs/market-finalize.ts',
+      'packages/db/src/market-open.ts',
+    ]);
     for (const [file, changer] of Object.entries(STATUS_CHANGERS)) {
       if (changer.class !== 'excluded') continue;
       expect(read(file), file).not.toMatch(ANY_MARKET_NOTICE);

@@ -19,12 +19,16 @@ import {
   lockForOrder,
   marketEventKey,
   marketMakerAccountId,
+  recordSettlementFailure,
   releaseForOrder,
+  retrySettlingMarket,
   schema,
   setNotificationCategory,
   settleMarketPositions,
+  settlementRetryErrorKind,
   type Db,
   type LedgerAccountRef,
+  type SettlementProgress,
 } from '@buddha/db';
 import {
   ledgerOf as accountLedgerOf,
@@ -2563,5 +2567,94 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     } finally {
       await subscriber.quit();
     }
+  });
+
+  it('counts an operator retry recorded by the shared core and the next scan failure in the same attempts (#145, ADR-0163; 145-6, 145-7)', async () => {
+    // The operator's 정산 다시 시도 runs @buddha/db's retry core and, once it rolled back, records
+    // the attempt with `recordSettlementFailure(… retry)` — the upsert the worker's own failure
+    // record goes through, so the step's attempts count every attempt, the operator's included.
+    const market = await resolved('YES');
+    const alice = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
+    await hold({
+      userId: alice,
+      marketId: market.id,
+      outcome: 'YES',
+      qty: 10,
+      costBasisCoin: 500n,
+    });
+    await drainCollateral(market.id, 500n);
+    const message = shortOf(market.id, 1_000n);
+    const admin = (await createUser(t.db)).user.id;
+
+    // 1. The scan starts the payout and fails: the market stays settling, attempt 1.
+    await expect(finalizeDueMarkets(t.db, publish, logger)).resolves.toMatchObject({
+      settled: 0,
+      failed: 1,
+      failures: [{ marketId: market.id, message }],
+    });
+    expect(await stepsOf(market.id)).toEqual([
+      expect.objectContaining({ status: 'failed', attempts: 1, lastError: message }),
+    ]);
+    const settlingEvents = await eventsOf(market.id);
+
+    // 2. The operator retry, as the API runs it: the core throws after the attempt started, the
+    // transaction (its settled row included) rolls back, and the failure is recorded — attempt 2.
+    const retry = { adminId: admin, reason: 'collateral checked', actionId: randomUUID() };
+    const progress: SettlementProgress = {};
+    const err = await t.db
+      .transaction((tx) => retrySettlingMarket(tx, { marketId: market.id, ...retry }, progress))
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe(message);
+    expect(settlementRetryErrorKind(err, progress)).toBe('attempted');
+    await expect(
+      recordSettlementFailure(t.db, market.id, progress.running, err, retry),
+    ).resolves.toEqual({
+      outcome: 'failed',
+      step: { status: 'failed', attempts: 2, lastError: message },
+    });
+
+    // 3. The next scan fails again and counts on the same row: attempt 3.
+    await expect(finalizeDueMarkets(t.db, publish, logger)).resolves.toMatchObject({
+      settled: 0,
+      failed: 1,
+      failures: [{ marketId: market.id, message }],
+    });
+    expect(await stepsOf(market.id)).toEqual([
+      expect.objectContaining({ status: 'failed', attempts: 3, lastError: message }),
+    ]);
+    // One retry row, the failed one: the settled row rolled back with the attempt.
+    const retryRows = await t.db
+      .select()
+      .from(schema.adminActions)
+      .where(eq(schema.adminActions.type, 'market_settlement_retry'));
+    expect(retryRows).toEqual([
+      expect.objectContaining({
+        id: retry.actionId,
+        adminId: admin,
+        targetType: 'market',
+        targetId: market.id,
+        payload: { reason: retry.reason, outcome: 'failed', error: message },
+      }),
+    ]);
+    // Nothing paid, nothing settled, no second settling event.
+    expect(await eventsOf(market.id)).toEqual(settlingEvents);
+    expect(await positionOf(alice, market.id, 'YES')).toMatchObject({ settled: false, version: 1 });
+
+    // Once the collateral is whole the scan settles it: attempt 4, the old error kept.
+    await correctCollateral(market.id, 500n);
+    await expect(finalizeDueMarkets(t.db, publish, logger)).resolves.toMatchObject({
+      settled: 1,
+      failed: 0,
+    });
+    expect(await stepsOf(market.id)).toEqual([
+      expect.objectContaining({ status: 'done', attempts: 4, lastError: message }),
+    ]);
+    expect(await eventsOf(market.id)).toEqual([
+      ...settlingEvents,
+      expect.objectContaining({ type: 'finalized', actorId: null, toStatus: 'settled' }),
+    ]);
+    expect((await balanceOf(alice)).availableCoin).toBe(10_000n - 500n + 1_000n);
+    expect(logs).toEqual([]);
   });
 });

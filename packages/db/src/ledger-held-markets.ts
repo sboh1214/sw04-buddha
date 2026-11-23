@@ -4,6 +4,7 @@ import type * as schema from './schema/index.js';
 import {
   marketPauses,
   markets,
+  marketSettlementSteps,
   reconciliationHolds,
   reconciliationRecoveries,
 } from './schema/index.js';
@@ -42,6 +43,19 @@ export function ledgerHeldMarketSql(marketId: SQLWrapper): SQL<boolean> {
     WHERE held_pause.market_id = ${marketId} AND held_pause.reason = 'ledger_failure'
       AND (held_pause.ended_at IS NULL OR held_pause.end_kind = 'closed_at_close')
       AND NOT EXISTS (SELECT 1 FROM ${reconciliationRecoveries} r WHERE r.legacy_pause_id=held_pause.id)))`;
+}
+
+/**
+ * SQL: a SETTLING market `marketId`'s payout is late — the public '지급 지연' (`payoutDelayed`,
+ * ADR-0121) and the admin 정산 실패 list (#145, ADR-0163), one fragment so the two never disagree:
+ * a ledger hold blocks it (`ledgerHeldMarketSql`), or a step failed or carries an error. Read it
+ * only together with `status = 'settling'`: `last_error` survives a success as the past failure
+ * trail (ADR-0118 결정 8), so a SETTLED market with one is not late.
+ */
+export function payoutDelayedSql(marketId: SQLWrapper): SQL<boolean> {
+  return sql<boolean>`(${ledgerHeldMarketSql(marketId)} OR EXISTS (SELECT 1 FROM ${marketSettlementSteps}
+      WHERE ${marketSettlementSteps.marketId}=${marketId}
+        AND (${marketSettlementSteps.status}='failed' OR ${marketSettlementSteps.lastError} IS NOT NULL)))`;
 }
 
 /** The markets of `marketIds` that are held (`ledgerHeldMarketSql`), in one read. */

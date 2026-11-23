@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { formatKst } from '@/lib/datetime';
 import { marketMaker } from '@/test/market-maker';
-import { byTestId, renderWithQueries } from '@/test/render';
+import { byId, byTestId, renderWithQueries } from '@/test/render';
 import { MarketMakerFacts } from './market-maker-panel';
 
 describe('private market maker execution observations', () => {
@@ -14,6 +14,10 @@ describe('private market maker execution observations', () => {
     expect(recall.text).not.toContain(copy.marketMakerRecallPending);
     expect(recall.text).not.toContain(copy.marketMakerRecallAmount);
     expect(html).not.toContain('<button');
+    // 운영 대기열's '회수 칸 보기' lands here (#145, ADR-0163; 145-8): the block carries the anchor.
+    expect(byId(html, 'market-maker-recall')?.attributes['data-testid']).toBe(
+      'market-maker-recall',
+    );
   });
   it('shows an unfinished recall without inferring a failure or a pending payout', () => {
     const html = renderWithQueries(

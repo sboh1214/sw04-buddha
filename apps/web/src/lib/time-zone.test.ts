@@ -631,6 +631,11 @@ const KST_CALLERS: Readonly<Record<string, { names: readonly string[]; reason: s
       'the admin repeated-link review list (ADR-0083): when an item was caught, written, ' +
       'edited, deleted and hidden, a group’s latest entry, and when an operator marked it',
   },
+  'lib/admin-operations.ts': {
+    names: ['stuckSinceText'],
+    reason:
+      '운영 대기열 (#145, ADR-0163): when a 처리 멈춤 row’s automatic transition was due (145-4)',
+  },
 };
 
 /**

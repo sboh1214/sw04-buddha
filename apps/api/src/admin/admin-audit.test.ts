@@ -129,6 +129,11 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   // #142: a 판정 지연 기록 is one admin's, not an approval request, with the market's own event
   // (`judgement_delay_recorded`); there is no edit or withdrawal route.
   'POST /admin/markets/:id/judgement-delays': 'market_delay_record',
+  // #145 (ADR-0163; 145-7): one admin's 정산 다시 시도 of a settling market. Its `settled` row
+  // commits in the payout's transaction, before the shared core; its `failed` row commits with
+  // the failure record — the step's attempt and error, which IS a failed attempt's effect — in
+  // that record's own transaction, never alone. A refused click (not settling) writes nothing.
+  'POST /admin/markets/:id/settlement-retries': 'market_settlement_retry',
   'POST /admin/markets/:id/related': 'market_link',
   'DELETE /admin/markets/:id/related/:relatedMarketId': 'market_unlink',
   'POST /admin/themes': 'theme_create',

@@ -120,8 +120,8 @@ const marketSummaryFields = {
    * 정정 still holding it once its 이의 기한 has come (#175, owner answer 2026-11-03; #176,
    * ADR-0105) — in place of '잠정 결과' and '이의 검토 중'. On the server's clock at the read, so
    * the card needs no time of its own. A display, not a status: nothing changes at that time, and
-   * no list filters by it (ADR-0095 8-6). The detail adds the operator's reason and next review
-   * time (`Market.judgementDelay`, #142).
+   * no public list filters by it (ADR-0095 8-6; the admin 운영 대기열's '지연만' does, #145). The
+   * detail adds the operator's reason and next review time (`Market.judgementDelay`, #142).
    */
   judgementDelayed: z.boolean(),
   /**
