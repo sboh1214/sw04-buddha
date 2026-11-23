@@ -188,6 +188,17 @@ export function drawnAnchor<T extends { drawn: boolean }>(copies: readonly T[]):
   return copies.find((item) => item.drawn);
 }
 
+/**
+ * Scrolls to the copy of 공개 판정 기록 this width draws (`drawnAnchor`); nothing when none is. The
+ * 결과 줄's '판정 정정' mark and the recap's '판정 기록 보기' (#144) call it: the record has no id.
+ */
+export function scrollToJudgingRecord(): void {
+  const copies = [
+    ...document.querySelectorAll<HTMLElement>(`[data-anchor="${JUDGING_RECORD_ANCHOR}"]`),
+  ].map((element) => ({ element, drawn: element.getClientRects().length > 0 }));
+  drawnAnchor(copies)?.element.scrollIntoView({ block: 'start' });
+}
+
 /** The two views of the mobile switch (N02 §4 '호가·거래 내역을 전환'). */
 export const DETAIL_VIEWS = ['book', 'history'] as const;
 export type DetailView = (typeof DETAIL_VIEWS)[number];

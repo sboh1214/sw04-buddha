@@ -29,6 +29,7 @@ export * from './guards/notifications.js';
 export * from './guards/private-data.js';
 export * from './guards/realtime-events.js';
 export * from './jobs.js';
+export * from './judgement-compensation.js';
 export * from './like.js';
 export * from './link-review.js';
 export * from './ledger.js';

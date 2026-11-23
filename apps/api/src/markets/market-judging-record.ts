@@ -1,6 +1,7 @@
-import { payoutDelayedSql, schema } from '@buddha/db';
+import { payoutDelayedSql, readJudgementCompensationFacts, schema } from '@buddha/db';
 import {
   marketDisputeStatusSchema,
+  publicJudgementCompensationOf,
   withCurrentJudgementDelay,
   type MarketJudgingRecord,
   type PublicDisputeDecision,
@@ -88,6 +89,8 @@ export async function readMarketJudgingRecord(
   // `market_id`: one at most, 144-14). A waiting or dismissed incident has no row.
   const [correction] = await reader
     .select({
+      // Internal: reads the compensation's figures below; never answered.
+      id: marketJudgementIncidents.id,
       result: marketJudgementIncidents.correctedResult,
       originalResult: marketJudgementIncidents.originalResult,
       judgementVersion: marketJudgementIncidents.judgementVersion,
@@ -99,6 +102,19 @@ export async function readMarketJudgingRecord(
     .from(marketJudgementIncidents)
     .where(eq(marketJudgementIncidents.marketId, market.id))
     .limit(1);
+  // #144 part 2 (ADR-0166; 144-6, 144-15): the compensation's status, its 대상 count and the Coin
+  // paid in all, in the same snapshot — counts and a total only, never an account or one
+  // account's amount (with one paid account the total is its amount: 144-6 accepted that).
+  const compensation =
+    correction === undefined
+      ? null
+      : publicJudgementCompensationOf(
+          await readJudgementCompensationFacts(reader, {
+            id: correction.id,
+            marketId: market.id,
+            correctedResult: correction.result,
+          }),
+        );
   const [cancelled] =
     market.status === 'cancelled'
       ? await reader
@@ -163,7 +179,7 @@ export async function readMarketJudgingRecord(
         : null,
     payoutDelayed: payout?.delayed ?? false,
     correction:
-      correction === undefined
+      correction === undefined || compensation === null
         ? null
         : {
             result: correction.result,
@@ -175,6 +191,7 @@ export async function readMarketJudgingRecord(
               links: correction.links,
               collectedAt: correction.collectedAt.toISOString(),
             },
+            compensation,
           },
   };
 }

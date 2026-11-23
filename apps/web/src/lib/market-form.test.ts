@@ -922,6 +922,7 @@ const market: AdminMarket = {
     pending: null,
     confirmed: null,
     log: [],
+    compensation: null,
   },
   missingOpenItems: [],
   leadCloseGapMinutes: null,

@@ -11,6 +11,7 @@ import {
 import {
   type AdminDisputeQueueItem,
   type AdminMarket,
+  type AdminJudgementCompensationRecipient,
   type AdminMarketJudgementIncidentQueueItem,
   type AdminMarketJudgementQueueItem,
   type AdminMarketCancelItem,
@@ -103,6 +104,21 @@ export const ADMIN_MARKET_JUDGEMENT_INCIDENTS_KEY = [
   'admin',
   'market-judgement-incidents',
 ] as const;
+
+/**
+ * 판정 오류 보상's 대상 계정 (#144 part 2, ADR-0166): `GET /admin/markets/:id/judgement-compensations/
+ * recipients`, one market's listed accounts with their amounts and states, under the private
+ * `['admin']` root and a segment of its own — not under `adminMarketKey(id)`, whose entry is the
+ * `AdminMarket` `applyMarket` seeds — keyed by the market: every admin write to a market asks it
+ * again (`invalidateMarket`) — a request freezes a list, an approval turns it into the payout's
+ * records, and a 대사 정정 elsewhere can turn a 원장 확인 필요 account payable.
+ */
+export const ADMIN_JUDGEMENT_COMPENSATION_RECIPIENTS_KEY = [
+  'admin',
+  'judgement-compensation-recipients',
+] as const;
+export const adminJudgementCompensationRecipientsKey = (id: string) =>
+  [...ADMIN_JUDGEMENT_COMPENSATION_RECIPIENTS_KEY, id] as const;
 
 /**
  * 이의 접수 (#175, ADR-0104): `GET /admin/market-disputes?status=`, the members' 판정 이의 in two
@@ -458,6 +474,45 @@ export function useAdminMarketJudgementIncidents() {
   return useInfiniteQuery(adminMarketJudgementIncidentsQueryOptions());
 }
 
+/** One page of a market's 판정 오류 보상 대상 계정. */
+export interface AdminJudgementCompensationRecipientPage {
+  items: AdminJudgementCompensationRecipient[];
+  nextCursor: string | null;
+}
+
+/**
+ * A market's 판정 오류 보상 대상 계정 (#144, ADR-0166; 144-16 "관리자 화면에 어느 계정인지 보인다"):
+ * in account order, 20 per page with 더 보기 (the API's default page). No polling (ADR-0138).
+ */
+export function adminJudgementCompensationRecipientsQueryOptions(id: string) {
+  return {
+    queryKey: adminJudgementCompensationRecipientsKey(id),
+    queryFn: async ({
+      pageParam,
+    }: {
+      pageParam: string | undefined;
+    }): Promise<AdminJudgementCompensationRecipientPage> => {
+      const { data, meta } = unwrap(
+        await api.GET('/api/v1/admin/markets/{id}/judgement-compensations/recipients', {
+          params: {
+            path: { id },
+            query: pageParam === undefined ? {} : { cursor: pageParam },
+          },
+        }),
+      );
+      return { items: data, nextCursor: meta.nextCursor };
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last: AdminJudgementCompensationRecipientPage) =>
+      last.nextCursor ?? undefined,
+  };
+}
+
+/** The list, mounted only while the panel shows it (대상 계정 보기 pressed). */
+export function useAdminJudgementCompensationRecipients(id: string) {
+  return useInfiniteQuery(adminJudgementCompensationRecipientsQueryOptions(id));
+}
+
 /** One page of an 이의 접수 half. */
 export interface AdminMarketDisputePage {
   items: AdminDisputeQueueItem[];
@@ -579,6 +634,8 @@ export function invalidateMarket(queryClient: QueryClient, id: string) {
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_CANCEL_REQUESTS_KEY }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_JUDGEMENTS_KEY }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_JUDGEMENT_INCIDENTS_KEY }),
+    // 판정 오류 보상's 대상 계정 (#144, ADR-0166): every market's, keyed by the market.
+    queryClient.invalidateQueries({ queryKey: ADMIN_JUDGEMENT_COMPENSATION_RECIPIENTS_KEY }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_DISPUTES_KEY }),
     // 운영 대기열 (#145, ADR-0163): a write can add a row to a list, move it or take it away.
     queryClient.invalidateQueries({ queryKey: ADMIN_OPERATIONS_KEY }),

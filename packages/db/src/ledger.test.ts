@@ -235,8 +235,8 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
   describe('directions', () => {
     it('agrees with LEDGER_ENTRY_RULES for every type and every pair of sides (drift)', async () => {
       // The SQL copy of the pairs (`ledger_entry_direction_allowed`, migration 0060) and the shared
-      // table answer alike for each of the 15 × 5 × 5 combinations, mint and burn sides included
-      // (REGRANT's row came with migration 0077, #74).
+      // table answer alike for each of the 16 × 5 × 5 combinations, mint and burn sides included
+      // (REGRANT's row came with migration 0077, #74; JUDGEMENT_COMPENSATION's with 0081, #144).
       const combos = LEDGER_ENTRY_TYPES.flatMap((type) =>
         SIDES.flatMap((from) => SIDES.map((to) => [type, from, to] as const)),
       );
@@ -260,9 +260,11 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
 
     it('records every allowed pair of every type, moving the amount and each side’s total', async () => {
       await createMarketMakerAccount(t.db);
-      // A forfeiture is the closure's own (schema.test.ts, and the conservation case below), and a
-      // re-grant `applyRegrant`'s with its record (migration 0077; regrants.test.ts).
-      const own = ['CLOSURE_FORFEIT', 'REGRANT'];
+      // A forfeiture is the closure's own (schema.test.ts, and the conservation case below), a
+      // re-grant `applyRegrant`'s with its record (migration 0077; regrants.test.ts), and a 판정
+      // 오류 보상 `payJudgementCompensation`'s with its record and approved request (migration 0081;
+      // judgement-compensation.test.ts).
+      const own = ['CLOSURE_FORFEIT', 'REGRANT', 'JUDGEMENT_COMPENSATION'];
       for (const type of LEDGER_ENTRY_TYPES.filter((type) => !own.includes(type))) {
         for (const [fromKind, toKind] of LEDGER_ENTRY_RULES[type].pairs) {
           const market = await createMarket(t.db);
@@ -340,9 +342,11 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
           from: userA,
           to: { kind: 'treasury' },
         },
-        // A grant of a market, a fill of none, a collateral of another market.
+        // A grant of a market, a fill of none, a 판정 오류 보상 of none (#144: it names the market
+        // it compensates), a collateral of another market.
         { type: 'START_GRANT', amountCoin: 1n, from: null, to: userB, marketId: market.id },
         { type: 'TRADE_FILL', amountCoin: 1n, from: userA, to: userB },
+        { type: 'JUDGEMENT_COMPENSATION', amountCoin: 1n, from: null, to: userB },
         {
           type: 'PAIR_MINT_COLLATERAL',
           amountCoin: 1n,
@@ -441,6 +445,17 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
           /names the market of its accounts/,
         ],
         [
+          // #144 (migration 0081): the compensation names the market it compensates.
+          'a judgement compensation naming no market',
+          {
+            type: 'JUDGEMENT_COMPENSATION',
+            refType: 'judgement_compensation',
+            toAccountId: user,
+            toBalanceAfterCoin: 10n,
+          },
+          /names the market of its accounts/,
+        ],
+        [
           'a fill between two people naming no market',
           {
             type: 'TRADE_FILL',
@@ -525,6 +540,33 @@ describe.skipIf(!hasTestDb())('the ledger (#116, docker test profile)', () => {
           });
         }),
       ).rejects.toSatisfy(refusedAtInsert(/a TRADE_FILL event does not continue/));
+      // A judgement compensation naming its market passes the INSERT check (migration 0081 widened
+      // its market clause for that type alone), and only its missing record refuses it, at COMMIT
+      // (`ledger_entries_judgement_compensation_record`; the whole write is
+      // judgement-compensation.test.ts's).
+      await expect(
+        t.db.transaction(async (tx) => {
+          await tx
+            .update(balances)
+            .set({
+              availableCoin: sql`${balances.availableCoin} + 10`,
+              ledgerCoin: sql`${balances.ledgerCoin} + 10`,
+            })
+            .where(eq(balances.accountId, user));
+          await tx.insert(ledgerEntries).values({
+            ...row,
+            type: 'JUDGEMENT_COMPENSATION',
+            refType: 'judgement_compensation',
+            toAccountId: user,
+            toBalanceAfterCoin: 10n,
+            marketId: market.id,
+          });
+        }),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23000' &&
+          sqlConstraint(e) === 'ledger_entries_judgement_compensation_record',
+      );
       // An empty key, past the trigger: the table's CHECK refuses it.
       await expect(
         raw({ toAccountId: user, toBalanceAfterCoin: 10n, idempotencyKey: '' }),

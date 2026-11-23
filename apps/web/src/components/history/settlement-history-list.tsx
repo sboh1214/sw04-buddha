@@ -24,6 +24,7 @@ import { useSettlementHistory } from '@/hooks/use-my-history';
 import type { MySettlement } from '@/lib/api';
 import { MARKET_RESULT_LABEL, formatContracts } from '@/lib/market-admin';
 import { showMoreOrders } from '@/lib/my';
+import { settlementCorrectedText } from '@/lib/judgement-correction';
 import { judgingRecordPath } from '@/lib/market-detail';
 import { type HistoryListFilters, isHistoryFiltered, myHistoryPath } from '@/lib/my-history';
 import { listSection } from '@/lib/query-client';
@@ -144,6 +145,11 @@ export function SettlementHistoryList({
  * whose market row carries none) and 지급 완료 is THIS account's record's (`settledAt`), the time
  * the list is ordered and filtered by. 판정 기록 opens the market's detail at its public judging
  * record (`#judging-record`).
+ *
+ * A market whose 판정 오류 사건 was confirmed after the payout (#144, ADR-0166; 144-17) marks its
+ * rows '판정 정정 · 결과 {정정된 결과}' — the mark alone, no amount: the row's result and figures
+ * stay the paid ones (the record never moves), the compensation is the wallet's and the recap's,
+ * and 판정 기록 leads to the correction.
  */
 export function SettlementHistoryRow({
   record,
@@ -168,6 +174,11 @@ export function SettlementHistoryRow({
         <Badge colorPalette={yes ? 'yes' : 'no'} variant="subtle">
           {yes ? copy.yes : copy.no}
         </Badge>
+        {record.correctedResult !== null && (
+          <Badge colorPalette="orange" variant="subtle" data-testid="history-settlement-corrected">
+            {settlementCorrectedText(record.correctedResult)}
+          </Badge>
+        )}
       </HStack>
       {/* Nine cells: one column on a phone, the figures beside the two times from md up. */}
       <Grid templateColumns={{ base: 'minmax(0, 1fr)', md: 'repeat(2, minmax(0, 1fr))' }} gap="4">

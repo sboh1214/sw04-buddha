@@ -11,6 +11,7 @@ import {
   Table,
   Text,
 } from '@chakra-ui/react';
+import { formatCoin, parseCoinAmount } from '@buddha/shared';
 import NextLink from 'next/link';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
@@ -26,6 +27,10 @@ import {
   MARKET_STATUS_LABEL,
   MARKET_STATUS_PALETTE,
 } from '@/lib/market-admin';
+import {
+  COMPENSATION_QUEUE_KIND_LABEL,
+  compensationSummaryText,
+} from '@/lib/market-judgement-compensation';
 
 /**
  * 판정 오류 사건 검토 대기 (#144 part 1, ADR-0165; 144-3, 144-4, 144-13): every 판정 오류 사건 waiting
@@ -33,8 +38,11 @@ import {
  * after 판정 승인 대기 on 검수 대기. The decision is on each market's detail, where the description,
  * the evidence and the exclusions are. One row per incident: the question (to its admin detail),
  * the market's status (a 오류 확인 waits for 지급 완료, 144-13), the paid result and the correct
- * one, who registered it and when, every time in KST. No polling (ADR-0138): every admin write to a
- * market asks it again (`invalidateMarket`). A refresh that failed after rows exist keeps them
+ * one, who registered it and when, every time in KST. Since #144 part 2 (ADR-0166 T13) the same
+ * table holds the 판정 오류 보상 requests waiting for another admin's 보상 승인 or 반려, in request
+ * order with the incidents: its `종류` column tells the two apart, and a compensation's row says
+ * its frozen list's count and total (never an account). No polling (ADR-0138): every admin write
+ * to a market asks it again (`invalidateMarket`). A refresh that failed after rows exist keeps them
  * under a notice with 다시 시도; a 더 보기 that failed keeps them and says so above its button
  * (`LoadMoreFailed`); only a first read that failed shows the error.
  */
@@ -52,7 +60,7 @@ export function AdminMarketJudgementIncidents() {
         {copy.adminMarketJudgementIncidents}
       </Heading>
       <Text fontSize="sm" color="fg.muted">
-        {copy.adminMarketJudgementIncidentsIntro}
+        {copy.adminMarketJudgementIncidentsIntro} {copy.adminMarketJudgementCompensationQueueIntro}
       </Text>
       {list.isPending ? (
         <Skeleton height="24" />
@@ -97,6 +105,9 @@ export function AdminMarketJudgementIncidents() {
                     {copy.adminMarketJudgementIncidentsColTitle}
                   </Table.ColumnHeader>
                   <Table.ColumnHeader>
+                    {copy.adminMarketJudgementCompensationQueueColKind}
+                  </Table.ColumnHeader>
+                  <Table.ColumnHeader>
                     {copy.adminMarketJudgementIncidentsColStatus}
                   </Table.ColumnHeader>
                   <Table.ColumnHeader>
@@ -119,6 +130,7 @@ export function AdminMarketJudgementIncidents() {
                     key={row.requestId}
                     data-testid={`admin-market-judgement-incident-${row.requestId}`}
                     data-market={row.marketId}
+                    data-kind={row.kind}
                   >
                     <Table.Cell minW="48" wordBreak="break-word">
                       <ChakraLink asChild fontWeight="semibold">
@@ -129,6 +141,26 @@ export function AdminMarketJudgementIncidents() {
                           {row.title}
                         </NextLink>
                       </ChakraLink>
+                    </Table.Cell>
+                    <Table.Cell
+                      whiteSpace="nowrap"
+                      data-testid={`admin-market-judgement-incident-kind-${row.requestId}`}
+                    >
+                      <Text>{COMPENSATION_QUEUE_KIND_LABEL[row.kind]}</Text>
+                      {row.kind === 'compensation' &&
+                        row.accountCount !== null &&
+                        row.totalCoin !== null && (
+                          <Text
+                            fontSize="xs"
+                            color="fg.muted"
+                            data-testid={`admin-market-judgement-incident-summary-${row.requestId}`}
+                          >
+                            {compensationSummaryText(
+                              row.accountCount,
+                              formatCoin(parseCoinAmount(row.totalCoin)),
+                            )}
+                          </Text>
+                        )}
                     </Table.Cell>
                     <Table.Cell whiteSpace="nowrap">
                       <Badge

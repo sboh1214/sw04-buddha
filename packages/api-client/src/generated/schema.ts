@@ -794,6 +794,91 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/markets/{id}/judgement-compensations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Request the compensation of a market’s confirmed judgement incident (보상 요청) for another admin’s approval, with an internal reason and the reason the compensated members read: the server computes the accounts owed and their amounts from the settlement records and freezes them in the request. One request waits at a time, and none is taken once one is approved */
+        post: operations["adminRequestMarketJudgementCompensation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/judgement-compensations/{requestId}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve a waiting judgement compensation request (보상 승인), with a reason, by an admin who is neither its requester nor the registrant of the paid judgement and has no interest in the market: every listed account is paid its amount once in the same transaction (a closed account is recorded unpaid), each paid member is notified, and nothing is taken back from anyone. Refused whole while the market is held by the ledger reconciliation or any listed account’s balance record left its ledger */
+        post: operations["adminApproveMarketJudgementCompensation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/judgement-compensations/{requestId}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject a waiting judgement compensation request (보상 반려), with a reason, by any admin but its requester: nothing is paid, and another request may follow */
+        post: operations["adminRejectMarketJudgementCompensation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/judgement-compensations/{requestId}/retract": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retract a waiting judgement compensation request the acting admin made (철회), before anyone decides it; nothing else changes */
+        post: operations["adminRetractMarketJudgementCompensation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/judgement-compensations/recipients": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The accounts a market’s confirmed judgement correction compensates, in account id order: each named, with its amount and where it stands — before an approval the waiting request’s list (or, with none, the accounts owed now), payable, needing a ledger check or closed; once approved, paid or recorded unpaid as closed. An empty page for a market without a confirmed incident */
+        get: operations["adminListMarketJudgementCompensationRecipients"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/markets/{id}/judgement-delays": {
         parameters: {
             query?: never;
@@ -4716,6 +4801,12 @@ export type components = {
             liveOrderCount: number;
             userId: string;
         };
+        AdminJudgementCompensationRecipient: {
+            account: components["schemas"]["AdminAccountActor"];
+            amountCoin: components["schemas"]["CoinAmount"];
+            /** @enum {string} */
+            state: "pending" | "blocked" | "closed" | "paid";
+        };
         AdminJudgementDelay: {
             current: boolean;
             /** Format: uuid */
@@ -4964,7 +5055,15 @@ export type components = {
             version: number;
             voidReason: string | null;
         };
+        AdminMarketJudgementCompensation: {
+            held: boolean;
+            log: components["schemas"]["MarketJudgementCompensationLogEntry"][];
+            paid: components["schemas"]["MarketJudgementCompensationPaid"] | null;
+            pending: components["schemas"]["MarketJudgementCompensationPending"] | null;
+            preview: components["schemas"]["MarketJudgementCompensationPreview"] | null;
+        };
         AdminMarketJudgementIncident: {
+            compensation: components["schemas"]["AdminMarketJudgementCompensation"] | null;
             confirmable: boolean;
             confirmed: components["schemas"]["MarketJudgementIncidentConfirmed"] | null;
             log: components["schemas"]["MarketJudgementIncidentLogEntry"][];
@@ -4972,7 +5071,10 @@ export type components = {
             registrable: boolean;
         };
         AdminMarketJudgementIncidentQueueItem: {
+            accountCount: number | null;
             correctedResult: components["schemas"]["MarketResult"];
+            /** @enum {string} */
+            kind: "incident" | "compensation";
             /** Format: uuid */
             marketId: string;
             originalResult: components["schemas"]["MarketResult"];
@@ -4985,6 +5087,7 @@ export type components = {
             /** @enum {string} */
             status: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
             title: string;
+            totalCoin: components["schemas"]["CoinAmount"] | null;
         };
         AdminMarketJudgementQueueItem: {
             /** Format: date-time */
@@ -5448,7 +5551,7 @@ export type components = {
             /** @enum {string} */
             source: "market_event" | "admin_action" | "settlement_step";
             /** @enum {string} */
-            type: "fill_classification_request" | "fill_classification_approve" | "fill_classification_reject" | "fill_classification_retract" | "market_conflict_declare" | "reconciliation_run" | "reconciliation_recovery_request" | "reconciliation_recovery_approve" | "reconciliation_recovery_reject" | "reconciliation_recovery_retract" | "market_create" | "market_update" | "market_submit" | "market_approve" | "market_reject" | "market_revert" | "market_reschedule" | "market_supplement_request" | "market_supplement_approve" | "market_supplement_reject" | "market_supplement_retract" | "market_pause" | "market_pause_decision_request" | "market_pause_decision_approve" | "market_pause_decision_reject" | "market_pause_decision_retract" | "market_judgement_request" | "market_judgement_approve" | "market_judgement_reject" | "market_judgement_retract" | "market_dispute_dismiss" | "market_dispute_accept" | "market_delay_record" | "market_open" | "market_close" | "market_resolve" | "market_link" | "market_unlink" | "proposal_adopt" | "proposal_link" | "market_price_protection_change" | "market_cancel_request" | "market_cancel_approve" | "market_cancel_reject" | "market_cancel_retract" | "market_settlement_retry" | "market_judgement_incident_register" | "market_judgement_incident_confirm" | "market_judgement_incident_dismiss" | "market_judgement_incident_retract" | "created" | "submitted" | "approved" | "rejected" | "reverted" | "open_rescheduled" | "opened" | "closed" | "finalized" | "rules_edited" | "resolved" | "settling" | "rules_supplemented" | "paused" | "resumed" | "provisional" | "judgement_corrected" | "judgement_delay_recorded" | "price_protection_changed" | "cancelled" | "settlement_step";
+            type: "fill_classification_request" | "fill_classification_approve" | "fill_classification_reject" | "fill_classification_retract" | "market_conflict_declare" | "reconciliation_run" | "reconciliation_recovery_request" | "reconciliation_recovery_approve" | "reconciliation_recovery_reject" | "reconciliation_recovery_retract" | "market_create" | "market_update" | "market_submit" | "market_approve" | "market_reject" | "market_revert" | "market_reschedule" | "market_supplement_request" | "market_supplement_approve" | "market_supplement_reject" | "market_supplement_retract" | "market_pause" | "market_pause_decision_request" | "market_pause_decision_approve" | "market_pause_decision_reject" | "market_pause_decision_retract" | "market_judgement_request" | "market_judgement_approve" | "market_judgement_reject" | "market_judgement_retract" | "market_dispute_dismiss" | "market_dispute_accept" | "market_delay_record" | "market_open" | "market_close" | "market_resolve" | "market_link" | "market_unlink" | "proposal_adopt" | "proposal_link" | "market_price_protection_change" | "market_cancel_request" | "market_cancel_approve" | "market_cancel_reject" | "market_cancel_retract" | "market_settlement_retry" | "market_judgement_incident_register" | "market_judgement_incident_confirm" | "market_judgement_incident_dismiss" | "market_judgement_incident_retract" | "market_judgement_compensation_request" | "market_judgement_compensation_approve" | "market_judgement_compensation_reject" | "market_judgement_compensation_retract" | "created" | "submitted" | "approved" | "rejected" | "reverted" | "open_rescheduled" | "opened" | "closed" | "finalized" | "rules_edited" | "resolved" | "settling" | "rules_supplemented" | "paused" | "resumed" | "provisional" | "judgement_corrected" | "judgement_delay_recorded" | "price_protection_changed" | "cancelled" | "settlement_step";
         };
         AdminMarketWorkRelatedMarket: {
             /** Format: uuid */
@@ -6057,6 +6160,12 @@ export type components = {
             noConflictConfirmed: true;
             reason: string;
         };
+        ApproveJudgementCompensationBody: {
+            expectedAccountId: string;
+            /** @enum {boolean} */
+            noConflictConfirmed: true;
+            reason: string;
+        };
         ApproveMarketCancelBody: {
             expectedAccountId: string;
             reason: string;
@@ -6504,7 +6613,7 @@ export type components = {
             createdAt: string;
             id: string;
             /** @enum {string} */
-            kind: "BUY_FILL" | "SELL_FILL" | "SETTLEMENT_PAYOUT" | "START_GRANT" | "RECONCILIATION_CORRECTION" | "REGRANT" | "CLOSURE_FORFEIT" | "DEPOSIT" | "BONUS" | "PAYMENT_CANCEL" | "PAYMENT_CANCEL_REVERSAL";
+            kind: "BUY_FILL" | "SELL_FILL" | "SETTLEMENT_PAYOUT" | "START_GRANT" | "RECONCILIATION_CORRECTION" | "REGRANT" | "JUDGEMENT_COMPENSATION" | "CLOSURE_FORFEIT" | "DEPOSIT" | "BONUS" | "PAYMENT_CANCEL" | "PAYMENT_CANCEL_REVERSAL";
             /** Format: uuid */
             marketId: string | null;
             marketSlug: string | null;
@@ -6514,7 +6623,7 @@ export type components = {
             orderId: string | null;
             refId: string;
             /** @enum {string} */
-            refType: "payment" | "fill" | "market" | "coupon" | "start_grant" | "account_closure" | "approval_request" | "audit_failure" | "reconciliation_correction" | "regrant";
+            refType: "payment" | "fill" | "market" | "coupon" | "start_grant" | "account_closure" | "approval_request" | "audit_failure" | "reconciliation_correction" | "regrant" | "judgement_compensation";
         };
         LiftRestrictionBody: {
             expectedAccountId: string;
@@ -6656,6 +6765,58 @@ export type components = {
             toStatus: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled" | null;
             /** @enum {string} */
             type: "created" | "submitted" | "approved" | "rejected" | "reverted" | "open_rescheduled" | "opened" | "closed" | "finalized" | "rules_edited" | "resolved" | "settling" | "rules_supplemented" | "paused" | "resumed" | "provisional" | "judgement_corrected" | "judgement_delay_recorded" | "price_protection_changed" | "cancelled";
+        };
+        MarketJudgementCompensationLogEntry: {
+            accountCount: number;
+            /** Format: date-time */
+            decidedAt: string | null;
+            decidedBy: components["schemas"]["AdminAccountActor"] | null;
+            decisionReason: string | null;
+            reason: string;
+            /** Format: date-time */
+            requestedAt: string;
+            requestedBy: components["schemas"]["AdminAccountActor"];
+            /** Format: uuid */
+            requestId: string;
+            /** Format: date-time */
+            retractedAt: string | null;
+            status: components["schemas"]["ApprovalStatus"];
+            totalCoin: components["schemas"]["CoinAmount"];
+            userReason: string;
+        };
+        MarketJudgementCompensationPaid: {
+            accountCount: number;
+            /** Format: date-time */
+            approvedAt: string;
+            approvedBy: components["schemas"]["AdminAccountActor"];
+            closedCount: number;
+            paidCoin: components["schemas"]["CoinAmount"];
+            paidCount: number;
+            reason: string;
+            /** Format: date-time */
+            requestedAt: string;
+            requestedBy: components["schemas"]["AdminAccountActor"];
+            /** Format: uuid */
+            requestId: string;
+            totalCoin: components["schemas"]["CoinAmount"];
+            userReason: string;
+        };
+        MarketJudgementCompensationPending: {
+            accountCount: number;
+            reason: string;
+            /** Format: date-time */
+            requestedAt: string;
+            requestedBy: components["schemas"]["AdminAccountActor"];
+            /** Format: uuid */
+            requestId: string;
+            totalCoin: components["schemas"]["CoinAmount"];
+            userReason: string;
+        };
+        MarketJudgementCompensationPreview: {
+            accountCount: number;
+            blockedCount: number;
+            closedCount: number;
+            totalCoin: components["schemas"]["CoinAmount"];
         };
         MarketJudgementCorrection: {
             baseVersion: number;
@@ -7351,6 +7512,7 @@ export type components = {
             originalEndsAt: string | null;
         };
         MySettlement: {
+            correctedResult: components["schemas"]["MarketResult"] | null;
             costBasisCoin: components["schemas"]["CoinAmount"];
             /** Format: uuid */
             marketId: string;
@@ -7908,6 +8070,13 @@ export type components = {
             judgementVersion: number;
             reason: string;
         };
+        PublicJudgementCompensation: {
+            accountCount: number | null;
+            paidCount: number | null;
+            /** @enum {string} */
+            status: "preparing" | "none" | "pending" | "paid";
+            totalCoin: components["schemas"]["CoinAmount"] | null;
+        };
         PublicMarketDisputes: {
             byVersion: {
                 counts: components["schemas"]["PublicDisputeCounts"];
@@ -7933,6 +8102,7 @@ export type components = {
             voidReason: string | null;
         };
         PublicMarketJudgementCorrection: {
+            compensation: components["schemas"]["PublicJudgementCompensation"];
             /** Format: date-time */
             confirmedAt: string;
             description: string;
@@ -8263,6 +8433,10 @@ export type components = {
             expectedAccountId: string;
             reason: string;
         };
+        RejectJudgementCompensationBody: {
+            expectedAccountId: string;
+            reason: string;
+        };
         RejectMarketCancelBody: {
             expectedAccountId: string;
             reason: string;
@@ -8406,6 +8580,13 @@ export type components = {
             baseRevision: string;
             expectedAccountId: string;
             reason: string;
+        };
+        RequestJudgementCompensationBody: {
+            expectedAccountId: string;
+            /** @enum {boolean} */
+            noConflictConfirmed: true;
+            reason: string;
+            userReason: string;
         };
         RequestMarketCancelBody: {
             expectedAccountId: string;
@@ -13093,6 +13274,406 @@ export interface operations {
                 };
             };
             /** @description ONBOARDING_REQUIRED | DISPUTE_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRequestMarketJudgementCompensation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestJudgementCompensationBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminApproveMarketJudgementCompensation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApproveJudgementCompensationBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRejectMarketJudgementCompensation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RejectJudgementCompensationBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRetractMarketJudgementCompensation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedAccountBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListMarketJudgementCompensationRecipients: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminJudgementCompensationRecipient"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -25248,7 +25829,7 @@ export interface operations {
         parameters: {
             query?: {
                 cursor?: string;
-                kind?: "BUY_FILL" | "SELL_FILL" | "SETTLEMENT_PAYOUT" | "START_GRANT" | "RECONCILIATION_CORRECTION" | "REGRANT";
+                kind?: "BUY_FILL" | "SELL_FILL" | "SETTLEMENT_PAYOUT" | "START_GRANT" | "RECONCILIATION_CORRECTION" | "REGRANT" | "JUDGEMENT_COMPENSATION";
                 limit?: number;
                 marketId?: string;
                 period?: "7d" | "30d" | "90d";

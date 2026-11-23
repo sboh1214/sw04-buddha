@@ -8,6 +8,7 @@ import {
 } from '@buddha/db';
 import {
   JUDGEMENT_INCIDENT_CONFIRMABLE_STATUS,
+  MARKET_JUDGEMENT_COMPENSATION_APPROVAL_KIND,
   MARKET_JUDGEMENT_INCIDENT_APPROVAL_KIND,
   decodeKeyset,
   encodeKeyset,
@@ -19,12 +20,16 @@ import {
   type CursorQuery,
   type MarketJudgementIncidentLogEntry,
 } from '@buddha/shared';
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
 import { type Page } from '../wallet/wallet.service.js';
 import { type Executor } from './market-item-rules.js';
+import {
+  compensationPayloadOf,
+  readAdminMarketJudgementCompensation,
+} from './market-judgement-compensation.js';
 import { type MarketRow } from './market.service.js';
 
 /**
@@ -37,7 +42,7 @@ import { type MarketRow } from './market.service.js';
  * judging record's 판정 정정 is `readMarketJudgingRecord`'s own allowlist (#24), never this.
  */
 
-const { approvalRequests, markets, profiles } = schema;
+const { approvalRequests, marketJudgementIncidents, markets, profiles } = schema;
 
 /** An account as the admin screen names it (see the module doc). */
 const actor = (id: string, nickname: string | null): AdminAccountActor => ({ id, nickname });
@@ -142,7 +147,8 @@ function logEntryOf(request: MarketJudgementIncidentRequestRead): MarketJudgemen
  * (`readMarketJudgementIncident`, UNIQUE `market_id`) named by its request's requester and
  * decider with the reviewer's reason, and whether the market takes a registration (RESOLVED,
  * SETTLING or SETTLED, 144-8; a judgement version — not legacy, D4; no incident confirmed, 144-14,
- * or waiting) and a confirmation (SETTLED, 144-13) now.
+ * or waiting) and a confirmation (SETTLED, 144-13) now; and the confirmed incident's 판정 오류
+ * 보상 (#144 part 2, ADR-0166: `readAdminMarketJudgementCompensation`), null without one.
  */
 export async function readAdminMarketJudgementIncident(
   executor: Executor,
@@ -201,16 +207,29 @@ export async function readAdminMarketJudgementIncident(
             reason: approved.decisionReason ?? '',
           },
     log,
+    compensation:
+      confirmedRow === null
+        ? null
+        : await readAdminMarketJudgementCompensation(executor, row.id, confirmedRow),
   };
 }
 
 const queueRequester = alias(profiles, 'incident_queue_requester');
 
+/** The two kinds the queue lists (ADR-0166 T13), by `approval_requests.kind`. */
+const QUEUE_KINDS = {
+  [MARKET_JUDGEMENT_INCIDENT_APPROVAL_KIND]: 'incident',
+  [MARKET_JUDGEMENT_COMPENSATION_APPROVAL_KIND]: 'compensation',
+} as const;
+
 /**
  * `GET /admin/market-judgement-incidents` (판정 오류 사건 검토 대기, #144): every waiting
- * `market_judgement_incident` request with its market — its status (a confirmation waits for
- * SETTLED, 144-13; a dismissal is taken from RESOLVED on) — the paid result and the corrected one
- * as the registration froze them, and who registered it and when, the oldest request first over
+ * `market_judgement_incident` request (`kind` 'incident') and — #144 part 2, ADR-0166 T13 — every
+ * waiting `market_judgement_compensation` request (`kind` 'compensation') with its market — its
+ * status (a confirmation waits for SETTLED, 144-13; a compensation is asked on a SETTLED market
+ * alone) — the paid result and the corrected one (an incident's as its registration froze them, a
+ * compensation's from its confirmed incident and its payload), a compensation's list length and
+ * total (never an account of it), and who asked and when, the oldest request first over
  * `(requested_at, id)` ascending (`approval_requests_pending_requested_at_idx`, migration 0042),
  * with the request's keyset as the cursor (as the 판정 승인 대기 queue).
  */
@@ -223,6 +242,7 @@ export async function listMarketJudgementIncidents(
   const rows = await db
     .select({
       id: approvalRequests.id,
+      kind: approvalRequests.kind,
       requestedBy: approvalRequests.requestedBy,
       requesterNickname: queueRequester.nickname,
       requestedAt: approvalRequests.requestedAt,
@@ -231,16 +251,19 @@ export async function listMarketJudgementIncidents(
       slug: markets.slug,
       title: markets.title,
       marketStatus: markets.status,
+      incidentOriginalResult: marketJudgementIncidents.originalResult,
     })
     .from(approvalRequests)
     // `target_id` is text: the market's id is cast, never the target (another kind's target need
     // not be a uuid).
     .innerJoin(markets, eq(sql`${markets.id}::text`, approvalRequests.targetId))
+    // UNIQUE `market_id` (144-14): a compensation's confirmed incident, never two rows.
+    .leftJoin(marketJudgementIncidents, eq(marketJudgementIncidents.marketId, markets.id))
     .leftJoin(queueRequester, eq(queueRequester.userId, approvalRequests.requestedBy))
     .where(
       and(
         eq(approvalRequests.status, 'pending'),
-        eq(approvalRequests.kind, MARKET_JUDGEMENT_INCIDENT_APPROVAL_KIND),
+        inArray(approvalRequests.kind, Object.keys(QUEUE_KINDS)),
         eq(approvalRequests.targetType, 'market'),
         keyset
           ? keysetPredicate(
@@ -260,18 +283,41 @@ export async function listMarketJudgementIncidents(
   const kept = hasMore ? rows.slice(0, limit) : rows;
   const last = kept.at(-1);
   return {
-    items: kept.map((row) => {
-      const { originalResult, correctedResult } = incidentPayloadOf(row);
-      return {
+    items: kept.map((row): AdminMarketJudgementIncidentQueueItem => {
+      const common = {
         requestId: row.id,
         marketId: row.marketId,
         slug: row.slug,
         title: row.title,
         status: row.marketStatus,
-        originalResult,
-        correctedResult,
         requestedBy: actor(row.requestedBy, row.requesterNickname),
         requestedAt: row.requestedAt.toISOString(),
+      };
+      if (row.kind === MARKET_JUDGEMENT_INCIDENT_APPROVAL_KIND) {
+        const { originalResult, correctedResult } = incidentPayloadOf(row);
+        return {
+          kind: 'incident',
+          ...common,
+          originalResult,
+          correctedResult,
+          accountCount: null,
+          totalCoin: null,
+        };
+      }
+      const payload = compensationPayloadOf(row);
+      if (row.incidentOriginalResult === null) {
+        // A compensation is asked of a confirmed incident alone, and the incident is permanent.
+        throw new AppError('INTERNAL', {
+          message: `Judgement compensation request ${row.id} has no confirmed incident`,
+        });
+      }
+      return {
+        kind: 'compensation',
+        ...common,
+        originalResult: row.incidentOriginalResult,
+        correctedResult: payload.correctedResult,
+        accountCount: payload.accountCount,
+        totalCoin: payload.totalCoin,
       };
     }),
     nextCursor: hasMore && last ? encodeKeyset({ createdAt: last.requestedAt, id: last.id }) : null,

@@ -35,7 +35,8 @@ export type AccountType = (typeof ACCOUNT_TYPES)[number];
  * on the emptied database (#116, as 0017 did for #125) — ADMIN_ADJUST, TRADE_BUY, TRADE_SELL and
  * FEE went —, so this order is 0060's; from here on it only appends again (ADR-0042). No FEE type
  * while fees are 0 (15항), no generic burn (16항), no test-only value (7항); 재지급 came with #74
- * (REGRANT, migration 0077, ADR-0155) and 판정 오류 보상 comes with #144. Names avoid the excluded
+ * (REGRANT, migration 0077, ADR-0155) and 판정 오류 보상 with #144 (JUDGEMENT_COMPENSATION,
+ * migration 0081, ADR-0166). Names avoid the excluded
  * storage tokens (`transfer`, `reward`, …).
  */
 export const LEDGER_ENTRY_TYPES = [
@@ -99,6 +100,18 @@ export const LEDGER_ENTRY_TYPES = [
    * trading profit (N02 §8): nothing that computes PnL reads the ledger. Appended (migration 0077).
    */
   'REGRANT',
+  /**
+   * 판정 오류 보상 (#144 part 2, ADR-0166; ADR-0107 결정 2 #73 1·3·8항, owner answers 144-1·144-2·
+   * 144-10): what a confirmed 판정 오류 사건's approved compensation pays one account — the
+   * account's own 'correct result's payout − paid payout' over its settlement records of the
+   * market, when positive — minted straight into its user ledger account (#73 8항 "보상할 때마다
+   * 받는 계정에 신규 발행한다") and naming the market it compensates. A type of its own, never
+   * SETTLEMENT_PAYOUT: the paid settlement stays as it was. Written only by
+   * `payJudgementCompensation` (ref `judgement_compensation` → judgement_compensations.id), once
+   * per approval and account. Not trading profit (144-10): nothing that computes PnL reads the
+   * ledger. Appended (migration 0081).
+   */
+  'JUDGEMENT_COMPENSATION',
 ] as const;
 export type LedgerEntryType = (typeof LEDGER_ENTRY_TYPES)[number];
 export const ledgerEntryTypeSchema = z.enum(LEDGER_ENTRY_TYPES);
@@ -139,6 +152,11 @@ export const LEDGER_REF_TYPES = [
   'reconciliation_correction',
   /** A REGRANT entry's regrants row (#74, ADR-0155): one entry per row, keyed by its id. */
   'regrant',
+  /**
+   * A JUDGEMENT_COMPENSATION entry's judgement_compensations row (#144, ADR-0166): one entry per
+   * row, keyed by its id — never the incident's or the approval request's id (admin-side).
+   */
+  'judgement_compensation',
 ] as const;
 export type LedgerRefType = (typeof LEDGER_REF_TYPES)[number];
 export const ledgerRefTypeSchema = z.enum(LEDGER_REF_TYPES);
@@ -1022,6 +1040,32 @@ export const ADMIN_ACTION_TYPES = [
    * (ADR-0120 decision 6).
    */
   'market_judgement_incident_retract',
+  /**
+   * 판정 오류 보상 (#144 part 2, ADR-0166; 144-1, 144-2, 144-4, 144-7, 144-12, 144-16): target
+   * `market` / its id, as each compensation record below. No market event. An admin asked for the
+   * compensation of the market's confirmed incident, which opens a `market_judgement_compensation`
+   * approval request whose payload freezes the server-computed list (accounts and amounts) and the
+   * member-facing reason, and pays nothing yet: payload `{approvalId, incidentId, reason,
+   * accountCount, totalCoin, closedCount, userReason}`
+   * (`MarketJudgementCompensationRequestActionPayload`, judgement-compensation.ts) — counts and
+   * totals, never the accounts (ADR-0064, ADR-0159 12-12).
+   */
+  'market_judgement_compensation_request',
+  /**
+   * An admin who is neither the requester nor the paid version's registrant approved it, and every
+   * listed account was paid (or recorded '탈퇴로 지급 못 함') in the same transaction at the
+   * decision's instant: payload `{approvalId, incidentId, reason, paidCount, paidCoin,
+   * closedCount}`.
+   */
+  'market_judgement_compensation_approve',
+  /** Another admin rejected it (정리 목적 반려), nothing paid: `{approvalId, incidentId, reason}`. */
+  'market_judgement_compensation_reject',
+  /**
+   * Its requester retracted it before anyone decided it, nothing paid: payload `{approvalId,
+   * incidentId}`, and `conflictDeclarationId` when a self-declared conflict retracted it (ADR-0120
+   * decision 6, ADR-0166).
+   */
+  'market_judgement_compensation_retract',
 ] as const;
 export type AdminActionType = (typeof ADMIN_ACTION_TYPES)[number];
 export const adminActionTypeSchema = z.enum(ADMIN_ACTION_TYPES);

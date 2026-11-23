@@ -101,6 +101,8 @@ describe('enums', () => {
       'PAYMENT_CANCEL_REVERSAL',
       // #74 (migration 0077, ADR-0155): 재지급, appended.
       'REGRANT',
+      // #144 (migration 0081, ADR-0166): 판정 오류 보상, appended.
+      'JUDGEMENT_COMPENSATION',
     ]);
     expect(enums.paymentStatusSchema.parse('refunding')).toBe('refunding');
     expect(enums.ledgerEntryTypeSchema.parse('PAYMENT_CANCEL_REVERSAL')).toBe(
@@ -276,10 +278,13 @@ describe('enums', () => {
     expect(enums.MARKET_EVENT_TYPES.filter((type) => type === 'resolved')).toHaveLength(1);
     // The registration, 반려 and 철회 write no market event; each of the four is an admin action,
     // appended after #114's.
-    // #144's 판정 오류 사건 has four of its own (market_judgement_incident_*, below).
+    // #144's 판정 오류 사건 and 판정 오류 보상 have four each of their own (market_judgement_incident_*,
+    // market_judgement_compensation_*, below).
     const judgement = enums.ADMIN_ACTION_TYPES.filter(
       (type) =>
-        type.startsWith('market_judgement_') && !type.startsWith('market_judgement_incident_'),
+        type.startsWith('market_judgement_') &&
+        !type.startsWith('market_judgement_incident_') &&
+        !type.startsWith('market_judgement_compensation_'),
     );
     expect(judgement).toEqual([
       'market_judgement_request',
@@ -338,7 +343,9 @@ describe('enums', () => {
     expect(
       enums.ADMIN_ACTION_TYPES.filter(
         (type) =>
-          type.startsWith('market_judgement_') && !type.startsWith('market_judgement_incident_'),
+          type.startsWith('market_judgement_') &&
+          !type.startsWith('market_judgement_incident_') &&
+          !type.startsWith('market_judgement_compensation_'),
       ),
     ).toHaveLength(4);
     // Coin reconciliation is separate; judgement corrections reuse the judgement actions.
@@ -412,8 +419,8 @@ describe('enums', () => {
       'market_cancel_reject',
       'market_cancel_retract',
     ]);
-    // #145's operator 정산 다시 시도 (ADR-0163) is appended after them, #144's four after it.
-    expect(enums.ADMIN_ACTION_TYPES.slice(-9, -5)).toEqual(cancel);
+    // #145's operator 정산 다시 시도 (ADR-0163) is appended after them, #144's eight after it.
+    expect(enums.ADMIN_ACTION_TYPES.slice(-13, -9)).toEqual(cancel);
     // admin_actions.type and market_events.type are varchar(40).
     for (const type of [...cancel, 'cancelled']) expect(type.length).toBeLessThanOrEqual(40);
     expect(new Set(enums.MARKET_EVENT_TYPES).size).toBe(enums.MARKET_EVENT_TYPES.length);
@@ -422,8 +429,9 @@ describe('enums', () => {
 
   it('appends the operator 정산 다시 시도 as one admin action type (#145, ADR-0163)', () => {
     // 145-7: one admin, a reason, at once — no approval kind, no market event type of its own.
-    // #144's four 판정 오류 사건 types (ADR-0165) are appended after it.
-    expect(enums.ADMIN_ACTION_TYPES.at(-5)).toBe('market_settlement_retry');
+    // #144's four 판정 오류 사건 types (ADR-0165) and four 판정 오류 보상 types (ADR-0166) are
+    // appended after it.
+    expect(enums.ADMIN_ACTION_TYPES.at(-9)).toBe('market_settlement_retry');
     expect(enums.ADMIN_ACTION_TYPES.filter((type) => type.includes('settlement'))).toEqual([
       'market_settlement_retry',
     ]);
@@ -445,7 +453,8 @@ describe('enums', () => {
       'market_judgement_incident_dismiss',
       'market_judgement_incident_retract',
     ]);
-    expect(enums.ADMIN_ACTION_TYPES.slice(-4)).toEqual(incident);
+    // The 판정 오류 보상's four (ADR-0166) follow them.
+    expect(enums.ADMIN_ACTION_TYPES.slice(-8, -4)).toEqual(incident);
     expect(enums.MARKET_EVENT_TYPES.filter((type) => type.includes('incident'))).toEqual([]);
     // admin_actions.type is varchar(40).
     for (const type of incident) {
@@ -539,8 +548,44 @@ describe('enums', () => {
     // grant's or the coupon's, referring to its regrants row.
     expect(enums.ledgerEntryTypeSchema.parse('REGRANT')).toBe('REGRANT');
     expect(enums.ledgerRefTypeSchema.parse('regrant')).toBe('regrant');
-    expect(enums.LEDGER_ENTRY_TYPES.at(-1)).toBe('REGRANT');
-    expect(enums.LEDGER_REF_TYPES.at(-1)).toBe('regrant');
+    // #144's 판정 오류 보상 (ADR-0166) is appended after it.
+    expect(enums.LEDGER_ENTRY_TYPES.at(-2)).toBe('REGRANT');
+    expect(enums.LEDGER_REF_TYPES.at(-2)).toBe('regrant');
+  });
+
+  it('gives the 판정 오류 보상 a ledger type and a reference of its own (#144, ADR-0166)', () => {
+    // ADR-0107 결정 2 #73 1·3·8항: a new issue under its own type, never the settlement's payout
+    // (which stays as it was paid) nor a grant's, referring to its judgement_compensations row.
+    expect(enums.ledgerEntryTypeSchema.parse('JUDGEMENT_COMPENSATION')).toBe(
+      'JUDGEMENT_COMPENSATION',
+    );
+    expect(enums.ledgerRefTypeSchema.parse('judgement_compensation')).toBe(
+      'judgement_compensation',
+    );
+    expect(enums.LEDGER_ENTRY_TYPES.at(-1)).toBe('JUDGEMENT_COMPENSATION');
+    expect(enums.LEDGER_REF_TYPES.at(-1)).toBe('judgement_compensation');
+  });
+
+  it('appends the 판정 오류 보상 as four admin action types and no market event (#144, ADR-0166)', () => {
+    // Request, 승인 (the payout in the same transaction), 반려, 철회 — the market's status never
+    // moves, so no market event type; the approval kind is market_judgement_compensation.
+    const compensation = enums.ADMIN_ACTION_TYPES.filter((type) =>
+      type.startsWith('market_judgement_compensation_'),
+    );
+    expect(compensation).toEqual([
+      'market_judgement_compensation_request',
+      'market_judgement_compensation_approve',
+      'market_judgement_compensation_reject',
+      'market_judgement_compensation_retract',
+    ]);
+    expect(enums.ADMIN_ACTION_TYPES.slice(-4)).toEqual(compensation);
+    expect(enums.MARKET_EVENT_TYPES.filter((type) => type.includes('compensation'))).toEqual([]);
+    // admin_actions.type is varchar(40).
+    for (const type of compensation) {
+      expect(type.length).toBeLessThanOrEqual(40);
+      expect(enums.adminActionTypeSchema.parse(type)).toBe(type);
+    }
+    expect(new Set(enums.ADMIN_ACTION_TYPES).size).toBe(enums.ADMIN_ACTION_TYPES.length);
   });
 
   it('gives the forfeiture of a closure a ledger type of its own (#140)', () => {

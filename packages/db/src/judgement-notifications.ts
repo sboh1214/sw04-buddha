@@ -49,8 +49,9 @@ type MarketRow = typeof markets.$inferSelect;
  * Never: 결과 확정 (`resolveProvisionalMarket`, 52-12), 지급 중, a deadline drawing near or a
  * payout held (52-13), a time passing (ADR-0106 결정 6), a judgement's or a correction's
  * registration, 반려 or 철회 and the accepted → pending reopen (188-6), a member's own dispute
- * submit or retract, the post-payout correction and compensation (#144, 52-20) —
- * judgement-notifications.test.ts pins the callers.
+ * submit or retract, the post-payout correction's 오류 확인 (#144, 144-18) —
+ * judgement-notifications.test.ts pins the callers. The post-payout compensation tells its payees
+ * at its payout (52-20, 144-18), from judgement-compensation.ts's own builder.
  *
  * A throw here, or an input the definitions refuse, rolls the event back (ADR-0157 결정 4의 7) —
  * at J5 the payout with it (188-2). So the builders never produce what the definitions refuse, a

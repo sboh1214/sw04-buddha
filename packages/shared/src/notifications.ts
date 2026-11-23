@@ -42,7 +42,7 @@ import { postAuthorSchema } from './post.js';
  * `market_judgement_corrected`, `market_dispute_decided`, `market_dispute_closed_by_correction`,
  * `market_settled`), #135 the 커뮤니티 six (ADR-0161 — `post_replied`, `comment_replied`,
  * `moderation_action_taken`, `moderation_action_cancelled`, `moderation_restriction_end_changed`,
- * `proposal_decided`), then #144 정정·보상.
+ * `proposal_decided`), and #144 the 판정 오류 보상 (ADR-0166 — `market_judgement_compensated`).
  */
 
 /**
@@ -661,6 +661,35 @@ export const MARKET_SETTLED_NOTIFICATION = defineNotification({
   merge: null,
 });
 
+// ---- 판정 오류 보상 알림 (#144, ADR-0166) ----------------------------------------------------
+
+/**
+ * `market_judgement_compensated` (52-20 "최종 지급 뒤 판정 오류의 정정·보상을 보상받는 회원에게
+ * 알리고 #144가 만든다"; 144-18): one per account a 판정 오류 보상's approval paid, written last in
+ * that transaction — never at the 오류 확인, never to a closed account (recorded '탈퇴로 지급 못
+ * 함'), a holder the correction owes nothing, an over-paid one or a watcher. A 시장 notification
+ * (144-18 "'시장' 분류"; 52-21: 수신 설정 turns it off) leading to the market's detail. The paid
+ * result, the corrected one and the recipient's own compensation (> 0) — no P&L, no count, nobody
+ * else's amount (52-15).
+ */
+export const marketJudgementCompensatedParamsSchema = z.object({
+  marketTitle: noticeTitleSchema,
+  originalResult: noticeResultSchema,
+  correctedResult: noticeResultSchema,
+  compensationCoin: positiveDecimalSchema,
+});
+export type MarketJudgementCompensatedParams = z.infer<
+  typeof marketJudgementCompensatedParamsSchema
+>;
+
+export const MARKET_JUDGEMENT_COMPENSATED_NOTIFICATION = defineNotification({
+  type: 'market_judgement_compensated',
+  category: 'market',
+  targets: ['market'],
+  params: marketJudgementCompensatedParamsSchema,
+  merge: null,
+});
+
 // ---- 커뮤니티 알림 (#135, ADR-0161) ----------------------------------------------------------
 //
 // The six 커뮤니티 types (52-21: category `community` — N05 §4 "커뮤니티: 내 글의 답글·운영 처리
@@ -840,9 +869,8 @@ export const PROPOSAL_DECIDED_NOTIFICATION = defineNotification({
  * but the post-payout correction and compensation, #144; 시작 Coin, a re-grant's result, a
  * review's rejection and a market's opening are not notifications). #134 ships the 거래 three
  * (ADR-0158), #54 the 시장 five (ADR-0159), #188 the 판정·정산 six (ADR-0160), #135 the 커뮤니티
- * six (ADR-0161, 52-19's 제안 included). #144 (정정·보상) appends its own here with its guard
- * entry (NOTIFICATION_TYPE_REGISTRY) and its web renderer, and edits the pin in
- * notifications.test.ts.
+ * six (ADR-0161, 52-19's 제안 included), #144 the 판정 오류 보상's one (ADR-0166, 144-18), each
+ * with its guard entry (NOTIFICATION_TYPE_REGISTRY) and its web renderer.
  */
 export const NOTIFICATION_DEFINITIONS = [
   ORDER_FILLED_NOTIFICATION,
@@ -865,6 +893,7 @@ export const NOTIFICATION_DEFINITIONS = [
   MODERATION_ACTION_CANCELLED_NOTIFICATION,
   MODERATION_RESTRICTION_END_CHANGED_NOTIFICATION,
   PROPOSAL_DECIDED_NOTIFICATION,
+  MARKET_JUDGEMENT_COMPENSATED_NOTIFICATION,
 ] as const satisfies readonly NotificationDefinition[];
 export type NotificationType = (typeof NOTIFICATION_DEFINITIONS)[number]['type'];
 

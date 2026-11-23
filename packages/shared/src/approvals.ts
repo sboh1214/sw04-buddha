@@ -30,7 +30,10 @@ import * as z from 'zod';
  * SCHEDULED market's cancel (#20, `market_cancel`, market-cancel.ts). A 판정 오류 사건 (#144,
  * `market_judgement_incident`, market-judgement-incident.ts) excludes its requester and the paid
  * judgement version's registrant (`registrant`, a consumer refusal), may be retracted by its
- * requester, and is refused as `no_decider` when no third admin could decide it.
+ * requester, and is refused as `no_decider` when no third admin could decide it. So is its
+ * compensation (#144, `market_judgement_compensation`, judgement-compensation.ts), whose approval
+ * pays in the same transaction — the paid version's registrant is excluded from its approval only
+ * (a 반려 is a 정리 목적 반려, ADR-0120 decision 5).
  */
 
 /** Lower-case words joined by `_` (`market_open`); approval_requests.kind is varchar(40). */

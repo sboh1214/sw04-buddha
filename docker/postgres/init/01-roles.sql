@@ -14,7 +14,7 @@
 --                   reconciliation_recoveries, market_conflict_declarations, market_liquidity_versions, treasury_issuances,
 --                   market_maker_allocations, market_maker_runs, market_maker_recalls, market_maker_controls, fill_classifications,
 --                   fill_realizations, regrants,
---                   market_judgement_incidents): INSERT/SELECT only;
+--                   market_judgement_incidents, judgement_compensations): INSERT/SELECT only;
 --                   reconciliation_corrections: no INSERT, UPDATE, DELETE (only its guarded function writes);
 --                   market_maker_supply_pending, market_maker_supply_states,
 --                   market_maker_supply_intervals: SELECT only, written by their observer triggers;
@@ -37,7 +37,7 @@
 --                   (0001, 0015, 0020, 0021, 0023, 0026, 0030, 0031, 0032, 0033, 0034, 0035,
 --                   0036, 0039, 0040, 0041, 0044, 0045, 0049, 0053, 0054, 0055, 0056, 0058,
 --                   0060, 0062, 0064, 0065, 0066, 0067, 0069, 0070, 0072, 0073, 0075, 0076, 0077,
---                   0078, 0079, 0080),
+--                   0078, 0079, 0080, 0081),
 --                   see bottom.
 
 CREATE ROLE buddha_migrate LOGIN PASSWORD 'buddha';
@@ -134,4 +134,9 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO buddha_app;
 -- permanent fact; a trigger refuses both to every role, another binds a row at INSERT to its
 -- SETTLED market's paid version and its approved request, and triggers on approval_requests refuse
 -- the paid version's registrant as an incident's decider and an approval without its row.
+-- 0081 (#144: judgement_compensations: UPDATE, DELETE): a 판정 오류 보상 paid (or recorded
+-- '탈퇴로 지급 못 함') is a permanent fact like its JUDGEMENT_COMPENSATION entry; a trigger refuses
+-- both to every role, others bind a row at INSERT to its approved request, its confirmed incident,
+-- the amount its settlement records owe and its own entry, and triggers on approval_requests
+-- refuse the paid version's registrant as an approver and an approval without its listed rows.
 -- Default privileges are applied at CREATE time, so a REVOKE afterwards sticks.

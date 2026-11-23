@@ -39,6 +39,7 @@ const WON: MySettlement = {
   settlementPnlCoin: '140',
   resolvedAt: '2026-11-15T01:00:00.000Z',
   settledAt: '2026-11-16T02:00:00.000Z',
+  correctedResult: null,
 };
 
 /** The paid-out row: the payout left it at 0, its 실현 손익 the cumulative 12 + 140. */

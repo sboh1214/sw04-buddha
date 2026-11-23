@@ -1,3 +1,4 @@
+import { findExcludedText } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { TimeZoneScope } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
@@ -375,6 +376,7 @@ describe('판정 정정 and the 결과 확정 뒤 report line (#144, ADR-0165)',
       links: ['https://example.com/fix', 'https://example.com/fix-2'],
       collectedAt: '2026-11-12T01:00:00.000Z',
     },
+    compensation: { status: 'preparing', accountCount: null, paidCount: null, totalCoin: null },
   };
   const corrected: JudgingRecordMarket = {
     ...EMPTY,
@@ -413,6 +415,53 @@ describe('판정 정정 and the 결과 확정 뒤 report line (#144, ADR-0165)',
     ).toBe(true);
     const ids = testIdsStartingWith(html, ID);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('says the 보상 as 144-15 words it: four states, the closed targets apart, no account (#144)', () => {
+    const drawnWith = (compensation: typeof CORRECTION.compensation) =>
+      byTestId(
+        draw({
+          ...corrected,
+          judgingRecord: {
+            ...corrected.judgingRecord,
+            correction: { ...CORRECTION, compensation },
+          },
+        }),
+        `${ID}-correction-compensation`,
+      )?.text;
+    expect(
+      drawnWith({ status: 'preparing', accountCount: null, paidCount: null, totalCoin: null }),
+    ).toBe('보상 준비 중');
+    expect(
+      drawnWith({ status: 'none', accountCount: null, paidCount: null, totalCoin: null }),
+    ).toBe('보상 대상 없음');
+    expect(
+      drawnWith({ status: 'pending', accountCount: 3, paidCount: null, totalCoin: null }),
+    ).toBe('승인 대기 · 대상 계정 3개');
+    expect(drawnWith({ status: 'paid', accountCount: 1, paidCount: 1, totalCoin: '100' })).toBe(
+      '지급 완료 · 대상 계정 1개 · 총 100 Coin',
+    );
+    expect(drawnWith({ status: 'paid', accountCount: 3, paidCount: 2, totalCoin: '1250' })).toBe(
+      '지급 완료 · 대상 계정 3개 중 2개 지급 · 총 1,250 Coin',
+    );
+    // Every target closed: the 대상 count stays beside the 0 Coin.
+    expect(drawnWith({ status: 'paid', accountCount: 2, paidCount: 0, totalCoin: '0' })).toBe(
+      '지급 완료 · 대상 계정 2개 중 0개 지급 · 총 0 Coin',
+    );
+    // In the section, after its times; never a word of P&L, refund or 정답.
+    const html = draw(corrected);
+    expect(byTestId(html, `${ID}-correction`)?.text).toContain('보상 준비 중');
+    for (const text of [
+      copy.judgingCompensation,
+      copy.judgingCompensationPreparing,
+      copy.judgingCompensationNone,
+      copy.judgingCompensationPending,
+      copy.judgingCompensationPaid,
+      copy.judgingCompensationPaidPartly,
+    ]) {
+      expect(findExcludedText(text), text).toEqual([]);
+      expect(text, text).not.toMatch(/환불|원금|손익|정답|맞힌|정산 오류|리워드|적립/);
+    }
   });
 
   it('draws no section without a correction, nor while the snapshot is stale', () => {

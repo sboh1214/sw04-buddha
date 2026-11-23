@@ -340,6 +340,7 @@ describe('a settled market’s 판정 정정 (#144, 144-5)', () => {
         confirmedAt: '2026-11-17T01:00:00.000Z',
         description: '1차 출처가 발표를 정정했습니다.',
         evidence: { links: ['https://example.com/fix'], collectedAt: '2026-11-17T00:00:00.000Z' },
+        compensation: { status: 'preparing', accountCount: null, paidCount: null, totalCoin: null },
       },
     },
   });

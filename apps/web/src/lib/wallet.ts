@@ -21,9 +21,9 @@ import { ME_KEY } from './query-client';
 /**
  * What 이용 내역 calls each kind of row (#69, ADR-0144; ADR-0135 H1). PLAN Appendix A: never
  * "베팅"; every kind gets plain Korean. A Record over the kinds an answer can carry
- * (LEDGER_ENTRY_KINDS, the stored type and the reader's side of it): a kind added there — 보상
- * (#144) next — without a label fails the typecheck, and the operating treasury's and the
- * 마켓메이커's own types never reach a member's screen.
+ * (LEDGER_ENTRY_KINDS, the stored type and the reader's side of it): a kind added there without a
+ * label fails the typecheck, and the operating treasury's and the 마켓메이커's own types never reach
+ * a member's screen.
  *
  * 매수 체결 is the Coin a fill took — a pair mint's collateral and a trade's payment alike, which
  * neither the answer nor this label tells apart (ADR-0135 결과 4); 매도 체결 the Coin a sale
@@ -31,7 +31,9 @@ import { ME_KEY } from './query-client';
  * 4 #70), never the coupon's '보너스', so the wallet tells the two sources apart (N04 §5); the
  * re-grant a member applied for in the wallet (#74, ADR-0155) is '재지급', a word of its own too. 정산
  * 지급 is every payout, a void market's too — never called a refund. 'Coin 보정' is one name for
- * every correction; what a row did (원장 보충 or the amount) is its effect line.
+ * every correction; what a row did (원장 보충 or the amount) is its effect line. '판정 오류 보상' (#144,
+ * ADR-0166; 144-10 "별도 출처와 유형 필터") is the Coin a judgement corrected after its payout paid
+ * — no P&L, a source of its own, the seventh filter.
  */
 export const LEDGER_KIND_LABEL: Readonly<Record<LedgerEntryKind, string>> = {
   BUY_FILL: copy.ledgerKindBuyFill,
@@ -40,6 +42,7 @@ export const LEDGER_KIND_LABEL: Readonly<Record<LedgerEntryKind, string>> = {
   START_GRANT: copy.ledgerTypeStartGrant,
   RECONCILIATION_CORRECTION: copy.ledgerTypeReconciliationCorrection,
   REGRANT: copy.ledgerTypeRegrant,
+  JUDGEMENT_COMPENSATION: copy.ledgerTypeJudgementCompensation,
   // 탈퇴 소멸 (#140): written as the account closes, so no member's wallet ever lists it — the
   // label is for completeness of the Record (an operator reads the ledger elsewhere).
   CLOSURE_FORFEIT: copy.ledgerTypeClosureForfeit,

@@ -141,6 +141,41 @@ describe('LedgerRow', () => {
       `${copy.ledgerCorrectionReason}: 장부를 보충했습니다.`,
     );
   });
+
+  it('draws a 판정 오류 보상 with its members’ reason, its market and its 판정 기록 (#144, 144-12)', () => {
+    const compensation: Partial<LedgerEntry> = {
+      kind: 'JUDGEMENT_COMPENSATION',
+      amountCoin: '100',
+      refType: 'judgement_compensation',
+      refId: '0b5b2f7e-0a4c-4c1e-9d55-6f3c2f9a1e11',
+      memo: '1차 출처의 정정 발표에 따라 결과를 바로잡았습니다.',
+      orderId: null,
+    };
+    const html = row(compensation, 'full', ONLY);
+    expect(byTestId(html, 'ledger-type')?.text).toBe('판정 오류 보상');
+    expect(byTestId(html, 'ledger-amount')?.text).toBe('+100 Coin');
+    expect(byTestId(html, 'ledger-reason')?.text).toBe(
+      `사유: 1차 출처의 정정 발표에 따라 결과를 바로잡았습니다.`,
+    );
+    expect(byTestId(html, 'ledger-market')?.text).toBe(FILL.marketTitle);
+    expect(html).toContain(`href="/markets/${FILL.marketSlug ?? ''}"`);
+    expect(byTestId(html, 'ledger-judging-link')?.attributes.href).toBe(
+      `/markets/${FILL.marketSlug ?? ''}#judging-record`,
+    );
+    expect(byTestId(html, 'ledger-judging-link')?.text).toBe(copy.historyJudgingRecord);
+    expect(byTestId(html, 'ledger-only-market')?.attributes.href).toBe(ONLY);
+    // Neither a fill's order nor a payout's settlement records: a compensation is neither (144-10).
+    expect(byTestId(html, 'ledger-order-link')).toBeUndefined();
+    expect(byTestId(html, 'ledger-settlement-link')).toBeUndefined();
+    // A market no longer public: its title as text, and no 판정 기록 link.
+    expect(
+      byTestId(row({ ...compensation, marketSlug: null }), 'ledger-judging-link'),
+    ).toBeUndefined();
+    // The preview: the name, the Coin and the market's name, no reason and no link.
+    const preview = row(compensation, 'preview');
+    expect(byTestId(preview, 'ledger-reason')).toBeUndefined();
+    expect(preview).not.toContain('href=');
+  });
 });
 
 /**

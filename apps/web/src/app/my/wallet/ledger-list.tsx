@@ -25,6 +25,7 @@ import { useMe } from '@/hooks/use-me';
 import { useLedger } from '@/hooks/use-wallet';
 import { useWalletLockWatch } from '@/hooks/use-wallet-lock-watch';
 import { type LedgerEntry } from '@/lib/api';
+import { judgingRecordPath } from '@/lib/market-detail';
 import { myOrderPath } from '@/lib/my';
 import { myHistoryPath } from '@/lib/my-history';
 import { listSection } from '@/lib/query-client';
@@ -186,7 +187,7 @@ export function LedgerList({
   );
 }
 
-/** A link of a row's meta line: the order's detail or the market's settlement records. */
+/** A link of a row's meta line: the order's detail, the market's settlement records or 판정 기록. */
 function RowLink({ href, testId, children }: { href: string; testId: string; children: string }) {
   return (
     <ChakraLink asChild fontSize="sm" colorPalette="brand" color="colorPalette.fg">
@@ -203,8 +204,10 @@ function RowLink({ href, testId, children }: { href: string; testId: string; chi
  * too; for a fill its own order's detail, for a payout the market's settlement records, and
  * '이 시장만 보기' (`onlyMarketHref`, left out once the list is narrowed to that market). A Coin
  * correction says what it did (`correctionEffect`, the server's) and the member-facing reason it
- * was given. Nothing else of a fill or a payout — price, quantity, contract, result, counterparty
- * — is in the answer or here (H2: those are 주문 상세's and 이력's).
+ * was given; a 판정 오류 보상 (#144, ADR-0166; 144-12) the reason its request wrote for the
+ * members ('사유: …') and, beside the market, its public 판정 기록 (`#judging-record`), where the
+ * correction is. Nothing else of a fill or a payout — price, quantity, contract, result,
+ * counterparty — is in the answer or here (H2: those are 주문 상세's and 이력's).
  *
  * '반영 후 코인 합계' is the ledger's own total for the account right after the row (가용 + 주문
  * 잠금, H4), drawn as stored. Side by side on a wide screen; stacked below `md`, where the right
@@ -230,6 +233,9 @@ export function LedgerRow({
   const credit = amount >= 0n;
   const full = variant === 'full';
   const corrected = entry.kind === 'RECONCILIATION_CORRECTION';
+  // 144-12: the members' reason the compensation's request wrote, prefixed as a correction's is.
+  const compensated = entry.kind === 'JUDGEMENT_COMPENSATION';
+  const reasoned = corrected || compensated;
   const market = entry.marketTitle;
 
   // The meta line: the time, then the row's links, each keyed by what it is.
@@ -262,6 +268,16 @@ export function LedgerRow({
           testId="ledger-settlement-link"
         >
           {copy.ledgerSettlementHistory}
+        </RowLink>
+      ),
+    });
+  }
+  if (full && compensated && entry.marketSlug !== null) {
+    meta.push({
+      key: 'judging',
+      node: (
+        <RowLink href={judgingRecordPath(entry.marketSlug)} testId="ledger-judging-link">
+          {copy.historyJudgingRecord}
         </RowLink>
       ),
     });
@@ -313,9 +329,9 @@ export function LedgerRow({
             color="fg.muted"
             whiteSpace="pre-wrap"
             wordBreak="break-word"
-            data-testid={corrected ? 'ledger-reason' : undefined}
+            data-testid={reasoned ? 'ledger-reason' : undefined}
           >
-            {corrected ? `${copy.ledgerCorrectionReason}: ${entry.memo}` : entry.memo}
+            {reasoned ? `${copy.ledgerCorrectionReason}: ${entry.memo}` : entry.memo}
           </Text>
         )}
       </Stack>

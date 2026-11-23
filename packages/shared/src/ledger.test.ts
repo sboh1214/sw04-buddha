@@ -17,6 +17,7 @@ import {
   MEMBER_LEDGER_ENTRY_TYPES,
   memberLedgerEntryTypeSchema,
   PRESERVED_LEDGER_TYPES,
+  USER_DEBIT_TYPES,
   USER_INFLOW_EXCEPTIONS,
   USER_INFLOW_TYPES,
   type LedgerEntryKind,
@@ -96,12 +97,17 @@ describe('ledger entry rules (#116, ADR-0107 결정 2 #73)', () => {
     const listed: readonly string[] = [...USER_INFLOW_TYPES, ...USER_INFLOW_EXCEPTIONS];
     expect(credits.filter((type) => !listed.includes(type))).toEqual([]);
     expect([...credits].sort()).toEqual([...listed].sort());
-    // 재지급 joined by ADR-0155 (#74): a grant, as the start Coin is.
+    // 재지급 joined by ADR-0155 (#74), 판정 오류 보상 by ADR-0166 (#144): grants, as the start Coin
+    // is — "시작 지급·재지급·판정 오류 보상 셋뿐인 닫힌 목록".
     expect(USER_INFLOW_TYPES).toEqual([
       'START_GRANT',
       'REGRANT',
+      'JUDGEMENT_COMPENSATION',
       'TRADE_FILL',
       'SETTLEMENT_PAYOUT',
+    ]);
+    expect(USER_INFLOW_TYPES.filter((type) => LEDGER_ENTRY_RULES[type].flow === 'mint')).toEqual([
+      ...LEDGER_GRANT_TYPES,
     ]);
     expect(USER_INFLOW_EXCEPTIONS).toEqual([
       'DEPOSIT',
@@ -117,6 +123,30 @@ describe('ledger entry rules (#116, ADR-0107 결정 2 #73)', () => {
     ).toEqual([]);
   });
 
+  it('takes Coin out of a user’s account only by these types: no claw-back (#144 AC 3, N03 §7)', () => {
+    // 자동 회수·차감 경로 없음: a new type whose rule debits a user's account fails here until an
+    // ADR lists it — and none of these is written because of a judgement or a settlement.
+    const debits = [
+      ...new Set(allowed().flatMap(([type, from]) => (from === 'user' ? [type] : []))),
+    ];
+    expect(debits).toEqual([...USER_DEBIT_TYPES]);
+    expect(USER_DEBIT_TYPES).toEqual([
+      'PAIR_MINT_COLLATERAL',
+      'TRADE_FILL',
+      'CLOSURE_FORFEIT',
+      'PAYMENT_CANCEL',
+    ]);
+    // Neither a payout nor its compensation is ever taken back.
+    for (const type of [
+      'SETTLEMENT_PAYOUT',
+      'JUDGEMENT_COMPENSATION',
+      'RECONCILIATION_CORRECTION',
+    ]) {
+      expect(USER_DEBIT_TYPES as readonly string[]).not.toContain(type);
+    }
+    expect(LEDGER_ENTRY_RULES.JUDGEMENT_COMPENSATION.pairs).toEqual([[null, 'user']]);
+  });
+
   it('names the mints and the burns #93 totals, and the grant sources', () => {
     expect(LEDGER_MINT_TYPES).toEqual([
       'START_GRANT',
@@ -125,6 +155,8 @@ describe('ledger entry rules (#116, ADR-0107 결정 2 #73)', () => {
       'BONUS',
       'PAYMENT_CANCEL_REVERSAL',
       'REGRANT',
+      // #144 (ADR-0166): counted by #93's 발행 total like any mint (ADR-0119).
+      'JUDGEMENT_COMPENSATION',
     ]);
     // 실제 소각은 탈퇴 소멸 하나 (#73 16항), plus the kept payment cancel (2항).
     expect(LEDGER_BURN_TYPES).toEqual(['CLOSURE_FORFEIT', 'PAYMENT_CANCEL']);
@@ -134,7 +166,7 @@ describe('ledger entry rules (#116, ADR-0107 결정 2 #73)', () => {
       'PAYMENT_CANCEL',
       'PAYMENT_CANCEL_REVERSAL',
     ]);
-    expect(LEDGER_GRANT_TYPES).toEqual(['START_GRANT', 'REGRANT']);
+    expect(LEDGER_GRANT_TYPES).toEqual(['START_GRANT', 'REGRANT', 'JUDGEMENT_COMPENSATION']);
   });
 
   it('shows a member exactly the types a user account takes part in', () => {
@@ -149,14 +181,20 @@ describe('ledger entry rules (#116, ADR-0107 결정 2 #73)', () => {
   it('maps every word of the plan (N01 §2·§9) to its types', () => {
     const byWord = (word: string) =>
       LEDGER_ENTRY_TYPES.filter((type) => LEDGER_ENTRY_RULES[type].plan === word);
-    expect(byWord('발행')).toEqual(['START_GRANT', 'TREASURY_MINT', 'REGRANT']);
+    // 판정 오류 보상 (#144) is 발행 (#73 8항 "신규 발행"): 보상 is its source's name, not a plan word.
+    expect(byWord('발행')).toEqual([
+      'START_GRANT',
+      'TREASURY_MINT',
+      'REGRANT',
+      'JUDGEMENT_COMPENSATION',
+    ]);
     expect(byWord('운영금 이전')).toEqual(['BOT_ALLOCATION', 'BOT_RECALL']);
     expect(byWord('담보')).toEqual(['PAIR_MINT_COLLATERAL', 'PAIR_BURN_RETURN']);
     expect(byWord('거래')).toEqual(['TRADE_FILL']);
     expect(byWord('정산')).toEqual(['SETTLEMENT_PAYOUT']);
     expect(byWord('소각')).toEqual(['CLOSURE_FORFEIT']);
     expect(byWord('대사 정정')).toEqual(['RECONCILIATION_CORRECTION']);
-    // 수수료: none while fees are 0 (15항); 보상: #144 adds it.
+    // 수수료: none while fees are 0 (15항).
     expect(LEDGER_ENTRY_TYPES.filter((type) => /FEE|REWARD|TRANSFER/.test(type))).toEqual([]);
   });
 });
@@ -166,6 +204,16 @@ describe('ledgerEntryShapeError', () => {
   const other = '3f1a5b6c-1111-4222-8333-444455556667';
 
   it('accepts each type’s own shape', () => {
+    // 판정 오류 보상 (#144): a mint into a user's account that names its market (migration 0081).
+    expect(
+      ledgerEntryShapeError({
+        type: 'JUDGEMENT_COMPENSATION',
+        amountCoin: 100n,
+        fromKind: null,
+        toKind: 'user',
+        marketId: market,
+      }),
+    ).toBeNull();
     expect(
       ledgerEntryShapeError({
         type: 'REGRANT',
@@ -244,6 +292,37 @@ describe('ledgerEntryShapeError', () => {
       { type: 'REGRANT', amountCoin: 1n, fromKind: null, toKind: 'treasury', marketId: null },
     ],
     [
+      'a 판정 오류 보상 without its market (#144)',
+      {
+        type: 'JUDGEMENT_COMPENSATION',
+        amountCoin: 1n,
+        fromKind: null,
+        toKind: 'user',
+        marketId: null,
+      },
+    ],
+    [
+      'a 판정 오류 보상 from anyone (a mint only, #144)',
+      {
+        type: 'JUDGEMENT_COMPENSATION',
+        amountCoin: 1n,
+        fromKind: 'treasury',
+        toKind: 'user',
+        marketId,
+      },
+    ],
+    [
+      'a 판정 오류 보상 into a market’s account (#144)',
+      {
+        type: 'JUDGEMENT_COMPENSATION',
+        amountCoin: 1n,
+        fromKind: null,
+        toKind: 'market_maker_funds',
+        marketId,
+        toMarketId: marketId,
+      },
+    ],
+    [
       'a market on an event of none',
       { type: 'START_GRANT', amountCoin: 1n, fromKind: null, toKind: 'user', marketId },
     ],
@@ -298,7 +377,7 @@ describe('the wallet kinds (#69, ADR-0144)', () => {
   );
 
   it('maps each (type, side) a user account takes to exactly one kind, and every kind is one', () => {
-    expect(userSides).toHaveLength(12);
+    expect(userSides).toHaveLength(13);
     const sources = LEDGER_ENTRY_KINDS.flatMap((kind) =>
       LEDGER_KIND_SOURCES[kind].map((source) => `${source.type}/${source.side}`),
     );
@@ -318,6 +397,9 @@ describe('the wallet kinds (#69, ADR-0144)', () => {
     // 재지급 (#74, ADR-0155) is its own kind, on the side it credits, after the first five.
     expect(ledgerEntryKind('REGRANT', 'to')).toBe('REGRANT');
     expect(LEDGER_ENTRY_KINDS.indexOf('REGRANT')).toBe(5);
+    // 판정 오류 보상 (#144, ADR-0166; 144-10 "별도 출처") is its own kind, the seventh.
+    expect(ledgerEntryKind('JUDGEMENT_COMPENSATION', 'to')).toBe('JUDGEMENT_COMPENSATION');
+    expect(LEDGER_ENTRY_KINDS.indexOf('JUDGEMENT_COMPENSATION')).toBe(6);
     expect(ledgerEntryKindSchema.options).toEqual([...LEDGER_ENTRY_KINDS]);
   });
 
@@ -332,6 +414,7 @@ describe('the wallet kinds (#69, ADR-0144)', () => {
       ['BOT_ALLOCATION', 'from'],
       ['PAIR_BURN_RETURN', 'to'],
       ['REGRANT', 'from'],
+      ['JUDGEMENT_COMPENSATION', 'from'],
     ] as const) {
       expect(() => ledgerEntryKind(type, side), `${type}/${side}`).toThrow();
     }
@@ -352,6 +435,8 @@ describe('the wallet kinds (#69, ADR-0144)', () => {
       'START_GRANT',
       'RECONCILIATION_CORRECTION',
       'REGRANT',
+      // 144-10 "유형 필터": the seventh.
+      'JUDGEMENT_COMPENSATION',
     ]);
     // The excluded are the kept paid-Coin and coupon types and 탈퇴 소멸.
     expect([...LEDGER_FILTER_EXCLUDED].sort()).toEqual(

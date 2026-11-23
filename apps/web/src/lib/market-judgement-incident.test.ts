@@ -338,8 +338,9 @@ describe('the incident’s words (#144, 144-19; excluded.ts)', () => {
     for (const [key, text] of texts) {
       expect(findExcludedText(text), key).toEqual([]);
       // 정산 means the Coin payout alone (terms.ts): an error is a 판정 오류, never a 정산 오류;
-      // no refund, principal or transfer word, no 보상 before PR 2, and no 정답 or per-contract
-      // amount (ADR-0165 결정 12: the copy outside 144-19's table is held here).
+      // no refund, principal or transfer word, no 보상 under these keys (the 보상's own words are
+      // adminMarketJudgementCompensation*, judgingCompensation*, recap*, copy.test — ADR-0166),
+      // and no 정답 or per-contract amount (ADR-0165 결정 12: the copy outside 144-19's table).
       expect(text, key).not.toMatch(
         /정산 오류|환불|원금|송금|이체|리워드|적립|보상|정답|맞힌|\d+ Coin씩/,
       );

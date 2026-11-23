@@ -33,6 +33,7 @@ const WON: MySettlement = {
   settlementPnlCoin: '140',
   resolvedAt: '2026-11-15T01:00:00.000Z',
   settledAt: '2026-11-16T02:00:00.000Z',
+  correctedResult: null,
 };
 
 const record = (over: Partial<MySettlement> = {}, realized: string | null = '152'): RecapEntry => {

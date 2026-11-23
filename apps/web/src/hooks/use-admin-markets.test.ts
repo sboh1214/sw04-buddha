@@ -27,6 +27,7 @@ import { ADMIN_RECONCILIATION_KEY } from './use-reconciliation';
 import { adminMarketMakerKey } from './use-admin-market-maker';
 import { treasuryBalanceKey } from './use-treasury';
 import {
+  ADMIN_JUDGEMENT_COMPENSATION_RECIPIENTS_KEY,
   ADMIN_MARKETS_KEY,
   ADMIN_MARKET_DISPUTES_KEY,
   ADMIN_MARKET_JUDGEMENTS_KEY,
@@ -36,6 +37,8 @@ import {
   ADMIN_MARKET_REVIEWS_KEY,
   ADMIN_MARKET_SUPPLEMENTS_KEY,
   ADMIN_RELATED_MARKETS_KEY,
+  adminJudgementCompensationRecipientsKey,
+  adminJudgementCompensationRecipientsQueryOptions,
   adminMarketDisputesKey,
   adminMarketCancelRequestsQueryOptions,
   adminMarketDisputesQueryOptions,
@@ -128,6 +131,7 @@ const draft: AdminMarket = {
     pending: null,
     confirmed: null,
     log: [],
+    compensation: null,
   },
   missingOpenItems: [],
   leadCloseGapMinutes: null,
@@ -952,6 +956,52 @@ describe('the 판정 승인 대기 queue (#152, ADR-0103)', () => {
         pages: [],
         pageParams: [],
       });
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+});
+
+describe('the 판정 오류 보상’s 대상 계정 (#144 part 2, ADR-0166)', () => {
+  it('asks `GET …/judgement-compensations/recipients` a page per cursor, under its own admin root', async () => {
+    const get = vi.spyOn(api, 'GET').mockResolvedValue({
+      data: { data: [], meta: { nextCursor: 'c2' } },
+      response: new Response(null, { status: 200 }),
+    } as never);
+    try {
+      const options = adminJudgementCompensationRecipientsQueryOptions(ID);
+      expect(options.queryKey).toEqual(['admin', 'judgement-compensation-recipients', ID]);
+      expect(options.queryKey).toEqual(adminJudgementCompensationRecipientsKey(ID));
+      expect(await options.queryFn({ pageParam: undefined })).toEqual({
+        items: [],
+        nextCursor: 'c2',
+      });
+      expect(get).toHaveBeenLastCalledWith(
+        '/api/v1/admin/markets/{id}/judgement-compensations/recipients',
+        { params: { path: { id: ID }, query: {} } },
+      );
+      await options.queryFn({ pageParam: 'c2' });
+      expect(get).toHaveBeenLastCalledWith(
+        '/api/v1/admin/markets/{id}/judgement-compensations/recipients',
+        { params: { path: { id: ID }, query: { cursor: 'c2' } } },
+      );
+      expect(options.getNextPageParam({ items: [], nextCursor: null })).toBeUndefined();
+      // Never under the detail's key, which `applyMarket` seeds with an AdminMarket.
+      expect(partialMatchKey(options.queryKey, adminMarketKey(ID))).toBe(false);
+    } finally {
+      get.mockRestore();
+    }
+  });
+
+  it('is asked again by every admin write to a market: a request freezes it, an approval pays it', async () => {
+    const { queryClient, unsubscribe } = await loadedDetail();
+    try {
+      const key = adminJudgementCompensationRecipientsKey(ID);
+      queryClient.setQueryData(key, { pages: [], pageParams: [] });
+      await applyMarket(queryClient, ID, { ...draft, status: 'settled' });
+      expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+      expect(partialMatchKey(key, ADMIN_JUDGEMENT_COMPENSATION_RECIPIENTS_KEY)).toBe(true);
     } finally {
       unsubscribe();
       queryClient.clear();

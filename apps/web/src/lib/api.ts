@@ -166,6 +166,22 @@ export type AdminMarketJudgementIncidentQueueItem =
 export type PublicMarketJudgementCorrection =
   components['schemas']['PublicMarketJudgementCorrection'];
 /**
+ * 판정 오류 보상 (#144 part 2, ADR-0166): the admin detail's state
+ * (`AdminMarket.judgementIncident.compensation` — the preview, the waiting request, the payout and
+ * the log) and a row of its recipients list (`GET /admin/markets/:id/judgement-compensations/
+ * recipients`, admins only); the public figures are `PublicMarketJudgementCorrection.compensation`.
+ */
+export type AdminMarketJudgementCompensation =
+  components['schemas']['AdminMarketJudgementCompensation'];
+export type MarketJudgementCompensationPending =
+  components['schemas']['MarketJudgementCompensationPending'];
+export type MarketJudgementCompensationPaid =
+  components['schemas']['MarketJudgementCompensationPaid'];
+export type MarketJudgementCompensationLogEntry =
+  components['schemas']['MarketJudgementCompensationLogEntry'];
+export type AdminJudgementCompensationRecipient =
+  components['schemas']['AdminJudgementCompensationRecipient'];
+/**
  * 운영 대기열 (#145, ADR-0163): a row of 마감 예정 (`GET /admin/operations/closing`), of 판정 대기·지연
  * (`…/judgements`, with its current-episode delay record) and of 정산 실패 (`…/failures`: a failed
  * payout, a 처리 멈춤 or a failed bot recall, told apart by `kind`), and the 정산 다시 시도 body and

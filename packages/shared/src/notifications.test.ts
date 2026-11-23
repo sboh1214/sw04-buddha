@@ -13,6 +13,7 @@ import {
   MARKET_CLOSED_NOTIFICATION,
   MARKET_DISPUTE_CLOSED_BY_CORRECTION_NOTIFICATION,
   MARKET_DISPUTE_DECIDED_NOTIFICATION,
+  MARKET_JUDGEMENT_COMPENSATED_NOTIFICATION,
   MARKET_JUDGEMENT_CORRECTED_NOTIFICATION,
   MARKET_JUDGEMENT_DELAYED_NOTIFICATION,
   MARKET_PAUSED_NOTIFICATION,
@@ -480,9 +481,9 @@ describe('notification DTOs', () => {
   });
 });
 
-describe('NOTIFICATION_DEFINITIONS (#53, 52-20; #134; #54; #188; #135)', () => {
-  it('holds the 거래 three of #134, the 시장 five of #54, the 판정·정산 six of #188, then the 커뮤니티 six of #135', () => {
-    // Pinned. Each producer edits this pin as it appends its own: #144 (정정·보상) next. 시작
+describe('NOTIFICATION_DEFINITIONS (#53, 52-20; #134; #54; #188; #135; #144)', () => {
+  it('holds the 거래 three of #134, the 시장 five of #54, the 판정·정산 six of #188, the 커뮤니티 six of #135, then #144’s 판정 오류 보상', () => {
+    // Pinned. Each producer edits this pin as it appends its own: #144 (ADR-0166) the last. 시작
     // Coin, a re-grant's result, a review's rejection and a market's opening are no notification
     // (52-20); nor is a like or a report's intake (D5, 52-20).
     const market = (type: string) => ({
@@ -539,6 +540,8 @@ describe('NOTIFICATION_DEFINITIONS (#53, 52-20; #134; #54; #188; #135)', () => {
       community('moderation_action_cancelled', 'moderation_action'),
       community('moderation_restriction_end_changed', 'moderation_action'),
       community('proposal_decided', 'proposal'),
+      // #144 (ADR-0166; 144-18: at the payout, a 시장 notification, the market's detail).
+      market('market_judgement_compensated'),
     ]);
     expect(NOTIFICATION_DEFINITIONS).toEqual([
       ORDER_FILLED_NOTIFICATION,
@@ -561,8 +564,9 @@ describe('NOTIFICATION_DEFINITIONS (#53, 52-20; #134; #54; #188; #135)', () => {
       MODERATION_ACTION_CANCELLED_NOTIFICATION,
       MODERATION_RESTRICTION_END_CHANGED_NOTIFICATION,
       PROPOSAL_DECIDED_NOTIFICATION,
+      MARKET_JUDGEMENT_COMPENSATED_NOTIFICATION,
     ]);
-    expect(NOTIFICATION_DEFINITIONS).toHaveLength(20);
+    expect(NOTIFICATION_DEFINITIONS).toHaveLength(21);
     for (const definition of NOTIFICATION_DEFINITIONS) {
       expect(NOTIFICATION_TYPE_PATTERN.test(definition.type), definition.type).toBe(true);
     }
@@ -1084,6 +1088,66 @@ describe('판정·정산 알림 (#188, ADR-0160; 52-1·52-11~52-15, 188-1~188-6)
         otherPayoutCoin: '0',
       }),
     ).toEqual({ marketTitle: title, result: 'NO', payoutCoin: '200' });
+  });
+
+  it('market_judgement_compensated: the paid and corrected results and the recipient’s own compensation, above 0 (#144, 144-18)', () => {
+    const { params } = MARKET_JUDGEMENT_COMPENSATED_NOTIFICATION;
+    for (const originalResult of MARKET_RESULTS) {
+      for (const correctedResult of MARKET_RESULTS) {
+        for (const compensationCoin of ['50', '100', '9007199254740993']) {
+          const compensated = {
+            marketTitle: title,
+            originalResult,
+            correctedResult,
+            compensationCoin,
+          };
+          expect(params.parse(compensated)).toEqual(compensated);
+        }
+      }
+    }
+    // Only a paid account is told: a compensation is never 0 (the record's CHECK > 0).
+    for (const compensationCoin of ['0', '-1', '01', '1.5', '', 100, null, undefined]) {
+      expect(
+        params.safeParse({
+          marketTitle: title,
+          originalResult: 'YES',
+          correctedResult: 'NO',
+          compensationCoin,
+        }).success,
+        String(compensationCoin),
+      ).toBe(false);
+    }
+    // No account, P&L, count, reason or anybody else's amount is kept (52-15, 144-12: the
+    // members' reason is the wallet's, not the notice's).
+    expect(
+      params.parse({
+        marketTitle: title,
+        originalResult: 'YES',
+        correctedResult: 'VOID',
+        compensationCoin: '50',
+        userReason: '판정 오류 보상',
+        accountCount: 3,
+        settlementPnlCoin: '0',
+      }),
+    ).toEqual({
+      marketTitle: title,
+      originalResult: 'YES',
+      correctedResult: 'VOID',
+      compensationCoin: '50',
+    });
+    expect(keys(MARKET_JUDGEMENT_COMPENSATED_NOTIFICATION)).toEqual([
+      'compensationCoin',
+      'correctedResult',
+      'marketTitle',
+      'originalResult',
+    ]);
+    for (const key of keys(MARKET_JUDGEMENT_COMPENSATED_NOTIFICATION)) {
+      expect(NOTIFICATION_IDENTITY_PARAM.test(key), key).toBe(false);
+      expect(
+        /qty|quantity|count|pnl|profit|loss|holder|watcher|operator|admin|reason/i.test(key),
+        key,
+      ).toBe(false);
+    }
   });
 
   it('keeps the delay and decision reasons within the param cap: both are approval reasons', () => {

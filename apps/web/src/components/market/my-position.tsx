@@ -16,7 +16,7 @@ import {
   usePositions,
 } from '@/hooks/use-portfolio';
 import { useSellableReadings } from '@/hooks/use-sellable-readings';
-import { type MySettlement } from '@/lib/api';
+import { type MySettlement, type PublicMarketJudgementCorrection } from '@/lib/api';
 import {
   positionEmptyCopy,
   recapViewOf,
@@ -26,6 +26,7 @@ import {
 import { refreshFailed, sessionListSection } from '@/lib/query-client';
 import { POSITION_ACCOUNT_LINE_ID, positionAccountLine } from '@/lib/sellable-view';
 import { useOrderPanel } from './order-panel-provider';
+import { CorrectionRecap } from './correction-recap';
 import { SettledRecap } from './settled-recap';
 
 /**
@@ -78,6 +79,12 @@ export interface MyPositionProps {
    * a market it has no cache entry for.
    */
   live?: LiveMarketReading;
+  /**
+   * The market's 판정 정정 confirmed after its payout (`judgingRecord.correction`, #144 — ADR-0166,
+   * 144-11): the recap's records stay the paid result's, and a 판정 정정 block goes under them
+   * (`CorrectionRecap`). Null or absent for every other market.
+   */
+  correction?: PublicMarketJudgementCorrection | null;
   'data-testid'?: string;
 }
 
@@ -85,6 +92,7 @@ export function MyPosition({
   marketId,
   status = 'open',
   live,
+  correction = null,
   'data-testid': testId = 'market-my-position',
 }: MyPositionProps) {
   const listStatus = positionListStatusFor(status);
@@ -211,10 +219,20 @@ export function MyPosition({
           ) : view === 'recap' || view === 'ended' ? (
             // A finished market is never marked to a price: its last price is not its result. A
             // cancelled market has no records (ADR-0117), so its rows, if any, are sold-out lines.
-            <SettledRecap
-              entries={settledRecapOf(rows, view === 'recap' ? recordRows : [])}
-              marketId={marketId}
-            />
+            <Stack gap="4">
+              <SettledRecap
+                entries={settledRecapOf(rows, view === 'recap' ? recordRows : [])}
+                marketId={marketId}
+              />
+              {/* 144-11: the records as they are, then the correction and this account's share. */}
+              {view === 'recap' && correction !== null && (
+                <CorrectionRecap
+                  marketId={marketId}
+                  correction={correction}
+                  accountId={accountId}
+                />
+              )}
+            </Stack>
           ) : (
             <Stack gap="4">
               {accountLine.ownLine && (

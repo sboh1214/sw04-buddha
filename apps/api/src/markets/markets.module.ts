@@ -17,6 +17,7 @@ import {
   AdminMarketDisputeQueueController,
   AdminMarketDisputesController,
 } from './admin-market-disputes.controller.js';
+import { AdminMarketJudgementCompensationsController } from './admin-market-judgement-compensations.controller.js';
 import { AdminMarketJudgementDelaysController } from './admin-market-judgement-delays.controller.js';
 import {
   AdminMarketJudgementIncidentQueueController,
@@ -40,6 +41,7 @@ import { MarketAdminService } from './market-admin.service.js';
 import { MarketCancelService } from './market-cancel.service.js';
 import { MarketDisputeService } from './market-dispute.service.js';
 import { MarketDisputesController, MeDisputesController } from './market-disputes.controller.js';
+import { MarketJudgementCompensationService } from './market-judgement-compensation.service.js';
 import { MarketJudgementDelayService } from './market-judgement-delay.service.js';
 import { MarketJudgementIncidentService } from './market-judgement-incident.service.js';
 import { MarketJudgementService } from './market-judgement.service.js';
@@ -73,7 +75,10 @@ import { RelatedMarketsService } from './related-markets.service.js';
  * Nor is 판정 지연 기록 (#142, ADR-0106; MarketJudgementDelayService): one admin records a delayed
  * market's reason and next review time (AdminMarketJudgementDelaysController). 판정 오류 사건 (#144,
  * ADR-0165; MarketJudgementIncidentService) takes its `market_judgement_incident` registrations
- * through ApprovalsModule too, with its routes and its 판정 오류 사건 검토 대기 queue.
+ * through ApprovalsModule too, with its routes and its 판정 오류 사건 검토 대기 queue; and so does 판정
+ * 오류 보상 (#144 part 2, ADR-0166; MarketJudgementCompensationService) its
+ * `market_judgement_compensation` requests, whose approval pays, with the per-account recipients
+ * list (AdminMarketJudgementCompensationsController) — they wait in the same queue.
  */
 @Module({
   imports: [
@@ -106,6 +111,7 @@ import { RelatedMarketsService } from './related-markets.service.js';
     AdminMarketDisputeQueueController,
     AdminMarketJudgementIncidentsController,
     AdminMarketJudgementIncidentQueueController,
+    AdminMarketJudgementCompensationsController,
   ],
   providers: [
     MarketRankingCursors,
@@ -118,6 +124,7 @@ import { RelatedMarketsService } from './related-markets.service.js';
     MarketJudgementService,
     MarketJudgementDelayService,
     MarketJudgementIncidentService,
+    MarketJudgementCompensationService,
     MarketDisputeService,
     RelatedMarketsService,
   ],

@@ -865,8 +865,9 @@ describe.skipIf(!hasTestDb())('the re-grant (#74, docker test profile)', () => {
       );
       const { rows: labels } = await t.db.execute<{ label: string }>(sql`
         SELECT e.enumlabel AS label FROM pg_enum e JOIN pg_type ty ON ty.oid = e.enumtypid
-        WHERE ty.typname = 'ledger_entry_type' ORDER BY e.enumsortorder DESC LIMIT 1`);
-      expect(labels).toEqual([{ label: 'REGRANT' }]);
+        WHERE ty.typname = 'ledger_entry_type' ORDER BY e.enumsortorder DESC LIMIT 2`);
+      // Appended after the fifteenth; #144's JUDGEMENT_COMPENSATION came after it (migration 0081).
+      expect(labels).toEqual([{ label: 'JUDGEMENT_COMPENSATION' }, { label: 'REGRANT' }]);
       const { rows: allowed } = await t.db.execute<{ ok: boolean; other: boolean }>(sql`
         SELECT ledger_entry_direction_allowed('REGRANT', NULL, 'user') AS ok,
           ledger_entry_direction_allowed('REGRANT', 'treasury', 'user') AS other`);

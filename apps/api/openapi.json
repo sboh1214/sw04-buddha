@@ -1281,7 +1281,8 @@
                 "SETTLEMENT_PAYOUT",
                 "START_GRANT",
                 "RECONCILIATION_CORRECTION",
-                "REGRANT"
+                "REGRANT",
+                "JUDGEMENT_COMPENSATION"
               ]
             }
           },
@@ -15003,6 +15004,630 @@
           }
         ],
         "summary": "The judgement incidents waiting for review, the oldest first, with their market (its status: a confirmation waits for settled), the paid and the corrected result, and who registered it and when",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/markets/{id}/judgement-compensations": {
+      "post": {
+        "operationId": "adminRequestMarketJudgementCompensation",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestJudgementCompensationBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AdminMarket"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Request the compensation of a market’s confirmed judgement incident (보상 요청) for another admin’s approval, with an internal reason and the reason the compensated members read: the server computes the accounts owed and their amounts from the settlement records and freezes them in the request. One request waits at a time, and none is taken once one is approved",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/markets/{id}/judgement-compensations/{requestId}/approve": {
+      "post": {
+        "operationId": "adminApproveMarketJudgementCompensation",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveJudgementCompensationBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AdminMarket"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Approve a waiting judgement compensation request (보상 승인), with a reason, by an admin who is neither its requester nor the registrant of the paid judgement and has no interest in the market: every listed account is paid its amount once in the same transaction (a closed account is recorded unpaid), each paid member is notified, and nothing is taken back from anyone. Refused whole while the market is held by the ledger reconciliation or any listed account’s balance record left its ledger",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/markets/{id}/judgement-compensations/{requestId}/reject": {
+      "post": {
+        "operationId": "adminRejectMarketJudgementCompensation",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RejectJudgementCompensationBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AdminMarket"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Reject a waiting judgement compensation request (보상 반려), with a reason, by any admin but its requester: nothing is paid, and another request may follow",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/markets/{id}/judgement-compensations/{requestId}/retract": {
+      "post": {
+        "operationId": "adminRetractMarketJudgementCompensation",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpectedAccountBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AdminMarket"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Retract a waiting judgement compensation request the acting admin made (철회), before anyone decides it; nothing else changes",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/markets/{id}/judgement-compensations/recipients": {
+      "get": {
+        "operationId": "adminListMarketJudgementCompensationRecipients",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "Opaque; `meta.nextCursor` of the previous page.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AdminJudgementCompensationRecipient"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/PageMeta"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "The accounts a market’s confirmed judgement correction compensates, in account id order: each named, with its amount and where it stands — before an approval the waiting request’s list (or, with none, the accounts owed now), payable, needing a ledger check or closed; once approved, paid or recorded unpaid as closed. An empty page for a market without a confirmed incident",
         "tags": [
           "admin"
         ]
@@ -32189,6 +32814,7 @@
               "START_GRANT",
               "RECONCILIATION_CORRECTION",
               "REGRANT",
+              "JUDGEMENT_COMPENSATION",
               "CLOSURE_FORFEIT",
               "DEPOSIT",
               "BONUS",
@@ -32214,7 +32840,8 @@
               "approval_request",
               "audit_failure",
               "reconciliation_correction",
-              "regrant"
+              "regrant",
+              "judgement_compensation"
             ]
           },
           "refId": {
@@ -38349,6 +38976,9 @@
           },
           "evidence": {
             "$ref": "#/components/schemas/JudgementEvidence"
+          },
+          "compensation": {
+            "$ref": "#/components/schemas/PublicJudgementCompensation"
           }
         },
         "required": [
@@ -38357,7 +38987,49 @@
           "judgementVersion",
           "confirmedAt",
           "description",
-          "evidence"
+          "evidence",
+          "compensation"
+        ],
+        "additionalProperties": false
+      },
+      "PublicJudgementCompensation": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "preparing",
+              "none",
+              "pending",
+              "paid"
+            ]
+          },
+          "accountCount": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "paidCount": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "totalCoin": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CoinAmount"
+              }
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "accountCount",
+          "paidCount",
+          "totalCoin"
         ],
         "additionalProperties": false
       },
@@ -40684,6 +41356,14 @@
             "items": {
               "$ref": "#/components/schemas/MarketJudgementIncidentLogEntry"
             }
+          },
+          "compensation": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminMarketJudgementCompensation"
+              }
+            ]
           }
         },
         "required": [
@@ -40691,7 +41371,8 @@
           "confirmable",
           "pending",
           "confirmed",
-          "log"
+          "log",
+          "compensation"
         ],
         "additionalProperties": false
       },
@@ -40857,6 +41538,266 @@
           "evidence",
           "requestedBy",
           "requestedAt",
+          "status",
+          "decidedBy",
+          "decidedAt",
+          "decisionReason",
+          "retractedAt"
+        ],
+        "additionalProperties": false
+      },
+      "AdminMarketJudgementCompensation": {
+        "type": "object",
+        "properties": {
+          "preview": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketJudgementCompensationPreview"
+              }
+            ]
+          },
+          "held": {
+            "type": "boolean"
+          },
+          "pending": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketJudgementCompensationPending"
+              }
+            ]
+          },
+          "paid": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketJudgementCompensationPaid"
+              }
+            ]
+          },
+          "log": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MarketJudgementCompensationLogEntry"
+            }
+          }
+        },
+        "required": [
+          "preview",
+          "held",
+          "pending",
+          "paid",
+          "log"
+        ],
+        "additionalProperties": false
+      },
+      "MarketJudgementCompensationPreview": {
+        "type": "object",
+        "properties": {
+          "accountCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "totalCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
+          "closedCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockedCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "accountCount",
+          "totalCoin",
+          "closedCount",
+          "blockedCount"
+        ],
+        "additionalProperties": false
+      },
+      "MarketJudgementCompensationPending": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "requestedBy": {
+            "$ref": "#/components/schemas/AdminAccountActor"
+          },
+          "requestedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "accountCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "totalCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "userReason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId",
+          "requestedBy",
+          "requestedAt",
+          "accountCount",
+          "totalCoin",
+          "reason",
+          "userReason"
+        ],
+        "additionalProperties": false
+      },
+      "MarketJudgementCompensationPaid": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "requestedBy": {
+            "$ref": "#/components/schemas/AdminAccountActor"
+          },
+          "requestedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "accountCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "totalCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "userReason": {
+            "type": "string"
+          },
+          "approvedBy": {
+            "$ref": "#/components/schemas/AdminAccountActor"
+          },
+          "approvedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "paidCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "paidCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
+          "closedCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "requestId",
+          "requestedBy",
+          "requestedAt",
+          "accountCount",
+          "totalCoin",
+          "reason",
+          "userReason",
+          "approvedBy",
+          "approvedAt",
+          "paidCount",
+          "paidCoin",
+          "closedCount"
+        ],
+        "additionalProperties": false
+      },
+      "MarketJudgementCompensationLogEntry": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "requestedBy": {
+            "$ref": "#/components/schemas/AdminAccountActor"
+          },
+          "requestedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "accountCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "totalCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "userReason": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ApprovalStatus"
+          },
+          "decidedBy": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminAccountActor"
+              }
+            ]
+          },
+          "decidedAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "decisionReason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "retractedAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "requestId",
+          "requestedBy",
+          "requestedAt",
+          "accountCount",
+          "totalCoin",
+          "reason",
+          "userReason",
           "status",
           "decidedBy",
           "decidedAt",
@@ -42744,6 +43685,13 @@
       "AdminMarketJudgementIncidentQueueItem": {
         "type": "object",
         "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "incident",
+              "compensation"
+            ]
+          },
           "requestId": {
             "type": "string",
             "format": "uuid",
@@ -42789,9 +43737,24 @@
             "type": "string",
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "accountCount": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "totalCoin": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CoinAmount"
+              }
+            ]
           }
         },
         "required": [
+          "kind",
           "requestId",
           "marketId",
           "slug",
@@ -42800,7 +43763,112 @@
           "originalResult",
           "correctedResult",
           "requestedBy",
-          "requestedAt"
+          "requestedAt",
+          "accountCount",
+          "totalCoin"
+        ],
+        "additionalProperties": false
+      },
+      "RequestJudgementCompensationBody": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "userReason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "noConflictConfirmed": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "reason",
+          "userReason",
+          "noConflictConfirmed",
+          "expectedAccountId"
+        ]
+      },
+      "ApproveJudgementCompensationBody": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "noConflictConfirmed": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "reason",
+          "noConflictConfirmed",
+          "expectedAccountId"
+        ]
+      },
+      "RejectJudgementCompensationBody": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "reason",
+          "expectedAccountId"
+        ]
+      },
+      "AdminJudgementCompensationRecipient": {
+        "type": "object",
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AdminAccountActor"
+          },
+          "amountCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "blocked",
+              "closed",
+              "paid"
+            ]
+          }
+        },
+        "required": [
+          "account",
+          "amountCoin",
+          "state"
         ],
         "additionalProperties": false
       },
@@ -42968,6 +44036,14 @@
             "type": "string",
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "correctedResult": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketResult"
+              }
+            ]
           }
         },
         "required": [
@@ -42982,7 +44058,8 @@
           "payoutCoin",
           "settlementPnlCoin",
           "resolvedAt",
-          "settledAt"
+          "settledAt",
+          "correctedResult"
         ],
         "additionalProperties": false
       },
@@ -51669,6 +52746,10 @@
               "market_judgement_incident_confirm",
               "market_judgement_incident_dismiss",
               "market_judgement_incident_retract",
+              "market_judgement_compensation_request",
+              "market_judgement_compensation_approve",
+              "market_judgement_compensation_reject",
+              "market_judgement_compensation_retract",
               "created",
               "submitted",
               "approved",

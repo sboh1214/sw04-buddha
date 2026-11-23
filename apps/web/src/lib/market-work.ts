@@ -1,5 +1,6 @@
 import {
   MARKET_WORK_KINDS,
+  formatCoin,
   type MarketEventType,
   type MarketSnapshotChangeField,
   type MarketWorkActionType,
@@ -102,6 +103,10 @@ export const MARKET_WORK_ACTION_LABEL: Readonly<Record<MarketWorkActionType, str
   market_conflict_declare: copy.marketConflictDeclare,
   market_resolve: copy.adminMarketWorkResolveInterim,
   market_settlement_retry: copy.adminSettlementRetry,
+  market_judgement_compensation_request: copy.adminMarketWorkCompensationRequest,
+  market_judgement_compensation_approve: copy.adminMarketWorkCompensationApprove,
+  market_judgement_compensation_reject: copy.adminMarketWorkCompensationReject,
+  market_judgement_compensation_retract: copy.adminMarketWorkCompensationRetract,
   reconciliation_recovery_request: copy.adminMarketWorkRecoveryRequest,
   reconciliation_recovery_approve: copy.adminMarketWorkRecoveryApprove,
   reconciliation_recovery_reject: copy.adminMarketWorkRecoveryReject,
@@ -364,6 +369,28 @@ const INCIDENT_REGISTER = z.object({
 });
 /** Its 오류 확인, 기각 and 철회: the correct result the registration named. */
 const INCIDENT_DECISION = z.object({ correctedResult: marketResultSchema });
+/** A 판정 오류 보상's amounts: a Coin total as a decimal string, a count of accounts. */
+const COIN = z.string().regex(/^[0-9]{1,19}$/);
+const COUNT = z.number().int().nonnegative();
+/**
+ * Its request (#144 part 2, ADR-0166): the frozen list's count and total, how many of its accounts
+ * were closed then, and the members' reason (144-12) — never an account (ADR-0064).
+ */
+const COMPENSATION_REQUEST = z.object({
+  accountCount: COUNT,
+  totalCoin: COIN,
+  closedCount: COUNT,
+  userReason: z.string(),
+});
+/** Its approval: how many accounts were paid, how much in all, and how many were closed (144-7). */
+const COMPENSATION_APPROVE = z.object({
+  paidCount: COUNT,
+  paidCoin: COIN,
+  closedCount: COUNT,
+});
+
+const accountCount = (n: number) =>
+  copy.adminMarketWorkCompensationCount.replace('{n}', n.toLocaleString('ko-KR'));
 
 const disputeCount = (ids: readonly unknown[]) =>
   `${ids.length.toLocaleString('ko-KR')}${copy.adminMarketDisputesHoldingUnit}`;
@@ -533,6 +560,56 @@ function actionRows(type: MarketWorkActionType, details: unknown): EventRow[] | 
           ]
         : undefined;
     }
+    case 'market_judgement_compensation_request': {
+      // The internal reason is the reason column's (145-16); the members' is a row of its own.
+      const parsed = COMPENSATION_REQUEST.safeParse(details);
+      if (!parsed.success) return undefined;
+      return [
+        {
+          label: copy.adminMarketWorkCompensationAccounts,
+          value: accountCount(parsed.data.accountCount),
+        },
+        {
+          label: copy.adminMarketWorkCompensationTotal,
+          value: formatCoin(BigInt(parsed.data.totalCoin)),
+        },
+        ...(parsed.data.closedCount === 0
+          ? []
+          : [
+              {
+                label: copy.adminMarketWorkCompensationClosed,
+                value: accountCount(parsed.data.closedCount),
+              },
+            ]),
+        { label: copy.adminMarketWorkCompensationUserReason, value: parsed.data.userReason },
+      ];
+    }
+    case 'market_judgement_compensation_approve': {
+      const parsed = COMPENSATION_APPROVE.safeParse(details);
+      if (!parsed.success) return undefined;
+      return [
+        {
+          label: copy.adminMarketWorkCompensationPaidAccounts,
+          value: accountCount(parsed.data.paidCount),
+        },
+        {
+          label: copy.adminMarketWorkCompensationPaidCoin,
+          value: formatCoin(BigInt(parsed.data.paidCoin)),
+        },
+        ...(parsed.data.closedCount === 0
+          ? []
+          : [
+              {
+                label: copy.adminMarketWorkCompensationClosed,
+                value: accountCount(parsed.data.closedCount),
+              },
+            ]),
+      ];
+    }
+    case 'market_judgement_compensation_reject':
+    case 'market_judgement_compensation_retract':
+      // The request and the incident alone: nothing but the reason (or 철회's basis) to read.
+      return [];
     case 'market_delay_record': {
       const parsed = DELAY_RECORD.safeParse(details);
       if (!parsed.success) return undefined;
