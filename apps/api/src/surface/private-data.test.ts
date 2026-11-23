@@ -2658,6 +2658,113 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     }
   });
 
+  it('publishes a confirmed 판정 오류 사건’s 판정 정정 alone: no identity, reviewer’s reason or waiting incident (#144, ADR-0165)', async () => {
+    // Two settled markets paid on a judgement two other admins made; the fixture's admin registers
+    // an incident on each and a second admin confirms one. 오류 내용 and the evidence are public
+    // once confirmed (#173 item 13); the waiting one's text, every admin and the reviewer's reason
+    // are the operators' alone.
+    const reviewer = await signUpTestUser(t);
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'admin' })
+      .where(eq(schema.profiles.userId, reviewer.id));
+    await completeOnboarding(t.db, { userId: reviewer.id });
+    await t.app.get(AdminGuard).invalidate(reviewer.id);
+    const tag = randomUUID().replaceAll('-', '').slice(0, 10);
+    const text = {
+      confirmed: `leak-incident-description-${tag}`,
+      waiting: `leak-incident-waiting-${tag}`,
+      reason: `leak-incident-review-reason-${tag}`,
+      link: `https://example.com/leak-incident-${tag}`,
+    };
+    const paid = async () => {
+      const { market, judgement } = await createProvisionalMarket(t.db, {
+        market: { createdBy: f.admin.id },
+      });
+      await resolveMarketNow(t.db, market.id);
+      await t.db
+        .update(schema.markets)
+        .set({ status: 'settled', settledAt: new Date() })
+        .where(eq(schema.markets.id, market.id));
+      return { market, judgement };
+    };
+    const write = (url: string, who: TestUser, body: Record<string, unknown>) =>
+      t.app.inject({
+        method: 'POST',
+        url: `/api/v1/admin/markets/${url}`,
+        headers: { origin: ORIGIN, 'content-type': 'application/json', cookie: who.cookie },
+        payload: { expectedAccountId: who.id, noConflictConfirmed: true, ...body },
+      });
+    const registration = (description: string) => ({
+      correctedResult: 'NO',
+      description,
+      evidence: { links: [text.link], collectedAt: new Date(Date.now() - 60_000).toISOString() },
+    });
+    const confirmed = await paid();
+    const waiting = await paid();
+    const registered = await write(
+      `${confirmed.market.id}/judgement-incidents`,
+      f.admin,
+      registration(text.confirmed),
+    );
+    expect(registered.statusCode, registered.body).toBe(200);
+    const requestId = (
+      parse(registered.body) as { data: { judgementIncident: { pending: { requestId: string } } } }
+    ).data.judgementIncident.pending.requestId;
+    const approved = await write(
+      `${confirmed.market.id}/judgement-incidents/${requestId}/confirm`,
+      reviewer,
+      { reason: text.reason },
+    );
+    expect(approved.statusCode, approved.body).toBe(200);
+    expect(
+      (await write(`${waiting.market.id}/judgement-incidents`, f.admin, registration(text.waiting)))
+        .statusCode,
+    ).toBe(200);
+
+    const hidden = [
+      text.reason,
+      text.waiting,
+      f.admin.id,
+      reviewer.id,
+      confirmed.judgement.registeredBy,
+      confirmed.judgement.approvedBy,
+      requestId,
+    ];
+    for (const cookie of [undefined, f.b.cookie, f.a.cookie]) {
+      for (const { market } of [confirmed, waiting]) {
+        const res = await call(routeOf('GET /markets/:idOrSlug'), {
+          params: { idOrSlug: market.slug },
+          cookie,
+        });
+        expect(res.statusCode).toBe(200);
+        expect(hidden.filter((value) => res.body.includes(value))).toEqual([]);
+        expect([...leaked(res.body), ...forbiddenFields(res.body)]).toEqual([]);
+        const { correction } = (
+          parse(res.body) as { data: { judgingRecord: { correction: unknown } } }
+        ).data.judgingRecord;
+        if (market === confirmed.market) {
+          expect(correction).toMatchObject({
+            result: 'NO',
+            originalResult: 'YES',
+            description: text.confirmed,
+            evidence: { links: [text.link] },
+          });
+          expect(Object.keys(correction as object).sort()).toEqual([
+            'confirmedAt',
+            'description',
+            'evidence',
+            'judgementVersion',
+            'originalResult',
+            'result',
+          ]);
+        } else {
+          expect(correction).toBeNull();
+        }
+      }
+    }
+  });
+
   it('answers every public route without A’s private data, whoever asks', async () => {
     const answers: { route: string; caller: string; status: number; leaks: string[] }[] = [];
     const bodies = new Map<string, string>();

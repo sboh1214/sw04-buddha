@@ -276,8 +276,10 @@ describe('enums', () => {
     expect(enums.MARKET_EVENT_TYPES.filter((type) => type === 'resolved')).toHaveLength(1);
     // The registration, 반려 and 철회 write no market event; each of the four is an admin action,
     // appended after #114's.
-    const judgement = enums.ADMIN_ACTION_TYPES.filter((type) =>
-      type.startsWith('market_judgement_'),
+    // #144's 판정 오류 사건 has four of its own (market_judgement_incident_*, below).
+    const judgement = enums.ADMIN_ACTION_TYPES.filter(
+      (type) =>
+        type.startsWith('market_judgement_') && !type.startsWith('market_judgement_incident_'),
     );
     expect(judgement).toEqual([
       'market_judgement_request',
@@ -334,7 +336,10 @@ describe('enums', () => {
     expect('judgement_corrected'.length).toBeLessThanOrEqual(40);
     // The registration, approval, 반려 and 철회 reuse #152's four types (one approval kind).
     expect(
-      enums.ADMIN_ACTION_TYPES.filter((type) => type.startsWith('market_judgement_')),
+      enums.ADMIN_ACTION_TYPES.filter(
+        (type) =>
+          type.startsWith('market_judgement_') && !type.startsWith('market_judgement_incident_'),
+      ),
     ).toHaveLength(4);
     // Coin reconciliation is separate; judgement corrections reuse the judgement actions.
     expect(enums.ADMIN_ACTION_TYPES.filter((type) => type.includes('correct'))).toEqual([
@@ -407,8 +412,8 @@ describe('enums', () => {
       'market_cancel_reject',
       'market_cancel_retract',
     ]);
-    // #145's operator 정산 다시 시도 (ADR-0163) is appended after them.
-    expect(enums.ADMIN_ACTION_TYPES.slice(-5, -1)).toEqual(cancel);
+    // #145's operator 정산 다시 시도 (ADR-0163) is appended after them, #144's four after it.
+    expect(enums.ADMIN_ACTION_TYPES.slice(-9, -5)).toEqual(cancel);
     // admin_actions.type and market_events.type are varchar(40).
     for (const type of [...cancel, 'cancelled']) expect(type.length).toBeLessThanOrEqual(40);
     expect(new Set(enums.MARKET_EVENT_TYPES).size).toBe(enums.MARKET_EVENT_TYPES.length);
@@ -417,7 +422,8 @@ describe('enums', () => {
 
   it('appends the operator 정산 다시 시도 as one admin action type (#145, ADR-0163)', () => {
     // 145-7: one admin, a reason, at once — no approval kind, no market event type of its own.
-    expect(enums.ADMIN_ACTION_TYPES.at(-1)).toBe('market_settlement_retry');
+    // #144's four 판정 오류 사건 types (ADR-0165) are appended after it.
+    expect(enums.ADMIN_ACTION_TYPES.at(-5)).toBe('market_settlement_retry');
     expect(enums.ADMIN_ACTION_TYPES.filter((type) => type.includes('settlement'))).toEqual([
       'market_settlement_retry',
     ]);
@@ -425,6 +431,28 @@ describe('enums', () => {
     expect(enums.adminActionTypeSchema.parse('market_settlement_retry')).toBe(
       'market_settlement_retry',
     );
+  });
+
+  it('appends the 판정 오류 사건 as four admin action types and no market event (#144, ADR-0165)', () => {
+    // Register, 오류 확인, 기각, 철회 — the market's status, result and version never move, so no
+    // market event type (ADR-0165 decision 2); the approval kind is market_judgement_incident.
+    const incident = enums.ADMIN_ACTION_TYPES.filter((type) =>
+      type.startsWith('market_judgement_incident_'),
+    );
+    expect(incident).toEqual([
+      'market_judgement_incident_register',
+      'market_judgement_incident_confirm',
+      'market_judgement_incident_dismiss',
+      'market_judgement_incident_retract',
+    ]);
+    expect(enums.ADMIN_ACTION_TYPES.slice(-4)).toEqual(incident);
+    expect(enums.MARKET_EVENT_TYPES.filter((type) => type.includes('incident'))).toEqual([]);
+    // admin_actions.type is varchar(40).
+    for (const type of incident) {
+      expect(type.length).toBeLessThanOrEqual(40);
+      expect(enums.adminActionTypeSchema.parse(type)).toBe(type);
+    }
+    expect(new Set(enums.ADMIN_ACTION_TYPES).size).toBe(enums.ADMIN_ACTION_TYPES.length);
   });
 
   it('lists the settlement steps and their statuses (O-6, ADR-0046)', () => {

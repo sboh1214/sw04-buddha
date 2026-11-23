@@ -536,6 +536,7 @@ describe.skipIf(!hasTestInfra)('themes in public (integration)', () => {
         title: yes.title,
         status: 'resolved',
         result: 'YES',
+        corrected: false,
         decidedAt: new Date(now - HOUR_MS).toISOString(),
       },
       expect.objectContaining({ marketId: no.id, status: 'settled', result: 'NO' }),
@@ -546,6 +547,7 @@ describe.skipIf(!hasTestInfra)('themes in public (integration)', () => {
         title: voidResult.title,
         status: 'settled',
         result: 'VOID',
+        corrected: false,
         decidedAt: new Date(now - 3 * HOUR_MS).toISOString(),
       },
     ]);

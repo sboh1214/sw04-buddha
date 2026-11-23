@@ -164,6 +164,11 @@ describe('작업 이력 classification (#145, ADR-0164; 145-12, 145-13)', () => 
         'market_delay_record',
         'market_conflict_declare',
         'market_resolve',
+        // #144 (ADR-0165): the 판정 오류 사건's four, a judgement's review after the payout.
+        'market_judgement_incident_register',
+        'market_judgement_incident_confirm',
+        'market_judgement_incident_dismiss',
+        'market_judgement_incident_retract',
       ].sort(),
     );
     expect(byKind('settlement')).toEqual(
@@ -302,6 +307,41 @@ describe('작업 이력 reason basis (145-16)', () => {
     });
   });
 
+  it('shows a 판정 오류 사건 by its 오류 내용 and its decisions by their reasons (#144, ADR-0165)', () => {
+    // 145-16 "판정 등록은 그 설명": the incident's registration stands on its description.
+    expect(
+      marketWorkReasonOf('market_judgement_incident_register', {
+        approvalId: ACTION,
+        judgementVersion: 1,
+        originalResult: 'YES',
+        correctedResult: 'NO',
+        description: '발표 원문의 수치를 잘못 읽었다',
+        evidence: { links: ['https://example.com/a'], collectedAt: AT },
+      }),
+    ).toEqual({ reason: '발표 원문의 수치를 잘못 읽었다', reasonBasis: 'recorded' });
+    for (const type of [
+      'market_judgement_incident_confirm',
+      'market_judgement_incident_dismiss',
+    ] as const) {
+      expect(
+        marketWorkReasonOf(type, { approvalId: ACTION, correctedResult: 'NO', reason: '확인' }),
+      ).toEqual({ reason: '확인', reasonBasis: 'recorded' });
+      expect(marketWorkKindOf(type)).toBe('judgement');
+    }
+    expect(
+      marketWorkReasonOf('market_judgement_incident_retract', {
+        approvalId: ACTION,
+        correctedResult: 'NO',
+      }),
+    ).toEqual({ reason: null, reasonBasis: 'retracted' });
+    // Not a #176 correction: those are the judgement's own four types.
+    expect(
+      isJudgementCorrection('market_judgement_incident_register', {
+        correction: { baseVersion: 1 },
+      }),
+    ).toBe(false);
+  });
+
   it('shows a 판정 정정’s registration by its 설명 like any 판정 등록 and tells a correction’s four steps (#176)', () => {
     const correction = { baseVersion: 1, reason: '출처 수치 정정', disputeIds: [] };
     // 145-16 "판정 등록은 그 설명": the 정정 사유 is a detail, not the reason.
@@ -367,7 +407,8 @@ describe('작업 이력 reason basis (145-16)', () => {
 
   it('points a retraction at its request (사유는 그 요청에 있음)', () => {
     const retracts = MARKET_WORK_ACTION_TYPES.filter((type) => type.endsWith('_retract'));
-    expect(retracts.length).toBe(6);
+    // #144 added the 판정 오류 사건's (ADR-0165).
+    expect(retracts.length).toBe(7);
     for (const type of retracts) {
       expect(MARKET_WORK_ACTION_REASON[type], type).toBe('retracted');
       expect(marketWorkReasonOf(type, { approvalId: ACTION, reason: 'x' }).reason).toBeNull();

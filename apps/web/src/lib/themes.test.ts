@@ -24,6 +24,7 @@ import {
   themePageQuery,
   themePath,
   themeResultLabel,
+  themeResultMark,
   themeResultsKey,
   themeSlugParam,
 } from './themes';
@@ -185,6 +186,12 @@ describe('labels and addresses', () => {
     expect(themeResultLabel({ result: 'YES' })).toBe(copy.yes);
     expect(themeResultLabel({ result: 'NO' })).toBe(copy.no);
     expect(themeResultLabel({ result: 'VOID' })).toBe('무효');
+  });
+
+  it('marks a 판정 정정’s result, which the list follows (#144, 144-5, 144-19 (가))', () => {
+    expect(themeResultMark({ corrected: true })).toBe(copy.marketResultCorrected);
+    expect(copy.marketResultCorrected).toBe('판정 정정');
+    expect(themeResultMark({ corrected: false })).toBeNull();
   });
 
   it('addresses a theme by its slug and reads the segment back however it arrived', () => {

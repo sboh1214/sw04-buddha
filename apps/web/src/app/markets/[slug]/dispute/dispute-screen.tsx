@@ -48,6 +48,7 @@ import {
   toSubmitDisputeBody,
 } from '@/lib/disputes';
 import { MARKET_RESULT_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
+import { judgingRecordPath } from '@/lib/market-detail';
 import { marketKey } from '@/lib/market-keys';
 import { marketStatusLabel } from '@/lib/market-status';
 
@@ -124,10 +125,14 @@ export function DisputeScreen({ marketId, now }: { marketId: string; now?: numbe
 
 /**
  * The market the dispute is about: its title (to its detail), its status as a member reads it
- * (`marketStatusLabel`: '이의 검토 중' while one holds it), its 잠정 결과 and its 이의 기한 in the
+ * (`marketStatusLabel`: '이의 검토 중' while one holds it), its 잠정 결과 (its 결과 once confirmed,
+ * corrected and marked as the detail's when a 판정 오류 사건 is confirmed) and its 이의 기한 in the
  * viewer's zone with the 판정 기준 시간대 (`DateTimeText`). No price, volume or count.
  */
 function DisputeMarketCard({ market }: { market: Market }) {
+  // Past PROVISIONAL the row is the detail's 결과 줄, so a confirmed 판정 오류 사건 (#144, 144-5)
+  // shows the corrected result and the same mark, leading to the record's 판정 정정.
+  const correction = market.status === 'provisional' ? null : market.judgingRecord.correction;
   return (
     <Card.Root data-testid="dispute-market">
       <Card.Body>
@@ -155,8 +160,24 @@ function DisputeMarketCard({ market }: { market: Market }) {
                     ? copy.disputeProvisionalResult
                     : copy.marketResolvedResult}
                 </DataList.ItemLabel>
-                <DataList.ItemValue data-testid="dispute-market-result">
-                  {MARKET_RESULT_LABEL[market.resolvedResult]}
+                <DataList.ItemValue>
+                  <HStack gap="2" flexWrap="wrap">
+                    <Text as="span" data-testid="dispute-market-result">
+                      {MARKET_RESULT_LABEL[correction?.result ?? market.resolvedResult]}
+                    </Text>
+                    {correction !== null && (
+                      <ChakraLink asChild>
+                        <NextLink
+                          href={judgingRecordPath(market.slug) as Route}
+                          data-testid="dispute-market-result-corrected"
+                        >
+                          <Badge colorPalette="orange" variant="subtle">
+                            {copy.marketResultCorrected}
+                          </Badge>
+                        </NextLink>
+                      </ChakraLink>
+                    )}
+                  </HStack>
                 </DataList.ItemValue>
               </DataList.Item>
             )}

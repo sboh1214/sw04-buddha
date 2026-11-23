@@ -29,6 +29,8 @@ const emptyRecord = {
   disputes: { total: 0, byVersion: [], decisions: [] },
   cancellation: null,
   payoutDelayed: false,
+  // #144 (ADR-0165): no confirmed 판정 오류 사건.
+  correction: null,
 };
 const HOUR = 3_600_000;
 const actualRead = recordReader.readMarketJudgingRecord;

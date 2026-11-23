@@ -53,6 +53,31 @@ export const publicMarketJudgementDelaySchema = z
   .meta({ id: 'PublicMarketJudgementDelay' });
 export type PublicMarketJudgementDelay = z.infer<typeof publicMarketJudgementDelaySchema>;
 
+/**
+ * 판정 정정 (#144 part 1, ADR-0165; owner answer 144-5, ADR-0093 decision 1 #173 item 13): the
+ * market's confirmed 판정 오류 사건 as the public sees it — the corrected result, the paid result
+ * and the judgement version it was paid on (which stays the current version: the market row, its
+ * judgements and its settlement records never move), when the error was confirmed, and what went
+ * wrong with its evidence links and collection instant. Never who registered or confirmed it, the
+ * reviewer's reason, a dismissed or waiting incident, or anything about an account. #144 part 2
+ * adds the compensation figures (144-6).
+ */
+export const publicMarketJudgementCorrectionSchema = z
+  .object({
+    /** 정정된 결과. */
+    result: marketResultSchema,
+    /** 원래 결과: the paid one, `markets.resolved_result`. */
+    originalResult: marketResultSchema,
+    /** The paid judgement version the correction is about. */
+    judgementVersion: judgementVersionSchema,
+    confirmedAt: z.iso.datetime(),
+    /** 오류 내용. */
+    description: z.string(),
+    evidence: judgementEvidenceSchema,
+  })
+  .meta({ id: 'PublicMarketJudgementCorrection' });
+export type PublicMarketJudgementCorrection = z.infer<typeof publicMarketJudgementCorrectionSchema>;
+
 const countSchema = z.number().int().nonnegative();
 export const publicDisputeCountsSchema = z
   .object({
@@ -97,6 +122,11 @@ export const marketJudgingRecordSchema = z
     cancellation: z.object({ reason: z.string(), cancelledAt: z.iso.datetime() }).nullable(),
     /** A payout failure or reconciliation hold while settling; no internal error text. */
     payoutDelayed: z.boolean(),
+    /**
+     * The confirmed 판정 오류 사건's 판정 정정 (#144, ADR-0165), or null when the market has none —
+     * every market until one is confirmed, which happens once paid (144-13).
+     */
+    correction: publicMarketJudgementCorrectionSchema.nullable(),
   })
   .meta({ id: 'MarketJudgingRecord' });
 export type MarketJudgingRecord = z.infer<typeof marketJudgingRecordSchema>;

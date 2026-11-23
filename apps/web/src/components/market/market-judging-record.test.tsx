@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { TimeZoneScope } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
+import { BUSINESS_INFO } from '@/legal/business-info';
 import { formatInTimeZone } from '@/lib/datetime';
 import { byTagName, byTestId, renderWithQueries, testIdsStartingWith } from '@/test/render';
-import { MarketJudgingRecord, type JudgingRecordMarket } from './market-judging-record';
+import {
+  MarketJudgingRecord,
+  type JudgingRecordMarket,
+  postPayoutReportText,
+  showsPostPayoutReport,
+} from './market-judging-record';
 
 const ID = 'public-record';
 const EMPTY: JudgingRecordMarket = {
@@ -21,6 +27,7 @@ const EMPTY: JudgingRecordMarket = {
     disputes: { total: 0, byVersion: [], decisions: [] },
     cancellation: null,
     payoutDelayed: false,
+    correction: null,
   },
 };
 const VERSION: JudgingRecordMarket['judgingRecord']['versions'][number] = {
@@ -354,5 +361,98 @@ describe('public judging record (#24)', () => {
     expect(byTestId(html, `${ID}-version-1-collected-at-judgement-zone`)?.text).toContain(
       formatInTimeZone(VERSION.evidence.collectedAt, 'Asia/Seoul'),
     );
+  });
+});
+
+describe('판정 정정 and the 결과 확정 뒤 report line (#144, ADR-0165)', () => {
+  const CORRECTION: NonNullable<JudgingRecordMarket['judgingRecord']['correction']> = {
+    result: 'NO',
+    originalResult: 'YES',
+    judgementVersion: 1,
+    confirmedAt: '2026-11-12T03:00:00.000Z',
+    description: '1차 출처가 발표를 정정했습니다.\n정정 발표의 결과는 NO입니다.',
+    evidence: {
+      links: ['https://example.com/fix', 'https://example.com/fix-2'],
+      collectedAt: '2026-11-12T01:00:00.000Z',
+    },
+  };
+  const corrected: JudgingRecordMarket = {
+    ...EMPTY,
+    status: 'settled',
+    // The market row keeps the paid result and its version stays the current one.
+    resolvedResult: 'YES',
+    resolvedAt: '2026-11-11T02:00:00.000Z',
+    settledAt: '2026-11-11T02:05:00.000Z',
+    judgingRecord: { ...EMPTY.judgingRecord, versions: [VERSION], correction: CORRECTION },
+  };
+
+  it('puts the section above the versions: corrected and original result, the fact, grounds, time', () => {
+    const html = draw(corrected);
+    const section = byTestId(html, `${ID}-correction`);
+    expect(section?.text).toContain(copy.judgingCorrection);
+    expect(byTestId(html, `${ID}-correction-result`)?.text).toBe(copy.no);
+    expect(byTestId(html, `${ID}-correction-original`)?.text).toBe(`${copy.yes} (v1)`);
+    expect(byTestId(html, `${ID}-correction-no-clawback`)?.text).toBe(
+      '원래 결과로 지급했고, 지급한 Coin은 회수하지 않습니다.',
+    );
+    expect(byTestId(html, `${ID}-correction-description`)?.text).toBe(CORRECTION.description);
+    for (const link of CORRECTION.evidence.links) {
+      expect(byTestId(html, `${ID}-correction-evidence`)?.text).toContain(link);
+    }
+    expect(byTestId(html, `${ID}-correction-collected-at-viewer-zone`)).toBeDefined();
+    expect(byTestId(html, `${ID}-correction-confirmed-at-viewer-zone`)).toBeDefined();
+    // Above the versions, which keep the paid version's name '현재 판정' (144-19 (나)).
+    expect(html.indexOf(`data-testid="${ID}-correction"`)).toBeLessThan(
+      html.indexOf(`data-testid="${ID}-version-1"`),
+    );
+    expect(byTestId(html, `${ID}-version-1`)?.text).toContain(`${copy.judgingCurrentVersion} v1`);
+    // No identity, no reviewer's reason: the public shape has none, and nothing names one.
+    expect(section?.text).not.toContain('관리자');
+    expect(
+      byTagName(html, 'a').every((link) => link.attributes.rel === 'noopener noreferrer'),
+    ).toBe(true);
+    const ids = testIdsStartingWith(html, ID);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('draws no section without a correction, nor while the snapshot is stale', () => {
+    expect(
+      byTestId(
+        draw({ ...corrected, judgingRecord: { ...corrected.judgingRecord, correction: null } }),
+        `${ID}-correction`,
+      ),
+    ).toBeUndefined();
+    const stale = draw({ ...corrected, judgingRecordStale: true });
+    expect(byTestId(stale, `${ID}-correction`)).toBeUndefined();
+    expect(stale).not.toContain(CORRECTION.description);
+  });
+
+  it('carries 144-9’s line, with the customer centre’s address, from 결과 확정 on — stale too', () => {
+    for (const status of ['resolved', 'settling', 'settled'] as const) {
+      const html = draw({ ...EMPTY, status });
+      const line = byTestId(html, `${ID}-report`)?.text;
+      expect(line, status).toBe(postPayoutReportText());
+      expect(line, status).toContain('결과 확정 뒤의 판정 오류는 고객센터 이메일');
+      expect(line, status).not.toContain('{{');
+      // Outside the body a stale snapshot hides, beside the principle.
+      expect(
+        byTestId(draw({ ...EMPTY, status, judgingRecordStale: true }), `${ID}-report`),
+        status,
+      ).toBeDefined();
+    }
+    expect(postPayoutReportText()).toBe(
+      copy.judgingPostPayoutReport.replace('{{email}}', BUSINESS_INFO.email),
+    );
+    for (const status of [
+      'scheduled',
+      'open',
+      'paused',
+      'closed',
+      'provisional',
+      'cancelled',
+    ] as const) {
+      expect(byTestId(draw({ ...EMPTY, status }), `${ID}-report`), status).toBeUndefined();
+      expect(showsPostPayoutReport(status), status).toBe(false);
+    }
   });
 });

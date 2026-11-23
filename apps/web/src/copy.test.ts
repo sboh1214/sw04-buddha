@@ -45,6 +45,70 @@ describe('copy', () => {
     }
   });
 
+  it('words the 판정 정정 as 144-19 approved it, with no refund, no 정답 and no amount (#144)', () => {
+    // Public (144-5, 144-9, 144-19): the section, its two results, 144-5's fact, the detail's
+    // mark and settled sentence, and the 결과 확정 뒤 report line (its address filled from the
+    // business info, as the appeal guidance's).
+    expect([
+      copy.judgingCorrection,
+      copy.marketResultCorrected,
+      copy.judgingCorrectedResult,
+      copy.judgingOriginalResult,
+      copy.judgingCorrectionNoClawback,
+    ]).toEqual([
+      '판정 정정',
+      '판정 정정',
+      '정정된 결과',
+      '원래 결과',
+      '원래 결과로 지급했고, 지급한 Coin은 회수하지 않습니다.',
+    ]);
+    expect(copy.marketSettledCorrected).toBe(
+      '원래 결과({paid})로 지급했고, 지급한 Coin은 회수하지 않습니다. 판정 정정은 판정 기록에서 볼 수 있습니다.',
+    );
+    expect(copy.judgingPostPayoutReport.replace('({{email}})', '')).toBe(
+      '결과 확정 뒤의 판정 오류는 고객센터 이메일로 알려 주세요.',
+    );
+    // Admin (144-19): 판정 오류 사건 apart from #176's 판정 정정, and 144-13's disabled line.
+    expect([
+      copy.adminMarketJudgementIncident,
+      copy.adminMarketJudgementIncidentRegister,
+      copy.adminMarketJudgementIncidentCorrectedResult,
+      copy.adminMarketJudgementIncidentDescription,
+      copy.adminMarketJudgementIncidentEvidence,
+      copy.adminMarketJudgementIncidentConfirm,
+      copy.adminMarketJudgementIncidentDismiss,
+      copy.adminMarketJudgementIncidentRetract,
+      copy.adminMarketJudgementIncidentConfirmWaits,
+    ]).toEqual([
+      '판정 오류 사건',
+      '사건 등록',
+      '올바른 결과',
+      '오류 내용',
+      '근거',
+      '오류 확인',
+      '기각',
+      '철회',
+      '지급이 끝난 뒤 확인할 수 있습니다.',
+    ]);
+    // 144-19 (다).
+    expect(copy.adminRelatedHintHiddenResultTail).toContain('(정정된 결과 포함)');
+    for (const text of [
+      copy.judgingCorrectionNoClawback,
+      copy.marketSettledCorrected,
+      copy.judgingPostPayoutReport,
+      copy.adminMarketJudgementIncidentIntro,
+      copy.adminMarketJudgementIncidentConfirmBody,
+      copy.errMarketJudgementIncidentNoDecider,
+    ]) {
+      expect(text).not.toMatch(
+        /환불|원금|정답|맞힌|정산 오류|보상|송금|이체|리워드|적립|\d+ Coin씩/,
+      );
+    }
+    // 사건 등록's no_decider names the 144-4 exclusion too, not a conflict alone (the judgement's).
+    expect(copy.errMarketJudgementIncidentNoDecider).not.toBe(copy.marketConflictNoDecider);
+    expect(copy.errMarketJudgementIncidentNoDecider).toContain('지급한 판정을 등록한 관리자');
+  });
+
   it('words the recap’s links and its empty line with no score, rank or refund (#34)', () => {
     // N04 §3·§4: a P&L is trade accounting, never a score; I3: the orders link opens ended orders.
     const recap = [

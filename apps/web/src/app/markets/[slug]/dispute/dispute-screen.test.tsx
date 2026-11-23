@@ -64,6 +64,7 @@ const provisional: Market = {
     disputes: { total: 0, byVersion: [], decisions: [] },
     cancellation: null,
     payoutDelayed: false,
+    correction: null,
   },
   ruleVersions: [],
 };
@@ -135,6 +136,48 @@ describe('DisputeScreen', () => {
     expect(byTestId(html, 'dispute-notice')?.text).toContain(copy.disputePrivacyNote);
     expect(byTestId(html, 'dispute-notice')?.text).toContain(copy.disputeNotAppealNote);
     expect(byTestId(html, 'dispute-my-link')?.attributes.href).toBe('/my/disputes');
+  });
+
+  it('names the corrected result with the 판정 정정 mark once a 판정 오류 사건 is confirmed (#144, 144-5)', () => {
+    const settled: Market = {
+      ...provisional,
+      status: 'settled',
+      resolvedResult: 'YES',
+      disputeDeadline: null,
+      disputeOpen: false,
+    };
+    const plain = drawn(settled, {
+      eligibility: 'not_provisional',
+      judgementVersion: 1,
+      dispute: null,
+    });
+    expect(byTestId(plain, 'dispute-market-result')?.text).toBe('YES');
+    expect(byTestId(plain, 'dispute-market-result-corrected')).toBeUndefined();
+    const html = drawn(
+      {
+        ...settled,
+        judgingRecord: {
+          ...settled.judgingRecord,
+          correction: {
+            result: 'NO',
+            originalResult: 'YES',
+            judgementVersion: 1,
+            confirmedAt: '2026-12-02T01:00:00.000Z',
+            description: '1차 출처가 발표를 정정했습니다.',
+            evidence: {
+              links: ['https://example.com/fix'],
+              collectedAt: '2026-12-02T00:00:00.000Z',
+            },
+          },
+        },
+      },
+      { eligibility: 'not_provisional', judgementVersion: 1, dispute: null },
+    );
+    // The paid result stays on the market row; the card follows the detail's 결과 줄.
+    expect(byTestId(html, 'dispute-market-result')?.text).toBe('NO');
+    const mark = byTestId(html, 'dispute-market-result-corrected');
+    expect(mark?.text).toBe(copy.marketResultCorrected);
+    expect(mark?.attributes.href).toBe('/markets/first-snow#judging-record');
   });
 
   it('says why not, one sentence each, with no form: no fill, an admin, the deadline, a confirmed market', () => {

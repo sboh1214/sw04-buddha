@@ -136,6 +136,7 @@ const detail: Market = {
     disputes: { total: 0, byVersion: [], decisions: [] },
     cancellation: null,
     payoutDelayed: false,
+    correction: null,
   },
   ruleVersions: [],
   // No 판정 지연 기록 (#142): not reading 판정 지연.

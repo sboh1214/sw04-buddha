@@ -129,6 +129,7 @@ import { readAdminMarketDisputes } from './market-dispute.js';
 import { toAdminJudgementDelays } from './market-judgement-delay.js';
 import { readMarketCancel } from './market-cancel.js';
 import { readMarketJudgement } from './market-judgement.js';
+import { readAdminMarketJudgementIncident } from './market-judgement-incident.js';
 import { readMarketPause } from './market-pause.js';
 import { readAdminRuleVersions, readMarketSupplement } from './market-supplement.js';
 import {
@@ -1682,7 +1683,9 @@ export class MarketAdminService {
    * shape's since #175) — the current version's 판정 이의 with how many hold the confirmation
    * (#175, `readAdminMarketDisputes`: one statement), and every 판정 지연 기록 with who made it and
    * which is current (#142, `readJudgementDelays`: one statement, which the inherited public
-   * `judgementDelay` reads too, at the same `nowMs` as the card's flags). Reads through `executor`
+   * `judgementDelay` reads too, at the same `nowMs` as the card's flags), and the 판정 오류 사건 —
+   * its registrations, the confirmed one and whether one is registrable and confirmable now (#144,
+   * `readAdminMarketJudgementIncident`: two statements). Reads through `executor`
    * so a transition returns the state it just committed; `tags` are the market's names in order
    * (`marketTagNames`) and `sources` its sources (`readMarketSources`), which every caller holds
    * already. MarketSupplementService's, MarketPauseService's, MarketCancelService's,
@@ -1810,6 +1813,8 @@ export class MarketAdminService {
       ),
       disputes: await readAdminMarketDisputes(executor, row),
       judgementDelays: toAdminJudgementDelays(judgementDelays, row),
+      // #144 (ADR-0165): the 판정 오류 사건, in the same snapshot as the judging record above.
+      judgementIncident: await readAdminMarketJudgementIncident(executor, row),
     };
   }
 

@@ -76,6 +76,8 @@ const OPERATION_RECORDS = [
   // market's history is an empty page, so the walk's placeholder id answers 200 too.
   'GET /admin/markets/:id/work-history',
   'GET /admin/categories/changes',
+  // #144: 판정 오류 사건 검토 대기 — the registrations with who registered them (ADR-0165).
+  'GET /admin/market-judgement-incidents',
 ];
 
 describe('admin access (static)', () => {

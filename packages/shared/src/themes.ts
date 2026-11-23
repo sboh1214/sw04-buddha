@@ -226,7 +226,13 @@ export const themeResultSchema = z
     slug: z.string(),
     title: z.string(),
     status: z.enum(THEME_RESULT_STATUSES),
+    /**
+     * The market's result as the public sees it: the corrected one when a 판정 오류 사건 was
+     * confirmed (#144, 144-5), else the paid one.
+     */
     result: marketResultSchema,
+    /** Whether `result` is a 판정 정정's (#144, 144-5; 144-19 (가): the list marks it). */
+    corrected: z.boolean(),
     decidedAt: z.iso.datetime(),
   })
   .meta({ id: 'ThemeResult' });

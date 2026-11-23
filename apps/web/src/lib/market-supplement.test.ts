@@ -148,6 +148,7 @@ const market: AdminMarket = {
     disputes: { total: 0, byVersion: [], decisions: [] },
     cancellation: null,
     payoutDelayed: false,
+    correction: null,
   },
   ruleVersions: [v1],
   supplement: { pending: null, log: [] },
@@ -161,6 +162,13 @@ const market: AdminMarket = {
   judgementDelay: null,
   judgementDelays: [],
   judgement: { current: null, history: [], pending: null, log: [], disputeWindowUndecided: false },
+  judgementIncident: {
+    registrable: false,
+    confirmable: false,
+    pending: null,
+    confirmed: null,
+    log: [],
+  },
 };
 
 /** Before the close (11-29 15:00 UTC) and after it. */

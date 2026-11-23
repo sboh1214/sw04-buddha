@@ -94,6 +94,10 @@ export const MARKET_WORK_ACTION_LABEL: Readonly<Record<MarketWorkActionType, str
   market_judgement_retract: copy.adminMarketWorkJudgementRetract,
   market_dispute_dismiss: copy.adminMarketWorkDisputeDismiss,
   market_dispute_accept: copy.adminMarketWorkDisputeAccept,
+  market_judgement_incident_register: copy.adminMarketWorkIncidentRegister,
+  market_judgement_incident_confirm: copy.adminMarketWorkIncidentConfirm,
+  market_judgement_incident_dismiss: copy.adminMarketWorkIncidentDismiss,
+  market_judgement_incident_retract: copy.adminMarketWorkIncidentRetract,
   market_delay_record: copy.eventJudgementDelayRecorded,
   market_conflict_declare: copy.marketConflictDeclare,
   market_resolve: copy.adminMarketWorkResolveInterim,
@@ -352,6 +356,14 @@ const DELAY_RECORD = z.object({
   judgementVersion: z.number().int().min(1).nullable(),
 });
 const MARKET_REJECT = z.object({ rejectReason: marketRejectReasonSchema });
+/** A 판정 오류 사건's registration (#144): the paid version and result, and the correct result. */
+const INCIDENT_REGISTER = z.object({
+  judgementVersion: z.number().int().min(1),
+  originalResult: marketResultSchema,
+  correctedResult: marketResultSchema,
+});
+/** Its 오류 확인, 기각 and 철회: the correct result the registration named. */
+const INCIDENT_DECISION = z.object({ correctedResult: marketResultSchema });
 
 const disputeCount = (ids: readonly unknown[]) =>
   `${ids.length.toLocaleString('ko-KR')}${copy.adminMarketDisputesHoldingUnit}`;
@@ -485,6 +497,38 @@ function actionRows(type: MarketWorkActionType, details: unknown): EventRow[] | 
             {
               label: copy.eventJudgementVersion,
               value: judgementVersionName(parsed.data.judgementVersion),
+            },
+          ]
+        : undefined;
+    }
+    case 'market_judgement_incident_register': {
+      // 오류 내용 is the reason column's (145-16); the evidence is the panel's to show.
+      const parsed = INCIDENT_REGISTER.safeParse(details);
+      if (!parsed.success) return undefined;
+      return [
+        {
+          label: copy.adminMarketJudgementIncidentPaidVersion,
+          value: judgementVersionName(parsed.data.judgementVersion),
+        },
+        {
+          label: copy.adminMarketJudgementIncidentPaidResult,
+          value: MARKET_RESULT_LABEL[parsed.data.originalResult],
+        },
+        {
+          label: copy.adminMarketJudgementIncidentCorrectedResult,
+          value: MARKET_RESULT_LABEL[parsed.data.correctedResult],
+        },
+      ];
+    }
+    case 'market_judgement_incident_confirm':
+    case 'market_judgement_incident_dismiss':
+    case 'market_judgement_incident_retract': {
+      const parsed = INCIDENT_DECISION.safeParse(details);
+      return parsed.success
+        ? [
+            {
+              label: copy.adminMarketJudgementIncidentCorrectedResult,
+              value: MARKET_RESULT_LABEL[parsed.data.correctedResult],
             },
           ]
         : undefined;

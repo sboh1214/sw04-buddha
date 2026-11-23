@@ -20,6 +20,7 @@ import {
   relatedMarketsKey,
 } from '@/lib/market-keys';
 import { type MarketPage, type MarketPages } from '@/lib/market-live';
+import { getQueryClient } from '@/lib/query-client';
 import { relatedSearchSection } from '@/lib/related-markets';
 import { relatedMarketsInfiniteQueryOptions } from './use-markets';
 import { ADMIN_RECONCILIATION_KEY } from './use-reconciliation';
@@ -29,6 +30,7 @@ import {
   ADMIN_MARKETS_KEY,
   ADMIN_MARKET_DISPUTES_KEY,
   ADMIN_MARKET_JUDGEMENTS_KEY,
+  ADMIN_MARKET_JUDGEMENT_INCIDENTS_KEY,
   ADMIN_MARKET_CANCEL_REQUESTS_KEY,
   ADMIN_MARKET_PAUSE_DECISIONS_KEY,
   ADMIN_MARKET_REVIEWS_KEY,
@@ -37,6 +39,7 @@ import {
   adminMarketDisputesKey,
   adminMarketCancelRequestsQueryOptions,
   adminMarketDisputesQueryOptions,
+  adminMarketJudgementIncidentsQueryOptions,
   adminMarketJudgementsQueryOptions,
   adminMarketKey,
   adminMarketPauseDecisionsQueryOptions,
@@ -105,6 +108,7 @@ const draft: AdminMarket = {
     disputes: { total: 0, byVersion: [], decisions: [] },
     cancellation: null,
     payoutDelayed: false,
+    correction: null,
   },
   ruleVersions: [],
   supplement: { pending: null, log: [] },
@@ -118,6 +122,13 @@ const draft: AdminMarket = {
   judgementDelay: null,
   judgementDelays: [],
   judgement: { current: null, history: [], pending: null, log: [], disputeWindowUndecided: false },
+  judgementIncident: {
+    registrable: false,
+    confirmable: false,
+    pending: null,
+    confirmed: null,
+    log: [],
+  },
   missingOpenItems: [],
   leadCloseGapMinutes: null,
   priceProtectionTicks: null,
@@ -944,6 +955,86 @@ describe('the 판정 승인 대기 queue (#152, ADR-0103)', () => {
     } finally {
       unsubscribe();
       queryClient.clear();
+    }
+  });
+});
+
+describe('the 판정 오류 사건 검토 대기 queue (#144, ADR-0165)', () => {
+  it('asks `GET /admin/market-judgement-incidents` a page per cursor, under the private admin root', async () => {
+    const get = vi.spyOn(api, 'GET').mockResolvedValue({
+      data: { data: [], meta: { nextCursor: 'c2' } },
+      response: new Response(null, { status: 200 }),
+    } as never);
+    try {
+      const options = adminMarketJudgementIncidentsQueryOptions();
+      expect(options.queryKey).toEqual(['admin', 'market-judgement-incidents']);
+      expect(await options.queryFn({ pageParam: undefined })).toEqual({
+        items: [],
+        nextCursor: 'c2',
+      });
+      expect(get).toHaveBeenLastCalledWith('/api/v1/admin/market-judgement-incidents', {
+        params: { query: {} },
+      });
+      await options.queryFn({ pageParam: 'c2' });
+      expect(get).toHaveBeenLastCalledWith('/api/v1/admin/market-judgement-incidents', {
+        params: { query: { cursor: 'c2' } },
+      });
+      expect(options.getNextPageParam({ items: [], nextCursor: null })).toBeUndefined();
+      // Its own root segment: neither a status filter of the admin list nor another queue.
+      for (const other of [
+        ADMIN_MARKETS_KEY,
+        ADMIN_MARKET_REVIEWS_KEY,
+        ADMIN_MARKET_SUPPLEMENTS_KEY,
+        ADMIN_MARKET_PAUSE_DECISIONS_KEY,
+        ADMIN_MARKET_JUDGEMENTS_KEY,
+      ]) {
+        expect(partialMatchKey(ADMIN_MARKET_JUDGEMENT_INCIDENTS_KEY, other)).toBe(false);
+        expect(partialMatchKey(other, ADMIN_MARKET_JUDGEMENT_INCIDENTS_KEY)).toBe(false);
+      }
+    } finally {
+      get.mockRestore();
+    }
+  });
+
+  it('is asked again by every admin write to a market: a registration adds a row, a decision takes one', async () => {
+    const { queryClient, unsubscribe } = await loadedDetail();
+    try {
+      queryClient.setQueryData(ADMIN_MARKET_JUDGEMENT_INCIDENTS_KEY, { pages: [], pageParams: [] });
+      await applyMarket(queryClient, ID, { ...draft, status: 'settled' });
+      expect(queryClient.getQueryState(ADMIN_MARKET_JUDGEMENT_INCIDENTS_KEY)?.isInvalidated).toBe(
+        true,
+      );
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('reads once on entry and once per 더 보기, never by a timer (ADR-0138)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'Date'] });
+    const get = vi.spyOn(api, 'GET').mockResolvedValue({
+      data: { data: [], meta: { nextCursor: 'c2' } },
+      response: new Response(null, { status: 200 }),
+    } as never);
+    const queryClient = getQueryClient();
+    const observer = new InfiniteQueryObserver(
+      queryClient,
+      adminMarketJudgementIncidentsQueryOptions() as never,
+    );
+    const off = observer.subscribe(() => undefined);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(get).toHaveBeenCalledTimes(1);
+      await observer.fetchNextPage();
+      expect(get).toHaveBeenCalledTimes(2);
+      // Ten minutes on screen: no poll.
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(get).toHaveBeenCalledTimes(2);
+    } finally {
+      off();
+      queryClient.clear();
+      get.mockRestore();
+      vi.useRealTimers();
     }
   });
 });

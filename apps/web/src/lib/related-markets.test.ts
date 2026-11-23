@@ -4,12 +4,15 @@ import {
   MARKET_TITLE_MAX,
   RELATED_MARKET_STATUSES,
 } from '@buddha/shared';
+import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { ApiError } from './api';
 import { MARKET_STATUS_LABEL } from './market-admin';
+import { marketKey, relatedMarketsKey } from './market-keys';
 import { SEARCH_INPUT_MAX_LENGTH } from './market-search';
 import {
+  refreshRelatedMarketsOnStatus,
   relatedHint,
   relatedLinkErrorMessage,
   relatedPickState,
@@ -162,9 +165,11 @@ describe('relatedHint (the admin panel, #65)', () => {
         `${copy.adminRelatedHintHiddenStatusTail} ${copy.marketResultVoid}` +
         `${copy.adminRelatedHintHiddenResultTail} ${copy.adminRelatedHintNoEffect}`,
     );
+    // 144-19 (다): the 무효 result includes one a 판정 정정 made (#144, the effective result).
     expect(hint).toBe(
       '연결한 두 시장은 서로의 상세에 관련 시장으로 보입니다. 초안·검수 중·취소인 시장과 결과가 ' +
-        '무효인 시장은 상세에 보이지 않습니다. 연결은 두 시장의 규칙·거래·판정·정산을 바꾸지 않습니다.',
+        '무효인 시장(정정된 결과 포함)은 상세에 보이지 않습니다. 연결은 두 시장의 규칙·거래·판정·정산을 ' +
+        '바꾸지 않습니다.',
     );
     // Every status by its label exactly when a detail leaves it out — the shown ones are not
     // named (no label of one is inside another's, so `includes` reads one label alone).
@@ -203,5 +208,36 @@ describe('relatedLinkErrorMessage', () => {
     expect(relatedLinkErrorMessage(apiError(404, 'NOT_FOUND'))).toBe(copy.adminMarketNotFound);
     expect(relatedLinkErrorMessage(apiError(400, 'VALIDATION_ERROR'))).toBe(copy.errUnknown);
     expect(relatedLinkErrorMessage(new Error('network'))).toBe(copy.errUnknown);
+  });
+});
+
+describe('refreshRelatedMarketsOnStatus (#144, ADR-0165 T12)', () => {
+  const held = () => {
+    const queryClient = new QueryClient();
+    for (const key of [relatedMarketsKey(HUB), relatedMarketsKey(OTHER), marketKey(HUB)]) {
+      queryClient.setQueryData(key, { held: true });
+    }
+    const invalidated = (key: readonly unknown[]) =>
+      queryClient.getQueryState(key)?.isInvalidated === true;
+    return { queryClient, invalidated };
+  };
+
+  it('marks every detail’s related list on 지급 완료 — a correction’s same-key repeat included', async () => {
+    // A confirmed 판정 오류 사건 republishes the settled status unchanged; the lists leave out a
+    // market whose (corrected) result is 무효, and which details list it is the server's to say.
+    const { queryClient, invalidated } = held();
+    await refreshRelatedMarketsOnStatus(queryClient, 'settled');
+    expect(invalidated(relatedMarketsKey(HUB))).toBe(true);
+    expect(invalidated(relatedMarketsKey(OTHER))).toBe(true);
+    // Nothing else: the market's own read is the status handler's.
+    expect(invalidated(marketKey(HUB))).toBe(false);
+  });
+
+  it('marks nothing for any other status', () => {
+    for (const status of MARKET_STATUSES.filter((status) => status !== 'settled')) {
+      const { queryClient, invalidated } = held();
+      expect(refreshRelatedMarketsOnStatus(queryClient, status), status).toBeUndefined();
+      expect(invalidated(relatedMarketsKey(HUB)), status).toBe(false);
+    }
   });
 });

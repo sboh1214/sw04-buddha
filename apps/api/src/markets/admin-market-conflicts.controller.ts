@@ -46,7 +46,7 @@ export class AdminMarketConflictsController {
   @ApiOperation({
     operationId: 'adminDeclareMarketConflict',
     summary:
-      'Declare the acting administrator’s interest irrevocably, retracting their pending judgement or correction atomically',
+      'Declare the acting administrator’s interest irrevocably, retracting their pending judgement, correction or judgement incident atomically',
   })
   @ApiData(adminMarketConflictWriteSchema)
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')

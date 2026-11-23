@@ -101,6 +101,15 @@ const SCREENS: Readonly<Record<string, readonly string[]>> = {
     "await api.POST('/api/v1/admin/markets/{id}/disputes/{disputeId}/dismiss', {\n            params: { path: { id: market.id, disputeId } },\n            body: { reason, expectedAccountId: by, noConflictConfirmed: true },",
     "await api.POST('/api/v1/admin/markets/{id}/disputes/{disputeId}/accept', {\n            params: { path: { id: market.id, disputeId } },\n            body: { reason, expectedAccountId: by, noConflictConfirmed: true },",
   ],
+  // 판정 오류 사건 (#144, ADR-0165), new since and written the same way: 사건 등록, then 오류 확인 · 기각
+  // · 철회 from their dialogs (each naming the incident in its path), the panel holding them for the
+  // admin who opened them
+  '../app/admin/markets/[id]/market-judgement-incident-dialogs.tsx': [
+    "await api.POST('/api/v1/admin/markets/{id}/judgement-incidents', {\n          params: { path: { id: market.id } },\n          body: { ...registration, noConflictConfirmed: true, expectedAccountId: by },",
+    "await api.POST('/api/v1/admin/markets/{id}/judgement-incidents/{requestId}/confirm', {\n            params: { path: { id: market.id, requestId } },\n            body: { reason, noConflictConfirmed: true, expectedAccountId: by },",
+    "await api.POST('/api/v1/admin/markets/{id}/judgement-incidents/{requestId}/dismiss', {\n            params: { path: { id: market.id, requestId } },\n            body: { reason, noConflictConfirmed: true, expectedAccountId: by },",
+    "await api.POST('/api/v1/admin/markets/{id}/judgement-incidents/{requestId}/retract', {\n          params: { path: { id: market.id, requestId } },\n          body: { expectedAccountId: by },",
+  ],
   // 정산 다시 시도 (#145, ADR-0163; 145-7), new since and written the same way: one admin's attempt
   // from its dialog, the reason and the admin on screen alone, the 정산 실패 list holding it for the
   // admin who opened it
@@ -234,6 +243,10 @@ describe('the admin the admin writes name (ADR-0092)', () => {
       '../app/admin/markets/[id]/market-dispute-panel.tsx': 3,
       // the confirm of 기각 or 수용 (#175: one dialog, its kind's route)
       '../app/admin/markets/[id]/market-dispute-dialogs.tsx': 1,
+      // the buttons opening 사건 등록, 오류 확인, 기각 and 철회 (#144)
+      '../app/admin/markets/[id]/market-judgement-incident-panel.tsx': 4,
+      // the confirms of 사건 등록, 오류 확인 or 기각 (one dialog, its kind's route) and 철회 (#144)
+      '../app/admin/markets/[id]/market-judgement-incident-dialogs.tsx': 3,
       // the buttons opening 정산 다시 시도 on the 지급 중 rows (#145, 145-14)
       '../app/admin/operations/operations-failures.tsx': 1,
       // the confirm of 정산 다시 시도, and its reason's fieldset (#145, 145-7)
@@ -361,6 +374,11 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
     // 판정 지연 기록 (#142): the 지연 기록 등록 dialog, with the reason and the time typed
     '../app/admin/markets/[id]/market-judgement-delay-panel.tsx': [
       'const [action, setAction] = useHeldForOperator<JudgementDelayAction>();',
+    ],
+    // 판정 오류 사건 (#144): the registration's dialog — with the result picked, the description, the
+    // links and the instant typed — and the waiting incident's 오류 확인, 기각 and 철회
+    '../app/admin/markets/[id]/market-judgement-incident-panel.tsx': [
+      'const [action, setAction] = useHeldForOperator<IncidentAction>();',
     ],
     // 정산 다시 시도 (#145, 145-7): the dialog, with the market it was opened on and the reason typed
     '../app/admin/operations/operations-failures.tsx': [
@@ -497,6 +515,10 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
     // And the 판정 이의 block's 기각 or 수용 dialog (#175), drawn in the judgement panel.
     expect(source('../app/admin/markets/[id]/market-dispute-panel.tsx')).toContain(
       '{action !== null && (\n        <DisputeDecisionDialog\n          action={action}\n          market={market}',
+    );
+    // And the 판정 오류 사건 panel's dialogs (#144), only while held for their admin.
+    expect(source('../app/admin/markets/[id]/market-judgement-incident-panel.tsx')).toContain(
+      '{action !== null && (\n        <JudgementIncidentDialog\n          kind={action}\n          market={market}',
     );
     // And the 판정 지연 기록 section's dialog (#142), drawn in the judgement panel.
     expect(source('../app/admin/markets/[id]/market-judgement-delay-panel.tsx')).toContain(

@@ -148,11 +148,16 @@ const DETAIL_COLUMNS = {
 function useJudgingRecordAnchor(ready: boolean) {
   useEffect(() => {
     if (!ready || window.location.hash !== `#${JUDGING_RECORD_ANCHOR}`) return;
-    const copies = [
-      ...document.querySelectorAll<HTMLElement>(`[data-anchor="${JUDGING_RECORD_ANCHOR}"]`),
-    ].map((element) => ({ element, drawn: element.getClientRects().length > 0 }));
-    drawnAnchor(copies)?.element.scrollIntoView({ block: 'start' });
+    scrollToJudgingRecord();
   }, [ready]);
+}
+
+/** Scrolls to the copy of 공개 판정 기록 this width draws (`drawnAnchor`); nothing when none is. */
+function scrollToJudgingRecord() {
+  const copies = [
+    ...document.querySelectorAll<HTMLElement>(`[data-anchor="${JUDGING_RECORD_ANCHOR}"]`),
+  ].map((element) => ({ element, drawn: element.getClientRects().length > 0 }));
+  drawnAnchor(copies)?.element.scrollIntoView({ block: 'start' });
 }
 
 export interface MarketDetailProps {
@@ -667,6 +672,9 @@ export function StatusNotice({ market, now }: { market: Market; now?: number }) 
   const deadline = market.status === 'provisional' ? market.disputeDeadline : null;
   const reviewPassed = delay !== null && (delay.nextReviewPassed || reviewCame);
   const resultRows = market.resolvedResult !== null || deadline !== null;
+  // A confirmed 판정 오류 사건 (#144, 144-5): the 결과 줄 follows the corrected result and marks it,
+  // the mark leading to the record's 판정 정정. The market row keeps the paid one.
+  const correction = market.judgingRecord.correction;
   return (
     <Alert.Root status={notice.tone} role="status" data-testid="market-status-notice">
       <Alert.Indicator />
@@ -682,8 +690,29 @@ export function StatusNotice({ market, now }: { market: Market; now?: number }) 
             {market.resolvedResult !== null && (
               <DataList.Item>
                 <DataList.ItemLabel>{copy.marketResolvedResult}</DataList.ItemLabel>
-                <DataList.ItemValue data-testid="market-detail-result">
-                  {MARKET_RESULT_LABEL[market.resolvedResult]}
+                <DataList.ItemValue>
+                  <HStack gap="2" flexWrap="wrap">
+                    <Text as="span" data-testid="market-detail-result">
+                      {MARKET_RESULT_LABEL[correction?.result ?? market.resolvedResult]}
+                    </Text>
+                    {correction !== null && (
+                      // The record is in the page once per width with no id (`data-anchor`), so
+                      // the mark scrolls to the drawn copy itself rather than leaving it to the
+                      // hash; the address stays a working link without script.
+                      <ChakraLink
+                        href={`#${JUDGING_RECORD_ANCHOR}`}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          scrollToJudgingRecord();
+                        }}
+                        data-testid="market-detail-result-corrected"
+                      >
+                        <Badge colorPalette="orange" variant="subtle">
+                          {copy.marketResultCorrected}
+                        </Badge>
+                      </ChakraLink>
+                    )}
+                  </HStack>
                 </DataList.ItemValue>
               </DataList.Item>
             )}

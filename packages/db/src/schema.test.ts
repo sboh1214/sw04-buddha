@@ -11327,6 +11327,90 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
   });
 
+  describe('market_judgement_incidents (migration 0080, #144)', () => {
+    it('adds the table with its keys, CHECKs, references and triggers', async () => {
+      const { rows: columns } = await t.db.execute<{
+        column: string;
+        type: string;
+        nullable: string;
+        default: string | null;
+      }>(sql`
+        SELECT column_name AS "column", data_type AS type, is_nullable AS nullable,
+          column_default AS "default"
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'market_judgement_incidents'
+        ORDER BY ordinal_position`);
+      const instant = 'timestamp with time zone';
+      expect(columns).toEqual([
+        { column: 'id', type: 'uuid', nullable: 'NO', default: 'gen_random_uuid()' },
+        { column: 'market_id', type: 'uuid', nullable: 'NO', default: null },
+        { column: 'applied_txid', type: 'text', nullable: 'NO', default: null },
+        { column: 'judgement_version', type: 'integer', nullable: 'NO', default: null },
+        { column: 'original_result', type: 'USER-DEFINED', nullable: 'NO', default: null },
+        { column: 'corrected_result', type: 'USER-DEFINED', nullable: 'NO', default: null },
+        { column: 'description', type: 'text', nullable: 'NO', default: null },
+        { column: 'evidence_links', type: 'ARRAY', nullable: 'NO', default: null },
+        { column: 'evidence_collected_at', type: instant, nullable: 'NO', default: null },
+        { column: 'approval_id', type: 'uuid', nullable: 'NO', default: null },
+        { column: 'registered_by', type: 'text', nullable: 'NO', default: null },
+        { column: 'paid_registered_by', type: 'text', nullable: 'NO', default: null },
+        { column: 'confirmed_by', type: 'text', nullable: 'NO', default: null },
+        { column: 'registered_at', type: instant, nullable: 'NO', default: null },
+        { column: 'confirmed_at', type: instant, nullable: 'NO', default: null },
+      ]);
+      const { rows: constraints } = await t.db.execute<{
+        name: string;
+        type: string;
+        action: string;
+      }>(sql`
+        SELECT conname AS name, contype AS type, confdeltype AS action FROM pg_constraint
+        WHERE conrelid = 'market_judgement_incidents'::regclass ORDER BY conname`);
+      // Every reference RESTRICTs (`r`); one incident per market (144-14) and per request.
+      expect(constraints).toEqual([
+        {
+          name: 'market_judgement_incidents_approval_id_approval_requests_id_fk',
+          type: 'f',
+          action: 'r',
+        },
+        { name: 'market_judgement_incidents_approval_id_unique', type: 'u', action: ' ' },
+        { name: 'market_judgement_incidents_confirmed_by_user_id_fk', type: 'f', action: 'r' },
+        { name: 'market_judgement_incidents_confirmer_check', type: 'c', action: ' ' },
+        { name: 'market_judgement_incidents_evidence_check', type: 'c', action: ' ' },
+        { name: 'market_judgement_incidents_judgement_fk', type: 'f', action: 'r' },
+        { name: 'market_judgement_incidents_market_id_markets_id_fk', type: 'f', action: 'r' },
+        { name: 'market_judgement_incidents_market_id_unique', type: 'u', action: ' ' },
+        {
+          name: 'market_judgement_incidents_paid_registered_by_user_id_fk',
+          type: 'f',
+          action: 'r',
+        },
+        { name: 'market_judgement_incidents_pkey', type: 'p', action: ' ' },
+        {
+          name: 'market_judgement_incidents_registered_by_user_id_fk',
+          type: 'f',
+          action: 'r',
+        },
+        { name: 'market_judgement_incidents_result_check', type: 'c', action: ' ' },
+      ]);
+      const { rows: triggers } = await t.db.execute<{ table: string; name: string }>(sql`
+        SELECT tgrelid::regclass::text AS "table", tgname AS name FROM pg_trigger
+        WHERE NOT tgisinternal AND (tgrelid = 'market_judgement_incidents'::regclass
+          OR tgname LIKE 'approval_requests_incident_%')
+        ORDER BY 1, 2`);
+      expect(triggers).toEqual([
+        { table: 'approval_requests', name: 'approval_requests_incident_record' },
+        { table: 'approval_requests', name: 'approval_requests_incident_registrant' },
+        { table: 'market_judgement_incidents', name: 'market_judgement_incidents_check' },
+        { table: 'market_judgement_incidents', name: 'market_judgement_incidents_keep_record' },
+      ]);
+      // The completeness check runs at COMMIT (deferred), the rest at the statement.
+      const { rows: deferred } = await t.db.execute<{ name: string; deferred: boolean }>(sql`
+        SELECT tgname AS name, tginitdeferred AS deferred FROM pg_trigger
+        WHERE tgname = 'approval_requests_incident_record'`);
+      expect(deferred).toEqual([{ name: 'approval_requests_incident_record', deferred: true }]);
+    });
+  });
+
   describe('buddha_app privileges (PLAN 6.4)', () => {
     it('can INSERT and SELECT ledger_entries but not UPDATE or DELETE', async () => {
       await createUser(t.db, { balanceCoin: 500n });
@@ -11356,7 +11440,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
             'write_limit_events', 'link_uses', 'link_flags', 'retention_purges',
             'themes', 'theme_markets', 'theme_notices', 'tags', 'market_tags', 'categories',
             'market_sources', 'market_rule_versions', 'market_judgement_delays', 'orders',
-            'fills', 'fill_realizations', 'regrants')
+            'fills', 'fill_realizations', 'regrants', 'market_judgement_incidents')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
@@ -11377,6 +11461,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(privs('fill_realizations')).toEqual(['INSERT', 'SELECT']);
       // Migration 0077 (#74): a re-grant given is a permanent fact like its REGRANT entry.
       expect(privs('regrants')).toEqual(['INSERT', 'SELECT']);
+      // Migration 0080 (#144): a confirmed 판정 오류 사건 is a permanent fact.
+      expect(privs('market_judgement_incidents')).toEqual(['INSERT', 'SELECT']);
       expect(privs('payments')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       // Migration 0028 (#183): the real name changes in place and the row goes with the account;
       // a code's wrong entries, its use and what the provider said (0030) are written in place,

@@ -240,7 +240,9 @@ export function judgementChoiceRefusals(choice: JudgementChoice): JudgementChoic
  * Why a market's status refuses a registration or its approval, or null when it takes it (#173
  * item 8): a first judgement (`correction` false) is CLOSED's, a correction (true — the request's
  * `correction` is not null, never read off the status) PROVISIONAL's alone, so a confirmed result
- * is never corrected here (#144). A 반려 and a 철회 ask no status.
+ * is never corrected here: from the result's confirmation on, a 판정 오류 사건 records the corrected
+ * result beside the paid version, which stays current (#144, ADR-0165,
+ * market-judgement-incident.ts). A 반려 and a 철회 ask no status.
  */
 export function judgementStatusRefusal(
   status: MarketStatus,
@@ -361,6 +363,25 @@ export const evidenceLinkSchema = z
   .refine((url) => httpUrlSchema.safeParse(url).success, 'Invalid URL');
 
 /**
+ * A body's evidence links: 1..JUDGEMENT_EVIDENCE_LINKS_MAX `evidenceLinkSchema` links, a link given
+ * twice refused on its own index (`evidence.duplicateLink`). A judgement's registration and a 판정
+ * 오류 사건's (#144, market-judgement-incident.ts) take the same rule.
+ */
+export const judgementEvidenceLinksSchema = z
+  .array(evidenceLinkSchema)
+  .min(1)
+  .max(JUDGEMENT_EVIDENCE_LINKS_MAX)
+  .superRefine((links, ctx) => {
+    for (const index of duplicateLinkIndexes(links)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [index],
+        message: MARKET_JUDGEMENT_REFUSALS.evidence.duplicateLink,
+      });
+    }
+  });
+
+/**
  * A registration's 판정 정정 part (#176, ADR-0105; #173 items 2·8): the current version the
  * correction was written against (`baseVersion` — refused as `correction.stale` once the market
  * has moved past it, as #80's supplement) and the 정정 사유, trimmed, 1..500 characters
@@ -402,22 +423,7 @@ export const registerJudgementBodySchema = z
     source: z.object({ priority: judgementSourcePrioritySchema }).nullable(),
     fallbackReason: approvalReasonSchema.nullish(),
     voidReason: approvalReasonSchema.nullish(),
-    evidence: z.object({
-      links: z
-        .array(evidenceLinkSchema)
-        .min(1)
-        .max(JUDGEMENT_EVIDENCE_LINKS_MAX)
-        .superRefine((links, ctx) => {
-          for (const index of duplicateLinkIndexes(links)) {
-            ctx.addIssue({
-              code: 'custom',
-              path: [index],
-              message: MARKET_JUDGEMENT_REFUSALS.evidence.duplicateLink,
-            });
-          }
-        }),
-      collectedAt: storableInstantSchema,
-    }),
+    evidence: z.object({ links: judgementEvidenceLinksSchema, collectedAt: storableInstantSchema }),
     description: approvalReasonSchema,
     correction: judgementCorrectionBodySchema.nullable().default(null),
     expectedAccountId: expectedAccountIdSchema,

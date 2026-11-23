@@ -33,8 +33,9 @@ export type MarketWorkKind = (typeof MARKET_WORK_KINDS)[number];
  * - 수정: 초안 만들기·수정, 개장 뒤 카테고리·태그·이미지와 유동성 설정 (`market_update`), 규칙 보충, 가격
  *   보호 폭;
  * - 중단: 일시 중단, 재개·조기 마감의 요청과 결정;
- * - 판정: 판정 등록·승인·반려·철회(정정 포함), 이의 기각·수용, 판정 지연 기록, 이해충돌 신고, and the
- *   retired interim judgement;
+ * - 판정: 판정 등록·승인·반려·철회(정정 포함), 이의 기각·수용, 판정 지연 기록, 이해충돌 신고, the
+ *   retired interim judgement, and 판정 오류 사건의 등록·오류 확인·기각·철회 (#144, ADR-0165 —
+ *   a judgement's review after the payout);
  * - 지급: 정산 다시 시도 (145-7), 대사 보류 복구 (145-12 "대사 보류 복구는 지급");
  * - 그 밖: 개설 검수 (제출·승인·반려·되돌림·일정 변경), 취소, 관련 시장, 대사 실행, 비정상 체결 분류,
  *   시장 제안 채택·연결, and the retired interim open and one-admin close.
@@ -64,6 +65,10 @@ export const MARKET_WORK_ACTION_KIND = {
   market_delay_record: 'judgement',
   market_conflict_declare: 'judgement',
   market_resolve: 'judgement',
+  market_judgement_incident_register: 'judgement',
+  market_judgement_incident_confirm: 'judgement',
+  market_judgement_incident_dismiss: 'judgement',
+  market_judgement_incident_retract: 'judgement',
   market_settlement_retry: 'settlement',
   reconciliation_recovery_request: 'settlement',
   reconciliation_recovery_approve: 'settlement',
@@ -309,6 +314,10 @@ export const MARKET_WORK_ACTION_REASON: Readonly<
   market_delay_record: 'recorded',
   market_conflict_declare: 'recorded',
   market_resolve: 'recorded',
+  market_judgement_incident_register: 'recorded',
+  market_judgement_incident_confirm: 'recorded',
+  market_judgement_incident_dismiss: 'recorded',
+  market_judgement_incident_retract: 'retracted',
   market_settlement_retry: 'recorded',
   reconciliation_recovery_request: 'recorded',
   reconciliation_recovery_approve: 'recorded',
@@ -338,11 +347,12 @@ export const MARKET_WORK_ACTION_REASON: Readonly<
 
 /**
  * The payload key a `recorded` action keeps its reason under, where it is not `reason`: 판정
- * 등록's 설명 (145-16 "판정 등록은 그 설명"), a pause's note (its `reason` is the code), the
- * retired interim judgement's note.
+ * 등록's 설명 (145-16 "판정 등록은 그 설명") and a 판정 오류 사건 등록's 오류 내용 alike (#144), a
+ * pause's note (its `reason` is the code), the retired interim judgement's note.
  */
 const RECORDED_REASON_KEY: Partial<Record<MarketWorkActionType, string>> = {
   market_judgement_request: 'description',
+  market_judgement_incident_register: 'description',
   market_pause: 'note',
   market_resolve: 'note',
 };

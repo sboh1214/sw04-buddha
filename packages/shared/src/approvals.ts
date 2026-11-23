@@ -27,7 +27,10 @@ import * as z from 'zod';
  * next path, 재개 or 조기 마감 (#114, `market_pause_decision`, market-pause.ts), and a closed
  * market's judgement (#152, `market_judgement`, market-judgement.ts): the admin who registered it
  * may not approve or reject it (ADR-0093 decision 3 '역할'), and may retract it. So does a
- * SCHEDULED market's cancel (#20, `market_cancel`, market-cancel.ts).
+ * SCHEDULED market's cancel (#20, `market_cancel`, market-cancel.ts). A 판정 오류 사건 (#144,
+ * `market_judgement_incident`, market-judgement-incident.ts) excludes its requester and the paid
+ * judgement version's registrant (`registrant`, a consumer refusal), may be retracted by its
+ * requester, and is refused as `no_decider` when no third admin could decide it.
  */
 
 /** Lower-case words joined by `_` (`market_open`); approval_requests.kind is varchar(40). */

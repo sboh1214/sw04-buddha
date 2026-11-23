@@ -4,10 +4,12 @@ import {
   RELATED_MARKET_STATUSES,
   marketSearchTermSchema,
 } from '@buddha/shared';
+import { type QueryClient } from '@tanstack/react-query';
 import { copy } from '@/copy';
 import { isApiError, isForAnotherAccount, validationField } from './api';
 import { MARKET_RESULT_LABEL, MARKET_STATUS_LABEL } from './market-admin';
-import { listSection } from './query-client';
+import { MARKET_RELATED_KEY } from './market-keys';
+import { listSection, restartQueries } from './query-client';
 
 /**
  * 관련 시장 (#65, ADR-0068), the admin half: what the admin detail's 관련 시장 panel decides about
@@ -110,7 +112,9 @@ export function relatedSearchQuery(q: string, cursor?: string): { q: string; cur
  * The panel's hint: the two markets see each other, which markets a detail does NOT show, and that
  * a link changes neither market. Since #174 the rule is two halves (ADR-0093 decision 3, the #174
  * row; `isRelatedMarketShown`): a status — every one `RELATED_MARKET_STATUSES` leaves out, the
- * admin's 초안·검수 중 and 취소 — and a result, 무효, in whatever status the market holds it. A
+ * admin's 초안·검수 중 and 취소 — and a result, 무효, in whatever status the market holds it: the
+ * effective result, the corrected one once a 판정 오류 사건 is confirmed (#144, 144-5 — 144-19 (다)
+ * says so in the hint, '(정정된 결과 포함)'). A
  * list of shown statuses cannot say the second half, and would be eight labels long; the hidden
  * ones are three and a result. Both are named by their labels — the ones the same panel badges
  * each linked and found market with (`MARKET_STATUS_LABEL`), and the result's own word
@@ -145,4 +149,22 @@ export function relatedLinkErrorMessage(error: unknown): string {
   }
   if (isApiError(error, 'NOT_FOUND')) return copy.adminMarketNotFound;
   return copy.errUnknown;
+}
+
+/**
+ * What a market's `market:status` event does to the details' 관련 시장 lists (#144, ADR-0165 T12):
+ * on 지급 완료 every related list is marked and the one on screen asks again. A confirmed 판정 오류
+ * 사건 republishes the market's settled status under its unchanged key (the market row never
+ * moves), and the lists leave out a market whose result — the corrected one since #144 (144-5,
+ * `effectiveResultSql`) — is 무효: a YES→VOID correction takes it out of another market's list, a
+ * VOID→YES one puts it in, and no event carries which. Which details list the market is the
+ * server's to say, so the root is marked; `restartQueries` asks again only where a list is mounted
+ * (PLAN 11.5), and every other status marks nothing.
+ */
+export function refreshRelatedMarketsOnStatus(
+  queryClient: QueryClient,
+  status: MarketStatus,
+): Promise<void> | undefined {
+  if (status !== 'settled') return undefined;
+  return restartQueries(queryClient, MARKET_RELATED_KEY);
 }

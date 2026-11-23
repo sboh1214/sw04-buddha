@@ -1,5 +1,6 @@
 'use client';
 import { MarketMakerControlsPanel } from './market-maker-controls';
+import { MarketJudgementIncidentPanel } from './market-judgement-incident-panel';
 
 import {
   Alert,
@@ -63,8 +64,8 @@ import {
   unwrap,
 } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
+import { adminResultText } from '@/lib/market-judgement-incident';
 import {
-  MARKET_RESULT_LABEL,
   MARKET_STATUS_LABEL,
   MARKET_STATUS_PALETTE,
   compactJson,
@@ -237,6 +238,10 @@ export function AdminMarketDetail({ id }: { id: string }) {
         market={data}
         readAt={market.dataUpdatedAt}
       />
+      {/* 판정 오류 사건 (#144, ADR-0165): after the judgement it corrects, keyed and prefixed as the
+          judgement panel is — its dialogs name the market and the incident they were opened on.
+          Drawn from 결과 확정 on (144-8) and on any market with an incident. */}
+      <MarketJudgementIncidentPanel key={`judgement-incident-${data.id}`} market={data} />
       {/* 검수 (#78, ADR-0099): keyed by the market, so a dialog held on one market's detail never
           names the next one a same-condition link opens on this route. Prefixed: a sibling below
           (RelatedMarketsPanel) is keyed by the id too, and two equal keys in one list leave the
@@ -285,8 +290,10 @@ export function AdminMarketDetail({ id }: { id: string }) {
             {/* YES·NO·무효, or '—' before a judgement and on a cancelled market (ADR-0093 decision 1,
                 item 10: a cancelled market has no result, never VOID) — from the 잠정 결과 on (#152:
                 the approved judgement's, ADR-0095 8-2). */}
-            <Item label={copy.marketResolvedResult}>
-              {data.resolvedResult === null ? '—' : MARKET_RESULT_LABEL[data.resolvedResult]}
+            {/* Once a 판정 오류 사건 is confirmed (#144, ADR-0165): '{paid} → 판정 정정 {corrected}' — the
+                row keeps the paid result. */}
+            <Item label={copy.marketResolvedResult} testId="market-detail-resolved-result">
+              {adminResultText(data)}
             </Item>
             {/* The current judgement's version and dispute deadline, fixed at its approval (#152,
                 #173 item 5); none for a market judged before #152. */}
