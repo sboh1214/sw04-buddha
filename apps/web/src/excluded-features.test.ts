@@ -543,6 +543,10 @@ describe('excluded features on screens (#113)', () => {
       at('lib', 'admin-operations.ts'),
       at('app', 'admin', 'operations', 'settlement-retry-dialog.tsx'),
       at('hooks', 'use-hash-scroll-once.ts'),
+      // 작업 이력's (#145 part 2): the payout's attempts and error and a retry's outcome are no
+      // member's either — the history screen alone reads it.
+      at('lib', 'market-work.ts'),
+      at('app', 'admin', 'markets', '[id]', 'work-history', 'market-work-history.tsx'),
     ]) {
       expect(ADMIN.has(file), file).toBe(true);
     }

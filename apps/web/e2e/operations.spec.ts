@@ -1,10 +1,12 @@
 import type { APIRequestContext, Locator, Page, Response } from '@playwright/test';
-import type {
-  AdminAwaitingJudgementMarket,
-  AdminClosingMarket,
-  AdminMarket,
-  AdminOperationsFailure,
-  AdminSettlementRetryResult,
+import {
+  type AdminAwaitingJudgementMarket,
+  type AdminClosingMarket,
+  type AdminMarket,
+  type AdminMarketWorkEntry,
+  type AdminOperationsFailure,
+  type AdminSettlementRetryResult,
+  MARKET_WORK_KINDS,
 } from '@buddha/shared';
 import { copy } from '../src/copy';
 import {
@@ -42,7 +44,10 @@ import {
  * market past its scheduled judgement is listed under 지연만 with no record and its status untouched
  * (AC 3), takes a record and a registration, and leaves once judged (AC 7). C: a payout held by a
  * ledger failure is listed as 정산 실패, an operator's retry fails while the hold stands and the
- * market settles once it is recovered, leaving the list (AC 4, AC 7).
+ * market settles once it is recovered, leaving the list (AC 4, AC 7) — and D (#145 part 2,
+ * ADR-0164): that market's 작업 이력 holds its tag edit, its pause, its judgement and its payout's
+ * attempts, failure record and 시스템 steps, each kind filter only its own, each with 담당자, 시각 and 사유,
+ * and none of a second market's work (AC 6).
  *
  * The e2e database persists across runs and both projects share it serially, so each test makes
  * fresh markets, finds its rows by test id after paging (judgement.spec.ts's `showInJudgements`)
@@ -64,6 +69,8 @@ const CLOSE_WAIT_MS = 240_000;
 /** How long C waits for its payout to fail (a job at once, the per-minute scan behind it). */
 const FAILED_WAIT_MS = 90_000;
 const ROOT = '/api/v1/admin/operations';
+/** The rows one read of a market's 작업 이력 answers (the API's default page). */
+const HISTORY_PAGE = 20;
 const minuteIso = (ms: number) => new Date(Math.floor(ms / MINUTE_MS) * MINUTE_MS).toISOString();
 
 /** Every row of one list as `context` reads it through the API, page after page. */
@@ -108,6 +115,14 @@ async function marketOf(admin: APIRequestContext, marketId: string): Promise<Adm
   return (JSON.parse(body) as { data: AdminMarket }).data;
 }
 
+/** Sets an OPEN market's tags through the admin edit (`market_update`, #172 item 14). */
+async function editTags(admin: APIRequestContext, marketId: string, tags: string[]): Promise<void> {
+  const response = await admin.patch(`/api/v1/admin/markets/${marketId}`, {
+    data: { tags, expectedAccountId: await accountIdOf(admin) },
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+}
+
 /**
  * Presses a list's 더 보기 until `row` shows, or until no page follows (`present: false` then
  * passes): the lists put earlier runs' markets before a fresh one.
@@ -147,6 +162,212 @@ function nextRetry(page: Page, marketId: string): Promise<Response> {
       response.request().method() === 'POST' &&
       new URL(response.url()).pathname === `/api/v1/admin/markets/${marketId}/settlement-retries`,
   );
+}
+
+/** Every entry of one market's 작업 이력 as `context` reads it, oldest first, page after page. */
+async function workHistoryOf(
+  context: APIRequestContext,
+  marketId: string,
+  kind?: AdminMarketWorkEntry['kind'],
+): Promise<AdminMarketWorkEntry[]> {
+  const entries: AdminMarketWorkEntry[] = [];
+  let cursor: string | null = null;
+  do {
+    const query = new URLSearchParams({ limit: '100' });
+    if (kind !== undefined) query.set('kind', kind);
+    if (cursor !== null) query.set('cursor', cursor);
+    const response = await context.get(
+      `/api/v1/admin/markets/${marketId}/work-history?${query.toString()}`,
+    );
+    const body = await response.text();
+    expect(response.ok(), body).toBe(true);
+    const page = JSON.parse(body) as {
+      data: AdminMarketWorkEntry[];
+      meta: { nextCursor: string | null };
+    };
+    entries.push(...page.data);
+    cursor = page.meta.nextCursor;
+  } while (cursor !== null);
+  return entries;
+}
+
+/** Presses the history's 더 보기 until no page follows, so every entry is on screen. */
+async function showWholeHistory(page: Page): Promise<void> {
+  const more = page.getByTestId('market-work-history-more');
+  await expect(
+    page.getByTestId('market-work-history-list').or(page.getByTestId('market-work-history-empty')),
+  ).toBeVisible();
+  for (let pages = 0; pages < 20 && (await more.isVisible()); pages += 1) {
+    const next = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'GET' &&
+        new URL(response.url()).pathname.endsWith('/work-history'),
+    );
+    await more.click();
+    await next;
+    await expect(
+      page.locator('[data-testid="market-work-history-more"][data-loading]'),
+    ).toHaveCount(0);
+  }
+  await expect(more).toHaveCount(0);
+}
+
+/** The ids of the history rows on screen, in order. */
+function workRowIds(page: Page): Promise<(string | null)[]> {
+  return page
+    .getByTestId('market-work-history-list')
+    .locator('tbody > tr')
+    .evaluateAll((rows) =>
+      rows.map((row) => row.getAttribute('data-testid')?.replace('market-work-entry-', '') ?? null),
+    );
+}
+
+/** The one entry of `type` in `entries` that `match` picks, failing when there is none. */
+function onlyEntry(
+  entries: readonly AdminMarketWorkEntry[],
+  type: AdminMarketWorkEntry['type'],
+  match: (entry: AdminMarketWorkEntry) => boolean = () => true,
+): AdminMarketWorkEntry {
+  const found = entries.filter((entry) => entry.type === type && match(entry));
+  expect(found, `${type} in the history`).toHaveLength(1);
+  return found[0]!;
+}
+
+/**
+ * D (#145 part 2, ADR-0164; AC 6): `market`'s 작업 이력, reached from its detail's header, as the
+ * API reads it and as the screen draws it — every entry with its 담당자 (a nickname or 시스템), 시각
+ * and 사유 (or the line standing for one, 145-16); each of the four kinds the spec made — 수정 (the
+ * tag edit), 중단 (the pause), 판정 (the registration and its approval), 지급 (the operator's
+ * attempts, the recovery, the failure record and the 시스템 steps) — under its own filter and only
+ * there; and nothing of `other`, a second market with work of its own.
+ */
+async function checkWorkHistory(
+  page: Page,
+  admin: APIRequestContext,
+  market: { id: string; tag: string },
+  expected: {
+    addedTag: string;
+    pauseNote: string;
+    failedReason: string;
+    settledReason: string | null;
+    other: { id: string; addedTag: string };
+  },
+): Promise<void> {
+  const entries = await workHistoryOf(admin, market.id);
+  const tagEdit = onlyEntry(entries, 'market_update', (entry) =>
+    entry.changes.some(
+      (change) =>
+        change.field === 'tags' && JSON.stringify(change.after).includes(expected.addedTag),
+    ),
+  );
+  expect(tagEdit).toMatchObject({ kind: 'edit', reasonBasis: 'changed_items' });
+  expect(onlyEntry(entries, 'market_pause')).toMatchObject({
+    kind: 'pause',
+    reason: expected.pauseNote,
+  });
+  const registered = onlyEntry(entries, 'market_judgement_request');
+  const approved = onlyEntry(entries, 'market_judgement_approve');
+  for (const judged of [registered, approved]) {
+    expect(judged.kind).toBe('judgement');
+    expect(judged.reason ?? '').not.toBe('');
+  }
+  expect(onlyEntry(entries, 'resolved')).toMatchObject({ kind: 'judgement', actor: null });
+  const failedRetry = onlyEntry(
+    entries,
+    'market_settlement_retry',
+    (entry) => entry.reason === expected.failedReason,
+  );
+  expect(failedRetry).toMatchObject({ kind: 'settlement', retryOutcome: 'failed' });
+  const settledRetry =
+    expected.settledReason === null
+      ? null
+      : onlyEntry(
+          entries,
+          'market_settlement_retry',
+          (entry) => entry.reason === expected.settledReason,
+        );
+  if (settledRetry !== null) expect(settledRetry.retryOutcome).toBe('settled');
+  expect(onlyEntry(entries, 'reconciliation_recovery_approve').kind).toBe('settlement');
+  for (const step of ['settling', 'finalized'] as const) {
+    expect(onlyEntry(entries, step)).toMatchObject({ kind: 'settlement', actor: null });
+  }
+  const failure = onlyEntry(entries, 'settlement_step');
+  expect(failure).toMatchObject({ kind: 'settlement', actor: null });
+  expect(failure.settlement?.settlementAttempts ?? 0).toBeGreaterThan(0);
+  // A second market's work never appears here (AC 6), and it has its own.
+  expect(JSON.stringify(entries)).not.toContain(expected.other.addedTag);
+  expect(JSON.stringify(entries)).not.toContain(expected.other.id);
+  expect(JSON.stringify(await workHistoryOf(admin, expected.other.id))).toContain(
+    expected.other.addedTag,
+  );
+
+  // --- on screen, from the detail's header: 전체, oldest first, every entry with who, when, why.
+  await page.goto(`/admin/markets/${market.id}`);
+  const link = page.getByTestId('market-detail-work-history');
+  await expect(link).toHaveText(copy.adminMarketWorkHistory);
+  await link.click();
+  await expect(page).toHaveURL(new RegExp(`/admin/markets/${market.id}/work-history$`));
+  await expect(page.getByTestId('market-work')).toHaveAttribute('data-kind', 'all');
+  await showWholeHistory(page);
+  await expect.poll(() => workRowIds(page)).toEqual(entries.map((entry) => entry.id));
+  const part = (entry: AdminMarketWorkEntry, name: string) =>
+    page.getByTestId(`market-work-entry-${entry.id}-${name}`);
+  for (const entry of entries) {
+    await expect(part(entry, 'actor')).toHaveText(
+      entry.actor === null ? copy.eventSystem : (entry.actor.nickname ?? copy.postAuthorFormer),
+    );
+    await expect(part(entry, 'at')).not.toBeEmpty();
+    await expect(part(entry, 'reason')).not.toBeEmpty();
+  }
+  await expect(part(tagEdit, 'basis')).toHaveText(copy.adminMarketWorkBasisChangedItems);
+  await expect(part(tagEdit, 'changes')).toContainText(expected.addedTag);
+  await expect(part(failedRetry, 'outcome')).toHaveText(copy.adminMarketWorkRetryFailed);
+  await expect(part(failedRetry, 'reason')).toContainText(expected.failedReason);
+  if (settledRetry !== null) {
+    await expect(part(settledRetry, 'outcome')).toHaveText(copy.adminMarketWorkRetrySettled);
+  }
+  await expect(part(failure, 'label')).toHaveText(copy.adminMarketWorkStep);
+  await expect(part(failure, 'attempts')).toBeVisible();
+  await expect(part(failure, 'error-text')).not.toBeEmpty();
+  await expect(page.getByTestId('market-work-history')).not.toContainText(expected.other.addedTag);
+  await expectNoSideScroll(page);
+
+  // --- each kind: its own entries only, the four the spec made among them.
+  const made: Partial<Record<AdminMarketWorkEntry['kind'], AdminMarketWorkEntry[]>> = {
+    edit: [tagEdit],
+    pause: [onlyEntry(entries, 'market_pause')],
+    judgement: [registered, approved],
+    settlement: [failedRetry, failure],
+  };
+  for (const kind of MARKET_WORK_KINDS) {
+    const read = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'GET' &&
+        new URL(response.url()).pathname.endsWith('/work-history') &&
+        new URL(response.url()).searchParams.get('kind') === kind,
+    );
+    await page.getByTestId(`market-work-kind-${kind}`).click();
+    await read;
+    await expect(page).toHaveURL(new RegExp(`/work-history\\?kind=${kind}$`));
+    await expect(page.getByTestId('market-work')).toHaveAttribute('data-kind', kind);
+    await expect(page.getByTestId(`market-work-kind-${kind}`)).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    // The previous kind's rows stay while this one loads: its first page first, then the rest.
+    const ofKind = entries.filter((entry) => entry.kind === kind).map((entry) => entry.id);
+    await expect.poll(() => workRowIds(page)).toEqual(ofKind.slice(0, HISTORY_PAGE));
+    await showWholeHistory(page);
+    await expect.poll(() => workRowIds(page)).toEqual(ofKind);
+    for (const entry of made[kind] ?? []) {
+      await expect(page.getByTestId(`market-work-entry-${entry.id}`)).toHaveAttribute(
+        'data-kind',
+        kind,
+      );
+    }
+  }
+  await page.getByTestId('market-work-kind-all').click();
+  await expect(page).toHaveURL(new RegExp(`/admin/markets/${market.id}/work-history$`));
 }
 
 test.describe('운영 대기열 (#145)', () => {
@@ -358,7 +579,7 @@ test.describe('운영 대기열 (#145)', () => {
     }
   });
 
-  test('정산 중단과 재시도: 원장 장애로 묶인 시장의 지급이 실패하면 정산 실패에 대사 보류와 시도 횟수로 보이고, 보류가 남은 동안의 정산 다시 시도는 실패를 보이며, 복구 뒤에는 지급을 마치고 목록에서 빠진다', async ({
+  test('정산 중단과 재시도: 원장 장애로 묶인 시장의 지급이 실패하면 정산 실패에 대사 보류와 시도 횟수로 보이고, 보류가 남은 동안의 정산 다시 시도는 실패를 보이며, 복구 뒤에는 지급을 마치고 목록에서 빠진다 — 그 시장의 작업 이력에는 수정·중단·판정·지급이 담당자·시각·사유와 함께 남고 다른 시장의 것은 없다', async ({
     admin,
     secondAdmin,
     page,
@@ -372,13 +593,20 @@ test.describe('운영 대기열 (#145)', () => {
     const market = await createOpenMarket(admin, {
       closeAt: minuteIso(Date.now() + CLOSE_IN_MS + MINUTE_MS),
     });
+    // D's second market: work of its own, which the first market's 작업 이력 never shows.
+    const other = await createOpenMarket(admin);
+    const otherTag = `${other.tag}w`;
+    await editTags(admin, other.id, [...other.tags, otherTag]);
+    const addedTag = `${market.tag}w`;
+    const pauseNote = `원장 장애로 멈춘 시장의 지급 재시도 확인 ${market.tag}`;
+    let settledReason: string | null = null;
     try {
+      // --- 수정 while OPEN (D): a tag added, recorded with the actor, the time and both values.
+      await editTags(admin, market.id, [...market.tags, addedTag]);
       // --- a fill, then the ledger-failure pause: the market closes on schedule with its hold
       // (a fill: 거래 마감, not 취소 — #20), is judged, and its payout fails on the hold.
       await tradeOnce(admin, market.id);
-      await pauseMarket(admin, market.id, 'ledger_failure', {
-        note: `원장 장애로 멈춘 시장의 지급 재시도 확인 ${market.tag}`,
-      });
+      await pauseMarket(admin, market.id, 'ledger_failure', { note: pauseNote });
       await expect
         .poll(async () => (await marketOf(admin, market.id)).status, {
           timeout: CLOSE_WAIT_MS,
@@ -455,7 +683,8 @@ test.describe('운영 대기열 (#145)', () => {
       if (await showIn(page, 'failures', row)) {
         await letToastsGo(page);
         await retry.click();
-        await dialog.getByTestId('settlement-retry-reason').fill(`복구 뒤 다시 시도 ${market.tag}`);
+        const afterRecovery = `복구 뒤 다시 시도 ${market.tag}`;
+        await dialog.getByTestId('settlement-retry-reason').fill(afterRecovery);
         const sent = nextRetry(page, market.id);
         await dialog.getByTestId('settlement-retry-dialog-confirm').click();
         const response = await sent;
@@ -463,6 +692,7 @@ test.describe('운영 대기열 (#145)', () => {
           expect(
             ((await response.json()) as { data: AdminSettlementRetryResult }).data,
           ).toMatchObject({ outcome: 'settled' });
+          settledReason = afterRecovery;
           await expect(toastsOf(page).first()).toContainText(copy.adminSettlementRetryDone);
         } else {
           // The worker's scan won: the market was no longer 지급 중, nothing was attempted.
@@ -477,6 +707,15 @@ test.describe('운영 대기열 (#145)', () => {
       expect(await failureRow(admin, market.id)).toBeUndefined();
       await page.goto('/admin/operations?list=failures');
       expect(await showIn(page, 'failures', row)).toBe(false);
+
+      // --- D: the market's 작업 이력 (#145 part 2, ADR-0164; AC 6).
+      await checkWorkHistory(page, admin, market, {
+        addedTag,
+        pauseNote,
+        failedReason: reason,
+        settledReason,
+        other: { id: other.id, addedTag: otherTag },
+      });
     } finally {
       await leaveNoJudgement(admin, market.id);
     }

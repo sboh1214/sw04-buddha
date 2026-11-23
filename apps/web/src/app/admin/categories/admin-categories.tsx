@@ -47,6 +47,7 @@ import {
 } from '@/lib/admin-categories';
 import { type AdminCategory, api, unwrap } from '@/lib/api';
 import { RefreshFailedNotice } from '../markets/[id]/admin-market-detail';
+import { CategoryChanges } from './category-changes';
 
 /**
  * 카테고리 관리 (#17, ADR-0093 decision 2 #172 item 1 and decision 3's #17 rows): the two-level
@@ -66,6 +67,7 @@ import { RefreshFailedNotice } from '../markets/[id]/admin-market-detail';
  * to B in place drops it (owner decision 2026-10-26 17:21 answer 1). A write that succeeds marks
  * the admin list and the public `['categories']` (`applyAdminCategories`), so the header, the
  * sidebar and the pickers follow; one refused because the tree moved meanwhile reads both again.
+ * Under the tree, the 변경 기록 of every category write, newest first (#145, ADR-0164; 145-10).
  */
 export function AdminCategories() {
   const categories = useAdminCategories();
@@ -111,6 +113,8 @@ export function AdminCategories() {
       ) : (
         <CategoryTree rows={categories.data} />
       )}
+      {/* 변경 기록 (#145, ADR-0164; 145-10): under the tree, newest first. */}
+      <CategoryChanges />
     </Stack>
   );
 }

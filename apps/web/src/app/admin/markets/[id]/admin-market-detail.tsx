@@ -104,6 +104,7 @@ import {
   relatedSearchSubmit,
 } from '@/lib/related-markets';
 import { LONG_DELAY_SEPARATOR, longDelayText } from '@/lib/market-detail';
+import { marketWorkPath } from '@/lib/market-work';
 import { timeZoneLabel } from '@/lib/time-zone';
 import { MarketFormFields } from '../market-form-fields';
 import { MarketConflictPanel } from './market-conflict-panel';
@@ -203,6 +204,12 @@ export function AdminMarketDetail({ id }: { id: string }) {
               {copy.adminMarketAwaitingSettlement}
             </Badge>
           )}
+          {/* 작업 이력 (#145, ADR-0164): the market's operator work and the worker's processing. */}
+          <ChakraLink asChild fontSize="sm" colorPalette="brand" color="colorPalette.fg">
+            <NextLink href={marketWorkPath(data.id)} data-testid="market-detail-work-history">
+              {copy.adminMarketWorkHistory}
+            </NextLink>
+          </ChakraLink>
         </HStack>
         <Text fontSize="sm" color="fg.muted" fontFamily="mono">
           {data.slug}

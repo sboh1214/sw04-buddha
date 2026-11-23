@@ -1,10 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { schema, type Db } from '@buddha/db';
+import { readCategoryChanges, schema, type Db } from '@buddha/db';
 import {
   CATEGORY_GROUP_MAX,
   CATEGORY_REFUSALS,
   type AdminActionType,
   type AdminCategory,
+  type AdminCategoryChangePage,
+  type AdminCategoryChangesQuery,
   type CreateCategoryBody,
   type ReorderCategoriesBody,
   type WithoutExpectedAccount,
@@ -69,8 +71,9 @@ function refusal(
  * reorder names every sibling of the group, hidden ones included. Hiding a top-level category hides
  * its sub-categories with it through the parent rule — `GET /categories` leaves them out and none
  * can be picked (`categoryUnselectableReason`) — without touching their own `is_active`. Names are
- * not held to the excluded words, and sports and politics may be added (D10). The record is
- * write-only, as the themes' is (ADR-0088): no route reads it back.
+ * not held to the excluded words, and sports and politics may be added (D10). The record is read
+ * back newest first on `/admin/categories` (`changes`, 145-10, ADR-0164); the themes' stays
+ * write-only (ADR-0088).
  *
  * Each write runs in one transaction. It locks what it changes (`WRITE_LOCK`) — a sub-category's
  * parent first, then the sub-category, the order readCategorySelectability takes them in; a new
@@ -92,6 +95,15 @@ export class CategoryAdminService {
    */
   async list(): Promise<AdminCategory[]> {
     return this.rows(this.db);
+  }
+
+  /**
+   * `GET /admin/categories/changes` (카테고리 변경 기록, 145-10, ADR-0164): the five `category_*`
+   * records newest first, each with its admin, time and values before and after, the categories
+   * by their current names — one REPEATABLE READ, READ ONLY transaction (category-changes.ts).
+   */
+  changes(query: AdminCategoryChangesQuery): Promise<AdminCategoryChangePage> {
+    return readCategoryChanges(this.db, query);
   }
 
   /**

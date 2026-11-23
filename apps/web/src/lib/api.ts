@@ -163,6 +163,16 @@ export type AdminOperationsSettlement = components['schemas']['AdminOperationsSe
 export type AdminSettlementRetryBody = components['schemas']['AdminSettlementRetryBody'];
 export type AdminSettlementRetryResult = components['schemas']['AdminSettlementRetryResult'];
 /**
+ * 시장별 작업 이력 (#145 part 2, ADR-0164): one entry of `GET /admin/markets/:id/work-history` — an
+ * admin action, a system event or the settlement step's failure record, with its kind, actor (null
+ * for 시스템), reason and its basis, details, snapshot changes, a link's other market, the step's
+ * record and a retry's outcome — and one record of `GET /admin/categories/changes` (145-10).
+ */
+export type AdminMarketWorkEntry = components['schemas']['AdminMarketWorkEntry'];
+export type AdminMarketWorkChange = components['schemas']['AdminMarketWorkChange'];
+export type AdminCategoryChange = components['schemas']['AdminCategoryChange'];
+export type AdminCategoryRef = components['schemas']['AdminCategoryRef'];
+/**
  * 판정 지연 기록 (#142, ADR-0106): the current record as every detail reads it while the market reads
  * '판정 지연' (`Market.judgementDelay`: the reason, the next review time and whether it has passed —
  * nobody's name, no record time), one record as the admin's history lists it

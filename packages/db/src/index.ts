@@ -326,6 +326,8 @@ export {
 export * from './market-settlement.js';
 export * from './market-finalize.js';
 export * from './operations-queues.js';
+export * from './market-work.js';
+export * from './category-changes.js';
 export * from './reconciliation-audit.js';
 export * from './reconciliation-recovery.js';
 export * from './reconciliation-correction.js';

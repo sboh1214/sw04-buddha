@@ -1,11 +1,19 @@
-import { CATEGORY_GROUP_MAX, CATEGORY_NAME_MAX, CATEGORY_REFUSALS } from '@buddha/shared';
+import {
+  CATEGORY_CHANGE_TYPES,
+  CATEGORY_GROUP_MAX,
+  CATEGORY_NAME_MAX,
+  CATEGORY_REFUSALS,
+} from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import {
+  CATEGORY_CHANGE_LABEL,
   EMPTY_CATEGORY_FORM,
   adminCategoryState,
+  categoryChangeValues,
   categoryFormError,
   categoryFormSchema,
+  categoryRefText,
   categoryRenameFormSchema,
   categoryWriteErrorMessage,
   formatAdminCategoryMeta,
@@ -16,7 +24,7 @@ import {
   toCreateCategoryFields,
   toRenameCategoryFields,
 } from './admin-categories';
-import { type AdminCategory, ApiError, type ErrorEnvelope } from './api';
+import { type AdminCategory, type AdminCategoryChange, ApiError, type ErrorEnvelope } from './api';
 
 /**
  * 카테고리 관리 (#17, ADR-0093): the tree the screen lists, the order a move sends, the forms' rules
@@ -289,5 +297,92 @@ describe('a refused write', () => {
     for (const [index, [error, message]] of cases.entries()) {
       expect(categoryWriteErrorMessage(error), `case ${String(index)}`).toBe(message);
     }
+  });
+});
+
+/** 변경 기록 (#145 part 2, ADR-0164; 145-10): each record's name and its values before and after. */
+describe('the category records', () => {
+  const base = {
+    id: 'a1b2c3d4-0000-4000-8000-000000000001',
+    at: '2026-11-20T03:00:00.000Z',
+    actor: { id: 'admin-1', nickname: '운영자1' },
+  };
+
+  it('names the five records in the approved words (145-18), the buttons’ own where they have one', () => {
+    expect(Object.keys(CATEGORY_CHANGE_LABEL)).toEqual([...CATEGORY_CHANGE_TYPES]);
+    expect(Object.values(CATEGORY_CHANGE_LABEL)).toEqual([
+      '추가',
+      '이름 바꾸기',
+      '순서 바꾸기',
+      '숨기기',
+      '다시 보이기',
+    ]);
+    expect(copy.adminCategoryChanges).toBe('변경 기록');
+    expect(copy.adminCategoryChangesHint).toBe(
+      '카테고리의 추가·이름·순서·숨김을 최신순으로 보입니다.',
+    );
+  });
+
+  it('names a category by its current name, the top level as 상위 카테고리, a lost id by its number', () => {
+    expect(categoryRefText({ id: 3, nameKo: '경제' })).toBe('경제');
+    expect(categoryRefText(null)).toBe(copy.adminCategoryChangeTopLevel);
+    expect(categoryRefText({ id: 3, nameKo: null })).toBe('#3');
+  });
+
+  it('says each record’s before and after (145-10 "전후 값")', () => {
+    const values = (change: Omit<AdminCategoryChange, 'id' | 'at' | 'actor'>) =>
+      categoryChangeValues({ ...base, ...change } as AdminCategoryChange);
+    expect(
+      values({
+        type: 'category_create',
+        category: { id: 5, nameKo: '물가' },
+        details: { nameKo: '물가', parent: { id: 1, nameKo: '경제' } },
+      }),
+    ).toBe('경제 › 물가');
+    expect(
+      values({
+        type: 'category_create',
+        category: { id: 1, nameKo: '경제' },
+        details: { nameKo: '경제', parent: null },
+      }),
+    ).toBe('경제');
+    expect(
+      values({
+        type: 'category_rename',
+        category: { id: 5, nameKo: '물가 지표' },
+        details: { before: '물가', after: '물가 지표' },
+      }),
+    ).toBe('물가 → 물가 지표');
+    expect(
+      values({
+        type: 'category_reorder',
+        category: null,
+        details: {
+          parent: null,
+          before: [
+            { id: 1, nameKo: '경제' },
+            { id: 2, nameKo: '정치' },
+          ],
+          after: [
+            { id: 2, nameKo: '정치' },
+            { id: 1, nameKo: '경제' },
+          ],
+        },
+      }),
+    ).toBe('경제 · 정치 → 정치 · 경제');
+    expect(
+      values({
+        type: 'category_hide',
+        category: { id: 5, nameKo: '물가' },
+        details: { before: true, after: false },
+      }),
+    ).toBe('보임 → 숨김');
+    expect(
+      values({
+        type: 'category_show',
+        category: { id: 5, nameKo: '물가' },
+        details: { before: false, after: true },
+      }),
+    ).toBe('숨김 → 보임');
   });
 });

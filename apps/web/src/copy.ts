@@ -4895,6 +4895,106 @@ export const copy = {
   adminSettlementRetryFailed: '다시 시도했지만 지급하지 못했습니다.',
   adminSettlementRetryNotSettling: '이 시장은 이미 지급 중이 아닙니다. 목록을 다시 읽었습니다.',
 
+  // --- admin: 작업 이력과 카테고리 변경 기록 (#145, ADR-0164; 145-5~145-7·145-10·145-12·145-13·145-16) ---
+  // 시장별 작업 이력(#145 2부, ADR-0164): 관리자 상세 머리의 '작업 이력' 링크로 간다. 그 시장에 묶인 관리자 작업과
+  // 승인 요청·결정, 워커의 처리('시스템', 145-6)를 오래된 것부터 한 표(시각·분류·작업·담당자·사유)에 보이고
+  // 수정·중단·판정·지급·그 밖(145-5, 145-12)으로 거른다. 사유는 145-16대로 보인다: 저장된 사유, 사유를 받지 않는
+  // 작업은 그 근거 줄('바뀐 항목'은 항목: 이전 → 새), 시스템 처리는 그 규칙. 정산 실패는 시도 횟수와 마지막 오류를,
+  // 정산 다시 시도는 결과를 보인다(145-6, 145-7). 문구는 오너가 승인한 그대로다(145-18).
+  adminMarketWorkHistory: '작업 이력',
+  adminMarketWorkKindAll: '전체',
+  adminMarketWorkKindEdit: '수정',
+  adminMarketWorkKindPause: '중단',
+  adminMarketWorkKindJudgement: '판정',
+  adminMarketWorkKindSettlement: '지급',
+  adminMarketWorkKindOther: '그 밖',
+  adminMarketWorkColAt: '시각',
+  adminMarketWorkColKind: '분류',
+  adminMarketWorkColWork: '작업',
+  adminMarketWorkColActor: '담당자',
+  adminMarketWorkColReason: '사유',
+  adminMarketWorkEmpty: '작업 이력이 없습니다.',
+  adminMarketWorkDetails: '자세히',
+  // 사유를 받지 않는 작업의 근거 줄(145-16).
+  adminMarketWorkBasisChangedItems: '사유를 받지 않는 작업 — 바뀐 항목을 남깁니다',
+  adminMarketWorkBasisActorTime: '사유를 받지 않는 작업 — 담당자와 시각만 남깁니다',
+  adminMarketWorkBasisRetracted: '요청 철회 — 사유는 그 요청에 있습니다',
+  // 시스템 처리의 사유 자리에 보이는 규칙(145-16 '시스템 처리는 그 규칙을 사유로 보인다'). 원장 불일치 자동 중단은
+  // 일시 중단 사유의 말(pauseReasonLedgerFailure)을, 자동 취소는 저장된 문장을 그대로 쓴다.
+  adminMarketWorkRuleOpened: '예정 개장 시각',
+  adminMarketWorkRuleOpenedAtOnce: '예정 개장 시각이 지남',
+  adminMarketWorkRuleClosed: '거래 마감 시각',
+  adminMarketWorkRuleResolved: '이의 기한이 지나고 남은 이의·정정이 없음',
+  adminMarketWorkRuleSettling: '결과 확정 뒤 자동 지급',
+  adminMarketWorkRuleFinalized: '모든 지급과 대사를 마침',
+  // 정산 실패 기록: '정산 실패 기록 · 시도 {n}회 · 마지막 오류'(시도 횟수와 마지막 오류는 운영 대기열의 말).
+  adminMarketWorkStep: '정산 실패 기록',
+  adminMarketWorkRetrySettled: '결과: 지급 완료',
+  adminMarketWorkRetryFailed: '결과: 실패',
+  // 바뀐 항목의 이름 가운데 다른 화면에 없는 것.
+  adminMarketWorkFieldSlug: '슬러그',
+  // 바뀐 항목이 셋보다 많은 줄(초안 만들기처럼 한 번에 여러 필드를 정한 것)은 앞의 셋만 보이고 나머지를 한 펼침
+  // 아래에 접는다 — 그 펼침의 말. {n}은 접힌 항목 수다.
+  adminMarketWorkChangesMore: '바뀐 항목 {n}개 더 보기',
+  // 작업 하나에 이름 하나(145-12의 말). 시장 이벤트의 이름은 이벤트 로그의 것을 쓴다.
+  adminMarketWorkMarketCreate: '초안 만들기',
+  adminMarketWorkMarketUpdate: '시장 수정',
+  adminMarketWorkLiquidityUpdate: '유동성 설정',
+  adminMarketWorkSupplementRequest: '규칙 보충 요청',
+  adminMarketWorkSupplementApprove: '규칙 보충 승인',
+  adminMarketWorkSupplementReject: '규칙 보충 반려',
+  adminMarketWorkSupplementRetract: '규칙 보충 요청 철회',
+  adminMarketWorkPauseDecisionRequest: '재개·조기 마감 요청',
+  adminMarketWorkPauseDecisionApprove: '재개·조기 마감 승인',
+  adminMarketWorkPauseDecisionReject: '재개·조기 마감 반려',
+  adminMarketWorkPauseDecisionRetract: '재개·조기 마감 요청 철회',
+  adminMarketWorkJudgementRequest: '판정 등록',
+  adminMarketWorkJudgementApprove: '판정 승인',
+  adminMarketWorkJudgementReject: '판정 반려',
+  adminMarketWorkJudgementRetract: '판정 등록 철회',
+  // 판정 정정(#176)의 등록·승인·반려·철회 — 정정 칸과 그 창의 말. 정정 등록의 사유 칸은 판정 등록처럼 그
+  // 설명(145-16)이고, 자세히에 정정 대상 판정 버전·정정 사유·함께 등록된 수용한 이의 수(등록), 정정 사유(승인),
+  // 검토 중으로 돌아간 이의 수(반려·철회)가 보인다.
+  adminMarketWorkJudgementCorrectionRequest: '판정 정정 등록',
+  adminMarketWorkJudgementCorrectionApprove: '판정 정정 승인',
+  adminMarketWorkJudgementCorrectionReject: '판정 정정 반려',
+  adminMarketWorkJudgementCorrectionRetract: '판정 정정 철회',
+  adminMarketWorkCorrectionBase: '정정 대상 판정',
+  adminMarketWorkReopenedDisputes: '검토 중으로 돌아간 판정 이의',
+  adminMarketWorkDisputeDismiss: '이의 기각',
+  adminMarketWorkDisputeAccept: '이의 수용',
+  adminMarketWorkResolveInterim: '1인 판정(이전 방식)',
+  adminMarketWorkRecoveryRequest: '대사 보류 복구 요청',
+  adminMarketWorkRecoveryApprove: '대사 보류 복구 승인',
+  adminMarketWorkRecoveryReject: '대사 보류 복구 반려',
+  adminMarketWorkRecoveryRetract: '대사 보류 복구 요청 철회',
+  adminMarketWorkMarketApprove: '개설 승인',
+  adminMarketWorkMarketReject: '개설 반려',
+  adminMarketWorkCancelRequest: '시장 취소 요청',
+  adminMarketWorkCancelApprove: '시장 취소 승인',
+  adminMarketWorkCancelReject: '시장 취소 반려',
+  adminMarketWorkCancelRetract: '시장 취소 요청 철회',
+  adminMarketWorkLink: '관련 시장 연결',
+  adminMarketWorkUnlink: '관련 시장 연결 해제',
+  adminMarketWorkFillClassificationRequest: '비정상 체결 분류 요청',
+  adminMarketWorkFillClassificationApprove: '비정상 체결 분류 승인',
+  adminMarketWorkFillClassificationReject: '비정상 체결 분류 반려',
+  adminMarketWorkFillClassificationRetract: '비정상 체결 분류 요청 철회',
+  adminMarketWorkProposalAdopt: '시장 제안 채택',
+  adminMarketWorkProposalLink: '시장 제안 연결',
+  adminMarketWorkOpenInterim: '개장(이전 방식)',
+  adminMarketWorkCloseInterim: '마감(이전 방식)',
+  // 카테고리 변경 기록(145-10): /admin/categories의 목록 아래, 최신순. 종류 이름 가운데 추가·이름 바꾸기·숨기기·다시
+  // 보이기는 그 버튼의 말을 쓴다.
+  adminCategoryChanges: '변경 기록',
+  adminCategoryChangesHint: '카테고리의 추가·이름·순서·숨김을 최신순으로 보입니다.',
+  adminCategoryChangesEmpty: '변경 기록이 없습니다.',
+  adminCategoryChangeReorder: '순서 바꾸기',
+  adminCategoryChangesColCategory: '카테고리',
+  adminCategoryChangesColValues: '전후 값',
+  adminCategoryChangeTopLevel: '상위 카테고리',
+  adminCategoryChangeShownTag: '보임',
+
   // --- reconciliation (#93) ---
   reconciliationTitle: '장부 대사와 복구',
   reconciliationIntro:

@@ -72,6 +72,10 @@ const OPERATION_RECORDS = [
   'GET /admin/operations/closing',
   'GET /admin/operations/judgements',
   'GET /admin/operations/failures',
+  // #145: each market's 작업 이력 and the 카테고리 변경 기록 (ADR-0164; 145-5, 145-10). An unknown
+  // market's history is an empty page, so the walk's placeholder id answers 200 too.
+  'GET /admin/markets/:id/work-history',
+  'GET /admin/categories/changes',
 ];
 
 describe('admin access (static)', () => {

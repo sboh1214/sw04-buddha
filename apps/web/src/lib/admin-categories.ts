@@ -1,8 +1,15 @@
-import { CATEGORY_REFUSALS, categoryNameSchema, newCategorySlugSchema } from '@buddha/shared';
+import {
+  CATEGORY_REFUSALS,
+  type CategoryChangeType,
+  categoryNameSchema,
+  newCategorySlugSchema,
+} from '@buddha/shared';
 import * as z from 'zod';
 import { copy } from '@/copy';
 import {
   type AdminCategory,
+  type AdminCategoryChange,
+  type AdminCategoryRef,
   type CreateCategoryBody,
   type RenameCategoryBody,
   isApiError,
@@ -260,4 +267,53 @@ export function categoryWriteErrorMessage(error: unknown): string {
   }
   if (isApiError(error, 'NOT_FOUND')) return copy.adminCategoryNotFound;
   return copy.errUnknown;
+}
+
+// ---- 변경 기록 (#145 part 2, ADR-0164; 145-10, ADR-0096 결과 5) -----------------------------
+
+/**
+ * Each category record's name: the button's own word for 추가, 이름 바꾸기, 숨기기 and 다시 보이기, and
+ * 순서 바꾸기 for the 위로 · 아래로 that wrote a reorder.
+ */
+export const CATEGORY_CHANGE_LABEL: Readonly<Record<CategoryChangeType, string>> = {
+  category_create: copy.adminCategoryCreate,
+  category_rename: copy.adminCategoryRename,
+  category_reorder: copy.adminCategoryChangeReorder,
+  category_hide: copy.adminCategoryHide,
+  category_show: copy.adminCategoryShow,
+};
+
+/**
+ * A category a record names, by its current name; '#<id>' for an id the table no longer holds,
+ * and 상위 카테고리 for a top-level reorder's group (no parent).
+ */
+export function categoryRefText(ref: AdminCategoryRef | null): string {
+  if (ref === null) return copy.adminCategoryChangeTopLevel;
+  return ref.nameKo ?? `#${String(ref.id)}`;
+}
+
+const shownText = (active: boolean) =>
+  active ? copy.adminCategoryChangeShownTag : copy.adminCategoryHiddenTag;
+
+/**
+ * A record's before and after (145-10 "전후 값"): 추가 its name under its parent ('상위 › 이름'), 이름
+ * 바꾸기 the names as stored, 순서 바꾸기 the group's order before and after (current names, '·'
+ * between), 숨기기·다시 보이기 보임 → 숨김 and back.
+ */
+export function categoryChangeValues(change: AdminCategoryChange): string {
+  switch (change.type) {
+    case 'category_create':
+      return change.details.parent === null
+        ? change.details.nameKo
+        : `${categoryRefText(change.details.parent)} › ${change.details.nameKo}`;
+    case 'category_rename':
+      return `${change.details.before} → ${change.details.after}`;
+    case 'category_reorder': {
+      const order = (refs: readonly AdminCategoryRef[]) => refs.map(categoryRefText).join(' · ');
+      return `${order(change.details.before)} → ${order(change.details.after)}`;
+    }
+    case 'category_hide':
+    case 'category_show':
+      return `${shownText(change.details.before)} → ${shownText(change.details.after)}`;
+  }
 }
