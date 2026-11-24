@@ -21774,3 +21774,33 @@ ADR-0155 결과 5가 오너에게 남긴 물음이다: 관리자도 회원과 �
 - **기각 한 번을 묶는 법:** 조치는 `action_id`로 묶인다. 기각 한 번은 같은 트랜잭션이 쓰는 `admin_actions`의 `report_dismiss` 행이고 그 `payload.reportIds`가 닫은 신고들이며, 그 신고들은 `resolved_at`·`resolved_by`도 같다(`apps/api/src/moderation/moderation.service.ts`의 `dismiss`). `dismiss`는 `reportIds`를 한 대상으로 묶지 않으므로 기각 한 번이 여러 대상의 신고를 닫을 수 있다 — #96은 기각 한 번을 `target_type`·`target_key`로 나눠 96-4의 '같은 대상의 신고들'을 얻는다.
 - **보존기간 값:** '방문 기록 보존기간'의 값은 #151 배포 뒤 오너가 `/admin/settings`에서 넣는다. 그 전에는 지우지 않는다(151-5).
 - **오너가 할 일:** 위 보존기간 값. #137의 처리방침 문구 확인.
+
+---
+
+## ADR-0168 — 느린 CI job 나누기: api 통합 시험을 vitest 샤드 셋으로, e2e 일반 회귀를 Playwright 샤드 다섯으로, 제한 시간은 그대로, api 시험 줄은 그때그때 출력
+
+- 날짜: 2026-11-24
+- 상태: 채택
+
+### 맥락
+
+시험이 실패하지 않았는데 CI가 job 제한 시간에 걸려 취소되었다. 시험이 늘어 한 job이 감당할 시간을 넘겼기 때문이다.
+
+- **`Integration Tests (api)`(제한 30분):** 최근 30번에 17\~29분이 걸렸고 최근 main은 28\~29분이었다. main `793800ba`(run 45175418664), PR #323(run 45255690990), main `34f6cb94`(run 45271389241)에서 30분에 취소되었다. 파일 126개가 한 DB에서 차례로 돈다(`apps/api/vitest.config.ts`의 `fileParallelism: false`). 한 번에 1683초(시험 1461초·import 166초·setup 39초)가 걸렸고, 가장 긴 파일은 67초(`src/media/image-memory.test.ts`)다.
+- **`E2E Tests (Playwright 1/3~3/3)`(제한 60분):** 샤드마다 시험 275개(두 화면 폭)를 worker 하나로 돌려 50.0·49.0·51.6분이 걸렸다(PR #324, run 45307161970). PR #323의 샤드 1은 59분 59초였고, main `34f6cb94`의 샤드 1은 60분에 취소되었다. 샤드 사이의 시간은 고르다(fullyParallel이라 시험 단위로 나뉜다).
+- **취소된 api job에는 vitest 출력이 남지 않았다:** Actions에서 turbo는 작업이 끝날 때까지 그 출력을 모아 두기 때문이다.
+
+### 결정
+
+1. **api 통합 시험을 vitest 샤드 셋으로 나눈다.** `Integration Tests (api 1/3)`·`(api 2/3)`·`(api 3/3)`. 각 job이 러너·Postgres·Redis·turbo 캐시(`integration-api-1`\~`3`)를 따로 쓴다. 나누는 법은 vitest의 `--shard`(파일 경로 해시 순으로 파일 수를 같게)다. 위 run의 파일별 시간으로 재 보면 시험 시간이 7.7·7.9·8.8분이라 job은 11분 남짓이 된다. `db`·`worker`는 그대로 한 job이다.
+2. **e2e 일반 회귀를 샤드 다섯으로 나눈다.** `E2E Tests (Playwright 1/5)`\~`(5/5)`. 샤드마다 시험이 165개쯤이라 30분 남짓에 준비 2분이 더해진다. 샤드마다 DB가 따로이므로 서비스 전체 인증 문자 한도(ADR-0070의 하루 500건)에 더 멀어진다. `market-maker`·`treasury` 전용 프로필은 그대로다.
+3. **제한 시간은 그대로 둔다.** 통합 30분, e2e 60분. 시험이 늘면 시간을 늘리지 않고 샤드를 더한다. 두 job 모두 제한의 30% 넘게 여유를 둔다.
+4. **api 시험 단계는 `turbo run test --log-order=stream`으로 돈다.** vitest의 파일별 줄이 끝나는 대로 찍혀, 제한에 걸려 취소돼도 어디까지 돌았는지 남는다. `--` 뒤의 샤드 인자는 `api#test`에만 넘어가고(의존 빌드에는 넘어가지 않음) turbo 작업 해시에 들어가므로 샤드마다 캐시가 따로다.
+5. **필수 검사 이름이 바뀐다.** main ruleset(22189691)은 `E2E Tests (Playwright 1/3)`·`2/3`·`3/3`을 필수 검사로 요구한다. 이 PR은 그 이름을 없애므로 머지 전에 오너가 ruleset의 필수 검사를 바꾼다. 종합 gate `format / lint / typecheck / test / build`는 이름도 `needs`도 그대로이고 matrix의 모든 job을 기다린다.
+
+### 결과
+
+- 개별 시험의 timeout(180초)·expect(15초)·CI 재시도 2회·`workers: 1`·`fileParallelism: false`는 바꾸지 않는다. 앱·마이그레이션·출시 설정·API 계약도 바뀌지 않는다.
+- job은 넷(api 둘·e2e 둘)이 늘어 열넷에서 열여덟이 된다. 샤드마다 준비(컨테이너·설치·마이그레이션, e2e는 빌드·Chromium·seed)가 1\~2분씩 더해진다.
+- 로컬의 `check-run.sh`가 e2e를 세 샤드로 도는 것(`apps/web/e2e/README.md`의 '일반 회귀 3샤드')은 그대로다. 로컬 DB마다의 인증 문자 수를 다루는 것이라 CI와 관계없다.
+- `docs/GUARDS.md`의 job 이름과 `apps/web/e2e/delay.spec.ts` 주석의 샤드 수를 고쳤다.
