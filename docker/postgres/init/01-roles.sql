@@ -32,12 +32,13 @@
 --                   review_action_id column; notifications: no UPDATE but of its params,
 --                   event_count, occurred_at and read_at columns; notification_inboxes: no
 --                   UPDATE but of its categories_off column; post_comment_counts: SELECT
---                   only, written by its trigger) are
+--                   only, written by its trigger; market_visits: no UPDATE, INSERT of
+--                   user_id and market_id only; market_visit_collection: SELECT only) are
 --                   applied later by migrations with REVOKE
 --                   (0001, 0015, 0020, 0021, 0023, 0026, 0030, 0031, 0032, 0033, 0034, 0035,
 --                   0036, 0039, 0040, 0041, 0044, 0045, 0049, 0053, 0054, 0055, 0056, 0058,
 --                   0060, 0062, 0064, 0065, 0066, 0067, 0069, 0070, 0072, 0073, 0075, 0076, 0077,
---                   0078, 0079, 0080, 0081),
+--                   0078, 0079, 0080, 0081, 0082),
 --                   see bottom.
 
 CREATE ROLE buddha_migrate LOGIN PASSWORD 'buddha';
@@ -139,4 +140,9 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO buddha_app;
 -- both to every role, others bind a row at INSERT to its approved request, its confirmed incident,
 -- the amount its settlement records owe and its own entry, and triggers on approval_requests
 -- refuse the paid version's registrant as an approver and an approval without its listed rows.
+-- 0082 (#151: market_visits: INSERT, UPDATE — then GRANT INSERT (user_id, market_id);
+-- market_visit_collection: INSERT, UPDATE, DELETE): a visit row is never changed and its Korean
+-- date is always the column default, the database clock's, so no app write carries a date; it
+-- keeps SELECT and DELETE (the retention purge, which takes no row lock — it cannot without
+-- UPDATE). The collection's start is one row the migration writes, read only.
 -- Default privileges are applied at CREATE time, so a REVOKE afterwards sticks.

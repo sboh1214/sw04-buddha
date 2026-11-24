@@ -2,6 +2,7 @@ import type { APIRequestContext, Page, Response } from '@playwright/test';
 import {
   type AdminObservationMetrics,
   OBSERVATION_WEEKS_SHOWN,
+  observationWeekFlags,
   observationWeeks,
 } from '@buddha/shared';
 import { copy } from '../src/copy';
@@ -9,11 +10,13 @@ import {
   discussionPostsComments,
   formatElapsed,
   observationCount,
+  observationCoverageOf,
   observationFraction,
   observationRatio,
 } from '../src/lib/admin-observation-metrics';
 import {
   adminAccount,
+  closeMarket,
   commentThroughApi,
   createOpenMarket,
   dataOf,
@@ -21,26 +24,47 @@ import {
   expectNoSideScroll,
   freshEmail,
   freshTag,
+  helperTraders,
+  judgeMarket,
   meOf,
   postThroughApi,
   signIn,
   signUp,
   test,
+  watchThroughApi,
 } from './helpers';
 
 /**
- * 관측 지표 (#96, ADR-0169; owner answers in ADR-0167, 96-7~96-11): an admin opens '관측 지표', the
- * last link of the admin menu, and reads four tables of 12 KST weeks — 첫 체결 전환, 정산 후 재참여,
- * 유효 토론, 신고 처리 시간 — that the server recounts from the records on every read. The e2e
- * database persists and other workers write at the same time, so a test says only that its own
- * writes are among the counts (deltas, `≥`), that the screen draws exactly the answer its own
- * request got, and the structure: 12 rows each, 진행 중 on the current week, the previous cohort
- * week 진행 중 unless it is 자료 없음 (a fresh database's previous week ended before the seed).
+ * 관측 지표 (#96, ADR-0169; #151, ADR-0170; owner answers in ADR-0167, 96-7~96-11, 151-1~151-6):
+ * an admin opens '관측 지표', the last link of the admin menu, and reads six tables of 12 KST weeks
+ * — 첫 체결 전환, 정산 후 재참여, 유효 토론, 신고 처리 시간, then #151's 관심 등록 후 재방문 and 결과
+ * 조회 — that the server recounts from the records on every read. The e2e database persists and
+ * other workers write at the same time, so a test says only that its own writes are among the
+ * counts (deltas, `≥`), that the screen draws exactly the answer its own request got, and the
+ * structure: 12 rows each, 진행 중 on the current week, the previous cohort week 진행 중 unless it
+ * is 자료 없음 (a fresh database's previous week ended before the seed).
+ *
+ * #151's two tables read the visit records, collected from migration 0082 on: on a database
+ * migrated to 0082 after its accounts existed (the local persistent one) the weeks up to the one
+ * 0082 ran in are 자료 없음 — with zeros — until the next Monday (ADR-0167 결정 8의 7). Every check
+ * of their counts therefore reads the answer's `noData` for the week first, and under 자료 없음
+ * checks the row says so and skips the count (an annotation says why); on CI's fresh database
+ * 0082's marker precedes the seed and nothing is cut.
  */
 
 const PATH = '/api/v1/admin/observation-metrics';
+const VISITS = '/api/v1/me/market-visits';
 const ROOT = 'admin-observation-metrics';
-const TABLES = ['first-fill', 'after-settlement', 'discussion', 'report-handling'] as const;
+/** #96's four, whose current week is never 자료 없음 on a seeded database. */
+const OCCURRENCE_AND_FILL_TABLES = [
+  'first-fill',
+  'after-settlement',
+  'discussion',
+  'report-handling',
+] as const;
+/** #151's two, appended after the four (96-7). */
+const VISIT_TABLES = ['revisit', 'result-view'] as const;
+const TABLES = [...OCCURRENCE_AND_FILL_TABLES, ...VISIT_TABLES] as const;
 
 function metricsOf(context: APIRequestContext): Promise<AdminObservationMetrics> {
   return context.get(PATH).then((response) => dataOf<AdminObservationMetrics>(response));
@@ -60,8 +84,31 @@ async function valueCells(page: Page, table: string, week: string): Promise<stri
   return cells.slice(1, -1).map((text) => text.trim());
 }
 
+/** The POST the market detail sends once per open (#151), as it lands. */
+function nextVisit(page: Page): Promise<Response> {
+  return page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' && new URL(response.url()).pathname === VISITS,
+  );
+}
+
+/** Whether a visit table's week is 자료 없음 in `answer`; if so, says why the count is skipped. */
+function visitWeekCut(
+  week: { week: string; noData: boolean },
+  table: (typeof VISIT_TABLES)[number],
+): boolean {
+  if (!week.noData) return false;
+  test.info().annotations.push({
+    type: 'skip-reason',
+    description:
+      `${table} ${week.week} is 자료 없음 (visits collected from 0082 on, after this ` +
+      'database’s accounts existed — ADR-0167 결정 8의 7): its count is not compared',
+  });
+  return true;
+}
+
 test.describe('관측 지표 (#96)', () => {
-  test('관리자가 메뉴 끝의 관측 지표를 열면 네 표가 주 12개씩 보이고, 방금 쓴 글·댓글·신고 처리와 온보딩이 이번 주 값에 든다', async ({
+  test('관리자가 메뉴 끝의 관측 지표를 열면 여섯 표가 주 12개씩 보이고, 방금 쓴 글·댓글·신고 처리와 온보딩이 이번 주 값에 든다', async ({
     page,
     admin,
     browser,
@@ -155,13 +202,40 @@ test.describe('관측 지표 (#96)', () => {
 
       // --- 진행 중 and 자료 없음, as the answer the screen got says.
       const week = shown.firstFill[0]!.week;
-      for (const table of TABLES) {
+      for (const table of OCCURRENCE_AND_FILL_TABLES) {
         // The current week is in progress in every table — never 자료 없음 on a seeded database
         // (and after 0064's deploy for 정산 후 재참여, 96-11).
         const row = page.getByTestId(`${ROOT}-${table}-${week}`);
         await expect(row).toHaveAttribute('data-in-progress', 'true');
         await expect(row).toHaveAttribute('data-no-data', 'false');
         await expect(row).toContainText(copy.adminObservationInProgress);
+      }
+      // #151's two: the flags the answer carries, recomputed with the one shared function from
+      // the answer's coverage (the collection start, the purge horizon), the 상태 cell as they say.
+      const coverage = observationCoverageOf(shown);
+      const asOf = new Date(shown.asOf);
+      for (const [table, metric, rows] of [
+        ['revisit', 'revisit', shown.revisit],
+        ['result-view', 'resultView', shown.resultView],
+      ] as const) {
+        expect(rows).toHaveLength(OBSERVATION_WEEKS_SHOWN);
+        for (const [index, weekOf] of observationWeeks(asOf).entries()) {
+          const row = rows[index]!;
+          expect(row.week).toBe(weekOf.week);
+          expect(
+            { inProgress: row.inProgress, noData: row.noData },
+            `${table} ${row.week}`,
+          ).toEqual(observationWeekFlags(weekOf, metric, asOf, coverage));
+        }
+        for (const row of rows.slice(0, 2)) {
+          const drawn = page.getByTestId(`${ROOT}-${table}-${row.week}`);
+          await expect(drawn).toHaveAttribute('data-no-data', String(row.noData));
+          await expect(drawn).toHaveAttribute('data-in-progress', String(row.inProgress));
+          // The two newest weeks: 진행 중 unless 자료 없음 (결정 8의 6·7).
+          await expect(page.getByTestId(`${ROOT}-${table}-${row.week}-state`)).toHaveText(
+            row.noData ? copy.adminObservationNoData : copy.adminObservationInProgress,
+          );
+        }
       }
       for (const [table, rows] of [
         ['first-fill', shown.firstFill],
@@ -210,6 +284,23 @@ test.describe('관측 지표 (#96)', () => {
         formatElapsed(reports.p90Ms),
         observationCount(reports.pendingTargets),
       ]);
+      for (const [table, rows] of [
+        ['revisit', shown.revisit.map((row) => [row.revisited, row.pairs, row.noData] as const)],
+        [
+          'result-view',
+          shown.resultView.map((row) => [row.viewed, row.pairs, row.noData] as const),
+        ],
+      ] as const) {
+        const [numerator, denominator, noData] = rows[0]!;
+        expect(await valueCells(page, table, week)).toEqual(
+          noData
+            ? [copy.adminObservationNoData, copy.adminObservationNoData]
+            : [
+                observationRatio(numerator, denominator).text,
+                observationFraction(numerator, denominator),
+              ],
+        );
+      }
       if (week === after.firstFill[0]!.week) {
         expect(discussion.posts).toBeGreaterThanOrEqual(1);
         expect(reports.cases).toBeGreaterThanOrEqual(1);
@@ -236,6 +327,8 @@ test.describe('관측 지표 (#96)', () => {
     const empty: AdminObservationMetrics = {
       asOf: asOf.toISOString(),
       dataStart: null,
+      visitsSince: null,
+      visitsPurgedThrough: null,
       firstFill: weeks.map(({ week }) => ({ week, ...flags, accounts: 0, filled: 0 })),
       afterSettlement: weeks.map(({ week }) => ({ week, ...flags, pairs: 0, returned: 0 })),
       discussion: weeks.map(({ week }) => ({
@@ -255,6 +348,8 @@ test.describe('관측 지표 (#96)', () => {
         pendingTargets: 0,
       })),
       pendingTargetsEarlier: 0,
+      revisit: weeks.map(({ week }) => ({ week, ...flags, pairs: 0, revisited: 0 })),
+      resultView: weeks.map(({ week }) => ({ week, ...flags, pairs: 0, viewed: 0 })),
     };
     await page.route(`**${PATH}`, (route) => route.fulfill({ json: { data: empty } }));
 
@@ -283,6 +378,122 @@ test.describe('관측 지표 (#96)', () => {
     await expect(page.getByTestId(`${ROOT}-pending-earlier`)).toHaveCount(0);
     // At 375px each table scrolls inside its own frame; the page never does.
     await expectNoSideScroll(page);
+  });
+
+  test('체결한 회원이 잠정 결과가 공개된 날 시장 상세를 열면 결과 조회에 들고, 관심 등록한 회원은 재방문의 대상 쌍에 들며, 관리자의 방문도 204로 끝난다 (#151)', async ({
+    page,
+    admin,
+    browser,
+    baseURL,
+  }) => {
+    test.slow();
+    const traders = await helperTraders(admin);
+    const market = await createOpenMarket(admin);
+    const before = await metricsOf(admin);
+    const traderContext = await browser.newContext({
+      baseURL,
+      storageState: await traders[0].storageState(),
+    });
+    const watcherContext = await browser.newContext({ baseURL });
+    try {
+      // --- 결과 조회 (151-2): the helper's two members trade once (`closeMarket`), the market is
+      // judged — version 1 published now, a cohort of this week — and one of them opens the
+      // detail the same day (95-12: D counts).
+      await closeMarket(admin, market.id);
+      await judgeMarket(admin, market.id);
+      const judged = await metricsOf(admin);
+      const current = judged.resultView[0]!;
+      const sameWeek = current.week === before.resultView[0]!.week;
+      if (sameWeek && !visitWeekCut(current, 'result-view')) {
+        // The two members' sides, among whatever other workers added.
+        expect(current.pairs).toBeGreaterThanOrEqual(before.resultView[0]!.pairs + 2);
+      }
+
+      const traderPage = await traderContext.newPage();
+      const visit = nextVisit(traderPage);
+      await traderPage.goto(`/markets/${market.slug}`);
+      const recorded = await visit;
+      expect(recorded.status()).toBe(204);
+      // The market travels in the body, never the path (the request log keeps the path).
+      expect(new URL(recorded.url()).pathname).toBe(VISITS);
+      expect(recorded.request().postDataJSON()).toEqual({
+        expectedAccountId: (await meOf(traders[0])).id,
+        marketId: market.id,
+      });
+
+      const viewed = await metricsOf(admin);
+      const viewedRow = viewed.resultView[0]!;
+      if (viewedRow.week === current.week && !visitWeekCut(viewedRow, 'result-view')) {
+        expect(viewedRow.viewed).toBeGreaterThanOrEqual(current.viewed + 1);
+      }
+
+      // --- 관심 등록 후 재방문 (151-1): a fresh member's first watch is a start of this week; its
+      // same-day open is not a revisit (D+1~D+7), and the D+1 boundaries live in the db and api
+      // tests — the e2e has no clock of its own.
+      const watcher = await watcherContext.newPage();
+      await signUp(watcher, freshEmail());
+      const beforeWatch = await metricsOf(admin);
+      await watchThroughApi(watcher, market.id);
+      const watcherVisit = nextVisit(watcher);
+      await watcher.goto(`/markets/${market.slug}`);
+      expect((await watcherVisit).status()).toBe(204);
+      const watched = await metricsOf(admin);
+      const watchedRow = watched.revisit[0]!;
+      if (
+        watchedRow.week === beforeWatch.revisit[0]!.week &&
+        !visitWeekCut(watchedRow, 'revisit')
+      ) {
+        expect(watchedRow.pairs).toBeGreaterThanOrEqual(beforeWatch.revisit[0]!.pairs + 1);
+      }
+
+      // --- the admin's own open (151-3): the same answer, 204, and nothing said about a row (no
+      // assertion on the totals — other workers write meanwhile).
+      await signIn(page, adminAccount.email, adminAccount.password);
+      const adminVisit = nextVisit(page);
+      await page.goto(`/markets/${market.slug}`);
+      expect((await adminVisit).status()).toBe(204);
+
+      // --- the screen draws the answer its own read got, for both tables' current week.
+      const read = nextRead(page);
+      await page.goto('/admin/observation-metrics');
+      const shown = ((await (await read).json()) as { data: AdminObservationMetrics }).data;
+      for (const [table, numerator, denominator, row] of [
+        ['revisit', shown.revisit[0]!.revisited, shown.revisit[0]!.pairs, shown.revisit[0]!],
+        [
+          'result-view',
+          shown.resultView[0]!.viewed,
+          shown.resultView[0]!.pairs,
+          shown.resultView[0]!,
+        ],
+      ] as const) {
+        await expect(page.getByTestId(`${ROOT}-${table}-${row.week}`)).toHaveAttribute(
+          'data-no-data',
+          String(row.noData),
+        );
+        await expect(page.getByTestId(`${ROOT}-${table}-${row.week}-state`)).toHaveText(
+          row.noData ? copy.adminObservationNoData : copy.adminObservationInProgress,
+        );
+        expect(await valueCells(page, table, row.week)).toEqual(
+          row.noData
+            ? [copy.adminObservationNoData, copy.adminObservationNoData]
+            : [
+                observationRatio(numerator, denominator).text,
+                observationFraction(numerator, denominator),
+              ],
+        );
+      }
+      await expect(page.getByTestId(`${ROOT}-revisit-note`)).toHaveText(
+        copy.adminObservationVisitCohortNote,
+      );
+      await expect(page.getByTestId(`${ROOT}-result-view-note`)).toHaveText(
+        copy.adminObservationVisitCohortNote,
+      );
+      // Counts only (95-10): no market, no account on the screen.
+      await expect(page.getByTestId(ROOT)).not.toContainText(market.tag);
+    } finally {
+      await traderContext.close();
+      await watcherContext.close();
+    }
   });
 
   test('관리자가 아닌 계정은 /admin/observation-metrics를 열 수 없고, API는 거절한다', async ({

@@ -1,22 +1,44 @@
-import { kstDateOf, observationRatioPercent } from '@buddha/shared';
+import { type ObservationCoverage, kstDateOf, observationRatioPercent } from '@buddha/shared';
 import { copy } from '@/copy';
 import { formatKst } from './datetime';
 
 /**
- * 관측 지표 (#96, ADR-0169; decisions in ADR-0167) as the admin screen reads it: the counts and
- * durations of `GET /admin/observation-metrics` in words. The answer carries counts only; the
- * ratio is the shared helper's (`observationRatioPercent`), so the screen and the tests compute
- * it once. Kept out of the component so vitest can run it under its node environment
+ * 관측 지표 (#96, ADR-0169; #151, ADR-0170; decisions in ADR-0167) as the admin screen reads it: the
+ * counts and durations of `GET /admin/observation-metrics` in words. The answer carries counts
+ * only; the ratio is the shared helper's (`observationRatioPercent`), so the screen and the tests
+ * compute it once. Kept out of the component so vitest can run it under its node environment
  * (admin-observation-metrics.test.ts).
  */
 
-/** The four tables in screen order: the answer's arrays and their test-id slugs. */
+/**
+ * The six tables in screen order: the answer's arrays and their test-id slugs — #96's four, then
+ * #151's two visit-based cohorts after them (96-7: "#151의 두 지표도 뒤에 더한다").
+ */
 export const OBSERVATION_TABLES = [
   { metric: 'firstFill', slug: 'first-fill' },
   { metric: 'afterSettlement', slug: 'after-settlement' },
   { metric: 'discussion', slug: 'discussion' },
   { metric: 'reportHandling', slug: 'report-handling' },
+  { metric: 'revisit', slug: 'revisit' },
+  { metric: 'resultView', slug: 'result-view' },
 ] as const;
+
+/**
+ * The flags' inputs an answer carries (`dataStart`, `visitsSince`, `visitsPurgedThrough`) as the
+ * shared `observationWeekFlags` takes them, so a test or the e2e recomputes a week's state with
+ * the one function the server uses (ADR-0170).
+ */
+export function observationCoverageOf(answer: {
+  dataStart: string | null;
+  visitsSince: string | null;
+  visitsPurgedThrough: string | null;
+}): ObservationCoverage {
+  return {
+    dataStart: answer.dataStart === null ? null : new Date(answer.dataStart),
+    visitsSince: answer.visitsSince === null ? null : new Date(answer.visitsSince),
+    visitsPurgedThrough: answer.visitsPurgedThrough,
+  };
+}
 
 /** The root test id; each table's is `${root}-${slug}`, each row's `${table}-${week}`. */
 export const OBSERVATION_TEST_ID = 'admin-observation-metrics';

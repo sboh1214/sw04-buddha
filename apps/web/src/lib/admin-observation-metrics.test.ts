@@ -1,9 +1,12 @@
+import { OBSERVATION_METRICS } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import {
+  OBSERVATION_TABLES,
   discussionPostsComments,
   formatElapsed,
   observationAsOf,
+  observationCoverageOf,
   observationFraction,
   observationRatio,
   observationRowState,
@@ -18,6 +21,35 @@ const DAY = 24 * HOUR;
 
 /** 관측 지표's words (#96, ADR-0169; 96-8, 96-9). */
 describe('관측 지표 in words', () => {
+  it('lists the six tables in the shared metric order, #151’s two after the four (96-7)', () => {
+    expect(OBSERVATION_TABLES.map((table) => table.metric)).toEqual([...OBSERVATION_METRICS]);
+    expect(OBSERVATION_TABLES.map((table) => table.slug)).toEqual([
+      'first-fill',
+      'after-settlement',
+      'discussion',
+      'report-handling',
+      'revisit',
+      'result-view',
+    ]);
+  });
+
+  it('reads the flags’ coverage off an answer, instants as dates, the purge date as given', () => {
+    expect(
+      observationCoverageOf({ dataStart: null, visitsSince: null, visitsPurgedThrough: null }),
+    ).toEqual({ dataStart: null, visitsSince: null, visitsPurgedThrough: null });
+    expect(
+      observationCoverageOf({
+        dataStart: '2026-09-19T23:00:00.000Z',
+        visitsSince: '2026-11-18T03:00:00.000Z',
+        visitsPurgedThrough: '2026-10-12',
+      }),
+    ).toEqual({
+      dataStart: new Date('2026-09-19T23:00:00.000Z'),
+      visitsSince: new Date('2026-11-18T03:00:00.000Z'),
+      visitsPurgedThrough: '2026-10-12',
+    });
+  });
+
   it('names a week by its Monday and Sunday, the year only off the current Korean year', () => {
     const asOf = '2026-11-24T06:00:00.000Z';
     expect(weekLabel('2026-11-23', asOf)).toBe('11. 23.(월) ~ 11. 29.(일)');

@@ -12,8 +12,10 @@ import { sql, type SQL, type SQLWrapper } from 'drizzle-orm';
  * order has no tie in real data; `id` only makes it total.
  *
  * Used as `WITH ${adminSpansCte()}, …` and then `NOT ${wasAdminAtSql(id, at)}` in a WHERE, where
- * the planner makes it a hash anti-join on the account (the observation metrics, and #151's two
- * metrics later — 결정 8의 1 holds for them too).
+ * the planner makes it a hash anti-join on the account (the observation metrics, #151's two
+ * visit-based ones included — 결정 8의 1 holds for them too). #151's visit writer
+ * (`recordMarketVisit`) applies the same test at `clock_timestamp()`, so an admin's open is never
+ * written and the write gate and the metrics agree on who was admin (ADR-0170, 96-10).
  */
 
 /** The CTE `admin_spans(user_id, type, from_at, to_at)`: one row per role-change record. */

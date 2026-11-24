@@ -22,6 +22,8 @@ import { identifierWords } from './excluded.js';
  * and the member's own actions theirs (#50, ADR-0081).
  * A market proposal and its proposer are the proposer's and the operators' alone (#77, ADR-0069
  * decision 4), and so are a 판정 이의's submitter and body (#175, ADR-0093 decision 1 #173 item 13).
+ * Which market details an account opened, and when, is nobody's to see: the visit records feed
+ * the admins' weekly counts only (#151, ADR-0167 결정 6, 95-10).
  * Items nothing stores yet
  * are named ahead (`pending`), so the route or event that brings one is refused from its first
  * day.
@@ -62,6 +64,7 @@ export const PRIVATE_DATA_IDS = [
   'account-type',
   'operation-records',
   'observation-metrics',
+  'market-visits',
 ] as const;
 export type PrivateDataId = (typeof PRIVATE_DATA_IDS)[number];
 
@@ -641,14 +644,42 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
     // 주·지표별 비율과 분자·분모 수만 본다 … 회원 화면에는 보이지 않는다"): no public or owner shape
     // carries the report-handling durations, the pending targets or the after-settlement cohort.
     // Runs of the answer's own field names (`medianMs`, `p90Ms`, `pendingTargets`,
-    // `reportHandling`, `afterSettlement`); not `first fill` (the public `firstFillAt`).
+    // `reportHandling`, `afterSettlement`, and #151's `resultView`, `visitsSince`,
+    // `visitsPurgedThrough` — `revisit` and `revisited` are the `market-visits` item's); not
+    // `first fill` (the public `firstFillAt`).
     fields: [
       ['median', 'ms'],
       ['p90', 'ms'],
       ['pending', 'targets'],
       ['report', 'handling'],
       ['after', 'settlement'],
+      ['result', 'view'],
+      ['visits', 'since'],
+      ['visits', 'purged'],
     ],
+  },
+  {
+    id: 'market-visits',
+    name: '방문 기록(특정 계정이 연 시장 상세와 그 날짜)',
+    basis: 'ADR-0167 결정 6·결정 5의 9(151-3·95-10), ADR-0170(#151), ADR-0064 결과 3',
+    // Which market details an account opened and on which Korean date (`market_visits`, #151) are
+    // kept for the two admin cohorts' weekly counts alone (ADR-0167 결정 6 "지표에만 쓴다"; 95-10):
+    // no public, owner or realtime shape says that somebody visited or revisited a market, lists
+    // visitors, or counts a market's visits (`visit`, `visits`, `visited`, `visitor`, `revisit`,
+    // `lastVisit`, `visitedAt`) — no per-account or per-market view of them exists, admin
+    // included (ADR-0064 결과 3's #151 line). A name that says views are somebody's (`userViews`,
+    // `myView`, `viewerViews`) is a person's; `review`, `preview` and `overview` are their own
+    // words and stay public.
+    fields: [
+      ['visit'],
+      ['visits'],
+      ['visited'],
+      ['visitor'],
+      ['visitors'],
+      ['revisit'],
+      ['revisited'],
+    ],
+    owned: { words: ['view', 'views'], whose: WHOSE_OR_VIEWER },
   },
 ];
 

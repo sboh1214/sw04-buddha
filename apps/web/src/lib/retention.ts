@@ -33,6 +33,7 @@ const KIND_LABELS: Readonly<Record<RetentionPurgeKind, string>> = {
   phone_verification_records: copy.adminRetentionKindPhoneVerificationRecords,
   market_proposals: copy.adminRetentionKindMarketProposals,
   notifications: copy.adminRetentionKindNotifications,
+  market_visits: copy.adminRetentionKindMarketVisits,
 };
 
 export function retentionPurgeKindLabel(kind: RetentionPurgeKind): string {

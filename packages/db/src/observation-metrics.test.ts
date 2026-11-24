@@ -1,18 +1,34 @@
 import {
+  OBSERVATION_METRICS,
   OBSERVATION_WEEKS_SHOWN,
   OBSERVATION_WINDOW_MS,
   POSITION_SETTLEMENTS_SINCE,
   kstDateOf,
+  kstDatePlusDays,
+  kstStartOfDate,
   kstWeekStartOf,
   nearestPercentile,
+  observationWeekFlags,
+  observationWeeks,
   type AdminObservationMetrics,
 } from '@buddha/shared';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { Client } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { settleMarketPositions } from './market-settlement.js';
 import { observationWeekSql, readObservationMetrics } from './observation-metrics.js';
-import { adminActions, markets, postComments, posts, reports, user } from './schema/index.js';
+import {
+  adminActions,
+  marketVisitCollection,
+  marketVisits,
+  marketWatchEvents,
+  marketWatches,
+  markets,
+  postComments,
+  posts,
+  reports,
+  user,
+} from './schema/index.js';
 import {
   closeAccount,
   completeOnboarding,
@@ -24,6 +40,9 @@ import {
   createReport,
   createSettlementRecord,
   createUser,
+  createWatch,
+  createCorrectedMarket,
+  createProvisionalMarket,
 } from './test/factories.js';
 import { connectTestDb, hasTestDb, testDbUrls, type TestDb } from './test/harness.js';
 import { fundMarketMakerFunds, mintTestPairs } from './test/ledger.js';
@@ -37,6 +56,7 @@ import {
   settleMarketAt,
 } from './test/observation.js';
 import { createFillRecord, createOrder } from './test/orders.js';
+import { createVisit, recordVisitPurge, setVisitCollectionStart } from './test/visits.js';
 import { clockTimestamp } from './tx-helpers.js';
 
 const MINUTE_MS = 60_000;
@@ -56,7 +76,7 @@ describe.skipIf(!hasTestDb())('관측 지표 reader (#96, ADR-0169; integration)
   /** The default reading instant: the fifth week after `base`, past every 168-hour window. */
   const later = () => at(4 * WEEK_MS + 2 * DAY_MS);
   const read = (asOf: Date = later()) => readObservationMetrics(t.db, { asOf });
-  type Metric = 'firstFill' | 'afterSettlement' | 'discussion' | 'reportHandling';
+  type Metric = (typeof OBSERVATION_METRICS)[number];
   function rowOf<M extends Metric>(
     answer: AdminObservationMetrics,
     metric: M,
@@ -109,11 +129,17 @@ describe.skipIf(!hasTestDb())('관측 지표 reader (#96, ADR-0169; integration)
         '2027-01-04T14:59:59.999Z', // Mon 2027-01-04 23:59 KST
       ].map((iso) => new Date(iso));
       for (const instant of instants) {
-        const { rows } = await t.db.execute<{ week: string }>(
-          sql`SELECT ${observationWeekSql(sql`${instant.toISOString()}::timestamptz`)} AS week`,
+        const { rows } = await t.db.execute<{ week: string; day: string }>(
+          sql`SELECT ${observationWeekSql(sql`${instant.toISOString()}::timestamptz`)} AS week,
+                     to_char((${instant.toISOString()}::timestamptz AT TIME ZONE 'Asia/Seoul')::date,
+                             'YYYY-MM-DD') AS day`,
         );
         expect(rows[0]!.week, instant.toISOString()).toBe(weekOf(instant));
+        // The visit-based cohorts' D (#151): the start's Korean date, as kstDateOf.
+        expect(rows[0]!.day, instant.toISOString()).toBe(kstDateOf(instant));
       }
+      expect(kstDateOf(new Date('2026-11-29T14:59:59.999Z'))).toBe('2026-11-29');
+      expect(kstDateOf(new Date('2026-11-29T15:00:00.000Z'))).toBe('2026-11-30');
       expect(weekOf(new Date('2027-01-03T12:00:00.000Z'))).toBe('2026-12-28');
       expect(weekOf(new Date('2026-11-29T14:59:59.999Z'))).toBe('2026-11-23');
     });
@@ -123,12 +149,9 @@ describe.skipIf(!hasTestDb())('관측 지표 reader (#96, ADR-0169; integration)
       const asOf = later();
       const answer = await read(asOf);
       expect(answer.asOf).toBe(asOf.toISOString());
-      for (const metric of [
-        'firstFill',
-        'afterSettlement',
-        'discussion',
-        'reportHandling',
-      ] as const) {
+      // No collection start after the reset, and no purge: no visit cut (#151).
+      expect(answer).toMatchObject({ visitsSince: null, visitsPurgedThrough: null });
+      for (const metric of OBSERVATION_METRICS) {
         const rows = answer[metric];
         expect(rows).toHaveLength(OBSERVATION_WEEKS_SHOWN);
         expect(rows[0]!.week).toBe(weekOf(asOf));
@@ -136,7 +159,7 @@ describe.skipIf(!hasTestDb())('관측 지표 reader (#96, ADR-0169; integration)
           expect(rows[index]!.week < rows[index - 1]!.week).toBe(true);
         }
         const progress = rows.map((row) => row.inProgress);
-        const cohort = metric === 'firstFill' || metric === 'afterSettlement';
+        const cohort = metric !== 'discussion' && metric !== 'reportHandling';
         expect(progress.slice(0, 3)).toEqual(cohort ? [true, true, false] : [true, false, false]);
       }
       expect(answer.firstFill[4]).toMatchObject({ accounts: 0, filled: 0, noData: false });
@@ -147,6 +170,8 @@ describe.skipIf(!hasTestDb())('관측 지표 reader (#96, ADR-0169; integration)
         pendingTargets: 0,
       });
       expect(answer.pendingTargetsEarlier).toBe(0);
+      expect(answer.revisit[4]).toMatchObject({ pairs: 0, revisited: 0, noData: false });
+      expect(answer.resultView[4]).toMatchObject({ pairs: 0, viewed: 0, noData: false });
     });
 
     it('is 자료 없음 for weeks ending at or before the earliest account, never 진행 중', async () => {
@@ -160,7 +185,7 @@ describe.skipIf(!hasTestDb())('관측 지표 reader (#96, ADR-0169; integration)
       const answer = await read(asOf);
       expect(answer.dataStart).toBe(created!.at.toISOString());
       const weekStart = kstWeekStartOf(created!.at);
-      for (const metric of ['firstFill', 'discussion'] as const) {
+      for (const metric of ['firstFill', 'discussion', 'revisit', 'resultView'] as const) {
         expect(answer[metric][0]).toMatchObject({ noData: false, inProgress: true });
         expect(answer[metric][1]).toMatchObject({ noData: true, inProgress: false });
         expect(answer[metric].slice(1).every((row) => row.noData)).toBe(true);
@@ -171,12 +196,7 @@ describe.skipIf(!hasTestDb())('관측 지표 reader (#96, ADR-0169; integration)
     it('is 자료 없음 everywhere on an empty database, with no data start', async () => {
       const answer = await read();
       expect(answer.dataStart).toBeNull();
-      for (const metric of [
-        'firstFill',
-        'afterSettlement',
-        'discussion',
-        'reportHandling',
-      ] as const) {
+      for (const metric of OBSERVATION_METRICS) {
         expect(answer[metric].every((row) => row.noData && !row.inProgress)).toBe(true);
       }
     });
@@ -901,6 +921,415 @@ describe.skipIf(!hasTestDb())('관측 지표 reader (#96, ADR-0169; integration)
     });
   });
 
+  describe('관심 등록 후 재방문 (151-1, #151)', () => {
+    /** The Korean date `days` after the Korean date of `instant`. */
+    const dayOf = (instant: Date, days: number) => kstDatePlusDays(kstDateOf(instant), days);
+    const visit = (userId: string, marketId: string, date: string) =>
+      createVisit(t.asOwner, { userId, marketId, date });
+    const watch = (userId: string, marketId: string, watchedAt: Date) =>
+      createWatch(t.db, { userId, marketId, watchedAt });
+    /** An unwatch as the API writes it: the current row gone, an `unwatch` event at `at`. */
+    async function unwatch(userId: string, marketId: string, at: Date) {
+      await t.db.transaction(async (tx) => {
+        await tx
+          .delete(marketWatches)
+          .where(and(eq(marketWatches.userId, userId), eq(marketWatches.marketId, marketId)));
+        await tx
+          .insert(marketWatchEvents)
+          .values({ userId, marketId, action: 'unwatch', createdAt: at });
+      });
+    }
+
+    it('counts an open from D+1 to D+7 (Korean dates), once per pair, never D or D+8 (95-12)', async () => {
+      const start = at(10 * HOUR_MS); // Monday 10:00 KST
+      const market = await openMarket();
+      const offsets: number[][] = [[0], [1], [7], [8], [1, 3]];
+      for (const days of offsets) {
+        const id = await member();
+        await watch(id, market, start);
+        for (const n of days) await visit(id, market, dayOf(start, n));
+      }
+      // Another market's open is not this pair's.
+      const elsewhere = await member();
+      await watch(elsewhere, market, start);
+      await visit(elsewhere, await openMarket(), dayOf(start, 1));
+      expect(rowOf(await read(), 'revisit', start)).toMatchObject({
+        pairs: 6,
+        revisited: 3,
+        noData: false,
+        inProgress: false,
+      });
+    });
+
+    it('counts an open after an unwatch, and a rewatch is no new start (151-1, 95-4)', async () => {
+      const market = await openMarket();
+      const start = at(10 * HOUR_MS);
+      // Watch, unwatch the same day, open on D+2: counted.
+      const unwatched = await member();
+      await watch(unwatched, market, start);
+      await unwatch(unwatched, market, at(11 * HOUR_MS));
+      await visit(unwatched, market, dayOf(start, 2));
+      // First watched this week, watched again next week: next week holds no pair.
+      const again = await member();
+      await watch(again, market, start);
+      await unwatch(again, market, at(DAY_MS));
+      const rewatch = at(WEEK_MS + 10 * HOUR_MS);
+      await watch(again, market, rewatch);
+      await visit(again, market, dayOf(rewatch, 1));
+      const answer = await read();
+      expect(rowOf(answer, 'revisit', start)).toMatchObject({ pairs: 2, revisited: 1 });
+      expect(rowOf(answer, 'revisit', rewatch)).toMatchObject({ pairs: 0, revisited: 0 });
+    });
+
+    it('takes D as the Korean date: Sunday 23:59:59.999 and Monday 00:00 KST are two weeks', async () => {
+      const market = await openMarket();
+      const sunday = at(WEEK_MS - 1);
+      const monday = at(WEEK_MS);
+      expect(kstDateOf(sunday)).toBe(dayOf(monday, -1));
+      const late = await member();
+      await watch(late, market, sunday);
+      // D (Sunday) is not counted; D+1 is Monday.
+      await visit(late, market, dayOf(sunday, 0));
+      await visit(late, market, dayOf(sunday, 1));
+      const early = await member();
+      await watch(early, market, monday);
+      await visit(early, market, dayOf(monday, 0));
+      const answer = await read();
+      expect(rowOf(answer, 'revisit', sunday)).toMatchObject({ pairs: 1, revisited: 1 });
+      expect(rowOf(answer, 'revisit', monday)).toMatchObject({ pairs: 1, revisited: 0 });
+    });
+
+    it('leaves out a pair whose account was admin at the first watch, for good (8의 1)', async () => {
+      const market = await openMarket();
+      const start = at(10 * HOUR_MS);
+      // Admin at the first watch: out, though revoked and watched again later.
+      const admin = await member();
+      await grantAdminAt(t.db, admin, at(9 * HOUR_MS));
+      await watch(admin, market, start);
+      await revokeAdminAt(t.db, admin, at(11 * HOUR_MS));
+      await unwatch(admin, market, at(12 * HOUR_MS));
+      await watch(admin, market, at(13 * HOUR_MS));
+      await visit(admin, market, dayOf(start, 2));
+      // Admin only after its open on D+1: in, the open counts.
+      const later = await member();
+      await watch(later, market, start);
+      await visit(later, market, dayOf(start, 1));
+      await grantAdminAt(t.db, later, at(2 * DAY_MS + HOUR_MS));
+      // The admin role with no record: a member (96-10).
+      const { user: unrecorded } = await createUser(t.db, { role: 'admin' });
+      await watch(unrecorded.id, market, start);
+      await visit(unrecorded.id, market, dayOf(start, 3));
+      expect(rowOf(await read(), 'revisit', start)).toMatchObject({ pairs: 2, revisited: 2 });
+    });
+
+    it('leaves out the bot, keeps a closed account and a member not onboarded (95-1, 결정 4)', async () => {
+      const market = await openMarket();
+      const start = at(10 * HOUR_MS);
+      const bot = await createMarketMakerAccount(t.db);
+      await watch(bot, market, start);
+      // Watched, opened on D+2, then closed (its closure writes an unwatch): still counted.
+      const closed = await member();
+      await watch(closed, market, start);
+      await visit(closed, market, dayOf(start, 2));
+      await closeAccount(t.db, closed);
+      // Never onboarded: in the denominator.
+      const fresh = await member();
+      const [profile] = await t.db
+        .execute<{ confirmed: Date | null }>(
+          sql`SELECT nickname_confirmed_at AS confirmed FROM profiles WHERE user_id = ${fresh}`,
+        )
+        .then((result) => result.rows);
+      expect(profile?.confirmed).toBeNull();
+      await watch(fresh, market, start);
+      expect(rowOf(await read(), 'revisit', start)).toMatchObject({ pairs: 2, revisited: 1 });
+    });
+
+    it('reads nothing after asOf: a watch at or after it, an open after its Korean date', async () => {
+      const market = await openMarket();
+      const start = at(10 * HOUR_MS);
+      const asOf = at(3 * DAY_MS + 12 * HOUR_MS); // Thursday 12:00 KST = D+3
+      const onDay = await member();
+      await watch(onDay, market, start);
+      await visit(onDay, market, kstDateOf(asOf));
+      const afterDay = await member();
+      await watch(afterDay, market, start);
+      await visit(afterDay, market, dayOf(asOf, 1));
+      await watch(await member(), market, asOf);
+      await watch(await member(), market, new Date(asOf.getTime() + 1));
+      expect(rowOf(await read(asOf), 'revisit', start)).toMatchObject({
+        pairs: 2,
+        revisited: 1,
+        inProgress: true,
+      });
+      expect(rowOf(await read(), 'revisit', start)).toMatchObject({ pairs: 4, revisited: 2 });
+    });
+  });
+
+  describe('결과 조회 (151-2, #151)', () => {
+    const dayOf = (instant: Date, days: number) => kstDatePlusDays(kstDateOf(instant), days);
+    const visit = (userId: string, marketId: string, date: string) =>
+      createVisit(t.asOwner, { userId, marketId, date });
+    /** A CLOSED market whose close was two hours before `publishedAt`. */
+    const closedMarket = async (publishedAt: Date) =>
+      (
+        await createMarket(t.db, {
+          status: 'closed',
+          closeAt: new Date(publishedAt.getTime() - 2 * HOUR_MS),
+        })
+      ).id;
+    /** Its judgement version 1 approved at `publishedAt` (#152). */
+    const publish = (marketId: string, publishedAt: Date, result: 'YES' | 'NO' | 'VOID' = 'YES') =>
+      createProvisionalMarket(t.db, { marketId, publishedAt, result });
+
+    it('counts each person who filled there, opening from D to D+7, never the bot (95-2, 95-12)', async () => {
+      const start = at(10 * HOUR_MS);
+      const market = await closedMarket(start);
+      const before = at(7 * HOUR_MS);
+      const [a, b, c, d, e] = [
+        await member(),
+        await member(),
+        await member(),
+        await member(),
+        await member(),
+      ];
+      const bot = await createMarketMakerAccount(t.db);
+      await fill(market, a, b, before);
+      await fill(market, c, d, before);
+      // A person's fill against the bot: the person's side only.
+      await fill(market, bot, e, before);
+      // Bought, then sold everything: still one who filled (151-2 "전량 매도 포함").
+      await fill(market, a, b, at(8 * HOUR_MS));
+      await publish(market, start);
+      await visit(a, market, dayOf(start, 0));
+      await visit(a, market, dayOf(start, 3)); // once per pair
+      await visit(b, market, dayOf(start, 7));
+      await visit(c, market, dayOf(start, 8));
+      await visit(d, market, dayOf(start, -1));
+      await visit(e, market, dayOf(start, 1));
+      expect(rowOf(await read(), 'resultView', start)).toMatchObject({
+        pairs: 5,
+        viewed: 3,
+        noData: false,
+        inProgress: false,
+      });
+    });
+
+    it('leaves out a pair whose every fill there is marked, and brings it back on a clear (95-3)', async () => {
+      const asker = await createAdminAt(t.db, { at: at(-3 * HOUR_MS) });
+      const decider = await createAdminAt(t.db, { at: at(-2 * HOUR_MS) });
+      const start = at(10 * HOUR_MS);
+      const market = await closedMarket(start);
+      const sole = await member();
+      const mixed = await member();
+      const { id: soleFill } = await fill(market, sole, mixed, at(HOUR_MS));
+      const { id: otherFill } = await fill(market, await member(), mixed, at(2 * HOUR_MS));
+      await publish(market, start);
+      await visit(sole, market, dayOf(start, 1));
+      await visit(mixed, market, dayOf(start, 1));
+      const classify = (fillId: number, action: 'mark' | 'clear') =>
+        classifyFill(t.db, {
+          fillId,
+          marketId: market,
+          action,
+          askerId: asker,
+          deciderId: decider,
+        });
+      expect(rowOf(await read(), 'resultView', start)).toMatchObject({ pairs: 3, viewed: 2 });
+      await classify(soleFill, 'mark');
+      // `sole` is out; `mixed` keeps its unmarked fill.
+      expect(rowOf(await read(), 'resultView', start)).toMatchObject({ pairs: 2, viewed: 1 });
+      await classify(otherFill, 'mark');
+      expect(rowOf(await read(), 'resultView', start)).toMatchObject({ pairs: 0, viewed: 0 });
+      await classify(soleFill, 'clear');
+      expect(rowOf(await read(), 'resultView', start)).toMatchObject({ pairs: 2, viewed: 2 });
+    });
+
+    it('starts at version 1 only, VOID included, never a correction; leaves out an admin then', async () => {
+      const start = at(10 * HOUR_MS);
+      const market = await closedMarket(start);
+      const holder = await member();
+      const admin = await member();
+      await fill(market, holder, admin, at(HOUR_MS));
+      await grantAdminAt(t.db, admin, at(9 * HOUR_MS));
+      await publish(market, start, 'VOID');
+      await visit(holder, market, dayOf(start, 2));
+      // A correction (version 2) published next week starts nothing (8의 9).
+      const corrected = at(WEEK_MS + 10 * HOUR_MS);
+      await createCorrectedMarket(t.db, { marketId: market, correctedAt: corrected });
+      await visit(holder, market, dayOf(corrected, 1));
+      const answer = await read();
+      expect(rowOf(answer, 'resultView', start)).toMatchObject({ pairs: 1, viewed: 1 });
+      expect(rowOf(answer, 'resultView', corrected)).toMatchObject({ pairs: 0, viewed: 0 });
+    });
+
+    it('starts nothing without a version 1 or after asOf', async () => {
+      const start = at(10 * HOUR_MS);
+      // Fills, no judgement: a CLOSED market, and one CANCELLED (ADR-0117: never judged).
+      const unjudged = await closedMarket(start);
+      await fill(unjudged, await member(), await member(), at(HOUR_MS));
+      const cancelled = await closedMarket(start);
+      await fill(cancelled, await member(), await member(), at(HOUR_MS));
+      await t.db.update(markets).set({ status: 'cancelled' }).where(eq(markets.id, cancelled));
+      // Published a millisecond after asOf.
+      const asOf = at(DAY_MS);
+      const lateMarket = await closedMarket(start);
+      await fill(lateMarket, await member(), await member(), at(HOUR_MS));
+      await publish(lateMarket, new Date(asOf.getTime() + 1));
+      expect(rowOf(await read(asOf), 'resultView', start)).toMatchObject({
+        pairs: 0,
+        viewed: 0,
+        inProgress: true,
+      });
+      expect(rowOf(await read(), 'resultView', start)).toMatchObject({ pairs: 2 });
+    });
+
+    it('reads no open after the Korean date of asOf, and one on it', async () => {
+      const start = at(10 * HOUR_MS);
+      const market = await closedMarket(start);
+      const [a, b] = [await member(), await member()];
+      await fill(market, a, b, at(HOUR_MS));
+      await publish(market, start);
+      const asOf = at(2 * DAY_MS + 9 * HOUR_MS); // Wednesday 09:00 KST = D+2
+      await visit(a, market, kstDateOf(asOf));
+      await visit(b, market, dayOf(asOf, 1));
+      expect(rowOf(await read(asOf), 'resultView', start)).toMatchObject({ pairs: 2, viewed: 1 });
+    });
+  });
+
+  describe('자료 없음 of the visit-based metrics (결정 8의 7, #151)', () => {
+    /** Each visit-based metric's row and #96's 첫 체결 전환 row of the week holding `instant`. */
+    const rows = (answer: AdminObservationMetrics, instant: Date) => ({
+      revisit: rowOf(answer, 'revisit', instant),
+      resultView: rowOf(answer, 'resultView', instant),
+      firstFill: rowOf(answer, 'firstFill', instant),
+    });
+
+    it('cuts the weeks before the collection start when it is later than the data start', async () => {
+      const market = await openMarket();
+      const start = at(WEEK_MS + 10 * HOUR_MS);
+      const id = await member();
+      await createWatch(t.db, { userId: id, marketId: market, watchedAt: start });
+      await createVisit(t.asOwner, {
+        userId: id,
+        marketId: market,
+        date: kstDatePlusDays(kstDateOf(start), 1),
+      });
+      // Thursday of the second week: that week and every earlier one are 자료 없음.
+      const since = at(WEEK_MS + 3 * DAY_MS);
+      await setVisitCollectionStart(t.asOwner, since);
+      let answer = await read();
+      expect(answer.visitsSince).toBe(since.toISOString());
+      for (const instant of [at(0), start]) {
+        expect(rows(answer, instant)).toMatchObject({
+          revisit: { noData: true, inProgress: false, pairs: 0, revisited: 0 },
+          resultView: { noData: true, pairs: 0, viewed: 0 },
+          firstFill: { noData: false },
+        });
+      }
+      expect(rows(answer, at(2 * WEEK_MS))).toMatchObject({
+        revisit: { noData: false },
+        resultView: { noData: false },
+      });
+      // A start at a Monday 00:00 KST: that week is whole.
+      await setVisitCollectionStart(t.asOwner, at(WEEK_MS));
+      answer = await read();
+      expect(rows(answer, start).revisit).toMatchObject({ noData: false, pairs: 1, revisited: 1 });
+      expect(rows(answer, at(0)).revisit).toMatchObject({ noData: true });
+      // A start before the earliest account (a database migrated before its accounts): no cut.
+      await setVisitCollectionStart(t.asOwner, new Date(Date.now() - 365 * DAY_MS));
+      answer = await read();
+      const base96 = answer.firstFill.map((row) => row.noData);
+      expect(answer.revisit.map((row) => row.noData)).toEqual(base96);
+      // No start (a wiped database): no cut.
+      await setVisitCollectionStart(t.asOwner, null);
+      answer = await read();
+      expect(answer.visitsSince).toBeNull();
+      expect(answer.resultView.map((row) => row.noData)).toEqual(base96);
+    });
+
+    it('cuts a week whose window reaches the purge horizon: D+1 for 재방문, D for 결과 조회', async () => {
+      await member();
+      const monday = kstDateOf(at(WEEK_MS));
+      const period = 10;
+      /** A run whose cutoff falls on the Korean date `horizon` (the 04:30 KST run). */
+      const ranAtFor = (horizon: string) =>
+        new Date(kstStartOfDate(horizon).getTime() + (period * 24 + 4.5) * HOUR_MS);
+      const purge = (horizon: string, count: number, outcome: 'done' | 'failed' = 'done') =>
+        recordVisitPurge(t.db, { ranAt: ranAtFor(horizon), periodDays: period, count, outcome });
+      const asOf = later();
+      // Ignored: a run that deleted nothing, a failure, a run after asOf.
+      await purge(kstDatePlusDays(monday, 3), 0);
+      await purge(kstDatePlusDays(monday, 3), 0, 'failed');
+      await recordVisitPurge(t.db, {
+        ranAt: new Date(asOf.getTime() + 1),
+        periodDays: 1,
+        count: 5,
+      });
+      let answer = await read(asOf);
+      expect(answer.visitsPurgedThrough).toBeNull();
+      // Only the weeks before the earliest account, as #96's tables.
+      const base96 = answer.firstFill.map((row) => row.noData);
+      expect(answer.revisit.map((row) => row.noData)).toEqual(base96);
+      expect(answer.resultView.map((row) => row.noData)).toEqual(base96);
+      // Horizon = the week's Monday: 결과 조회 lost D of its Monday cohort; 재방문 lost nothing.
+      await purge(monday, 3);
+      answer = await read(asOf);
+      expect(answer.visitsPurgedThrough).toBe(monday);
+      expect(rows(answer, at(WEEK_MS))).toMatchObject({
+        revisit: { noData: false },
+        resultView: { noData: true },
+        firstFill: { noData: false },
+      });
+      expect(rows(answer, at(0))).toMatchObject({
+        revisit: { noData: true },
+        resultView: { noData: true },
+      });
+      // Horizon = Tuesday: 재방문 lost D+1 of its Monday cohort too.
+      await purge(kstDatePlusDays(monday, 1), 1);
+      answer = await read(asOf);
+      expect(answer.visitsPurgedThrough).toBe(kstDatePlusDays(monday, 1));
+      expect(rows(answer, at(WEEK_MS))).toMatchObject({
+        revisit: { noData: true },
+        resultView: { noData: true },
+      });
+      expect(rows(answer, at(2 * WEEK_MS))).toMatchObject({
+        revisit: { noData: false },
+        resultView: { noData: false },
+      });
+      // The flags are the shared function's over the answer's coverage, week by week.
+      const coverage = {
+        dataStart: answer.dataStart === null ? null : new Date(answer.dataStart),
+        visitsSince: null,
+        visitsPurgedThrough: answer.visitsPurgedThrough,
+      };
+      const weeks = observationWeeks(asOf);
+      for (const metric of ['revisit', 'resultView'] as const) {
+        expect(
+          answer[metric].map(({ noData, inProgress }) => ({ noData, inProgress })),
+          metric,
+        ).toEqual(weeks.map((week) => observationWeekFlags(week, metric, asOf, coverage)));
+      }
+    });
+
+    it('keeps the horizon of the earlier run when its period was longer (the max cutoff date)', async () => {
+      await member();
+      const monday = kstDateOf(at(WEEK_MS));
+      // Horizon Monday, then a later run with a longer period: horizon the Sunday before.
+      await recordVisitPurge(t.db, {
+        ranAt: new Date(kstStartOfDate(kstDatePlusDays(monday, 10)).getTime() + 4.5 * HOUR_MS),
+        periodDays: 10,
+        count: 2,
+      });
+      await recordVisitPurge(t.db, {
+        ranAt: new Date(kstStartOfDate(kstDatePlusDays(monday, 11)).getTime() + 4.5 * HOUR_MS),
+        periodDays: 12,
+        count: 2,
+      });
+      const answer = await read();
+      expect(answer.visitsPurgedThrough).toBe(monday);
+    });
+  });
+
   it('writes nothing: one read leaves every source as it was', async () => {
     const author = await member();
     await createPost(t.db, {
@@ -913,6 +1342,8 @@ describe.skipIf(!hasTestDb())('관측 지표 reader (#96, ADR-0169; integration)
       posts: await t.db.$count(posts),
       comments: await t.db.$count(postComments),
       reports: await t.db.$count(reports),
+      visits: await t.db.$count(marketVisits),
+      collection: await t.db.$count(marketVisitCollection),
     });
     const before = await counts();
     await read();

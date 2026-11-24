@@ -2,6 +2,7 @@ import { MarketRankingCursors } from './market-ranking-cursor.js';
 import { Inject, Injectable } from '@nestjs/common';
 import {
   DAY_AGO,
+  isPublicMarketStatusSql,
   marketPriceAt,
   marketTradingEndedAt,
   readPublicJudgementDelay,
@@ -11,7 +12,6 @@ import {
 import {
   ALL_MARKET_STATUSES,
   FILLS_RECENT_LIMIT,
-  PUBLIC_MARKET_STATUSES,
   TICKS_MAX_POINTS,
   TICKS_SCAN_MAX,
   isDisputeOpen,
@@ -271,9 +271,11 @@ export async function marketTagNames(executor: Db | Tx, marketId: string): Promi
  * users see (`PUBLIC_MARKET_STATUSES`), so DRAFT and REVIEW — the admin's alone — are on no list
  * and answer NOT_FOUND, the same as an id that does not exist. The detail, the list, the
  * discussion, the watchlist, the themes, the related markets and the proposals all filter by it.
+ * The rule itself is packages/db's `isPublicMarketStatusSql`, which the visit writer
+ * (`recordMarketVisit`, #151) applies over its own alias: one definition.
  */
 export function isPublicMarket(): SQL {
-  return inArray(schema.markets.status, [...PUBLIC_MARKET_STATUSES]);
+  return isPublicMarketStatusSql(schema.markets.status);
 }
 
 /**

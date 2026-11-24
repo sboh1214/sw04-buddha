@@ -53,6 +53,10 @@ describe('보존기간 처리 기록 (#184, ADR-0087)', () => {
     // A closed account's decided or retracted 판정 이의, emptied in place under the 신고·제재 period
     // (#175, ADR-0104): its links and reason go, its count and status stay.
     expect(retentionPurgeKindLabel('market_disputes')).toBe('판정 이의 본문');
+    // Every account's market-detail visit rows (#151, ADR-0170; 151-5): by the visit's Korean
+    // date, a closure deleting none.
+    expect(retentionPurgeKindLabel('market_visits')).toBe('방문 기록');
+    expect(retentionPurgeKindLabel('market_visits')).toBe(copy.adminRetentionKindMarketVisits);
   });
 
   it('says counts in 건 and the period in 일, with thousands grouped — 0 too', () => {

@@ -26,16 +26,18 @@ import { NICKNAME_HOLD_DAYS } from './nickname.js';
  * - Each run records, per kind it processed, how many it deleted and when — no personal content
  *   (decision 4 #184 «경과 처리 기록»): `retention_purges`, read at `GET /admin/retention-purges`.
  *
- * A personal data kind added after #184 (notifications #53, visit records #151, …) registers its
- * period the same way: the period the owner decides for it — a new setting in
- * RETENTION_PERIOD_SETTINGS or an existing one's, whose description then names the kind too — a
- * purge kind here, and its step in the worker's job (docs/SETTINGS.md '보존기간 항목 등록하기').
- * #77's market proposals came so, with a setting of their own (ADR-0087's owner decision
- * 2026-10-24 13), and #53's notifications (ADR-0157 53-7). Unlike the closure-anchored kinds
- * (consent records, verification records, moderation records and market proposals of a withdrawn
- * account), notifications are deleted from a live member's inbox by their 발생 시각 (53-10), read
- * or unread: a closure deletes a closed one's inbox whole at once, so no period counts from a
- * withdrawal.
+ * A personal data kind added after #184 registers its period the same way: the period the owner
+ * decides for it — a new setting in RETENTION_PERIOD_SETTINGS or an existing one's, whose
+ * description then names the kind too — a purge kind here, and its step in the worker's job
+ * (docs/SETTINGS.md '보존기간 항목 등록하기'). #77's market proposals came so, with a setting of
+ * their own (ADR-0087's owner decision 2026-10-24 13), #53's notifications (ADR-0157 53-7) and
+ * #151's visit records (ADR-0170, owner answer 151-5; ADR-0167 결정 8의 8). Unlike the
+ * closure-anchored kinds (consent records, verification records, moderation records and market
+ * proposals of a withdrawn account), notifications are deleted from a live member's inbox by their
+ * 발생 시각 (53-10), read or unread: a closure deletes a closed one's inbox whole at once, so no
+ * period counts from a withdrawal. Visit records count from 00:00 KST of the visit's Korean date
+ * for every account, and a closure deletes none of them: a closed account's stay linked to it
+ * until their period has passed (151-5).
  */
 
 /**
@@ -73,6 +75,9 @@ export const RETENTION_PERIOD_MAX_DAYS = 7_300;
  * - `notifications`: 알림 — every account's notifications (#53, `notifications` with their keys),
  *   read or not, once the period has passed since their 발생 시각 (a merged one's latest event,
  *   134-2; owner answers 53-7, 53-10). A closed account's went whole with its closure.
+ * - `market_visits`: 방문 기록 — every account's market-detail visit rows (#151, ADR-0170,
+ *   `market_visits`: account, market and Korean date), once the period has passed since 00:00 KST
+ *   of the visit's date (ADR-0167 결정 8의 8); a closure deletes none of them (owner answer 151-5).
  */
 export const RETENTION_PERIODS = [
   'consent_records',
@@ -82,6 +87,7 @@ export const RETENTION_PERIODS = [
   'removed_profile_items',
   'market_proposals',
   'notifications',
+  'market_visits',
 ] as const;
 export type RetentionPeriod = (typeof RETENTION_PERIODS)[number];
 
@@ -123,6 +129,9 @@ export type RetentionPeriod = (typeof RETENTION_PERIODS)[number];
  *   last. Unlike the closure-anchored kinds (consent records, verification records, moderation
  *   records and market proposals of a withdrawn account), they are deleted from a live member's
  *   inbox by their 발생 시각, read or unread.
+ * - `market_visits`: 방문 기록 — every account's market-detail visit rows (#151, ADR-0170) whose
+ *   period has passed since 00:00 KST of their visit date (ADR-0167 결정 8의 8), whoever's they are:
+ *   a closure deletes none (owner answer 151-5). Nothing names them, so last.
  */
 export const RETENTION_PURGE_KINDS = [
   'nickname_holds',
@@ -142,6 +151,7 @@ export const RETENTION_PURGE_KINDS = [
   'phone_verification_records',
   'market_proposals',
   'notifications',
+  'market_visits',
 ] as const;
 export type RetentionPurgeKind = (typeof RETENTION_PURGE_KINDS)[number];
 export const retentionPurgeKindSchema = z
@@ -175,6 +185,7 @@ export const RETENTION_PURGE_KIND_PERIODS: Readonly<
   phone_verification_records: 'phone_verification_records',
   market_proposals: 'market_proposals',
   notifications: 'notifications',
+  market_visits: 'market_visits',
 };
 
 /** The days a nickname hold is kept: the hold itself (#57-6), recorded as its purge's period. */

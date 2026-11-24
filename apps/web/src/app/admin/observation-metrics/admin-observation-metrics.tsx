@@ -19,15 +19,18 @@ import {
 import { type AdminObservationMetrics as Metrics } from '@/lib/api';
 
 /**
- * 관측 지표 (#96, ADR-0169; owner answers in ADR-0167, 96-7~96-9): the heading and the intro, then
- * a skeleton while the one read is out, that read's failure with 다시 시도 (`-error`), or the
- * screen — 기준 시각 and four sections, each its title, its one-line definition and a table of the
- * latest 12 KST weeks, newest first, in a ScrollArea (at 375px the table scrolls inside, never
- * the page): 첫 체결 전환 and 정산 후 재참여 (ratio, numerator / denominator — 95-7) under the note
- * that their two newest weeks are 진행 중, 유효 토론 (96-8's one cell, 쓴 계정, 토론이 있는 시장) and
- * 신고 처리 시간 (처리 건수, the median and 90th percentile, 대기), with the line for pending targets
- * older than the shown weeks under it. A '자료 없음' week writes it in every value cell and is never
- * 진행 중; a ratio over 0 is '—' (대상 없음). A refresh that failed over the numbers held keeps them
+ * 관측 지표 (#96, ADR-0169; #151, ADR-0170; owner answers in ADR-0167, 96-7~96-9, 151-6): the
+ * heading and the intro, then a skeleton while the one read is out, that read's failure with 다시
+ * 시도 (`-error`), or the screen — 기준 시각 and six sections, each its title, its one-line
+ * definition and a table of the latest 12 KST weeks, newest first, in a ScrollArea (at 375px the
+ * table scrolls inside, never the page): 첫 체결 전환 and 정산 후 재참여 (ratio, numerator /
+ * denominator — 95-7) under the note that their two newest weeks are 진행 중, 유효 토론 (96-8's one
+ * cell, 쓴 계정, 토론이 있는 시장) and 신고 처리 시간 (처리 건수, the median and 90th percentile,
+ * 대기), with the line for pending targets older than the shown weeks under it, then #151's 관심
+ * 등록 후 재방문 and 결과 조회 (ratio, numerator / denominator) under their own note — windows
+ * counted in Korean dates, and 자료 없음 before the visits were collected or after the retention
+ * purge reached a window (ADR-0167 결정 8의 6·7). A '자료 없음' week writes it in every value cell and is
+ * never 진행 중; a ratio over 0 is '—' (대상 없음). A refresh that failed over the numbers held keeps them
  * under a notice with 다시 시도 (`-stale`). Counts and durations only — no account, market, post or
  * report, no link, no export (95-10), no target or good/bad colour (95-11).
  */
@@ -80,7 +83,7 @@ export function AdminObservationMetrics() {
   );
 }
 
-/** The four sections of one answer. Exported for the node render test. */
+/** The six sections of one answer. Exported for the node render test. */
 export function ObservationTables({ data }: { data: Metrics }) {
   const { asOf } = data;
   const pendingEarlier = pendingEarlierLine(data.pendingTargetsEarlier);
@@ -94,7 +97,7 @@ export function ObservationTables({ data }: { data: Metrics }) {
         slug="first-fill"
         title={copy.adminObservationFirstFill}
         hint={copy.adminObservationFirstFillHint}
-        cohort
+        note={copy.adminObservationCohortNote}
         columns={[copy.adminObservationColRatio, copy.adminObservationColFilledOfAccounts]}
       >
         {data.firstFill.map((row) => {
@@ -118,7 +121,7 @@ export function ObservationTables({ data }: { data: Metrics }) {
         slug="after-settlement"
         title={copy.adminObservationAfterSettlement}
         hint={copy.adminObservationAfterSettlementHint}
-        cohort
+        note={copy.adminObservationCohortNote}
         columns={[copy.adminObservationColRatio, copy.adminObservationColReturnedOfPairs]}
       >
         {data.afterSettlement.map((row) => {
@@ -200,19 +203,70 @@ export function ObservationTables({ data }: { data: Metrics }) {
           />
         ))}
       </Section>
+
+      {/* #151's two visit-based cohorts after the four (96-7), each under the note that its window
+          is counted in Korean dates and when its weeks are 자료 없음 (151-6). */}
+      <Section
+        slug="revisit"
+        title={copy.adminObservationRevisit}
+        hint={copy.adminObservationRevisitHint}
+        note={copy.adminObservationVisitCohortNote}
+        columns={[copy.adminObservationColRatio, copy.adminObservationColRevisitedOfPairs]}
+      >
+        {data.revisit.map((row) => {
+          const ratio = observationRatio(row.revisited, row.pairs);
+          return (
+            <WeekRow
+              key={row.week}
+              slug="revisit"
+              row={row}
+              asOf={asOf}
+              values={[
+                { text: ratio.text, label: ratio.label },
+                { text: observationFraction(row.revisited, row.pairs) },
+              ]}
+            />
+          );
+        })}
+      </Section>
+
+      <Section
+        slug="result-view"
+        title={copy.adminObservationResultView}
+        hint={copy.adminObservationResultViewHint}
+        note={copy.adminObservationVisitCohortNote}
+        columns={[copy.adminObservationColRatio, copy.adminObservationColViewedOfPairs]}
+      >
+        {data.resultView.map((row) => {
+          const ratio = observationRatio(row.viewed, row.pairs);
+          return (
+            <WeekRow
+              key={row.week}
+              slug="result-view"
+              row={row}
+              asOf={asOf}
+              values={[
+                { text: ratio.text, label: ratio.label },
+                { text: observationFraction(row.viewed, row.pairs) },
+              ]}
+            />
+          );
+        })}
+      </Section>
     </Stack>
   );
 }
 
 /**
- * One metric: its title, definition, the cohort note on the two cohort tables, and its table —
- * 주, the metric's own columns, 상태.
+ * One metric: its title, definition, the note on a cohort table — #96's approved sentence on its
+ * two (96-9), the Korean-date one on #151's two (151-6) — and its table: 주, the metric's own
+ * columns, 상태.
  */
 function Section({
   slug,
   title,
   hint,
-  cohort = false,
+  note,
   columns,
   footer,
   children,
@@ -220,7 +274,7 @@ function Section({
   slug: string;
   title: string;
   hint: string;
-  cohort?: boolean;
+  note?: string;
   columns: string[];
   footer?: ReactNode;
   children: ReactNode;
@@ -235,9 +289,9 @@ function Section({
         <Text fontSize="sm" color="fg.muted" data-testid={`${id}-hint`}>
           {hint}
         </Text>
-        {cohort && (
+        {note !== undefined && (
           <Text fontSize="sm" color="fg.muted" data-testid={`${id}-note`}>
-            {copy.adminObservationCohortNote}
+            {note}
           </Text>
         )}
       </Stack>

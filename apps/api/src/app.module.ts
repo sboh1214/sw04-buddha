@@ -15,6 +15,7 @@ import { DbModule } from './infra/db/db.module.js';
 import { RedisModule } from './infra/redis/redis.module.js';
 import { JobsModule } from './jobs/jobs.module.js';
 import { LikesModule } from './likes/likes.module.js';
+import { MarketVisitsModule } from './market-visits/market-visits.module.js';
 import { AdminLinkFlagsModule } from './link-review/admin-link-flags.module.js';
 import { MarketsModule } from './markets/markets.module.js';
 import { MediaModule } from './media/media.module.js';
@@ -70,6 +71,8 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     TradesModule,
     WatchlistModule,
     SearchHistoryModule,
+    // 방문 기록 (#151, ADR-0170): the market detail's one write, read by the observation metrics.
+    MarketVisitsModule,
     ThemesModule,
     ReleaseSettingsModule,
     AdminAccountsModule,

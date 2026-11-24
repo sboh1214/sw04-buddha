@@ -2755,6 +2755,9 @@ export const copy = {
   // 보존기간'의 기간으로 발생 시각(묶인 알림은 가장 늦은 사건의 시각)부터 센다. 탈퇴한 계정의 알림은 탈퇴할 때 모두
   // 지워 이 줄에 들지 않는다.
   adminRetentionKindNotifications: '알림',
+  // 방문 기록(#151, ADR-0170; 오너 답 151-5): 모든 계정의 시장 상세 방문 기록(계정·시장·한국 날짜)을 '방문 기록
+  // 보존기간'의 기간으로 조회한 한국 날짜의 0시(KST)부터 센다. 탈퇴로 지우지 않는다.
+  adminRetentionKindMarketVisits: '방문 기록',
   // --- admin: 재지급 기록 (#74, ADR-0155; 오너 답 2026-11-21 3: 관리자 화면은 지급 기록 조회만) ---
   // 회원이 지갑에서 신청해 그 요청에서 바로 받은 재지급, 최근 것부터 20개씩. 관리자가 주거나 거두는 기능은
   // 없고(ADR-0107), 금액과 조건은 출시 설정의 여섯 값이다. '신청 때 가용 코인'은 지급하기 직전 잠금 아래에서
@@ -5310,6 +5313,21 @@ export const copy = {
   adminObservationElapsedDays: '{n}일',
   // 신고 처리 시간 표 아래, 그 수가 0보다 클 때만.
   adminObservationPendingEarlier: '보이는 주보다 앞서 접수된 대기 대상 {n}개',
+  // 방문 기반 두 표(#151, ADR-0170; 오너 답 151-1·151-2, 95-12, ADR-0167 결정 8의 6·7): 네 표 뒤에 관심 등록 후
+  // 재방문, 결과 조회 차례로(96-7). 관찰 기간을 시각이 아니라 한국 날짜로 센다 — 재방문은 첫 등록한 다음 날부터
+  // 이레(D+1~D+7), 결과 조회는 판정 버전 1을 공개한 날과 그 뒤 이레(D~D+7). 문구는 오너가 승인한 초안 그대로다
+  // (151-6). 출석·연속·보상 같은 말이 없다.
+  adminObservationRevisit: '관심 등록 후 재방문',
+  adminObservationRevisitHint:
+    '계정·시장 쌍의 첫 관심 등록 가운데 등록한 다음 날부터 이레(한국 날짜) 안에 그 시장 상세를 다시 연 쌍의 비율. 첫 등록한 주로 묶습니다.',
+  adminObservationResultView: '결과 조회',
+  adminObservationResultViewHint:
+    '그 시장에서 체결한 적이 있는 계정·시장 쌍 가운데 잠정 결과를 처음 공개한 날과 그 뒤 이레(한국 날짜) 안에 그 시장 상세를 연 쌍의 비율. 처음 공개한 주로 묶습니다.',
+  adminObservationColRevisitedOfPairs: '재방문 쌍 / 대상 쌍',
+  adminObservationColViewedOfPairs: '조회한 쌍 / 대상 쌍',
+  // 두 방문 기반 표 아래의 안내(151-6). #96 두 표의 코호트 안내(adminObservationCohortNote)는 그대로 둔다(96-9).
+  adminObservationVisitCohortNote:
+    '최근 두 주는 관찰 기간(한국 날짜)이 끝나지 않아 진행 중입니다. 방문 기록을 모으기 전이거나 보존기간이 지나 지운 날이 관찰 기간에 걸린 주는 자료 없음입니다.',
 
   // --- reconciliation (#93) ---
   reconciliationTitle: '장부 대사와 복구',

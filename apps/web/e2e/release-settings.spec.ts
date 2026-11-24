@@ -123,6 +123,10 @@ const RETENTION_ITEMS = [
   // 시각. The global setup enters no value for it: an approved one would have the worker delete
   // what notifications.spec.ts reads.
   ['retention.notifications', '알림 보존기간'],
+  // #151 (ADR-0170, owner answer 151-5): every account's market-detail visit rows, from 00:00 KST
+  // of the visit's date. The global setup enters no value for it either: an approved one would
+  // have the worker delete what observation-metrics.spec.ts counts.
+  ['retention.market_visits', '방문 기록 보존기간'],
 ] as const;
 
 /**
@@ -168,7 +172,7 @@ async function expectForbidden(response: APIResponse): Promise<void> {
 }
 
 test.describe('출시 설정 (#170)', () => {
-  test('관리자 메뉴에서 열면 시작 지급액·재지급 여섯 항목·선행 마감 최소 간격·이의 기간, 주문·MM 각 세 항목·유동성 표준값 여섯·집중도 인원·거래 패턴 여섯 항목·일곱 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
+  test('관리자 메뉴에서 열면 시작 지급액·재지급 여섯 항목·선행 마감 최소 간격·이의 기간, 주문·MM 각 세 항목·유동성 표준값 여섯·집중도 인원·거래 패턴 여섯 항목·여덟 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
     page,
     admin,
   }) => {

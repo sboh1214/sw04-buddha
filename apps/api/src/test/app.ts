@@ -51,6 +51,12 @@ export interface TestApp {
   storage: MemoryObjectStorage;
   /** `http://127.0.0.1:<port>`, only with `{ listen: true }`. */
   url?: string;
+  /**
+   * One statement as the table owner (buddha_migrate, the packages/db harness's `asOwner`): for
+   * fixtures buddha_app may not write — a dated visit or the visit collection's start (#151,
+   * `createVisit(t.asOwner, …)`).
+   */
+  asOwner: TestDb['asOwner'];
   /** Truncates every table (owner role, via the packages/db harness). Call in beforeEach. */
   reset(): Promise<void>;
   close(): Promise<void>;
@@ -171,6 +177,7 @@ export async function createTestApp(options: CreateTestAppOptions = {}): Promise
     sms,
     storage,
     url,
+    asOwner: harness.asOwner,
     reset: async () => {
       await harness.reset();
       storage.objects.clear();

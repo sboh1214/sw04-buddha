@@ -22,11 +22,18 @@
  * holds it — and a reply to a 대댓글, which holds two comments, neither waits nor deadlocks. #53's
  * notifications (ADR-0157, owner answers 53-7 and 53-10): every account's, read or not, from their
  * 발생 시각 — a merged one's latest event — with their keys, and one a write in flight holds passed
- * by. The release settings are changed the way the admin screen changes them (a row and its
+ * by. #151's visit records (ADR-0170, owner answer 151-5): every account's, a closed one's too, from
+ * 00:00 KST of the visit's Korean date, without a row lock, and the horizon the metrics then read.
+ * The release settings are changed the way the admin screen changes them (a row and its
  * record); the run's instant is moved past a period instead of backdating a closure (a closed
  * profile never changes, migration 0043). Skips when TEST_* are unset.
  */
-import { createNotifications, markNotificationRead, schema } from '@buddha/db';
+import {
+  createNotifications,
+  markNotificationRead,
+  readObservationMetrics,
+  schema,
+} from '@buddha/db';
 import {
   closeAccount,
   connectTestDb,
@@ -48,11 +55,14 @@ import {
   createReport,
   createTestNotification,
   createUser,
+  createVisit,
   createWatch,
   hasTestDb,
   randomPhone,
   randomPhoneHash,
+  readVisits,
   setReleaseSetting,
+  setVisitCollectionStart,
   TEST_MERGED_NOTIFICATION,
   TEST_NOTIFICATION_DEFINITIONS,
   type TestDb,
@@ -61,6 +71,7 @@ import {
   CONSENT_RECORDS_RETENTION_SETTING,
   DELETED_POSTS_RETENTION_SETTING,
   MARKET_PROPOSALS_RETENTION_SETTING,
+  MARKET_VISITS_RETENTION_SETTING,
   MODERATION_RECORDS_RETENTION_SETTING,
   NOTIFICATIONS_RETENTION_SETTING,
   ORPHAN_MEDIA_RETRY_FIRST_HOURS,
@@ -68,6 +79,9 @@ import {
   PHONE_VERIFICATION_RECORDS_RETENTION_SETTING,
   REMOVED_PROFILE_ITEMS_RETENTION_SETTING,
   RETENTION_PURGE_KINDS,
+  kstDateOf,
+  kstDatePlusDays,
+  kstStartOfDate,
   type ReleaseSettingDefinition,
   type ReleaseSettingStatus,
   type RetentionPurgeKind,
@@ -2402,6 +2416,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
       REMOVED_PROFILE_ITEMS_RETENTION_SETTING,
       MARKET_PROPOSALS_RETENTION_SETTING,
       NOTIFICATIONS_RETENTION_SETTING,
+      MARKET_VISITS_RETENTION_SETTING,
     ]) {
       await setPeriod(definition, 1);
     }
@@ -3206,6 +3221,158 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     await run(next);
     expect(await notificationIds()).toEqual([merging]);
     expect(await countsAt(next)).toEqual({ notifications: 1 });
+  });
+
+  /** The visit rows left, as `account/market:date` with the ids named by `names`, sorted. */
+  const visitsLeft = async (names: Record<string, string>) =>
+    (await readVisits(t.db))
+      .map((row) => `${names[row.userId]}/${names[row.marketId]}:${row.date}`)
+      .sort();
+
+  it('deletes nothing of the visit records while their period is undecided, a design proposal or a test value, and records nothing for them (#151, ADR-0170; ADR-0167 결정 8의 8)', async () => {
+    const member = (await createUser(t.db)).user.id;
+    const old = kstDateOf(before(new Date(), 400));
+    await createVisit(t.asOwner, { userId: member, marketId, date: old });
+    const now = new Date();
+    for (const status of ['proposal', 'test', 'undecided'] as const) {
+      await setPeriod(MARKET_VISITS_RETENTION_SETTING, status === 'undecided' ? null : 1, status);
+      const outcome = await run(now);
+      expect(outcome.kinds.find((kind) => kind.kind === 'market_visits')).toEqual({
+        kind: 'market_visits',
+        status,
+        periodDays: null,
+        deleted: 0,
+      });
+    }
+    expect(await visitsLeft({ [member]: 'member', [marketId]: 'm' })).toEqual([`member/m:${old}`]);
+    expect((await purgeRecords()).filter((row) => row.kind === 'market_visits')).toEqual([]);
+    // Never given a value at all (no row, as shipped): the same.
+    await t.reset();
+    const fresh = (await createUser(t.db)).user.id;
+    const freshMarket = (await createMarket(t.db, { createdBy: fresh })).id;
+    await createVisit(t.asOwner, { userId: fresh, marketId: freshMarket, date: old });
+    await run(now);
+    expect(await readVisits(t.db)).toHaveLength(1);
+    expect((await purgeRecords()).filter((row) => row.kind === 'market_visits')).toEqual([]);
+  });
+
+  it('deletes every account’s visit records once the period has passed since 00:00 KST of the visit’s Korean date — a live account’s and a closed one’s alike, the closure counting for nothing — in batches, without a row lock, recorded as done; nothing else goes, and the metrics read how far (#151, ADR-0170; 151-5, ADR-0167 결정 8의 7·8의 8)', async () => {
+    const member = (await createUser(t.db)).user.id;
+    const leaving = (await createUser(t.db)).user.id;
+    const other = (await createMarket(t.db, { createdBy: admin })).id;
+    const names = { [member]: 'member', [leaving]: 'leaving', [marketId]: 'm', [other]: 'o' };
+    // D: a Korean date 60 days back; the rows around it.
+    const d = kstDateOf(before(new Date(), 60));
+    const day = (offset: number) => kstDatePlusDays(d, offset);
+    await createVisit(t.asOwner, { userId: member, marketId, date: day(-1) });
+    await createVisit(t.asOwner, { userId: member, marketId, date: day(0) });
+    await createVisit(t.asOwner, { userId: member, marketId: other, date: day(0) });
+    await createVisit(t.asOwner, { userId: member, marketId, date: day(1) });
+    await createVisit(t.asOwner, { userId: leaving, marketId, date: day(0) });
+    await createVisit(t.asOwner, { userId: leaving, marketId, date: day(5) });
+    // What the run must leave: the same accounts' watch events and a live one's notification (its
+    // own period undecided), and the collection's start.
+    await createWatch(t.db, { userId: member, marketId });
+    await createWatch(t.db, { userId: leaving, marketId: other });
+    await createTestNotification(t.db, {
+      userId: member,
+      slug: marketSlug,
+      occurredAt: before(new Date(), 100),
+    });
+    const startedAt = kstStartOfDate(day(-30));
+    await setVisitCollectionStart(t.asOwner, startedAt);
+    // Closed today: a closure-anchored kind would keep its rows another 30 days past every run
+    // below.
+    await closeAccount(t.db, leaving);
+    await setPeriod(MARKET_VISITS_RETENTION_SETTING, 30);
+    const counted = async () => ({
+      watchEvents: (await t.db.select().from(schema.marketWatchEvents)).length,
+      notifications: (await t.db.select().from(schema.notifications)).length,
+      collection: await t.db.select().from(schema.marketVisitCollection),
+    });
+    const kept = await counted();
+    // Two watches and the closure's unwatch of the closed account's (its watchlist emptied).
+    expect(kept).toEqual({
+      watchEvents: 3,
+      notifications: 1,
+      collection: [{ id: true, startedAt }],
+    });
+    const purgedThrough = async () => (await readObservationMetrics(t.db)).visitsPurgedThrough;
+    expect(await purgedThrough()).toBeNull();
+
+    // The cutoff a millisecond short of 00:00 KST of D: only the day before D is due.
+    const early = after(kstStartOfDate(d), 30, -1);
+    await run(early);
+    expect(await visitsLeft(names)).toEqual(
+      [
+        `member/m:${day(0)}`,
+        `member/o:${day(0)}`,
+        `leaving/m:${day(0)}`,
+        `member/m:${day(1)}`,
+        `leaving/m:${day(5)}`,
+      ].sort(),
+    );
+    expect(await countsAt(early)).toEqual({ market_visits: 1 });
+    expect(await purgedThrough()).toBe(day(-1));
+
+    // Exactly 00:00 KST of D: D's three rows, whoever's and whichever market — the closed
+    // account's by its visit date — in batches of two, each recorded in its transaction as done
+    // (a locking select would fail every batch: buddha_app holds no UPDATE on the table).
+    const due = after(kstStartOfDate(d), 30);
+    const outcome = await run(due, 2);
+    expect(await visitsLeft(names)).toEqual([`leaving/m:${day(5)}`, `member/m:${day(1)}`]);
+    expect(outcome.kinds.find((kind) => kind.kind === 'market_visits')).toEqual({
+      kind: 'market_visits',
+      status: 'approved',
+      periodDays: 30,
+      deleted: 3,
+    });
+    expect(
+      (await purgeRecords()).filter(
+        (row) => row.kind === 'market_visits' && row.ranAt.getTime() === due.getTime(),
+      ),
+    ).toEqual([
+      { kind: 'market_visits', count: 2, periodDays: 30, ranAt: due, outcome: 'done' },
+      { kind: 'market_visits', count: 1, periodDays: 30, ranAt: due, outcome: 'done' },
+    ]);
+    expect(await countsAt(due)).toEqual({ market_visits: 3 });
+    expect(await purgedThrough()).toBe(day(0));
+
+    // Later in the same day: nothing more due — a 0, which moves no horizon.
+    const sameDay = after(due, 0, 12 * 60 * 60 * 1000);
+    await run(sameDay);
+    expect(await countsAt(sameDay)).toEqual({ market_visits: 0 });
+    expect(await purgedThrough()).toBe(day(0));
+
+    // The period past 00:00 KST of D + 5: the rest, the closed account's last row among them.
+    const last = after(kstStartOfDate(day(5)), 30);
+    await run(last);
+    expect(await readVisits(t.db)).toEqual([]);
+    expect(await countsAt(last)).toEqual({ market_visits: 2 });
+    expect(await purgedThrough()).toBe(day(5));
+    expect(await counted()).toEqual(kept);
+  });
+
+  it('records the visit records’ kind as failed (0) when a batch fails, keeping every row, and deletes them on the next run (#151, ADR-0170; owner decision 2026-10-24 14)', async () => {
+    const member = (await createUser(t.db)).user.id;
+    const d = kstDateOf(before(new Date(), 40));
+    await createVisit(t.asOwner, { userId: member, marketId, date: d });
+    await setPeriod(MARKET_VISITS_RETENTION_SETTING, 30);
+    const now = after(kstStartOfDate(d), 30);
+    const outcome = await purgeExpiredRecords(failingDelete(schema.marketVisits), storage, { now });
+    expect(outcome.kindFailures.map(({ kind, recorded }) => ({ kind, recorded }))).toEqual([
+      { kind: 'market_visits', recorded: true },
+    ]);
+    expect(await readVisits(t.db)).toHaveLength(1);
+    expect((await purgeRecords()).filter((row) => row.kind === 'market_visits')).toEqual([
+      { kind: 'market_visits', count: 0, periodDays: 30, ranAt: now, outcome: 'failed' },
+    ]);
+    // A failed record moves no horizon.
+    expect((await readObservationMetrics(t.db)).visitsPurgedThrough).toBeNull();
+    const next = after(now, 1);
+    await run(next);
+    expect(await readVisits(t.db)).toEqual([]);
+    expect(await countsAt(next)).toEqual({ market_visits: 1 });
   });
 
   it('queues each object’s key with its row’s deletion and unqueues it once the store has removed it (#46, ADR-0087 7-12)', async () => {

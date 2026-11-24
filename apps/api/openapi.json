@@ -17435,6 +17435,96 @@
         ]
       }
     },
+    "/api/v1/me/market-visits": {
+      "post": {
+        "operationId": "recordMyMarketVisit",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordMarketVisitBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Recorded, merged into today’s row, or not kept"
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Record that the account opened a public market's detail today (KST): one row per account, market and Korean date, a repeat merged; an admin’s or an operating account’s writes nothing. Answers 204 either way, with no body",
+        "tags": [
+          "market-visits"
+        ]
+      }
+    },
     "/api/v1/themes": {
       "get": {
         "operationId": "listThemes",
@@ -32028,7 +32118,7 @@
             "session": []
           }
         ],
-        "summary": "관측 지표 (#96): 첫 체결 전환, 정산 후 재참여 (7×24h cohorts), 유효 토론 and 신고 처리 시간 (cases, nearest-rank median and 90th percentile, pending targets) per KST week over the latest 12 weeks, newest first, recounted from the records on every read. Bots, and accounts that were admins when they acted, are left out; counts only, no account or item named",
+        "summary": "관측 지표 (#96, #151): 첫 체결 전환, 정산 후 재참여 (7×24h cohorts), 유효 토론 and 신고 처리 시간 (cases, nearest-rank median and 90th percentile, pending targets), 관심 등록 후 재방문 (first watch, a detail visit on a KST date D+1…D+7) and 결과 조회 (a trader of a market whose provisional result was first published, a visit on D…D+7) per KST week over the latest 12 weeks, newest first, recounted from the records on every read. Bots, and accounts that were admins when they acted, are left out; counts only, no account or item named",
         "tags": [
           "admin"
         ]
@@ -44885,6 +44975,26 @@
           "expectedAccountId"
         ]
       },
+      "RecordMarketVisitBody": {
+        "type": "object",
+        "properties": {
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "marketId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "expectedAccountId",
+          "marketId"
+        ],
+        "additionalProperties": false
+      },
       "ThemeSummary": {
         "type": "object",
         "properties": {
@@ -50599,7 +50709,8 @@
           "consent_records",
           "phone_verification_records",
           "market_proposals",
-          "notifications"
+          "notifications",
+          "market_visits"
         ]
       },
       "RetentionPurgeOutcome": {
@@ -53039,6 +53150,18 @@
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
           },
+          "visitsSince": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "visitsPurgedThrough": {
+            "nullable": true,
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
           "firstFill": {
             "minItems": 12,
             "maxItems": 12,
@@ -53075,16 +53198,36 @@
             "type": "integer",
             "minimum": 0,
             "maximum": 9007199254740991
+          },
+          "revisit": {
+            "minItems": 12,
+            "maxItems": 12,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminObservationRevisitWeek"
+            }
+          },
+          "resultView": {
+            "minItems": 12,
+            "maxItems": 12,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminObservationResultViewWeek"
+            }
           }
         },
         "required": [
           "asOf",
           "dataStart",
+          "visitsSince",
+          "visitsPurgedThrough",
           "firstFill",
           "afterSettlement",
           "discussion",
           "reportHandling",
-          "pendingTargetsEarlier"
+          "pendingTargetsEarlier",
+          "revisit",
+          "resultView"
         ],
         "additionalProperties": false
       },
@@ -53247,6 +53390,74 @@
           "medianMs",
           "p90Ms",
           "pendingTargets"
+        ],
+        "additionalProperties": false
+      },
+      "AdminObservationRevisitWeek": {
+        "type": "object",
+        "properties": {
+          "week": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "inProgress": {
+            "type": "boolean"
+          },
+          "noData": {
+            "type": "boolean"
+          },
+          "pairs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "revisited": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "week",
+          "inProgress",
+          "noData",
+          "pairs",
+          "revisited"
+        ],
+        "additionalProperties": false
+      },
+      "AdminObservationResultViewWeek": {
+        "type": "object",
+        "properties": {
+          "week": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "inProgress": {
+            "type": "boolean"
+          },
+          "noData": {
+            "type": "boolean"
+          },
+          "pairs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "viewed": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "week",
+          "inProgress",
+          "noData",
+          "pairs",
+          "viewed"
         ],
         "additionalProperties": false
       }

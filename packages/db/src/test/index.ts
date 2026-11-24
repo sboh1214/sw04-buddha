@@ -7,4 +7,5 @@ export * from './notifications.js';
 export * from './observation.js';
 export * from './operator.js';
 export * from './orders.js';
+export * from './visits.js';
 export * from './wait.js';

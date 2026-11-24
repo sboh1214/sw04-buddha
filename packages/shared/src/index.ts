@@ -48,6 +48,7 @@ export * from './market-review.js';
 export * from './market-rules.js';
 export * from './market-supplement.js';
 export * from './market-times.js';
+export * from './market-visits.js';
 export * from './market-work.js';
 export * from './market-maker/ladder.js';
 export * from './market-maker/risk.js';

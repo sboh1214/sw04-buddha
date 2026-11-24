@@ -8,8 +8,11 @@
  * after it (정산 후 재참여), posts and comments (유효 토론), and a report closed by a dismissal
  * (`POST /admin/reports/dismiss`, its `report_dismiss.reportIds`), by a hiding that closes two
  * members' reports, and by an account-restriction approval (신고 처리 시간) — the calling admin left
- * out through its grant record (95-1, records only), and reading changes no row. Skips when
- * TEST_* are unset.
+ * out through its grant record (95-1, records only), and reading changes no row. And #151's two
+ * (ADR-0170): a watch through `PUT /me/watchlist/:marketId` is a 재방문 cohort pair its same-day
+ * visit does not revisit (D excluded, 95-12), and the traders of a market judged now are 결과 조회
+ * pairs a visit through `POST /me/market-visits` the same day counts (D included) — the admin's
+ * own visit writing nothing. Skips when TEST_* are unset.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -23,9 +26,11 @@ import {
   createPost,
   createSettlementRecord,
   createStartGrant,
+  createProvisionalMarket,
   createUser,
   grantAdminAt,
   openOrderIntake,
+  readVisits,
   settleMarketAt,
 } from '@buddha/db/test';
 import {
@@ -70,7 +75,8 @@ describe('the routes #96 adds (static)', () => {
   it('leaves `readObservationMetrics` to the admin service alone (95-10: no member surface)', () => {
     // Every source file of every app and package: the reader may appear in its own module and
     // its test (the package index re-exports it with `export *`), and outside packages/db only in
-    // the admin service.
+    // the admin service — and in the worker's purge test, which reads `visitsPurgedThrough` after
+    // a visit purge (#151, ADR-0170: a test file, not a member surface).
     const root = path.resolve(SRC, '../../..');
     const skip = new Set(['node_modules', 'dist', '.next', '.turbo', 'coverage', 'generated']);
     const walk = (dir: string): string[] =>
@@ -97,6 +103,7 @@ describe('the routes #96 adds (static)', () => {
       .sort();
     expect(readers).toEqual([
       'apps/api/src/observation-metrics/observation-metrics.service.ts',
+      'apps/worker/src/jobs/retention-purge.test.ts',
       'packages/db/src/observation-metrics.test.ts',
       'packages/db/src/observation-metrics.ts',
     ]);
@@ -232,6 +239,7 @@ describe.skipIf(!hasTestInfra)('관측 지표 (integration)', () => {
     reports: (await t.db.select({ n: count() }).from(schema.reports))[0]!.n,
     fills: (await t.db.select({ n: count() }).from(schema.fills))[0]!.n,
     profiles: (await t.db.select({ n: count() }).from(schema.profiles))[0]!.n,
+    visits: (await readVisits(t.db)).length,
   });
 
   it('is every admin’s and nobody else’s: 401 without a session, 403 for a member (95-10, #171)', async () => {
@@ -262,16 +270,24 @@ describe.skipIf(!hasTestInfra)('관측 지표 (integration)', () => {
       afterSettlement: { pairs: 0, returned: 0 },
       discussion: { posts: 0, comments: 0, authors: 0, markets: 0 },
       reportHandling: { cases: 0, medianMs: null, p90Ms: null, pendingTargets: 0 },
+      revisit: { pairs: 0, revisited: 0 },
+      resultView: { pairs: 0, viewed: 0 },
     };
+    // After the reset there is no visit collection start (the wipe empties it) and no purge
+    // record: nothing is cut (ADR-0170).
+    expect(answer.visitsSince).toBeNull();
+    expect(answer.visitsPurgedThrough).toBeNull();
+    const coverage = { dataStart, visitsSince: null, visitsPurgedThrough: null };
     for (const metric of OBSERVATION_METRICS) {
       expect(answer[metric]).toEqual(
         weeks.map((week) => ({
           week: week.week,
-          ...observationWeekFlags(week, metric, asOf, dataStart),
+          ...observationWeekFlags(week, metric, asOf, coverage),
           ...zeros[metric],
         })),
       );
-      // The week holding the reading: open in every table, and never 자료 없음 on this database.
+      // The week holding the reading: open in every table, and never 자료 없음 on this database
+      // (the two visit tables too: no collection start after the reset).
       expect(answer[metric][0]).toMatchObject({ inProgress: true, noData: false });
     }
     expect(answer.pendingTargetsEarlier).toBe(0);
@@ -313,7 +329,13 @@ describe.skipIf(!hasTestInfra)('관측 지표 (integration)', () => {
         'pendingTargetsEarlier',
         'posts',
         'reportHandling',
+        'resultView',
         'returned',
+        'revisit',
+        'revisited',
+        'viewed',
+        'visitsPurgedThrough',
+        'visitsSince',
         'week',
       ].sort(),
     );
@@ -502,6 +524,109 @@ describe.skipIf(!hasTestInfra)('관측 지표 (integration)', () => {
         p90Ms: elapsedMs,
         pendingTargets: 0,
       });
+    });
+  });
+
+  describe('the visit-based cohorts (#151, ADR-0170) from the real watch, trades and visits', () => {
+    /** A visit of `marketId`'s detail as `who`, through the route the web's detail calls. */
+    const visit = (who: TestUser, marketId: string) => send('/me/market-visits', { marketId }, who);
+    const watch = (who: TestUser, marketId: string) =>
+      t.app.inject({
+        method: 'PUT',
+        url: `/api/v1/me/watchlist/${marketId}`,
+        headers: { origin: ORIGIN, 'content-type': 'application/json', cookie: who.cookie },
+        payload: JSON.stringify({ watched: true, expectedAccountId: who.id }),
+      });
+    async function firstWatchOf(userId: string): Promise<Date> {
+      const [event] = await t.db
+        .select({ createdAt: schema.marketWatchEvents.createdAt })
+        .from(schema.marketWatchEvents)
+        .where(eq(schema.marketWatchEvents.userId, userId));
+      return event!.createdAt;
+    }
+
+    it('a watch through the route is a 재방문 pair its same-day visit does not revisit (D excluded, 95-12); the admin’s is no pair (8의 1)', async () => {
+      const member = await onboarded();
+      const market = await createMarket(t.db);
+      const watched = await watch(member, market.id);
+      expect(watched.statusCode, watched.body).toBe(200);
+      const watchedAt = await firstWatchOf(member.id);
+      const visited = await visit(member, market.id);
+      expect(visited.statusCode, visited.body).toBe(204);
+      expect(visited.body).toBe('');
+      // The admin watches and opens it too: admin at its first watch by its grant record, so no
+      // pair, and its visit is not kept (151-3).
+      expect((await watch(admin, market.id)).statusCode).toBe(200);
+      expect((await visit(admin, market.id)).statusCode).toBe(204);
+      expect(await readVisits(t.db)).toEqual([
+        { userId: member.id, marketId: market.id, date: kstDateOf(watchedAt) },
+      ]);
+
+      const before = await rowCounts();
+      const answer = await read();
+      expect(await rowCounts()).toEqual(before);
+      expect(rowOf(answer, 'revisit', watchedAt)).toMatchObject({
+        inProgress: true,
+        noData: false,
+        pairs: 1,
+        revisited: 0,
+      });
+      for (const week of otherRows(answer, 'revisit', watchedAt)) {
+        expect(week).toMatchObject({ pairs: 0, revisited: 0 });
+      }
+    });
+
+    it('the traders of a market judged now are 결과 조회 pairs; a visit on the day of the publication counts once (D included, 95-4)', async () => {
+      const a = await onboarded(true);
+      const b = await onboarded(true);
+      const market = await createMarket(t.db);
+      await openOrderIntake(t.db, { adminId: admin.id });
+      expect(
+        (await order(a, market.id, { outcome: 'NO', timeInForce: 'gtc', limitPriceCoin: 40 }))
+          .statusCode,
+      ).toBe(200);
+      const filledRes = await order(b, market.id, {
+        outcome: 'YES',
+        timeInForce: 'ioc',
+        limitPriceCoin: 99,
+      });
+      expect(filledRes.statusCode, filledRes.body).toBe(200);
+      // Trading ends and the judgement is approved now: version 1 published (8의 9).
+      await t.db
+        .update(schema.markets)
+        .set({ status: 'closed' })
+        .where(eq(schema.markets.id, market.id));
+      const { judgement } = await createProvisionalMarket(t.db, { marketId: market.id });
+      const publishedAt = judgement.publishedAt;
+
+      const judged = await read();
+      expect(rowOf(judged, 'resultView', publishedAt)).toMatchObject({
+        inProgress: true,
+        noData: false,
+        pairs: 2,
+        viewed: 0,
+      });
+      // `a` opens the detail twice the same day — one row (95-4) — and the admin once: not kept.
+      for (const who of [a, a, admin]) {
+        const res = await visit(who, market.id);
+        expect(res.statusCode, res.body).toBe(204);
+      }
+      expect(await readVisits(t.db)).toEqual([
+        { userId: a.id, marketId: market.id, date: expect.any(String) as string },
+      ]);
+
+      const before = await rowCounts();
+      const answer = await read();
+      expect(await rowCounts()).toEqual(before);
+      expect(rowOf(answer, 'resultView', publishedAt)).toMatchObject({
+        inProgress: true,
+        noData: false,
+        pairs: 2,
+        viewed: 1,
+      });
+      for (const week of otherRows(answer, 'resultView', publishedAt)) {
+        expect(week).toMatchObject({ pairs: 0, viewed: 0 });
+      }
     });
   });
 });
