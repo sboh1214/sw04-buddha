@@ -6,16 +6,16 @@
  * data deleted (real name and number, address, sign-in methods, sessions, public items, profile
  * image, watchlist, search history, the inbox with its notifications — #53) while the records stay
  * (ledger, start grant and its number, code-send records, consent records, watch events, posts,
- * comments, likes, reports), the public face anonymised on every surface ('탈퇴한 사용자' with no profile
- * link, the profile and its lists 404 — N04 §7's third deletion check, #37-19), the nickname held
- * unlinked for 30 days, a start grant still waiting cancelled and its number freed, the account
- * restriction requests about the member closed as rejected '탈퇴'; the closed account signs in no
- * more, and the same address and number sign up again at once without a second start Coin. The
- * waiting orders are cancelled first as 취소 완료(탈퇴) at the closure's instant, their locks forfeited
- * with the rest (#178, ADR-0113). Refused while an admin, restricted, holding an unsettled
- * contract, paying or with an order waiting for a ledger failure's recovery — nothing changes then,
- * no order cancelled; another member's rows, requests, contracts, payments and orders are neither
- * touched nor counted. Asked twice at once,
+ * comments, likes, reports, market-detail visits — #151), the public face anonymised on every
+ * surface ('탈퇴한 사용자' with no profile link, the profile and its lists 404 — N04 §7's third deletion
+ * check, #37-19), the nickname held unlinked for 30 days, a start grant still waiting cancelled and
+ * its number freed, the account restriction requests about the member closed as rejected '탈퇴'; the
+ * closed account signs in no more, and the same address and number sign up again at once without a
+ * second start Coin. The waiting orders are cancelled first as 취소 완료(탈퇴) at the closure's instant,
+ * their locks forfeited with the rest (#178, ADR-0113). Refused while an admin, restricted, holding
+ * an unsettled contract, paying or with an order waiting for a ledger failure's recovery — nothing
+ * changes then, no order cancelled; another member's rows, requests, contracts, payments and orders
+ * are neither touched nor counted. Asked twice at once,
  * it runs once. A request that passed SessionGuard before the closure committed writes nothing
  * (UNAUTHENTICATED), and operators can neither adjust nor grant the closed account; a former admin
  * who closed the account is named with no nickname in the operators' records. Skips when TEST_*
@@ -48,10 +48,12 @@ import {
   createSearch,
   createStartGrant,
   createTestNotification,
+  createVisit,
   createWatch,
   ledgerOf as accountLedgerOf,
   openOrderIntake,
   placeTestOrder,
+  readVisits,
   resumeMarket,
   withLedgerGuardsOff,
 } from '@buddha/db/test';
@@ -87,6 +89,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { AdminGuard } from '../auth/admin.guard.js';
 import { AppError } from '../common/errors/app-error.js';
 import { PhoneHasher } from '../identity/phone-hash.js';
+import { MarketVisitsService } from '../market-visits/market-visits.service.js';
 import { PhoneVerificationService } from '../phone-verification/phone-verification.service.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
 import { ReleaseSettingsService } from '../release-settings/release-settings.service.js';
@@ -261,6 +264,11 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       // given up earlier (held for the member), a password-reset token of better-auth's.
       await createWatch(t.db, { userId: member.id, marketId: market.id });
       await createSearch(t.db, { userId: member.id, query: '금리' });
+      // Visits of the market's detail on two Korean dates (#151): kept past the closure, linked
+      // to the account, until the 방문 기록 보존기간 (151-5) — the closure deletes none.
+      for (const date of ['2026-01-05', '2026-01-06']) {
+        await createVisit(t.asOwner, { userId: member.id, marketId: market.id, date });
+      }
       await t.db.insert(schema.phoneVerificationCodes).values({
         id: randomUUID(),
         userId: member.id,
@@ -508,6 +516,12 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       ).toEqual([
         { marketId: market.id, action: 'watch', createdAt: expect.any(Date) as Date },
         { marketId: market.id, action: 'unwatch', createdAt: closedAt },
+      ]);
+      // The member's visits stay, linked to the account (151-5): only the 방문 기록 보존기간 removes
+      // them, from each visit's date (ADR-0170).
+      expect(await readVisits(t.db)).toEqual([
+        { userId: member.id, marketId: market.id, date: '2026-01-05' },
+        { userId: member.id, marketId: market.id, date: '2026-01-06' },
       ]);
       // The other member's watch history is left as it was: their watch stands.
       expect(
@@ -2255,7 +2269,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       expect(report.status).toBe('pending');
     });
 
-    it('takes no watch, search, code send or 본인확인 of a request that passed SessionGuard before the closure committed (migration 0043)', async () => {
+    it('takes no watch, search, visit, code send or 본인확인 of a request that passed SessionGuard before the closure committed (migrations 0043, 0082)', async () => {
       // An account that had a code texted before it closed (the closure is sign-in only).
       const fresh = await signUpTestUser(t);
       await createConsents(t.db, { userId: fresh.id });
@@ -2278,12 +2292,19 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       await expect(t.app.get(SearchHistoryService).record(member.id, '금리')).rejects.toMatchObject(
         ended,
       );
+      // A visit of the market's detail (#151): the `market_visits_open_account` trigger, named in
+      // CLOSED_ACCOUNT_ROW_TRIGGERS — else a 500 whose logged driver error names the account.
+      await expect(
+        t.app.get(MarketVisitsService).record(member.id, market.id),
+      ).rejects.toMatchObject(ended);
       await expect(phones.confirm(fresh.id, code)).rejects.toMatchObject(ended);
       await expect(
         phones.requestCode(member.id, { realName: '김탈퇴', phone: '01077778888' }, null),
       ).rejects.toMatchObject(ended);
 
-      // Nothing was left: no watch or its event, no search, no 본인확인 record, no code or text.
+      // Nothing was left: no watch or its event, no search, no visit, no 본인확인 record, no code
+      // or text.
+      expect(await readVisits(t.db)).toEqual([]);
       for (const userId of [member.id, fresh.id]) {
         const { marketWatches, marketSearches, phoneVerifications } = schema;
         expect(

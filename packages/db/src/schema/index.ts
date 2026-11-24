@@ -37,6 +37,7 @@ export * from './market-pauses.js';
 export * from './market-proposals.js';
 export * from './market-rule-versions.js';
 export * from './market-searches.js';
+export * from './market-visits.js';
 export * from './market-settlement-steps.js';
 export * from './market-sources.js';
 export * from './markets.js';

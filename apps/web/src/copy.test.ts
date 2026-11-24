@@ -282,7 +282,49 @@ describe('copy', () => {
       expect(text.trim(), key).not.toBe('');
       expect(findExcludedText(text), key).toEqual([]);
       expect(text, key).not.toMatch(/점수|순위|등급|배지|목표|보상|Coin|환전|출금|랭킹|경보/);
+      // #151's visit records are not an attendance feature (excluded.ts activity-reward).
+      expect(text, key).not.toMatch(/출석|연속|스트릭|보너스/);
     }
+  });
+
+  it('words #151’s two 관측 지표 tables as the owner approved (151-6), #96’s left as they were', () => {
+    // 151-6 (a) 초안대로: the brief's Q1 draft, word for word.
+    expect([copy.adminObservationRevisit, copy.adminObservationRevisitHint]).toEqual([
+      '관심 등록 후 재방문',
+      '계정·시장 쌍의 첫 관심 등록 가운데 등록한 다음 날부터 이레(한국 날짜) 안에 그 시장 상세를 다시 연 쌍의 비율. 첫 등록한 주로 묶습니다.',
+    ]);
+    expect([copy.adminObservationResultView, copy.adminObservationResultViewHint]).toEqual([
+      '결과 조회',
+      '그 시장에서 체결한 적이 있는 계정·시장 쌍 가운데 잠정 결과를 처음 공개한 날과 그 뒤 이레(한국 날짜) 안에 그 시장 상세를 연 쌍의 비율. 처음 공개한 주로 묶습니다.',
+    ]);
+    // The columns: '주 · 비율 · 재방문 쌍 / 대상 쌍 · 상태' and '주 · 비율 · 조회한 쌍 / 대상 쌍 · 상태'.
+    expect(
+      [
+        copy.adminObservationColWeek,
+        copy.adminObservationColRatio,
+        copy.adminObservationColRevisitedOfPairs,
+        copy.adminObservationColStatus,
+      ].join(' · '),
+    ).toBe('주 · 비율 · 재방문 쌍 / 대상 쌍 · 상태');
+    expect(
+      [
+        copy.adminObservationColWeek,
+        copy.adminObservationColRatio,
+        copy.adminObservationColViewedOfPairs,
+        copy.adminObservationColStatus,
+      ].join(' · '),
+    ).toBe('주 · 비율 · 조회한 쌍 / 대상 쌍 · 상태');
+    expect(copy.adminObservationVisitCohortNote).toBe(
+      '최근 두 주는 관찰 기간(한국 날짜)이 끝나지 않아 진행 중입니다. 방문 기록을 모으기 전이거나 보존기간이 지나 지운 날이 관찰 기간에 걸린 주는 자료 없음입니다.',
+    );
+    // #96's note stays the approved one (96-9); the two notes are not the same sentence.
+    expect(copy.adminObservationCohortNote).toBe(
+      '최근 두 주는 관찰 기간(7×24시간)이 끝나지 않아 진행 중입니다.',
+    );
+    expect(copy.adminObservationVisitCohortNote).not.toBe(copy.adminObservationCohortNote);
+    // The purge kind's name on /admin/retention (#184's screen).
+    expect(copy.adminRetentionKindMarketVisits).toBe('방문 기록');
+    expect(copy.adminRetentionKindMarketVisits).not.toMatch(/출석|연속|보상|점수|순위|목표|Coin/);
   });
 
   it('labels every status as ADR-0093 decision 1 item 12 words it, and VOID as 무효', () => {

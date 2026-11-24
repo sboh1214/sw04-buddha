@@ -66,7 +66,8 @@ const reasonText = (column: AnyPgColumn): SQL =>
  *   the first approval read it — a correction's is its base version's, so every version of a
  *   market has v1's length ('정정 뒤의 기한: 첫 기한과 같은 길이') — `published_at`, the approval's
  *   instant (its event's), and `dispute_deadline`, exactly the one plus the other — fixed then,
- *   never moved by a later change of the setting.
+ *   never moved by a later change of the setting. Version 1's `published_at` is also when 결과 조회
+ *   starts (#151, ADR-0170; ADR-0167 결정 8의 9): a correction's version starts nothing.
  * - `correction_reason` (정정 사유, #176): why the version replaced the one before it — exactly for
  *   a version after the first, trimmed, 1..500 (as `market_rule_versions.reason`), public with the
  *   record (#173 item 13, #24).

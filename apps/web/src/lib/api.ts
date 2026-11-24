@@ -265,6 +265,8 @@ export type UpdateWatchBody = components['schemas']['UpdateWatchBody'];
 export type RecentSearch = components['schemas']['RecentSearch'];
 /** `POST /me/search-history`: the submitted term and the account on screen (ADR-0066). */
 export type RecordSearchBody = components['schemas']['RecordSearchBody'];
+/** `POST /me/market-visits` (#151, ADR-0170): the market a member opened, in the body. */
+export type RecordMarketVisitBody = components['schemas']['RecordMarketVisitBody'];
 /**
  * 근거 글 (#46, ADR-0073): a community card (`GET /posts`), a post page in one of its three states
  * (`GET /posts/:postId`), the published one alone, its author and its market as every public answer
@@ -491,10 +493,12 @@ export type AdminGrantBody = components['schemas']['AdminGrantBody'];
  */
 export type AdminSmsStatus = components['schemas']['AdminSmsStatus'];
 /**
- * `GET /admin/observation-metrics` (#96, ADR-0169): the four weekly service-wide metrics in one
- * snapshot — 첫 체결 전환, 정산 후 재참여, 유효 토론 and 신고 처리 시간, OBSERVATION_WEEKS_SHOWN KST
- * weeks each, newest first — with the instant read (`asOf`) and the earliest account
- * (`dataStart`). Counts and durations only (95-10).
+ * `GET /admin/observation-metrics` (#96, ADR-0169; #151, ADR-0170): the six weekly service-wide
+ * metrics in one snapshot — 첫 체결 전환, 정산 후 재참여, 유효 토론, 신고 처리 시간, 관심 등록 후
+ * 재방문 and 결과 조회, OBSERVATION_WEEKS_SHOWN KST weeks each, newest first — with the instant
+ * read (`asOf`), the earliest account (`dataStart`), when the visits began to be collected
+ * (`visitsSince`) and the latest Korean date the visit purge may have reached
+ * (`visitsPurgedThrough`). Counts and durations only (95-10).
  */
 export type AdminObservationMetrics = components['schemas']['AdminObservationMetrics'];
 export type AdminObservationFirstFillWeek = components['schemas']['AdminObservationFirstFillWeek'];
@@ -504,6 +508,9 @@ export type AdminObservationDiscussionWeek =
   components['schemas']['AdminObservationDiscussionWeek'];
 export type AdminObservationReportHandlingWeek =
   components['schemas']['AdminObservationReportHandlingWeek'];
+export type AdminObservationRevisitWeek = components['schemas']['AdminObservationRevisitWeek'];
+export type AdminObservationResultViewWeek =
+  components['schemas']['AdminObservationResultViewWeek'];
 /**
  * One entry of `GET /admin/link-flags/items` (#187, ADR-0083): a post or a comment a repeated-link
  * rule caught — the link as compared, the rule, when, and the item as it is now.

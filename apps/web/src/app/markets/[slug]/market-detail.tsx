@@ -41,6 +41,7 @@ import { useDisputeOpen } from '@/hooks/use-disputes';
 import { useInstantReached } from '@/hooks/use-instant-reached';
 import { useMarketSocket } from '@/hooks/use-market-socket';
 import { useCategories, useMarket, useMarketBaselineRefresh } from '@/hooks/use-markets';
+import { useRecordMarketVisit } from '@/hooks/use-record-market-visit';
 import { type Market } from '@/lib/api';
 import { CATEGORY_TRAIL_SEPARATOR, categoryBreadcrumb } from '@/lib/category-label';
 import { disputePath } from '@/lib/disputes';
@@ -200,6 +201,10 @@ export function MarketDetail({
   // Re-reads an open market's row every five minutes, for the 24시간 badge's baseline that no
   // event carries — a fixed timer that ticks cannot push back (ADR-0139).
   useMarketBaselineRefresh(marketId, market.data?.status === 'open');
+  // 방문 기록 (#151, ADR-0170): this open of the detail, for the signed-in member, once per mount —
+  // from the browser, since the server render carries no cookie and the background re-reads above
+  // are not opens. The server decides who is not recorded; any failure is swallowed.
+  useRecordMarketVisit(marketId);
   const session = useSession();
   // `unknown` on the server and through hydration, so nothing that depends on who is reading — the
   // personal areas, their sign-in prompt, the sheet's body — differs between visitors' HTML.

@@ -6,6 +6,7 @@ import {
   RELEASE_SETTINGS,
   RETENTION_PERIOD_SETTINGS,
   RETENTION_PURGE_KIND_PERIODS,
+  kstDateOf,
   orphanMediaRetryHours,
   retentionCutoffOf,
   type ReleaseSettingStatus,
@@ -1114,13 +1115,48 @@ const notifications: Step = async (tx, { cutoff, limit }) => {
 };
 
 /**
+ * Every account's market-detail visit records (#151, ADR-0170; owner answer 151-5 — their own
+ * period, '방문 기록'), once the period has passed since 00:00 KST of the visit's Korean date
+ * (ADR-0167 결정 8의 8 "조회한 한국 날짜의 0시(KST)"): that base is at or before the cutoff exactly
+ * when the date is at or before the cutoff's Korean date (`kstDateOf`, the one definition the
+ * metrics' reader uses too). A live account's go as a closed one's: a closure deletes none and
+ * counts for nothing here (151-5). With the 04:30 KST run, a visit dated X goes at the run on
+ * X + days, between days − 19.5 h and days + 4.5 h after the open itself (date grain). The
+ * metrics read the `done` records of this kind as how far the records were deleted
+ * (`visitsPurgedThrough`): a week whose window reaches a deleted date is '자료 없음' (8의 7). No row
+ * lock (no UPDATE of the table for buddha_app — a lock needs it, migration 0078 — and nothing
+ * changes a visit): a new visit only ever carries today's date, never one that old, and one run is
+ * active at a time.
+ */
+const marketVisits: Step = async (tx, { cutoff, limit }) => {
+  const { marketVisits: table } = schema;
+  const through = kstDateOf(cutoff);
+  const due = tx
+    .select({ userId: table.userId, marketId: table.marketId, visitDate: table.visitDate })
+    .from(table)
+    .where(sql`${table.visitDate} <= ${through}::date`)
+    .orderBy(asc(table.visitDate), asc(table.userId), asc(table.marketId))
+    .limit(limit);
+  const deleted = await tx
+    .delete(table)
+    .where(sql`(${table.userId}, ${table.marketId}, ${table.visitDate}) IN ${due}`)
+    .returning({ userId: table.userId });
+  return {
+    selected: deleted.length,
+    deleted: { market_visits: deleted.length },
+    storageKeys: [],
+  };
+};
+
+/**
  * The steps in the order a run takes them (RETENTION_PURGE_KINDS): each kind before what it names —
  * a report before its action (a hiding's among them, which goes with its hidden item and that
  * item's versions), a removed profile item and an ended hold before theirs, an action before its
  * requests — and the versions before the originals, so an original's images are judged against the
  * versions still kept. #187's review list names nothing the run deletes and nothing names it, nor
- * do #175's 판정 이의, emptied in place: they close the 신고·제재 kinds. #53's notifications, last,
- * name nothing the run deletes, and only their own keys name them.
+ * do #175's 판정 이의, emptied in place: they close the 신고·제재 kinds. #53's notifications name
+ * nothing the run deletes, and only their own keys name them; #151's visit records, last, name
+ * nothing the run deletes and nothing names them.
  */
 const STEPS: readonly { kind: RetentionPurgeKind; step: Step }[] = [
   { kind: 'nickname_holds', step: nicknameHolds },
@@ -1140,6 +1176,7 @@ const STEPS: readonly { kind: RetentionPurgeKind; step: Step }[] = [
   { kind: 'phone_verification_records', step: phoneVerificationRecords },
   { kind: 'market_proposals', step: marketProposals },
   { kind: 'notifications', step: notifications },
+  { kind: 'market_visits', step: marketVisits },
 ];
 
 /**
@@ -1216,8 +1253,14 @@ async function readPeriods(
  * - Image objects go after their transaction commits, their keys queued in it (#46's
  *   `media_deletions`): one the store will not remove is logged and stays queued, and
  *   `media.orphan_cleanup` removes it later (ADR-0087 7-12).
+ * - A kind's period counts from one of three bases: for most, an event of the record or of its
+ *   account (the withdrawal, a deletion, a replacement, the end of a processing — whichever is
+ *   later where several apply); for #53's notifications, their 발생 시각, every account's alike;
+ *   for #151's visit records, 00:00 KST of the visit's Korean date, every account's alike — a
+ *   closure counts for nothing — and with no row lock (buddha_app holds no UPDATE on them).
  * - The ledger, orders, watch events, likes, posts not deleted, start grants and the operational
- *   records are never touched: no step names them.
+ *   records are never touched: no step names them. The visit records' collection start
+ *   (`market_visit_collection`) is not a record of a person and is never touched either.
  */
 export async function purgeExpiredRecords(
   db: Db,

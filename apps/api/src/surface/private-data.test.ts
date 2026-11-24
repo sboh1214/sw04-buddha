@@ -5,7 +5,8 @@
  * (#74: its id, its request id and its amount, the six re-grant settings decided), password
  * and session, a balance and a ledger memo, orders and the fill one of them got against another
  * account's resting order, a position with its PnL, a payment, two watched markets (#89), a
- * recorded search (#15), its consent records with the address and browser they came with, a
+ * recorded search (#15), its visits of a market's detail on two Korean dates with the visit
+ * collection's start (#151), its consent records with the address and browser they came with, a
  * nickname it gave up (#58), a post with an image on the market it trades (#46), comments under
  * it (#48) and A's likes of both, made with the keyed hash of A's number (#49), a pinned notice
  * whose operator — its writer, editor and pinner, and its image's uploader — is A, with an earlier
@@ -119,13 +120,16 @@ import {
   createThemeMarket,
   createThemeNotice,
   createUser,
+  createVisit,
   createWatch,
   fundMarketMakerFunds,
   mintTestPairs,
   openOrderIntake,
   resolveMarketNow,
+  readVisits,
   resumeMarket,
   setReleaseSetting,
+  setVisitCollectionStart,
 } from '@buddha/db/test';
 import {
   CONSENT_ITEMS,
@@ -282,6 +286,12 @@ interface Fixture {
   /** A's recorded search (#15): the id B's delete names, its term a sentinel. */
   searchId: string;
   /**
+   * Closed, and opened by A alone (#151, ADR-0170): A's two visits of its detail — on two Korean
+   * dates nobody else's record holds — are the only rows naming it, so its id or slug in an answer
+   * could only come from A's visits. B's refused visit names it.
+   */
+  visited: MarketRow;
+  /**
    * A's unread notification (#53, ADR-0157; a test type through the real write path), its label a
    * sentinel: the id B's read mark names. A has one more, older and unread too.
    */
@@ -352,6 +362,12 @@ function cursorAfter(row: { createdAt: Date; id: string | number }): string {
 
 /** The largest page, so A's page holds every row A has. */
 const LIMIT = () => String(PAGE_LIMIT_MAX);
+
+/**
+ * The Korean dates of A's two visits (#151): long past, so no other value of the fixture — every
+ * instant here is this year's — and no id (a uuid has no `-dd-` group) can hold one.
+ */
+const VISIT_DATES = ['2019-03-12', '2019-03-14'] as const;
 
 /** Letters only, so the value passes the real-name rule as typed by a person would. */
 function letters(count: number): string {
@@ -912,6 +928,13 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
   },
   'POST /me/search-history/clear': {
     body: (fixture) => ({ expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
+  // B's cookie naming A's account and the market A visited (#151, ADR-0170): refused before
+  // anything is written — no row for B, none for A, and A's visits stay (below). A 204 has no
+  // body, so no `own` label: no route answers a visit, A's own included.
+  'POST /me/market-visits': {
+    body: (fixture) => ({ marketId: fixture.visited.id, expectedAccountId: fixture.a.id }),
     status: 403,
   },
   // B's inbox, paged from A's newer notification (#53, ADR-0157): B was notified of nothing, so
@@ -2302,6 +2325,16 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     const searchTerm = `leak-search-${tag}`;
     const search = await createSearch(t.db, { userId: a.id, query: searchTerm });
 
+    // A's visits (#151, ADR-0170): a closed market's detail opened by A on two Korean dates long
+    // past, through the table owner (buddha_app writes no date), and the collection's start. A
+    // public or owner answer listing what A opened, or when, would carry the market's id or slug
+    // or a date.
+    const visited = await createMarket(t.db, { createdBy: admin.id, status: 'closed' });
+    await setVisitCollectionStart(t.asOwner, new Date('2019-03-10T15:00:00.000Z'));
+    for (const date of VISIT_DATES) {
+      await createVisit(t.asOwner, { userId: a.id, marketId: visited.id, date });
+    }
+
     // A's notifications (#53, ADR-0157): two unread, through the real write path with the tests'
     // own type (#53 ships none), about the open market every public call reads — a public answer
     // or a market-room event carrying an inbox would carry their labels or ids.
@@ -2386,6 +2419,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       admin,
       market,
       watched,
+      visited,
       relatedMarket: related,
       post: { id: post.id, mediaId: media.id },
       comment: { id: comment.id },
@@ -2556,6 +2590,9 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('watched market slug', watched.slug),
         text('search term', searchTerm),
         text('search id', search.id),
+        text('visited market id', visited.id),
+        text('visited market slug', visited.slug),
+        ...VISIT_DATES.map((date, i) => text(`visit date ${String(i + 1)}`, date)),
         // Both of A's notifications: the newer's label is a prefix of the older's.
         text('notification label', notificationLabel),
         text('notification id', newerNotice.id),
@@ -3521,6 +3558,11 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       postLiked: true,
       likedCommentIds: [f.comment.id],
     });
+
+    // B's refused visit wrote nothing — no row for B, none more for A — and A's two stay (#151).
+    expect(await readVisits(t.db)).toEqual(
+      VISIT_DATES.map((date) => ({ userId: f.a.id, marketId: f.visited.id, date })),
+    );
 
     // B's refused writes left A's search and wrote nothing for B (#15). B's delete naming A's
     // entry as B itself is accepted and reaches nothing: the entry is looked up among B's rows.

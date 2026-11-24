@@ -672,6 +672,22 @@ export const NOTIFICATIONS_RETENTION_SETTING = defineReleaseSetting({
   schema: retentionDaysSchema,
 });
 
+/**
+ * 방문 기록 보존기간 (#151, ADR-0170; owner answer 151-5, ADR-0167 결정 6 and 결정 8의 8): every
+ * account's market-detail visit rows (`market_visits` — account, market and Korean date, nothing
+ * else), deleted once this period has passed since 00:00 KST of the visit's date. A closure deletes
+ * none of them: a closed account's rows stay linked to it, for the metrics, until their period has
+ * passed. Registered with no value — the owner enters it in /admin/settings, and nothing is deleted
+ * before it is approved (151-5). The key is never renamed after deploy (docs/SETTINGS.md).
+ */
+export const MARKET_VISITS_RETENTION_SETTING = defineReleaseSetting({
+  key: 'retention.market_visits',
+  label: '방문 기록 보존기간',
+  unit: '일',
+  description: `모든 계정의 시장 상세 방문 기록(계정·시장·한국 날짜, #151)을 조회한 한국 날짜의 0시(KST)부터 이 기간이 지나면 지운다. 탈퇴한 계정의 기록도 탈퇴로 지우지 않고 이 기간까지 둔다. ${RETENTION_RULES}`,
+  schema: retentionDaysSchema,
+});
+
 /** The retention items by period (retention.ts): the worker's job reads each once per run. */
 export const RETENTION_PERIOD_SETTINGS: Readonly<
   Record<RetentionPeriod, ReleaseSettingDefinition<number>>
@@ -683,6 +699,7 @@ export const RETENTION_PERIOD_SETTINGS: Readonly<
   removed_profile_items: REMOVED_PROFILE_ITEMS_RETENTION_SETTING,
   market_proposals: MARKET_PROPOSALS_RETENTION_SETTING,
   notifications: NOTIFICATIONS_RETENTION_SETTING,
+  market_visits: MARKET_VISITS_RETENTION_SETTING,
 };
 
 /**
@@ -690,7 +707,8 @@ export const RETENTION_PERIOD_SETTINGS: Readonly<
  * retention periods. #170 built the mechanism, and each value is registered by the issue that uses
  * it (#70 the start grant, #74 the re-grant's six, #22 the lead-close gap, #152 the dispute window,
  * #119 the order intake, the order rate limit and the price-protection width, #184 the retention
- * periods, #77 the market proposals' retention period, #53 the notifications', …) — define it with
+ * periods, #77 the market proposals' retention period, #53 the notifications', #151 the visit
+ * records', …) — define it with
  * `defineReleaseSetting` and list it here, then update every test that pins the list
  * (docs/SETTINGS.md, 항목 등록하기).
  * Tests inject their own registry (`createTestApp({ releaseSettings })` in apps/api).
@@ -716,6 +734,7 @@ export const RELEASE_SETTINGS: ReleaseSettingsRegistry = defineReleaseSettings([
   REMOVED_PROFILE_ITEMS_RETENTION_SETTING,
   MARKET_PROPOSALS_RETENTION_SETTING,
   NOTIFICATIONS_RETENTION_SETTING,
+  MARKET_VISITS_RETENTION_SETTING,
 ]);
 
 /** A stored status and value: `value` is null exactly when `status` is `undecided`. */

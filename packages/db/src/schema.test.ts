@@ -176,6 +176,7 @@ import {
 import { connectTestDb, hasTestDb, testDbUrls, type TestDb } from './test/harness.js';
 import { ledgerOf } from './test/ledger.js';
 import { createTestNotification } from './test/notifications.js';
+import { createVisit, readVisits } from './test/visits.js';
 import {
   hasStandingConsent,
   isNicknameHeld,
@@ -7147,6 +7148,10 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       });
       // Its 본인확인 record came with its Coin: `balanceCoin` pays it as the start grant (#116).
       await createWatch(t.db, { userId: member.id, marketId: market.id });
+      // #151: an open of the market's detail, dated by the database (a column default).
+      await t.db.execute(
+        sql`INSERT INTO market_visits (user_id, market_id) VALUES (${member.id}, ${market.id})`,
+      );
       await createSearch(t.db, { userId: member.id, query: '금리' });
       await createTestNotification(t.db, { userId: member.id, slug: market.slug });
       await t.db
@@ -7339,6 +7344,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
             .orderBy(marketWatchEvents.id)
         ).map((event) => event.action),
       ).toEqual(['watch', 'unwatch']);
+      // So are its visit records, still linked to it until their period (151-5, ADR-0170).
+      expect((await readVisits(t.db)).filter((row) => row.userId === member.id)).toHaveLength(1);
       // Whoever writes: no change, no reopening (#57-17).
       for (const change of [
         { timeZone: 'Asia/Seoul' },
@@ -7682,6 +7689,12 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           value: userId,
           expiresAt: new Date(Date.now() + 60_000),
         }),
+      // #151 (migration 0082): a market-detail visit, as `recordMarketVisit` inserts it.
+      market_visits_open_account: async (userId: string) =>
+        t.db.execute(
+          sql`INSERT INTO market_visits (user_id, market_id)
+              VALUES (${userId}, ${(await createMarket(t.db)).id})`,
+        ),
     };
     const lateTriggers = Object.keys(lateRows) as (keyof typeof lateRows)[];
 
@@ -8038,6 +8051,12 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         .values({ kind: 'reports', count: 0, periodDays: 30, ranAt, outcome: 'failed' })
         .returning();
       expect(failure!.outcome).toBe('failed');
+      // Migration 0082 (#151): the visit records' kind, last.
+      const [visits] = await t.db
+        .insert(retentionPurges)
+        .values({ kind: 'market_visits', count: 2, periodDays: 90, ranAt })
+        .returning();
+      expect(visits).toMatchObject({ kind: 'market_visits', outcome: 'done' });
       for (const [values, constraint] of [
         [{ kind: 'ledger_entries', count: 1, periodDays: 1 }, 'retention_purges_kind_check'],
         [{ kind: 'reports', count: -1, periodDays: 1 }, 'retention_purges_count_check'],
@@ -11538,6 +11557,124 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           config: ['search_path=pg_catalog, public, pg_temp'],
         },
       ]);
+    });
+  });
+
+  describe('market visits (migration 0082, #151)', () => {
+    it('keeps an account, a market and a Korean date, nothing else, with the date the database’s', async () => {
+      const { rows: columns } = await t.db.execute<{
+        column: string;
+        type: string;
+        nullable: string;
+        default: string | null;
+      }>(sql`
+        SELECT column_name AS "column", data_type AS type, is_nullable AS nullable,
+               column_default AS "default"
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'market_visits'
+        ORDER BY ordinal_position`);
+      expect(columns).toEqual([
+        { column: 'user_id', type: 'text', nullable: 'NO', default: null },
+        { column: 'market_id', type: 'uuid', nullable: 'NO', default: null },
+        {
+          column: 'visit_date',
+          type: 'date',
+          nullable: 'NO',
+          default: "((now() AT TIME ZONE 'Asia/Seoul'::text))::date",
+        },
+      ]);
+      const { rows: keys } = await t.db.execute<{ name: string; definition: string }>(sql`
+        SELECT conname AS name, pg_get_constraintdef(oid) AS definition FROM pg_constraint
+        WHERE conrelid = 'market_visits'::regclass AND contype = 'p'`);
+      expect(keys).toEqual([
+        {
+          name: 'market_visits_user_id_market_id_visit_date_pk',
+          definition: 'PRIMARY KEY (user_id, market_id, visit_date)',
+        },
+      ]);
+      // Kept past a closure, like the watch history: neither key cascades.
+      expect(
+        await deleteActions(
+          t.db,
+          'market_visits_user_id_user_id_fk',
+          'market_visits_market_id_markets_id_fk',
+        ),
+      ).toEqual({
+        market_visits_user_id_user_id_fk: 'r',
+        market_visits_market_id_markets_id_fk: 'r',
+      });
+      const { rows: triggers } = await t.db.execute<{ name: string; definition: string }>(sql`
+        SELECT tgname AS name, pg_get_triggerdef(oid) AS definition FROM pg_trigger
+        WHERE tgrelid = 'market_visits'::regclass AND NOT tgisinternal ORDER BY tgname`);
+      expect(triggers.map((row) => row.name)).toEqual([
+        'market_visits_human_account',
+        'market_visits_open_account',
+      ]);
+      expect(triggers[0]!.definition).toContain("refuse_operating_account_rows('user_id')");
+      expect(triggers[1]!.definition).toContain('refuse_closed_account_rows()');
+      // The default is the Korean date of the database clock (ADR-0063).
+      const { user: member } = await createUser(t.db);
+      const market = await createMarket(t.db);
+      await t.db.execute(
+        sql`INSERT INTO market_visits (user_id, market_id) VALUES (${member.id}, ${market.id})`,
+      );
+      const { rows: today } = await t.db.execute<{ date: string }>(
+        sql`SELECT to_char((now() AT TIME ZONE 'Asia/Seoul')::date, 'YYYY-MM-DD') AS date`,
+      );
+      expect(await readVisits(t.db)).toEqual([
+        { userId: member.id, marketId: market.id, date: today[0]!.date },
+      ]);
+      // The day's repeat is the primary key's (95-4).
+      expect(
+        await refusal(
+          t.db.execute(
+            sql`INSERT INTO market_visits (user_id, market_id) VALUES (${member.id}, ${market.id})`,
+          ),
+        ),
+      ).toEqual({ state: '23505', constraint: 'market_visits_user_id_market_id_visit_date_pk' });
+    });
+
+    it('lets buddha_app insert a visit’s account and market only, read and delete; the start read only', async () => {
+      const { rows } = await t.db.execute<{ table: string; privilege: string }>(sql`
+        SELECT table_name AS "table", privilege_type AS privilege
+        FROM information_schema.role_table_grants
+        WHERE grantee = 'buddha_app' AND table_schema = 'public'
+          AND table_name IN ('market_visits', 'market_visit_collection')
+        ORDER BY 1, 2`);
+      const privs = (table: string) =>
+        rows.filter((row) => row.table === table).map((row) => row.privilege);
+      expect(privs('market_visits')).toEqual(['DELETE', 'SELECT']);
+      expect(privs('market_visit_collection')).toEqual(['SELECT']);
+      const { rows: insertable } = await t.db.execute<{ column: string }>(sql`
+        SELECT column_name AS "column" FROM information_schema.column_privileges
+        WHERE grantee = 'buddha_app' AND table_schema = 'public' AND table_name = 'market_visits'
+          AND privilege_type = 'INSERT'
+        ORDER BY 1`);
+      expect(insertable.map((row) => row.column)).toEqual(['market_id', 'user_id']);
+      const { rows: held } = await t.db.execute<{
+        column: string;
+        insert: boolean;
+        update: boolean;
+      }>(
+        sql`SELECT c AS "column",
+              has_column_privilege('buddha_app', 'market_visits', c, 'INSERT') AS insert,
+              has_column_privilege('buddha_app', 'market_visits', c, 'UPDATE') AS update
+            FROM unnest(ARRAY['user_id', 'market_id', 'visit_date']) AS c`,
+      );
+      expect(held).toEqual([
+        { column: 'user_id', insert: true, update: false },
+        { column: 'market_id', insert: true, update: false },
+        { column: 'visit_date', insert: false, update: false },
+      ]);
+      // An owner-written row of any date is what the app role may read and delete.
+      const { user: member } = await createUser(t.db);
+      const market = await createMarket(t.db);
+      await createVisit(t.asOwner, { userId: member.id, marketId: market.id, date: '2026-01-05' });
+      expect(await readVisits(t.db)).toEqual([
+        { userId: member.id, marketId: market.id, date: '2026-01-05' },
+      ]);
+      await t.db.execute(sql`DELETE FROM market_visits WHERE visit_date <= DATE '2026-01-05'`);
+      expect(await readVisits(t.db)).toEqual([]);
     });
   });
 

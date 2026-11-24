@@ -575,6 +575,13 @@
       "when": 1795441263598,
       "tag": "0081_judgement_compensations",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1795515762542,
+      "tag": "0082_market_visits",
+      "breakpoints": true
     }
   ]
 }

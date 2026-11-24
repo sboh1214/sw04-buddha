@@ -363,6 +363,7 @@ const TAG_LABELS = {
   orders: '주문',
   watchlist: '관심 시장',
   'search-history': '최근 검색',
+  'market-visits': '방문 기록',
   notifications: '알림',
   themes: '테마',
   proposals: '시장 제안',

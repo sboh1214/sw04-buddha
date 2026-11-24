@@ -2046,7 +2046,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** 관측 지표 (#96): 첫 체결 전환, 정산 후 재참여 (7×24h cohorts), 유효 토론 and 신고 처리 시간 (cases, nearest-rank median and 90th percentile, pending targets) per KST week over the latest 12 weeks, newest first, recounted from the records on every read. Bots, and accounts that were admins when they acted, are left out; counts only, no account or item named */
+        /** 관측 지표 (#96, #151): 첫 체결 전환, 정산 후 재참여 (7×24h cohorts), 유효 토론 and 신고 처리 시간 (cases, nearest-rank median and 90th percentile, pending targets), 관심 등록 후 재방문 (first watch, a detail visit on a KST date D+1…D+7) and 결과 조회 (a trader of a market whose provisional result was first published, a visit on D…D+7) per KST week over the latest 12 weeks, newest first, recounted from the records on every read. Bots, and accounts that were admins when they acted, are left out; counts only, no account or item named */
         get: operations["getAdminObservationMetrics"];
         put?: never;
         post?: never;
@@ -3501,6 +3501,23 @@ export type paths = {
         get: operations["getMyPostLikes"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/market-visits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record that the account opened a public market's detail today (KST): one row per account, market and Korean date, a repeat merged; an admin’s or an operating account’s writes nothing. Answers 204 either way, with no body */
+        post: operations["recordMyMarketVisit"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5699,6 +5716,12 @@ export type components = {
             firstFill: components["schemas"]["AdminObservationFirstFillWeek"][];
             pendingTargetsEarlier: number;
             reportHandling: components["schemas"]["AdminObservationReportHandlingWeek"][];
+            resultView: components["schemas"]["AdminObservationResultViewWeek"][];
+            revisit: components["schemas"]["AdminObservationRevisitWeek"][];
+            /** Format: date */
+            visitsPurgedThrough: string | null;
+            /** Format: date-time */
+            visitsSince: string | null;
         };
         AdminObservationReportHandlingWeek: {
             cases: number;
@@ -5707,6 +5730,22 @@ export type components = {
             noData: boolean;
             p90Ms: number | null;
             pendingTargets: number;
+            /** Format: date */
+            week: string;
+        };
+        AdminObservationResultViewWeek: {
+            inProgress: boolean;
+            noData: boolean;
+            pairs: number;
+            viewed: number;
+            /** Format: date */
+            week: string;
+        };
+        AdminObservationRevisitWeek: {
+            inProgress: boolean;
+            noData: boolean;
+            pairs: number;
+            revisited: number;
             /** Format: date */
             week: string;
         };
@@ -8405,6 +8444,11 @@ export type components = {
             nextReviewAt: string;
             reason: string;
         };
+        RecordMarketVisitBody: {
+            expectedAccountId: string;
+            /** Format: uuid */
+            marketId: string;
+        };
         RecordSearchBody: {
             expectedAccountId: string;
             query: string;
@@ -8768,7 +8812,7 @@ export type components = {
             ranAt: string;
         };
         /** @enum {string} */
-        RetentionPurgeKind: "nickname_holds" | "post_revisions" | "comment_revisions" | "deleted_posts" | "deleted_comments" | "reports" | "hidden_posts" | "hidden_comments" | "removed_profile_items" | "moderation_actions" | "approval_requests" | "link_flags" | "market_disputes" | "consent_records" | "phone_verification_records" | "market_proposals" | "notifications";
+        RetentionPurgeKind: "nickname_holds" | "post_revisions" | "comment_revisions" | "deleted_posts" | "deleted_comments" | "reports" | "hidden_posts" | "hidden_comments" | "removed_profile_items" | "moderation_actions" | "approval_requests" | "link_flags" | "market_disputes" | "consent_records" | "phone_verification_records" | "market_proposals" | "notifications" | "market_visits";
         /** @enum {string} */
         RetentionPurgeOutcome: "done" | "failed";
         RetractFillClassificationBody: {
@@ -26033,6 +26077,82 @@ export interface operations {
             };
             /** @description UNAUTHENTICATED */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    recordMyMarketVisit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordMarketVisitBody"];
+            };
+        };
+        responses: {
+            /** @description Recorded, merged into today’s row, or not kept */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

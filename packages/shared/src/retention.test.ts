@@ -23,6 +23,8 @@ describe('retention (#184)', () => {
       'market_proposals',
       // The inbox's (#53, ADR-0157 53-7).
       'notifications',
+      // The visit records' (#151, ADR-0170, 151-5): the eighth.
+      'market_visits',
     ]);
     expect(Object.keys(RETENTION_PERIOD_SETTINGS)).toEqual([...RETENTION_PERIODS]);
   });
@@ -51,8 +53,14 @@ describe('retention (#184)', () => {
     // Every account's notifications (#53, ADR-0157 53-7, 53-10): their own period, the last kind
     // of a run — nothing names a notification.
     expect(RETENTION_PURGE_KIND_PERIODS.notifications).toBe('notifications');
-    expect(RETENTION_PURGE_KINDS.at(-1)).toBe('notifications');
-    expect(RETENTION_PURGE_KINDS.at(-2)).toBe('market_proposals');
+    expect(RETENTION_PURGE_KINDS.at(-2)).toBe('notifications');
+    expect(RETENTION_PURGE_KINDS.at(-3)).toBe('market_proposals');
+    // Every account's visit records (#151, ADR-0170; 151-5, ADR-0167 결정 8의 8): their own
+    // period, the last kind of a run — nothing names a visit row, and it names nothing the run
+    // deletes.
+    expect(RETENTION_PURGE_KIND_PERIODS.market_visits).toBe('market_visits');
+    expect(RETENTION_PURGE_KINDS.at(-1)).toBe('market_visits');
+    expect(RETENTION_PURGE_KINDS).toHaveLength(18);
     // Every period is applied to some kind.
     expect(new Set(Object.values(RETENTION_PURGE_KIND_PERIODS).filter(Boolean))).toEqual(
       new Set(RETENTION_PERIODS),

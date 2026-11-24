@@ -75,6 +75,13 @@ export const marketWatches = pgTable(
  * So a reader that pages by market or by account must not take the last `id` it saw as a
  * high-water mark (`id > lastSeen`) — it would skip 10 for good — unless the writes take a lock
  * that orders them first, as the ledger does with the balance row.
+ *
+ * 관심 등록 후 재방문 (#151, ADR-0170; owner answer 151-1) starts from a pair's first `watch`
+ * ever — its lowest `id`, which is commit order within the pair — and never reads `unwatch`
+ * (151-1 "그 사이에 해제해도 센다"). Its reader takes every `watch` row in one sequential pass (the
+ * first watch is chosen before any week range), not through the two indexes below, and shows
+ * service-wide weekly counts only: no screen lists an account's watches or a market's (ADR-0064
+ * 결과 3).
  */
 export const marketWatchEvents = pgTable(
   'market_watch_events',

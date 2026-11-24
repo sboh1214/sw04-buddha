@@ -651,6 +651,9 @@ describe('the public API document (static)', () => {
       // ADR-0069 decision 3 #37-9 «시간대 같은 비공개 설정은 고칠 수 있다».
       'PUT /me/notifications/settings/:category',
       'PUT /me/watchlist/:marketId',
+      // 방문 기록 (#151, ADR-0170; 95-1 «계정 제한·탈퇴 계정의 지난 활동은 그대로 센다»): a restricted
+      // member's open of a detail is kept like anyone's — the screen's own record, not writing.
+      'POST /me/market-visits',
       'POST /me/search-history',
       'POST /me/search-history/:id/delete',
       'POST /me/search-history/clear',

@@ -790,6 +790,31 @@ describe('excluded features in stored data (#113)', () => {
     );
   });
 
+  it('names the visit records, their marker and their purge kind, each read above (#151)', () => {
+    // ADR-0170, migration 0082: a market-detail visit is exactly the shape an attendance feature
+    // would store, so its names are the plain 'visit' ones — no check-in, attendance, streak or
+    // daily bonus (excluded `activity-reward` tokens, read by the test above) — and its marker
+    // holds when the records began, nothing personal.
+    expect(storageNames()).toEqual(
+      expect.arrayContaining([
+        { where: 'table', name: 'market_visits' },
+        { where: 'table', name: 'market_visit_collection' },
+        { where: 'market_visits constraint', name: 'market_visits_visit_date_idx' },
+        { where: 'market_visit_collection constraint', name: 'market_visit_collection_id_check' },
+        { where: 'retention_purges.kind value', name: 'market_visits' },
+      ]),
+    );
+    const columnsOf = (name: string) =>
+      TABLES.find((table) => table.name === name)?.columns.map((column) => column.name);
+    expect(columnsOf('market_visits')).toEqual(['userId', 'marketId', 'visitDate']);
+    expect(columnsOf('market_visit_collection')).toEqual(['id', 'startedAt']);
+    // The visits are a person's table, holding no personal probability (the test below); the
+    // marker names no account.
+    const personal = personalTables().map((table) => table.name);
+    expect(personal).toContain('market_visits');
+    expect(personal).not.toContain('market_visit_collection');
+  });
+
   it('names the market cancel’s stored values, each read above (#20)', () => {
     // ADR-0117, no migration: the SCHEDULED cancel's approval kind, the one market event type of
     // every path to CANCELLED and the cancel's admin action types — varchar values the test above

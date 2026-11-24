@@ -54,6 +54,7 @@ describe('PRIVATE_DATA (#113)', () => {
         'account-type',
         'operation-records',
         'observation-metrics',
+        'market-visits',
       ]),
     );
     expect(
@@ -233,6 +234,13 @@ describe('findPrivateField', () => {
     ['pendingTargetsEarlier', 'observation-metrics'],
     ['reportHandling', 'observation-metrics'],
     ['afterSettlement', 'observation-metrics'],
+    ['resultView', 'observation-metrics'],
+    ['visitsSince', 'observation-metrics'],
+    ['visitsPurgedThrough', 'observation-metrics'],
+    ['visitedAt', 'market-visits'],
+    ['lastVisit', 'market-visits'],
+    ['visitors', 'market-visits'],
+    ['revisitCount', 'market-visits'],
   ])('finds %s (%s)', (name, item) => {
     expect(items(name)).toContain(item);
   });
@@ -365,6 +373,16 @@ describe('findPrivateField', () => {
     'authorKind',
     'type',
     'targetType',
+    // A review, a preview and an overview are their own words, and a view with nobody's beside it
+    // is a screen's, not a visit (#151, ADR-0170).
+    'review',
+    'reviewedAt',
+    'reviewNote',
+    'preview',
+    'previewUrl',
+    'overview',
+    'view',
+    'viewCount',
   ])('lets %s through', (name) => {
     expect(findPrivateField(name)).toEqual([]);
   });
@@ -488,6 +506,48 @@ describe('findPrivateField', () => {
     const examples = DISPUTE_RUNS.map(([, words]) => words);
     for (const run of dispute.fields) expect(examples, run.join(' ')).toContain(run.join(' '));
     for (const word of dispute.owned!.words) {
+      expect(
+        examples.some((words) => words.split(' ').includes(word)),
+        word,
+      ).toBe(true);
+    }
+  });
+
+  // The market-visits item (#151, ADR-0170; ADR-0167 결정 6, 95-10): that an account visited or
+  // revisited a market, its visitors, and views said to be somebody's. A run or a word without an
+  // example here fails the test below.
+  const MARKET_VISIT_RUNS: readonly [string, string][] = [
+    ['visit', 'visit'],
+    ['lastVisit', 'visit'],
+    ['visits', 'visits'],
+    ['marketVisits', 'visits'],
+    ['visited', 'visited'],
+    ['visitedAt', 'visited'],
+    ['visitor', 'visitor'],
+    ['visitorCount', 'visitor'],
+    ['visitors', 'visitors'],
+    ['revisit', 'revisit'],
+    ['revisitCount', 'revisit'],
+    ['revisited', 'revisited'],
+    ['userViews', 'user views'],
+    ['myView', 'my view'],
+    ['viewerViews', 'viewer views'],
+    ['accountView', 'account view'],
+  ];
+  const marketVisitHits = (name: string) =>
+    findPrivateField(name)
+      .filter((hit) => hit.item === 'market-visits')
+      .map((hit) => hit.words);
+
+  it.each(MARKET_VISIT_RUNS)('keeps %s private as a market-visits field (%s)', (name, words) => {
+    expect(marketVisitHits(name)).toContain(words);
+  });
+
+  it('has an example above for every run and every word of the market-visits item', () => {
+    const visits = PRIVATE_DATA.find((item) => item.id === 'market-visits')!;
+    const examples = MARKET_VISIT_RUNS.map(([, words]) => words);
+    for (const run of visits.fields) expect(examples, run.join(' ')).toContain(run.join(' '));
+    for (const word of visits.owned!.words) {
       expect(
         examples.some((words) => words.split(' ').includes(word)),
         word,

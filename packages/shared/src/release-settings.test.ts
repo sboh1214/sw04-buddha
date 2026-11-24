@@ -13,6 +13,7 @@ import {
   LEAD_CLOSE_GAP_SETTING,
   MARKET_LIQUIDITY_DEFAULT_SETTINGS,
   MARKET_PROPOSALS_RETENTION_SETTING,
+  MARKET_VISITS_RETENTION_SETTING,
   NOTIFICATIONS_RETENTION_SETTING,
   MARKET_MAKER_CONCENTRATION_TOP_N_SETTING,
   ORDER_ACCEPTING_SETTING,
@@ -109,6 +110,8 @@ describe('release settings registry', () => {
       'retention.market_proposals',
       // 알림 보존기간 (#53, ADR-0157 53-7): registered with no value.
       'retention.notifications',
+      // 방문 기록 보존기간 (#151, ADR-0170, 151-5): registered with no value, last.
+      'retention.market_visits',
     ]);
     expect(RELEASE_SETTINGS.get('grant.start_coin')).toBe(START_COIN_SETTING);
     expect(RELEASE_SETTINGS.get('market.lead_close_gap')).toBe(LEAD_CLOSE_GAP_SETTING);
@@ -321,6 +324,36 @@ describe('release settings registry', () => {
     expect(definition.description).toContain('상태가 승인됨일 때만 지우고');
     expect(definition.schema.safeParse(30).success).toBe(true);
     expect(definition.schema.safeParse(0).success).toBe(false);
+  });
+
+  it('names the visit records’ period as the owner set it: every account’s, from the visit date, kept past a closure (#151, ADR-0170, 151-5)', () => {
+    const definition = RETENTION_PERIOD_SETTINGS.market_visits;
+    expect(definition).toBe(MARKET_VISITS_RETENTION_SETTING);
+    expect(definition).toMatchObject({
+      key: 'retention.market_visits',
+      label: '방문 기록 보존기간',
+      unit: '일',
+    });
+    expect(RELEASE_SETTINGS.get('retention.market_visits')).toBe(definition);
+    expect([...RELEASE_SETTINGS.keys()].at(-1)).toBe('retention.market_visits');
+    // Every account's rows, counted from 00:00 KST of the Korean date of the visit (ADR-0167 결정
+    // 8의 8), and a closure deletes none (151-5).
+    expect(definition.description).toContain(
+      '모든 계정의 시장 상세 방문 기록(계정·시장·한국 날짜, #151)을',
+    );
+    expect(definition.description).toContain(
+      '조회한 한국 날짜의 0시(KST)부터 이 기간이 지나면 지운다',
+    );
+    expect(definition.description).toContain(
+      '탈퇴한 계정의 기록도 탈퇴로 지우지 않고 이 기간까지 둔다',
+    );
+    expect(definition.description).toContain('상태가 승인됨일 때만 지우고');
+    for (const value of [1, 83, 84, RETENTION_PERIOD_MAX_DAYS]) {
+      expect(definition.schema.safeParse(value).success, String(value)).toBe(true);
+    }
+    for (const value of [0, -1, 1.5, '30', RETENTION_PERIOD_MAX_DAYS + 1, null]) {
+      expect(definition.schema.safeParse(value).success, String(value)).toBe(false);
+    }
   });
 
   it('takes a whole Coin amount for the start grant, up to START_GRANT_MAX_COIN (#70)', () => {

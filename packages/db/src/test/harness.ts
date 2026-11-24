@@ -13,7 +13,7 @@
  *
  * TEST_* variables never fall back to DATABASE_URL: a test run must not touch the dev DB.
  */
-import { Client } from 'pg';
+import { Client, type QueryResult, type QueryResultRow } from 'pg';
 import { closeDb, createDb, type Db } from '../client.js';
 import { loadRootEnv } from '../env.js';
 import { runMigrations } from '../migrator.js';
@@ -81,6 +81,16 @@ export interface TestDb {
    * 0017, 0048 and 0060 and deploy/reset-db.sh run (wipe.ts). Call in beforeEach.
    */
   reset(): Promise<void>;
+  /**
+   * Runs one statement as the table owner (buddha_migrate — not a superuser: row triggers and
+   * CHECKs apply) over the harness's own connection, for fixtures buddha_app may not write: a
+   * dated visit row or the visit collection's start (#151, migration 0082 — buddha_app inserts a
+   * visit's account and market only). Test-only; the code under test never gets this handle.
+   */
+  asOwner: <R extends QueryResultRow = QueryResultRow>(
+    text: string,
+    params?: unknown[],
+  ) => Promise<QueryResult<R>>;
   /** Releases the file lock and closes both connections. Call in afterAll. */
   close(): Promise<void>;
 }
@@ -103,6 +113,8 @@ export async function connectTestDb(): Promise<TestDb> {
     async reset() {
       await admin.query(WIPE_PUBLIC_TABLES_SQL);
     },
+    asOwner: <R extends QueryResultRow = QueryResultRow>(text: string, params?: unknown[]) =>
+      admin.query<R>(text, params),
     async close() {
       await closeDb(db);
       await admin.query('SELECT pg_advisory_unlock(hashtext($1))', [FILE_LOCK_KEY]);
