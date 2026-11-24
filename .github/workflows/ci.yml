@@ -229,8 +229,9 @@ jobs:
     runs-on: ubuntu-latest
     # Includes the build, Chromium, seed and both projects. Shared-setting scenarios use one
     # worker per DB, so a shard runs its tests one after another: with three shards each took
-    # 50 minutes by #144 (2026-11-24) and one hit this limit on main. Five shards take about 30
-    # each. Per-test timeouts, retries and failure handling remain unchanged.
+    # 50 minutes by #144 (2026-11-24) and one hit this limit on main. With five, main's slowest
+    # shard took 39.5 minutes (ADR-0168); six take about 30 each. Per-test timeouts, retries and
+    # failure handling remain unchanged.
     timeout-minutes: 60
 
     # The specs are split across the shards by test (fullyParallel), mobile-375 and
@@ -244,20 +245,23 @@ jobs:
       matrix:
         include:
           - id: shard-1
-            label: Playwright 1/5
-            command: pnpm --filter web test:e2e --shard=1/5
+            label: Playwright 1/6
+            command: pnpm --filter web test:e2e --shard=1/6
           - id: shard-2
-            label: Playwright 2/5
-            command: pnpm --filter web test:e2e --shard=2/5
+            label: Playwright 2/6
+            command: pnpm --filter web test:e2e --shard=2/6
           - id: shard-3
-            label: Playwright 3/5
-            command: pnpm --filter web test:e2e --shard=3/5
+            label: Playwright 3/6
+            command: pnpm --filter web test:e2e --shard=3/6
           - id: shard-4
-            label: Playwright 4/5
-            command: pnpm --filter web test:e2e --shard=4/5
+            label: Playwright 4/6
+            command: pnpm --filter web test:e2e --shard=4/6
           - id: shard-5
-            label: Playwright 5/5
-            command: pnpm --filter web test:e2e --shard=5/5
+            label: Playwright 5/6
+            command: pnpm --filter web test:e2e --shard=5/6
+          - id: shard-6
+            label: Playwright 6/6
+            command: pnpm --filter web test:e2e --shard=6/6
           # Both dedicated profiles have their own service DB/Redis and run both viewports.
           # Their tests are excluded from the general profile, never skipped from CI.
           - id: market-maker
