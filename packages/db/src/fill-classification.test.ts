@@ -3,11 +3,7 @@ import { eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { placeOrder } from './orders.js';
 import type { FillClassificationAction } from '@buddha/shared';
-import {
-  applyFillClassification,
-  lockFillClassificationDecision,
-  readFillClassification,
-} from './fill-classification.js';
+import { applyFillClassification } from './fill-classification.js';
 import { isFillExcludedSql } from './fill-classification-read.js';
 import { settleMarketPositions } from './market-settlement.js';
 import { transitionMarket } from './market-transitions.js';
@@ -25,12 +21,8 @@ import {
   profiles,
 } from './schema/index.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
-import {
-  createApprovalRequest,
-  createMarket,
-  createMarketPause,
-  createUser,
-} from './test/factories.js';
+import { createMarket, createMarketPause, createUser } from './test/factories.js';
+import { approveFillClassification, requestFillClassification } from './test/observation.js';
 import { checkMarketStats, openOrderIntake, placeTestOrder } from './test/orders.js';
 import { mintTestPairs, withLedgerGuardsOff } from './test/ledger.js';
 
@@ -77,48 +69,11 @@ describe.skipIf(!hasTestDb())('immutable individual fill classifications (#132)'
       throw new Error('expected actual pair fill');
     return second.fills[0]!.id;
   }
-  async function request(action: FillClassificationAction = 'mark', target = fillId) {
-    const current = await readFillClassification(t.db, target);
-    return createApprovalRequest(t.db, {
-      kind: 'fill_classification',
-      targetType: 'fill',
-      targetId: String(target),
-      requestedBy: asker,
-      reason: '확인된 인위적 거래량에 대한 운영 근거',
-      payload: {
-        fillId: String(target),
-        marketId,
-        action,
-        baseRevision: String(current?.revision ?? 0n),
-      },
-    });
-  }
-  async function approve(id: string, by = decider) {
-    return t.db.transaction(async (tx) => {
-      const [r] = await tx.select().from(approvalRequests).where(eq(approvalRequests.id, id));
-      await lockMarket(tx, marketId);
-      await lockAdminRoles(tx, 'shared');
-      await lockFillClassificationDecision(
-        tx,
-        r!.payload as {
-          fillId: string;
-          marketId: string;
-          action: FillClassificationAction;
-          baseRevision: string;
-        },
-      );
-      await tx
-        .update(approvalRequests)
-        .set({
-          status: 'approved',
-          decidedBy: by,
-          decisionReason: '독립 검토 완료',
-          decidedAt: await clockTimestamp(tx),
-        })
-        .where(eq(approvalRequests.id, id));
-      return applyFillClassification(tx, id);
-    });
-  }
+  // The two-admin flow's request and approval (test/observation.ts, shared with #96's tests).
+  const request = (action: FillClassificationAction = 'mark', target = fillId) =>
+    requestFillClassification(t.db, { fillId: target, marketId, action, askerId: asker });
+  const approve = (id: string, by = decider) =>
+    approveFillClassification(t.db, { approvalId: id, marketId, deciderId: by });
   const market = async () =>
     (await t.db.select().from(markets).where(eq(markets.id, marketId)))[0]!;
   const economics = async () => ({

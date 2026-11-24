@@ -22,7 +22,9 @@ describe('PRIVATE_DATA (#113)', () => {
       }
       for (const run of item.fields) {
         expect(run.length, item.id).toBeGreaterThan(0);
-        for (const word of run) expect(word, item.id).toMatch(/^[a-z]+$/);
+        // Lower case, as identifierWords gives them: a digit may follow a letter (`p90` of
+        // `p90Ms`, `observation-metrics`), never start a word.
+        for (const word of run) expect(word, item.id).toMatch(/^[a-z][a-z0-9]*$/);
       }
       for (const word of [...(item.owned?.words ?? []), ...(item.owned?.whose ?? [])]) {
         expect(word, item.id).toMatch(/^[a-z]+$/);
@@ -51,6 +53,7 @@ describe('PRIVATE_DATA (#113)', () => {
         'market-maker',
         'account-type',
         'operation-records',
+        'observation-metrics',
       ]),
     );
     expect(
@@ -224,6 +227,12 @@ describe('findPrivateField', () => {
     ['recallAttempts', 'operation-records'],
     ['reasonBasis', 'operation-records'],
     ['retryOutcome', 'operation-records'],
+    ['medianMs', 'observation-metrics'],
+    ['p90Ms', 'observation-metrics'],
+    ['pendingTargets', 'observation-metrics'],
+    ['pendingTargetsEarlier', 'observation-metrics'],
+    ['reportHandling', 'observation-metrics'],
+    ['afterSettlement', 'observation-metrics'],
   ])('finds %s (%s)', (name, item) => {
     expect(items(name)).toContain(item);
   });
@@ -259,6 +268,12 @@ describe('findPrivateField', () => {
     'resolution',
     'uptimeSeconds',
     'latencyMs',
+    // A public market's first fill and a settlement's own words are not the observation metrics
+    // (#96): only their admin answer's runs are private.
+    'firstFillAt',
+    'settledAt',
+    'pending',
+    'medianPriceCoin',
     'sortOrder',
     'parentId',
     'nextCursor',

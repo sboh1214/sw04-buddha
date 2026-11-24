@@ -275,7 +275,11 @@ export const markets = pgTable(
      * results read it as 확정 시각 (ADR-0095 결과 5). Before #152, the interim judgement's.
      */
     resolvedAt: timestampTz(),
-    /** When the settlement steps all finished (→ `settled`). */
+    /**
+     * When the settlement steps all finished (→ `settled`), written once by that transition. The
+     * start of the 정산 후 재참여 cohort (#96, ADR-0169, owner answer 96-2) — not `resolved_at`, and
+     * not the payout step's own `position_settlements.settled_at`.
+     */
     settledAt: timestampTz(),
     /**
      * `market_events.id` of the transition that produced `status` (M5, A-M3-19) — or, since #176,

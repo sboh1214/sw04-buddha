@@ -61,6 +61,7 @@ export const PRIVATE_DATA_IDS = [
   'market-maker',
   'account-type',
   'operation-records',
+  'observation-metrics',
 ] as const;
 export type PrivateDataId = (typeof PRIVATE_DATA_IDS)[number];
 
@@ -630,6 +631,23 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       ['recall', 'attempts'],
       ['reason', 'basis'],
       ['retry', 'outcome'],
+    ],
+  },
+  {
+    id: 'observation-metrics',
+    name: '관측 지표(주별 코호트·전환·처리 시간 집계)',
+    basis: 'ADR-0167 결정 5의 9(95-10), ADR-0169(#96), N04 §6',
+    // The weekly observation metrics (#96) are aggregates for admins only (95-10 "관리자 화면에서
+    // 주·지표별 비율과 분자·분모 수만 본다 … 회원 화면에는 보이지 않는다"): no public or owner shape
+    // carries the report-handling durations, the pending targets or the after-settlement cohort.
+    // Runs of the answer's own field names (`medianMs`, `p90Ms`, `pendingTargets`,
+    // `reportHandling`, `afterSettlement`); not `first fill` (the public `firstFillAt`).
+    fields: [
+      ['median', 'ms'],
+      ['p90', 'ms'],
+      ['pending', 'targets'],
+      ['report', 'handling'],
+      ['after', 'settlement'],
     ],
   },
 ];

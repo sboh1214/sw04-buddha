@@ -5258,6 +5258,59 @@ export const copy = {
   adminCategoryChangeTopLevel: '상위 카테고리',
   adminCategoryChangeShownTag: '보임',
 
+  // --- admin: 관측 지표 (#96, ADR-0169; 오너 답 ADR-0167 95-1~95-12·96-1~96-6, 96-7~96-9) ---
+  // 관측 지표(#96, ADR-0169): 관리자 메뉴의 맨 끝(체결 분류 다음, 96-7). 첫 체결 전환·정산 후 재참여(코호트,
+  // 7×24시간)·유효 토론·신고 처리 시간(발생 주)을 최근 한국 시간 주 12개마다 서비스 전체 값으로 보인다(95-5·95-6·
+  // 95-7). 볼 때마다 원자료에서 다시 센다(95-8). 문구는 오너가 승인한 초안 그대로다(96-9). 점수·순위·목표·보상 같은
+  // 말이 없다(95-11 — 목표치가 없다는 문장도 두지 않는다).
+  adminObservationMetrics: '관측 지표',
+  adminObservationIntro:
+    '서비스 전체 값을 한국 시간 주(월요일 0시 시작)마다 봅니다. 볼 때마다 원자료에서 다시 셉니다. 봇과, 활동한 때 관리자였던 계정의 것은 빼고 셉니다.',
+  adminObservationAsOf: '기준 시각',
+  // 두 코호트 표(첫 체결 전환·정산 후 재참여) 위의 안내. 7×24시간은 OBSERVATION_WINDOW_HOURS(168)와 같아야 한다.
+  adminObservationCohortNote: '최근 두 주는 관찰 기간(7×24시간)이 끝나지 않아 진행 중입니다.',
+  adminObservationFirstFill: '첫 체결 전환',
+  adminObservationFirstFillHint:
+    '온보딩을 처음 마친 계정 가운데 그때부터 7×24시간 안에 체결한 계정의 비율. 마친 주로 묶습니다.',
+  adminObservationAfterSettlement: '정산 후 재참여',
+  adminObservationAfterSettlementHint:
+    '지급 완료된 시장의 정산 기록이 있는 계정·시장 쌍 가운데 지급 완료부터 7×24시간 안에 어느 시장에서든 체결한 쌍의 비율. 지급 완료 주로 묶습니다.',
+  adminObservationDiscussion: '유효 토론',
+  adminObservationDiscussionHint: '지우거나 숨기지 않은 근거 글·댓글·대댓글. 쓴 주로 묶습니다.',
+  adminObservationReportHandling: '신고 처리 시간',
+  adminObservationReportHandlingHint:
+    '조치·기각·계정 제한 승인 한 번이 닫은 같은 대상의 신고를 한 건으로, 가장 먼저 들어온 신고부터 닫힌 때까지의 실제 경과 시간. 접수된 주로 묶습니다. 대기는 아직 대기 중인 신고가 있는 대상의 수입니다.',
+  // 표의 머리(96-9).
+  adminObservationColWeek: '주',
+  adminObservationColRatio: '비율',
+  adminObservationColFilledOfAccounts: '체결한 계정 / 대상 계정',
+  adminObservationColReturnedOfPairs: '재참여 쌍 / 대상 쌍',
+  adminObservationColPostsComments: '글·댓글',
+  adminObservationColAuthors: '쓴 계정',
+  adminObservationColMarkets: '토론이 있는 시장',
+  adminObservationColCases: '처리 건수',
+  adminObservationColMedian: '중앙값',
+  adminObservationColP90: '90번째 백분위',
+  adminObservationColPending: '대기',
+  adminObservationColStatus: '상태',
+  adminObservationInProgress: '진행 중',
+  adminObservationNoData: '자료 없음',
+  // 분모가 0인 비율과 처리 건이 없는 주의 중앙값·90번째 백분위(ADR-0167 결정 8의 6). 비율의 '—'는 '대상 없음'으로
+  // 읽힌다(aria-label·title).
+  adminObservationNone: '—',
+  adminObservationNoTarget: '대상 없음',
+  // 유효 토론의 한 칸(96-8): '글·댓글 12 (글 3 · 댓글 9)'. 댓글은 대댓글을 함께 센다.
+  adminObservationPostsComments: '글·댓글 {total} (글 {posts} · 댓글 {comments})',
+  // 주 표시(96-9): '11. 23.(월) ~ 11. 29.(일)'. 올해(기준 시각의 한국 시간 해)가 아닌 주만 두 날짜에 연도를 붙인다.
+  adminObservationWeekLabel: '{monday}(월) ~ {sunday}(일)',
+  // 경과 시간(96-9): 분 아래는 버린다 — '2일 4시간', '3시간 5분', '12분', '1분 미만'.
+  adminObservationElapsedUnderMinute: '1분 미만',
+  adminObservationElapsedMinutes: '{n}분',
+  adminObservationElapsedHours: '{n}시간',
+  adminObservationElapsedDays: '{n}일',
+  // 신고 처리 시간 표 아래, 그 수가 0보다 클 때만.
+  adminObservationPendingEarlier: '보이는 주보다 앞서 접수된 대기 대상 {n}개',
+
   // --- reconciliation (#93) ---
   reconciliationTitle: '장부 대사와 복구',
   reconciliationIntro:

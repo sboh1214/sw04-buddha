@@ -523,7 +523,9 @@ export class ModerationService {
    * (#135: 135-1 — nothing was done to the reported member; 52-17 — nor the reporters). The
    * reports are locked in id order, the order an action takes the ones it resolves
    * (`resolveReports`), so a dismissal and an action on the same reports wait for each other
-   * instead of deadlocking.
+   * instead of deadlocking. Its one `report_dismiss` record names every report it closed in
+   * `payload.reportIds` — always the whole array: the observation metrics (#96, ADR-0169) read it
+   * to know which reports one dismissal closed (ADR-0167 결과 5).
    */
   async dismiss(
     adminId: string,

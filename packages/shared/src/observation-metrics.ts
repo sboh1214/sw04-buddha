@@ -1,0 +1,277 @@
+import * as z from 'zod';
+
+/*
+ * 관측 지표 (#96, ADR-0169; decisions in ADR-0167): the admin screen `/admin/observation-metrics`
+ * shows four service-wide weekly values — 첫 체결 전환, 정산 후 재참여 (cohorts, 95-7), 유효 토론 and
+ * 신고 처리 시간 (by occurrence week, 95-7) — recomputed from the source records on every view
+ * (95-8). This module is the one definition of the weeks, the '진행 중'·'자료 없음' rules, the
+ * percentile and the ratio that the @buddha/db reader (`observation-metrics.ts`), the web and the
+ * tests share. Every value here is a code constant, never a release setting (ADR-0167 결정 8의 6;
+ * 95-9 fixed the seven days). The answer carries counts and durations only — no account, market,
+ * post or report (95-10), no target or alert (95-11) — and its admin-only field names are the
+ * PRIVATE_DATA item `observation-metrics`.
+ */
+
+// ---- constants -----------------------------------------------------------------------
+/** 95-9 "(a) 모두 7일", 95-12: the two fill-based cohorts watch 7 × 24 hours from their start. */
+export const OBSERVATION_WINDOW_HOURS = 168;
+
+/** ADR-0167 결정 8의 6 "보이는 주의 범위(최근 몇 주)는 구현이 고른다": the latest 12 KST weeks. */
+export const OBSERVATION_WEEKS_SHOWN = 12;
+
+/** 96-4 "중앙값·90번째 백분위", nearest-rank (결정 8의 6); the median is P50. */
+export const OBSERVATION_PERCENTILES = [50, 90] as const;
+export type ObservationPercentile = (typeof OBSERVATION_PERCENTILES)[number];
+
+/** 95-5: weeks start on Monday 00:00 in this zone (no daylight saving since 1988). */
+export const OBSERVATION_TIME_ZONE = 'Asia/Seoul';
+
+/**
+ * When `position_settlements` (migration 0064, #126 — it did not backfill) started to be
+ * written on the deployed environment: the end of the 'Deploy over SSM' step of the Deploy run
+ * of PR #269's merge (f8476724, run 42635357422), 2026-11-09 23:34:45 KST — the migration ran
+ * inside that step, which began at 14:33:44Z. Markets paid out before it have no records, so
+ * 정산 후 재참여 shows '자료 없음' for every week that starts before it (owner answer 96-11).
+ */
+export const POSITION_SETTLEMENTS_SINCE = new Date('2026-11-09T14:34:45.000Z');
+
+const HOUR_MS = 60 * 60 * 1_000;
+const DAY_MS = 24 * HOUR_MS;
+const WEEK_MS = 7 * DAY_MS;
+/** Korea keeps no daylight saving since 1988: KST is UTC + 9 hours at every instant. */
+const KST_OFFSET_MS = 9 * HOUR_MS;
+/** The observation window in milliseconds. */
+export const OBSERVATION_WINDOW_MS = OBSERVATION_WINDOW_HOURS * HOUR_MS;
+
+// ---- KST weeks (95-5) ----------------------------------------------------------------
+function assertInstant(instant: Date): void {
+  if (!(instant instanceof Date) || Number.isNaN(instant.getTime())) {
+    throw new RangeError('observation metrics need a valid instant');
+  }
+}
+
+/**
+ * The instant the KST week holding `instant` starts: Monday 00:00 KST. The SQL bucket
+ * `date_trunc('week', ts AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul'` is the same
+ * instant (a db test pins the two together).
+ */
+export function kstWeekStartOf(instant: Date): Date {
+  assertInstant(instant);
+  const local = instant.getTime() + KST_OFFSET_MS;
+  const day = Math.floor(local / DAY_MS);
+  // 1970-01-01 was a Thursday: day 0 is weekday 3 counted from Monday.
+  const weekday = (((day + 3) % 7) + 7) % 7;
+  return new Date((day - weekday) * DAY_MS - KST_OFFSET_MS);
+}
+
+/** The Korean calendar date `instant` falls on, `YYYY-MM-DD`. */
+export function kstDateOf(instant: Date): string {
+  assertInstant(instant);
+  return new Date(instant.getTime() + KST_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+/** One shown week: its Monday as a KST date and its half-open instant range [start, end). */
+export interface ObservationWeek {
+  /** The KST date of the week's Monday, `YYYY-MM-DD` — what the answer's rows carry. */
+  readonly week: string;
+  readonly start: Date;
+  readonly end: Date;
+}
+
+/**
+ * The latest OBSERVATION_WEEKS_SHOWN KST weeks, newest first: the first holds `asOf`, each next
+ * one ends where the one before starts. The reader bounds every statement by the oldest start
+ * and the newest end and fills the weeks no row names with zeros.
+ */
+export function observationWeeks(asOf: Date): ObservationWeek[] {
+  const current = kstWeekStartOf(asOf).getTime();
+  return Array.from({ length: OBSERVATION_WEEKS_SHOWN }, (_, index) => {
+    const start = new Date(current - index * WEEK_MS);
+    return { week: kstDateOf(start), start, end: new Date(start.getTime() + WEEK_MS) };
+  });
+}
+
+// ---- '진행 중' and '자료 없음' (95-7, 95-8, ADR-0167 결정 8의 6·7) ------------------------
+/**
+ * How a metric groups (95-7): a cohort follows the accounts that started in a week for the
+ * observation window; an occurrence metric counts what happened in the week.
+ */
+export const OBSERVATION_GROUPINGS = ['cohort', 'occurrence'] as const;
+export type ObservationGrouping = (typeof OBSERVATION_GROUPINGS)[number];
+
+/** The four metrics, in screen order; the keys are the answer's arrays. */
+export const OBSERVATION_METRICS = [
+  'firstFill',
+  'afterSettlement',
+  'discussion',
+  'reportHandling',
+] as const;
+export type ObservationMetric = (typeof OBSERVATION_METRICS)[number];
+
+/** Each metric's grouping (95-7 "전환형은 코호트, 나머지는 발생 주"). */
+export const OBSERVATION_METRIC_GROUPING: Readonly<Record<ObservationMetric, ObservationGrouping>> =
+  {
+    firstFill: 'cohort',
+    afterSettlement: 'cohort',
+    discussion: 'occurrence',
+    reportHandling: 'occurrence',
+  };
+
+/**
+ * A metric whose source started later than the service's data: weeks starting before this
+ * instant are '자료 없음' for that metric alone (96-11: 정산 후 재참여 before 0064's deploy).
+ */
+export const OBSERVATION_COLLECTED_SINCE: Readonly<Partial<Record<ObservationMetric, Date>>> = {
+  afterSettlement: POSITION_SETTLEMENTS_SINCE,
+};
+
+export interface ObservationWeekFlags {
+  readonly inProgress: boolean;
+  readonly noData: boolean;
+}
+
+/**
+ * A shown week's state for one metric.
+ * - `noData` (ADR-0167 결정 8의 7, 95-8): the week ended at or before `dataStart` (the earliest
+ *   account — nothing the metrics read can be older; null on an empty database: every week), or
+ *   it starts before the metric's own OBSERVATION_COLLECTED_SINCE (a week the late source covers
+ *   only in part, 96-11).
+ * - `inProgress` (결정 8의 6, 95-7 "기간이 다 지나지 않은 묶음"): a cohort week until its last
+ *   instant's window is over (`end + 168h > asOf` — the two newest weeks), an occurrence week
+ *   until it ends (the current week). Never on a `noData` week: '자료 없음' wins.
+ */
+export function observationWeekFlags(
+  week: Pick<ObservationWeek, 'start' | 'end'>,
+  metric: ObservationMetric,
+  asOf: Date,
+  dataStart: Date | null,
+): ObservationWeekFlags {
+  assertInstant(asOf);
+  const since = OBSERVATION_COLLECTED_SINCE[metric];
+  const noData =
+    dataStart === null ||
+    week.end.getTime() <= dataStart.getTime() ||
+    (since !== undefined && week.start.getTime() < since.getTime());
+  if (noData) return { inProgress: false, noData };
+  const closesAt =
+    OBSERVATION_METRIC_GROUPING[metric] === 'cohort'
+      ? week.end.getTime() + OBSERVATION_WINDOW_MS
+      : week.end.getTime();
+  return { inProgress: closesAt > asOf.getTime(), noData };
+}
+
+// ---- percentiles and ratios (96-4, ADR-0167 결정 8의 6) -----------------------------------
+/**
+ * The nearest-rank percentile: the value at 1-based position ⌈p·n/100⌉ of the ascending list —
+ * the median is P50, the lower middle when n is even. SQL `percentile_disc(p/100)` is the same
+ * value (a db test pins them together). Null for an empty list ('—').
+ */
+export function nearestPercentile(
+  values: readonly number[],
+  p: ObservationPercentile,
+): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const position = Math.ceil((p * sorted.length) / 100);
+  return sorted[Math.max(position, 1) - 1]!;
+}
+
+/**
+ * A ratio as the screen shows it beside its counts: a percentage with one decimal, rounded half
+ * up in integer arithmetic ('42.9' for 3 / 7). Null when the denominator is 0 ('—', 대상 없음 —
+ * 결정 8의 6). The answer carries the counts only.
+ */
+export function observationRatioPercent(numerator: number, denominator: number): string | null {
+  for (const value of [numerator, denominator]) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new RangeError('a ratio takes two non-negative integer counts');
+    }
+  }
+  if (denominator === 0) return null;
+  // Tenths of a percent, half up: ⌊(2 · 1000 · n + d) / (2 · d)⌋.
+  const tenths = Math.floor((2_000 * numerator + denominator) / (2 * denominator));
+  return `${Math.floor(tenths / 10)}.${tenths % 10}`;
+}
+
+// ---- the answer (`GET /admin/observation-metrics`) -----------------------------------
+const count = z.number().int().nonnegative();
+/** A duration in whole milliseconds: a year is 3.2e10, far inside the safe range. */
+const durationMs = z.number().int().nonnegative();
+
+const weekBase = {
+  /** The KST date of the week's Monday (95-5). */
+  week: z.iso.date(),
+  inProgress: z.boolean(),
+  noData: z.boolean(),
+};
+
+/**
+ * 첫 체결 전환 (96-1): of the human accounts that finished onboarding (`nickname_confirmed_at`)
+ * in the week and were not admin then (`accounts`), those with a countable fill within 168 hours
+ * (`filled`).
+ */
+export const adminObservationFirstFillWeekSchema = z
+  .object({ ...weekBase, accounts: count, filled: count })
+  .meta({ id: 'AdminObservationFirstFillWeek' });
+export type AdminObservationFirstFillWeek = z.infer<typeof adminObservationFirstFillWeekSchema>;
+
+/**
+ * 정산 후 재참여 (96-2): account·market pairs with a settlement record of a market paid out
+ * (`markets.settled_at`) in the week (`pairs`), and those with a countable fill in any market
+ * within 168 hours of the payout (`returned`).
+ */
+export const adminObservationAfterSettlementWeekSchema = z
+  .object({ ...weekBase, pairs: count, returned: count })
+  .meta({ id: 'AdminObservationAfterSettlementWeek' });
+export type AdminObservationAfterSettlementWeek = z.infer<
+  typeof adminObservationAfterSettlementWeekSchema
+>;
+
+/**
+ * 유효 토론 (96-3): posts and comments (replies included) written in the week and neither
+ * deleted nor hidden, the accounts that wrote them and the markets they are on. No denominator.
+ */
+export const adminObservationDiscussionWeekSchema = z
+  .object({ ...weekBase, posts: count, comments: count, authors: count, markets: count })
+  .meta({ id: 'AdminObservationDiscussionWeek' });
+export type AdminObservationDiscussionWeek = z.infer<typeof adminObservationDiscussionWeekSchema>;
+
+/**
+ * 신고 처리 시간 (96-4): `cases` closed (one closing × one target), grouped by the week of their
+ * earliest eligible report, with the nearest-rank median and 90th percentile of their wall-clock
+ * durations (null with no case), and `pendingTargets`: targets whose earliest eligible pending
+ * report came in that week (결정 8의 4).
+ */
+export const adminObservationReportHandlingWeekSchema = z
+  .object({
+    ...weekBase,
+    cases: count,
+    medianMs: durationMs.nullable(),
+    p90Ms: durationMs.nullable(),
+    pendingTargets: count,
+  })
+  .meta({ id: 'AdminObservationReportHandlingWeek' });
+export type AdminObservationReportHandlingWeek = z.infer<
+  typeof adminObservationReportHandlingWeekSchema
+>;
+
+const weeks = <T extends z.ZodType>(row: T) => z.array(row).length(OBSERVATION_WEEKS_SHOWN);
+
+/**
+ * The whole screen in one answer, read in one snapshot: the instant every source was compared
+ * with (`asOf`), the earliest account (`dataStart`, null on an empty database), the four
+ * metrics' OBSERVATION_WEEKS_SHOWN weeks newest first, and the pending targets whose earliest
+ * eligible pending report is older than the oldest shown week.
+ */
+export const adminObservationMetricsSchema = z
+  .object({
+    asOf: z.iso.datetime(),
+    dataStart: z.iso.datetime().nullable(),
+    firstFill: weeks(adminObservationFirstFillWeekSchema),
+    afterSettlement: weeks(adminObservationAfterSettlementWeekSchema),
+    discussion: weeks(adminObservationDiscussionWeekSchema),
+    reportHandling: weeks(adminObservationReportHandlingWeekSchema),
+    pendingTargetsEarlier: count,
+  })
+  .meta({ id: 'AdminObservationMetrics' });
+export type AdminObservationMetrics = z.infer<typeof adminObservationMetricsSchema>;

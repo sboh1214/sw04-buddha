@@ -1137,6 +1137,11 @@ export interface CompleteOnboardingInput {
   phone?: string;
   /** Also answer the interest categories step (with none). Default: false. */
   interests?: boolean;
+  /**
+   * When the nickname step finished — the 첫 체결 전환 cohort's start (#96, ADR-0169). Default:
+   * the database clock (`now()`).
+   */
+  nicknameConfirmedAt?: Date;
 }
 
 /**
@@ -1154,7 +1159,7 @@ export async function completeOnboarding(db: Db, input: CompleteOnboardingInput)
   const [profile] = await db
     .update(profiles)
     .set({
-      nicknameConfirmedAt: sql`now()`,
+      nicknameConfirmedAt: input.nicknameConfirmedAt ?? sql`now()`,
       ...(input.interests ? { interestsAnsweredAt: sql`now()` } : {}),
     })
     .where(eq(profiles.userId, input.userId))
