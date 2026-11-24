@@ -75,7 +75,7 @@ const DELAYED_WAIT_MS = 60_000;
 /**
  * How far ahead of the first record its 다음 검토 시각 is: room for the visitor's detail to read it
  * and the admin's to be read again, both on screen already and both checked not passed before it
- * passes, with room to spare on a loaded CI shard (three shards, both projects). Only those checks
+ * passes, with room to spare on a loaded CI shard (five shards, both projects). Only those checks
  * sit in the window: what the time does not change is checked once it has passed.
  */
 const REVIEW_IN_MS = 45_000;

@@ -144,20 +144,36 @@ jobs:
   test-integration:
     name: Integration Tests (${{ matrix.name }})
     runs-on: ubuntu-latest
-    # api's suite alone ran 19 minutes on a hosted runner at #142 (1465 tests, 2026-11-03): the
-    # old 20 cancelled the job after its last test had passed (ADR-0106 결과 7).
+    # api's suite runs its files one after another on one database (fileParallelism: false):
+    # 126 files took 28 minutes in one job by #144 (2026-11-24) and hit the old 30-minute limit
+    # on main. It is split by file into three vitest shards, each a job with its own runner,
+    # Postgres and Redis, so a shard takes about ten minutes. Add a shard here, not minutes.
     timeout-minutes: 30
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: api
+          - name: api 1/3
+            cache: api-1
             filter: api
+            args: '-- --shard=1/3'
+          - name: api 2/3
+            cache: api-2
+            filter: api
+            args: '-- --shard=2/3'
+          - name: api 3/3
+            cache: api-3
+            filter: api
+            args: '-- --shard=3/3'
           - name: db
+            cache: db
             filter: '@buddha/db'
+            args: ''
           - name: worker
+            cache: worker
             filter: worker
+            args: ''
 
     # The superuser below is only used to apply docker/postgres/init/01-roles.sql; tasks then
     # connect with the same buddha_app / buddha_migrate roles as local development (PLAN 6.4).
@@ -189,7 +205,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/workflows/setup
         with:
-          turbo-cache: integration-${{ matrix.name }}
+          turbo-cache: integration-${{ matrix.cache }}
 
       - name: Create database roles (same SQL as docker compose)
         run: psql postgres://postgres:postgres@localhost:5432/buddha -v ON_ERROR_STOP=1 -f docker/postgres/init/01-roles.sql
@@ -200,21 +216,26 @@ jobs:
       - name: Run migrations
         run: pnpm db:migrate
 
+      # `--log-order=stream` prints vitest's lines as they come: turbo's default on Actions
+      # holds a task's output until the task ends, so a job cancelled at its time limit used to
+      # show nothing of the suite. The args after `--` (the shard) reach vitest and turbo's
+      # task hash alike, so each shard caches on its own.
       - name: Run integration tests
-        run: pnpm turbo run test --filter='${{ matrix.filter }}'
+        run: pnpm turbo run test --filter='${{ matrix.filter }}' --log-order=stream ${{ matrix.args }}
 
   # ---- e2e (PLAN 14 AC 7, A-M1-10): its own build, database and servers per shard ----------------
   e2e:
     name: E2E Tests (${{ matrix.label }})
     runs-on: ubuntu-latest
-    # Includes the build, Chromium, seed and both projects. Shared-setting scenarios now
-    # use one worker per DB. A prior two-worker shard took 27.5 minutes excluding setup;
-    # reserve 60 minutes for serial execution plus setup, with the same three CI shards.
-    # Per-test timeouts, retries and failure handling remain unchanged.
+    # Includes the build, Chromium, seed and both projects. Shared-setting scenarios use one
+    # worker per DB, so a shard runs its tests one after another: with three shards each took
+    # 50 minutes by #144 (2026-11-24) and one hit this limit on main. Five shards take about 30
+    # each. Per-test timeouts, retries and failure handling remain unchanged.
     timeout-minutes: 60
 
     # The specs are split across the shards by test (fullyParallel), mobile-375 and
-    # desktop-1280 alike. Add a shard here to split them further.
+    # desktop-1280 alike. Add a shard here to split them further: the main ruleset requires
+    # only the summary job's check at the bottom (ADR-0168), so a shard's name is free to change.
     # Each shard seeds a database of its own, and the service-wide limit of 500 verification
     # sends in 24 hours (ADR-0070, a fixed owner value) counts that database's sends alone: the
     # whole suite sends some five hundred (ADR-0092), so it needs two shards at least.
@@ -223,14 +244,20 @@ jobs:
       matrix:
         include:
           - id: shard-1
-            label: Playwright 1/3
-            command: pnpm --filter web test:e2e --shard=1/3
+            label: Playwright 1/5
+            command: pnpm --filter web test:e2e --shard=1/5
           - id: shard-2
-            label: Playwright 2/3
-            command: pnpm --filter web test:e2e --shard=2/3
+            label: Playwright 2/5
+            command: pnpm --filter web test:e2e --shard=2/5
           - id: shard-3
-            label: Playwright 3/3
-            command: pnpm --filter web test:e2e --shard=3/3
+            label: Playwright 3/5
+            command: pnpm --filter web test:e2e --shard=3/5
+          - id: shard-4
+            label: Playwright 4/5
+            command: pnpm --filter web test:e2e --shard=4/5
+          - id: shard-5
+            label: Playwright 5/5
+            command: pnpm --filter web test:e2e --shard=5/5
           # Both dedicated profiles have their own service DB/Redis and run both viewports.
           # Their tests are excluded from the general profile, never skipped from CI.
           - id: market-maker
