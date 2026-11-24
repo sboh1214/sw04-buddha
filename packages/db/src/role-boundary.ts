@@ -5,6 +5,15 @@ import { clockTimestamp, lockAdminRoles } from './tx-helpers.js';
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 type Reader = Db | Tx;
 
+/*
+ * The admin role's time boundaries (#143, ADR-0120): every `admin_grant`/`admin_revoke` record is
+ * strictly later than the last role change of any account (and a revoke than every market's
+ * creation), and a new market strictly after the last role change. Whether an account WAS admin
+ * at a past instant — the observation metrics' "활동한 때 관리자" (#96, ADR-0169) — is read from
+ * these records in admin-role-spans.ts (`adminSpansCte`, `wasAdminAtSql`); the strictly
+ * increasing times are what make its per-account spans free of ties.
+ */
+
 export async function latestAdminRevocation(reader: Reader, userId: string): Promise<Date | null> {
   const [row] = await reader
     .select({ at: adminActions.createdAt })

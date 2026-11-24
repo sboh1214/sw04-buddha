@@ -491,6 +491,20 @@ export type AdminGrantBody = components['schemas']['AdminGrantBody'];
  */
 export type AdminSmsStatus = components['schemas']['AdminSmsStatus'];
 /**
+ * `GET /admin/observation-metrics` (#96, ADR-0169): the four weekly service-wide metrics in one
+ * snapshot — 첫 체결 전환, 정산 후 재참여, 유효 토론 and 신고 처리 시간, OBSERVATION_WEEKS_SHOWN KST
+ * weeks each, newest first — with the instant read (`asOf`) and the earliest account
+ * (`dataStart`). Counts and durations only (95-10).
+ */
+export type AdminObservationMetrics = components['schemas']['AdminObservationMetrics'];
+export type AdminObservationFirstFillWeek = components['schemas']['AdminObservationFirstFillWeek'];
+export type AdminObservationAfterSettlementWeek =
+  components['schemas']['AdminObservationAfterSettlementWeek'];
+export type AdminObservationDiscussionWeek =
+  components['schemas']['AdminObservationDiscussionWeek'];
+export type AdminObservationReportHandlingWeek =
+  components['schemas']['AdminObservationReportHandlingWeek'];
+/**
  * One entry of `GET /admin/link-flags/items` (#187, ADR-0083): a post or a comment a repeated-link
  * rule caught — the link as compared, the rule, when, and the item as it is now.
  */

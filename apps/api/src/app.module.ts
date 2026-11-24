@@ -23,6 +23,7 @@ import { NoticesModule } from './notices/notices.module.js';
 import { NotificationsModule } from './notifications/notifications.module.js';
 import { ModerationModule } from './moderation/moderation.module.js';
 import { OnboardingModule } from './onboarding/onboarding.module.js';
+import { ObservationMetricsModule } from './observation-metrics/observation-metrics.module.js';
 import { OperationsModule } from './operations/operations.module.js';
 import { AdminSmsStatusModule } from './phone-verification/admin-sms-status.module.js';
 import { PhoneVerificationModule } from './phone-verification/phone-verification.module.js';
@@ -131,6 +132,9 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     // of a settling market. After the modules above, so the document keeps their routes where
     // they were.
     OperationsModule,
+    // 관측 지표 (#96, ADR-0169): the admins' weekly /admin/observation-metrics. After the modules
+    // above, so the document keeps their routes where they were.
+    ObservationMetricsModule,
   ],
   controllers: [HealthController],
 })

@@ -223,6 +223,68 @@ describe('copy', () => {
     }
   });
 
+  it('words 관측 지표 as the owner approved, with no score, rank, target, reward or Coin (#96)', () => {
+    // 96-9: the screen copy of the brief's Q3, word for word.
+    expect(copy.adminObservationMetrics).toBe('관측 지표');
+    expect(copy.adminObservationIntro).toBe(
+      '서비스 전체 값을 한국 시간 주(월요일 0시 시작)마다 봅니다. 볼 때마다 원자료에서 다시 셉니다. 봇과, 활동한 때 관리자였던 계정의 것은 빼고 셉니다.',
+    );
+    expect(copy.adminObservationCohortNote).toBe(
+      '최근 두 주는 관찰 기간(7×24시간)이 끝나지 않아 진행 중입니다.',
+    );
+    expect([
+      copy.adminObservationFirstFillHint,
+      copy.adminObservationAfterSettlementHint,
+      copy.adminObservationDiscussionHint,
+      copy.adminObservationReportHandlingHint,
+    ]).toEqual([
+      '온보딩을 처음 마친 계정 가운데 그때부터 7×24시간 안에 체결한 계정의 비율. 마친 주로 묶습니다.',
+      '지급 완료된 시장의 정산 기록이 있는 계정·시장 쌍 가운데 지급 완료부터 7×24시간 안에 어느 시장에서든 체결한 쌍의 비율. 지급 완료 주로 묶습니다.',
+      '지우거나 숨기지 않은 근거 글·댓글·대댓글. 쓴 주로 묶습니다.',
+      '조치·기각·계정 제한 승인 한 번이 닫은 같은 대상의 신고를 한 건으로, 가장 먼저 들어온 신고부터 닫힌 때까지의 실제 경과 시간. 접수된 주로 묶습니다. 대기는 아직 대기 중인 신고가 있는 대상의 수입니다.',
+    ]);
+    expect([
+      copy.adminObservationColWeek,
+      copy.adminObservationColRatio,
+      copy.adminObservationColFilledOfAccounts,
+      copy.adminObservationColReturnedOfPairs,
+      copy.adminObservationColCases,
+      copy.adminObservationColMedian,
+      copy.adminObservationColP90,
+      copy.adminObservationColPending,
+      copy.adminObservationColStatus,
+      copy.adminObservationInProgress,
+      copy.adminObservationNoData,
+      copy.adminObservationNone,
+    ]).toEqual([
+      '주',
+      '비율',
+      '체결한 계정 / 대상 계정',
+      '재참여 쌍 / 대상 쌍',
+      '처리 건수',
+      '중앙값',
+      '90번째 백분위',
+      '대기',
+      '상태',
+      '진행 중',
+      '자료 없음',
+      '—',
+    ]);
+    // 96-8: one cell, the total with its split.
+    expect(copy.adminObservationPostsComments).toBe(
+      '글·댓글 {total} (글 {posts} · 댓글 {comments})',
+    );
+    expect(copy.adminObservationPendingEarlier).toBe('보이는 주보다 앞서 접수된 대기 대상 {n}개');
+    // N04 §4, N05 §2, 95-11: an observation, never a score, a rank, a target or a reward.
+    const texts = Object.entries(copy).filter(([key]) => key.startsWith('adminObservation'));
+    expect(texts.length).toBeGreaterThan(30);
+    for (const [key, text] of texts) {
+      expect(text.trim(), key).not.toBe('');
+      expect(findExcludedText(text), key).toEqual([]);
+      expect(text, key).not.toMatch(/점수|순위|등급|배지|목표|보상|Coin|환전|출금|랭킹|경보/);
+    }
+  });
+
   it('labels every status as ADR-0093 decision 1 item 12 words it, and VOID as 무효', () => {
     // The user labels word for word; 초안 and 검수 중 are the admin's alone.
     expect([

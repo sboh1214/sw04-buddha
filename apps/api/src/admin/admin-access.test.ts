@@ -81,6 +81,9 @@ const OPERATION_RECORDS = [
   // #144 part 2: the accounts a correction compensates, each named with its amount (ADR-0166) —
   // an empty page for a market without a confirmed incident, the walk's placeholder id included.
   'GET /admin/markets/:id/judgement-compensations/recipients',
+  // #96: 관측 지표 — computed from the reports and the moderation records too (N04 §6, ADR-0056
+  // 1-2), aggregates only (95-10, ADR-0169).
+  'GET /admin/observation-metrics',
 ];
 
 describe('admin access (static)', () => {

@@ -61,7 +61,8 @@ export const profiles = pgTable(
     /**
      * When the onboarding's nickname step was done (#58): the nickname offered — the auto one, or
      * a seeded one — confirmed as it is, or another chosen. Null until then: the nickname step is
-     * what is left. Not a change (#57-6): `nickname_changed_at` stays as it was.
+     * what is left. Not a change (#57-6): `nickname_changed_at` stays as it was. Written once and
+     * kept through closure: the start of the 첫 체결 전환 cohort (#96, ADR-0169, owner answer 96-1).
      */
     nicknameConfirmedAt: timestampTz(),
     /**

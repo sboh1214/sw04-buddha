@@ -33,8 +33,9 @@ export const metadata: Metadata = { title: `${copy.adminTitle} | ${copy.appName}
  * another admin's approval), 이의 접수 #175's (ADR-0104 — right after 테마, so the first three stay
  * the markets' own: the members' 판정 이의, pending and decided), 운영 대기열 #145's (ADR-0163 —
  * right after 이의 접수, before 카테고리: 마감 예정, 판정 대기·지연 and 정산 실패, linking to 검수 대기 and
- * 이의 접수 for the other two lists of N03 §8). The row wraps rather than scrolling sideways at
- * phone width.
+ * 이의 접수 for the other two lists of N03 §8), 관측 지표 #96's (ADR-0169, 96-7 — last: an
+ * observation, not a queue to work; #151 adds its two metrics to the same screen). The row wraps
+ * rather than scrolling sideways at phone width.
  */
 const NAV: { href: Route; label: string }[] = [
   { href: '/admin/markets', label: copy.adminMarkets },
@@ -70,6 +71,8 @@ const NAV: { href: Route; label: string }[] = [
   { href: '/admin/market-makers', label: copy.adminMarketMakers },
   { href: '/admin/trading-anomalies', label: copy.adminTradingAnomalies },
   { href: '/admin/fill-classifications', label: copy.classificationsTitle },
+  // 관측 지표 (#96, ADR-0169): last (96-7), so every entry above keeps its place.
+  { href: '/admin/observation-metrics', label: copy.adminObservationMetrics },
 ];
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {

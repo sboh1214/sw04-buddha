@@ -601,6 +601,10 @@ const KST_CALLERS: Readonly<Record<string, { names: readonly string[]; reason: s
     names: ['formatAdminGrant'],
     reason: 'the admin accounts list: the line under an admin saying when it was granted',
   },
+  'lib/admin-observation-metrics.ts': {
+    names: ['observationAsOf'],
+    reason: 'the admin 관측 지표 (#96, ADR-0169): 기준 시각, the instant of the one snapshot',
+  },
   'lib/admin-sms.ts': {
     names: ['smsAsOf'],
     reason: 'the admin SMS send status (ADR-0070): 기준 시각, when the counts were read',

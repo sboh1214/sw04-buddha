@@ -2039,6 +2039,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/observation-metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 관측 지표 (#96): 첫 체결 전환, 정산 후 재참여 (7×24h cohorts), 유효 토론 and 신고 처리 시간 (cases, nearest-rank median and 90th percentile, pending targets) per KST week over the latest 12 weeks, newest first, recounted from the records on every read. Bots, and accounts that were admins when they acted, are left out; counts only, no account or item named */
+        get: operations["getAdminObservationMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/operations/closing": {
         parameters: {
             query?: never;
@@ -5645,6 +5662,53 @@ export type components = {
         AdminNoticeUpdateResult: {
             changed: boolean;
             notice: components["schemas"]["AdminNotice"];
+        };
+        AdminObservationAfterSettlementWeek: {
+            inProgress: boolean;
+            noData: boolean;
+            pairs: number;
+            returned: number;
+            /** Format: date */
+            week: string;
+        };
+        AdminObservationDiscussionWeek: {
+            authors: number;
+            comments: number;
+            inProgress: boolean;
+            markets: number;
+            noData: boolean;
+            posts: number;
+            /** Format: date */
+            week: string;
+        };
+        AdminObservationFirstFillWeek: {
+            accounts: number;
+            filled: number;
+            inProgress: boolean;
+            noData: boolean;
+            /** Format: date */
+            week: string;
+        };
+        AdminObservationMetrics: {
+            afterSettlement: components["schemas"]["AdminObservationAfterSettlementWeek"][];
+            /** Format: date-time */
+            asOf: string;
+            /** Format: date-time */
+            dataStart: string | null;
+            discussion: components["schemas"]["AdminObservationDiscussionWeek"][];
+            firstFill: components["schemas"]["AdminObservationFirstFillWeek"][];
+            pendingTargetsEarlier: number;
+            reportHandling: components["schemas"]["AdminObservationReportHandlingWeek"][];
+        };
+        AdminObservationReportHandlingWeek: {
+            cases: number;
+            inProgress: boolean;
+            medianMs: number | null;
+            noData: boolean;
+            p90Ms: number | null;
+            pendingTargets: number;
+            /** Format: date */
+            week: string;
         };
         AdminOperationsFailure: components["schemas"]["AdminOperationsSettlementFailure"] | components["schemas"]["AdminOperationsStuck"] | components["schemas"]["AdminOperationsRecallFailure"];
         AdminOperationsJudgementDelay: {
@@ -19461,6 +19525,63 @@ export interface operations {
             };
             /** @description NOT_FOUND */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getAdminObservationMetrics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminObservationMetrics"];
+                    };
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

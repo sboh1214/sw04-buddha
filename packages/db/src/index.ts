@@ -384,3 +384,6 @@ export * from './trading-anomalies.js';
 
 export * from './fill-classification.js';
 export * from './fill-classification-read.js';
+
+export * from './admin-role-spans.js';
+export * from './observation-metrics.js';
