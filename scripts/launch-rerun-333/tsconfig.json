@@ -1,0 +1,10 @@
+{
+  "extends": "../../packages/config-ts/node.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "typeRoots": ["../../packages/shared/node_modules/@types"]
+  },
+  "include": ["*.ts"]
+}
