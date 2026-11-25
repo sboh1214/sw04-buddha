@@ -582,6 +582,13 @@
       "when": 1795515762542,
       "tag": "0082_market_visits",
       "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1795626427551,
+      "tag": "0083_signup_allowlist",
+      "breakpoints": true
     }
   ]
 }

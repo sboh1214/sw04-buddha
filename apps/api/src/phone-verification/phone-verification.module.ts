@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module.js';
+import { IdentityModule } from '../identity/identity.module.js';
 import { DbModule } from '../infra/db/db.module.js';
 import { RateLimitsModule } from '../rate-limit/rate-limit.limits.js';
 import { SmsModule } from '../sms/sms.module.js';
@@ -14,8 +15,9 @@ import { PhoneVerificationService } from './phone-verification.service.js';
  * send counts are AdminSmsStatusModule's.
  */
 @Module({
-  // RateLimitsModule for UNCOUNTED_PEERS: the client address is named by the rate limit's rule.
-  imports: [DbModule, AuthModule, SmsModule, RateLimitsModule],
+  // RateLimitsModule for UNCOUNTED_PEERS: the client address is named by the rate limit's rule;
+  // IdentityModule for the keyed hash the 가입 허용 목록 is kept in (#330, ADR-0174).
+  imports: [DbModule, AuthModule, IdentityModule, SmsModule, RateLimitsModule],
   controllers: [PhoneVerificationController],
   providers: [PhoneVerificationService],
   exports: [PhoneVerificationService],

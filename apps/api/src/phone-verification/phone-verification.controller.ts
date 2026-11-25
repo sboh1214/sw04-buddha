@@ -97,8 +97,9 @@ export class PhoneVerificationController {
   })
   @ApiData(phoneVerificationSchema)
   // VERIFICATION_CODE_REJECTED: no code waiting, expired, discarded, an older code a resend
-  // replaced (not counted), or wrong (counted). PHONE_VERIFICATION_NOT_ALLOWED: verified already, or the number is another
-  // account's (told only once the code matched).
+  // replaced (not counted), or wrong (counted). PHONE_VERIFICATION_NOT_ALLOWED: verified already,
+  // the number is another account's, or the closed test's 가입 허용 목록 is not empty and the number
+  // is not on it (`not_listed`, #330) — the last two told only once the code matched.
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',

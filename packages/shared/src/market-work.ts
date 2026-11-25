@@ -172,6 +172,12 @@ export const MARKET_WORK_EXCLUDED_ACTIONS: Readonly<
   proposal_review: 'a proposal step that links no market (145-13 shows the linked proposal only)',
   proposal_reject: 'a proposal step that links no market (145-13 shows the linked proposal only)',
   proposal_memo: 'a proposal step that links no market (145-13 shows the linked proposal only)',
+  signup_allowlist_add: 'the signup allowlist: no market',
+  signup_allowlist_remove: 'the signup allowlist: no market',
+  signup_allowlist_clear_request: 'the signup allowlist: no market',
+  signup_allowlist_clear_approve: 'the signup allowlist: no market',
+  signup_allowlist_clear_reject: 'the signup allowlist: no market',
+  signup_allowlist_clear_retract: 'the signup allowlist: no market',
 };
 
 /** The shown admin action types, in ADMIN_ACTION_TYPES order. */

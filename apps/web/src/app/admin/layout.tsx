@@ -34,7 +34,8 @@ export const metadata: Metadata = { title: `${copy.adminTitle} | ${copy.appName}
  * the markets' own: the members' 판정 이의, pending and decided), 운영 대기열 #145's (ADR-0163 —
  * right after 이의 접수, before 카테고리: 마감 예정, 판정 대기·지연 and 정산 실패, linking to 검수 대기 and
  * 이의 접수 for the other two lists of N03 §8), 관측 지표 #96's (ADR-0169, 96-7 — last: an
- * observation, not a queue to work; #151 adds its two metrics to the same screen). The row wraps
+ * observation, not a queue to work; #151 adds its two metrics to the same screen), 가입 허용 목록
+ * #330's (ADR-0174 — right after 운영자 계정). The row wraps
  * rather than scrolling sideways at phone width.
  */
 const NAV: { href: Route; label: string }[] = [
@@ -53,6 +54,10 @@ const NAV: { href: Route; label: string }[] = [
   { href: '/admin/users', label: copy.adminUsers },
   { href: '/admin/reports', label: copy.adminModeration },
   { href: '/admin/admins', label: copy.adminAccounts },
+  // 가입 허용 목록 (#330, ADR-0174): right after 운영자 계정 — who may sign up during the closed
+  // test, and the clear of public launch another admin approves. The first five and the last
+  // (관측 지표) keep their places.
+  { href: '/admin/signup-allowlist', label: copy.adminSignupAllowlist },
   ...(PAID_COIN_SALES_ENABLED
     ? [
         { href: '/admin/charge-packages' as Route, label: copy.adminPackages },

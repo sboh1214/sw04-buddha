@@ -23,7 +23,8 @@ import { identifierWords } from './excluded.js';
  * A market proposal and its proposer are the proposer's and the operators' alone (#77, ADR-0069
  * decision 4), and so are a 판정 이의's submitter and body (#175, ADR-0093 decision 1 #173 item 13).
  * Which market details an account opened, and when, is nobody's to see: the visit records feed
- * the admins' weekly counts only (#151, ADR-0167 결정 6, 95-10).
+ * the admins' weekly counts only (#151, ADR-0167 결정 6, 95-10). Which numbers the closed test's
+ * 가입 허용 목록 holds is the admins' alone (#330, ADR-0174 330-8).
  * Items nothing stores yet
  * are named ahead (`pending`), so the route or event that brings one is refused from its first
  * day.
@@ -65,6 +66,7 @@ export const PRIVATE_DATA_IDS = [
   'operation-records',
   'observation-metrics',
   'market-visits',
+  'signup-allowlist',
 ] as const;
 export type PrivateDataId = (typeof PRIVATE_DATA_IDS)[number];
 
@@ -680,6 +682,17 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       ['revisited'],
     ],
     owned: { words: ['view', 'views'], whose: WHOSE_OR_VIEWER },
+  },
+  {
+    id: 'signup-allowlist',
+    name: '가입 허용 목록(폐쇄 테스트에 미리 넣은 번호의 해시·항목·넣은 시각과 목록 밖 본인확인 수)',
+    basis: 'ADR-0174(#330; 330-5·330-8), ADR-0171 133-7, ADR-0071',
+    // The closed test's 가입 허용 목록 (#330) is the admins' alone: no public, owner or realtime
+    // shape says whether a number or an account is on it, lists its entries or counts them
+    // (`allowlist`, `allowlisted`, `allowList`). A member learns only their own number's answer,
+    // and only after its code matched (PHONE_VERIFICATION_NOT_ALLOWED `not_listed`, a value — no
+    // field names it).
+    fields: [['allowlist'], ['allowlisted'], ['allow', 'list']],
   },
 ];
 

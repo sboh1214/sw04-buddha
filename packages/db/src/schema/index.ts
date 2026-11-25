@@ -60,6 +60,7 @@ export * from './regrants.js';
 export * from './relations.js';
 export * from './release-settings.js';
 export * from './retention-purges.js';
+export * from './signup-allowlist.js';
 export * from './start-grants.js';
 export * from './tags.js';
 export * from './themes.js';

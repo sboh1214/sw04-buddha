@@ -4618,6 +4618,11 @@ export const copy = {
   // 한 번호에는 한 계정만(#57-1). 인증번호가 맞은 뒤에만 알려 준다(번호의 주인만 안다).
   errPhoneInUse:
     '다른 계정이 이미 본인확인에 쓴 번호입니다. 번호 하나로는 계정 하나만 본인확인할 수 있습니다.',
+  // 폐쇄 테스트의 가입 허용 목록(#330, ADR-0174): 목록이 비어 있지 않은데 번호가 목록에 없다. 오너 답
+  // 330-5의 문장 그대로다. 인증번호가 맞은 뒤에만 알려 준다(번호의 주인만 안다). 문의 창구는 정해지지
+  // 않아 넣지 않는다.
+  errSignupNotListed:
+    '이 번호로는 지금 가입할 수 없습니다. 지금은 미리 등록된 번호로만 가입할 수 있는 폐쇄 테스트 기간입니다.',
   errRealNameUnverified: '본인확인을 마친 계정만 실명을 고칠 수 있습니다.',
   settingsVerification: '본인확인',
   // 확인하는 것은 번호뿐이다(실명은 형식만 본다). 실명이 확인된 값처럼 읽히지 않게 둘을 나눠 말한다.
@@ -5646,6 +5651,77 @@ export const copy = {
   anomalyQuantity: '원 체결 수량',
   anomalyMore: '같은 결과에서 더 보기',
   anomalyRefreshFailed: '다시 계산하지 못했습니다. 아래에는 이전 기준 시각의 결과를 유지합니다.',
+
+  // --- admin: 가입 허용 목록 (#330, ADR-0174; 오너 답 330-1~330-12) ---
+  // 폐쇄 테스트 동안 미리 넣은 번호만 본인확인을 마친다(133-7). 목록이 비어 있지 않으면 적용한다(330-3).
+  // 넣기·빼기는 관리자 한 명이 사유를 남기고(330-1), 비우기(공개 출시)는 다른 관리자가 승인한다(330-2).
+  // 번호는 키 있는 해시로만 두어 화면에는 항목 id와 넣은 시각만 보인다(330-8). 메모는 없다(330-10).
+  adminSignupAllowlist: '가입 허용 목록',
+  adminSignupAllowlistIntro:
+    '폐쇄 테스트 기간에는 이 목록에 넣은 휴대전화 번호로만 본인확인을 마치고 가입할 수 있습니다. 이메일 가입과 소셜 가입 모두 같습니다.',
+  adminSignupAllowlistRuleApplies:
+    '목록이 비어 있지 않으면 적용합니다. 목록이 비어 있으면 누구나 가입할 수 있습니다.',
+  adminSignupAllowlistRuleHash:
+    '번호는 키 있는 해시로만 저장합니다(키 없이는 번호로 되돌릴 수 없습니다). 그래서 이 화면에는 항목 id와 넣은 시각만 보입니다.',
+  adminSignupAllowlistRuleWrites:
+    '넣기와 빼기는 관리자 한 명이 사유를 남기고 합니다. 이미 가입한 회원은 번호를 빼도 그대로입니다.',
+  adminSignupAllowlistRuleClear:
+    '마지막 번호는 빼기로 뺄 수 없습니다. 공개 출시 때 목록을 비우려면 다른 관리자의 승인이 필요하고, 승인하면 모든 번호가 지워집니다.',
+  adminSignupAllowlistOn: '적용 중',
+  adminSignupAllowlistOff: '적용 안 함(누구나 가입)',
+  adminSignupAllowlistCount: '목록의 번호',
+  adminSignupAllowlistOutside: '목록 밖 번호로 본인확인한 계정',
+  adminSignupAllowlistOutsideMembers: '회원',
+  adminSignupAllowlistOutsideAdmins: '관리자',
+  // #149 점검과 재초기화 뒤 차례(330-9): 관리자 외에 0인지 확인한 뒤 테스터에게 알린다.
+  adminSignupAllowlistOutsideHint:
+    '테스터에게 주소를 알리기 전에 회원 수가 0인지 확인하세요. 0이 아니면 재초기화를 다시 돌립니다(docs/RESET.md).',
+  adminSignupAllowlistAddTitle: '번호 넣기',
+  adminSignupAllowlistPhones: '휴대전화 번호(한 줄에 하나)',
+  adminSignupAllowlistPhonesHint:
+    '010-1234-5678처럼 하이픈이나 공백이 있어도 됩니다. 한 줄이라도 번호가 아니면 아무것도 넣지 않습니다.',
+  adminSignupAllowlistBadLines: '휴대전화 번호가 아닌 줄이 있습니다. 줄 번호:',
+  adminSignupAllowlistNoPhones: '넣을 번호를 한 줄에 하나씩 입력해 주세요.',
+  adminSignupAllowlistAdd: '넣기',
+  adminSignupAllowlistAdded: '번호를 넣었습니다',
+  adminSignupAllowlistSkipped: '이미 있던 번호',
+  adminSignupAllowlistRemoveTitle: '번호 빼기',
+  adminSignupAllowlistPhone: '휴대전화 번호',
+  adminSignupAllowlistRemove: '빼기',
+  adminSignupAllowlistRemoved: '번호를 뺐습니다.',
+  adminSignupAllowlistReason: '사유',
+  adminSignupAllowlistReasonHint: '관리자 작업 기록에 작업자·시각과 함께 남습니다.',
+  errSignupAllowlistReason: '사유를 1~500자로 입력해 주세요.',
+  errSignupAllowlistPhone: '휴대전화 번호(01X)를 입력해 주세요.',
+  errSignupAllowlistNotFound: '목록에 없는 번호입니다.',
+  errSignupAllowlistClearNotFound: '비우기 요청을 찾을 수 없습니다. 화면을 새로 고쳐 주세요.',
+  errSignupAllowlistLastEntry:
+    '마지막 번호는 뺄 수 없습니다. 목록을 비우려면 아래에서 비우기를 요청하세요.',
+  errSignupAllowlistEmpty: '목록이 비어 있어 비울 것이 없습니다.',
+  errSignupAllowlistClearPending: '결정을 기다리는 비우기 요청이 이미 있습니다.',
+  errSignupAllowlistNoDecider: '승인할 다른 관리자가 없어 요청할 수 없습니다.',
+  adminSignupAllowlistClearTitle: '목록 비우기(공개 출시)',
+  adminSignupAllowlistClearIntro:
+    '비우면 누구나 가입할 수 있습니다. 한 관리자가 요청하고 다른 관리자가 승인하면 그때 모든 번호가 지워집니다.',
+  adminSignupAllowlistConfirmation: '확인 문구',
+  adminSignupAllowlistConfirmationHint: "'목록 비우기'를 그대로 입력하세요.",
+  errSignupAllowlistConfirmation: "'목록 비우기'를 그대로 입력해 주세요.",
+  adminSignupAllowlistClearRequest: '비우기 요청',
+  adminSignupAllowlistClearRequested: '비우기를 요청했습니다. 다른 관리자의 승인을 기다립니다.',
+  adminSignupAllowlistClearPending: '승인을 기다리는 비우기 요청',
+  adminSignupAllowlistClearRequester: '요청한 관리자',
+  adminSignupAllowlistClearRequestReason: '요청 사유',
+  adminSignupAllowlistClearOwn: '내가 한 요청입니다. 다른 관리자만 승인하거나 반려할 수 있습니다.',
+  adminSignupAllowlistDecisionReason: '결정 사유',
+  adminSignupAllowlistApprove: '승인하고 목록 비우기',
+  adminSignupAllowlistReject: '반려',
+  adminSignupAllowlistRetract: '요청 철회',
+  adminSignupAllowlistApproved: '목록을 비웠습니다. 이제 누구나 가입할 수 있습니다.',
+  adminSignupAllowlistRejected: '비우기 요청을 반려했습니다.',
+  adminSignupAllowlistRetracted: '비우기 요청을 철회했습니다.',
+  adminSignupAllowlistEntries: '항목',
+  adminSignupAllowlistEntriesEmpty: '목록이 비어 있습니다. 지금은 누구나 가입할 수 있습니다.',
+  adminSignupAllowlistAddedAt: '넣은 시각',
 } as const;
 
 export type CopyKey = keyof typeof copy;

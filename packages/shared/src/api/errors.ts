@@ -52,8 +52,9 @@ export const ERROR_CODES = [
   'APPROVAL_NOT_ALLOWED',
   'FILL_CLASSIFICATION_NOT_ALLOWED',
   /**
-   * A verification the rules refuse: the account verified already, or the number is the verified
-   * number of another account. Details carry the reason, phoneVerificationNotAllowedDetailsSchema.
+   * A verification the rules refuse: the account verified already, the number is the verified
+   * number of another account, or the signup allowlist is not empty and the number is not on it.
+   * Details carry the reason, phoneVerificationNotAllowedDetailsSchema.
    */
   'PHONE_VERIFICATION_NOT_ALLOWED',
   /**
@@ -251,6 +252,12 @@ export const ERROR_CODES = [
    * reasons are gone. An account restriction refuses it as RESTRICTED.
    */
   'REGRANT_NOT_ALLOWED',
+  /**
+   * A write of the signup allowlist its rules refuse: the removal of its last entry, a clear of an
+   * empty list, or a clear asked while another waits. The details carry the reason,
+   * signupAllowlistNotAllowedDetailsSchema in signup-allowlist.ts.
+   */
+  'SIGNUP_ALLOWLIST_NOT_ALLOWED',
   'INTERNAL',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

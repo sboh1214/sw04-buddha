@@ -38,6 +38,7 @@ import { RegrantModule } from './regrant/regrant.module.js';
 import { ReleaseSettingsModule } from './release-settings/release-settings.module.js';
 import { RetentionModule } from './retention/retention.module.js';
 import { SearchHistoryModule } from './search-history/search-history.module.js';
+import { SignupAllowlistModule } from './signup-allowlist/signup-allowlist.module.js';
 import { StartGrantModule } from './start-grant/start-grant.module.js';
 import { ThemesModule } from './themes/themes.module.js';
 import { TradesModule } from './trades/trades.module.js';
@@ -138,6 +139,9 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     // 관측 지표 (#96, ADR-0169): the admins' weekly /admin/observation-metrics. After the modules
     // above, so the document keeps their routes where they were.
     ObservationMetricsModule,
+    // 가입 허용 목록 (#330, ADR-0174): the admins' /admin/signup-allowlist and its clear's approval.
+    // After the modules above, so the document keeps their routes where they were.
+    SignupAllowlistModule,
   ],
   controllers: [HealthController],
 })

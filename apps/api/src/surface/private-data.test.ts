@@ -1,8 +1,8 @@
 /**
  * #113 at run time, against the docker `test` profile. Account A's private data is in the
  * database — email, nickname and time zone, its 본인확인 (verified phone, real name, the code's
- * hash), its start Coin (#70: the grant, its amount and the keyed hash of A's number), a re-grant
- * (#74: its id, its request id and its amount, the six re-grant settings decided), password
+ * hash), its start Coin (#70: the grant, its amount and the keyed hash of A's number), its
+ * number's entry on the 가입 허용 목록 (#330: the same hash and the entry's id), a re-grant (#74: its id, its request id and its amount, the six re-grant settings decided), password
  * and session, a balance and a ledger memo, orders and the fill one of them got against another
  * account's resting order, a position with its PnL, a payment, two watched markets (#89), a
  * recorded search (#15), its visits of a market's detail on two Korean dates with the visit
@@ -115,6 +115,7 @@ import {
   createSearch,
   createTestNotification,
   createSettlementRecord,
+  createSignupAllowlistEntry,
   createStartGrant,
   createTheme,
   createThemeMarket,
@@ -648,6 +649,10 @@ const NEVER_SHOWN: readonly string[] = [
   // operators' records (운영 목록·작업 이력, ADR-0056 1-2) — the public keeps `payoutDelayed`.
   'settlement last error',
   'settlement retry reason',
+  // #330 (ADR-0174; 330-8): A's number on the 가입 허용 목록 is the admins' record alone — its
+  // keyed hash is 'phone hash' above, and the entry's id names it. Nobody's answer outside /admin
+  // holds either, A's own included.
+  'signup allowlist entry id',
 ];
 
 interface OwnerCase {
@@ -1485,6 +1490,11 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       phoneHash,
       amountCoin: AMOUNTS.startGrant,
     });
+
+    // A's number on the closed test's 가입 허용 목록 (#330, ADR-0174): the keyed hash and the entry
+    // id are the admins' (`NEVER_SHOWN`). Nothing here confirms a code through the API, so a
+    // non-empty list refuses no fixture.
+    const allowlistEntry = await createSignupAllowlistEntry(t.db, phoneHash);
 
     // A's consents (#58), each with the address and browser it came with (sentinels: nobody, A
     // included, is shown them), and a nickname A gave up (#37-3: never shown again). B has done
@@ -2605,6 +2615,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('proposal internal memo', internalMemo),
         text('start grant id', startGrant.id),
         text('phone hash', phoneHash),
+        text('signup allowlist entry id', allowlistEntry.id),
         text('regrant id', regrantId),
         text('regrant key', regrantKey),
         amount('regrant amount', AMOUNTS.regrant),

@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { hasStandingConsent, isPhoneVerified, schema, type Db } from '@buddha/db';
+import {
+  hasStandingConsent,
+  isPhoneVerified,
+  schema,
+  signupAllowlistRefuses,
+  type Db,
+} from '@buddha/db';
 import {
   PHONE_VERIFICATION_LIMITS,
   type OnboardingRequiredDetails,
@@ -16,6 +22,7 @@ import { AppError } from '../common/errors/app-error.js';
 import { closedAccountRefusal } from '../common/errors/closed-account.js';
 import { findPgError, isPgError, PG_UNIQUE_VIOLATION } from '../common/errors/pg-error.js';
 import { type Env } from '../config/env.js';
+import { PhoneHasher } from '../identity/phone-hash.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
 import { redactDigits, SMS_SENDER, type SmsSender, sendOutcome } from '../sms/sms-sender.js';
@@ -63,6 +70,7 @@ export function verificationNotAllowed(details: PhoneVerificationNotAllowedDetai
   const messages = {
     already_verified: 'The account has completed the verification already',
     phone_in_use: "The number is another account's verified number",
+    not_listed: 'The signup allowlist is not empty and the number is not on it',
   } as const satisfies Record<PhoneVerificationNotAllowedDetails['reason'], string>;
   return new AppError('PHONE_VERIFICATION_NOT_ALLOWED', {
     message: messages[details.reason],
@@ -135,7 +143,10 @@ export function codeRejected(details: VerificationCodeRejectedDetails): AppError
  *   before the refusal is answered. A match records the verification with the number and the real
  *   name the code was sent with. One account per number is the UNIQUE of
  *   `phone_verifications.phone`; the read before it only spares the write. Whether the number is
- *   taken is answered after the code matched, so only the number's holder learns it.
+ *   taken is answered after the code matched, so only the number's holder learns it — and so is
+ *   whether the closed test's 가입 허용 목록 refuses it (#330, ADR-0174: not empty, and the
+ *   number's keyed hash not on it — `not_listed`, after `phone_in_use`). Sending never reads the
+ *   list, so its answers say nothing of it.
  *
  * Neither the number, the real name, the address nor the code reaches a log: every database
  * failure leaves as its SQLSTATE alone (`verificationWriteFailure`), every provider failure as
@@ -148,6 +159,7 @@ export class PhoneVerificationService {
   constructor(
     @Inject(DB) private readonly db: Db,
     @Inject(SMS_SENDER) private readonly sms: SmsSender,
+    private readonly hasher: PhoneHasher,
     config: ConfigService<Env, true>,
   ) {
     const secret = config.get('BETTER_AUTH_SECRET', { infer: true });
@@ -326,6 +338,14 @@ export class PhoneVerificationService {
           .where(eq(verifications.phone, pending.phone))
           .limit(1);
         if (taken) return { refused: verificationNotAllowed({ reason: 'phone_in_use' }) };
+        // The closed test's 가입 허용 목록 (#330, ADR-0174 330-5): after the code matched and the
+        // number was found free, so only its holder learns either, `phone_in_use` first. Writes
+        // nothing — the code stays unconsumed and its entries uncounted, so the same code is
+        // answered the same — and every signup path meets it here: this is the one place a
+        // record is written (email and social accounts alike, 133-7).
+        if (await signupAllowlistRefuses(tx, this.hasher.hash(pending.phone))) {
+          return { refused: verificationNotAllowed({ reason: 'not_listed' }) };
+        }
         await tx.update(codes).set({ consumedAt: clock }).where(eq(codes.id, pending.id));
         const [row] = await tx
           .insert(verifications)

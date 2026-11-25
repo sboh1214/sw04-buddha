@@ -479,6 +479,10 @@ export type ReleaseSettingChangeBody = components['schemas']['ReleaseSettingChan
 export type ReleaseSettingState = components['schemas']['ReleaseSettingState'];
 /** An account that holds the admin role now, with its latest grant (#171). */
 export type AdminAccount = components['schemas']['AdminAccount'];
+// 가입 허용 목록 (#330, ADR-0174): `/admin/signup-allowlist`.
+export type SignupAllowlist = components['schemas']['SignupAllowlist'];
+export type SignupAllowlistClearRequest = components['schemas']['SignupAllowlistClearRequest'];
+export type SignupAllowlistSummary = components['schemas']['SignupAllowlistSummary'];
 /** One admin grant or revoke as recorded: account, admin, reason and time (#171). */
 export type AdminRoleChange = components['schemas']['AdminRoleChange'];
 export type AdminMarketConflictWrite = components['schemas']['AdminMarketConflictWrite'];

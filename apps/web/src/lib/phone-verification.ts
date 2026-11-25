@@ -289,8 +289,9 @@ export type ConfirmFailure =
    */
   | { kind: 'code-gone'; message: string }
   /**
-   * The number is another account's verified number (one account per number, #57-1): back to
-   * the details, the message under the number.
+   * The number is another account's verified number (one account per number, #57-1), or the
+   * closed test's 가입 허용 목록 is not empty and the number is not on it (#330, ADR-0174 330-5):
+   * back to the details, the message under the number.
    */
   | { kind: 'phone-in-use'; message: string }
   /** Verified already (another tab): the hook refreshed `['me']`, and the page moves on. */
@@ -347,6 +348,10 @@ export function confirmFailure(error: unknown, context: ConfirmContext = {}): Co
   }
   const notAllowed = notAllowedReason(error);
   if (notAllowed === 'phone_in_use') return { kind: 'phone-in-use', message: copy.errPhoneInUse };
+  // #330 (ADR-0174 330-5): only after the code matched, as `phone_in_use` — the owner's sentence.
+  if (notAllowed === 'not_listed') {
+    return { kind: 'phone-in-use', message: copy.errSignupNotListed };
+  }
   if (notAllowed === 'already_verified') {
     return { kind: 'verified', message: copy.errVerificationAlreadyDone };
   }

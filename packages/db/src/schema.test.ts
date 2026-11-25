@@ -11708,7 +11708,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
             'themes', 'theme_markets', 'theme_notices', 'tags', 'market_tags', 'categories',
             'market_sources', 'market_rule_versions', 'market_judgement_delays', 'orders',
             'fills', 'fill_realizations', 'regrants', 'market_judgement_incidents',
-            'judgement_compensations')
+            'judgement_compensations', 'signup_allowlist')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
@@ -11733,6 +11733,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(privs('market_judgement_incidents')).toEqual(['INSERT', 'SELECT']);
       // Migration 0081 (#144): a 판정 오류 보상 is a permanent fact like its entry.
       expect(privs('judgement_compensations')).toEqual(['INSERT', 'SELECT']);
+      // Migration 0083 (#330): a 가입 허용 목록 entry is added and removed, never changed.
+      expect(privs('signup_allowlist')).toEqual(['DELETE', 'INSERT', 'SELECT']);
       expect(privs('payments')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       // Migration 0028 (#183): the real name changes in place and the row goes with the account;
       // a code's wrong entries, its use and what the provider said (0030) are written in place,

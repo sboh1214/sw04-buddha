@@ -38,6 +38,7 @@ import {
   RULE_VERSION_ITEMS,
   SETTLEMENT_STEPS,
   SETTLEMENT_STEP_STATUSES,
+  SIGNUP_ALLOWLIST_CLEAR_APPROVAL_KIND,
   START_GRANT_NUMBER_SOURCES,
   WATCH_EVENT_ACTIONS,
   WRITE_LIMIT_ACTIONS,
@@ -141,6 +142,8 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
     // #144: a SETTLED market's judgement incident (ADR-0165) and its compensation (ADR-0166).
     MARKET_JUDGEMENT_INCIDENT_APPROVAL_KIND,
     MARKET_JUDGEMENT_COMPENSATION_APPROVAL_KIND,
+    // #330: emptying the 가입 허용 목록 at public launch (ADR-0174, 330-2).
+    SIGNUP_ALLOWLIST_CLEAR_APPROVAL_KIND,
   ],
   // #144 (ADR-0166): what became of a listed account at the approval — paid, or 'closed' (탈퇴로
   // 지급 못 함, 144-7; never the cash-out's `withdraw*`), held by a CHECK.
@@ -813,6 +816,33 @@ describe('excluded features in stored data (#113)', () => {
     const personal = personalTables().map((table) => table.name);
     expect(personal).toContain('market_visits');
     expect(personal).not.toContain('market_visit_collection');
+  });
+
+  it('names the signup allowlist, its keys and its admin action types, each read above (#330)', () => {
+    // ADR-0174, migration 0083: the closed test's 가입 허용 목록 — the keyed hash of a number and
+    // when it was added, nothing else (330-8, 330-10) — and what its writes record and ask.
+    expect(storageNames()).toEqual(
+      expect.arrayContaining([
+        { where: 'table', name: 'signup_allowlist' },
+        { where: 'signup_allowlist constraint', name: 'signup_allowlist_phone_hash_check' },
+        { where: 'approval_requests.kind value', name: 'signup_allowlist_clear' },
+        ...[
+          'signup_allowlist_add',
+          'signup_allowlist_remove',
+          'signup_allowlist_clear_request',
+          'signup_allowlist_clear_approve',
+          'signup_allowlist_clear_reject',
+          'signup_allowlist_clear_retract',
+        ].map((name) => ({ where: 'admin_actions.type value', name })),
+      ]),
+    );
+    expect(
+      TABLES.find((table) => table.name === 'signup_allowlist')?.columns.map(
+        (column) => column.name,
+      ),
+    ).toEqual(['id', 'phoneHash', 'createdAt']);
+    // No account column and no key to one: an entry is a number's, not an account's.
+    expect(personalTables().map((table) => table.name)).not.toContain('signup_allowlist');
   });
 
   it('names the market cancel’s stored values, each read above (#20)', () => {
