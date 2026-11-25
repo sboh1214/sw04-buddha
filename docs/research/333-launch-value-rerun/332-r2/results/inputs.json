@@ -1,0 +1,124 @@
+{
+  "bundle": {
+    "id": "C5",
+    "startCoin": "1000",
+    "budgetCoin": "10000",
+    "maxLossCoin": "4000",
+    "b": 100,
+    "levels": 5,
+    "quantity": 20,
+    "safetyTicks": 1,
+    "protectionTicks": 5,
+    "reduceAtBp": 7000,
+    "haltAtBp": 9000,
+    "reduceRatioBp": 5000
+  },
+  "candidates": [
+    {
+      "id": "R2",
+      "values": {
+        "thresholdCoin": "100",
+        "amountCoin": "500",
+        "waitHours": 72,
+        "periodDays": 30,
+        "periodLimit": 2,
+        "totalCapCoin": "2000"
+      }
+    }
+  ],
+  "profiles": [
+    {
+      "id": "p20-m1",
+      "people": 20,
+      "markets": 1,
+      "label": "internal"
+    },
+    {
+      "id": "p20-m5",
+      "people": 20,
+      "markets": 5,
+      "label": "scale-sensitivity"
+    },
+    {
+      "id": "p20-m20",
+      "people": 20,
+      "markets": 20,
+      "label": "scale-sensitivity"
+    },
+    {
+      "id": "p100-m1",
+      "people": 100,
+      "markets": 1,
+      "label": "scale-sensitivity"
+    },
+    {
+      "id": "p100-m5",
+      "people": 100,
+      "markets": 5,
+      "label": "initial-public"
+    },
+    {
+      "id": "p100-m20",
+      "people": 100,
+      "markets": 20,
+      "label": "scale-sensitivity"
+    },
+    {
+      "id": "p500-m1",
+      "people": 500,
+      "markets": 1,
+      "label": "scale-sensitivity"
+    },
+    {
+      "id": "p500-m5",
+      "people": 500,
+      "markets": 5,
+      "label": "scale-sensitivity"
+    },
+    {
+      "id": "p500-m20",
+      "people": 500,
+      "markets": 20,
+      "label": "public-pressure"
+    }
+  ],
+  "variants": [
+    {
+      "id": "V1",
+      "label": "기본",
+      "exhaustBp": 2000,
+      "behaviourBp": {
+        "immediate": 6000,
+        "delayed": 3000,
+        "never": 1000
+      }
+    },
+    {
+      "id": "V2",
+      "label": "소진 압력",
+      "exhaustBp": 5000,
+      "behaviourBp": {
+        "immediate": 9000,
+        "delayed": 1000,
+        "never": 0
+      }
+    }
+  ],
+  "seeds": [71, 20261112],
+  "cycles": 60,
+  "cycleMs": 86820000,
+  "horizonMs": 420000,
+  "scanIntervalMs": 60000,
+  "settlementWaitMs": 86400000,
+  "marketCase": {
+    "id": "balanced",
+    "scenario": "balanced",
+    "refreshDelayMs": 250,
+    "split": 1,
+    "operatorPauseMs": null
+  },
+  "normalSpendBp": 1000,
+  "delayMaxHours": 72,
+  "thresholds": ["50", "100", "200", "500"],
+  "r0ApplyAtCoin": "50"
+}

@@ -1,0 +1,26 @@
+{
+  "stored": "../../../71-economic-simulation/results",
+  "storedResultsSha256": "01e675747c850a59694d19113e6a43ea7d95cfc5a069b2b911f2ce9c6f51ee00",
+  "rerunResultsSha256": "44e2c181a98e54c1707ac49ab24102015f362a52e32c1d7d65e40123355d438c",
+  "rows": 252,
+  "wholeRowEqual": 252,
+  "lineBytesEqual": 252,
+  "digestFields": ["inputDigest", "traceDigest"],
+  "digestEqual": 252,
+  "sameOrder": true,
+  "comparisonCsvEqual": true,
+  "scenarioSummaryRowsEqual": 126,
+  "source": {
+    "storedHead": "53a7843d7fa232173479a11869955ef75a331f06",
+    "files": 654,
+    "storedFiles": 548,
+    "changed": { "packages/shared/src": 42, "packages/shared/dist": 108, "pnpm-lock.yaml": 1 },
+    "added": {
+      "scripts/economic-simulation/report.mjs": 1,
+      "scripts/economic-simulation/report.test.ts": 1,
+      "packages/shared/src": 32,
+      "packages/shared/dist": 72
+    },
+    "removed": {}
+  }
+}

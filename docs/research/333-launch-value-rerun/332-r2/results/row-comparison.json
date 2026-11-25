@@ -1,0 +1,20 @@
+{
+  "stored": "../../../332-regrant-simulation/results",
+  "storedResultsSha256": "dcc37c30517d9556a94b66e3a15ef70d5310e98b923a748c6d330b919da62855",
+  "rerunResultsSha256": "dbb4fa1c4497f36fd5def2059acc019201605617cc8888bd4ed23814aee5bcc1",
+  "rows": 36,
+  "wholeRowEqual": 36,
+  "lineBytesEqual": 36,
+  "digestFields": ["inputDigests", "traceDigest"],
+  "digestEqual": 36,
+  "sameOrder": true,
+  "candidateSummaryRowsEqual": 18,
+  "source": {
+    "storedHead": "8d9d0f2d2f512302c65145d0e9f8fe612d2ea73f",
+    "files": 667,
+    "storedFiles": 667,
+    "changed": {},
+    "added": {},
+    "removed": {}
+  }
+}
