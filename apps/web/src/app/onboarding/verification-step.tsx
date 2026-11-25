@@ -274,6 +274,8 @@ export function VerificationStep({ accountId }: { accountId: string }) {
           closeCode();
           return;
         case 'phone-in-use':
+          // Another account's number, or one off the closed test's 가입 허용 목록 (#330): back to
+          // the details, the sentence under the number.
           setEntry(null);
           codeForm.reset({ code: '' });
           setNotice({ status: 'error', message: failure.message });

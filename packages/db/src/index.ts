@@ -213,6 +213,7 @@ export {
   type OnboardingRead,
 } from './onboarding.js';
 export { isPhoneVerified } from './phone-verification.js';
+export { lockSignupAllowlist, signupAllowlistRefuses } from './signup-allowlist.js';
 export {
   cancelLockedOrders,
   cancelledMarketIds,

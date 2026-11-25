@@ -173,12 +173,18 @@ export type PhoneVerification = z.infer<typeof phoneVerificationSchema>;
 // so a client reads one typed shape per code. The codes themselves are in api/errors.ts.
 
 /**
- * PHONE_VERIFICATION_NOT_ALLOWED (409): the account has verified already, or the number is the
- * verified number of another account (one account per number, ADR-0069 decision 1 #57-1). The
- * second is answered only to a confirmation — after the caller proved it holds the number — so
- * whether a number belongs to an account is told to nobody but that number's holder.
+ * PHONE_VERIFICATION_NOT_ALLOWED (409): the account has verified already, the number is the
+ * verified number of another account (one account per number, ADR-0069 decision 1 #57-1), or the
+ * 가입 허용 목록 is not empty and the number is not on it (`not_listed`, #330, ADR-0174 330-5 — the
+ * closed test). The last two are answered only to a confirmation — after the caller proved it
+ * holds the number, `phone_in_use` first — so whether a number belongs to an account, or is on the
+ * list, is told to nobody but that number's holder: a send is answered the same either way.
  */
-export const PHONE_VERIFICATION_REFUSALS = ['already_verified', 'phone_in_use'] as const;
+export const PHONE_VERIFICATION_REFUSALS = [
+  'already_verified',
+  'phone_in_use',
+  'not_listed',
+] as const;
 export type PhoneVerificationRefusal = (typeof PHONE_VERIFICATION_REFUSALS)[number];
 export const phoneVerificationNotAllowedDetailsSchema = z.object({
   reason: z.enum(PHONE_VERIFICATION_REFUSALS),

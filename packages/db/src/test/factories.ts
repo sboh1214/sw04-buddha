@@ -147,6 +147,7 @@ import {
   releaseSettings,
   reports,
   session,
+  signupAllowlist,
   startGrants,
   tags,
   themeMarkets,
@@ -1098,6 +1099,18 @@ export async function createStartGrant(db: Db, input: CreateStartGrantInput) {
     }
     return paid.grant;
   });
+}
+
+/**
+ * A 가입 허용 목록 entry (#330, ADR-0174) as an admin's add leaves it: the `signup_allowlist` row
+ * of the keyed hash alone, with no admin record (a test whose subject is the add goes through the
+ * API's SignupAllowlistService). `phoneHash` defaults to a random one; a test about a number passes
+ * the API's hash of it (`PhoneHasher`).
+ */
+export async function createSignupAllowlistEntry(db: Db, phoneHash: string = randomPhoneHash()) {
+  const [row] = await db.insert(signupAllowlist).values({ phoneHash }).returning();
+  if (!row) throw new Error('signup allowlist insert returned no row');
+  return row;
 }
 
 export interface CreateConsentsInput {

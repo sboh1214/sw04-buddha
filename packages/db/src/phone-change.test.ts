@@ -49,6 +49,7 @@ import {
   createPostLike,
   createProposal,
   createReport,
+  createSignupAllowlistEntry,
   createStartGrant,
   createUser,
   createWriteLimitEvent,
@@ -240,6 +241,17 @@ const REFUSED_WAITING = {
 const REFUSED_NO_GRANT = {
   updated: 1,
   refused: { at: 'do', code: 'P0001', message: DO_REFUSAL },
+  commit: 'ROLLBACK',
+} as const;
+
+/**
+ * The closed test's 가입 허용 목록 (#330, ADR-0174 330-7): not empty, and the new number's hash off
+ * it — the first DO block refuses it last, after the waiting grant's refusal.
+ */
+const NOT_LISTED_REFUSAL = 'refused: the signup allowlist does not hold the new number';
+const REFUSED_NOT_LISTED = {
+  updated: 1,
+  refused: { at: 'do', code: 'P0001', message: NOT_LISTED_REFUSAL },
   commit: 'ROLLBACK',
 } as const;
 
@@ -488,8 +500,8 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     );
     const after = text.slice(precheck);
     expect(after).toContain('하나라도 `t`이면 거절한다 — 문자를 보내지 않고 거절의 문장만 알린다');
-    expect(after).toContain('둘 다 `f`일 때만 확인 번호를 뽑는다');
-    expect(after.indexOf('둘 다 `f`일 때만 확인 번호를 뽑는다')).toBeLessThan(
+    expect(after).toContain('모두 `f`일 때만 확인 번호를 뽑는다');
+    expect(after.indexOf('모두 `f`일 때만 확인 번호를 뽑는다')).toBeLessThan(
       after.indexOf(CODE_BLOCK),
     );
     // Each column names the step 5 refusal it stands for.
@@ -497,15 +509,24 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     expect(after).toContain(
       '`other_waiting`은 새 번호를 금액을 기다리는 다른 계정의 지급이 붙들고 있는지',
     );
+    // #330 (ADR-0174 330-7): the 가입 허용 목록's refusal, seen before the code like the others.
+    expect(after).toContain(
+      '`not_listed`는 가입 허용 목록(#330)이 비어 있지 않은데 새 번호가 그 목록에 없는지',
+    );
     // The SMS goes to the digits the CLI printed for the pre-check.
     expect(after).toContain('찍힌 `\\set new_phone` 줄의 번호로 보낸다');
     // Before every new code too, and on a request asked again after a refusal.
-    expect(text).toContain('사전 확인을 다시 돌리고, 둘 다 `f`이면 새 확인 번호를 뽑아');
+    expect(text).toContain('사전 확인을 다시 돌리고, 모두 `f`이면 새 확인 번호를 뽑아');
     expect(sectionOf('**거절한 뒤에 다시 요청받았을 때.**', '**하지 않는 것.**')).toContain(
       '사전 확인의 `other_waiting`이 `t`이므로 문자를 보내지 않고',
     );
     // The step 5 rows of those refusals say they come only from what changed after it.
-    for (const outcome of [REFUSED_VERIFIED, REFUSED_WAITING, REFUSED_NO_GRANT]) {
+    for (const outcome of [
+      REFUSED_VERIFIED,
+      REFUSED_WAITING,
+      REFUSED_NO_GRANT,
+      REFUSED_NOT_LISTED,
+    ]) {
       const [row, ...others] = RESULT_ROWS.filter((r) => describes(r.result, outcome));
       expect(others).toEqual([]);
       expect(row!.meaning, row!.result).toContain('1단계의 사전 확인이 거르므로, 그 뒤에');
@@ -682,7 +703,12 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
       if (row.next.startsWith('`ROLLBACK;`')) expect(row.next, row.result).toContain(REFUSAL_REPLY);
       else expect(row.next, row.result).not.toContain(REFUSAL_SENTENCE);
     }
-    for (const outcome of [REFUSED_VERIFIED, REFUSED_WAITING, REFUSED_NO_GRANT]) {
+    for (const outcome of [
+      REFUSED_VERIFIED,
+      REFUSED_WAITING,
+      REFUSED_NO_GRANT,
+      REFUSED_NOT_LISTED,
+    ]) {
       expect(docRowFor(outcome).end).toBe('ROLLBACK');
     }
     const gone = docRowFor(REFUSED_OLD_NUMBER);
@@ -1057,16 +1083,17 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
   /** Step 1's pre-check of the new number, before every confirmation code (4차 answer 1). */
   async function precheck(vars: Vars) {
     const { user_id, new_phone, new_hash } = vars;
-    const rows = await read<{ other_verified: boolean; other_waiting: boolean }>(
-      OPERATOR_NUMBER_PRECHECK_SQL,
-      { user_id, new_phone, new_hash },
-    );
+    const rows = await read<{
+      other_verified: boolean;
+      other_waiting: boolean;
+      not_listed: boolean;
+    }>(OPERATOR_NUMBER_PRECHECK_SQL, { user_id, new_phone, new_hash });
     expect(rows).toHaveLength(1);
     return rows[0]!;
   }
 
-  const FREE = { other_verified: false, other_waiting: false };
-  const WAITING_ELSEWHERE = { other_verified: false, other_waiting: true };
+  const FREE = { other_verified: false, other_waiting: false, not_listed: false };
+  const WAITING_ELSEWHERE = { other_verified: false, other_waiting: true, not_listed: false };
 
   /**
    * Runs the doc's SQL as the operator does in psql with ON_ERROR_ROLLBACK off: on a connection of
@@ -1540,7 +1567,7 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
     async function checkedThenChanged(vars: Vars) {
       const pre = await precheck(vars);
       const outcome = await change(vars);
-      const flagged = pre.other_verified || pre.other_waiting;
+      const flagged = pre.other_verified || pre.other_waiting || pre.not_listed;
       expect('refused' in outcome, JSON.stringify({ pre, outcome })).toBe(flagged);
       return { pre, outcome };
     }
@@ -1561,7 +1588,10 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
           new_phone: taken,
           new_hash: randomPhoneHash(),
         }),
-      ).toEqual({ pre: { other_verified: true, other_waiting: false }, outcome: REFUSED_VERIFIED });
+      ).toEqual({
+        pre: { other_verified: true, other_waiting: false, not_listed: false },
+        outcome: REFUSED_VERIFIED,
+      });
     }
     // Verified by an account whose grant waits and holds that number's hash: both flagged; the
     // UPDATE refuses first.
@@ -1570,7 +1600,10 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
     const zHash = randomPhoneHash();
     await createStartGrant(t.db, { userId: z.id, phoneHash: zHash });
     expect(await checkedThenChanged({ user_id: x.id, new_phone: zPhone, new_hash: zHash })).toEqual(
-      { pre: { other_verified: true, other_waiting: true }, outcome: REFUSED_VERIFIED },
+      {
+        pre: { other_verified: true, other_waiting: true, not_listed: false },
+        outcome: REFUSED_VERIFIED,
+      },
     );
 
     // Held by another account's waiting grant, verified by nobody: flagged, and step 5 refuses it
@@ -1607,6 +1640,42 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
       await checkedThenChanged({ user_id: x.id, new_phone: xPhone, new_hash: xHash }),
     ).toMatchObject({ pre: FREE, outcome: { updated: 1, inserted: 0, next: 'COMMIT' } });
     expect(await phoneOf(x.id)).toBe(xPhone);
+  });
+
+  it('refuses a new number off a non-empty signup allowlist, before any SMS and at step 5 (#330)', async () => {
+    // ADR-0174 330-7: while the closed test's 가입 허용 목록 holds a row, a new number must be on
+    // it, as the 본인확인 would require; an empty list refuses nothing. The account's other
+    // records stay as they were (the transaction is aborted).
+    // Another account's waiting grant, made while the list is empty (its own change takes a
+    // number off the list).
+    const { n, phone } = await waitingHolder();
+    const { user } = await createUser(t.db);
+    const { phone: before } = await createPhoneVerification(t.db, { userId: user.id });
+    const listedPhone = randomPhone();
+    const listedHash = randomPhoneHash();
+    const offPhone = randomPhone();
+    const offHash = randomPhoneHash();
+    // Empty: nothing flagged, the change goes through (and back).
+    expect(await precheck({ user_id: user.id, new_phone: offPhone, new_hash: offHash })).toEqual(
+      FREE,
+    );
+    await createSignupAllowlistEntry(t.db, listedHash);
+    const off = { user_id: user.id, new_phone: offPhone, new_hash: offHash };
+    expect(await precheck(off)).toEqual({ ...FREE, not_listed: true });
+    expect(await change(off)).toEqual(REFUSED_NOT_LISTED);
+    expect(await phoneOf(user.id)).toBe(before);
+    const on = { user_id: user.id, new_phone: listedPhone, new_hash: listedHash };
+    expect(await precheck(on)).toEqual(FREE);
+    expect(await change(on)).toEqual({ updated: 1, inserted: 0, held: [], next: 'COMMIT' });
+    expect(await phoneOf(user.id)).toBe(listedPhone);
+    // A waiting grant of another account is refused first, as before.
+    expect(await precheck({ user_id: user.id, new_phone: phone, new_hash: n })).toEqual({
+      ...WAITING_ELSEWHERE,
+      not_listed: true,
+    });
+    expect(await change({ user_id: user.id, new_phone: phone, new_hash: n })).toEqual(
+      REFUSED_NO_GRANT,
+    );
   });
 
   it('finds the account a request’s sender address belongs to, and whether it is verified', async () => {

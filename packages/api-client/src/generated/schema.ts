@@ -2617,6 +2617,109 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/signup-allowlist": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The signup allowlist: its entries (id and time added, never a number), how many open accounts verified a number off it, and the clear waiting for a decision */
+        get: operations["adminGetSignupAllowlist"];
+        put?: never;
+        /** Add numbers to the signup allowlist with one reason (recorded); a bad number refuses them all, one already on it is skipped */
+        post: operations["adminAddSignupAllowlist"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/signup-allowlist/clear-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ask another admin to approve emptying the signup allowlist (public launch: everyone may then sign up), with a reason and the typed confirmation */
+        post: operations["adminRequestSignupAllowlistClear"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/signup-allowlist/clear-requests/{requestId}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve another admin's request and delete every entry of the signup allowlist in the same transaction */
+        post: operations["adminApproveSignupAllowlistClear"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/signup-allowlist/clear-requests/{requestId}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject another admin's request to empty the signup allowlist, keeping every entry */
+        post: operations["adminRejectSignupAllowlistClear"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/signup-allowlist/clear-requests/{requestId}/retract": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retract the acting admin's own request to empty the signup allowlist */
+        post: operations["adminRetractSignupAllowlistClear"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/signup-allowlist/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Take one number off the signup allowlist with a reason (recorded); never its last entry, which only an approved clear removes */
+        post: operations["adminRemoveSignupAllowlist"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/sms/status": {
         parameters: {
             query?: never;
@@ -6608,7 +6711,7 @@ export type components = {
             title: string;
         };
         /** @enum {string} */
-        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "TRANSACTION_BUSY" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "FILL_CLASSIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "REPORT_NOT_ALLOWED" | "REPORT_LIMITED" | "MODERATION_NOT_ALLOWED" | "RESTRICTED" | "WRITE_LIMITED" | "CLOSURE_NOT_ALLOWED" | "ACCOUNT_CLOSED" | "PROPOSAL_LIMITED" | "OPEN_ITEMS_MISSING" | "DISPUTE_NOT_ALLOWED" | "ORDER_INTAKE_CLOSED" | "MARKET_MAKER_CONTROL_NOT_ALLOWED" | "REGRANT_NOT_ALLOWED" | "INTERNAL";
+        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "TRANSACTION_BUSY" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "FILL_CLASSIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "REPORT_NOT_ALLOWED" | "REPORT_LIMITED" | "MODERATION_NOT_ALLOWED" | "RESTRICTED" | "WRITE_LIMITED" | "CLOSURE_NOT_ALLOWED" | "ACCOUNT_CLOSED" | "PROPOSAL_LIMITED" | "OPEN_ITEMS_MISSING" | "DISPUTE_NOT_ALLOWED" | "ORDER_INTAKE_CLOSED" | "MARKET_MAKER_CONTROL_NOT_ALLOWED" | "REGRANT_NOT_ALLOWED" | "SIGNUP_ALLOWLIST_NOT_ALLOWED" | "INTERNAL";
         ErrorEnvelope: {
             error: {
                 code: components["schemas"]["ErrorCode"];
@@ -8894,6 +8997,65 @@ export type components = {
             endsAt: string;
             expectedAccountId: string;
             reason: string;
+        };
+        SignupAllowlist: {
+            entries: components["schemas"]["SignupAllowlistEntry"][];
+            pendingClear: components["schemas"]["SignupAllowlistClearRequest"] | null;
+            summary: components["schemas"]["SignupAllowlistSummary"];
+        };
+        SignupAllowlistAddBody: {
+            expectedAccountId: string;
+            phones: string[];
+            reason: string;
+        };
+        SignupAllowlistAddResult: {
+            addedCount: number;
+            allowlist: components["schemas"]["SignupAllowlist"];
+            skippedCount: number;
+        };
+        SignupAllowlistClearDecisionBody: {
+            expectedAccountId: string;
+            reason: string;
+        };
+        SignupAllowlistClearRequest: {
+            /** Format: date-time */
+            decidedAt: string | null;
+            decidedBy: components["schemas"]["AdminAccountActor"] | null;
+            decisionReason: string | null;
+            /** Format: uuid */
+            id: string;
+            reason: string;
+            /** Format: date-time */
+            requestedAt: string;
+            requestedBy: components["schemas"]["AdminAccountActor"];
+            /** Format: date-time */
+            retractedAt: string | null;
+            status: components["schemas"]["ApprovalStatus"];
+        };
+        SignupAllowlistClearRequestBody: {
+            confirmation: string;
+            expectedAccountId: string;
+            reason: string;
+        };
+        SignupAllowlistClearWrite: {
+            allowlist: components["schemas"]["SignupAllowlist"];
+            request: components["schemas"]["SignupAllowlistClearRequest"];
+        };
+        SignupAllowlistEntry: {
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: uuid */
+            id: string;
+        };
+        SignupAllowlistRemoveBody: {
+            expectedAccountId: string;
+            phone: string;
+            reason: string;
+        };
+        SignupAllowlistSummary: {
+            entryCount: number;
+            outsideVerifiedAdmins: number;
+            outsideVerifiedMembers: number;
         };
         SmsSendDay: {
             /** Format: date */
@@ -22175,6 +22337,525 @@ export interface operations {
                 };
             };
             /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminGetSignupAllowlist: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["SignupAllowlist"];
+                    };
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminAddSignupAllowlist: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignupAllowlistAddBody"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["SignupAllowlistAddResult"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRequestSignupAllowlistClear: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignupAllowlistClearRequestBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["SignupAllowlistClearWrite"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | SIGNUP_ALLOWLIST_NOT_ALLOWED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminApproveSignupAllowlistClear: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignupAllowlistClearDecisionBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["SignupAllowlistClearWrite"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRejectSignupAllowlistClear: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignupAllowlistClearDecisionBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["SignupAllowlistClearWrite"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRetractSignupAllowlistClear: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedAccountBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["SignupAllowlistClearWrite"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRemoveSignupAllowlist: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignupAllowlistRemoveBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["SignupAllowlist"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | SIGNUP_ALLOWLIST_NOT_ALLOWED */
             409: {
                 headers: {
                     [name: string]: unknown;

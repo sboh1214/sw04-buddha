@@ -20,7 +20,8 @@
  * `admin-proposals.controller.test` for the review of market proposals,
  * `release-settings.controller.test` for the release settings,
  * `admin-accounts.controller.test` for the admin grants and revokes,
- * `notices.controller.test` for the notices' writes, pins and unpins and
+ * `notices.controller.test` for the notices' writes, pins and unpins,
+ * `signup-allowlist.controller.test` for the signup allowlist's adds, removals and clears (#330) and
  * `link-review.test` for the marks on the repeated-link review list. What none of them can
  * prove is COMPLETENESS: they assert about routes that exist, so an admin write added tomorrow
  * with no audit row would break nothing.
@@ -211,6 +212,17 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'POST /admin/proposals/:id/market': 'proposal_link',
   'PUT /admin/proposals/:id/internal-memo': 'proposal_memo',
   'POST /admin/proposals/:id/reject': 'proposal_reject',
+  // #330 (ADR-0174): one admin adds numbers to the 가입 허용 목록 or removes one (330-1); emptying
+  // it is a request, then another admin's approval — which deletes every entry in the same
+  // transaction — or 반려, or its requester's retraction (330-2).
+  'POST /admin/signup-allowlist': 'signup_allowlist_add',
+  'POST /admin/signup-allowlist/remove': 'signup_allowlist_remove',
+  'POST /admin/signup-allowlist/clear-requests': 'signup_allowlist_clear_request',
+  'POST /admin/signup-allowlist/clear-requests/:requestId/approve':
+    'signup_allowlist_clear_approve',
+  'POST /admin/signup-allowlist/clear-requests/:requestId/reject': 'signup_allowlist_clear_reject',
+  'POST /admin/signup-allowlist/clear-requests/:requestId/retract':
+    'signup_allowlist_clear_retract',
 };
 
 /**

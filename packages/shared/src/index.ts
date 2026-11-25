@@ -79,6 +79,7 @@ export * from './related-markets.js';
 export * from './release-settings.js';
 export * from './retention.js';
 export * from './search-history.js';
+export * from './signup-allowlist.js';
 export * from './start-grant.js';
 export * from './tags.js';
 export * from './terms.js';

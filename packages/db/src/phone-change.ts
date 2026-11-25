@@ -61,7 +61,9 @@
  *    LOCAL lines hand it `user_id` and `new_hash` (and the likes', the reports', the records' and
  *    the proposals' blocks `old_hash` too) for this transaction only. It reads what is committed: a cancellation or
  *    payment of that grant still in flight is not waited for, and the change is refused until asked
- *    again (ADR-0071 7-26).
+ *    again (ADR-0071 7-26). Last, the closed test's 가입 허용 목록 (#330, ADR-0174 330-7): while it
+ *    is not empty a new number off it is refused (`refused: the signup allowlist does not hold the
+ *    new number`), as the 본인확인 refuses one, with the same one sentence to the member.
  * 4. The account's likes (#49, owner decisions 2026-10-20 and 2026-10-21, ADR-0076): «좋아요 한 번»
  *    counts per verified number (ADR-0069 decision 7), so the likes that are the account's go over
  *    to the new number's hash and no longer hold the old number — its own `post_likes` and
@@ -202,6 +204,11 @@ DO $$BEGIN
         AND h.user_id <> pv.user_id AND h.granted_at IS NULL) THEN
     RAISE EXCEPTION 'refused: a waiting start grant of another account holds the new number';
   END IF;
+  IF EXISTS (SELECT 1 FROM signup_allowlist)
+      AND NOT EXISTS (SELECT 1 FROM signup_allowlist
+        WHERE phone_hash = current_setting('phone_change.new_hash')) THEN
+    RAISE EXCEPTION 'refused: the signup allowlist does not hold the new number';
+  END IF;
 END$$;
 DO $$BEGIN
   DELETE FROM post_likes o USING post_likes a
@@ -330,15 +337,20 @@ export const OPERATOR_CURRENT_NUMBER_SQL = `SELECT phone FROM phone_verification
  * Step 1, after the lookup and before every confirmation code is picked and texted (owner decision
  * 2026-10-19 4차, answer 1): whether step 5 would refuse the new number on what can be seen now —
  * `other_verified`, another account verified it (step 5's UPDATE, 23505); `other_waiting`, a
- * waiting grant of another account holds it (step 5's INSERT or DO block). Either t, and no SMS
- * goes out: the request is refused with the one sentence. Both f, and the code may be sent. The
+ * waiting grant of another account holds it (step 5's INSERT or DO block). Any t, and no SMS
+ * goes out: the request is refused with the one sentence. All f, and the code may be sent. The
  * account's own number and its own grant's numbers are not flagged — step 5 takes them. A paid
  * grant's number is not flagged either: step 5 changes to it and records nothing (2026-10-19,
  * answers 2 and 3). Read only; `user_id` from the lookup, `new_phone` and `new_hash` from the
- * hash CLI as for the change (ADR-0071 7-31).
+ * hash CLI as for the change (ADR-0071 7-31). And `not_listed` (#330, ADR-0174 330-7): the closed
+ * test's 가입 허용 목록 is not empty and the new number's hash is not on it — step 5's first DO block
+ * refuses it as the 본인확인's confirmation refuses such a number (`signupAllowlistRefuses`, the
+ * same predicate). An empty list flags nothing.
  */
 export const OPERATOR_NUMBER_PRECHECK_SQL = `SELECT EXISTS (SELECT 1 FROM phone_verifications pv
       WHERE pv.phone = :'new_phone' AND pv.user_id <> :'user_id') AS other_verified,
     EXISTS (SELECT 1 FROM start_grant_numbers n JOIN start_grants g ON g.id = n.grant_id
       WHERE n.phone_hash = :'new_hash' AND n.released_at IS NULL
-        AND g.user_id <> :'user_id' AND g.granted_at IS NULL) AS other_waiting;`;
+        AND g.user_id <> :'user_id' AND g.granted_at IS NULL) AS other_waiting,
+    EXISTS (SELECT 1 FROM signup_allowlist)
+      AND NOT EXISTS (SELECT 1 FROM signup_allowlist WHERE phone_hash = :'new_hash') AS not_listed;`;

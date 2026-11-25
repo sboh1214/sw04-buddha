@@ -1066,6 +1066,30 @@ export const ADMIN_ACTION_TYPES = [
    * decision 6, ADR-0166).
    */
   'market_judgement_compensation_retract',
+  /**
+   * 가입 허용 목록 (#330, ADR-0174; 330-1, 330-8): one admin added numbers to the list — target
+   * `signup_allowlist`, no id; payload `{entryIds, addedCount, skippedCount, reason}`, the new
+   * entries' ids and never a number (keyed hashes only, ADR-0071). Written in the transaction that
+   * inserts them.
+   */
+  'signup_allowlist_add',
+  /** One admin took a number off: target `signup_allowlist` / the entry's id, payload `{reason}`. */
+  'signup_allowlist_remove',
+  /**
+   * An admin asked to empty the list (330-2), which opens the signup to everyone: target
+   * `signup_allowlist`, payload `{approvalId, entryCount, reason}` — a `signup_allowlist_clear`
+   * approval request that waits for another admin.
+   */
+  'signup_allowlist_clear_request',
+  /**
+   * Another admin approved it and every entry was deleted in the same transaction (330-4):
+   * payload `{approvalId, entryCount, reason}`, the count deleted.
+   */
+  'signup_allowlist_clear_approve',
+  /** Another admin rejected it, nothing deleted: payload `{approvalId, reason}`. */
+  'signup_allowlist_clear_reject',
+  /** Its requester retracted it before a decision, nothing deleted: payload `{approvalId}`. */
+  'signup_allowlist_clear_retract',
 ] as const;
 export type AdminActionType = (typeof ADMIN_ACTION_TYPES)[number];
 export const adminActionTypeSchema = z.enum(ADMIN_ACTION_TYPES);

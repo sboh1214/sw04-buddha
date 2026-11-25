@@ -93,6 +93,9 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   // The account's state or the release settings refuse the re-grant (#74, ADR-0155): a conflict
   // with that state, which the same request passes once every reason is gone.
   REGRANT_NOT_ALLOWED: HttpStatus.CONFLICT,
+  // The list's own rules refuse the write (#330, ADR-0174): its last entry, an empty list's
+  // clear, a second clear waiting — a conflict with the list as it stands.
+  SIGNUP_ALLOWLIST_NOT_ALLOWED: HttpStatus.CONFLICT,
   INTERNAL: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 

@@ -458,6 +458,17 @@ describe('confirmFailure', () => {
     ).toEqual({ kind: 'verified', message: copy.errVerificationAlreadyDone });
   });
 
+  it('returns to the number with the owner’s sentence when the signup allowlist refuses it (#330)', () => {
+    // ADR-0174 330-5: answered only after the code matched, as `phone_in_use` — back to the
+    // details, the exact sentence under the number and in the notice.
+    expect(
+      confirmFailure(refusal(409, 'PHONE_VERIFICATION_NOT_ALLOWED', { reason: 'not_listed' })),
+    ).toEqual({ kind: 'phone-in-use', message: copy.errSignupNotListed });
+    expect(copy.errSignupNotListed).toBe(
+      '이 번호로는 지금 가입할 수 없습니다. 지금은 미리 등록된 번호로만 가입할 수 있는 폐쇄 테스트 기간입니다.',
+    );
+  });
+
   it('says the session changed, and nothing more specific than it knows otherwise', () => {
     expect(confirmFailure(forAnotherAccount())).toEqual({
       kind: 'notice',

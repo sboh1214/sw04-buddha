@@ -55,6 +55,7 @@ describe('PRIVATE_DATA (#113)', () => {
         'operation-records',
         'observation-metrics',
         'market-visits',
+        'signup-allowlist',
       ]),
     );
     expect(
@@ -241,6 +242,9 @@ describe('findPrivateField', () => {
     ['lastVisit', 'market-visits'],
     ['visitors', 'market-visits'],
     ['revisitCount', 'market-visits'],
+    ['signupAllowlist', 'signup-allowlist'],
+    ['allowlisted', 'signup-allowlist'],
+    ['allowListEntries', 'signup-allowlist'],
   ])('finds %s (%s)', (name, item) => {
     expect(items(name)).toContain(item);
   });

@@ -84,6 +84,9 @@ const OPERATION_RECORDS = [
   // #96: 관측 지표 — computed from the reports and the moderation records too (N04 §6, ADR-0056
   // 1-2), aggregates only (95-10, ADR-0169).
   'GET /admin/observation-metrics',
+  // #330: 가입 허용 목록 — its entries, how many accounts verified off it and the waiting clear
+  // with who asked (ADR-0174; 330-8: ids and times, never a number).
+  'GET /admin/signup-allowlist',
 ];
 
 describe('admin access (static)', () => {
