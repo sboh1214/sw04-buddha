@@ -8,8 +8,13 @@ import {
   PRICE_PROTECTION_TICKS_MAX,
   PRICE_PROTECTION_TICKS_MIN,
 } from './constants.js';
-import { releaseSettingStatusSchema, type ReleaseSettingStatus } from './enums.js';
-import { expectedAccountIdSchema } from './expected-account.js';
+import { approvalReasonSchema } from './approvals.js';
+import {
+  approvalStatusSchema,
+  releaseSettingStatusSchema,
+  type ReleaseSettingStatus,
+} from './enums.js';
+import { expectedAccountBodySchema, expectedAccountIdSchema } from './expected-account.js';
 import { disputeWindowMinutesSchema } from './market-judgement.js';
 import { liquidityCurveBSchema } from './market-liquidity.js';
 import { LEAD_CLOSE_GAP_MAX_MINUTES } from './market-times.js';
@@ -30,8 +35,10 @@ import { START_GRANT_MAX_COIN } from './start-grant.js';
  *
  * - WHAT an item is (key, name, unit, meaning, value shape) is code: a definition in
  *   RELEASE_SETTINGS below, registered by the issue that uses the value.
- * - Its VALUE and STATUS live in Postgres (`release_settings`), changed by an admin with a reason
- *   (owner decision 2026-10-13: changeable while running, every change recorded) and only so: no
+ * - Its VALUE and STATUS live in Postgres (`release_settings`), changed by admins with a reason
+ *   (owner decision 2026-10-13: changeable while running, every change recorded) and only so —
+ *   one admin at once, or one admin's request and another's approval, as the item's approval rule
+ *   says (`approval`, #331, ADR-0175; release-setting-approvals.ts): no
  *   migration or seed writes a value, and every item starts `undecided` after a dev setup or a
  *   reset (owner decision 2026-10-13~14). A missing row is `undecided` with no value. Each change
  *   appends an `admin_actions` row (`release_setting_change`) in the same transaction, and the
@@ -128,6 +135,146 @@ export type ReleaseSettingJson =
 export type ReleaseSettingValue = Exclude<ReleaseSettingJson, null>;
 
 /**
+ * The approval groups of ADR-0171 결정 10의 1 (#331, ADR-0175): 경제 값 (20), 관측 값 (7),
+ * 보존기간 (8) and 주문 접수 (1).
+ */
+export const RELEASE_SETTING_APPROVAL_GROUPS = [
+  'economic',
+  'observation',
+  'retention',
+  'order_intake',
+] as const;
+export type ReleaseSettingApprovalGroup = (typeof RELEASE_SETTING_APPROVAL_GROUPS)[number];
+
+/** Which of the three global risk stages (#129) an item is: their combination is read as one. */
+export const RELEASE_SETTING_STAGE_SLOTS = ['reduceAtBp', 'haltAtBp', 'reduceRatioBp'] as const;
+export type ReleaseSettingStageSlot = (typeof RELEASE_SETTING_STAGE_SLOTS)[number];
+
+/**
+ * An item's approval rule (#331, ADR-0175; owner answers 331-1…331-7). Every item's change to
+ * 승인됨 is two admins' (ADR-0171 133-23, 331-6), and a status-only change away from it is one's.
+ * Otherwise:
+ * - `observation`: one admin (ADR-0171 결정 6);
+ * - `order_intake`: closing (false or 미정) is one admin's, opening (true) two (결정 10의 1);
+ * - `economic` and `retention`: a value-to-value change is one admin's only in `reduce`'s
+ *   direction — `lower` or `higher` (331-1), null for none (always two, 331-1 and 331-3);
+ *   `undecided` says what 미정 does (331-5): `stop` (to 미정 one admin, from it two), `loosen`
+ *   (the order rate limit: to 미정 lifts the limit — two; from it tightens — one) or `block` (the
+ *   dispute window: 미정 blocks judgements — two both ways). `stage` names a risk stage, whose
+ *   combination turning from valid to 미정 or invalid is one admin's stop of every bot (331-2)
+ *   and back two admins' restart (I-a); a change that keeps it valid, or keeps it 미정·invalid,
+ *   takes the direction.
+ */
+export type ReleaseSettingApprovalRule =
+  | { readonly group: 'observation' }
+  | { readonly group: 'order_intake' }
+  | {
+      readonly group: 'economic' | 'retention';
+      readonly reduce: 'lower' | 'higher' | null;
+      readonly undecided: 'stop' | 'loosen' | 'block';
+      readonly stage?: ReleaseSettingStageSlot;
+    };
+
+const directedRuleFields = {
+  reduce: z.enum(['lower', 'higher']).nullable(),
+  undecided: z.enum(['stop', 'loosen', 'block']),
+  stage: z.enum(RELEASE_SETTING_STAGE_SLOTS).optional(),
+};
+
+/** `ReleaseSetting.approval`: the item's rule as the admin screen previews it. */
+export const releaseSettingApprovalRuleSchema = z
+  .discriminatedUnion('group', [
+    z.object({ group: z.literal('observation') }).strict(),
+    z.object({ group: z.literal('order_intake') }).strict(),
+    z.object({ group: z.literal('economic'), ...directedRuleFields }).strict(),
+    z.object({ group: z.literal('retention'), ...directedRuleFields }).strict(),
+  ])
+  .meta({ id: 'ReleaseSettingApprovalRule' });
+
+/** One admin at once, or one admin's request and another admin's approval (#331). */
+export const RELEASE_SETTING_CHANGE_PATHS = ['one_admin', 'two_admin'] as const;
+export type ReleaseSettingChangePath = (typeof RELEASE_SETTING_CHANGE_PATHS)[number];
+export const releaseSettingChangePathSchema = z
+  .enum(RELEASE_SETTING_CHANGE_PATHS)
+  .meta({ id: 'ReleaseSettingChangePath' });
+
+/**
+ * Why a change takes its path (`classifyReleaseSettingChange`), and the path each one means:
+ * - `approved_target` (two): the change ends at 승인됨 (133-23, 331-6);
+ * - `status_only` (one): the value stays and the status leaves 승인됨, or moves between 설계 제안 and
+ *   시험값 (331-5; I-c);
+ * - `observation` (one): an observation value (ADR-0171 결정 6);
+ * - `intake_open` (two) / `intake_close` (one): order intake to true / to false or 미정;
+ * - `undecided_stop` (one), `undecided_loosens` (two), `undecided_blocks` (two): a value to 미정
+ *   (331-5);
+ * - `enter_value` (two) / `enter_tightens` (one): 미정 to a value (331-5);
+ * - `stage_stop` (one) / `stage_resume` (two): the risk stages' combination turns from valid to
+ *   미정 or invalid (331-2) / from 미정 or invalid to valid (I-a);
+ * - `reduce` (one) / `increase` (two): a value moved in / against the item's direction (331-1);
+ * - `no_direction` (two): an item with no one-admin direction (331-1, 331-3).
+ */
+export const RELEASE_SETTING_CHANGE_BASES = [
+  'approved_target',
+  'status_only',
+  'observation',
+  'intake_open',
+  'intake_close',
+  'undecided_stop',
+  'undecided_loosens',
+  'undecided_blocks',
+  'enter_value',
+  'enter_tightens',
+  'stage_stop',
+  'stage_resume',
+  'reduce',
+  'increase',
+  'no_direction',
+] as const;
+export type ReleaseSettingChangeBasis = (typeof RELEASE_SETTING_CHANGE_BASES)[number];
+export const releaseSettingChangeBasisSchema = z
+  .enum(RELEASE_SETTING_CHANGE_BASES)
+  .meta({ id: 'ReleaseSettingChangeBasis' });
+
+/** The path each basis means. */
+export const RELEASE_SETTING_BASIS_PATH: Readonly<
+  Record<ReleaseSettingChangeBasis, ReleaseSettingChangePath>
+> = {
+  approved_target: 'two_admin',
+  status_only: 'one_admin',
+  observation: 'one_admin',
+  intake_open: 'two_admin',
+  intake_close: 'one_admin',
+  undecided_stop: 'one_admin',
+  undecided_loosens: 'two_admin',
+  undecided_blocks: 'two_admin',
+  enter_value: 'two_admin',
+  enter_tightens: 'one_admin',
+  stage_stop: 'one_admin',
+  stage_resume: 'two_admin',
+  reduce: 'one_admin',
+  increase: 'two_admin',
+  no_direction: 'two_admin',
+};
+
+/** The rule of an economic value whose value change is one admin's only in `reduce`'s direction. */
+const economic = (
+  reduce: 'lower' | 'higher' | null,
+  undecided: 'stop' | 'loosen' | 'block' = 'stop',
+  stage?: ReleaseSettingStageSlot,
+): ReleaseSettingApprovalRule =>
+  stage === undefined
+    ? { group: 'economic', reduce, undecided }
+    : { group: 'economic', reduce, undecided, stage };
+/** An observation value: one admin, save the move to 승인됨. */
+const OBSERVATION: ReleaseSettingApprovalRule = { group: 'observation' };
+/** A retention period: every value change two admins', either way (331-3); to 미정 one (331-5). */
+const RETENTION: ReleaseSettingApprovalRule = {
+  group: 'retention',
+  reduce: null,
+  undecided: 'stop',
+};
+
+/**
  * One release setting. Every text is what the admin screen shows (Korean).
  *
  * `schema` validates a value an admin enters and is applied again to the stored value on every
@@ -144,6 +291,12 @@ export interface ReleaseSettingDefinition<T extends ReleaseSettingValue = Releas
   /** 뜻: what the value controls and which issue owns it. */
   readonly description: string;
   readonly schema: z.ZodType<T>;
+  /**
+   * Who changes it (#331, ADR-0175; ADR-0171 결정 6): its group and, for an economic value or a
+   * retention period, which way a value-to-value change is one admin's and what 미정 does
+   * (`classifyReleaseSettingChange`).
+   */
+  readonly approval: ReleaseSettingApprovalRule;
 }
 
 /** Definitions by key, in the order the admin screen lists them. */
@@ -158,6 +311,9 @@ function assertDefinition(definition: ReleaseSettingDefinition): void {
   }
   if (label.trim() === '' || description.trim() === '' || unit?.trim() === '') {
     throw new Error(`release setting '${key}' needs a label, a description and a non-blank unit`);
+  }
+  if (!releaseSettingApprovalRuleSchema.safeParse(definition.approval).success) {
+    throw new Error(`release setting '${key}' needs an approval rule (ADR-0175)`);
   }
 }
 
@@ -202,6 +358,7 @@ export const START_COIN_SETTING = defineReleaseSetting({
   description:
     '본인확인한 휴대전화 번호마다 한 번 주는 시작 Coin의 금액(#70). 값이 있으면 상태와 상관없이 그 값으로 주고, 미정이면 지급을 기다리게 했다가 값을 넣으면 기다리던 계정에 준다. 바꾼 값은 그 뒤의 지급부터 적용하고 이미 받은 계정은 그대로다.',
   schema: z.number().int().min(1).max(START_GRANT_MAX_COIN),
+  approval: economic('lower'),
 });
 
 /**
@@ -235,6 +392,7 @@ export const REGRANT_SETTINGS = {
     unit: 'Coin',
     description: `가용 Coin이 이 값 이하인 계정만 재지급을 받을 수 있다(#74). 주문에 묶인 Coin은 가용 Coin에 넣지 않는다. ${REGRANT_RULES}`,
     schema: z.number().int().min(0).max(START_GRANT_MAX_COIN),
+    approval: economic('lower'),
   }),
   amountCoin: defineReleaseSetting({
     key: 'grant.regrant_amount_coin',
@@ -242,6 +400,7 @@ export const REGRANT_SETTINGS = {
     unit: 'Coin',
     description: `재지급 한 번에 주는 Coin(#74). 신청이 조건을 모두 채우면 그 요청에서 바로 이 금액을 새로 발행해 준다. 누적 상한을 넘게 되면 남은 만큼 깎아 주지 않고 주지 않는다. ${REGRANT_RULES}`,
     schema: z.number().int().min(1).max(START_GRANT_MAX_COIN),
+    approval: economic('lower'),
   }),
   waitHours: defineReleaseSetting({
     key: 'grant.regrant_wait_hours',
@@ -249,6 +408,7 @@ export const REGRANT_SETTINGS = {
     unit: '시간',
     description: `마지막 재지급(없으면 시작 지급) 뒤 다음 재지급까지 지나야 하는 시간(#74). 0이면 기다리지 않는다. ${REGRANT_RULES}`,
     schema: z.number().int().min(0).max(REGRANT_WAIT_MAX_HOURS),
+    approval: economic('higher'),
   }),
   periodDays: defineReleaseSetting({
     key: 'grant.regrant_period_days',
@@ -256,6 +416,7 @@ export const REGRANT_SETTINGS = {
     unit: '일',
     description: `재지급 횟수를 세는 기간(#74). 신청 시각부터 거슬러 이 기간 안의 재지급만 센다. ${REGRANT_RULES}`,
     schema: z.number().int().min(1).max(REGRANT_PERIOD_MAX_DAYS),
+    approval: economic('higher'),
   }),
   periodLimit: defineReleaseSetting({
     key: 'grant.regrant_period_limit',
@@ -263,6 +424,7 @@ export const REGRANT_SETTINGS = {
     unit: '회',
     description: `한 계정이 최근 주기 안에 받을 수 있는 재지급 횟수의 상한(#74). 다 쓰면 가장 오래된 재지급이 주기 밖으로 나갈 때 다시 받을 수 있다. ${REGRANT_RULES}`,
     schema: z.number().int().min(1).max(REGRANT_PERIOD_LIMIT_MAX),
+    approval: economic('lower'),
   }),
   totalCapCoin: defineReleaseSetting({
     key: 'grant.regrant_total_cap_coin',
@@ -270,6 +432,7 @@ export const REGRANT_SETTINGS = {
     unit: 'Coin',
     description: `한 계정이 재지급으로 받는 Coin의 평생 합계 상한(#74). 이번 재지급을 더해 이 값을 넘으면 주지 않는다(남은 만큼 깎아 주지 않는다). ${REGRANT_RULES}`,
     schema: z.number().int().min(1).max(REGRANT_TOTAL_CAP_MAX_COIN),
+    approval: economic('lower'),
   }),
 } as const;
 
@@ -295,6 +458,7 @@ export const LEAD_CLOSE_GAP_SETTING = defineReleaseSetting({
   description:
     '발표 예정 시각이 있는 시장의 거래 마감이 그 시각보다 적어도 이만큼 앞서야 한다(#22, ADR-0093 #172 13항, 설계 제안 60분). 개설 항목 검사의 선행 마감이 이 값으로 본다. 초안을 만들거나 고칠 때는 거절하지 않는다. 값이 있으면 상태와 상관없이 쓰고, 미정이면 발표 예정 시각이 있는 시장은 선행 마감을 통과하지 못해 검수 제출할 수 없다(발표 예정 시각이 없는 시장은 상관없다). 시장은 검수 제출할 때 읽은 값을 저장해, 승인할 때와 거래 중에 마감을 늦추거나 발표 예정 시각을 고칠 때 그 값으로 다시 본다(저장한 값이 없으면 지금 값). 바꾼 값은 그 뒤의 검사와 검수 제출부터 적용한다.',
   schema: z.number().int().min(0).max(LEAD_CLOSE_GAP_MAX_MINUTES),
+  approval: economic(null),
 });
 
 /**
@@ -317,6 +481,7 @@ export const DISPUTE_WINDOW_SETTING = defineReleaseSetting({
   description:
     '판정을 승인해 잠정 결과를 공개한 순간부터 이의를 받는 기간(#152·#175, ADR-0093 #173 5항, 설계 제안 1,440분 = 24시간). 모든 시장에 같은 값이다. 승인할 때 이 값을 읽어 그 시장의 이의 기한을 고정하고, 기한이 지나고 처리하지 않은 이의와 대기 중인 정정 요청이 없으면 결과를 자동으로 확정한다. 바꾼 값은 그 뒤에 공개하는 잠정 결과부터 적용하고 이미 공개한 시장의 기한은 그대로다. 판정을 정정하면(#176) 이 값을 다시 읽지 않고, 정정을 승인한 순간부터 그 시장의 첫 기한과 같은 길이의 새 기한을 준다. 값이 있으면 상태와 상관없이 쓰고, 미정이면 첫 판정을 등록하거나 승인할 수 없어 시장이 거래 마감에 남는다.',
   schema: disputeWindowMinutesSchema,
+  approval: economic(null, 'block'),
 });
 
 /**
@@ -336,6 +501,7 @@ export const ORDER_ACCEPTING_SETTING = defineReleaseSetting({
   description:
     '참이면 새 주문을 받는다(#119, ADR-0107 결정 3). 미정이거나 거짓이면 새 주문을 운영 마켓메이커의 것까지 주문 행 없이 거절하고, 이미 들어와 있는 주문과 그 취소·호가와 주문장 조회는 그대로다. 상태와 상관없이 값이 참일 때만 연다. 바꾼 값은 그 뒤에 들어오는 주문부터 적용한다. 정산의 대기 주문 확인(#126)과 장부 대사(#93)가 배포된 뒤 오너가 연다.',
   schema: z.boolean(),
+  approval: { group: 'order_intake' },
 });
 
 /**
@@ -361,6 +527,7 @@ export const ORDER_RATE_LIMIT_SETTING = defineReleaseSetting({
   description:
     '한 계정이 1분에 낼 수 있는 주문 수(#119, ADR-0107 #177 9항, 시험값 20). 모든 시장을 합쳐 세고, 주문 제출만 세며 취소는 세지 않는다. 운영 마켓메이커는 세지 않는다. 값이 있으면 상태와 상관없이 쓰고, 미정이면 계정 제한 없이 접속 주소마다 1분 100회 제한만 둔다. 바꾼 값은 그 뒤의 제출부터 적용한다.',
   schema: z.number().int().min(1).max(ORDER_RATE_LIMIT_MAX),
+  approval: economic('lower', 'loosen'),
 });
 
 /**
@@ -381,6 +548,7 @@ export const PRICE_PROTECTION_TICKS_SETTING = defineReleaseSetting({
   description:
     '즉시 거래(IOC) 주문의 한도를 접수 때 반대편 최우선 호가에서 이 틱 수 안으로 좁히는 가격 보호 폭의 표준값(#119, ADR-0107 #177 2항, 시험값 5). 시장을 만들 때 이 값을 시장에 복사하고, 값이 없는 시장은 검수 제출 때 넣으며, 검수부터 그 시장의 값이 잠긴다. 거래 중인 시장의 값은 개장 뒤 변경 절차로만 바꾼다. 값이 있으면 상태와 상관없이 쓰고, 미정이면 값이 없는 시장을 검수 제출할 수 없다. 바꾼 값은 그 뒤에 만드는 시장과, 값 없이 만든 초안을 검수 제출할 때부터 적용한다(이미 값을 복사한 초안은 제 값을 지킨다).',
   schema: z.number().int().min(PRICE_PROTECTION_TICKS_MIN).max(PRICE_PROTECTION_TICKS_MAX),
+  approval: economic(null),
 });
 
 /** #72: suggestions for the first form only. No seed value, copy on read, or market backfill. */
@@ -405,6 +573,7 @@ export const MARKET_LIQUIDITY_DEFAULT_SETTINGS = {
     unit: 'Coin',
     description: `양의 정수 Coin을 십진 문자열로 입력한다. ${LIQUIDITY_DEFAULT_RULES}`,
     schema: liquidityCoinDefaultSchema,
+    approval: economic(null),
   }),
   maxLossCoin: defineReleaseSetting({
     key: 'market_maker.default_max_loss_coin',
@@ -412,6 +581,7 @@ export const MARKET_LIQUIDITY_DEFAULT_SETTINGS = {
     unit: 'Coin',
     description: `양의 정수 Coin을 십진 문자열로 입력한다. ${LIQUIDITY_DEFAULT_RULES}`,
     schema: liquidityCoinDefaultSchema,
+    approval: economic(null),
   }),
   b: defineReleaseSetting({
     key: 'market_maker.default_b',
@@ -419,6 +589,7 @@ export const MARKET_LIQUIDITY_DEFAULT_SETTINGS = {
     unit: '계약',
     description: `역수와 100배가 유한한 양수이며 소수를 허용한다. 손실 보장값이 아니다. ${LIQUIDITY_DEFAULT_RULES}`,
     schema: liquidityCurveBSchema,
+    approval: economic(null),
   }),
   levels: defineReleaseSetting({
     key: 'market_maker.default_levels',
@@ -426,6 +597,7 @@ export const MARKET_LIQUIDITY_DEFAULT_SETTINGS = {
     unit: '단계',
     description: `1 이상 안전한 정수로 입력한다. ${LIQUIDITY_DEFAULT_RULES}`,
     schema: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+    approval: economic(null),
   }),
   quantity: defineReleaseSetting({
     key: 'market_maker.default_quantity',
@@ -433,6 +605,7 @@ export const MARKET_LIQUIDITY_DEFAULT_SETTINGS = {
     unit: '계약',
     description: `1부터 ${ORDER_QTY_MAX}까지 정수로 입력한다. ${LIQUIDITY_DEFAULT_RULES}`,
     schema: z.number().int().min(1).max(ORDER_QTY_MAX),
+    approval: economic(null),
   }),
   safetyTicks: defineReleaseSetting({
     key: 'market_maker.default_safety_ticks',
@@ -440,6 +613,7 @@ export const MARKET_LIQUIDITY_DEFAULT_SETTINGS = {
     unit: '틱',
     description: `0 이상 안전한 정수로 입력한다. ${LIQUIDITY_DEFAULT_RULES}`,
     schema: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+    approval: economic(null),
   }),
 } as const;
 /** Global risk stages (#129). No initial value or economic default is inferred. */
@@ -450,6 +624,7 @@ export const MARKET_MAKER_REDUCE_AT_BP_SETTING = defineReleaseSetting({
   description:
     '최대 손실 한도에 대한 위험 비율이 이 값에 이르면 호가 수량을 축소한다. 10,000bp는 100%다. 값이 있으면 설계 제안·시험값을 포함해 상태와 상관없이 적용한다. 세 단계 설정 중 하나라도 미정이거나 축소 시작 비율이 중단 시작 비율보다 크면 봇 호가를 실행하지 않는다. 기존 주문 접수와 시장 보류 조건을 우회하지 않는다.',
   schema: z.number().int().min(0).max(10_000),
+  approval: economic('lower', 'stop', 'reduceAtBp'),
 });
 export const MARKET_MAKER_HALT_AT_BP_SETTING = defineReleaseSetting({
   key: 'market_maker.halt_at_bp',
@@ -458,6 +633,7 @@ export const MARKET_MAKER_HALT_AT_BP_SETTING = defineReleaseSetting({
   description:
     '최대 손실 한도에 대한 위험 비율이 이 값에 이르면 위험을 늘리는 봇 호가를 중단한다. 10,000bp는 100%다. 축소 시작 비율 이상이어야 한다. 값이 있으면 상태와 상관없이 적용하고, 세 단계 설정 중 하나라도 미정이거나 조합이 잘못되면 봇 호가를 실행하지 않는다. 이 위험 단계는 관리자가 정지한 봇을 재개시키지 않는다.',
   schema: z.number().int().min(0).max(10_000),
+  approval: economic('lower', 'stop', 'haltAtBp'),
 });
 export const MARKET_MAKER_REDUCE_RATIO_BP_SETTING = defineReleaseSetting({
   key: 'market_maker.reduce_ratio_bp',
@@ -466,6 +642,7 @@ export const MARKET_MAKER_REDUCE_RATIO_BP_SETTING = defineReleaseSetting({
   description:
     '축소 단계에서 기존 호가 수량에 곱할 비율이다. 0~5,000bp(최대 50%)이며 0이면 수량을 내지 않는다. 값이 있으면 상태와 상관없이 적용하고, 세 단계 설정 중 하나라도 미정이거나 조합이 잘못되면 봇 호가를 실행하지 않는다. 정해지지 않은 비율을 임의의 기본값으로 채우지 않는다.',
   schema: z.number().int().min(0).max(5_000),
+  approval: economic('lower', 'stop', 'reduceRatioBp'),
 });
 
 /** Current human concentration (#182); 5 is a test example, never a launch default. */
@@ -476,6 +653,7 @@ export const MARKET_MAKER_CONCENTRATION_TOP_N_SETTING = defineReleaseSetting({
   description:
     '관리자 지표에서 결과별 미정산 계약을 많이 보유한 사람 상위 N명을 닉네임과 관리자 계정 링크로 표시한다. 잠긴 보유를 포함하고 봇은 제외한다. 양의 정수이며 값이 있으면 상태와 상관없이 적용한다. 미정이면 상위 명단과 그 비율을 계산하지 않는다. 시험 예시 5를 기본값으로 넣지 않으며 거래·위험 한도를 바꾸지 않는다.',
   schema: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  approval: OBSERVATION,
 });
 
 /** #98: no values/defaults; duration bound is the JavaScript Date range in whole seconds. */
@@ -489,6 +667,7 @@ export const TRADING_ANOMALY_SETTINGS = {
     description:
       '같은 시장의 같은 두 사람 체결이 시간창 안에서 이 수 이상이면 검토 후보로 표시한다. 방향은 합치고 MM 상대 반복만으로 후보를 만들지 않는다. 값이 있으면 상태와 관계없이 적용하며 미정이면 계산하지 않는다. 자동 판정이나 조치는 없다.',
     schema: anomalyCountSchema,
+    approval: OBSERVATION,
   }),
   pairWindow: defineReleaseSetting({
     key: 'trading_anomaly.pair_window_seconds',
@@ -497,6 +676,7 @@ export const TRADING_ANOMALY_SETTINGS = {
     description:
       '같은 사람 쌍 반복을 묶는 최대 시간이다. 조회기간보다 길면 잘못된 설정으로 표시한다. 양의 정수이며 명시한 값만 사용하고 기본값은 없다.',
     schema: anomalySecondsSchema,
+    approval: OBSERVATION,
   }),
   pairLookback: defineReleaseSetting({
     key: 'trading_anomaly.pair_lookback_seconds',
@@ -505,6 +685,7 @@ export const TRADING_ANOMALY_SETTINGS = {
     description:
       '조회 기준시각부터 과거 이 기간의 원체결을 계산한다. 양의 정수이며 미정이면 계산하지 않는다. 기술적 조회 상한으로 잘린 결과는 일부 자료라고 표시한다.',
     schema: anomalySecondsSchema,
+    approval: OBSERVATION,
   }),
   roundTripCount: defineReleaseSetting({
     key: 'trading_anomaly.round_trip_min_pairs',
@@ -513,6 +694,7 @@ export const TRADING_ANOMALY_SETTINGS = {
     description:
       '같은 사람·시장·계약의 반대 방향 체결을 시간순 FIFO로 수량 대응한 서로 다른 원체결ID쌍을 센다. 동일 쌍은 한 번만 세고 분할 체결은 쌍 수에 영향을 준다. MM 상대 사람 왕복도 포함한다. 값이 있을 때만 후보를 계산하며 자동 판정이나 조치는 없다.',
     schema: anomalyCountSchema,
+    approval: OBSERVATION,
   }),
   roundTripWindow: defineReleaseSetting({
     key: 'trading_anomaly.round_trip_window_seconds',
@@ -521,6 +703,7 @@ export const TRADING_ANOMALY_SETTINGS = {
     description:
       '한 후보에 포함된 왕복 체결쌍의 시작부터 끝까지 최대 시간이다. 조회기간보다 길면 잘못된 설정으로 표시한다. 양의 정수이며 명시한 값만 사용한다.',
     schema: anomalySecondsSchema,
+    approval: OBSERVATION,
   }),
   roundTripLookback: defineReleaseSetting({
     key: 'trading_anomaly.round_trip_lookback_seconds',
@@ -529,6 +712,7 @@ export const TRADING_ANOMALY_SETTINGS = {
     description:
       '조회 기준시각부터 과거 이 기간의 사람 매수·매도 원체결을 계산한다. 양의 정수이며 미정이면 계산하지 않는다. 기술적 조회 상한으로 잘린 결과는 일부 자료라고 표시한다.',
     schema: anomalySecondsSchema,
+    approval: OBSERVATION,
   }),
 } as const;
 
@@ -558,6 +742,7 @@ export const CONSENT_RECORDS_RETENTION_SETTING = defineReleaseSetting({
   unit: '일',
   description: `탈퇴한 계정의 약관 동의 기록(항목·판·동의 여부·시각·접속 주소·브라우저)을 탈퇴 시각부터 이 기간이 지나면 지운다(#184). 탈퇴하지 않은 계정의 기록은 지우지 않는다. ${RETENTION_RULES}`,
   schema: retentionDaysSchema,
+  approval: RETENTION,
 });
 
 /**
@@ -572,6 +757,7 @@ export const PHONE_VERIFICATION_RECORDS_RETENTION_SETTING = defineReleaseSetting
   unit: '일',
   description: `탈퇴한 계정의 휴대전화 본인확인 발송 기록(번호·실명·인증번호의 해시·시각·접속 주소)을 탈퇴 시각부터 이 기간이 지나면 지운다(#184). 탈퇴하지 않은 계정의 기록은 지우지 않는다. ${RETENTION_RULES}`,
   schema: retentionDaysSchema,
+  approval: RETENTION,
 });
 
 /**
@@ -593,6 +779,7 @@ export const DELETED_POSTS_RETENTION_SETTING = defineReleaseSetting({
   unit: '일',
   description: `작성자가 지운 근거 글·댓글·대댓글의 원문(그것만 쓰던 이미지 포함)을 지운 시각부터(탈퇴한 작성자는 탈퇴 시각부터), 글·댓글의 운영자 전용 수정 이력(이전 내용과 그것만 쓰던 이미지)을 바뀐 시각부터 이 기간이 지나면 지운다(#184). 탈퇴한 회원의 글·댓글 가운데 운영자가 숨긴 채로 남은 것의 수정 이력은 이 항목의 상태·값과 상관없이 그 내용을 비울 때('신고·제재 기록 보존기간') 함께 지운다. 처리 중인 신고가 있는 글·댓글과 결정을 기다리는 계정 제한 요청이 근거로 든 글·댓글의 것은 신고가 처리되거나 요청이 결정·철회될 때까지 지우지 않는다(기간은 그대로 지운 시각·바뀐 시각부터 센다). ${RETENTION_RULES}`,
   schema: retentionDaysSchema,
+  approval: RETENTION,
 });
 
 /**
@@ -624,6 +811,7 @@ export const MODERATION_RECORDS_RETENTION_SETTING = defineReleaseSetting({
   unit: '일',
   description: `탈퇴한 계정이 낸 신고, 탈퇴한 회원이 받은 신고와 조치(경고·숨김·닉네임 강제 변경·소개 비우기·프로필 이미지 삭제·작성 제한·계정 제한과 그 감경·해제·승인 요청)를 탈퇴 시각과 처리 시각 가운데 늦은 쪽부터 이 기간이 지나면 지운다(#184). 탈퇴한 회원의 글·댓글 가운데 운영자가 숨긴 채로 남은 것은 지운 원문처럼 내용을 비우고(글은 계속 숨긴 채) 그 수정 이력(이전 내용과 그것만 쓰던 이미지)과 숨김 조치도 함께 지운다. 프로필 조치가 가져간 항목 자체는 '운영자가 지운 프로필 항목 보존기간'을 따르고, 그 항목이 남아 있는 동안 조치도 남는다. 탈퇴한 계정이 낸 판정 이의(#175)는 기각·수용되거나 철회된 것과 정정으로 종결된 것(#176)의 근거 링크와 사유를 탈퇴 시각과 처리·철회·종결 시각 가운데 늦은 쪽부터 이 기간이 지나면 비운다(이의 건수와 처리 상태는 남는다). 처리 중인 신고·요청이 있는 것, 끝나지 않은 제한과 검토 중이거나 수용해 정정을 기다리는 판정 이의는 지우지 않는다. 탈퇴하지 않은 회원이 받은 조치와 탈퇴하지 않은 계정끼리의 신고는 지우지 않는다. 반복 링크 검토 목록의 항목은 작성자의 탈퇴와 상관없이 탐지된 시각과 '확인함'으로 표시된 시각 가운데 늦은 쪽부터 이 기간이 지나면 지운다('확인함' 운영 기록과 그 주소는 남는다). ${RETENTION_RULES}`,
   schema: retentionDaysSchema,
+  approval: RETENTION,
 });
 
 /**
@@ -637,6 +825,7 @@ export const REMOVED_PROFILE_ITEMS_RETENTION_SETTING = defineReleaseSetting({
   unit: '일',
   description: `운영자가 지운 닉네임·소개·프로필 이미지를 지운 시각부터(탈퇴한 회원은 탈퇴 시각부터) 이 기간이 지나면 지운다(#184). ${RETENTION_RULES}`,
   schema: retentionDaysSchema,
+  approval: RETENTION,
 });
 
 /**
@@ -655,6 +844,7 @@ export const MARKET_PROPOSALS_RETENTION_SETTING = defineReleaseSetting({
   unit: '일',
   description: `탈퇴한 계정의 시장 제안(낸 양식·상태·반려 사유와 설명·채택 메모·운영자 내부 메모)을 탈퇴 시각과 처리가 끝난 시각(채택·반려, 채택 뒤 나중에 이은 시장, 철회) 가운데 늦은 쪽부터 이 기간이 지나면 지운다(#77). 처리를 기다리는 제안(접수·검토)과 탈퇴하지 않은 계정의 제안은 지우지 않는다. ${RETENTION_RULES}`,
   schema: retentionDaysSchema,
+  approval: RETENTION,
 });
 
 /**
@@ -670,6 +860,7 @@ export const NOTIFICATIONS_RETENTION_SETTING = defineReleaseSetting({
   unit: '일',
   description: `알림함의 알림(유형·내용·대상·읽음 여부·발생 시각)을 발생 시각(묶인 알림은 묶인 사건 가운데 가장 늦은 시각)부터 이 기간이 지나면 읽음 여부와 상관없이 지운다(#53). 탈퇴한 계정의 알림은 탈퇴할 때 모두 지운다. ${RETENTION_RULES}`,
   schema: retentionDaysSchema,
+  approval: RETENTION,
 });
 
 /**
@@ -686,6 +877,7 @@ export const MARKET_VISITS_RETENTION_SETTING = defineReleaseSetting({
   unit: '일',
   description: `모든 계정의 시장 상세 방문 기록(계정·시장·한국 날짜, #151)을 조회한 한국 날짜의 0시(KST)부터 이 기간이 지나면 지운다. 탈퇴한 계정의 기록도 탈퇴로 지우지 않고 이 기간까지 둔다. ${RETENTION_RULES}`,
   schema: retentionDaysSchema,
+  approval: RETENTION,
 });
 
 /** The retention items by period (retention.ts): the worker's job reads each once per run. */
@@ -830,7 +1022,7 @@ export function isReleaseSettingUnchanged(
 export const RELEASE_SETTING_UNCHANGED_MESSAGE = 'is the current status and value';
 
 /** `parseReleaseSettingChange`: the state to store, or why the change is refused. */
-export type ReleaseSettingChangeResult =
+export type ReleaseSettingChangeParse =
   | { success: true; state: { status: ReleaseSettingStatus; value: ReleaseSettingValue | null } }
   | { success: false; issues: ValidationIssue[] };
 
@@ -844,7 +1036,7 @@ export type ReleaseSettingChangeResult =
 export function parseReleaseSettingChange(
   definition: ReleaseSettingDefinition,
   change: { status: ReleaseSettingStatus; value?: unknown },
-): ReleaseSettingChangeResult {
+): ReleaseSettingChangeParse {
   const { status, value } = change;
   const absent = value === undefined || value === null;
   if (status === 'undecided') {
@@ -906,7 +1098,56 @@ export const releaseSettingStateSchema = z
   .object({ status: releaseSettingStatusSchema, value: z.unknown().nullable() })
   .meta({ id: 'ReleaseSettingState' });
 
-/** `GET /admin/release-settings` item and `PATCH /admin/release-settings/:key` answer. */
+/** approval_requests.kind of a two-admin release setting change (#331, ADR-0175). */
+export const RELEASE_SETTING_CHANGE_APPROVAL_KIND = 'release_setting_change';
+
+/**
+ * The payload of a `release_setting_change` approval request: the key, the state the request saw
+ * (`before` — the approval is refused as `stale` once the item no longer holds it), the state
+ * asked for, the request's reason and why it needs the approval.
+ */
+export const releaseSettingChangeRequestPayloadSchema = z
+  .object({
+    key: z.string(),
+    before: releaseSettingStateSchema,
+    after: releaseSettingStateSchema,
+    reason: z.string(),
+    basis: releaseSettingChangeBasisSchema,
+  })
+  .strict();
+export type ReleaseSettingChangeRequestPayload = z.infer<
+  typeof releaseSettingChangeRequestPayloadSchema
+>;
+
+/**
+ * A two-admin change request (#331): what it asks and why, who asked and when, and its decision
+ * or retraction once there is one. `stale`: it waits, and the item no longer holds the state the
+ * request saw (or, for a risk stage, the other stages changed what it would do) — another change
+ * came first, so it cannot be approved; reject or retract it.
+ */
+export const releaseSettingChangeRequestSchema = z
+  .object({
+    id: z.uuid(),
+    key: z.string(),
+    /** The item's name today; null once the key is no longer registered. */
+    label: z.string().nullable(),
+    before: releaseSettingStateSchema,
+    after: releaseSettingStateSchema,
+    reason: z.string(),
+    basis: releaseSettingChangeBasisSchema,
+    requestedBy: releaseSettingActorSchema,
+    requestedAt: z.iso.datetime(),
+    status: approvalStatusSchema,
+    decidedBy: releaseSettingActorSchema.nullable(),
+    decisionReason: z.string().nullable(),
+    decidedAt: z.iso.datetime().nullable(),
+    retractedAt: z.iso.datetime().nullable(),
+    stale: z.boolean(),
+  })
+  .meta({ id: 'ReleaseSettingChangeRequest' });
+export type ReleaseSettingChangeRequest = z.infer<typeof releaseSettingChangeRequestSchema>;
+
+/** `GET /admin/release-settings` item and the item of a change's answer. */
 export const releaseSettingSchema = z
   .object({
     key: z.string(),
@@ -921,6 +1162,10 @@ export const releaseSettingSchema = z
     /** The last change; null for an item never changed (no row: `undecided`). */
     updatedAt: z.iso.datetime().nullable(),
     updatedBy: releaseSettingActorSchema.nullable(),
+    /** Who changes it (#331, ADR-0175): the screen previews a change's path with it. */
+    approval: releaseSettingApprovalRuleSchema,
+    /** The two-admin change of this item that waits for its decision (one at most), or null. */
+    pendingRequest: releaseSettingChangeRequestSchema.nullable(),
   })
   .meta({ id: 'ReleaseSetting' });
 export type ReleaseSetting = z.infer<typeof releaseSettingSchema>;
@@ -956,14 +1201,90 @@ export const releaseSettingChangeBodySchema = z
   .meta({ id: 'ReleaseSettingChangeBody' });
 export type ReleaseSettingChangeBody = z.infer<typeof releaseSettingChangeBodySchema>;
 
-/** `admin_actions.payload` of a `release_setting_change` row. */
+/**
+ * `admin_actions.payload` of a `release_setting_change` row. Since #331 (ADR-0175) the API adds
+ * the path and its basis, and for a two-admin change the approval (its request's id, requester
+ * and time, and the decision's reason) — the change's reason is the request's. Records written
+ * before #331, and the test factory's, have none of them.
+ */
 export const releaseSettingChangePayloadSchema = z.object({
   key: z.string(),
   before: releaseSettingStateSchema,
   after: releaseSettingStateSchema,
   reason: z.string(),
+  path: releaseSettingChangePathSchema.optional(),
+  basis: releaseSettingChangeBasisSchema.optional(),
+  approval: z
+    .object({
+      id: z.uuid(),
+      requestedBy: z.string(),
+      requestedAt: z.iso.datetime(),
+      decisionReason: z.string(),
+    })
+    .optional(),
 });
 export type ReleaseSettingChangePayload = z.infer<typeof releaseSettingChangePayloadSchema>;
+
+/**
+ * `PATCH /admin/release-settings/:key`'s answer (#331): `applied` — one admin's change, done, with
+ * the item as it now is; `requested` — a two-admin change, recorded as a request that waits for
+ * another admin (`request`), the item unchanged.
+ */
+export const releaseSettingChangeResultSchema = z
+  .object({
+    outcome: z.enum(['applied', 'requested']),
+    setting: releaseSettingSchema,
+    request: releaseSettingChangeRequestSchema.nullable(),
+  })
+  .meta({ id: 'ReleaseSettingChangeResult' });
+export type ReleaseSettingChangeResult = z.infer<typeof releaseSettingChangeResultSchema>;
+
+/**
+ * A request's approval, rejection or retraction: the request as it is now, and its item — null
+ * when a release dropped the key while the request waited (it can still be rejected or retracted;
+ * an approval of it is NOT_FOUND).
+ */
+export const releaseSettingChangeRequestWriteSchema = z
+  .object({ request: releaseSettingChangeRequestSchema, setting: releaseSettingSchema.nullable() })
+  .meta({ id: 'ReleaseSettingChangeRequestWrite' });
+export type ReleaseSettingChangeRequestWrite = z.infer<
+  typeof releaseSettingChangeRequestWriteSchema
+>;
+
+/** Another admin's approval or rejection of a change request, with a reason. */
+export const releaseSettingDecisionBodySchema = expectedAccountBodySchema
+  .extend({ reason: approvalReasonSchema })
+  .strict()
+  .meta({ id: 'ReleaseSettingDecisionBody' });
+export type ReleaseSettingDecisionBody = z.infer<typeof releaseSettingDecisionBodySchema>;
+
+/** `GET /admin/release-settings/change-requests`: a cursor page, newest first. */
+export const releaseSettingChangeRequestListQuerySchema = cursorQuerySchema.extend({
+  status: approvalStatusSchema.optional(),
+  key: releaseSettingKeySchema.optional(),
+});
+export type ReleaseSettingChangeRequestListQuery = z.infer<
+  typeof releaseSettingChangeRequestListQuerySchema
+>;
+
+/**
+ * Why a release setting write is refused (RELEASE_SETTING_NOT_ALLOWED, 409, `details.reason`;
+ * #331, ADR-0175):
+ * - `request_pending`: a two-admin change of a key whose request waits already (one at a time);
+ * - `stale`: an approval of a request whose item no longer holds the state the request saw, or
+ *   (a risk stage) whose change the other stages now make do something else — another basis;
+ * - `requester_ineligible`: an approval of a request whose requester is no longer an open admin.
+ */
+export const RELEASE_SETTING_REFUSALS = [
+  'request_pending',
+  'stale',
+  'requester_ineligible',
+] as const;
+export type ReleaseSettingRefusal = (typeof RELEASE_SETTING_REFUSALS)[number];
+export const releaseSettingNotAllowedDetailsSchema = z.object({
+  reason: z.enum(RELEASE_SETTING_REFUSALS),
+});
+export type ReleaseSettingNotAllowedDetails = z.infer<typeof releaseSettingNotAllowedDetailsSchema>;
 
 /** One entry of `GET /admin/release-settings/changes`, newest first. */
 export const releaseSettingChangeSchema = z
@@ -976,8 +1297,17 @@ export const releaseSettingChangeSchema = z
     before: releaseSettingStateSchema,
     after: releaseSettingStateSchema,
     reason: z.string(),
+    /** Who wrote it: the admin of a one-admin change, the approver of a two-admin one. */
     actor: releaseSettingActorSchema,
     createdAt: z.iso.datetime(),
+    /** One admin at once or two (#331, 331-4); null for a record written before #331. */
+    path: releaseSettingChangePathSchema.nullable(),
+    basis: releaseSettingChangeBasisSchema.nullable(),
+    /** A two-admin change's requester; null otherwise. */
+    requestedBy: releaseSettingActorSchema.nullable(),
+    /** A two-admin change's request and the approval's reason; null otherwise. */
+    approvalId: z.uuid().nullable(),
+    approvalReason: z.string().nullable(),
   })
   .meta({ id: 'ReleaseSettingChange' });
 export type ReleaseSettingChange = z.infer<typeof releaseSettingChangeSchema>;

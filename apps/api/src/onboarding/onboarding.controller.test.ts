@@ -22,6 +22,7 @@ import {
   createStartGrant,
   createUser,
   ledgerOf as accountLedgerOf,
+  setReleaseSetting,
 } from '@buddha/db/test';
 import {
   CONSENT_ITEMS,
@@ -43,7 +44,6 @@ import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PhoneHasher } from '../identity/phone-hash.js';
 import { NicknameService } from '../me/nickname.service.js';
-import { ReleaseSettingsService } from '../release-settings/release-settings.service.js';
 import { expectLedgerChain } from '../test/ledger.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
@@ -181,11 +181,17 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
   /** The account's ledger, each event from its side (`ledgerOf` of @buddha/db/test, #116). */
   const ledgerOf = (userId: string) => accountLedgerOf(t.db, userId);
 
-  /** The release setting `grant.start_coin`, changed as an admin does it, with a reason. */
+  /**
+   * The release setting `grant.start_coin`, written with its change record (the DB factory: the
+   * API's two-admin path for it is `release-settings` suites', #331).
+   */
   async function setAmount(value: number) {
-    await t.app
-      .get(ReleaseSettingsService)
-      .change(operator, START_COIN_SETTING.key, { status: 'test', value, reason: '시험' });
+    await setReleaseSetting(t.db, {
+      adminId: operator,
+      key: START_COIN_SETTING.key,
+      status: 'test',
+      value,
+    });
   }
 
   /** An account past the consent and the 본인확인, at the nickname step. */

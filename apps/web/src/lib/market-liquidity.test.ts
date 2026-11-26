@@ -40,6 +40,8 @@ describe('관리자 유동성 설정', () => {
         value: null,
         updatedAt: null,
         updatedBy: null,
+        approval: definition.approval,
+        pendingRequest: null,
       }),
     );
     const defaults = rows.map((row) =>

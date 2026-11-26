@@ -58,6 +58,8 @@ const OPERATION_RECORDS = [
   'GET /admin/treasury/issue-requests',
   'GET /admin/audit-failures',
   'GET /admin/release-settings/changes',
+  // #331: the release setting change requests, with who asked and who decided (ADR-0175).
+  'GET /admin/release-settings/change-requests',
   'GET /admin/admins/changes',
   'GET /admin/notices/:noticeId/actions',
   'GET /admin/notices/:noticeId/revisions',

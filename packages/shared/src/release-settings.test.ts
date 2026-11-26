@@ -56,6 +56,7 @@ const hours = defineReleaseSetting({
   unit: '시간',
   description: '시험용 항목',
   schema: z.number().int().min(1).max(720),
+  approval: { group: 'observation' },
 });
 
 const window = defineReleaseSetting({
@@ -64,6 +65,7 @@ const window = defineReleaseSetting({
   unit: null,
   description: '시험용 항목(객체 값)',
   schema: z.object({ from: z.number().int(), to: z.number().int() }).strict(),
+  approval: { group: 'observation' },
 });
 
 describe('release settings registry', () => {
@@ -553,6 +555,17 @@ describe('release settings registry', () => {
     expect(() => defineReleaseSetting({ ...hours, label: ' ' })).toThrow(/label/);
     expect(() => defineReleaseSetting({ ...hours, description: '' })).toThrow(/description/);
     expect(() => defineReleaseSetting({ ...hours, unit: '' })).toThrow(/unit/);
+    // Every item names who changes it (#331, ADR-0175).
+    for (const approval of [
+      undefined,
+      { group: 'economic' },
+      { group: 'observation', reduce: 'lower' },
+      { group: 'retention', reduce: 'down', undecided: 'stop' },
+    ]) {
+      expect(() => defineReleaseSetting({ ...hours, approval } as unknown as typeof hours)).toThrow(
+        /approval rule/,
+      );
+    }
   });
 
   it('records the change as its own admin action type', () => {
@@ -608,6 +621,7 @@ describe('parseReleaseSettingChange', () => {
       unit: null,
       description: '시험용 항목(아무 JSON)',
       schema: z.json() as z.ZodType<ReleaseSettingValue>,
+      approval: { group: 'observation' },
     });
     for (const [value, path, message] of [
       [NUL, ['value'], JSONB_NUL_MESSAGE],

@@ -2466,7 +2466,10 @@ export const copy = {
   // 바꾼 값의 적용 시점은 오너 결정(2026-10-13): 바꾼 뒤 시작하는 일에만.
   adminReleaseSettings: '출시 설정',
   adminReleaseSettingsIntro:
-    '시뮬레이션이나 운영 승인으로 정하는 값입니다. 값을 바꾸면 사유·작업자·시각·전후 값이 변경 기록에 남고, 바꾼 값은 바꾼 뒤 시작하는 일에만 적용됩니다.',
+    '시뮬레이션이나 운영 승인으로 정하는 값입니다. 항목마다 정한 묶음별 승인으로 바꿉니다 — 줄이기·멈추기와 관측 값은 관리자 한 명이 바로, 늘리기·열기와 그 밖의 변경은 한 관리자가 요청하고 다른 관리자가 승인합니다(ADR-0175). 값을 바꾸면 사유·작업자·시각·전후 값과 1인·2인이 변경 기록에 남고, 바꾼 값은 바꾼 뒤 시작하는 일에만 적용됩니다.',
+  // 모든 항목 공통(ADR-0171 133-23, 331-6): 범례 아래 한 줄.
+  adminReleaseSettingsApprovedRule:
+    '어느 항목이든 승인됨으로 바꾸는 것은 다른 관리자의 승인이 필요하고, 관리자 한 명의 변경은 승인됨일 수 없습니다.',
   adminReleaseSettingUndecidedHint: '값이 아직 정해지지 않았습니다.',
   adminReleaseSettingProposalHint: '기획의 설계 제안 값입니다. 승인된 값이 아닙니다.',
   adminReleaseSettingTestHint:
@@ -2488,7 +2491,8 @@ export const copy = {
   adminReleaseSettingValueFormat: '입력 형식',
   adminReleaseSettingValueUndecided: '미정으로 두면 값을 지웁니다.',
   adminReleaseSettingReason: '변경 사유',
-  adminReleaseSettingReasonHint: '변경 기록에 작업자·시각·전후 값과 함께 남습니다.',
+  adminReleaseSettingReasonHint:
+    '근거 ADR 번호를 적어 주세요. 변경 기록에 작업자·시각·전후 값과 함께 남습니다.',
   adminReleaseSettingApplyNotice:
     '바꾼 값은 바꾼 뒤 시작하는 일에만 적용됩니다. 이미 진행 중인 일은 시작할 때 읽은 값을 그대로 씁니다.',
   adminReleaseSettingSubmit: '저장',
@@ -2500,6 +2504,81 @@ export const copy = {
   adminReleaseSettingChangeActor: '작업자',
   adminReleaseSettingChangeReason: '사유',
   adminReleaseSettingUnregistered: '등록되지 않은 항목',
+
+  // --- admin: release setting approvals (#331, ADR-0175; owner answers 331-1…331-7) ---
+  // 항목 줄의 '변경 승인' 한 줄: 묶음과 1인 방향.
+  adminReleaseSettingApprovalLabel: '변경 승인',
+  adminReleaseSettingRuleObservation: '관측 값 · 관리자 한 명이 바로 바꿉니다.',
+  adminReleaseSettingRuleIntake:
+    '주문 접수 · 닫기(거짓·미정)는 관리자 한 명이 바로, 열기(참)는 승인.',
+  adminReleaseSettingRuleRetention:
+    '보존기간 · 값을 바꾸면 길게든 짧게든 승인, 미정으로 돌리기와 승인됨에서 내리기는 한 명이 바로.',
+  adminReleaseSettingRuleNoDirection:
+    '경제 값 · 값을 바꾸면 방향과 상관없이 승인, 미정으로 돌리기는 한 명이 바로.',
+  adminReleaseSettingRuleDisputeWindow:
+    '경제 값 · 값을 바꾸는 것도 미정으로 돌리는 것도 승인(1,440분이 아닌 값은 새 ADR 먼저).',
+  adminReleaseSettingRuleLower: '경제 값 · 낮추기와 미정으로 돌리기는 한 명이 바로, 그 밖은 승인.',
+  adminReleaseSettingRuleHigher: '경제 값 · 높이기와 미정으로 돌리기는 한 명이 바로, 그 밖은 승인.',
+  adminReleaseSettingRuleRateLimit:
+    '경제 값 · 낮추기와 미정에서 넣기는 한 명이 바로, 높이기와 미정으로 돌리기는 승인.',
+  adminReleaseSettingRuleStage:
+    '위험 단계 · 낮추기와 유효한 세 값을 미정·무효 조합으로 만드는 것(모든 봇 호가 멈춤)은 한 명이 바로, 그 밖은 승인(멈춘 동안의 높이기와 다시 유효하게 하기도).',
+  // 변경 창의 경로 미리보기.
+  adminReleaseSettingPathOne: '바로 반영합니다 — 관리자 한 명의 변경입니다.',
+  adminReleaseSettingPathTwo:
+    '다른 관리자가 승인해야 반영됩니다 — 승인 요청으로 올라가고, 그때까지 값은 그대로입니다.',
+  adminReleaseSettingRequestSubmit: '승인 요청',
+  adminReleaseSettingRequested: '승인 요청을 올렸습니다. 다른 관리자가 승인하면 반영됩니다.',
+  adminReleaseSettingPendingBlocks: '이 항목에는 승인을 기다리는 요청이 있습니다.',
+  adminReleaseSettingApprovedNeedsTwo:
+    '승인됨으로 두면 승인 요청이 됩니다. 바로 반영하려면 시험값이나 설계 제안을 고르세요.',
+  adminReleaseSettingPendingBadge: '승인 대기',
+  // 근거(RELEASE_SETTING_CHANGE_BASES)의 문장.
+  adminReleaseSettingBasisApprovedTarget: '승인됨으로 바꾸는 변경',
+  adminReleaseSettingBasisStatusOnly: '값은 그대로, 상태만 승인됨이 아닌 쪽으로',
+  adminReleaseSettingBasisObservation: '관측 값',
+  adminReleaseSettingBasisIntakeOpen: '주문 접수 열기',
+  adminReleaseSettingBasisIntakeClose: '주문 접수 닫기',
+  adminReleaseSettingBasisUndecidedStop: '미정으로 돌려 멈추기',
+  adminReleaseSettingBasisUndecidedLoosens: '미정으로 돌리면 제한이 풀림',
+  adminReleaseSettingBasisUndecidedBlocks: '미정으로 돌리면 판정·정산이 막힘',
+  adminReleaseSettingBasisEnterValue: '미정에서 값을 넣는 열기',
+  adminReleaseSettingBasisEnterTightens: '미정에서 값을 넣어 조이기',
+  adminReleaseSettingBasisStageStop: '위험 단계 조합이 미정·무효가 되어 모든 봇 호가 멈춤',
+  adminReleaseSettingBasisStageResume: '위험 단계 조합이 다시 유효해져 모든 봇이 다시 호가',
+  adminReleaseSettingBasisReduce: '줄이는 방향',
+  adminReleaseSettingBasisIncrease: '늘리는 방향',
+  adminReleaseSettingBasisNoDirection: '줄이는 방향이 없는 항목',
+  // '승인 요청' 칸.
+  adminReleaseSettingRequests: '승인 요청',
+  adminReleaseSettingRequestsIntro:
+    '한 관리자가 올린 2인 변경입니다. 요청한 관리자는 철회만 하고, 다른 관리자가 사유를 적어 승인하거나 반려합니다. 승인하면 그때 반영됩니다.',
+  adminReleaseSettingRequestsPendingOnly: '대기만 보기',
+  adminReleaseSettingRequestsEmpty: '승인 요청이 없습니다.',
+  adminReleaseSettingRequestRequester: '요청',
+  adminReleaseSettingRequestReason: '요청 사유',
+  adminReleaseSettingRequestBasis: '근거',
+  adminReleaseSettingRequestDecider: '결정',
+  adminReleaseSettingRequestDecisionReason: '결정 사유',
+  adminReleaseSettingRequestOwn: '내가 올린 요청입니다. 다른 관리자가 결정합니다.',
+  adminReleaseSettingRequestStale:
+    '지금 값(위험 단계면 다른 단계의 값)이 요청 때와 달라 승인할 수 없습니다 — 반려하거나 요청자가 철회하세요.',
+  adminReleaseSettingApprove: '승인',
+  adminReleaseSettingReject: '반려',
+  adminReleaseSettingRetract: '철회',
+  adminReleaseSettingApprovedToast: '승인했습니다. 출시 설정에 반영했습니다.',
+  adminReleaseSettingRejectedToast: '반려했습니다.',
+  adminReleaseSettingRetractedToast: '요청을 철회했습니다.',
+  adminReleaseSettingStatusPending: '대기',
+  adminReleaseSettingStatusApproved: '승인',
+  adminReleaseSettingStatusRejected: '반려',
+  adminReleaseSettingStatusRetracted: '철회',
+  // 변경 기록의 경로(331-4: 1인 변경을 구분해 보인다).
+  adminReleaseSettingPathOneBadge: '1인 즉시',
+  adminReleaseSettingPathTwoBadge: '2인 승인',
+  adminReleaseSettingChangeRequester: '요청',
+  adminReleaseSettingChangeApprover: '승인',
+  adminReleaseSettingChangeApprovalReason: '승인 사유',
   // RELEASE_SETTING_REASON_MAX_LENGTH와 같아야 한다(release-settings.test.ts가 확인한다).
   errReleaseSettingReason: '변경 사유를 1~500자로 입력해 주세요.',
   errReleaseSettingValueRequired:
@@ -2507,6 +2586,17 @@ export const copy = {
   errReleaseSettingValueFormat: 'JSON으로 읽을 수 없는 값입니다.',
   errReleaseSettingValueInvalid: '이 항목의 형식에 맞지 않는 값입니다.',
   errReleaseSettingNotFound: '등록되지 않은 항목입니다. 화면을 새로 고쳐 주세요.',
+  // RELEASE_SETTING_NOT_ALLOWED(#331)의 까닭과 2인 요청의 no_decider.
+  errReleaseSettingRequestPending:
+    '이 항목에는 승인을 기다리는 요청이 이미 있습니다. 그 요청이 결정되거나 철회된 뒤 다시 요청해 주세요.',
+  errReleaseSettingStale:
+    '요청 뒤 항목의 값(위험 단계면 다른 단계의 값)이 바뀌어 승인할 수 없습니다. 반려하거나 요청자가 철회해 주세요.',
+  errReleaseSettingRequesterIneligible:
+    '요청한 관리자가 더는 관리자가 아니어서 승인할 수 없습니다. 반려해 주세요.',
+  errReleaseSettingNoDecider:
+    '승인할 다른 관리자가 없어 요청할 수 없습니다. 줄이기·멈추기는 관리자 한 명이 바로 할 수 있습니다.',
+  errReleaseSettingRequestNotFound: '요청을 찾을 수 없습니다. 화면을 새로 고쳐 주세요.',
+  errReleaseSettingDecisionReason: '결정 사유를 1~500자로 입력해 주세요.',
 
   // --- admin: admin accounts (#171, ADR-0056) ---
   // 관리자 권한은 하나이고, 관리자가 화면에서 사유를 남기고 다른 관리자의 승인 없이 부여·회수한다.

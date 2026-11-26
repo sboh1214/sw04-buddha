@@ -8190,6 +8190,143 @@
         ]
       }
     },
+    "/api/v1/admin/release-settings/change-requests": {
+      "get": {
+        "operationId": "adminListReleaseSettingChangeRequests",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 20,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/ApprovalStatus"
+                }
+              ]
+            }
+          },
+          {
+            "name": "key",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ReleaseSettingChangeRequest"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/PageMeta"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Two-admin release setting change requests, newest first: before and after, why, who asked and the decision (of one status or key when given); a waiting one is `stale` once its item changed since",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/v1/admin/release-settings/{key}": {
       "patch": {
         "operationId": "adminChangeReleaseSetting",
@@ -8224,7 +8361,7 @@
                   "type": "object",
                   "properties": {
                     "data": {
-                      "$ref": "#/components/schemas/ReleaseSetting"
+                      "$ref": "#/components/schemas/ReleaseSettingChangeResult"
                     }
                   },
                   "required": [
@@ -8276,7 +8413,7 @@
             }
           },
           "409": {
-            "description": "ONBOARDING_REQUIRED",
+            "description": "ONBOARDING_REQUIRED | RELEASE_SETTING_NOT_ALLOWED | APPROVAL_NOT_ALLOWED",
             "content": {
               "application/json": {
                 "schema": {
@@ -8301,7 +8438,358 @@
             "session": []
           }
         ],
-        "summary": "Set the status and value of a release setting with a reason (recorded); `undecided` takes no value, the others require one that fits the item, and a change to the current status and value is refused",
+        "summary": "Change a release setting's status and value with a reason: applied at once when the item's approval rule lets one admin (a reduction or stop, an observation value, closing order intake), otherwise recorded as a request another admin approves; `undecided` takes no value, the others require one that fits the item, and a change to the current status and value is refused",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/release-settings/change-requests/{requestId}/approve": {
+      "post": {
+        "operationId": "adminApproveReleaseSettingChange",
+        "parameters": [
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseSettingDecisionBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ReleaseSettingChangeRequestWrite"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED | RELEASE_SETTING_NOT_ALLOWED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Approve another admin's release setting change request, writing the change in the same transaction (refused when the item changed since or the requester is no longer an admin)",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/release-settings/change-requests/{requestId}/reject": {
+      "post": {
+        "operationId": "adminRejectReleaseSettingChange",
+        "parameters": [
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseSettingDecisionBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ReleaseSettingChangeRequestWrite"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Reject another admin's release setting change request, changing nothing",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/release-settings/change-requests/{requestId}/retract": {
+      "post": {
+        "operationId": "adminRetractReleaseSettingChange",
+        "parameters": [
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpectedAccountBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ReleaseSettingChangeRequestWrite"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Retract the acting admin's own waiting release setting change request",
         "tags": [
           "admin"
         ]
@@ -32941,6 +33429,7 @@
           "MARKET_MAKER_CONTROL_NOT_ALLOWED",
           "REGRANT_NOT_ALLOWED",
           "SIGNUP_ALLOWLIST_NOT_ALLOWED",
+          "RELEASE_SETTING_NOT_ALLOWED",
           "INTERNAL"
         ]
       },
@@ -38690,6 +39179,17 @@
                 "$ref": "#/components/schemas/ReleaseSettingActor"
               }
             ]
+          },
+          "approval": {
+            "$ref": "#/components/schemas/ReleaseSettingApprovalRule"
+          },
+          "pendingRequest": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReleaseSettingChangeRequest"
+              }
+            ]
           }
         },
         "required": [
@@ -38701,7 +39201,9 @@
           "status",
           "value",
           "updatedAt",
-          "updatedBy"
+          "updatedBy",
+          "approval",
+          "pendingRequest"
         ],
         "additionalProperties": false
       },
@@ -38721,6 +39223,243 @@
           "nickname"
         ],
         "additionalProperties": false
+      },
+      "ReleaseSettingApprovalRule": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "group": {
+                "type": "string",
+                "enum": [
+                  "observation"
+                ]
+              }
+            },
+            "required": [
+              "group"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "group": {
+                "type": "string",
+                "enum": [
+                  "order_intake"
+                ]
+              }
+            },
+            "required": [
+              "group"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "group": {
+                "type": "string",
+                "enum": [
+                  "economic"
+                ]
+              },
+              "reduce": {
+                "nullable": true,
+                "type": "string",
+                "enum": [
+                  "lower",
+                  "higher"
+                ]
+              },
+              "undecided": {
+                "type": "string",
+                "enum": [
+                  "stop",
+                  "loosen",
+                  "block"
+                ]
+              },
+              "stage": {
+                "type": "string",
+                "enum": [
+                  "reduceAtBp",
+                  "haltAtBp",
+                  "reduceRatioBp"
+                ]
+              }
+            },
+            "required": [
+              "group",
+              "reduce",
+              "undecided"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "group": {
+                "type": "string",
+                "enum": [
+                  "retention"
+                ]
+              },
+              "reduce": {
+                "nullable": true,
+                "type": "string",
+                "enum": [
+                  "lower",
+                  "higher"
+                ]
+              },
+              "undecided": {
+                "type": "string",
+                "enum": [
+                  "stop",
+                  "loosen",
+                  "block"
+                ]
+              },
+              "stage": {
+                "type": "string",
+                "enum": [
+                  "reduceAtBp",
+                  "haltAtBp",
+                  "reduceRatioBp"
+                ]
+              }
+            },
+            "required": [
+              "group",
+              "reduce",
+              "undecided"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "ReleaseSettingChangeRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "nullable": true,
+            "type": "string"
+          },
+          "before": {
+            "$ref": "#/components/schemas/ReleaseSettingState"
+          },
+          "after": {
+            "$ref": "#/components/schemas/ReleaseSettingState"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "basis": {
+            "$ref": "#/components/schemas/ReleaseSettingChangeBasis"
+          },
+          "requestedBy": {
+            "$ref": "#/components/schemas/ReleaseSettingActor"
+          },
+          "requestedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ApprovalStatus"
+          },
+          "decidedBy": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReleaseSettingActor"
+              }
+            ]
+          },
+          "decisionReason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "decidedAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "retractedAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "stale": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "label",
+          "before",
+          "after",
+          "reason",
+          "basis",
+          "requestedBy",
+          "requestedAt",
+          "status",
+          "decidedBy",
+          "decisionReason",
+          "decidedAt",
+          "retractedAt",
+          "stale"
+        ],
+        "additionalProperties": false
+      },
+      "ReleaseSettingState": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/ReleaseSettingStatus"
+          },
+          "value": {
+            "nullable": true
+          }
+        },
+        "required": [
+          "status",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "ReleaseSettingChangeBasis": {
+        "type": "string",
+        "enum": [
+          "approved_target",
+          "status_only",
+          "observation",
+          "intake_open",
+          "intake_close",
+          "undecided_stop",
+          "undecided_loosens",
+          "undecided_blocks",
+          "enter_value",
+          "enter_tightens",
+          "stage_stop",
+          "stage_resume",
+          "reduce",
+          "increase",
+          "no_direction"
+        ]
       },
       "ReleaseSettingChange": {
         "type": "object",
@@ -38753,6 +39492,40 @@
             "type": "string",
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "path": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReleaseSettingChangePath"
+              }
+            ]
+          },
+          "basis": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReleaseSettingChangeBasis"
+              }
+            ]
+          },
+          "requestedBy": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReleaseSettingActor"
+              }
+            ]
+          },
+          "approvalId": {
+            "nullable": true,
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "approvalReason": {
+            "nullable": true,
+            "type": "string"
           }
         },
         "required": [
@@ -38763,25 +39536,21 @@
           "after",
           "reason",
           "actor",
-          "createdAt"
+          "createdAt",
+          "path",
+          "basis",
+          "requestedBy",
+          "approvalId",
+          "approvalReason"
         ],
         "additionalProperties": false
       },
-      "ReleaseSettingState": {
-        "type": "object",
-        "properties": {
-          "status": {
-            "$ref": "#/components/schemas/ReleaseSettingStatus"
-          },
-          "value": {
-            "nullable": true
-          }
-        },
-        "required": [
-          "status",
-          "value"
-        ],
-        "additionalProperties": false
+      "ReleaseSettingChangePath": {
+        "type": "string",
+        "enum": [
+          "one_admin",
+          "two_admin"
+        ]
       },
       "ReleaseSettingChangeBody": {
         "type": "object",
@@ -38806,6 +39575,76 @@
           "reason",
           "expectedAccountId"
         ]
+      },
+      "ReleaseSettingChangeResult": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "applied",
+              "requested"
+            ]
+          },
+          "setting": {
+            "$ref": "#/components/schemas/ReleaseSetting"
+          },
+          "request": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReleaseSettingChangeRequest"
+              }
+            ]
+          }
+        },
+        "required": [
+          "outcome",
+          "setting",
+          "request"
+        ],
+        "additionalProperties": false
+      },
+      "ReleaseSettingDecisionBody": {
+        "type": "object",
+        "properties": {
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "expectedAccountId",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "ReleaseSettingChangeRequestWrite": {
+        "type": "object",
+        "properties": {
+          "request": {
+            "$ref": "#/components/schemas/ReleaseSettingChangeRequest"
+          },
+          "setting": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReleaseSetting"
+              }
+            ]
+          }
+        },
+        "required": [
+          "request",
+          "setting"
+        ],
+        "additionalProperties": false
       },
       "MarketSummary": {
         "type": "object",

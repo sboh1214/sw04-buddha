@@ -255,15 +255,18 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
     return detail(res);
   }
 
-  /** The release setting `market.lead_close_gap` as an admin enters it (a test value). */
+  /**
+   * The release setting `market.lead_close_gap` (a test value), written with its change record by
+   * the DB factory (the API's two-admin path for it is the release-settings suites', #331).
+   */
   async function setGap(value: number) {
-    const res = await t.app.inject({
-      method: 'PATCH',
-      url: '/api/v1/admin/release-settings/market.lead_close_gap',
-      headers: { ...jsonHeaders, cookie: creator.cookie },
-      payload: { status: 'test', value, reason: '선행 마감 시험값', expectedAccountId: creator.id },
+    await setReleaseSetting(t.db, {
+      adminId: creator.id,
+      key: 'market.lead_close_gap',
+      status: 'test',
+      value,
+      reason: '선행 마감 시험값',
     });
-    expect(res.statusCode).toBe(200);
   }
 
   async function marketRow(id: string) {

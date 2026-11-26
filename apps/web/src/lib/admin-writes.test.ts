@@ -416,9 +416,10 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
       'const [hiding, setHiding] = useHeldForOperator<AdminCategory>();',
       'const [addingTo, setAddingTo] = useHeldForOperator<number>();',
     ],
-    // the change dialog, with its status and reason
+    // the change dialog, with its status and reason, and a change request's decision reason (#331)
     '../app/admin/settings/admin-release-settings.tsx': [
       'const [editing, setEditing] = useHeldForOperator<ReleaseSetting>();',
+      'const [held, setHeld] = useHeldForOperator<{ reason: string }>();',
     ],
     // 확인함으로 표시, with its outcome and note
     '../app/admin/moderation/link-flags/admin-link-flags.tsx': [
@@ -559,7 +560,7 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
       'const open = (next: JudgementAction) => {\n    if (isFormAction(next)) refocus.opened();\n    setAction(next);\n  };',
     );
     expect(source('../app/admin/settings/admin-release-settings.tsx')).toContain(
-      '{editing !== null && <ChangeDialog item={editing} onClose={() => setEditing(null)} />}',
+      '{editing !== null && (\n        <ChangeDialog item={editing} items={settings.data ?? []} onClose={() => setEditing(null)} />\n      )}',
     );
     expect(source('../app/admin/moderation/link-flags/admin-link-flags.tsx')).toContain(
       '{marking !== null && (',

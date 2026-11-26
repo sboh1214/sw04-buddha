@@ -19,8 +19,9 @@ import { marketMakerE2eProfile, prepareMarketMakerTestProfile } from './market-m
  * item 5: the deadline is fixed from the value as the 잠정 결과 is published; a 판정 정정's reads
  * none — it takes the first one's length, #176), and migrations and the seed never write a value
  * (docs/SETTINGS.md), so every fresh e2e database starts 미정. The first seed admin — the `admin`
- * fixture's account, signed in and onboarded as that fixture does — enters 1분 as a 시험값 with its
- * reason (`ensureDisputeWindow`): the shortest window, which the specs that wait for the worker's
+ * fixture's account, signed in and onboarded as that fixture does — asks for 1분 as a 시험값 with its
+ * reason and the second seed admin approves it (`ensureDisputeWindow`; 미정 → a value is two
+ * admins', #331, ADR-0175): the shortest window, which the specs that wait for the worker's
  * confirmation wait out (settlement.spec.ts, themes.spec.ts, dispute.spec.ts, correction.spec.ts).
  * A value already there is left as it is — a run before this one entered it, or a developer
  * entered another on their database, and a spec skips its wait when that one is long
@@ -30,9 +31,9 @@ import { marketMakerE2eProfile, prepareMarketMakerTestProfile } from './market-m
  * more (ADR-0107 결정 2 #73 7항), and the owner chose that "e2e는 시험 DB의 시작 지급 설정값으로 Coin을
  * 받는다". While it is 미정 the first seed admin enters 1,000,000 Coin (`START_GRANT_MAX_COIN`) as a
  * 시험값 (`ensureStartCoin`), so every account a spec signs up is paid its start Coin at the
- * nickname step. The first seed admin's own grant, made by the sign-in above on a fresh database
- * before the amount was entered, waits for the worker (`start_grant.pay`), and the setup waits for
- * that payment (`awaitOwnStartGrant`) so it never lands under a spec that holds the admin's balance
+ * nickname step. The seed admins' own grants, made by the sign-ins above on a fresh database
+ * before the amount was entered, wait for the worker (`start_grant.pay`), and the setup waits for
+ * those payments (`awaitOwnStartGrant`) so neither lands under a spec that holds an admin's balance
  * still (market.spec.ts AC 1). A value already there is left as it is, and the specs read the one
  * in force (`startCoinValue`).
  *
@@ -45,7 +46,8 @@ import { marketMakerE2eProfile, prepareMarketMakerTestProfile } from './market-m
  * And the order intake's three settings (#119, ADR-0112; ADR-0107 결정 3: the test environment opens
  * it with test values): `order.accepting` true, `order.rate_limit` 20 a minute and
  * `order.price_protection_ticks` 5 — the width before any spec submits a market for review, which
- * needs one and copies it (`ensureOrderSettings`). Values already there are left as they are.
+ * needs one and copies it (`ensureOrderSettings`; the rate limit from 미정 is one admin's, the other
+ * two the second seed admin approves). Values already there are left as they are.
  *
  * #129 also needs actual treasury issuance and all three MM stage settings. The default profile
  * uses 0/0/0 test thresholds so initially flat makers add no risk-raising quotes to pre-existing
@@ -68,12 +70,15 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
   const context = await request.newContext({ baseURL: config.projects[0]?.use.baseURL });
   const approver = await request.newContext({ baseURL: config.projects[0]?.use.baseURL });
   try {
+    // Both seed admins first: every value below but the order rate limit is one admin's request
+    // and the other's approval (#331, ADR-0175).
     await signInFirstSeedAdmin(context);
-    await ensureDisputeWindow(context);
-    await ensureRegrantSettings(context, await ensureStartCoin(context));
-    await ensureOrderSettings(context);
-    await awaitOwnStartGrant(context);
     await signInSecondSeedAdmin(approver);
+    const admins = { requester: context, approver };
+    await ensureDisputeWindow(admins);
+    await ensureRegrantSettings(admins, await ensureStartCoin(admins));
+    await ensureOrderSettings(admins);
+    await awaitOwnStartGrant(context);
     await awaitOwnStartGrant(approver);
     await prepareMarketMakerTestProfile(context, approver, profile);
   } finally {

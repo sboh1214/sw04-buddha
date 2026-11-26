@@ -232,6 +232,14 @@ test.describe('출시 설정 (#170)', () => {
     // There is no seeded N or fallback 5: the screen follows this registry reading.
     for (const item of items)
       expect(item.status === 'undecided', item.key).toBe(item.value === null);
+    // Each item names who changes it (#331, ADR-0175), and none has a request waiting: the global
+    // setup's requests were all approved.
+    for (const item of items) {
+      expect(item.approval.group, item.key).toMatch(
+        /^(economic|observation|retention|order_intake)$/,
+      );
+      expect(item.pendingRequest, item.key).toBeNull();
+    }
     const undecidedKeys = items
       .filter((item) => item.status === 'undecided')
       .map((item) => item.key);
@@ -278,7 +286,13 @@ test.describe('출시 설정 (#170)', () => {
         await expect(row.getByTestId('release-setting-value')).toHaveText('—');
       }
       await expect(row).toContainText(`${copy.adminReleaseSettingUnit}${item.unit ?? '—'}`);
+      await expect(row.getByTestId('release-setting-approval')).toContainText(
+        copy.adminReleaseSettingApprovalLabel,
+      );
     }
+    await expect(page.getByTestId('release-settings-approved-rule')).toHaveText(
+      copy.adminReleaseSettingsApprovedRule,
+    );
     // The legend names all four statuses, so 설계 제안 and 시험값 never pass for 승인됨.
     const legend = page.getByTestId('release-settings-legend');
     for (const hint of [

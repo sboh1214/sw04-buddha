@@ -10,6 +10,7 @@ import { copy } from '../src/copy';
 import {
   accountIdOf,
   adminAccount,
+  changeReleaseSettingAs,
   closeMarket,
   coinText,
   createDraftMarket,
@@ -712,16 +713,14 @@ test.describe('탭의 계정이 바뀌는 틈의 관리자 쓰기 (ADR-0092)', (
       });
     } finally {
       await close();
-      // Put back, whatever happened above.
+      // Put back, whatever happened above — by request and approval when the rule wants two
+      // admins (#331).
       const now = await itemNow();
       if (now.status !== before.status || now.value !== before.value) {
-        await admin.patch(`/api/v1/admin/release-settings/${key}`, {
-          data: {
-            status: before.status,
-            ...(before.status === 'undecided' ? {} : { value: before.value }),
-            reason: 'e2e 되돌림',
-            expectedAccountId: await accountIdOf(admin),
-          },
+        await changeReleaseSettingAs({ requester: admin, approver: secondAdmin }, key, {
+          status: before.status,
+          value: before.value,
+          reason: 'e2e 되돌림',
         });
       }
     }

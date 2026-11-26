@@ -2545,8 +2545,76 @@ export type paths = {
         delete?: never;
         options?: never;
         head?: never;
-        /** Set the status and value of a release setting with a reason (recorded); `undecided` takes no value, the others require one that fits the item, and a change to the current status and value is refused */
+        /** Change a release setting's status and value with a reason: applied at once when the item's approval rule lets one admin (a reduction or stop, an observation value, closing order intake), otherwise recorded as a request another admin approves; `undecided` takes no value, the others require one that fits the item, and a change to the current status and value is refused */
         patch: operations["adminChangeReleaseSetting"];
+        trace?: never;
+    };
+    "/api/v1/admin/release-settings/change-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Two-admin release setting change requests, newest first: before and after, why, who asked and the decision (of one status or key when given); a waiting one is `stale` once its item changed since */
+        get: operations["adminListReleaseSettingChangeRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/release-settings/change-requests/{requestId}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve another admin's release setting change request, writing the change in the same transaction (refused when the item changed since or the requester is no longer an admin) */
+        post: operations["adminApproveReleaseSettingChange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/release-settings/change-requests/{requestId}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject another admin's release setting change request, changing nothing */
+        post: operations["adminRejectReleaseSettingChange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/release-settings/change-requests/{requestId}/retract": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retract the acting admin's own waiting release setting change request */
+        post: operations["adminRetractReleaseSettingChange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/admin/release-settings/changes": {
@@ -6711,7 +6779,7 @@ export type components = {
             title: string;
         };
         /** @enum {string} */
-        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "TRANSACTION_BUSY" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "FILL_CLASSIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "REPORT_NOT_ALLOWED" | "REPORT_LIMITED" | "MODERATION_NOT_ALLOWED" | "RESTRICTED" | "WRITE_LIMITED" | "CLOSURE_NOT_ALLOWED" | "ACCOUNT_CLOSED" | "PROPOSAL_LIMITED" | "OPEN_ITEMS_MISSING" | "DISPUTE_NOT_ALLOWED" | "ORDER_INTAKE_CLOSED" | "MARKET_MAKER_CONTROL_NOT_ALLOWED" | "REGRANT_NOT_ALLOWED" | "SIGNUP_ALLOWLIST_NOT_ALLOWED" | "INTERNAL";
+        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "TRANSACTION_BUSY" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "FILL_CLASSIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "REPORT_NOT_ALLOWED" | "REPORT_LIMITED" | "MODERATION_NOT_ALLOWED" | "RESTRICTED" | "WRITE_LIMITED" | "CLOSURE_NOT_ALLOWED" | "ACCOUNT_CLOSED" | "PROPOSAL_LIMITED" | "OPEN_ITEMS_MISSING" | "DISPUTE_NOT_ALLOWED" | "ORDER_INTAKE_CLOSED" | "MARKET_MAKER_CONTROL_NOT_ALLOWED" | "REGRANT_NOT_ALLOWED" | "SIGNUP_ALLOWLIST_NOT_ALLOWED" | "RELEASE_SETTING_NOT_ALLOWED" | "INTERNAL";
         ErrorEnvelope: {
             error: {
                 code: components["schemas"]["ErrorCode"];
@@ -8676,9 +8744,11 @@ export type components = {
             reason: components["schemas"]["ProposalRejectionReason"];
         };
         ReleaseSetting: {
+            approval: components["schemas"]["ReleaseSettingApprovalRule"];
             description: string;
             key: string;
             label: string;
+            pendingRequest: components["schemas"]["ReleaseSettingChangeRequest"] | null;
             status: components["schemas"]["ReleaseSettingStatus"];
             unit: string | null;
             /** Format: date-time */
@@ -8693,9 +8763,38 @@ export type components = {
             id: string;
             nickname: string | null;
         };
+        ReleaseSettingApprovalRule: {
+            /** @enum {string} */
+            group: "observation";
+        } | {
+            /** @enum {string} */
+            group: "order_intake";
+        } | {
+            /** @enum {string} */
+            group: "economic";
+            /** @enum {string|null} */
+            reduce: "lower" | "higher" | null;
+            /** @enum {string} */
+            stage?: "reduceAtBp" | "haltAtBp" | "reduceRatioBp";
+            /** @enum {string} */
+            undecided: "stop" | "loosen" | "block";
+        } | {
+            /** @enum {string} */
+            group: "retention";
+            /** @enum {string|null} */
+            reduce: "lower" | "higher" | null;
+            /** @enum {string} */
+            stage?: "reduceAtBp" | "haltAtBp" | "reduceRatioBp";
+            /** @enum {string} */
+            undecided: "stop" | "loosen" | "block";
+        };
         ReleaseSettingChange: {
             actor: components["schemas"]["ReleaseSettingActor"];
             after: components["schemas"]["ReleaseSettingState"];
+            /** Format: uuid */
+            approvalId: string | null;
+            approvalReason: string | null;
+            basis: components["schemas"]["ReleaseSettingChangeBasis"] | null;
             before: components["schemas"]["ReleaseSettingState"];
             /** Format: date-time */
             createdAt: string;
@@ -8703,13 +8802,54 @@ export type components = {
             id: string;
             key: string;
             label: string | null;
+            path: components["schemas"]["ReleaseSettingChangePath"] | null;
             reason: string;
+            requestedBy: components["schemas"]["ReleaseSettingActor"] | null;
         };
+        /** @enum {string} */
+        ReleaseSettingChangeBasis: "approved_target" | "status_only" | "observation" | "intake_open" | "intake_close" | "undecided_stop" | "undecided_loosens" | "undecided_blocks" | "enter_value" | "enter_tightens" | "stage_stop" | "stage_resume" | "reduce" | "increase" | "no_direction";
         ReleaseSettingChangeBody: {
             expectedAccountId: string;
             reason: string;
             status: components["schemas"]["ReleaseSettingStatus"];
             value?: unknown;
+        };
+        /** @enum {string} */
+        ReleaseSettingChangePath: "one_admin" | "two_admin";
+        ReleaseSettingChangeRequest: {
+            after: components["schemas"]["ReleaseSettingState"];
+            basis: components["schemas"]["ReleaseSettingChangeBasis"];
+            before: components["schemas"]["ReleaseSettingState"];
+            /** Format: date-time */
+            decidedAt: string | null;
+            decidedBy: components["schemas"]["ReleaseSettingActor"] | null;
+            decisionReason: string | null;
+            /** Format: uuid */
+            id: string;
+            key: string;
+            label: string | null;
+            reason: string;
+            /** Format: date-time */
+            requestedAt: string;
+            requestedBy: components["schemas"]["ReleaseSettingActor"];
+            /** Format: date-time */
+            retractedAt: string | null;
+            stale: boolean;
+            status: components["schemas"]["ApprovalStatus"];
+        };
+        ReleaseSettingChangeRequestWrite: {
+            request: components["schemas"]["ReleaseSettingChangeRequest"];
+            setting: components["schemas"]["ReleaseSetting"] | null;
+        };
+        ReleaseSettingChangeResult: {
+            /** @enum {string} */
+            outcome: "applied" | "requested";
+            request: components["schemas"]["ReleaseSettingChangeRequest"] | null;
+            setting: components["schemas"]["ReleaseSetting"];
+        };
+        ReleaseSettingDecisionBody: {
+            expectedAccountId: string;
+            reason: string;
         };
         ReleaseSettingState: {
             status: components["schemas"]["ReleaseSettingStatus"];
@@ -22004,7 +22144,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        data: components["schemas"]["ReleaseSetting"];
+                        data: components["schemas"]["ReleaseSettingChangeResult"];
                     };
                 };
             };
@@ -22044,7 +22184,322 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description ONBOARDING_REQUIRED | RELEASE_SETTING_NOT_ALLOWED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListReleaseSettingChangeRequests: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                key?: string;
+                limit?: number;
+                status?: components["schemas"]["ApprovalStatus"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ReleaseSettingChangeRequest"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminApproveReleaseSettingChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReleaseSettingDecisionBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ReleaseSettingChangeRequestWrite"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED | RELEASE_SETTING_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRejectReleaseSettingChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReleaseSettingDecisionBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ReleaseSettingChangeRequestWrite"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRetractReleaseSettingChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedAccountBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ReleaseSettingChangeRequestWrite"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
             409: {
                 headers: {
                     [name: string]: unknown;

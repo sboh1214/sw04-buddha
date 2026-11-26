@@ -34,6 +34,8 @@ import type {
   ReconciliationHoldDetail,
   ReconciliationRun,
   ReleaseSetting,
+  ReleaseSettingChangeRequest,
+  ReleaseSettingChangeResult,
 } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { E2E_CONSENT_VERSIONS } from './consent-versions';
@@ -2248,29 +2250,20 @@ export async function disputeWindowMinutes(context: APIRequestContext): Promise<
 
 /**
  * Makes sure the dispute window has a value, for the suite's global setup (global-setup.ts):
- * while it is 미정, `context`'s admin enters E2E_DISPUTE_WINDOW_MINUTES as a 시험값 with its reason;
- * a value already there — a run before this one, or a developer's — is left as it is. Safe to run
- * twice at once: the second change of the same status and value is refused as unchanged
- * (docs/SETTINGS.md), so any refusal is read again before it fails the run. Returns the minutes in
- * force.
+ * while it is 미정, `admins.requester` asks for E2E_DISPUTE_WINDOW_MINUTES as a 시험값 with its
+ * reason and `admins.approver` approves it (미정 → a value is two admins', #331); a value already
+ * there — a run before this one, or a developer's — is left as it is. Safe to run twice at once
+ * (`changeReleaseSettingAs`). Returns the minutes in force.
  */
-export async function ensureDisputeWindow(context: APIRequestContext): Promise<number> {
-  const before = await disputeWindowMinutes(context);
+export async function ensureDisputeWindow(admins: ReleaseSettingAdmins): Promise<number> {
+  const before = await disputeWindowMinutes(admins.requester);
   if (before !== null) return before;
-  const entered = await context.patch(`/api/v1/admin/release-settings/${DISPUTE_WINDOW_KEY}`, {
-    data: {
-      status: 'test',
-      value: E2E_DISPUTE_WINDOW_MINUTES,
-      reason: E2E_DISPUTE_WINDOW_REASON,
-      expectedAccountId: await accountIdOf(context),
-    },
+  await changeReleaseSettingAs(admins, DISPUTE_WINDOW_KEY, {
+    status: 'test',
+    value: E2E_DISPUTE_WINDOW_MINUTES,
+    reason: E2E_DISPUTE_WINDOW_REASON,
   });
-  if (entered.ok()) return E2E_DISPUTE_WINDOW_MINUTES;
-  const after = await disputeWindowMinutes(context);
-  if (after !== null) return after;
-  throw new Error(
-    `entering ${DISPUTE_WINDOW_KEY} failed (${String(entered.status())}): ${await entered.text()}`,
-  );
+  return E2E_DISPUTE_WINDOW_MINUTES;
 }
 
 /**
@@ -2288,6 +2281,104 @@ export async function skipUnlessResolvable(admin: APIRequestContext): Promise<vo
       `out ${String(QUICK_DISPUTE_WINDOW_MAX_MINUTES)}분 at most (global-setup.ts enters ` +
       `${String(E2E_DISPUTE_WINDOW_MINUTES)}분 while it is 미정)`,
   );
+}
+
+// ---- 출시 설정의 2인 변경 (#331, ADR-0175) -----------------------------------------------------
+
+/** Why the other admin approves a suite's own change (1..500 characters). */
+const E2E_RELEASE_SETTING_APPROVAL_REASON = 'e2e: 다른 관리자가 시험값을 확인했습니다.';
+
+/** Who changes a release setting: one asks, the other approves when the item's rule wants two. */
+export interface ReleaseSettingAdmins {
+  requester: APIRequestContext;
+  approver: APIRequestContext;
+}
+
+/** The change a spec asks for: no value while 미정. */
+export interface ReleaseSettingTarget {
+  status: ReleaseSetting['status'];
+  value?: unknown;
+  reason: string;
+}
+
+const RELEASE_SETTINGS_PATH = '/api/v1/admin/release-settings';
+
+/** One item as `context`'s admin reads it. */
+export async function releaseSettingItem(
+  context: APIRequestContext,
+  key: string,
+): Promise<ReleaseSetting> {
+  const items = await unwrap<ReleaseSetting[]>(await context.get(RELEASE_SETTINGS_PATH));
+  const item = items.find((entry) => entry.key === key);
+  if (item === undefined) throw new Error(`no release setting ${key} is registered`);
+  return item;
+}
+
+/** Whether `item` holds `target`'s status and value (numbers, booleans and strings here). */
+function holds(item: ReleaseSetting, target: ReleaseSettingTarget): boolean {
+  const value = target.status === 'undecided' ? null : (target.value ?? null);
+  return item.status === target.status && JSON.stringify(item.value) === JSON.stringify(value);
+}
+
+/**
+ * Changes a release setting as two admins do it (#331, ADR-0175): `requester` sends the change;
+ * one admin's change is applied at once, and a two-admin one is a request `approver` approves.
+ * Safe to run twice at once, as the global setup's `ensure*` are: when another run's request for
+ * the same change waits (`request_pending`), whichever of the two did not ask approves it, and any
+ * other refusal (the change found done, a decision made first) is read again — the item holding
+ * the change passes. Answers the item as it then is; fails when it does not hold the change.
+ */
+export async function changeReleaseSettingAs(
+  admins: ReleaseSettingAdmins,
+  key: string,
+  target: ReleaseSettingTarget,
+): Promise<ReleaseSetting> {
+  const { requester, approver } = admins;
+  const [requesterId, approverId] = await Promise.all([
+    accountIdOf(requester),
+    accountIdOf(approver),
+  ]);
+  if (requesterId === approverId) throw new Error('a release setting change needs two admins');
+  const approve = (requestId: string, by: APIRequestContext, byId: string) =>
+    by.post(`${RELEASE_SETTINGS_PATH}/change-requests/${requestId}/approve`, {
+      data: { reason: E2E_RELEASE_SETTING_APPROVAL_REASON, expectedAccountId: byId },
+    });
+  const sent = await requester.patch(`${RELEASE_SETTINGS_PATH}/${key}`, {
+    data: {
+      status: target.status,
+      ...(target.status === 'undecided' ? {} : { value: target.value }),
+      reason: target.reason,
+      expectedAccountId: requesterId,
+    },
+  });
+  let failure = sent.ok() ? '' : `${String(sent.status())} ${await sent.text()}`;
+  if (sent.ok()) {
+    const result = ((await sent.json()) as { data: ReleaseSettingChangeResult }).data;
+    if (result.outcome === 'requested' && result.request !== null) {
+      const approved = await approve(result.request.id, approver, approverId);
+      if (!approved.ok()) failure = `${String(approved.status())} ${await approved.text()}`;
+    }
+  } else if (failure.includes('request_pending')) {
+    // Another run asked first: approve its request when it asks for the same change.
+    const waiting = await unwrap<ReleaseSettingChangeRequest[]>(
+      await requester.get(`${RELEASE_SETTINGS_PATH}/change-requests?status=pending&key=${key}`),
+    );
+    const request = waiting[0];
+    const same =
+      request !== undefined &&
+      request.after.status === target.status &&
+      JSON.stringify(request.after.value) ===
+        JSON.stringify(target.status === 'undecided' ? null : (target.value ?? null));
+    if (request !== undefined && same) {
+      const [by, byId] =
+        request.requestedBy.id === approverId ? [requester, requesterId] : [approver, approverId];
+      const approved = await approve(request.id, by, byId);
+      if (!approved.ok()) failure = `${String(approved.status())} ${await approved.text()}`;
+    }
+  }
+  const after = await releaseSettingItem(requester, key);
+  if (holds(after, target)) return after;
+  throw new Error(`changing ${key} failed: ${failure || 'the item does not hold the change'}`);
 }
 
 // ---- 시작 지급액 (#70, #116, 출시 설정) ------------------------------------------------------
@@ -2324,27 +2415,20 @@ export async function startCoinValue(context: APIRequestContext): Promise<number
  * Makes sure the start Coin has a value, for the suite's global setup (global-setup.ts): no admin
  * adjusts a balance since #116 (ADR-0107 결정 2 #73 7항: "e2e는 시험 DB의 시작 지급 설정값으로 Coin을
  * 받는다"), so the start grant is how every account a spec makes gets its Coin. While it is 미정,
- * `context`'s admin enters E2E_START_COIN as a 시험값 with its reason; a value already there is
- * left as it is. Safe to run twice at once, as `ensureDisputeWindow` is. Returns the amount in
- * force; a spec reads it (`startCoinValue`) rather than assuming this one.
+ * `admins.requester` asks for E2E_START_COIN as a 시험값 with its reason and `admins.approver`
+ * approves it (#331); a value already there is left as it is. Safe to run twice at once, as
+ * `ensureDisputeWindow` is. Returns the amount in force; a spec reads it (`startCoinValue`) rather
+ * than assuming this one.
  */
-export async function ensureStartCoin(context: APIRequestContext): Promise<number> {
-  const before = await startCoinValue(context);
+export async function ensureStartCoin(admins: ReleaseSettingAdmins): Promise<number> {
+  const before = await startCoinValue(admins.requester);
   if (before !== null) return before;
-  const entered = await context.patch(`/api/v1/admin/release-settings/${START_COIN_KEY}`, {
-    data: {
-      status: 'test',
-      value: E2E_START_COIN,
-      reason: E2E_START_COIN_REASON,
-      expectedAccountId: await accountIdOf(context),
-    },
+  await changeReleaseSettingAs(admins, START_COIN_KEY, {
+    status: 'test',
+    value: E2E_START_COIN,
+    reason: E2E_START_COIN_REASON,
   });
-  if (entered.ok()) return E2E_START_COIN;
-  const after = await startCoinValue(context);
-  if (after !== null) return after;
-  throw new Error(
-    `entering ${START_COIN_KEY} failed (${String(entered.status())}): ${await entered.text()}`,
-  );
+  return E2E_START_COIN;
 }
 
 /**
@@ -2467,33 +2551,25 @@ export async function regrantSettingValues(
 
 /**
  * Makes sure the six have values, for the suite's global setup (global-setup.ts; owner answer
- * 2026-11-21 12: "e2e는 시험값을 넣는다"): while one is 미정, `context`'s admin enters
- * `e2eRegrantValues(startCoin)`'s as a 시험값 with its reason; a value already there — a run before
- * this one, or a developer's — is left as it is, and regrant.spec.ts reads the ones in force. Safe
- * to run twice at once, as `ensureDisputeWindow` is. After `ensureStartCoin`, whose amount the
- * threshold is set under.
+ * 2026-11-21 12: "e2e는 시험값을 넣는다"): while one is 미정, `admins.requester` asks for
+ * `e2eRegrantValues(startCoin)`'s as a 시험값 with its reason and `admins.approver` approves it
+ * (#331); a value already there — a run before this one, or a developer's — is left as it is, and
+ * regrant.spec.ts reads the ones in force. Safe to run twice at once, as `ensureDisputeWindow` is.
+ * After `ensureStartCoin`, whose amount the threshold is set under.
  */
 export async function ensureRegrantSettings(
-  context: APIRequestContext,
+  admins: ReleaseSettingAdmins,
   startCoin: number,
 ): Promise<void> {
   const values = e2eRegrantValues(startCoin);
-  const before = await regrantSettingValues(context);
+  const before = await regrantSettingValues(admins.requester);
   for (const name of Object.keys(REGRANT_SETTING_KEYS) as RegrantSettingName[]) {
     if (before[name] !== null) continue;
-    const key = REGRANT_SETTING_KEYS[name];
-    const entered = await context.patch(`/api/v1/admin/release-settings/${key}`, {
-      data: {
-        status: 'test',
-        value: values[name],
-        reason: E2E_REGRANT_REASON,
-        expectedAccountId: await accountIdOf(context),
-      },
+    await changeReleaseSettingAs(admins, REGRANT_SETTING_KEYS[name], {
+      status: 'test',
+      value: values[name],
+      reason: E2E_REGRANT_REASON,
     });
-    if (entered.ok() || (await regrantSettingValues(context))[name] !== null) continue;
-    throw new Error(
-      `entering ${key} failed (${String(entered.status())}): ${await entered.text()}`,
-    );
   }
 }
 
@@ -2529,26 +2605,20 @@ async function releaseSettingValue(
 /**
  * Makes sure the order intake's settings have values, for the suite's global setup
  * (global-setup.ts) — the width before any spec submits a market for review, whose submission
- * needs one (OPEN_ITEMS_MISSING `priceProtection`) and copies it: while one is 미정, `context`'s
- * admin enters ORDER_SETTINGS' value as a 시험값 with its reason; a value already there — a run
- * before this one, or a developer's — is left as it is. Safe to run twice at once, as
- * `ensureDisputeWindow` is.
+ * needs one (OPEN_ITEMS_MISSING `priceProtection`) and copies it: while one is 미정,
+ * `admins.requester` enters ORDER_SETTINGS' value as a 시험값 with its reason — the rate limit at
+ * once (미정 → a value tightens it, one admin's), the intake's opening and the width with
+ * `admins.approver`'s approval (#331); a value already there — a run before this one, or a
+ * developer's — is left as it is. Safe to run twice at once, as `ensureDisputeWindow` is.
  */
-export async function ensureOrderSettings(context: APIRequestContext): Promise<void> {
+export async function ensureOrderSettings(admins: ReleaseSettingAdmins): Promise<void> {
   for (const { key, value } of Object.values(ORDER_SETTINGS)) {
-    if ((await releaseSettingValue(context, key)) !== null) continue;
-    const entered = await context.patch(`/api/v1/admin/release-settings/${key}`, {
-      data: {
-        status: 'test',
-        value,
-        reason: E2E_ORDER_SETTINGS_REASON,
-        expectedAccountId: await accountIdOf(context),
-      },
+    if ((await releaseSettingValue(admins.requester, key)) !== null) continue;
+    await changeReleaseSettingAs(admins, key, {
+      status: 'test',
+      value,
+      reason: E2E_ORDER_SETTINGS_REASON,
     });
-    if (entered.ok() || (await releaseSettingValue(context, key)) !== null) continue;
-    throw new Error(
-      `entering ${key} failed (${String(entered.status())}): ${await entered.text()}`,
-    );
   }
 }
 

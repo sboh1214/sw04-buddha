@@ -45,6 +45,7 @@ import {
   openOrderIntake,
   placeTestOrder,
   resumeMarket,
+  setReleaseSetting,
 } from '@buddha/db/test';
 import {
   MARKET_NO_FILL_CANCEL_REASON,
@@ -1026,18 +1027,13 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
     );
     const pub = data<Market>(await publicDetail(market.id));
     expect(pub).toMatchObject({ status: 'closed', closeAt: market.closeAt.toISOString() });
-    const window = await t.app.inject({
-      method: 'PATCH',
-      url: '/api/v1/admin/release-settings/market.dispute_window',
-      headers: { ...jsonHeaders, cookie: asker.cookie },
-      payload: {
-        status: 'test',
-        value: 1_440,
-        reason: '이의 기간 시험값',
-        expectedAccountId: asker.id,
-      },
+    await setReleaseSetting(t.db, {
+      adminId: asker.id,
+      key: 'market.dispute_window',
+      status: 'test',
+      value: 1_440,
+      reason: '이의 기간 시험값',
     });
-    expect(window.statusCode).toBe(200);
     const judgements = `${marketUrl(market.id)}/judgements`;
     const evidence = {
       links: ['https://example.com/schedule'],

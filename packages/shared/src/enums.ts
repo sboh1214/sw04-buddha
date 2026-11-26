@@ -808,7 +808,10 @@ export const ADMIN_ACTION_TYPES = [
   /**
    * A release setting's status and value changed (#170): target `release_setting` / its key,
    * payload `{key, before: {status, value}, after: {status, value}, reason}`. A constraint
-   * trigger (migration 0020) refuses a release_settings write without this row.
+   * trigger (migration 0020) refuses a release_settings write without this row. Since #331
+   * (ADR-0175) the payload adds `path` (`one_admin` | `two_admin`) and `basis`, and a two-admin
+   * change `approval: {id, requestedBy, requestedAt, decisionReason}`: its writer (`admin_id`) is
+   * the approver and its reason the request's.
    */
   'release_setting_change',
   /**
@@ -1090,6 +1093,17 @@ export const ADMIN_ACTION_TYPES = [
   'signup_allowlist_clear_reject',
   /** Its requester retracted it before a decision, nothing deleted: payload `{approvalId}`. */
   'signup_allowlist_clear_retract',
+  /**
+   * 출시 설정 변경의 묶음별 승인 (#331, ADR-0175): an admin asked for a release setting change that
+   * needs another admin's approval — target `release_setting` / its key; payload `{approvalId, key,
+   * before, after, reason, basis}`, a `release_setting_change` approval request. Nothing changes
+   * until the approval, which writes `release_setting_change` (by the approver).
+   */
+  'release_setting_change_request',
+  /** Another admin rejected it, nothing changed: payload `{approvalId, key, reason}`. */
+  'release_setting_change_reject',
+  /** Its requester retracted it before a decision, nothing changed: payload `{approvalId, key}`. */
+  'release_setting_change_retract',
 ] as const;
 export type AdminActionType = (typeof ADMIN_ACTION_TYPES)[number];
 export const adminActionTypeSchema = z.enum(ADMIN_ACTION_TYPES);

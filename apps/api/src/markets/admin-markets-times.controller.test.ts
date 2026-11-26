@@ -4,7 +4,8 @@
  * entered and read back, the zone as given; the order rules refused on entry naming both ends in
  * whole minutes, the sent end first; the lead close never refused on a draft, named by the
  * open-items check at the gap in force (the release setting `market.lead_close_gap`, undecided
- * until a test enters it through /admin/release-settings) and stored by the review submission (the
+ * until a test enters it with its change record, `setReleaseSetting`) and stored by the review
+ * submission (the
  * open keeps it, #21); an open market's times refused on the PATCH, its rule version's items, and
  * the scheduled open and judgement taken by no supplement (#80: the close moved later only and up
  * to the scheduled judgement, and the lead close checked again, are the supplement's —
@@ -159,15 +160,18 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
       ...input,
     });
 
-  /** The release setting `market.lead_close_gap` as an admin enters it (a test value). */
+  /**
+   * The release setting `market.lead_close_gap` (a test value), written with its change record by
+   * the DB factory (the API's two-admin path for it is the release-settings suites', #331).
+   */
   async function setGap(value: number) {
-    const res = await t.app.inject({
-      method: 'PATCH',
-      url: '/api/v1/admin/release-settings/market.lead_close_gap',
-      headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: { status: 'test', value, reason: '선행 마감 시험값', expectedAccountId: admin.id },
+    await setReleaseSetting(t.db, {
+      adminId: admin.id,
+      key: 'market.lead_close_gap',
+      status: 'test',
+      value,
+      reason: '선행 마감 시험값',
     });
-    expect(res.statusCode).toBe(200);
   }
 
   const data = <T>(res: { json: <U>() => U }) => res.json<{ data: T }>().data;

@@ -6,6 +6,7 @@ import {
   createJudgementRequest,
   createMarket,
   createProvisionalMarket,
+  setReleaseSetting,
 } from '@buddha/db/test';
 import {
   adminMarketConflictsSchema,
@@ -48,18 +49,14 @@ describe.skipIf(!hasTestInfra)('market interests and decision eligibility (#143)
     first = await member(true);
     second = await member(true);
     third = await member(true);
-    const res = await t.app.inject({
-      method: 'PATCH',
-      url: '/api/v1/admin/release-settings/market.dispute_window',
-      headers: { origin: 'http://localhost:3000', cookie: first.cookie },
-      payload: {
-        expectedAccountId: first.id,
-        status: 'test',
-        value: 1440,
-        reason: '시험 이의 기간',
-      },
+    // The DB factory: the API's two-admin path for it is the release-settings suites' (#331).
+    await setReleaseSetting(t.db, {
+      adminId: first.id,
+      key: 'market.dispute_window',
+      status: 'test',
+      value: 1440,
+      reason: '시험 이의 기간',
     });
-    expect(res.statusCode, res.body).toBe(200);
   });
   const url = (id: string) => `/api/v1/admin/markets/${id}`;
   const post = (path: string, who: TestUser, payload: Record<string, unknown> = {}) =>

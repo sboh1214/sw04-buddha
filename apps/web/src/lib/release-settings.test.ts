@@ -1,4 +1,6 @@
 import {
+  RELEASE_SETTING_CHANGE_BASES,
+  RELEASE_SETTINGS,
   RELEASE_SETTING_REASON_MAX_LENGTH,
   RELEASE_SETTING_STATUSES,
   RELEASE_SETTING_STATUS_LABELS,
@@ -25,6 +27,13 @@ import {
   releaseSettingsView,
   replaceReleaseSetting,
   toReleaseSettingChangeBody,
+  RELEASE_SETTING_BASIS_TEXT,
+  changeRequestActions,
+  releaseSettingApprovalSummary,
+  releaseSettingChangePreview,
+  releaseSettingDecisionReasonError,
+  releaseSettingPathBadge,
+  releaseSettingRequestFailure,
 } from './release-settings';
 
 const INTEGER = {
@@ -50,6 +59,8 @@ function item(overrides: Partial<ReleaseSetting> = {}): ReleaseSetting {
     value: null,
     updatedAt: null,
     updatedBy: null,
+    approval: { group: 'observation' },
+    pendingRequest: null,
     ...overrides,
   };
 }
@@ -416,5 +427,174 @@ describe('replaceReleaseSetting', () => {
     expect(replaceReleaseSetting(list, fresh)).toEqual([list[0], fresh]);
     expect(replaceReleaseSetting(list, item({ key: 'z' }))).toBe(list);
     expect(replaceReleaseSetting(undefined, fresh)).toBeUndefined();
+  });
+});
+
+// ---- 묶음별 승인 (#331, ADR-0175) -------------------------------------------------------------
+
+/** The shipped item of `key`, as the list answers it. */
+function shipped(key: string, overrides: Partial<ReleaseSetting> = {}): ReleaseSetting {
+  const definition = RELEASE_SETTINGS.get(key)!;
+  return item({
+    key,
+    label: definition.label,
+    approval: definition.approval,
+    ...overrides,
+  });
+}
+
+describe('releaseSettingApprovalSummary (#331)', () => {
+  it('says each item’s rule in one line, by its group and direction', () => {
+    const summary = (key: string) =>
+      releaseSettingApprovalSummary(RELEASE_SETTINGS.get(key)!.approval);
+    expect(summary('market_maker.concentration_top_n')).toBe(
+      copy.adminReleaseSettingRuleObservation,
+    );
+    expect(summary('order.accepting')).toBe(copy.adminReleaseSettingRuleIntake);
+    expect(summary('retention.notifications')).toBe(copy.adminReleaseSettingRuleRetention);
+    expect(summary('grant.start_coin')).toBe(copy.adminReleaseSettingRuleLower);
+    expect(summary('grant.regrant_wait_hours')).toBe(copy.adminReleaseSettingRuleHigher);
+    expect(summary('order.rate_limit')).toBe(copy.adminReleaseSettingRuleRateLimit);
+    expect(summary('market.dispute_window')).toBe(copy.adminReleaseSettingRuleDisputeWindow);
+    expect(summary('market.lead_close_gap')).toBe(copy.adminReleaseSettingRuleNoDirection);
+    expect(summary('market_maker.halt_at_bp')).toBe(copy.adminReleaseSettingRuleStage);
+    // Every basis has its sentence.
+    expect(Object.keys(RELEASE_SETTING_BASIS_TEXT)).toEqual([...RELEASE_SETTING_CHANGE_BASES]);
+    expect(releaseSettingPathBadge('one_admin')).toBe(copy.adminReleaseSettingPathOneBadge);
+    expect(releaseSettingPathBadge('two_admin')).toBe(copy.adminReleaseSettingPathTwoBadge);
+    expect(releaseSettingPathBadge(null)).toBe(NO_VALUE);
+  });
+});
+
+describe('releaseSettingChangePreview (#331)', () => {
+  it('previews one admin for a lowering and two for a raise, nothing while unreadable or unchanged', () => {
+    const start = shipped('grant.start_coin', { status: 'test', value: 1000 });
+    const one = releaseSettingChangePreview({ status: 'test', value: '900' }, start, [start]);
+    expect(one).toMatchObject({ path: 'one_admin', basis: 'reduce', blocked: false });
+    expect(one?.message).toContain(copy.adminReleaseSettingPathOne);
+    const two = releaseSettingChangePreview({ status: 'test', value: '1100' }, start, [start]);
+    expect(two).toMatchObject({ path: 'two_admin', basis: 'increase' });
+    expect(two?.message).toContain(copy.adminReleaseSettingPathTwo);
+    expect(releaseSettingChangePreview({ status: 'test', value: 'x' }, start, [start])).toBeNull();
+    expect(
+      releaseSettingChangePreview({ status: 'test', value: '1000' }, start, [start]),
+    ).toBeNull();
+  });
+
+  it('blocks a two-admin change while the item has a waiting request', () => {
+    const waiting = shipped('grant.start_coin', {
+      status: 'test',
+      value: 1000,
+      pendingRequest: { id: 'r' } as ReleaseSetting['pendingRequest'],
+    });
+    expect(
+      releaseSettingChangePreview({ status: 'test', value: '1100' }, waiting, [waiting])?.blocked,
+    ).toBe(true);
+    // A one-admin change is never blocked (I-d).
+    expect(
+      releaseSettingChangePreview({ status: 'test', value: '900' }, waiting, [waiting])?.blocked,
+    ).toBe(false);
+  });
+
+  it('says how to make a lowering of an approved value one admin’s (331-6)', () => {
+    const approved = shipped('grant.start_coin', { status: 'approved', value: 1000 });
+    expect(
+      releaseSettingChangePreview({ status: 'approved', value: '900' }, approved, [approved]),
+    ).toMatchObject({ path: 'two_admin', approvedHint: true });
+    expect(
+      releaseSettingChangePreview({ status: 'approved', value: '1100' }, approved, [approved]),
+    ).toMatchObject({ path: 'two_admin', approvedHint: false });
+  });
+
+  it('reads the three risk stages from the list (331-2)', () => {
+    const reduce = shipped('market_maker.reduce_at_bp', { status: 'test', value: 7000 });
+    const halt = shipped('market_maker.halt_at_bp', { status: 'test', value: 9000 });
+    const ratio = shipped('market_maker.reduce_ratio_bp', { status: 'test', value: 5000 });
+    const list = [reduce, halt, ratio];
+    expect(
+      releaseSettingChangePreview({ status: 'test', value: '9500' }, reduce, list),
+    ).toMatchObject({ path: 'one_admin', basis: 'stage_stop' });
+    expect(
+      releaseSettingChangePreview({ status: 'test', value: '8000' }, reduce, list),
+    ).toMatchObject({ path: 'two_admin', basis: 'increase' });
+  });
+});
+
+describe('the change requests (#331)', () => {
+  it('maps the new refusals of a change to a toast that closes the dialog', () => {
+    expect(
+      releaseSettingChangeRefusal(
+        apiError(409, 'RELEASE_SETTING_NOT_ALLOWED', { reason: 'request_pending' }),
+      ),
+    ).toEqual({ toast: copy.errReleaseSettingRequestPending, tone: 'error', keepDialog: false });
+    expect(
+      releaseSettingChangeRefusal(
+        apiError(409, 'APPROVAL_NOT_ALLOWED', [{ path: ['request'], message: 'no_decider' }]),
+      ),
+    ).toEqual({ toast: copy.errReleaseSettingNoDecider, tone: 'error', keepDialog: false });
+  });
+
+  it('maps a refused decision or retraction', () => {
+    expect(
+      releaseSettingRequestFailure(
+        apiError(409, 'RELEASE_SETTING_NOT_ALLOWED', { reason: 'stale' }),
+      ),
+    ).toEqual({ message: copy.errReleaseSettingStale });
+    expect(
+      releaseSettingRequestFailure(
+        apiError(409, 'RELEASE_SETTING_NOT_ALLOWED', { reason: 'requester_ineligible' }),
+      ),
+    ).toEqual({ message: copy.errReleaseSettingRequesterIneligible });
+    for (const [reason, message] of [
+      ['requester', copy.errApprovalRequester],
+      ['decided', copy.errApprovalDecided],
+      ['retracted', copy.errApprovalRetracted],
+      ['not_requester', copy.errApprovalNotRequester],
+    ] as const) {
+      expect(
+        releaseSettingRequestFailure(
+          apiError(409, 'APPROVAL_NOT_ALLOWED', [{ path: ['request'], message: reason }]),
+        ),
+      ).toEqual({ message });
+    }
+    expect(
+      releaseSettingRequestFailure(
+        apiError(400, 'VALIDATION_ERROR', [{ path: ['reason'], message: 'x' }]),
+      ),
+    ).toEqual({ field: 'reason', message: copy.errReleaseSettingDecisionReason });
+    expect(releaseSettingRequestFailure(apiError(404, 'NOT_FOUND'))).toEqual({
+      message: copy.errReleaseSettingRequestNotFound,
+    });
+    expect(releaseSettingDecisionReasonError('  ')).toBe(copy.errReleaseSettingDecisionReason);
+    expect(releaseSettingDecisionReasonError('확인')).toBeUndefined();
+  });
+
+  it('lets the requester retract and any other admin decide, never a stale approval', () => {
+    const request = {
+      requestedBy: { id: 'a', nickname: null },
+      status: 'pending',
+      stale: false,
+    } as const;
+    expect(changeRequestActions(request, 'a')).toEqual({
+      own: true,
+      canApprove: false,
+      canReject: false,
+      canRetract: true,
+    });
+    expect(changeRequestActions(request, 'b')).toEqual({
+      own: false,
+      canApprove: true,
+      canReject: true,
+      canRetract: false,
+    });
+    expect(changeRequestActions({ ...request, stale: true }, 'b').canApprove).toBe(false);
+    expect(changeRequestActions({ ...request, status: 'approved' }, 'b')).toMatchObject({
+      canApprove: false,
+      canReject: false,
+    });
+    expect(changeRequestActions(request, undefined)).toMatchObject({
+      canApprove: false,
+      canRetract: false,
+    });
   });
 });

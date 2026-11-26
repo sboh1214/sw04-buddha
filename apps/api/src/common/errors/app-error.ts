@@ -96,6 +96,10 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   // The list's own rules refuse the write (#330, ADR-0174): its last entry, an empty list's
   // clear, a second clear waiting — a conflict with the list as it stands.
   SIGNUP_ALLOWLIST_NOT_ALLOWED: HttpStatus.CONFLICT,
+  // A release setting change's own rules refuse it (#331, ADR-0175): a request that waits for the
+  // key already, an item changed since the request, a requester no longer an admin — a conflict
+  // with the state as it stands.
+  RELEASE_SETTING_NOT_ALLOWED: HttpStatus.CONFLICT,
   INTERNAL: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 

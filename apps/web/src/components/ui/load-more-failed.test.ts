@@ -305,6 +305,7 @@ describe('the notice above a 더 보기 that failed', () => {
         'useReconciliationHolds',
         'useReconciliationResults',
         'useRelatedMarkets',
+        'useReleaseSettingChangeRequests',
         'useReleaseSettingChanges',
         'useRetentionPurges',
         'useSettlementHistory',
