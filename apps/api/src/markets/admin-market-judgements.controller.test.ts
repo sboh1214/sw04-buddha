@@ -48,6 +48,7 @@ import {
   openOrderIntake,
   placeTestOrder,
   resolveMarketNow,
+  setReleaseSetting,
   tradeOnce,
 } from '@buddha/db/test';
 import {
@@ -169,21 +170,17 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
     t.app.inject({ method: 'GET', url, headers: { cookie: who.cookie } });
 
   /**
-   * The release setting `market.dispute_window` as an admin enters it — a test value in minutes —
-   * or back to undecided (`null`).
+   * The release setting `market.dispute_window` — a test value in minutes — or back to undecided
+   * (`null`), written with its change record by the DB factory (the API's two-admin path for it is
+   * the release-settings suites', #331).
    */
   async function setWindow(value: number | null) {
-    const res = await t.app.inject({
-      method: 'PATCH',
-      url: '/api/v1/admin/release-settings/market.dispute_window',
-      headers: { ...jsonHeaders, cookie: registrant.cookie },
-      payload: {
-        ...(value === null ? { status: 'undecided' } : { status: 'test', value }),
-        reason: '이의 기간 시험값',
-        expectedAccountId: registrant.id,
-      },
+    await setReleaseSetting(t.db, {
+      adminId: registrant.id,
+      key: 'market.dispute_window',
+      ...(value === null ? { status: 'undecided', value: null } : { status: 'test', value }),
+      reason: '이의 기간 시험값',
     });
-    expect(res.statusCode, res.body).toBe(200);
   }
 
   const marketUrl = (id: string) => `/api/v1/admin/markets/${id}`;

@@ -1,9 +1,20 @@
 import {
+  APPROVAL_REASON_MAX_LENGTH,
   RELEASE_SETTING_REASON_MAX_LENGTH,
+  RELEASE_SETTING_STAGE_SLOTS,
   RELEASE_SETTING_STATUS_LABELS,
   RELEASE_SETTING_UNCHANGED_MESSAGE,
+  type ApprovalStatus,
+  type ReleaseSettingApprovalRule,
+  type ReleaseSettingChangeBasis,
+  type ReleaseSettingChangePath,
+  type ReleaseSettingRefusal,
+  type ReleaseSettingStageSlot,
+  type ReleaseSettingState as SharedReleaseSettingState,
   type ReleaseSettingStatus,
+  classifyReleaseSettingChange,
   isReleaseSettingUnchanged,
+  releaseSettingNotAllowedDetailsSchema,
   releaseSettingStatusSchema,
 } from '@buddha/shared';
 import * as z from 'zod';
@@ -13,6 +24,7 @@ import {
   isForAnotherAccount,
   type ReleaseSetting,
   type ReleaseSettingChangeBody,
+  type ReleaseSettingChangeRequest,
   type ReleaseSettingState,
   validationField,
   validationMessage,
@@ -217,6 +229,22 @@ export function releaseSettingFormUnchanged(
   );
 }
 
+/** What each refusal of RELEASE_SETTING_NOT_ALLOWED says. */
+const REFUSAL_MESSAGE: Readonly<Record<ReleaseSettingRefusal, string>> = {
+  request_pending: copy.errReleaseSettingRequestPending,
+  stale: copy.errReleaseSettingStale,
+  requester_ineligible: copy.errReleaseSettingRequesterIneligible,
+};
+
+/** The two-person rule's refusals (APPROVAL_NOT_ALLOWED), as the other approval screens say them. */
+const APPROVAL_MESSAGE: Readonly<Record<string, string>> = {
+  no_decider: copy.errReleaseSettingNoDecider,
+  requester: copy.errApprovalRequester,
+  decided: copy.errApprovalDecided,
+  retracted: copy.errApprovalRetracted,
+  not_requester: copy.errApprovalNotRequester,
+};
+
 /**
  * What the dialog does with a refused change.
  * - `field`: the reason or the value was refused; the message goes under that field and the
@@ -235,6 +263,9 @@ export type ReleaseSettingChangeRefusal =
 
 export function releaseSettingChangeRefusal(error: unknown): ReleaseSettingChangeRefusal {
   if (!isApiError(error)) return { toast: copy.errUnknown, tone: 'error', keepDialog: true };
+  // Each code check below narrows `error` away from ApiError once it fails; the details are read
+  // from the error as it came.
+  const { details: errorDetails } = error;
   if (isApiError(error, 'VALIDATION_ERROR')) {
     const field = validationField(error);
     if (field === 'reason') return { field, message: copy.errReleaseSettingReason };
@@ -246,6 +277,26 @@ export function releaseSettingChangeRefusal(error: unknown): ReleaseSettingChang
   }
   if (isApiError(error, 'NOT_FOUND')) {
     return { toast: copy.errReleaseSettingNotFound, tone: 'error', keepDialog: false };
+  }
+  // #331: a two-admin change of a key whose request waits, or one no other admin could decide.
+  if (isApiError(error, 'RELEASE_SETTING_NOT_ALLOWED')) {
+    const details = releaseSettingNotAllowedDetailsSchema.safeParse(errorDetails);
+    return {
+      toast: details.success ? REFUSAL_MESSAGE[details.data.reason] : copy.errUnknown,
+      tone: 'error',
+      keepDialog: false,
+    };
+  }
+  if (isApiError(error, 'APPROVAL_NOT_ALLOWED')) {
+    const reason = validationMessage(error);
+    return {
+      toast:
+        reason !== undefined && Object.hasOwn(APPROVAL_MESSAGE, reason)
+          ? APPROVAL_MESSAGE[reason]!
+          : copy.errUnknown,
+      tone: 'error',
+      keepDialog: false,
+    };
   }
   if (isApiError(error, 'UNAUTHENTICATED')) {
     return { toast: copy.errUnauthenticated, tone: 'error', keepDialog: false };
@@ -300,4 +351,179 @@ export function replaceReleaseSetting(
 export function releaseSettingSchemaHint(valueSchema: ValueSchema): string {
   const { $schema: _ignored, ...rest } = valueSchema;
   return compactJson(rest);
+}
+
+// ---- 묶음별 승인 (#331, ADR-0175) -------------------------------------------------------------
+
+/**
+ * An item's approval rule in one line (the list's '변경 승인'): its group and which changes one admin
+ * makes at once. That 승인됨 is two admins' for every item is said once, under the legend.
+ */
+export function releaseSettingApprovalSummary(rule: ReleaseSettingApprovalRule): string {
+  if (rule.group === 'observation') return copy.adminReleaseSettingRuleObservation;
+  if (rule.group === 'order_intake') return copy.adminReleaseSettingRuleIntake;
+  if (rule.group === 'retention') return copy.adminReleaseSettingRuleRetention;
+  if (rule.stage !== undefined) return copy.adminReleaseSettingRuleStage;
+  if (rule.undecided === 'block') return copy.adminReleaseSettingRuleDisputeWindow;
+  if (rule.undecided === 'loosen') return copy.adminReleaseSettingRuleRateLimit;
+  if (rule.reduce === 'lower') return copy.adminReleaseSettingRuleLower;
+  if (rule.reduce === 'higher') return copy.adminReleaseSettingRuleHigher;
+  return copy.adminReleaseSettingRuleNoDirection;
+}
+
+/** Why a change takes its path, as the dialog, the requests and the change log say it. */
+export const RELEASE_SETTING_BASIS_TEXT: Readonly<Record<ReleaseSettingChangeBasis, string>> = {
+  approved_target: copy.adminReleaseSettingBasisApprovedTarget,
+  status_only: copy.adminReleaseSettingBasisStatusOnly,
+  observation: copy.adminReleaseSettingBasisObservation,
+  intake_open: copy.adminReleaseSettingBasisIntakeOpen,
+  intake_close: copy.adminReleaseSettingBasisIntakeClose,
+  undecided_stop: copy.adminReleaseSettingBasisUndecidedStop,
+  undecided_loosens: copy.adminReleaseSettingBasisUndecidedLoosens,
+  undecided_blocks: copy.adminReleaseSettingBasisUndecidedBlocks,
+  enter_value: copy.adminReleaseSettingBasisEnterValue,
+  enter_tightens: copy.adminReleaseSettingBasisEnterTightens,
+  stage_stop: copy.adminReleaseSettingBasisStageStop,
+  stage_resume: copy.adminReleaseSettingBasisStageResume,
+  reduce: copy.adminReleaseSettingBasisReduce,
+  increase: copy.adminReleaseSettingBasisIncrease,
+  no_direction: copy.adminReleaseSettingBasisNoDirection,
+};
+
+/** The change log's badge of a path: 1인 즉시, 2인 승인, or none for a record before #331. */
+export function releaseSettingPathBadge(path: ReleaseSettingChangePath | null): string {
+  if (path === 'one_admin') return copy.adminReleaseSettingPathOneBadge;
+  if (path === 'two_admin') return copy.adminReleaseSettingPathTwoBadge;
+  return NO_VALUE;
+}
+
+/** A request's status as the requests list names it. */
+export const RELEASE_SETTING_REQUEST_STATUS: Readonly<Record<ApprovalStatus, string>> = {
+  pending: copy.adminReleaseSettingStatusPending,
+  approved: copy.adminReleaseSettingStatusApproved,
+  rejected: copy.adminReleaseSettingStatusRejected,
+  retracted: copy.adminReleaseSettingStatusRetracted,
+};
+
+/** The three risk stages' states as the list holds them, by slot (#129). */
+function stageStates(
+  items: readonly Pick<ReleaseSetting, 'status' | 'value' | 'approval'>[],
+): Record<ReleaseSettingStageSlot, SharedReleaseSettingState | undefined> {
+  const states = Object.fromEntries(
+    RELEASE_SETTING_STAGE_SLOTS.map((slot) => [slot, undefined]),
+  ) as Record<ReleaseSettingStageSlot, SharedReleaseSettingState | undefined>;
+  for (const item of items) {
+    const { approval } = item;
+    if ('stage' in approval && approval.stage !== undefined) {
+      states[approval.stage] = { status: item.status, value: item.value };
+    }
+  }
+  return states;
+}
+
+/**
+ * The path the dialog's change would take, as the server will judge it
+ * (`classifyReleaseSettingChange` on the item and the list as the screen holds them): null while the
+ * change is no change or its value cannot be read yet. `blocked`: a two-admin change of an item
+ * whose request waits (`request_pending`). `approvedHint`: an item at 승인됨 asked to stay there
+ * with a new value — saying how to make it one admin's (331-6). The server reads the row again
+ * under its lock, so its answer is the one that counts.
+ */
+export function releaseSettingChangePreview(
+  values: Pick<ReleaseSettingFormValues, 'status' | 'value'>,
+  item: Pick<ReleaseSetting, 'status' | 'value' | 'valueSchema' | 'approval' | 'pendingRequest'>,
+  items: readonly Pick<ReleaseSetting, 'status' | 'value' | 'approval'>[],
+): {
+  path: ReleaseSettingChangePath;
+  basis: ReleaseSettingChangeBasis;
+  message: string;
+  blocked: boolean;
+  approvedHint: boolean;
+} | null {
+  let after: SharedReleaseSettingState;
+  if (values.status === 'undecided') after = { status: 'undecided', value: null };
+  else {
+    const parsed = parseReleaseSettingValueText(values.value, item.valueSchema);
+    if (!parsed.ok) return null;
+    after = { status: values.status, value: parsed.value };
+  }
+  const current = { status: item.status, value: item.value };
+  const { approval } = item;
+  const stages =
+    'stage' in approval && approval.stage !== undefined ? stageStates(items) : undefined;
+  const result = classifyReleaseSettingChange(approval, current, after, stages);
+  if (result.path === 'unchanged') return null;
+  const basis = RELEASE_SETTING_BASIS_TEXT[result.basis];
+  const two = result.path === 'two_admin';
+  return {
+    path: result.path,
+    basis: result.basis,
+    message: `${two ? copy.adminReleaseSettingPathTwo : copy.adminReleaseSettingPathOne} (${basis})`,
+    blocked: two && item.pendingRequest !== null,
+    approvedHint:
+      two &&
+      item.status === 'approved' &&
+      after.status === 'approved' &&
+      classifyReleaseSettingChange(approval, current, { ...after, status: 'test' }, stages).path ===
+        'one_admin',
+  };
+}
+
+/** The reason a decision takes: 1–500 characters after trimming, as `approvalReasonSchema`. */
+export function releaseSettingDecisionReasonError(reason: string): string | undefined {
+  const trimmed = reason.trim();
+  return trimmed.length === 0 || trimmed.length > APPROVAL_REASON_MAX_LENGTH
+    ? copy.errReleaseSettingDecisionReason
+    : undefined;
+}
+
+/**
+ * What the screen says of a refused decision or retraction: under the reason field, or one toast —
+ * the requests are read again either way (`useDecideReleaseSettingChange`).
+ */
+export function releaseSettingRequestFailure(
+  error: unknown,
+): { field: 'reason'; message: string } | { message: string } {
+  if (isApiError(error, 'VALIDATION_ERROR')) {
+    return validationField(error) === 'reason'
+      ? { field: 'reason', message: copy.errReleaseSettingDecisionReason }
+      : { message: copy.errUnknown };
+  }
+  if (isApiError(error, 'RELEASE_SETTING_NOT_ALLOWED')) {
+    const details = releaseSettingNotAllowedDetailsSchema.safeParse(error.details);
+    return { message: details.success ? REFUSAL_MESSAGE[details.data.reason] : copy.errUnknown };
+  }
+  if (isApiError(error, 'APPROVAL_NOT_ALLOWED')) {
+    const reason = validationMessage(error);
+    return {
+      message:
+        reason !== undefined && Object.hasOwn(APPROVAL_MESSAGE, reason)
+          ? APPROVAL_MESSAGE[reason]!
+          : copy.errUnknown,
+    };
+  }
+  if (isApiError(error, 'NOT_FOUND')) return { message: copy.errReleaseSettingRequestNotFound };
+  if (isApiError(error, 'UNAUTHENTICATED')) return { message: copy.errUnauthenticated };
+  if (isForAnotherAccount(error)) return { message: copy.sessionChanged };
+  if (isApiError(error, 'FORBIDDEN')) return { message: copy.adminOnly };
+  return { message: copy.errUnknown };
+}
+
+/**
+ * What the admin on screen may do with a request: its requester retracts it while it waits and
+ * decides nothing of it; any other admin approves (not while it is `stale`) or rejects it. Nothing
+ * once it is decided or retracted, or while the admin on screen is unknown (`GET /me`).
+ */
+export function changeRequestActions(
+  request: Pick<ReleaseSettingChangeRequest, 'requestedBy' | 'status' | 'stale'>,
+  operatorId: string | undefined,
+): { own: boolean; canApprove: boolean; canReject: boolean; canRetract: boolean } {
+  const own = operatorId !== undefined && request.requestedBy.id === operatorId;
+  const open = operatorId !== undefined && request.status === 'pending';
+  return {
+    own,
+    canApprove: open && !own && !request.stale,
+    canReject: open && !own,
+    canRetract: open && own,
+  };
 }

@@ -77,6 +77,7 @@ export * from './realtime.js';
 export * from './regrant.js';
 export * from './related-markets.js';
 export * from './release-settings.js';
+export * from './release-setting-approvals.js';
 export * from './retention.js';
 export * from './search-history.js';
 export * from './signup-allowlist.js';

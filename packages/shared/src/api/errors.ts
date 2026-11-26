@@ -258,6 +258,13 @@ export const ERROR_CODES = [
    * signupAllowlistNotAllowedDetailsSchema in signup-allowlist.ts.
    */
   'SIGNUP_ALLOWLIST_NOT_ALLOWED',
+  /**
+   * A release setting change or a change request's approval its rules refuse (#331, ADR-0175): a
+   * two-admin change of a key whose request waits already, the approval of a request whose item
+   * changed since, or whose requester is no longer an open admin. The details carry the reason,
+   * releaseSettingNotAllowedDetailsSchema in release-settings.ts.
+   */
+  'RELEASE_SETTING_NOT_ALLOWED',
   'INTERNAL',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

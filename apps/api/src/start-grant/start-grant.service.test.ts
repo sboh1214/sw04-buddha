@@ -15,6 +15,7 @@ import {
   createPhoneVerification,
   createUser,
   ledgerOf as accountLedgerOf,
+  setReleaseSetting,
 } from '@buddha/db/test';
 import {
   START_COIN_SETTING,
@@ -26,7 +27,6 @@ import { asc, eq } from 'drizzle-orm';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PhoneHasher } from '../identity/phone-hash.js';
-import { ReleaseSettingsService } from '../release-settings/release-settings.service.js';
 import { expectLedgerChain } from '../test/ledger.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { discoverRoutes } from '../test/routes.js';
@@ -73,17 +73,17 @@ describe.skipIf(!hasTestInfra)('StartGrantService (integration)', () => {
     operator = (await createUser(t.db, { role: 'admin' })).user.id;
   });
 
-  /** The release setting `grant.start_coin`, changed as an admin does it, with a reason. */
+  /**
+   * The release setting `grant.start_coin`, written with its change record (the DB factory: the
+   * API's two-admin path for it is `release-settings` suites', #331).
+   */
   async function setAmount(value: number | null, status: ReleaseSettingStatus = 'test') {
-    await t.app
-      .get(ReleaseSettingsService)
-      .change(
-        operator,
-        START_COIN_SETTING.key,
-        value === null
-          ? { status: 'undecided', reason: '미정으로 되돌림' }
-          : { status, value, reason: '시험' },
-      );
+    await setReleaseSetting(
+      t.db,
+      value === null
+        ? { adminId: operator, key: START_COIN_SETTING.key, status: 'undecided', value: null }
+        : { adminId: operator, key: START_COIN_SETTING.key, status, value },
+    );
   }
 
   /** A signed-up account with a verified number (#183's record). */

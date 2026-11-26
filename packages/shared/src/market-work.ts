@@ -178,6 +178,9 @@ export const MARKET_WORK_EXCLUDED_ACTIONS: Readonly<
   signup_allowlist_clear_approve: 'the signup allowlist: no market',
   signup_allowlist_clear_reject: 'the signup allowlist: no market',
   signup_allowlist_clear_retract: 'the signup allowlist: no market',
+  release_setting_change_request: 'a release setting: no market',
+  release_setting_change_reject: 'a release setting: no market',
+  release_setting_change_retract: 'a release setting: no market',
 };
 
 /** The shown admin action types, in ADMIN_ACTION_TYPES order. */

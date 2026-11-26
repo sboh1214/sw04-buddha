@@ -37,6 +37,8 @@ const defaults: ReleaseSetting[] = Object.values(MARKET_LIQUIDITY_DEFAULT_SETTIN
     value: definition === MARKET_LIQUIDITY_DEFAULT_SETTINGS.budgetCoin ? '12345' : null,
     updatedAt: null,
     updatedBy: null,
+    approval: definition.approval,
+    pendingRequest: null,
   }),
 );
 const draw = (

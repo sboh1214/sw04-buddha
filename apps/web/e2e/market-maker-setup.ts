@@ -1,6 +1,6 @@
 import type { APIRequestContext, APIResponse } from '@playwright/test';
 import type { AdminTreasury, ReleaseSetting, TreasuryIssueWrite } from '@buddha/shared';
-import { accountIdOf } from './helpers';
+import { accountIdOf, changeReleaseSettingAs } from './helpers';
 import { correctionFixtureUrls } from './reconciliation-correction-worker.mjs';
 
 export type MarketMakerE2eProfile = 'regression' | 'quotes' | 'treasury';
@@ -67,18 +67,14 @@ export async function prepareMarketMakerTestProfile(
       throw new Error(`Market-maker E2E profile ${profile} conflicts with ${key}`);
     return { key, value, current };
   });
+  // 미정 → a value is two admins' (#331, ADR-0175): `first` asks and `second` approves.
   for (const { key, value, current } of settings) {
     if (current.status !== 'undecided') continue;
-    await dataOf(
-      await first.patch(`/api/v1/admin/release-settings/${key}`, {
-        data: {
-          status: 'test',
-          value,
-          reason: `e2e: ${profile} 전용 시험 DB의 MM 단계 시험값 (운영 기본값 아님)`,
-          expectedAccountId: firstId,
-        },
-      }),
-    );
+    await changeReleaseSettingAs({ requester: first, approver: second }, key, {
+      status: 'test',
+      value,
+      reason: `e2e: ${profile} 전용 시험 DB의 MM 단계 시험값 (운영 기본값 아님)`,
+    });
   }
   if (profile === 'treasury') return;
 

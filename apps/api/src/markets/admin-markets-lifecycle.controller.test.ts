@@ -19,6 +19,7 @@ import {
   createProvisionalMarket,
   createSettlementStep,
   resolveMarketNow,
+  setReleaseSetting,
 } from '@buddha/db/test';
 import {
   DEFAULT_JUDGEMENT_TIME_ZONE,
@@ -211,18 +212,14 @@ describe.skipIf(!hasTestInfra)('admin markets lifecycle (integration)', () => {
    * must. Answers the approval: the market PROVISIONAL.
    */
   async function judge(marketId: string) {
-    const window = await t.app.inject({
-      method: 'PATCH',
-      url: '/api/v1/admin/release-settings/market.dispute_window',
-      headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: {
-        status: 'test',
-        value: 1_440,
-        reason: '이의 기간 시험값',
-        expectedAccountId: admin.id,
-      },
+    // The DB factory: the API's two-admin path for it is the release-settings suites' (#331).
+    await setReleaseSetting(t.db, {
+      adminId: admin.id,
+      key: 'market.dispute_window',
+      status: 'test',
+      value: 1_440,
+      reason: '이의 기간 시험값',
     });
-    expect(window.statusCode).toBe(200);
     const url = `/api/v1/admin/markets/${marketId}/judgements`;
     const registered = await post(url, {
       result: 'YES',

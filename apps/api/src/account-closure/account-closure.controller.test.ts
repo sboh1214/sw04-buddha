@@ -24,8 +24,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createNotifications, lockMarket, schema } from '@buddha/db';
 import {
-  TEST_NOTIFICATION,
-  TEST_NOTIFICATION_DEFINITIONS,
   checkOrderInvariants,
   completeOnboarding,
   createApprovalRequest,
@@ -33,10 +31,10 @@ import {
   createComment,
   createConsents,
   createFill,
-  createOrder,
   createMarket,
   createMarketPause,
   createModerationAction,
+  createOrder,
   createPhoneVerification,
   createPosition,
   createPost,
@@ -55,6 +53,9 @@ import {
   placeTestOrder,
   readVisits,
   resumeMarket,
+  setReleaseSetting,
+  TEST_NOTIFICATION,
+  TEST_NOTIFICATION_DEFINITIONS,
   withLedgerGuardsOff,
 } from '@buddha/db/test';
 import {
@@ -92,7 +93,6 @@ import { PhoneHasher } from '../identity/phone-hash.js';
 import { MarketVisitsService } from '../market-visits/market-visits.service.js';
 import { PhoneVerificationService } from '../phone-verification/phone-verification.service.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
-import { ReleaseSettingsService } from '../release-settings/release-settings.service.js';
 import { SearchHistoryService } from '../search-history/search-history.service.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { expectLedgerChain } from '../test/ledger.js';
@@ -226,9 +226,12 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
   /** The account's ledger, each event from its side (`ledgerOf` of @buddha/db/test, #116). */
   const ledgerOf = (userId: string) => accountLedgerOf(t.db, userId);
   async function setAmount(value: number) {
-    await t.app
-      .get(ReleaseSettingsService)
-      .change(admin.id, START_COIN_SETTING.key, { status: 'test', value, reason: '시험' });
+    await setReleaseSetting(t.db, {
+      adminId: admin.id,
+      key: START_COIN_SETTING.key,
+      status: 'test',
+      value,
+    });
   }
   /** The onboarding's nickname step through the API, the start Coin's trigger (#70). */
   const nicknameStep = async (who: TestUser) => {

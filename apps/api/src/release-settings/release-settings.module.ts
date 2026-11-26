@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ApprovalsModule } from '../approvals/approvals.module.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { DbModule } from '../infra/db/db.module.js';
 import { RedisModule } from '../infra/redis/redis.module.js';
@@ -14,10 +15,11 @@ import { ReleaseSettingsService } from './release-settings.service.js';
  * #119, …) read it through `ReleaseSettingsService.get`, and the registry token for work that reads
  * an item inside @buddha/db (#119's `placeOrder` reads `order.accepting` in its transaction).
  * Guards are instantiated in the module that declares the controller, so DbModule and RedisModule
- * are imported for AdminGuard.
+ * are imported for AdminGuard. ApprovalsModule is the two-person rule a two-admin change goes
+ * through (#331, ADR-0175).
  */
 @Module({
-  imports: [DbModule, RedisModule, AuthModule],
+  imports: [DbModule, RedisModule, AuthModule, ApprovalsModule],
   controllers: [AdminReleaseSettingsController],
   providers: [releaseSettingsRegistryProvider, ReleaseSettingsService],
   exports: [ReleaseSettingsService, RELEASE_SETTINGS_REGISTRY],

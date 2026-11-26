@@ -477,6 +477,12 @@ export type ReleaseSettingChange = components['schemas']['ReleaseSettingChange']
 export type ReleaseSettingChangeBody = components['schemas']['ReleaseSettingChangeBody'];
 /** A status and value, before or after a change: `value` is null exactly while `undecided`. */
 export type ReleaseSettingState = components['schemas']['ReleaseSettingState'];
+// 출시 설정 변경의 묶음별 승인 (#331, ADR-0175): the PATCH's answer, a two-admin change request and
+// a decision's answer.
+export type ReleaseSettingChangeResult = components['schemas']['ReleaseSettingChangeResult'];
+export type ReleaseSettingChangeRequest = components['schemas']['ReleaseSettingChangeRequest'];
+export type ReleaseSettingChangeRequestWrite =
+  components['schemas']['ReleaseSettingChangeRequestWrite'];
 /** An account that holds the admin role now, with its latest grant (#171). */
 export type AdminAccount = components['schemas']['AdminAccount'];
 // 가입 허용 목록 (#330, ADR-0174): `/admin/signup-allowlist`.

@@ -18,7 +18,8 @@
  * `admin-themes.controller.test` for the themes, their markets and notices,
  * `admin-categories.controller.test` for the categories' creation, renames, order and hiding,
  * `admin-proposals.controller.test` for the review of market proposals,
- * `release-settings.controller.test` for the release settings,
+ * `release-settings.controller.test` and `release-setting-approvals.controller.test` for the
+ * release settings, their change requests and decisions (#331),
  * `admin-accounts.controller.test` for the admin grants and revokes,
  * `notices.controller.test` for the notices' writes, pins and unpins,
  * `signup-allowlist.controller.test` for the signup allowlist's adds, removals and clears (#330) and
@@ -46,9 +47,11 @@ import { discoverRoutes, isAdminPath } from '../test/routes.js';
  * A route may appear here only if the service behind it inserts that row IN THE SAME
  * TRANSACTION as the effect — an audit row that can commit without its effect, or the other way
  * round, is worse than none. Every entry below was checked against its `tx.insert(adminActions)`
- * call site.
+ * call site. A route that writes one of several rows, by what the request turns out to be, names
+ * them all: a release setting change is applied at once or asked for another admin's approval
+ * (#331, ADR-0175).
  */
-const AUDITED: Readonly<Record<string, AdminActionType>> = {
+const AUDITED: Readonly<Record<string, AdminActionType | readonly AdminActionType[]>> = {
   'POST /admin/markets/:marketId/market-maker/control-requests': 'market_maker_control_request',
   'POST /admin/markets/:marketId/market-maker/control-requests/:requestId/approve':
     'market_maker_control_approve',
@@ -173,7 +176,17 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'POST /admin/categories/:id/hide': 'category_hide',
   'POST /admin/categories/:id/show': 'category_show',
   'POST /admin/payments/:id/refund': 'payment_refund',
-  'PATCH /admin/release-settings/:key': 'release_setting_change',
+  // #331 (ADR-0175): one admin's change is written at once; a two-admin one is a request, then
+  // another admin's approval — which writes the change, by the approver, in the same transaction
+  // — or 반려, or its requester's retraction.
+  'PATCH /admin/release-settings/:key': [
+    'release_setting_change',
+    'release_setting_change_request',
+  ],
+  'POST /admin/release-settings/change-requests/:requestId/approve': 'release_setting_change',
+  'POST /admin/release-settings/change-requests/:requestId/reject': 'release_setting_change_reject',
+  'POST /admin/release-settings/change-requests/:requestId/retract':
+    'release_setting_change_retract',
   'POST /admin/admins': 'admin_grant',
   'POST /admin/admins/:userId/revoke': 'admin_revoke',
   'POST /admin/notices': 'notice_create',
@@ -275,8 +288,8 @@ describe('admin audit log completeness', () => {
     expect(audited).toEqual([]);
   });
 
-  it('uses every active audit type, sharing market_update only for the two draft editing routes', () => {
-    const used = Object.values(AUDITED);
+  it('uses every active audit type, sharing market_update only for the two draft editing routes and release_setting_change only for a release setting change and its approval', () => {
+    const used = Object.values(AUDITED).flat();
     const retired = Object.keys(RETIRED) as AdminActionType[];
     // Every type is produced by some route: a value nothing writes is a value a reader of the
     // enum would look for in the audit log and never find — unless it is retired, which only
@@ -289,7 +302,18 @@ describe('admin audit log completeness', () => {
       'PATCH /admin/markets/:id',
       'POST /admin/markets/:id/liquidity-settings',
     ]);
-    const others = used.filter((type) => type !== 'market_update');
+    // A one-admin release setting change and an approved two-admin one write the same record —
+    // the one migration 0020's trigger requires of every write (#331, ADR-0175).
+    const changes = Object.entries(AUDITED).filter(([, type]) =>
+      ([] as AdminActionType[]).concat(type).includes('release_setting_change'),
+    );
+    expect(changes.map(([route]) => route).sort()).toEqual([
+      'PATCH /admin/release-settings/:key',
+      'POST /admin/release-settings/change-requests/:requestId/approve',
+    ]);
+    const others = used.filter(
+      (type) => type !== 'market_update' && type !== 'release_setting_change',
+    );
     expect(new Set(others).size).toBe(others.length);
     expect(used.filter((type) => retired.includes(type))).toEqual([]);
   });

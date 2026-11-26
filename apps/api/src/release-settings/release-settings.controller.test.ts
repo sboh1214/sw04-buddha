@@ -38,6 +38,8 @@ import {
   defineReleaseSettings,
   type ReleaseSetting,
   type ReleaseSettingChange,
+  type ReleaseSettingChangeRequestWrite,
+  type ReleaseSettingChangeResult,
 } from '@buddha/shared';
 import { asc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -51,12 +53,20 @@ import { ReleaseSettingsService } from './release-settings.service.js';
 const jsonHeaders = { origin: 'http://localhost:3000', 'content-type': 'application/json' };
 const BASE = '/api/v1/admin/release-settings';
 
+/**
+ * The test items are observation values (#331): one admin changes them at once, save the move to
+ * 승인됨 — a request another admin approves (`approvedChange`). The two-admin paths of the shipped
+ * items are release-setting-approvals.controller.test's.
+ */
+const OBSERVATION = { group: 'observation' } as const;
+
 const hours = defineReleaseSetting({
   key: 'test.period_hours',
   label: '시험 기간',
   unit: '시간',
   description: '시험용 항목: 정수 시간',
   schema: z.number().int().min(1).max(720),
+  approval: OBSERVATION,
 });
 const window = defineReleaseSetting({
   key: 'test.window',
@@ -64,6 +74,7 @@ const window = defineReleaseSetting({
   unit: null,
   description: '시험용 항목: 객체 값',
   schema: z.object({ from: z.number().int(), to: z.number().int() }).strict(),
+  approval: OBSERVATION,
 });
 /** A string value: one that reads as JSON text (`"24"`) must come back as that string. */
 const code = defineReleaseSetting({
@@ -72,6 +83,7 @@ const code = defineReleaseSetting({
   unit: null,
   description: '시험용 항목: 문자열 값',
   schema: z.string().min(1).max(20),
+  approval: OBSERVATION,
 });
 /** A value with keys of the admin's choosing: names to whole numbers. */
 const limits = defineReleaseSetting({
@@ -80,6 +92,7 @@ const limits = defineReleaseSetting({
   unit: null,
   description: '시험용 항목: 이름별 정수',
   schema: z.record(z.string(), z.number().int()),
+  approval: OBSERVATION,
 });
 /**
  * Broken on purpose: its schema answers JSON null, which the type of a definition forbids and the
@@ -91,6 +104,7 @@ const broken = defineReleaseSetting({
   unit: null,
   description: '시험용 항목: 기록 뒤 쓰기가 실패한다',
   schema: z.number().transform(() => null) as unknown as z.ZodType<number>,
+  approval: OBSERVATION,
 });
 
 /** U+0000: PostgreSQL's jsonb cannot hold it. */
@@ -104,8 +118,10 @@ type ChangePage = { data: ReleaseSettingChange[]; meta: { nextCursor: string | n
 describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
   let t: TestApp;
   let admin: TestUser;
+  let approver: TestUser;
   let member: TestUser;
   let adminNickname: string;
+  let approverNickname: string;
 
   beforeAll(async () => {
     t = await createTestApp({
@@ -129,6 +145,16 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
     adminNickname = profile!.nickname!;
     // The guard caches roles for 60 s (PLAN 10.5); the promotion above happened behind it.
     await t.app.get(AdminGuard).invalidate(admin.id);
+    // The other admin, who approves a change to 승인됨 (#331).
+    approver = await signUpTestUser(t);
+    const [other] = await t.db
+      .update(schema.profiles)
+      .set({ role: 'admin' })
+      .where(eq(schema.profiles.userId, approver.id))
+      .returning();
+    await completeOnboarding(t.db, { userId: approver.id });
+    approverNickname = other!.nickname!;
+    await t.app.get(AdminGuard).invalidate(approver.id);
   });
 
   const get = (url: string, cookie = admin.cookie) =>
@@ -146,14 +172,42 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
   const data = <T>(res: { json: <U>() => U }) => res.json<{ data: T }>().data;
   const errorOf = (res: { json: <U>() => U }) => res.json<ErrorBody>().error;
   const service = () => t.app.get(ReleaseSettingsService);
+  /** The item a one-admin change answers (`applied`). */
+  const applied = (res: { json: <U>() => U }) => {
+    const result = data<ReleaseSettingChangeResult>(res);
+    expect(result.outcome).toBe('applied');
+    return result.setting;
+  };
+
+  /**
+   * A change to 승인됨 (#331, 331-6): `admin` asks, `approver` approves with a reason. Answers the
+   * approval and the item as it then is.
+   */
+  async function approvedChange(key: string, payload: Record<string, unknown>) {
+    const requested = await patch(key, payload);
+    expect(requested.statusCode, requested.body).toBe(200);
+    const result = data<ReleaseSettingChangeResult>(requested);
+    expect(result.outcome).toBe('requested');
+    const res = await t.app.inject({
+      method: 'POST',
+      url: `${BASE}/change-requests/${result.request!.id}/approve`,
+      headers: { ...jsonHeaders, cookie: approver.cookie },
+      payload: { reason: '승인 확인', expectedAccountId: approver.id },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    // An approval always answers with its item (only a dropped key has none, and is NOT_FOUND).
+    return { res, setting: data<ReleaseSettingChangeRequestWrite>(res).setting! };
+  }
 
   async function settingRows() {
     return t.db.select().from(schema.releaseSettings).orderBy(asc(schema.releaseSettings.key));
   }
+  /** The change records (the requests' own records are release-setting-approvals' to read). */
   async function records() {
     return t.db
       .select()
       .from(schema.adminActions)
+      .where(eq(schema.adminActions.type, 'release_setting_change'))
       .orderBy(asc(schema.adminActions.createdAt), asc(schema.adminActions.id));
   }
 
@@ -178,6 +232,8 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
       value: null,
       updatedAt: null,
       updatedBy: null,
+      approval: OBSERVATION,
+      pendingRequest: null,
     });
     // What the admin screen can tell the value's shape from.
     expect(valueSchema).toMatchObject({ type: 'integer', minimum: 1, maximum: 720 });
@@ -187,7 +243,7 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
   it('changes an item with a reason: the row, its record and the answer agree', async () => {
     const res = await patch(hours.key, { status: 'test', value: 48, reason: '  내부 시험  ' });
     expect(res.statusCode).toBe(200);
-    const item = data<ReleaseSetting>(res);
+    const item = applied(res);
     expect(item).toMatchObject({
       key: hours.key,
       status: 'test',
@@ -209,15 +265,17 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
         before: { status: 'undecided', value: null },
         after: { status: 'test', value: 48 },
         reason: '내부 시험',
+        path: 'one_admin',
+        basis: 'observation',
       },
     });
     // One instant for both: the record says when the value it describes took effect.
     expect(record!.createdAt.getTime()).toBe(row!.updatedAt.getTime());
 
     // The next change records the previous state as its `before`, and back to undecided too.
-    await patch(hours.key, { status: 'approved', value: 72, reason: '승인' });
+    await approvedChange(hours.key, { status: 'approved', value: 72, reason: '승인' });
     const back = await patch(hours.key, { status: 'undecided', reason: '재검토' });
-    expect(data<ReleaseSetting>(back)).toMatchObject({ status: 'undecided', value: null });
+    expect(applied(back)).toMatchObject({ status: 'undecided', value: null });
     expect((await records()).map((r) => r.payload)).toEqual([
       expect.anything(),
       expect.objectContaining({
@@ -260,7 +318,7 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
   it('keeps a string value that reads as JSON text a string, everywhere it is read', async () => {
     for (const value of ['24', 'null', '"x"', '{}']) {
       const res = await patch(code.key, { status: 'test', value, reason: '문자열' });
-      expect(data<ReleaseSetting>(res).value).toBe(value);
+      expect(applied(res).value).toBe(value);
       expect(await service().get(code)).toEqual({ key: code.key, status: 'test', value });
       const listed = data<ReleaseSetting[]>(await get(`${BASE}?status=test`));
       expect(listed.map((item) => item.value)).toEqual([value]);
@@ -324,7 +382,7 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
     const value = { '😀': 1, 'a\u0001': 2 };
     const res = await patch(limits.key, { status: 'test', value, reason: '😀\u001f사유' });
     expect(res.statusCode).toBe(200);
-    expect(data<ReleaseSetting>(res).value).toEqual(value);
+    expect(applied(res).value).toEqual(value);
     expect(await records()).toMatchObject([
       { payload: { after: { status: 'test', value }, reason: '😀\u001f사유' } },
     ]);
@@ -378,9 +436,7 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
     expect(await records()).toEqual(before.records);
 
     // A new status with the same value, or a new value of the same type, is a change.
-    expect(
-      (await patch(hours.key, { status: 'approved', value: 24, reason: '승인' })).statusCode,
-    ).toBe(200);
+    await approvedChange(hours.key, { status: 'approved', value: 24, reason: '승인' });
     expect(
       (await patch(code.key, { status: 'test', value: '25', reason: '바꿈' })).statusCode,
     ).toBe(200);
@@ -422,7 +478,11 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
   it('pages the change records newest first, with the actor, and by key', async () => {
     await patch(hours.key, { status: 'proposal', value: 24, reason: '첫 제안' });
     await patch(window.key, { status: 'test', value: { from: 0, to: 1 }, reason: '시험값' });
-    const approved = await patch(hours.key, { status: 'approved', value: 24, reason: '승인' });
+    const { setting: approved } = await approvedChange(hours.key, {
+      status: 'approved',
+      value: 24,
+      reason: '승인',
+    });
     // A record of a key the registry no longer holds keeps its place, with no label — written
     // 1 ms after the last change, so the order below does not hang on the clock's resolution.
     await t.db.insert(schema.adminActions).values({
@@ -436,7 +496,7 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
         after: { status: 'test', value: true },
         reason: '없어진 항목',
       },
-      createdAt: new Date(Date.parse(data<ReleaseSetting>(approved).updatedAt!) + 1),
+      createdAt: new Date(Date.parse(approved.updatedAt!) + 1),
     });
     // Another type in the same log is not a release setting change.
     await t.db
@@ -451,15 +511,21 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
       [hours.key, '승인'],
     ]);
     expect(page1.data[0]).toMatchObject({ label: null, after: { status: 'test', value: true } });
-    const { id, createdAt, ...latest } = page1.data[1]!;
+    const { id, createdAt, approvalId, ...latest } = page1.data[1]!;
+    // Written by the approver, with the request's reason, its requester and the approval (#331).
     expect(latest).toEqual({
       key: hours.key,
       label: '시험 기간',
       before: { status: 'proposal', value: 24 },
       after: { status: 'approved', value: 24 },
       reason: '승인',
-      actor: { id: admin.id, nickname: adminNickname },
+      actor: { id: approver.id, nickname: approverNickname },
+      path: 'two_admin',
+      basis: 'approved_target',
+      requestedBy: { id: admin.id, nickname: adminNickname },
+      approvalReason: '승인 확인',
     });
+    expect(approvalId).toEqual(expect.any(String));
     const [record] = await t.db
       .select()
       .from(schema.adminActions)
@@ -478,7 +544,12 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
     expect(page2.meta.nextCursor).toBeNull();
 
     const byKey = await get(`${BASE}/changes?key=${hours.key}`);
-    expect(byKey.json<ChangePage>().data.map((c) => c.reason)).toEqual(['승인', '첫 제안']);
+    expect(byKey.json<ChangePage>().data.map((c) => [c.reason, c.path])).toEqual([
+      ['승인', 'two_admin'],
+      ['첫 제안', 'one_admin'],
+    ]);
+    // A record written before #331 (or by the DB factory) has no path.
+    expect(page1.data[0]).toMatchObject({ path: null, basis: null, requestedBy: null });
     expect((await get(`${BASE}/changes?key=Not-A-Key`)).statusCode).toBe(400);
   });
 
@@ -528,7 +599,7 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
     const res = await patch(hours.key, { status: 'test', value: 20, reason: '다음 변경' });
     expect(res.statusCode).toBe(200);
     const next = ahead.getTime() + 1;
-    expect(Date.parse(data<ReleaseSetting>(res).updatedAt!)).toBe(next);
+    expect(Date.parse(applied(res).updatedAt!)).toBe(next);
     const [, record] = await records();
     expect(record!.createdAt.getTime()).toBe(next);
     expect(record!.payload).toMatchObject({ before: stored, after: { status: 'test', value: 20 } });
@@ -611,7 +682,7 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
     expect(errorOf(unnamed).details?.map((detail) => detail.path)).toEqual([['expectedAccountId']]);
     expect({ rows: await settingRows(), records: await records() }).toEqual(before);
     // The cookie's own account is taken, and recorded as the one who changed it.
-    const own = await patch(hours.key, { status: 'approved', value: 72, reason: '승인' }, other);
+    const own = await patch(hours.key, { status: 'test', value: 72, reason: '시험' }, other);
     expect(own.statusCode, own.body).toBe(200);
     expect((await records()).at(-1)?.adminId).toBe(other.id);
   });
@@ -620,6 +691,7 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
 describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
   let t: TestApp;
   let admin: TestUser;
+  let approver: TestUser;
 
   beforeAll(async () => {
     // No `releaseSettings`: the app runs what production ships (RELEASE_SETTINGS).
@@ -638,7 +710,36 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
     // An admin finishes the onboarding like any account before /admin answers it (ADR-0072).
     await completeOnboarding(t.db, { userId: admin.id });
     await t.app.get(AdminGuard).invalidate(admin.id);
+    approver = await signUpTestUser(t);
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'admin' })
+      .where(eq(schema.profiles.userId, approver.id));
+    await completeOnboarding(t.db, { userId: approver.id });
+    await t.app.get(AdminGuard).invalidate(approver.id);
   });
+
+  /**
+   * A change by `admin` (#331): applied at once when the item's rule lets one admin, otherwise the
+   * request `approver` approves. Answers the last response (the PATCH's when it was refused).
+   */
+  async function changeThrough(key: string, payload: Record<string, unknown>) {
+    const res = await t.app.inject({
+      method: 'PATCH',
+      url: `${BASE}/${key}`,
+      headers: { ...jsonHeaders, cookie: admin.cookie },
+      payload: { expectedAccountId: admin.id, ...payload },
+    });
+    if (res.statusCode !== 200) return res;
+    const result = res.json<{ data: ReleaseSettingChangeResult }>().data;
+    if (result.outcome === 'applied') return res;
+    return t.app.inject({
+      method: 'POST',
+      url: `${BASE}/change-requests/${result.request!.id}/approve`,
+      headers: { ...jsonHeaders, cookie: approver.cookie },
+      payload: { reason: '승인 확인', expectedAccountId: approver.id },
+    });
+  }
 
   it('lists the start grant amount (#70), the re-grant numbers (#74), the lead-close gap (#22), the dispute window (#152), the order intake, rate limit and width (#119) and the retention periods (#184), undecided until an admin enters a value', async () => {
     const retention = Object.values(RETENTION_PERIOD_SETTINGS);
@@ -664,7 +765,16 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
       headers: { cookie: admin.cookie },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json<{ data: ReleaseSetting[] }>().data).toEqual([
+    const listed = res.json<{ data: ReleaseSetting[] }>().data;
+    // Each item carries its approval rule (#331, pinned in @buddha/shared) and no waiting request.
+    expect(listed.map((item) => [item.key, item.approval, item.pendingRequest])).toEqual(
+      [...RELEASE_SETTINGS.values()].map((definition) => [
+        definition.key,
+        definition.approval,
+        null,
+      ]),
+    );
+    expect(listed.map(({ approval: _rule, pendingRequest: _none, ...item }) => item)).toEqual([
       {
         key: 'grant.start_coin',
         label: '시작 지급액',
@@ -886,16 +996,10 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
       value: null,
     });
 
-    const change = await t.app.inject({
-      method: 'PATCH',
-      url: `${BASE}/grant.start_coin`,
-      headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: {
-        status: 'test',
-        value: 10_000,
-        reason: '내부 시험값',
-        expectedAccountId: admin.id,
-      },
+    const change = await changeThrough('grant.start_coin', {
+      status: 'test',
+      value: 10_000,
+      reason: '내부 시험값',
     });
     expect(change.statusCode).toBe(200);
     expect(await settings.get(START_COIN_SETTING)).toEqual({
@@ -958,12 +1062,7 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
     expect(await t.db.select().from(schema.adminActions)).toEqual(actionsBefore);
     const key = MARKET_LIQUIDITY_DEFAULT_SETTINGS.budgetCoin.key;
     const patch = (value: unknown) =>
-      t.app.inject({
-        method: 'PATCH',
-        url: `${BASE}/${key}`,
-        headers: { ...jsonHeaders, cookie: admin.cookie },
-        payload: { status: 'test', value, reason: '표준값 시험', expectedAccountId: admin.id },
-      });
+      changeThrough(key, { status: 'test', value, reason: '표준값 시험' });
     expect((await patch('999999999999999')).statusCode).toBe(200);
     for (const value of [100, '0', '-1', '1.5', '9223372036854775808'])
       expect((await patch(value)).statusCode).toBe(400);
@@ -985,12 +1084,7 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
     const settings = t.app.get(ReleaseSettingsService);
     const key = ORDER_ACCEPTING_SETTING.key;
     const patchAccepting = (value: unknown, status = 'test') =>
-      t.app.inject({
-        method: 'PATCH',
-        url: `${BASE}/${key}`,
-        headers: { ...jsonHeaders, cookie: admin.cookie },
-        payload: { status, value, reason: '시험 환경', expectedAccountId: admin.id },
-      });
+      changeThrough(key, { status, value, reason: '시험 환경' });
     // false is a value (closed, as undecided is), then true opens it.
     expect((await patchAccepting(false)).statusCode).toBe(200);
     expect(await settings.get(ORDER_ACCEPTING_SETTING)).toEqual({
@@ -1009,16 +1103,10 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
   it('takes a retention period in whole days and keeps its status as given (#184)', async () => {
     const settings = t.app.get(ReleaseSettingsService);
     const key = CONSENT_RECORDS_RETENTION_SETTING.key;
-    const change = await t.app.inject({
-      method: 'PATCH',
-      url: `${BASE}/${key}`,
-      headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: {
-        status: 'proposal',
-        value: 1_095,
-        reason: '설계 제안',
-        expectedAccountId: admin.id,
-      },
+    const change = await changeThrough(key, {
+      status: 'proposal',
+      value: 1_095,
+      reason: '설계 제안',
     });
     expect(change.statusCode).toBe(200);
     // Read with its status: the worker applies only an approved one (ADR-0069 decision 7).
