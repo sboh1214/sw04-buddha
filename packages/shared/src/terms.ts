@@ -32,8 +32,11 @@ export interface ReplacedTerm {
  * (terms.test.ts compares the two), and the regression check of #113 imports it from here.
  * Nothing reads it at run time.
  *
- * Out of its reach until their own issues: the legal document bodies (#137) and the charge copy
- * hidden while paid Coin is closed (#111) — docs/TERMS.md lists them.
+ * Out of its reach until its own issue: the charge copy hidden while paid Coin is closed (#111) —
+ * docs/TERMS.md lists it. The legal document bodies, revised by #137, are held to it as the
+ * service guide is, their negative notices allowed (owner answer 137-4 (a), ADR-0176). One row
+ * binds member screens only: admin screens keep '운영 마켓메이커' (ADR-0107 결정 2 #73 11항,
+ * ADR-0177), as its note says.
  */
 export const REPLACED_TERMS: readonly ReplacedTerm[] = [
   // 예측 names the genre only (D22).
@@ -98,6 +101,16 @@ export const REPLACED_TERMS: readonly ReplacedTerm[] = [
   // Trading is not guessing right.
   { unused: '맞히면', use: ['정답 시'], basis: 'N02 §6, 오너 결정 #14-5', match: 'text' },
   { unused: '맞힌', use: ['정답'], basis: 'N02 §6, 오너 결정 #14-5', match: 'text' },
+  // The operating market maker's name on what members read (#136, ADR-0177): the onboarding
+  // notice's word. Admin screens keep '운영 마켓메이커' (ADR-0107 결정 2 #73 11항); the check holds
+  // them to the gambling words only.
+  {
+    unused: '운영 마켓메이커',
+    use: ['운영 유동성'],
+    basis: 'N01 §5, ADR-0177(136-1)',
+    match: 'text',
+    note: "회원 화면·문서의 이름. 첫 언급만 '운영 유동성(봇)'이고 관리자 화면은 그대로다",
+  },
   // Gambling vocabulary, with no replacement (D21).
   { unused: '베팅', use: [], basis: 'D21', match: 'text' },
   { unused: '배당', use: [], basis: 'D21', match: 'text' },

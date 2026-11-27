@@ -113,7 +113,8 @@ test.describe('최상위 메뉴', () => {
       await expect(row, path).toBeVisible();
       await expect(row.getByTestId('nav-category-all'), path).toBeVisible();
     }
-    for (const path of ['/community', '/login', '/terms']) {
+    // 서비스 안내 (#136) reads like the legal pages: the footer, and no row 2.
+    for (const path of ['/community', '/login', '/terms', '/guide']) {
       await page.goto(path);
       await expect(page.getByTestId('site-footer'), path).toBeVisible();
       await expect(row, path).toHaveCount(0);

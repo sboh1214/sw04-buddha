@@ -3,6 +3,7 @@ import {
   CONSENT_DOCUMENTS,
   CONSENT_ITEMS,
   CONSENT_VERSION_MAX_LENGTH,
+  LEGAL_FIRST_EFFECTIVE_DATE,
   REQUIRED_CONSENT_ITEMS,
   consentAgreed,
   consentAnswerStands,
@@ -51,6 +52,19 @@ describe('consent items (#57-4·#57-5)', () => {
       }
       expect(current(item)).toBe(versions[versions.length - 1]);
     }
+  });
+
+  it("puts #137's revision of the terms and the privacy text in force, asking both again (#57-5)", () => {
+    // The revision's 시행일 is the version (decision 4 #58); the drafts never took effect.
+    for (const item of ['terms', 'privacy'] as const) {
+      expect(current(item), item).toBe(LEGAL_FIRST_EFFECTIVE_DATE);
+      expect(CONSENT_DOCUMENTS[item].versions.at(-1)?.requiresReconsent, item).toBe(true);
+      expect(consentVersionHolds(item, 'draft-2026-10-18'), item).toBe(false);
+    }
+    // The other two are unchanged, so their answers stand (only the changed items are asked).
+    expect(current('age')).toBe('draft-2026-10-18');
+    expect(current('marketing')).toBe('draft-2026-10-18');
+    expect(LEGAL_FIRST_EFFECTIVE_DATE).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 });
 

@@ -1,4 +1,5 @@
 import { Box, Container, Heading, List, Stack, Table, Text } from '@chakra-ui/react';
+import type { ReactNode } from 'react';
 import { copy } from '@/copy';
 import {
   type LegalBlock,
@@ -22,9 +23,15 @@ import {
 export function LegalDocumentView({
   document,
   testId,
+  header,
+  footer,
 }: {
   document: LegalDocument;
   testId: string;
+  /** Under the title, before the intro: the 시행일 and, on a past version, where the current is. */
+  header?: ReactNode;
+  /** After the 부칙: the list of versions (legal-version-view.tsx). */
+  footer?: ReactNode;
 }) {
   const doc = resolveLegalDocument(document);
   return (
@@ -41,6 +48,7 @@ export function LegalDocumentView({
           <Heading as="h2" textStyle="headline">
             {doc.title}
           </Heading>
+          {header}
           <LegalBlocks blocks={doc.intro} />
         </Stack>
         {doc.sections.map((section, index) => {
@@ -68,6 +76,7 @@ export function LegalDocumentView({
             <LegalBlocks blocks={doc.addendum} />
           </Stack>
         )}
+        {footer}
       </Stack>
     </Container>
   );

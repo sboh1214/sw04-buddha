@@ -1,34 +1,71 @@
+import {
+  LEGAL_FIRST_EFFECTIVE_DATE,
+  NICKNAME_HOLD_DAYS,
+  WRITE_LIMIT_DAY_SECONDS,
+} from '@buddha/shared';
 import { copy } from '@/copy';
-import { type LegalDocument, bullets, numbered, paragraph, table } from './document';
+import {
+  type LegalDocument,
+  bullets,
+  effectiveDateText,
+  numbered,
+  paragraph,
+  table,
+} from './document';
+import { retentionPeriodText as kept } from './retention-periods';
 
 /**
- * 개인정보처리방침 (ADR-0044), following the items 「개인정보 보호법」 제30조 asks a policy to
- * state. Original text; business facts are `{{placeholders}}` (business-info.ts). Pending legal
- * review (QUESTIONS.md Q-M2-3).
+ * 개인정보처리방침 (ADR-0044), following the items 「개인정보 보호법」 제30조 asks a policy to state,
+ * revised by #137 (ADR-0176) to say what the code actually stores, for what, and for how long —
+ * the list ADR-0170 결과 6 and the decision ADRs handed to #137. Business facts are
+ * `{{placeholders}}` (business-info.ts). No external legal review (D11).
  *
- * The collected items are what the code actually stores: better-auth's `user`/`account`/
- * `session` rows (email, password hash, the provider's member id, IP and user agent — no longer
- * the provider's name or photo, which neither `user.name`/`user.image` nor `account.id_token` (the
- * provider's ID token that carries them) keep since ADR-0072, 오너 결정 2026-10-19 (2차) 3; the
- * policy's wording of it, which still lists them, is #137's, D11; nor the provider's access and
- * refresh tokens, 오너 결정 2026-10-19 (4차) 1),
- * `profiles` (nickname), `phone_verifications` (real name and verified mobile, ADR-0070),
- * `phone_verification_codes` (each code sent: the number and the real name it was sent with, the
- * code's HMAC, the times, the client IP and whether the provider took it — kept as 본인확인 기록
- * for #184's retention period, past a withdrawal: the owner's exception to the immediate deletion
- * of ADR-0069 #57-18, ADR-0070; the policy's wording of both is #137's, D11) and `payments` /
- * `payment_events` (the PG's approval result, whose card number arrives masked — SmartroPay
- * masks digits 7-12). The processors are the PG and AWS (terraform/: ap-northeast-2, SES in the
- * same region). Keep this list in step with the schema when either changes.
+ * - **Items.** better-auth's `user`/`account`/`session` (email, password hash, the social provider's
+ *   member id and email, the session's IP and browser), `phone_verifications` and
+ *   `phone_verification_codes` (ADR-0070), `consent_records` (ADR-0072), the keyed number hashes of
+ *   the start grant and the sign-up allowlist (#330), the profile (nickname, 소개, image without its
+ *   metadata, interest categories, time zone), `nickname_holds` (an operator's reset names its
+ *   action), the ledger, orders and fills, posts and comments with their revisions, the likes (account,
+ *   target, time and the liker's number hash), the write and link records of #187, reports (with the
+ *   reporter's number hash), actions and 판정 이의, `admin_actions`, market proposals (with the
+ *   proposer's number hash), watches and their events, search history (ADR-0061), notifications,
+ *   market visits (#151, ADR-0170 — by notice on 정당한 이익, no consent) and the API's request log.
+ *   No payment data: sales are closed and nothing is collected (D9). Every number hash is a
+ *   '키 있는 해시' (owner answer 2 of 2026-11-27 on #137, ADR-0176).
+ * - **Periods.** The eight retention settings are figures from POLICY_RETENTION_DAYS (@buddha/shared;
+ *   owner answer 133-8, the values owner answer 2 on #137 approved — a null would read '미정',
+ *   `retention-periods.ts`); each `from` is the moment the setting's description and the purge
+ *   count from. What has no period says so. No hold for an
+ *   investigation: nothing can hold one record (owner answer 2). Sessions, the request log and the
+ *   backups say what the deployment does now (owner answer 137-7): the expired sessions nobody
+ *   returns to are kept until a job deletes them (#339). Manual backups go when their purpose ends
+ *   (owner answer 2, docs/OPERATIONS.md).
+ * - **Numbers** (137-6 (a)): the age, the nickname hold's days and the write records' hours from
+ *   their constants; the backups kept from the infrastructure (DAILY_BACKUPS_KEPT).
  *
- * Access records get no fixed retention period on purpose: the deployment keeps no access log of
- * its own (no Caddy `log`, container logs capped and replaced on every deploy), so the policy
- * says what is true — collected for security and abuse prevention, kept only as long as that
- * needs or a law requires — and the period is an open question (QUESTIONS.md), not a promise.
+ * Changing a word changes what members agreed to: add a version (versions.ts, and the `privacy`
+ * consent version in CONSENT_DOCUMENTS) rather than rewriting this one in place.
  */
+
+/**
+ * The daily automatic backups kept: `snapshot_retention_count` in terraform/variables.tf, the
+ * current setting rather than a decided value (owner answer 137-7). Changing the setting means
+ * revising the policy; legal.test.ts reads the terraform default to keep the two equal.
+ */
+export const DAILY_BACKUPS_KEPT = 7;
+
+/**
+ * The write and link records' window (#187): a day of hours. Both windows are the same day
+ * (WRITE_LIMIT_DAY_SECONDS, LINK_REPEAT_WINDOW_SECONDS — legal.test.ts holds them equal), and the
+ * worker deletes a record an hour past it, hourly (`community.records_purge`,
+ * COMMUNITY_RECORDS_PURGE_MARGIN_SECONDS).
+ */
+const WRITE_RECORD_HOURS = WRITE_LIMIT_DAY_SECONDS / 3_600;
+
 export const PRIVACY: LegalDocument = {
   title: copy.legalPrivacyTitle,
   numbering: 'article',
+  effectiveDate: LEGAL_FIRST_EFFECTIVE_DATE,
   intro: [
     paragraph(
       '회사(상호: {{companyName}}, 이하 "회사")는 「개인정보 보호법」 등 관계 법령에 따라 {{serviceName}} 서비스 이용자의 개인정보를 보호하고, 이와 관련한 고충을 빠르고 원활하게 처리하기 위해 다음과 같이 개인정보처리방침을 정하여 공개합니다.',
@@ -42,50 +79,141 @@ export const PRIVACY: LegalDocument = {
           '회사는 다음 목적을 위해서만 개인정보를 처리합니다. 목적이 바뀌면 「개인정보 보호법」 제18조에 따라 별도의 동의를 받는 등 필요한 조치를 합니다.',
         ),
         numbered(
-          '회원 가입과 관리: 가입 의사 확인, 회원 식별과 로그인, 만 {{minimumAge}}세 미만의 가입 제한, 계정 도용과 부정 이용 방지, 탈퇴 처리',
-          '서비스 제공: 예측 거래와 정산, P 충전과 쿠폰 처리, 이용 내역 제공, 순위 화면의 닉네임 표시',
-          '결제와 환불: 충전 결제의 승인과 취소, 결제 기록 관리, 환불 처리, 결제 관련 분쟁 대응',
+          '회원 가입과 관리: 가입 의사 확인, 회원 식별과 로그인, 휴대전화 본인확인, 휴대전화 번호마다 계정 하나와 시작 Coin 한 번의 확인, 만 {{minimumAge}}세 미만의 가입 제한, 폐쇄 테스트 동안의 가입 허용 목록 확인, 탈퇴 처리',
+          '서비스 제공: 계약의 거래, 판정과 지급, 재지급, 이용 내역 제공',
+          '공개 프로필과 커뮤니티: 닉네임·소개·프로필 이미지의 표시, 근거 글·댓글과 좋아요',
+          '관심 시장과 알림, 최근 검색어',
+          '시장 제안과 판정 이의의 처리',
+          '운영과 보안: 신고와 운영 조치, 제재 이의, 작성 빈도 제한과 반복 링크 검토, 부정 이용 방지, 장애 대응',
           '고객 지원: 문의와 불만 처리, 약관 변경 등 중요한 사항의 안내',
-          '서비스 안정성과 보안: 접속 기록 관리, 부정 이용 탐지, 장애 대응',
+          '서비스 개선을 위한 통계(관측 지표): 체결·정산·커뮤니티·신고 기록, 관심 등록 이력, 시장 방문 기록의 집계',
         ),
       ],
     },
     {
-      heading: '처리하는 개인정보의 항목',
+      heading: '처리하는 개인정보의 항목과 보유 기간',
       blocks: [
+        paragraph(
+          '회사는 다음 개인정보를 처리하고, 표에 적은 기간 동안 보유합니다. 개인정보는 회원이 직접 입력하거나, 회원의 동의에 따라 소셜 로그인 제공자에게서 받거나, 서비스를 이용하는 과정에서 생성됩니다.',
+        ),
         table(
-          '처리하는 개인정보 항목과 수집 방법',
-          ['구분', '항목', '수집 방법'],
+          '처리하는 개인정보와 보유 기간',
+          ['항목', '목적', '보유 기간'],
           [
             [
-              '이메일 가입',
-              '이메일 주소, 비밀번호(복원할 수 없는 형태로 암호화하여 저장), 닉네임',
-              '회원이 직접 입력',
+              '이메일 주소, 비밀번호(복원할 수 없는 형태로 암호화하여 저장)',
+              '로그인, 문의와 제재 이의의 확인',
+              '탈퇴할 때 바로 지웁니다.',
             ],
             [
-              '소셜 로그인 가입',
-              '소셜 로그인 제공자(Google, 카카오, 네이버)가 발급한 회원 식별자, 제공자가 전달하는 이메일 주소·이름·프로필 사진 주소, 닉네임',
-              '회원의 동의에 따라 제공자로부터 받음',
+              '소셜 로그인으로 가입하거나 연결한 경우: 소셜 로그인 제공자(Google, 카카오, 네이버)가 발급한 회원 식별자, 제공자가 전달하는 이메일 주소',
+              '로그인',
+              '탈퇴할 때 바로 지웁니다.',
             ],
             [
-              '실명과 연락처',
               '실명, 휴대전화 번호',
-              '회원이 가입 과정에서 또는 서비스를 처음 이용하기 전에 직접 입력',
+              '본인확인, 휴대전화 번호마다 계정 하나와 시작 Coin 한 번의 확인',
+              '탈퇴할 때 바로 지웁니다.',
             ],
             [
-              '충전 결제',
-              '결제 금액과 일시, 결제 수단의 종류, 결제대행사 거래 번호와 승인 번호, 카드사 이름, 일부가 가려진 카드 번호 등 결제 결과 정보',
-              '결제대행사로부터 받음',
+              '인증번호를 보낸 기록(보낸 번호와 실명, 인증번호를 복원할 수 없게 바꾼 값, 시각, 요청한 IP 주소, 발송 결과)',
+              '본인확인 기록, 인증번호 발송 한도(부정 이용 방지)',
+              `계정이 있는 동안 보관합니다. 탈퇴한 뒤의 보관 기간은 ${kept('phone_verification_records', '탈퇴한 때부터')}입니다. 가입 허용 목록에 없는 번호로 인증번호를 받은 기록도 같습니다.`,
             ],
             [
-              '서비스 이용',
-              'IP 주소, 브라우저·기기 정보, 접속 일시, 서비스 이용 기록(거래·정산·P 이용 내역), 쿠키',
-              '서비스를 이용하는 과정에서 자동으로 생성·수집',
+              '시작 Coin을 받은 휴대전화 번호의 키 있는 해시',
+              '같은 번호에 시작 Coin을 다시 주지 않음',
+              '기간을 두지 않으며, 탈퇴한 뒤에도 보관합니다.',
+            ],
+            [
+              '가입 허용 목록에 넣은 휴대전화 번호의 키 있는 해시',
+              '폐쇄 테스트 동안의 가입 확인',
+              '목록에서 빼면 바로 지웁니다. 공개 출시 때 목록을 비우며 모두 지웁니다.',
+            ],
+            [
+              '동의 기록(동의한 항목과 문서의 판, 동의 여부, 시각, IP 주소, 브라우저 정보)',
+              '동의의 증명',
+              `계정이 있는 동안 보관합니다. 탈퇴한 뒤의 보관 기간은 ${kept('consent_records', '탈퇴한 때부터')}입니다.`,
+            ],
+            [
+              '닉네임, 소개, 프로필 이미지(촬영 위치 같은 부가 정보는 지우고 저장), 관심 카테고리, 시간대 설정',
+              '공개 프로필과 작성자 표시, 시각 표시',
+              `회원이 바꾸거나 지우면 바로, 탈퇴할 때 바로 지웁니다. 운영자가 지운 닉네임·소개·프로필 이미지의 보관 기간은 ${kept('removed_profile_items', '지운 때부터(탈퇴한 회원은 탈퇴한 때부터)')}입니다.`,
+            ],
+            [
+              '쓰지 않게 된 닉네임',
+              `${String(NICKNAME_HOLD_DAYS)}일 동안 다른 계정이 쓰지 못하게 함`,
+              `${String(NICKNAME_HOLD_DAYS)}일 동안 보관한 뒤 지웁니다. 회원이 바꿔서 쓰지 않게 된 닉네임은 계정과 이어 두어 본인이 되찾을 수 있습니다. 탈퇴해서 쓰지 않게 된 닉네임은 계정과 잇지 않고, 운영자가 바꿔서 쓰지 않게 된 닉네임은 그 운영 조치와 이어 보관합니다.`,
+            ],
+            [
+              '주문, 체결, 보유 계약, Coin 원장',
+              '거래와 지급, 이용 내역',
+              '기간을 두지 않습니다. 탈퇴한 뒤에는 운영자만 봅니다.',
+            ],
+            [
+              '근거 글, 댓글과 그 수정 이력, 이미지',
+              '커뮤니티',
+              `글·댓글이 있는 동안 보관하며, 탈퇴한 뒤에도 남기고 작성자를 "탈퇴한 사용자"로 표시합니다. 작성자가 지운 글·댓글의 원문과 이전 수정 이력의 보관 기간은 ${kept('deleted_posts', '지운 때(탈퇴한 작성자의 것은 탈퇴한 때, 수정 이력은 바뀐 때)부터')}입니다.`,
+            ],
+            [
+              '좋아요(누른 계정, 대상 글·댓글, 누른 시각, 누른 회원의 휴대전화 번호의 키 있는 해시)',
+              '좋아요 수의 표시, 한 사람의 좋아요를 한 번으로 셈',
+              '좋아요를 취소하면 바로 지웁니다. 그 밖에는 기간을 두지 않으며, 탈퇴한 뒤에도 남아 좋아요 수에 셉니다.',
+            ],
+            [
+              '작성 빈도와 링크 사용 기록(본인확인한 번호의 키 있는 해시, 쓴 시각, 링크의 주소와 그 링크를 쓴 글·댓글)',
+              '작성 빈도 제한, 반복 링크 검토',
+              `기록한 때부터 ${String(WRITE_RECORD_HOURS)}시간 동안 쓰고, 그 뒤 한 시간이 더 지나면 매시간 하는 처리에서 지웁니다. 운영자가 회원의 휴대전화 번호를 바꾸면 지난 ${String(WRITE_RECORD_HOURS)}시간의 기록을 새 번호로 옮깁니다. 반복 링크로 검토 목록에 오른 항목의 보관 기간은 ${kept('moderation_records', "오른 때와 운영자가 '확인함'으로 표시한 때 가운데 늦은 때부터")}입니다.`,
+            ],
+            [
+              '신고(신고한 회원의 휴대전화 번호의 키 있는 해시 포함), 운영 조치와 그 사유, 판정 이의(근거 링크와 사유)',
+              '운영 조치와 제재 이의, 판정 이의의 처리, 한 사람의 신고 한도',
+              `계정이 있는 동안 보관합니다. 탈퇴한 회원의 것은 처리가 끝나야 지우며, 그 보관 기간은 ${kept('moderation_records', '탈퇴한 때와 처리된 때 가운데 늦은 때부터')}입니다.`,
+            ],
+            [
+              "운영 기록(운영자가 한 일의 종류·대상·내용, '확인함'으로 표시한 반복 링크의 주소, 시장 제안을 검토·결정한 운영자)",
+              '운영 감사',
+              '기간을 두지 않습니다.',
+            ],
+            [
+              '시장 제안(제출한 내용, 상태, 처리 사유, 제안한 회원의 휴대전화 번호의 키 있는 해시)',
+              '시장 제안의 처리, 한 사람의 제안 한도',
+              `계정이 있는 동안 보관합니다. 탈퇴한 회원의 것은 처리가 끝나야 지우며, 그 보관 기간은 ${kept('market_proposals', '탈퇴한 때와 처리가 끝난 때 가운데 늦은 때부터')}입니다.`,
+            ],
+            [
+              '관심 시장, 관심 등록·해제 이력',
+              '관심 시장 목록과 알림, 통계',
+              '관심 시장은 해제하거나 탈퇴할 때 지웁니다. 등록·해제 이력은 기간을 두지 않습니다.',
+            ],
+            [
+              '검색어와 검색한 시각(로그인한 회원)',
+              '최근 검색어',
+              '기간을 두지 않습니다. 회원이 직접 지울 수 있고, 탈퇴할 때 지웁니다.',
+            ],
+            [
+              '알림',
+              '알림함',
+              `보관 기간은 ${kept('notifications', '알림이 생긴 때부터')}이며, 읽었는지와 상관없이 지웁니다. 탈퇴할 때 모두 지웁니다.`,
+            ],
+            [
+              '시장 방문 기록(계정, 시장, 방문한 한국 날짜). 로그인하고 가입 단계를 모두 마친 회원이 시장 상세를 열 때만 남기며, 시각·IP 주소·기기·유입 경로는 남기지 않습니다.',
+              '서비스 개선을 위한 통계',
+              `보관 기간은 ${kept('market_visits', '방문한 날 0시(한국 시각)부터')}이며, 탈퇴한 뒤에도 그 기간까지 보관합니다.`,
+            ],
+            [
+              '세션 정보(IP 주소, 브라우저 정보)와 세션 쿠키',
+              '로그인 유지와 보안',
+              '로그아웃하거나 탈퇴할 때 지웁니다. 만료된 세션은 그 쿠키로 다시 접속할 때 지우며, 다시 접속하지 않은 만료 세션은 계정이 있는 동안 남습니다.',
+            ],
+            [
+              '서버의 요청 기록(요청 방법과 경로, IP 주소, 시각)',
+              '운영과 보안, 장애 대응',
+              '서버 로그의 용량 한도 안에서 오래된 것부터 지우며, 배포로 서버 프로그램을 새로 띄우면 함께 지워집니다.',
             ],
           ],
         ),
         paragraph(
-          '카드 번호 전체, 유효기간, 비밀번호 등 결제 수단의 정보는 결제대행사가 직접 처리하며, 회사는 이를 받거나 저장하지 않습니다.',
+          '시장 방문 기록은 정당한 이익(「개인정보 보호법」 제15조 제1항 제6호)을 근거로 동의를 받지 않고 처리하며, 이 방침으로 알립니다. 따로 끄는 기능은 없습니다.',
         ),
         paragraph('회사는 주민등록번호를 수집하지 않습니다.'),
       ],
@@ -94,32 +222,20 @@ export const PRIVACY: LegalDocument = {
       heading: '개인정보의 처리 및 보유 기간',
       blocks: [
         numbered(
-          '회사는 회원이 탈퇴할 때까지 개인정보를 보유하며, 탈퇴하면 지체 없이 파기합니다. 다만 관계 법령에 따라 보존해야 하는 정보는 아래 기간 동안 보관합니다.',
-          '관계 법령 위반에 따른 수사나 조사가 진행 중인 경우에는 그 수사나 조사가 끝날 때까지 보유합니다.',
+          '회사는 회원이 탈퇴할 때까지 개인정보를 보유하며, 탈퇴하면 지체 없이 파기합니다. 다만 제2조의 표에 탈퇴한 뒤에도 보관한다고 적거나 기간을 두지 않는다고 적은 정보는 표에 적은 대로 보관합니다.',
+          '보관 기간이 지난 기록은 매일 한 번 하는 처리에서 지웁니다. 처리 중인 신고·운영 조치·판정 이의와 처리를 기다리는 시장 제안의 기록은 처리가 끝날 때까지 보관합니다.',
+          '회사가 보관 기간을 바꾸려면 이 개인정보처리방침을 먼저 개정합니다.',
         ),
-        table(
-          '관계 법령에 따라 보관하는 정보',
-          ['보관하는 정보', '보관 기간', '근거 법령'],
-          [
-            [
-              '계약 또는 청약철회 등에 관한 기록',
-              '5년',
-              '「전자상거래 등에서의 소비자보호에 관한 법률」',
-            ],
-            [
-              '대금결제 및 재화 등의 공급에 관한 기록',
-              '5년',
-              '「전자상거래 등에서의 소비자보호에 관한 법률」',
-            ],
-            [
-              '소비자의 불만 또는 분쟁처리에 관한 기록',
-              '3년',
-              '「전자상거래 등에서의 소비자보호에 관한 법률」',
-            ],
-          ],
-        ),
-        paragraph(
-          '서비스 접속 기록(IP 주소, 접속 일시)은 서비스의 보안을 유지하고 부정 이용을 막기 위해 수집하며, 그 목적에 필요한 기간 동안만 보관합니다. 다만 관계 법령이 보관을 요구하는 경우에는 그 법령이 정한 기간 동안 보관합니다.',
+      ],
+    },
+    {
+      heading: '공개 범위와 열람 제한',
+      blocks: [
+        numbered(
+          '다른 사람에게 공개하는 정보: 공개 프로필(닉네임, 소개, 프로필 이미지, 관심 카테고리, 가입한 해와 달, 쓴 글·댓글 수와 받은 좋아요 수), 근거 글과 댓글, 공개 판정 기록. 공개 판정 기록에는 판정한 관리자와 검토한 관리자, 판정 이의를 낸 사람과 이의 본문을 싣지 않습니다.',
+          '본인에게만 보이는 정보: 잔액, 주문, 보유 계약, 체결, 손익, 관심 시장, 시장 제안, 판정 이의, 자신이 한 신고와 그 처리 결과, 자신이 받은 운영 조치와 그 사유',
+          '어디에도 공개하지 않는 정보: 이메일 주소, 실명, 휴대전화 번호, 인증 정보, 내부 위험 표시',
+          '탈퇴한 회원의 기록(공개된 글·댓글은 빼고), 회원이 받은 신고와 신고한 사람, 운영 기록은 운영자만 봅니다.',
         ),
       ],
     },
@@ -140,13 +256,13 @@ export const PRIVACY: LegalDocument = {
           ['수탁자', '위탁 업무', '처리하는 정보'],
           [
             [
-              '{{pgName}}',
-              '충전 결제의 승인과 취소 등 결제 대행',
-              '구매자의 실명·휴대전화 번호·이메일 주소, 결제 금액, 회원을 구별하기 위한 값(원래 값을 알아낼 수 없는 형태)',
+              '알리고(㈜알리는사람들)',
+              '본인확인 인증번호 문자(SMS) 발송',
+              '휴대전화 번호, 문자의 내용',
             ],
             [
               '{{hostingProvider}}',
-              '서버와 데이터베이스 운영(호스팅), 이메일 발송(Amazon SES)',
+              '서버와 데이터베이스 운영(호스팅), 이미지 저장, 백업, 이메일 발송(Amazon SES)',
               '서비스 운영에 필요한 개인정보 전부. 데이터는 {{hostingRegion}}(대한민국)에 보관합니다.',
             ],
           ],
@@ -162,8 +278,9 @@ export const PRIVACY: LegalDocument = {
       blocks: [
         numbered(
           '회사는 보유 기간이 지났거나 처리 목적을 달성한 개인정보를 지체 없이 파기합니다.',
-          '법령에 따라 보존해야 하는 개인정보는 다른 개인정보와 분리하여 저장·관리하고, 보존 기간이 끝나면 파기합니다.',
           '전자 파일 형태의 정보는 복구할 수 없는 방법으로 삭제하고, 종이에 출력한 정보는 분쇄하거나 소각합니다.',
+          `데이터베이스에서 지운 정보도 장애 복구를 위한 매일 자동 백업에는 남아 있습니다. 자동 백업은 지금 설정으로 최근 ${String(DAILY_BACKUPS_KEPT)}개까지 두고, 그보다 오래된 것은 지웁니다.`,
+          '운영자가 작업을 위해 따로 만든 백업(데이터베이스 덤프, 서버 디스크의 스냅샷)은 그 목적이 끝나면 지웁니다.',
         ),
       ],
     },
@@ -172,7 +289,7 @@ export const PRIVACY: LegalDocument = {
       blocks: [
         numbered(
           '회원은 언제든지 자신의 개인정보에 대해 열람, 정정·삭제, 처리정지, 동의 철회를 요구할 수 있습니다.',
-          '닉네임, 이메일 주소, 실명, 휴대전화 번호는 설정 화면에서 직접 확인하고 고칠 수 있습니다. 그 밖의 요구는 개인정보 보호책임자에게 이메일({{privacyOfficerEmail}})로 할 수 있으며, 회사는 지체 없이 조치합니다.',
+          '닉네임, 이메일 주소, 실명은 MY의 설정 화면에서 직접 확인하고 고칠 수 있습니다. 휴대전화 번호는 고객센터를 통해서만 바꿀 수 있습니다. 마케팅 정보 수신 동의는 MY의 설정 화면에서 켜고 끌 수 있습니다. 그 밖의 요구는 개인정보 보호책임자에게 이메일({{email}})로 할 수 있으며, 회사는 지체 없이 조치합니다.',
           '권리 행사는 법정대리인이나 회원에게서 위임을 받은 사람을 통해서도 할 수 있습니다. 이 경우 위임장을 제출해야 합니다.',
           '법령에서 보존을 요구하는 정보는 삭제를 요구하더라도 그 기간 동안 보관될 수 있으며, 법령이 정한 경우에는 열람이나 처리정지 요구가 제한될 수 있습니다.',
           '회원은 자신의 개인정보를 정확하고 최신의 상태로 유지해야 하며, 다른 사람의 개인정보를 도용해서는 안 됩니다.',
@@ -184,6 +301,7 @@ export const PRIVACY: LegalDocument = {
       blocks: [
         numbered(
           '회사는 로그인 상태를 유지하기 위해 세션 쿠키를 사용합니다. 이 쿠키는 서비스 이용에 꼭 필요하며, 회사는 광고나 행태 분석을 위한 쿠키를 사용하지 않습니다.',
+          '회사는 외부 분석 도구를 쓰지 않습니다.',
           '화면 모드(라이트·다크) 설정은 회원의 브라우저에만 저장되며 회사 서버로 전송되지 않습니다.',
           '회원은 브라우저 설정에서 쿠키 저장을 거부할 수 있습니다. 다만 쿠키를 거부하면 로그인이 필요한 서비스를 이용할 수 없습니다.',
         ),
@@ -208,8 +326,7 @@ export const PRIVACY: LegalDocument = {
         ),
         bullets(
           '개인정보 보호책임자: {{privacyOfficer}}',
-          '이메일: {{privacyOfficerEmail}}',
-          '전화: {{phone}}',
+          '이메일: {{email}}(고객센터와 같은 주소입니다)',
         ),
         paragraph(
           '회원은 서비스를 이용하면서 생긴 개인정보 보호 관련 문의, 불만 처리, 피해 구제 등을 개인정보 보호책임자에게 문의할 수 있으며, 회사는 지체 없이 답변하고 처리합니다.',
@@ -244,8 +361,13 @@ export const PRIVACY: LegalDocument = {
         paragraph(
           '이 개인정보처리방침은 시행일부터 적용됩니다. 내용이 추가·삭제·수정되면 시행 7일 전부터 서비스 화면에 공지하며, 회원의 권리에 중요한 변경이 있으면 시행 30일 전부터 공지합니다.',
         ),
+        paragraph('이전에 시행한 개인정보처리방침도 이 화면에서 볼 수 있습니다.'),
       ],
     },
   ],
-  addendum: [paragraph('시행일: {{effectiveDate}}')],
+  addendum: [
+    paragraph(
+      `이 개인정보처리방침은 ${effectiveDateText(LEGAL_FIRST_EFFECTIVE_DATE)}부터 시행합니다.`,
+    ),
+  ],
 };

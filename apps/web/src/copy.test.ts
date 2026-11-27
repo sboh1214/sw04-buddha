@@ -603,6 +603,20 @@ describe('copy', () => {
     expect(new Set(priceNames).size).toBe(priceNames.length);
   });
 
+  it('names the links to the service guide after the section each opens (#136, ADR-0177)', () => {
+    for (const [label, section] of [
+      [copy.guideLinkJudgement, copy.serviceGuideJudgementTitle],
+      [copy.guideLinkMarketPrice, copy.serviceGuideMarketPriceTitle],
+      [copy.guideLinkOrders, copy.serviceGuideOrdersTitle],
+    ] as const) {
+      expect(label.trim()).not.toBe('');
+      expect(label).toBe(`${section} 자세히 보기`);
+    }
+    // The footer's link is the page's title, in a group that is no longer the policies alone.
+    expect(copy.serviceGuideTitle).toBe('서비스 안내');
+    expect(copy.footerNavLabel).toBe('안내 및 정책');
+  });
+
   it('formats Coin via @buddha/shared (workspace wiring)', () => {
     expect(formatCoin(12345n)).toBe('12,345 Coin');
   });
