@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { defineConfig, devices } from '@playwright/test';
+import { defineConfig, devices, type ReporterDescription } from '@playwright/test';
 import { config as loadEnv } from 'dotenv';
 
 /**
@@ -54,6 +54,51 @@ const TEST_TIMEOUT_MS = 180_000;
 /** Room for a cold-compiled route to answer; the 1s realtime budget is passed per assertion. */
 const EXPECT_TIMEOUT_MS = 15_000;
 
+/** This invocation's `--shard=<i>/<n>` (or `--shard <i>/<n>`) as `<i>-of-<n>`, if any. */
+function shardOf(argv: readonly string[]): string | undefined {
+  for (const [index, arg] of argv.entries()) {
+    const value =
+      arg === '--shard'
+        ? argv[index + 1]
+        : arg.startsWith('--shard=')
+          ? arg.slice('--shard='.length)
+          : undefined;
+    const match = value?.match(/^(\d+)\/(\d+)$/);
+    if (match) return `${match[1]}-of-${match[2]}`;
+  }
+  return undefined;
+}
+
+/**
+ * The reporters of the configuration named `config` (`general` here; the two dedicated configs
+ * pass their own name).
+ *
+ * `github` annotates the failing lines in the PR; the HTML report is what the CI job uploads from
+ * apps/web/playwright-report/ when a job fails (both that folder and test-results/ are gitignored).
+ *
+ * `json` keeps the run's results (#189, ADR-0178): one file per configuration and shard,
+ * `e2e-results/<config>[-shard-<i>-of-<n>].json` under apps/web (gitignored). It sits outside
+ * playwright-report/ and test-results/, which every run empties, so the shards of a local run
+ * (`--shard=1/3` … `3/3`) keep a file each, and a later run of the same configuration and shard
+ * replaces its file the way the HTML report is replaced. CI uploads it after every job, passing
+ * ones included, and `scripts/e2e-summary.mjs` reads it. With an output file the reporter writes
+ * nothing to stdout, so the console stays what the other reporters print (with none of them
+ * printing there, Playwright still adds its `dot`/`line` reporter). `--list` runs no test, so it
+ * writes no result. `PLAYWRIGHT_JSON_OUTPUT_FILE` overrides the path.
+ */
+export function e2eReporters(
+  config: string,
+  argv: readonly string[] = process.argv,
+): ReporterDescription[] {
+  const reporters: ReporterDescription[] = process.env.CI
+    ? [['github'], ['html', { open: 'never' }]]
+    : [['list'], ['html', { open: 'never' }]];
+  if (argv.includes('--list')) return reporters;
+  const shard = shardOf(argv);
+  const file = shard ? `${config}-shard-${shard}` : config;
+  return [...reporters, ['json', { outputFile: `e2e-results/${file}.json` }]];
+}
+
 export default defineConfig({
   testDir: './e2e',
   // These scenarios must run separately on fresh DB/Redis profiles; see e2e/README.md. This is
@@ -74,11 +119,7 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   timeout: TEST_TIMEOUT_MS,
   expect: { timeout: EXPECT_TIMEOUT_MS },
-  // `github` annotates the failing lines in the PR; the HTML report is what the CI job uploads
-  // from apps/web/playwright-report/ (both that folder and test-results/ are gitignored).
-  reporter: process.env.CI
-    ? [['github'], ['html', { open: 'never' }]]
-    : [['list'], ['html', { open: 'never' }]],
+  reporter: e2eReporters('general'),
   use: {
     baseURL,
     trace: 'on-first-retry',
