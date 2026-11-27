@@ -3094,8 +3094,8 @@ export const copy = {
   // 첫 주문 안내(#59, ADR-0154): 주문 확인 화면에서 그 계정의 첫 주문이 접수될 때까지(거절로 끝난 주문은
   // 세지 않는다) 펼쳐 보이고, 그 뒤에는 '첫 주문 안내 다시 보기'로 연다(오너 답 2026-11-21 #59-1·2). 고른
   // 주문 방식의 주제만 — 즉시 거래는 계약 지급액·부분 체결·가격 보호, 지정가는 계약 지급액·지정가 대기·부분
-  // 체결이다(#59-3). 지급액의 숫자는 CONTRACT_TERMS에서 붙인다(lib/first-order-guide.ts). 서비스 안내
-  // 페이지(#136)로 가는 링크는 두지 않는다(#59-4).
+  // 체결이다(#59-3). 지급액의 숫자는 CONTRACT_TERMS에서 붙인다(lib/first-order-guide.ts). 서비스 안내의 주문
+  // 방식 절(/guide#orders)로 가는 링크를 끝에 새 탭으로 둔다(#59-4 '그 이슈에서 연결을 더한다', #136, ADR-0177).
   firstOrderGuideTitle: '첫 주문 안내',
   firstOrderGuideShow: '첫 주문 안내 다시 보기',
   firstOrderGuideHide: '첫 주문 안내 접기',
@@ -4609,7 +4609,8 @@ export const copy = {
   legalVersions: '시행한 판',
   legalVersionItem: '{date} 시행',
   legalVersionCurrent: '현재 판',
-  footerNavLabel: '약관 및 정책',
+  // 바닥글 링크 묶음의 이름(aria-label). 서비스 안내(#136)가 들어가 '안내 및 정책'이다(ADR-0177 구현 선택).
+  footerNavLabel: '안내 및 정책',
   footerBusinessInfoLabel: '사업자 정보',
   footerCompany: '상호: {{companyName}}',
   footerCeo: '대표자: {{ceoName}}',
@@ -4633,6 +4634,122 @@ export const copy = {
     '결제가 승인된 때부터 {{refundWindowDays}}일 이내이고 그 결제로 충전된 Coin을 전혀 쓰지 않았다면 결제 금액 전액을 환불받을 수 있습니다. 쿠폰·정산 등 결제 없이 받은 Coin은 환불되지 않습니다.',
   chargeGuideRefundLink: '환불정책 자세히 보기',
   chargeGuideLoadError: '충전 상품을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.',
+
+  // --- 서비스 안내 (#136, ADR-0177) ---
+  // `/guide`: 거래·판정·Coin 규칙의 요약이고 권리·의무는 이용약관을 따른다(오너 답 136-3). 약관과 함께 쓰는 사실
+  // 문장 S01–S32는 legal/service-facts.ts에 있고, 여기에는 안내에만 있는 문장을 둔다. serviceGuide* 키는
+  // 제목(serviceGuideTitle — 바닥글 링크의 이름이기도 하다) 말고는 app/(service-guide) 안에서만 읽는다 — 그래야
+  // '…제공하지 않습니다'·'…확률이 아닙니다' 같은 부정 안내가 서비스 안내의 허용을 받는다(ADR-0057 결정 1-2). 숫자는
+  // 적지 않는다: 코드 고정값의 숫자는 사실 문장에만 있고(133-2, 137-6 (a)), 관리자가 정하는 값은 '화면에 표시한 값을
+  // 따릅니다'다. 운영 마켓메이커의 이름은 '운영 유동성'이고 본문의 첫 언급(S11)만 '운영 유동성(봇)'이다(136-1).
+  // 유료 판매·운영 시간·처리 목표·'추천' 정렬의 설명은 두지 않는다(N06, 133-6, ADR-0065 #4).
+  serviceGuideTitle: '서비스 안내',
+  serviceGuideIntro:
+    '이 안내는 거래·판정·Coin 규칙을 요약합니다. 회원의 권리와 의무는 이용약관을 따릅니다.',
+  serviceGuideIntroSettings:
+    '시작 지급액·재지급 조건·이의 기간·가격 보호 폭처럼 관리자가 정하는 값은 화면에 표시한 값을 따릅니다.',
+  serviceGuideTermsLink: '이용약관 보기',
+  serviceGuideContractTitle: '계약과 지급',
+  serviceGuideCollateralTitle: '완전 담보',
+  serviceGuideBuyWithinBalance: "매수는 '가용 코인' 안에서만 합니다.",
+  serviceGuidePairFill:
+    'YES 매수와 NO 매수도 한 쌍으로 체결될 수 있습니다. 들어온 매수의 한도가격과 기다리던 반대 계약 매수의 가격을 더해 지급액 이상이면 새 계약 한 쌍이 생기고, 들어온 쪽은 지급액에서 기다리던 가격을 뺀 가격에 삽니다.',
+  serviceGuideLocks:
+    '수량으로 내는 매수는 한도가격 × 수량만큼 Coin이, 매도는 그 수량의 계약이 잠깁니다. 한도보다 좋은 가격에 체결되면 그 차이는 체결 때 풀립니다.',
+  // [코드≠기획] N01 §4는 '한도가격 × 수량'만 적는다. 금액 주문은 입력 금액 전체를 잠근다(ADR-0107 결정 1 #177 3항).
+  serviceGuideBudgetLock: '금액으로 내는 즉시 매수는 입력한 금액 전체가 잠깁니다.',
+  serviceGuideOrdersTitle: '주문 방식',
+  serviceGuideOrderSteps:
+    '주문은 계약(YES·NO), 매수·매도, 주문 방식(즉시 거래·지정가)의 순서로 고릅니다.',
+  serviceGuideImmediateLimits:
+    "즉시 거래는 확인 화면의 '최대 매수 단가'보다 비싸게 사지 않고, '최소 매도 단가'보다 싸게 팔지 않습니다.",
+  serviceGuideBudgetUnused:
+    '금액으로 내는 즉시 매수는 입력한 금액을 다 쓰지 않을 수 있고, 쓰지 않은 Coin은 주문이 끝나면 풀립니다.',
+  serviceGuideNoMarketOrder: '가격 한도 없이 체결하는 무제한 시장가 주문은 제공하지 않습니다.',
+  serviceGuideLimitWaits:
+    '지정가 주문은 호가창에서 상대 주문을 기다리고, 기다리는 동안 매수는 Coin이, 매도는 계약이 잠깁니다.',
+  serviceGuidePartialFill: '주문은 일부만 체결될 수 있습니다.',
+  // 서버는 확인한 한도를 좁히기만 하고 다시 견적을 강제하지 않는다(ADR-0107 결정 1 #177 2항).
+  // 접수 때 바로 체결되는 수량만 그때의 호가로 정해진다. 지정가의 남은 수량은 기다렸다가 자기 가격에 체결된다(matching.ts).
+  serviceGuideQuote:
+    '견적은 현재 호가 기준 예상입니다. 접수하며 바로 체결되는 수량은 그때의 호가로 정해지며, 확인한 가격 한도보다 나쁜 가격으로는 체결되지 않습니다.',
+  serviceGuidePriority:
+    '좋은 가격의 주문부터, 같은 가격이면 먼저 들어온 주문부터 체결하며, 체결 가격은 기다리던 주문이 정한 가격입니다.',
+  serviceGuideSelfTrade: '자기 주문과 만나면 들어온 주문의 남은 수량은 취소됩니다.',
+  serviceGuideCancelPending:
+    "취소를 요청해도 처리가 끝나기 전에 체결될 수 있고, 처리가 끝나야 '취소 완료'로 표시합니다.",
+  serviceGuideMarketPriceTitle: '시장가격의 뜻',
+  serviceGuideYesBasis:
+    'NO 체결도 YES 기준 가격으로 바꿔 셉니다. 개장만으로는 시장가격이 생기지 않습니다.',
+  serviceGuideNotBelief: '시장가격은 한 사람이 믿는 확률도 아닙니다.',
+  serviceGuideThreePrices: '한 화면의 세 가격은 서로 다른 숫자입니다.',
+  // 라벨은 회원 화면의 것이다: '최근 체결가'는 보유 행(positionCurrentPrice), '평균가'는 MY 주문·체결(orderAvgPrice).
+  // 보유 행의 최근 체결가는 YES 기준 마지막 체결가이고 NO는 그 보완값이다(markPriceCoin, ADR-0142).
+  serviceGuidePriceLast:
+    '최근 체결가: 마지막 체결로 매긴 그 계약의 가격(Coin)입니다. YES 계약은 시장가격의 숫자를 Coin으로 쓴 값이고, NO 계약은 지급액에서 그 값을 뺀 값입니다.',
+  serviceGuidePriceBook:
+    '호가: 지금 호가창에서 기다리는 주문의 가격(Coin)입니다. 매수 견적은 가장 싼 매도호가부터 씁니다.',
+  serviceGuidePriceAverage:
+    '평균가: 한 주문이 여러 가격에 체결됐을 때 그 주문의 평균 가격입니다. 시장 전체의 평균 체결가는 없습니다.',
+  serviceGuideNoQuote: "그 방향에 기다리는 주문이 없으면 '호가 없음'으로 표시합니다.",
+  serviceGuideLiquidityTitle: '운영 유동성',
+  // 시장마다의 참여 여부와 설정은 관리자만 본다(ADR-0058 1-20, ADR-0135 B4). 안내는 '거래 상대가 될 수 있다'만 적는다.
+  serviceGuideLiquidityHidden:
+    '체결 목록은 상대가 운영 유동성인지 표시하지 않으며, 어느 시장에 참여하는지와 그 설정도 공개하지 않습니다.',
+  serviceGuideLiquidityNotPerson:
+    '운영 유동성은 사람처럼 꾸미지 않습니다. 프로필과 닉네임이 없고, 글이나 댓글을 쓰지 않습니다.',
+  // 거래량에는 운영 유동성과의 체결이 들어간다(ADR-0107 결정 1 #177 12항). '거래량에서도 뺀다'로 읽히지 않게.
+  // 라벨은 회원 화면의 '참여자'(marketTraders)다. '참여자 수'(marketTraderCount)는 관리자 상세의 것이다.
+  serviceGuideLiquidityCounts:
+    "'참여자'에는 운영 유동성을 세지 않습니다. 거래량에는 운영 유동성과의 체결도 들어갑니다.",
+  serviceGuideLiquidityNoSelfFill:
+    '운영 유동성끼리는 체결하지 않아, 운영 유동성만으로 거래량이 생기지 않습니다.',
+  serviceGuideLiquidityContinues:
+    '운영 유동성의 공급이 부족하거나 운영 유동성이 멈춰도 회원끼리의 거래는 계속됩니다. 운영 유동성의 정지와 시장의 거래 일시 중단은 다른 상태입니다.',
+  // 개장 기준값(코드 고정값)은 숫자로 적지 않는다(오너 답 137-6 (a)). 결과를 판단한 값이 아니라 개장 설정이다(N01 §6,
+  // ADR-0058 결정 1의 2). 어느 시장에서 호가를 내는지는 말하지 않는다(ADR-0058 1-20) — 기준값이 모든 시장에 같을 뿐이다.
+  serviceGuideOpeningSetting:
+    '운영 유동성이 호가를 내기 시작하는 기준값은 모든 시장에 같은 개장 설정이며, 결과의 확률을 판단한 값이 아닙니다.',
+  serviceGuideJudgementTitle: '판정과 이의',
+  // 두 시각은 같을 수 있다: 마감 ≤ 예정 판정(market-times.ts closeByJudgement, 관리자 힌트 adminMarketTimesHint).
+  serviceGuideCloseVsJudgement:
+    "시장 규칙의 '거래 마감 시각'과 '예정 판정 시각'은 따로 정하며, 거래 마감 시각은 예정 판정 시각과 같거나 그보다 앞섭니다.",
+  serviceGuideDisputeRules:
+    '판정 이의는 한 회원이 판정 버전마다 한 건 낼 수 있고, 기한 안에 철회할 수 있지만 고칠 수는 없습니다. 계정이 제한된 중에도 낼 수 있으며, 받은 조치에 대한 제재 이의와는 따로 받습니다.',
+  serviceGuideStatusIntro: '시장의 상태는 아래 이름으로 표시합니다.',
+  serviceGuideStatusCaption: '시장 상태 표시',
+  serviceGuideStatusHeadName: '상태',
+  serviceGuideStatusHeadMeaning: '뜻',
+  serviceGuideStatusScheduled: '정한 시각에 거래가 열리기를 기다립니다.',
+  serviceGuideStatusOpen: '주문을 받고 체결합니다.',
+  // 관리자의 일시 중단과 원장 대사 실패의 자동 일시 중단(#93, ADR-0119) 둘 다라 누가 멈췄는지는 적지 않는다.
+  serviceGuideStatusPaused: '거래를 잠시 멈췄습니다. 새 주문을 받지 않습니다.',
+  serviceGuideStatusClosed: '거래가 끝나 판정을 기다립니다.',
+  serviceGuideStatusProvisional: '판정을 공개하고 이의 기간을 둡니다.',
+  serviceGuideStatusDisputeUnderReview:
+    '잠정 결과에 낸 판정 이의를 검토합니다. 그동안 지급하지 않습니다.',
+  serviceGuideStatusJudgementDelayed:
+    '예정 판정 시각이 지나도 결과가 없거나, 이의 기한이 지나도 결과가 확정되지 않았습니다.',
+  serviceGuideStatusResolved: '결과가 확정되어 지급을 기다립니다.',
+  serviceGuideStatusSettling: '정산 지급을 하고 있습니다.',
+  serviceGuideStatusSettled: '정산 지급을 마쳤습니다.',
+  serviceGuideStatusCancelled: '결과 없이 끝났습니다. 판정과 지급이 없습니다.',
+  serviceGuideVoidCancelTitle: '무효와 시장 취소',
+  serviceGuideVoidRules: '어떤 경우에 무효가 되는지는 시장마다 규칙에 적습니다.',
+  serviceGuideVoidLabel: "무효로 끝난 시장은 결과를 '무효'로 표시합니다.",
+  // 무효는 매수한 사람마다 체결을 되돌리는 것이 아니라 계약마다 같은 금액을 지급하는 것이다(N03 §6).
+  serviceGuideNoUnwind: '무효로 끝나도 이미 이루어진 체결은 되돌리지 않습니다.',
+  serviceGuideCancelNoJudgement: '취소된 시장에는 판정·판정 이의·정산 지급이 없습니다.',
+  serviceGuideScheduledCancel:
+    '개장 예정인 시장은 관리자가 다른 관리자의 승인을 받아 취소할 수 있습니다.',
+  serviceGuideCoinTitle: 'Coin',
+  serviceGuideNoScore: '점수·순위는 제공하지 않습니다. 테마에는 순위·보상·참가 등록이 없습니다.',
+  // 진입점(오너 답 2026-11-27, #136의 '이미 답이 있는 상자'): 판정 기록 머리 → #judgement(ADR-0107 결정 4 #24),
+  // 시장 상세 차트 아래 안내 → #market-price(ADR-0135 '남은 것'), 첫 주문 안내 → #orders(ADR-0154 #59-4). 바닥글은
+  // serviceGuideTitle을 쓴다. 온보딩 지급 뒤 안내에는 두지 않는다(ADR-0069 #57-10).
+  guideLinkJudgement: '판정과 이의 자세히 보기',
+  guideLinkMarketPrice: '시장가격의 뜻 자세히 보기',
+  guideLinkOrders: '주문 방식 자세히 보기',
 
   // --- 본인확인과 온보딩 (ADR-0043, ADR-0070) ---
   // 휴대전화 SMS 인증번호 본인확인(#183, ADR-0069 결정 1 #57-1·#57-3). 실명과 번호를 한 화면에서 받고 그 번호로

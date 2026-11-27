@@ -11,6 +11,7 @@ import {
   Text,
 } from '@chakra-ui/react';
 import { JUDGEMENT_INCIDENT_STATUSES, type MarketStatus } from '@buddha/shared';
+import NextLink from 'next/link';
 import { type ReactNode } from 'react';
 import { DateTimeText } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
@@ -24,6 +25,7 @@ import {
   PAUSE_REVIEW_RESULT_LABEL,
 } from '@/lib/market-admin';
 import { marketStatusLabel } from '@/lib/market-status';
+import { serviceGuideHref } from '@/lib/service-guide';
 import { RuleRow } from './rules-section';
 
 export type JudgingRecordMarket = Pick<
@@ -87,6 +89,18 @@ export function MarketJudgingRecord({
           <Text fontSize="sm" data-testid={`${testId}-principle`}>
             {copy.judgingPrinciple}
           </Text>
+          {/* The principle's link to the guide's 판정과 이의 (ADR-0107 결정 4 #24 '#136이 생기면 링크를
+              단다', #136, ADR-0177), on every public state as the principle is. */}
+          <ChakraLink
+            asChild
+            alignSelf="flex-start"
+            fontSize="sm"
+            color="fg.muted"
+            textDecoration="underline"
+            data-testid={`${testId}-guide-link`}
+          >
+            <NextLink href={serviceGuideHref('judgement')}>{copy.guideLinkJudgement}</NextLink>
+          </ChakraLink>
           {market && (
             <Text fontSize="sm" data-testid={`${testId}-status`}>
               {copy.judgingCurrentStatus}:{' '}

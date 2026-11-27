@@ -7,6 +7,7 @@ import { delta24h } from '@/lib/market-detail';
 import { marketKey } from '@/lib/market-keys';
 import { applyTick } from '@/lib/market-live';
 import { getQueryClient } from '@/lib/query-client';
+import { serviceGuideHref } from '@/lib/service-guide';
 import { byTestId, renderWithQueries } from '@/test/render';
 import { MarketRefreshAlert, StatusNotice } from './market-detail';
 
@@ -315,6 +316,28 @@ describe('a settled market’s price and result (#34)', () => {
     expect(byTestId(price, 'market-detail-result')).toBeUndefined();
     expect(price).not.toContain(copy.marketResolvedResult);
     expect(price).not.toContain(copy.marketDelta24h);
+  });
+});
+
+/**
+ * The notice under the chart (ADR-0135 결정 1의 3) and, beside it, the link to the service guide's
+ * 시장가격의 뜻 (ADR-0135 '남은 것', #136, ADR-0177): one block outside the row's condition, so a
+ * row still loading keeps both. The link's address and anchor are lib/service-guide.ts's.
+ */
+describe('the market price notice’s link to the service guide (#136)', () => {
+  it('stands beside the notice, opening /guide#market-price', () => {
+    const source = readFileSync(new URL('./market-detail.tsx', import.meta.url), 'utf8');
+    const at = source.indexOf('data-testid="market-price-notice"');
+    expect(at).toBeGreaterThan(-1);
+    const block = source.slice(source.lastIndexOf('<HStack', at), source.indexOf('</HStack>', at));
+    expect(block).toContain('{copy.marketPriceNotice}');
+    expect(block).toContain('data-testid="market-price-guide-link"');
+    expect(block).toContain(
+      "<NextLink href={serviceGuideHref('market-price')}>{copy.guideLinkMarketPrice}</NextLink>",
+    );
+    expect(serviceGuideHref('market-price')).toBe('/guide#market-price');
+    // Outside `data !== undefined`: the chart's condition closes before the block opens.
+    expect(source.slice(source.lastIndexOf('{data !== undefined && (', at), at)).toContain(')}');
   });
 });
 

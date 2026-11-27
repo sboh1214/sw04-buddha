@@ -4,13 +4,16 @@ import type { Route } from 'next';
 import NextLink from 'next/link';
 import { copy } from '@/copy';
 import { FOOTER_BUSINESS_LINES, fillBusinessInfo } from '@/legal/business-info';
+import { serviceGuideHref } from '@/lib/service-guide';
 
 /**
- * The policy links (ADR-0044). 개인정보처리방침 is set in bold, as Korean sites mark it. The
- * fourth, 충전 안내, only while paid Coin is on sale (PAID_COIN_SALES_ENABLED, ADR-0049): `/charge`
- * is not found otherwise.
+ * The guide and the policy links (ADR-0044): 서비스 안내 first, the common place every screen
+ * reaches it from, signed in or not (#136, ADR-0177), then the three policies. 개인정보처리방침 is
+ * set in bold, as Korean sites mark it. The last, 충전 안내, only while paid Coin is on sale
+ * (PAID_COIN_SALES_ENABLED, ADR-0049): `/charge` is not found otherwise.
  */
 const LINKS: { key: string; href: Route; label: string; strong?: boolean }[] = [
+  { key: 'guide', href: serviceGuideHref(), label: copy.serviceGuideTitle },
   { key: 'terms', href: '/terms', label: copy.legalTermsTitle },
   { key: 'privacy', href: '/privacy', label: copy.legalPrivacyTitle, strong: true },
   { key: 'refund', href: '/refund', label: copy.legalRefundTitle },
@@ -20,9 +23,10 @@ const LINKS: { key: string; href: Route; label: string; strong?: boolean }[] = [
 ];
 
 /**
- * The site footer on every page (owner decision 2026-09-28 §7, ADR-0044): the policy links and
- * the 사업자 정보 a 통신판매업자 has to show. The facts come from `BUSINESS_INFO` through the
- * `copy` templates, so the footer and the legal pages can never disagree about them.
+ * The site footer on every page (owner decision 2026-09-28 §7, ADR-0044): the guide and policy
+ * links, under the name 안내 및 정책 (`copy.footerNavLabel`, ADR-0177), and the 사업자 정보 a
+ * 통신판매업자 has to show. The facts come from `BUSINESS_INFO` through the `copy` templates, so
+ * the footer and the legal pages can never disagree about them.
  *
  * A server component: nothing here reads the session, the URL or the API, so it costs the
  * statically prerendered pages nothing and renders the same for every visitor.
