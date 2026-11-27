@@ -392,8 +392,26 @@ jobs:
       - name: Playwright e2e (mobile-375 + desktop-1280)
         run: ${{ matrix.command }}
 
+      # Every run's results, passing runs included (#189, ADR-0178): the JSON report this
+      # configuration wrote (`e2eReporters` in apps/web/playwright.config.ts), for e2e-summary
+      # below. 90 days, the repository's retention (its maximum); a re-run replaces its job's file.
+      # Nothing to upload when a step before the e2e is what failed. A failure to keep results is
+      # reported, never a merge blocker: a failed upload leaves this job (and through it the gate)
+      # as the e2e left it, and e2e-summary then misses this job's file and fails instead.
+      - name: Upload the e2e results
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v6
+        with:
+          name: e2e-results-${{ matrix.id }}
+          path: apps/web/e2e-results/
+          if-no-files-found: ignore
+          retention-days: 90
+          overwrite: true
+
       # Traces (trace: 'on-first-retry' with retries: 2 in CI) plus whatever report the run
       # produced, and all three server logs. Ignored when a step before the e2e is what failed.
+      # A re-run that fails again replaces its job's report instead of failing on the name.
       - name: Upload the Playwright report
         if: failure()
         uses: actions/upload-artifact@v6
@@ -405,10 +423,68 @@ jobs:
             ${{ runner.temp }}/e2e-logs/
           if-no-files-found: ignore
           retention-days: 7
+          overwrite: true
+
+  # One summary of all the e2e jobs' results (#189, ADR-0178): the commit, each configuration's
+  # and each shard's passed / failed / flaky / skipped and the totals with every test counted once
+  # (apps/web/scripts/e2e-summary.mjs), as this job's summary and the artifact e2e-summary-<sha>
+  # for 90 days — two small files, small enough to commit as evidence: the launch check (#149)
+  # accepts the main run of the deployed sha alone. It reports and is not one of the gate's needs,
+  # so the ruleset is unchanged (ADR-0168): a failed test already fails its e2e job and through it
+  # the gate. It fails only when every e2e job passed and the summary is still incomplete (a result
+  # missing, an error outside the tests, a test interrupted, not run or in two files, an unreadable
+  # file …), because then it does not cover the whole run. It runs after failed or timed-out e2e
+  # jobs too, but not in a cancelled run (a newer push to the same ref): #149 never uses one.
+  e2e-summary:
+    name: E2E Results Summary
+    if: ${{ !cancelled() }}
+    needs: e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/workflows/setup
+
+      # Into a folder per artifact when more than one matches, straight into e2e-results/ when
+      # only one does; the summary reads the folder recursively, so either way works.
+      - name: Download the e2e results
+        uses: actions/download-artifact@v8
+        with:
+          pattern: e2e-results-*
+          path: e2e-results
+
+      # The --expect list follows the e2e matrix: general (whose results number its shards
+      # themselves), market-maker and treasury. A pull request's run tests the merge commit
+      # (github.sha), so its head is named beside it.
+      - name: Summarize the e2e results
+        env:
+          E2E_RESULT: ${{ needs.e2e.result }}
+          E2E_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          args=(--out e2e-summary --expect general --expect market-maker --expect treasury)
+          if [ "$E2E_RESULT" = success ]; then args+=(--require-complete); fi
+          status=0
+          node apps/web/scripts/e2e-summary.mjs "${args[@]}" e2e-results || status=$?
+          if [ -f e2e-summary/e2e-summary.md ]; then
+            cat e2e-summary/e2e-summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
+
+      - name: Upload the e2e summary
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: e2e-summary-${{ github.sha }}
+          path: e2e-summary/
+          if-no-files-found: warn
+          retention-days: 90
+          overwrite: true
 
   # The main ruleset requires a status check with exactly this name, which was the single job's
   # before the split; keep it, or change the ruleset in the same breath. A cancelled, failed or
-  # skipped job above fails it, so it never passes on part of the checks.
+  # skipped job of its needs fails it, so it never passes on part of the checks. e2e-summary is
+  # deliberately not one of them (above).
   ci:
     name: format / lint / typecheck / test / build
     if: always()
