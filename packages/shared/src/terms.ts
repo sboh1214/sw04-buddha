@@ -32,10 +32,11 @@ export interface ReplacedTerm {
  * (terms.test.ts compares the two), and the regression check of #113 imports it from here.
  * Nothing reads it at run time.
  *
- * Out of its reach until their own issues: the legal document bodies (#137) and the charge copy
- * hidden while paid Coin is closed (#111) — docs/TERMS.md lists them. One row binds member
- * screens only: admin screens keep '운영 마켓메이커' (ADR-0107 결정 2 #73 11항, ADR-0177), as its
- * note says.
+ * Out of its reach until its own issue: the charge copy hidden while paid Coin is closed (#111) —
+ * docs/TERMS.md lists it. The legal document bodies, revised by #137, are held to it as the
+ * service guide is, their negative notices allowed (owner answer 137-4 (a), ADR-0176). One row
+ * binds member screens only: admin screens keep '운영 마켓메이커' (ADR-0107 결정 2 #73 11항,
+ * ADR-0177), as its note says.
  */
 export const REPLACED_TERMS: readonly ReplacedTerm[] = [
   // 예측 names the genre only (D22).

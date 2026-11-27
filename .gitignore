@@ -27,6 +27,9 @@ expo-env.d.ts
 # playwright (apps/web)
 apps/web/test-results/
 apps/web/playwright-report/
+# e2e results per configuration and shard, and their summary (#189, ADR-0178)
+apps/web/e2e-results/
+/e2e-summary/
 
 # Local Docker port overrides (see the file header): never committed.
 compose.override.yaml

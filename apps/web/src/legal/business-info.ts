@@ -11,10 +11,18 @@ export const UNDECIDED = '미정';
  * `fillTemplate` substitutes it at render time, so filling in the real 상호 is a one-line edit
  * here that reaches the footer, 이용약관, 개인정보처리방침 and 환불정책 at once.
  *
- * The first group is what the owner still has to supply (docs/QUESTIONS.md, PG section); each
- * reads `미정` until then. The second group is already decided and only lives here so the
- * legal text can name it the same way — the service name comes from `copy`, the refund window
- * from the constant the API's refund check uses, so neither can drift from the code.
+ * The first group is what the owner still has to supply (docs/QUESTIONS.md Q-PG-2); each reads
+ * `미정` until then — the six business facts are taken at #149's check (owner answer 137-8), the
+ * privacy officer's title and the customer centre's address are the owner's to give (#137 '값',
+ * ADR-0176). The second group is already decided and only lives here so the legal text can name it
+ * the same way — the service name comes from `copy`, the refund window from the constant the API's
+ * refund check uses, so neither can drift from the code.
+ *
+ * #137 removed five keys (ADR-0176): the Coin expiry (no expiry — the 이용약관 says so in a
+ * sentence, #73-16), the refund processing time and the PG's service name (the paid sections they
+ * filled are gone, D9), the officer's own email (the officer is reached at the customer centre's
+ * address, `email` — owner answer 133-5) and the shared 시행일 (each document has its own,
+ * `LegalDocument.effectiveDate`).
  *
  * Values are plain text, never markup; a value may not be empty (the unit tests pin that).
  * The prose never puts a particle whose form depends on the last syllable (이/가, 은/는, 을/를,
@@ -35,28 +43,21 @@ export const BUSINESS_INFO = {
   address: UNDECIDED,
   /** 고객센터 전화번호. */
   phone: UNDECIDED,
-  /** 고객 문의·환불 요청을 받는 이메일 주소. */
-  email: UNDECIDED,
-  /** 개인정보 보호책임자 (성명 또는 직책). */
-  privacyOfficer: UNDECIDED,
-  /** 개인정보 보호책임자 연락 이메일. */
-  privacyOfficerEmail: UNDECIDED,
-  /** Coin 유효기간 — the whole phrase, e.g. "충전일로부터 5년" (open question, QUESTIONS.md). */
-  coinExpiry: UNDECIDED,
   /**
-   * 환불 요청 처리 기한 — the whole phrase, e.g. "요청을 받은 날부터 영업일 기준 1일 이내". The
-   * refund window is judged when the admin processes the refund, so this is how long a member
-   * has to allow for.
+   * 고객센터 이메일 주소: 문의와 제재 이의를 받고, 개인정보 보호책임자에게 닿는 주소이기도 하다
+   * (one address, owner answer 133-5).
    */
-  refundProcessingTime: UNDECIDED,
-  /** 약관·방침 시행일, e.g. "2026년 10월 1일". */
-  effectiveDate: UNDECIDED,
+  email: UNDECIDED,
+  /** 개인정보 보호책임자의 직책 — a title, never a person's name (owner answer 133-5). */
+  privacyOfficer: UNDECIDED,
 
   // --- decided ---
   serviceName: copy.appName,
-  /** 결제대행사 (ADR-0042). */
+  /**
+   * 결제대행사 (ADR-0042): only the kept charge copy names it now (`copy.chargeGuide…`, D9) — the
+   * revised documents have no paid section (#137).
+   */
   pgName: '스마트로(주)',
-  pgServiceName: '스마트로페이(SmartroPay)',
   /** terraform/: every resource in ap-northeast-2, mail through Amazon SES in the same region. */
   hostingProvider: 'Amazon Web Services, Inc.',
   hostingRegion: '아시아 태평양(서울) 리전',
@@ -78,10 +79,6 @@ export const OWNER_SUPPLIED_KEYS = [
   'phone',
   'email',
   'privacyOfficer',
-  'privacyOfficerEmail',
-  'coinExpiry',
-  'refundProcessingTime',
-  'effectiveDate',
 ] as const satisfies readonly BusinessInfoKey[];
 
 /** `text` with its `{{placeholders}}` filled from `BUSINESS_INFO` (throws on an unknown key). */

@@ -62,16 +62,47 @@ export interface ConsentDocument {
  *
  * The first versions are the documents as they stand on 2026-10-18 (decision 4 #58): /terms and
  * /privacy with their effective date still 미정, and the 개인정보 수집·이용 and 마케팅 정보 수신
- * consent texts #58 wrote. Each item has a version of its own, so revising one leaves the others'
+ * consent texts #58 wrote. Those drafts never took effect; #137's revision is the first that does
+ * (LEGAL_FIRST_EFFECTIVE_DATE). Each item has a version of its own, so revising one leaves the others'
  * answers standing, and the consent step a revision sends an account back to asks only the items
  * whose answer no longer stands (`consentItemsToAsk`): the marketing answer stays as it was unless
  * the member changes it (오너 결정 2026-10-19 (2차), ADR-0072).
  */
 export type ConsentDocuments = Readonly<Record<ConsentItem, ConsentDocument>>;
 
+/**
+ * The first 시행일 of the 이용약관, the 개인정보처리방침 and the 환불정책: the revision #137 publishes
+ * (ADR-0176), and so the version a consent record names for the `terms` and `privacy` items from
+ * then on (#57-5). The revision takes effect when it is published — the day of its production
+ * deploy, in KST (owner answer 137-2a) — so this is that day, the day the pull request was merged
+ * and deployed (ADR-0176 결과 3). The web's legal documents read it from here
+ * (`effectiveDate`, apps/web/src/legal/), and so do the generated API contract (the consent body's
+ * version literal, `pnpm api:openapi`) and the e2e copy (apps/web/e2e/consent-versions.ts).
+ */
+export const LEGAL_FIRST_EFFECTIVE_DATE = '2026-11-28';
+
 export const CONSENT_DOCUMENTS: ConsentDocuments = {
-  terms: { required: true, versions: [{ version: 'draft-2026-10-18', requiresReconsent: true }] },
-  privacy: { required: true, versions: [{ version: 'draft-2026-10-18', requiresReconsent: true }] },
+  // The revision (#137) changes members' rights — paid Coin's charge and refund are gone, and the
+  // judging, the VOID payout and the operating liquidity are new — so an account that agreed to
+  // the draft agrees again at its next sign-in (#57-5; ADR-0093 #175: one re-consent, at #137's).
+  terms: {
+    required: true,
+    versions: [
+      { version: 'draft-2026-10-18', requiresReconsent: true },
+      { version: LEGAL_FIRST_EFFECTIVE_DATE, requiresReconsent: true },
+    ],
+  },
+  // The 개인정보처리방침 (items, retention periods, processors) and the consent text's retention
+  // periods (owner answer 137-5) are revised with it.
+  privacy: {
+    required: true,
+    versions: [
+      { version: 'draft-2026-10-18', requiresReconsent: true },
+      { version: LEGAL_FIRST_EFFECTIVE_DATE, requiresReconsent: true },
+    ],
+  },
+  // The age check's line and the marketing text are unchanged: no version (only the changed items
+  // are asked again, ADR-0072).
   age: { required: true, versions: [{ version: 'draft-2026-10-18', requiresReconsent: true }] },
   marketing: {
     required: false,

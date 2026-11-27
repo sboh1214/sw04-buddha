@@ -1,3 +1,4 @@
+import { LEGAL_FIRST_EFFECTIVE_DATE, currentConsentVersion } from '@buddha/shared';
 import { MutationObserver, QueryObserver, type QueryClient } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -31,7 +32,7 @@ import {
 
 const consents = (['terms', 'privacy', 'age', 'marketing'] as const).map((item) => ({
   item,
-  version: 'draft-2026-10-18',
+  version: currentConsentVersion(item),
   agreed: item !== 'marketing',
   recordedAt: '2026-10-18T00:00:00.000Z',
 }));
@@ -250,8 +251,8 @@ describe('the onboarding mutations', () => {
       );
       const body = {
         consents: {
-          terms: { version: 'draft-2026-10-18', agreed: true },
-          privacy: { version: 'draft-2026-10-18', agreed: true },
+          terms: { version: LEGAL_FIRST_EFFECTIVE_DATE, agreed: true },
+          privacy: { version: LEGAL_FIRST_EFFECTIVE_DATE, agreed: true },
           age: { version: 'draft-2026-10-18', agreed: true },
           marketing: { version: 'draft-2026-10-18', agreed: false },
         },

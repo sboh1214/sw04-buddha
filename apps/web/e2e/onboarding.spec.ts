@@ -410,15 +410,18 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     expect((await meOf(page.request)).onboarding.interests).toBe(false);
 
     // A required item not agreed is refused; nothing is recorded.
-    const agreed = { version: 'draft-2026-10-18', agreed: true };
+    const agreed = (item: keyof typeof E2E_CONSENT_VERSIONS) => ({
+      version: E2E_CONSENT_VERSIONS[item],
+      agreed: true,
+    });
     await expectRefused(
       await page.request.post('/api/v1/me/consents', {
         data: {
           consents: {
-            terms: agreed,
-            privacy: agreed,
-            age: { ...agreed, agreed: false },
-            marketing: agreed,
+            terms: agreed('terms'),
+            privacy: agreed('privacy'),
+            age: { ...agreed('age'), agreed: false },
+            marketing: agreed('marketing'),
           },
           expectedAccountId: id,
         },
