@@ -92,6 +92,30 @@ export const RETENTION_PERIODS = [
 export type RetentionPeriod = (typeof RETENTION_PERIODS)[number];
 
 /**
+ * The retention periods the 개인정보처리방침 (/privacy) and the 개인정보 수집·이용 consent text state,
+ * in days, one per RETENTION_PERIODS item (owner answers 133-8 and 137-5, #137, ADR-0176): the
+ * value the owner approved for that item's release setting, written as a figure. The setting in
+ * the production database is what deletes; this is what the documents promise, so the two are
+ * kept equal by the order of work (docs/OPERATIONS.md '출시 운영'): a new value is a revision of the
+ * policy, published first, and the setting is requested and approved after it.
+ *
+ * `null` while the owner has approved no value: the documents then read '미정' in its place
+ * (apps/web/src/legal/retention-periods.ts). The eight are the values the owner approved on #137
+ * (owner answer 2, 2026-11-27, ADR-0176 결과 3): the production settings take the same values,
+ * entered '승인됨' by two admins after the revision is deployed (ADR-0175).
+ */
+export const POLICY_RETENTION_DAYS: Readonly<Record<RetentionPeriod, number | null>> = {
+  consent_records: 1_095,
+  phone_verification_records: 30,
+  deleted_posts: 90,
+  moderation_records: 90,
+  removed_profile_items: 90,
+  market_proposals: 30,
+  notifications: 30,
+  market_visits: 84,
+};
+
+/**
  * What a purge record counts (`retention_purges.kind`), in the order a run processes them — the
  * order the foreign keys ask for (a report before the action it names, a removed profile item and
  * an expired nickname hold before their action, an action before its approval requests):

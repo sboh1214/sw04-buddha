@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { currentConsentVersion } from './consent.js';
 import { meSchema, updateMeBodySchema } from './me.js';
 
 describe('meSchema', () => {
@@ -135,7 +136,7 @@ describe('meSchema', () => {
         consents: [
           {
             item: 'terms',
-            version: 'draft-2026-10-18',
+            version: currentConsentVersion('terms'),
             agreed: true,
             recordedAt: '2026-10-18T00:00:00.000Z',
           },

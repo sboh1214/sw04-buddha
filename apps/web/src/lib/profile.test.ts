@@ -4,6 +4,7 @@ import {
   PROFILE_IMAGE_CONTENT_TYPES,
   bioTooLongMessage,
   findExcludedText,
+  currentConsentVersion,
 } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
@@ -235,7 +236,7 @@ describe('MY 설정 for an account facing a re-consent (owner decision 2026-10-2
     consents: [
       {
         item: 'terms',
-        version: 'draft-2026-10-18',
+        version: currentConsentVersion('terms'),
         agreed: true,
         recordedAt: '2026-10-18T00:00:00.000Z',
       },

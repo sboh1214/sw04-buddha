@@ -1,3 +1,4 @@
+import { currentConsentVersion } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import {
@@ -380,19 +381,19 @@ describe('likeRefusalMove (owner decisions 2026-10-20 answer 1 and 2026-10-21)',
     consents: [
       {
         item: 'terms',
-        version: 'draft-2026-10-18',
+        version: currentConsentVersion('terms'),
         agreed: true,
         recordedAt: '2026-10-18T00:00:00.000Z',
       },
       {
         item: 'privacy',
-        version: 'draft-2026-10-18',
+        version: currentConsentVersion('privacy'),
         agreed: true,
         recordedAt: '2026-10-18T00:00:00.000Z',
       },
       {
         item: 'age',
-        version: 'draft-2026-10-18',
+        version: currentConsentVersion('age'),
         agreed: true,
         recordedAt: '2026-10-18T00:00:00.000Z',
       },

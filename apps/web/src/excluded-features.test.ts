@@ -94,10 +94,11 @@ const PRICE_FORMATTERS = ['formatKrw'] as const;
 
 /**
  * The service guide (#136) is the one page that may say what the product does not offer —
- * '점수·순위를 제공하지 않습니다' (owner decision 2026-10-13 #113); the no-cash notice may stand
- * anywhere. The guide's sources go under this route group, which leaves its address to #136 (a
- * route group is not part of the URL). Nothing is there yet, so today every such sentence fails
- * wherever it is written.
+ * '점수·순위를 제공하지 않습니다' (owner decision 2026-10-13 #113) — besides the legal bodies, which
+ * may say it as the guide may (owner answer 137-4 (a), ADR-0176; LEGAL_BODIES, checked on their
+ * own below); the no-cash notice may stand anywhere. The guide's sources go under this route group,
+ * which leaves its address to #136 (a route group is not part of the URL). Nothing is there yet, so
+ * today every such sentence fails anywhere else it is written.
  */
 const SERVICE_GUIDE_ROOT = at('app', '(service-guide)');
 
@@ -676,18 +677,30 @@ describe('excluded features on screens (#113)', () => {
     expect(uses("import { formatKrw as money } from '@buddha/shared';")).toEqual([]);
   });
 
-  it('holds the legal bodies to the gambling words until #137 revises them', () => {
-    // The rest — the old '예측', 'P 충전', the 순위 nickname clause — stays until #137.
+  it("holds the legal bodies to every feature, with the guide's negative notices (137-4 (a))", () => {
+    // The 이용약관, the 개인정보처리방침, the 환불정책 and the sentences they share (#137): as the
+    // service guide, they may say what the product does not offer (ADR-0176, ADR-0057 결정 1-2
+    // widened); a gambling word never.
+    expect(LEGAL_BODIES).toContain(at('legal', 'terms.ts'));
+    expect(LEGAL_BODIES).toContain(at('legal', 'service-facts.ts'));
     const hits = LEGAL_BODIES.flatMap((file) =>
       literalsOf(file, readFileSync(file, 'utf8')).flatMap((literal) =>
         describeHits(
           `${path.relative(SRC, file)}:${String(literal.line)}`,
           literal.text,
-          findExcludedText(literal.text, { features: ['gambling'] }),
+          findExcludedText(literal.text, { scope: 'legal-body' }),
         ),
       ),
     );
     expect(hits).toEqual([]);
+  });
+
+  it('allows the legal bodies a negative notice only, as the guide (137-4 (a))', () => {
+    const legal = (text: string) =>
+      findExcludedText(text, { scope: 'legal-body' }).map((hit) => hit.feature);
+    expect(legal('지금은 Coin을 판매하지 않고 결제·충전 기능이 없습니다.')).toEqual([]);
+    expect(legal('결제한 Coin은 7일 안에 환불받을 수 있습니다.')).toEqual(['paid-purchase']);
+    expect(legal('당첨된 계약은 배당을 받습니다.')).toEqual(['gambling', 'gambling']);
   });
 });
 

@@ -47555,7 +47555,7 @@
                   "version": {
                     "type": "string",
                     "enum": [
-                      "draft-2026-10-18"
+                      "2026-11-28"
                     ]
                   },
                   "agreed": {
@@ -47576,7 +47576,7 @@
                   "version": {
                     "type": "string",
                     "enum": [
-                      "draft-2026-10-18"
+                      "2026-11-28"
                     ]
                   },
                   "agreed": {

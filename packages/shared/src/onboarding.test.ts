@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { currentConsentVersion } from './consent.js';
 import { INT4_MAX } from './constants.js';
 import {
   INTEREST_CATEGORIES_INPUT_MAX,
@@ -22,7 +23,7 @@ const none: OnboardingProgress = {
 };
 const record = {
   item: 'terms' as const,
-  version: 'draft-2026-10-18',
+  version: currentConsentVersion('terms'),
   agreed: true,
   recordedAt: '2026-10-18T00:00:00.000Z',
 };

@@ -128,7 +128,8 @@ export const copy = {
   darkMode: '다크 모드',
   comingSoon: '준비 중입니다.',
   // 지갑의 고정 안내(N01 §2). 유료 충전을 닫아(ADR-0049) 충전은 말하지 않는다. 약관·환불정책
-  // 본문은 이 문장이 아니라 legal/cash-notice.ts의 원래 문장을 인용한다(#137에서 개정).
+  // 본문은 같은 문장을 공통 사실 문장(legal/service-facts.ts의 S28 `noCashOut`)으로 인용하고,
+  // 판매가 없다는 문장은 legal/cash-notice.ts의 LEGAL_NO_SALES_NOTICE다(#137, ADR-0176).
   walletNotice: 'Coin의 현금 환전·출금은 제공하지 않습니다.',
 
   // --- navigation / auth buttons (M1) ---
@@ -4600,6 +4601,14 @@ export const copy = {
   legalPrivacyTitle: '개인정보처리방침',
   legalRefundTitle: '환불정책',
   legalAddendum: '부칙',
+  // 시행일과 판 목록(#137, 137-2c, ADR-0176): 문서마다 시행한 판을 모두 보이고, 이전 판은 /terms/<시행일> 등에
+  // 둔다. {date}는 '2026년 11월 28일'처럼 적은 시행일.
+  legalEffectiveDate: '시행일: {date}',
+  legalPastVersion: '지금 시행 중인 판이 아닙니다.',
+  legalCurrentVersionLink: '현재 판 보기',
+  legalVersions: '시행한 판',
+  legalVersionItem: '{date} 시행',
+  legalVersionCurrent: '현재 판',
   footerNavLabel: '약관 및 정책',
   footerBusinessInfoLabel: '사업자 정보',
   footerCompany: '상호: {{companyName}}',
@@ -4609,7 +4618,8 @@ export const copy = {
   footerAddress: '주소: {{address}}',
   footerPhone: '고객센터: {{phone}}',
   footerEmail: '이메일: {{email}}',
-  footerPrivacyOfficer: '개인정보 보호책임자: {{privacyOfficer}}',
+  // 직책과 이메일(133-5): 보호책임자에게는 고객센터와 같은 주소로 닿는다.
+  footerPrivacyOfficer: '개인정보 보호책임자: {{privacyOfficer}}(이메일 {{email}})',
   footerHosting: '호스팅 서비스 제공자: {{hostingProvider}}',
   footerCopyright: '© {{serviceName}}',
   chargeGuideTitle: '충전 안내',

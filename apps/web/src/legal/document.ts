@@ -35,6 +35,13 @@ export interface LegalDocument {
   readonly title: string;
   /** `article` is 제1조(목적) — the 약관 convention; `decimal` is 1. 목적. */
   readonly numbering: 'article' | 'decimal';
+  /**
+   * The 시행일 `YYYY-MM-DD` of this version (#57-5, ADR-0176): the three documents have one each
+   * — their version, which versions.ts lists and the consent records name for 이용약관 and
+   * 개인정보처리방침 — and their 부칙 says it (`effectiveDateText`). The consent texts, which stand
+   * under a consent item's version, have none. Not text to map: a date, never a placeholder.
+   */
+  readonly effectiveDate?: string;
   /** Shown under the title before the first section. */
   readonly intro: readonly LegalBlock[];
   readonly sections: readonly LegalSection[];
@@ -60,7 +67,15 @@ export const table = (
   rows: readonly (readonly string[])[],
 ): LegalBlock => ({ kind: 'table', caption, head, rows });
 
-/** `제3조(P의 충전)` or `3. 환불 방법`; `index` is zero-based. */
+/** A 시행일 `YYYY-MM-DD` as the documents write it: `2026년 11월 28일`. */
+export function effectiveDateText(date: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (match === null) throw new Error(`Not a 시행일 (YYYY-MM-DD): ${date}`);
+  const [, year, month, day] = match;
+  return `${String(Number(year))}년 ${String(Number(month))}월 ${String(Number(day))}일`;
+}
+
+/** `제3조(Coin)` or `3. 환불 방법`; `index` is zero-based. */
 export function sectionHeading(
   numbering: LegalDocument['numbering'],
   index: number,
@@ -100,6 +115,7 @@ export function mapLegalDocument(doc: LegalDocument, map: (text: string) => stri
   return {
     title: map(doc.title),
     numbering: doc.numbering,
+    ...(doc.effectiveDate === undefined ? {} : { effectiveDate: doc.effectiveDate }),
     intro: blocks(doc.intro),
     sections: doc.sections.map((section) => ({
       heading: map(section.heading),
