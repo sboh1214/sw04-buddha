@@ -2,6 +2,7 @@ import type { APIRequestContext, APIResponse, Locator, Page, Request } from '@pl
 import type { AdminMarket, AdminMarketPauseDecisionItem, Market } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { formatKst } from '../src/lib/datetime';
+import { expectNoExcludedText } from './acceptance';
 import {
   accountIdOf,
   adminAccount,
@@ -9,6 +10,7 @@ import {
   createOpenMarket,
   documentSurvived,
   expect,
+  freshEmail,
   freshTag,
   helperTraders,
   kstLocalOf,
@@ -18,6 +20,7 @@ import {
   meOf,
   NO_FILL_CANCEL_REASON,
   pauseMarket,
+  placeOrder,
   requestPauseDecision,
   requestSupplement,
   secondAdminAccount,
@@ -26,6 +29,7 @@ import {
   sendPauseDecisionRequest,
   sendSupplementDecision,
   signIn,
+  signUp,
   subscribed,
   test,
   tradeOnce,
@@ -210,7 +214,7 @@ function skipWithoutWorkerProbe(): void {
 }
 
 test.describe('거래 일시 중단', () => {
-  test('관리자 한 명이 화면에서 조기 결과를 사유로 공개 시각과 함께 거래를 일시 중단하면 방문자의 상세가 리프레시 없이 거래 일시 중단이 되고, 한 관리자가 재개를 요청하면 그 관리자는 승인하지 못하며, 다른 관리자가 일시 중단 결정 대기에서 찾아 승인하면 다시 거래 중이 된다', async ({
+  test('관리자 한 명이 화면에서 조기 결과를 사유로 공개 시각과 함께 거래를 일시 중단하면 방문자의 상세가 리프레시 없이 거래 일시 중단이 되고, 대기 주문이 있던 회원에게는 주문 영역이 없고 새 주문은 일시 중단으로 거절되며, 한 관리자가 재개를 요청하면 그 관리자는 승인하지 못하며, 다른 관리자가 일시 중단 결정 대기에서 찾아 승인하면 다시 거래 중이 된다 @ac189-6 @ac189-11', async ({
     admin,
     secondAdmin,
     browser,
@@ -237,7 +241,20 @@ test.describe('거래 일시 중단', () => {
 
     const firstContext = await browser.newContext();
     const secondContext = await browser.newContext();
+    const memberContext = await browser.newContext();
     try {
+      // --- #189 기준 6 (조기 결과): a member with an order resting on the market before the pause.
+      const memberPage = await memberContext.newPage();
+      await signUp(memberPage, freshEmail());
+      const resting = await placeOrder(memberPage.request, market.id, crypto.randomUUID(), {
+        outcome: 'YES',
+        side: 'buy',
+        timeInForce: 'gtc',
+        limitPriceCoin: 30,
+        qty: 1,
+      });
+      expect(resting.order.status).toBe('open');
+
       // --- admin 1's detail: the 거래 일시 중단 panel of an open market, no pause yet, and no
       // one-admin 마감 (#114: an early end is a pause and another admin's approved 조기 마감).
       const firstPage = await firstContext.newPage();
@@ -380,6 +397,38 @@ test.describe('거래 일시 중단', () => {
       const publicBody = await (await request.get(`/api/v1/markets/${market.id}`)).text();
       for (const shown of [note, publishedAt]) expect(publicBody).toContain(shown);
       expect(publicBody).not.toContain(first.id);
+
+      // --- #189 기준 6 (조기 결과, N03 §9 '시장 전체 거래 중단이 보이고 주문이 막힌다'): the member
+      // sees the pause with no order area — no column, no 매수 bar — and the order that rested
+      // ended with it as 일시 중단 (orders.spec.ts's 주문 취소); a new order is refused as 일시 중단.
+      await memberPage.goto(`/markets/${market.slug}`);
+      await expect(memberPage.getByTestId('market-status-badge')).toHaveText(
+        copy.marketStatusPaused,
+      );
+      await expect(memberPage.getByTestId('market-status-notice')).toContainText(
+        copy.marketPausedNotice,
+      );
+      await expect(memberPage.getByTestId('order-area')).toHaveCount(0);
+      await expect(memberPage.getByTestId('order-entry-bar')).toHaveCount(0);
+      await expect(memberPage.getByTestId('market-order-book-reason')).toHaveText(
+        copy.marketBookReasonPaused,
+      );
+      await expectNoExcludedText(memberPage);
+      await memberPage.goto(`/my/orders/${resting.order.id}`);
+      await expect(memberPage.getByTestId('order-detail-status')).toHaveText(
+        copy.orderStatusCancelled,
+      );
+      await expect(memberPage.getByTestId('order-detail-reason')).toHaveText(
+        copy.orderCancelNamePaused,
+      );
+      const refused = await placeOrder(memberPage.request, market.id, crypto.randomUUID(), {
+        outcome: 'YES',
+        side: 'buy',
+        timeInForce: 'gtc',
+        limitPriceCoin: 30,
+        qty: 1,
+      });
+      expect(refused.order).toMatchObject({ status: 'rejected', rejectReason: 'paused' });
 
       // --- 재개·조기 마감 요청: the dialog names the pause's reason; an early result's next path
       // takes no review result, and the operator picks it.
@@ -527,6 +576,7 @@ test.describe('거래 일시 중단', () => {
       await leaveNoPauseDecision(admin, market.id);
       await firstContext.close();
       await secondContext.close();
+      await memberContext.close();
     }
 
     // --- the visitor's detail, never reloaded: 거래 중 again, with no notice — and the 호가창's

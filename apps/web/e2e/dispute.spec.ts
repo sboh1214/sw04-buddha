@@ -50,19 +50,23 @@ import {
  * The only fill on a market a spec judges is the helper's own pair before its close (helpers.ts
  * `closeMarket`: since #20 a market with no fill is cancelled, not closed) — two members of the
  * worker's own, never the spec's member — and only a member with a fill on the market may dispute
- * it (#173 item 6). This file's member therefore submits no real dispute. Other specs now use
- * eligible traders for real disputes (#143 conflicts, #24 judging-record), and their permanent
- * decisions may already appear in the admin queue. The remaining boundaries — a
- * 판정 이의 that holds a market, its 기각 and 수용, the hold past the deadline ('판정 지연'), '이의 검토 중' and
- * the confirmation right after the last 기각 are the database's, the API's and the worker's
- * integration tests (packages/db market-dispute.test.ts, market-disputes.controller.test.ts,
- * private-data.test.ts, worker market-resolve.test.ts), which make fills with `createFill` — and
- * so, since the 판정 정정 (#176, ADR-0105), are a correction from an accepted dispute, the pending
- * disputes it closes as 정정으로 종결, the accepted ones a rejected or retracted correction sends
- * back to 검토 중 and a second dispute on the corrected version
- * (admin-market-judgements.controller.test.ts, packages/db market-dispute.test.ts); the
- * correction itself, with no dispute, is correction.spec.ts's. A 판정 지연 기록 on a market a
- * dispute holds (#142, ADR-0106) is the API's integration test too
+ * it (#173 item 6). This file's member therefore submits no real dispute. Other specs make their
+ * own members trade and dispute for real, and their permanent decisions may already appear in the
+ * admin queue: judgement-notifications.spec.ts (#188) — a dispute submitted on this file's
+ * submission screen (#189, ADR-0178) and one through the API, the detail's '이의 검토 중' and the
+ * payout held while they are under review, 기각 and 수용, the hold past the deadline, a retracted
+ * correction sending an accepted one back to 검토 중, the confirmation and payout right after the
+ * last 기각, and the pending disputes a correction closes as 정정으로 종결; conflicts.spec.ts (#143);
+ * judging-record.spec.ts (#24, 수용 then a 무효 correction). What stays with the database's, the
+ * API's and the worker's integration tests (packages/db market-dispute.test.ts,
+ * market-disputes.controller.test.ts, admin-market-judgements.controller.test.ts,
+ * private-data.test.ts, worker market-resolve.test.ts) is every refusal's branch, the records, a
+ * rejected correction's return of an accepted one to 검토 중 and a second dispute on the corrected
+ * version; the correction itself, with no dispute, is correction.spec.ts's. The client-only form
+ * below stays for what the real path does not walk: its validation and a 철회 within the
+ * deadline — both real disputes there are decided, and a retraction on the real path would need
+ * one more eligible member's sign-up (ADR-0178). A 판정 지연 기록 on a market a dispute holds
+ * (#142, ADR-0106) is the API's integration test too
  * (admin-market-judgement-delays.controller.test.ts); correction.spec.ts records one on a market a
  * waiting correction holds. The screens' states are
  * unit-tested (dispute-screen.test.tsx, my-disputes.test.tsx, market-dispute-panel.test.tsx,
@@ -196,7 +200,7 @@ function untilDeadline(deadline: string): number {
 }
 
 test.describe('판정 이의', () => {
-  test('잠정 결과가 공개되면 방문자의 상세에 이의 기한과 판정 이의 제출 링크가 리프레시 없이(서버 HTML에도), 토론 위와 글쓰기 화면에 안내가 보이고, 체결 이력이 없는 회원과 운영자는 제출 화면에서 그 까닭을 보며 API도 거절하고, 기한이 지나면 링크와 안내가 리프레시 없이 사라지고 이의가 없는 시장은 그대로 확정된다', async ({
+  test('잠정 결과가 공개되면 방문자의 상세에 이의 기한과 판정 이의 제출 링크가 리프레시 없이(서버 HTML에도), 토론 위와 글쓰기 화면에 안내가 보이고, 체결 이력이 없는 회원과 운영자는 제출 화면에서 그 까닭을 보며 API도 거절하고, 기한이 지나면 링크와 안내가 리프레시 없이 사라지고 이의가 없는 시장은 그대로 확정된다 @ac189-6', async ({
     admin,
     browser,
     page,
@@ -438,7 +442,7 @@ test.describe('판정 이의', () => {
     }
   });
 
-  test('제출 양식(화면만 — 이 회원에게는 체결 이력이 없어 회원의 판정 이의 읽기와 쓰기를 브라우저에서 답한다): 링크와 사유를 확인하고, 낸 판정 이의를 검토 중으로 보이며, 기한 안에 철회하면 철회로 바뀌고 MY 판정 이의에도 그렇게 보인다', async ({
+  test('제출 양식(화면만 — 이 회원에게는 체결 이력이 없어 회원의 판정 이의 읽기와 쓰기를 브라우저에서 답한다): 링크와 사유를 확인하고, 낸 판정 이의를 검토 중으로 보이며, 기한 안에 철회하면 철회로 바뀌고 MY 판정 이의에도 그렇게 보인다 @ac189-6', async ({
     admin,
     page,
   }) => {

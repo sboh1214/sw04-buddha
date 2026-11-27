@@ -2,6 +2,7 @@ import { crc32, deflateSync } from 'node:zlib';
 import { type APIRequestContext, type Locator, type Page, type Route } from '@playwright/test';
 import type { Me } from '@buddha/shared';
 import { copy } from '../src/copy';
+import { expectNoExcludedText } from './acceptance';
 import {
   E2E_PASSWORD,
   agreeOnScreen,
@@ -291,7 +292,7 @@ async function postThroughApi(
 }
 
 test.describe('근거 글', () => {
-  test('회원이 시장을 정해 서식과 이미지가 있는 글을 쓰고, 목록에서 찾고, 고치면 수정됨이 붙고, 지우면 사라진다', async ({
+  test('회원이 시장을 정해 서식과 이미지가 있는 글을 쓰고, 목록에서 찾고, 고치면 수정됨이 붙고, 지우면 사라진다 @ac189-8 @ac189-11', async ({
     admin,
     page,
   }) => {
@@ -461,6 +462,7 @@ test.describe('근거 글', () => {
     await expect(page.getByTestId('post-edited')).toHaveText(copy.postEdited);
     await page.goto(`/community?q=${tag}`);
     await expect(card(page, postId).getByTestId('post-edited')).toBeVisible();
+    await expectNoExcludedText(page);
 
     // --- delete: asked first, then gone from the list, and its page is a 404 (#45-5: nothing
     // hangs under it before comments exist).
@@ -474,7 +476,7 @@ test.describe('근거 글', () => {
     expect(gone?.status()).toBe(404);
   });
 
-  test('로그인하지 않은 방문자는 목록과 글을 읽고(마감된 시장의 글도), 시장 링크로 상세에 가고, 글쓰기에서는 로그인 안내를 받는다', async ({
+  test('로그인하지 않은 방문자는 목록과 글을 읽고(마감된 시장의 글도), 시장 링크로 상세에 가고, 글쓰기에서는 로그인 안내를 받는다 @ac189-7 @ac189-8 @ac189-11', async ({
     admin,
     page,
   }) => {
@@ -527,6 +529,7 @@ test.describe('근거 글', () => {
     await page.getByTestId('post-market-link').click();
     await expect(page).toHaveURL(`/markets/${market.slug}`);
     await expect(page.getByRole('heading', { level: 2, name: market.title })).toBeVisible();
+    await expectNoExcludedText(page);
 
     // 글쓰기 asks a visitor to sign in, and comes back to the same market.
     await page.goto('/community');

@@ -1,13 +1,24 @@
-import type { APIResponse, Locator, Page, Request, Route } from '@playwright/test';
+import type { APIResponse, Page, Request, Route, WebSocketRoute } from '@playwright/test';
 import { type AdminMarket, type Order, formatCoin, parseCoinAmount } from '@buddha/shared';
 import { copy } from '../src/copy';
+import {
+  expectNoExcludedText,
+  expectNotCollapsed,
+  expectOrdersOnMy,
+  fillOrder,
+  openPanel,
+  openReview,
+} from './acceptance';
 import {
   E2E_PASSWORD,
   adminAccount,
   createOpenMarket,
   dataOf,
+  documentSurvived,
   expect,
   freshEmail,
+  helperTraders,
+  markDocument,
   meOf,
   placeOrder,
   signIn,
@@ -25,54 +36,17 @@ import {
  * 35 — never the 99 or 1 a quote starts from.
  *
  * Both projects: below md the panel is the sheet the 매수 bar opens, from md the order column —
- * one state behind both (`OrderPanelProvider`). The 1-hour expiry, the reasons' sentences, the
+ * one state behind both (`OrderPanelProvider`). #189 (ADR-0178) adds the screen acceptance steps:
+ * the immediate buy by an amount and by a quantity on both contracts and each path's result on
+ * MY's 보유 계약·대기 주문·거래 이력 (기준 1), 확인 shown in full on the 375 project (기준 5, 189-2),
+ * and an order whose answer is lost while the connection is down — the context offline and the
+ * realtime socket cut through `routeWebSocket` — read back once it is up, with the fill missed
+ * meanwhile shown once the socket joins again (기준 3). The 1-hour expiry, the reasons' sentences, the
  * arithmetic of 확인, the debounce and a restricted account are the unit tests'
  * (lib/order-*.test.ts).
  */
 
 const ORDERS_PATH = (marketId: string) => `/api/v1/markets/${marketId}/orders`;
-
-/**
- * The panel on this width: the order column from md, the sheet the 매수 bar opens below it — on
- * `contract` when one is named (its button pressed), as it stands otherwise.
- */
-async function openPanel(page: Page, contract?: 'YES' | 'NO'): Promise<Locator> {
-  const id = contract === 'NO' ? 'no' : 'yes';
-  let place: Locator;
-  if ((page.viewportSize()?.width ?? 0) >= 768) {
-    place = page.getByTestId('order-area');
-  } else {
-    place = page.getByTestId('order-sheet');
-    if (!(await place.isVisible())) await page.getByTestId(`order-entry-${id}`).click();
-  }
-  await expect(place.getByTestId('order-panel')).toBeVisible();
-  if (contract !== undefined) await place.getByTestId(`order-contract-${id}`).click();
-  return place;
-}
-
-interface PanelOrder {
-  side?: 'buy' | 'sell';
-  kind?: 'ioc' | 'gtc';
-  qty?: number;
-  budget?: number;
-  limit?: number;
-}
-
-/** Fills the panel's choices and fields, and waits for the quote of exactly them. */
-async function fillOrder(panel: Locator, order: PanelOrder): Promise<void> {
-  await panel.getByTestId(`order-side-${order.side ?? 'buy'}`).click();
-  await panel.getByTestId(`order-kind-${order.kind ?? 'ioc'}`).click();
-  if (order.budget !== undefined) {
-    await panel.getByTestId('order-size-budget').click();
-    await panel.getByTestId('order-budget').fill(String(order.budget));
-  } else {
-    if ((order.side ?? 'buy') === 'buy' && (order.kind ?? 'ioc') === 'ioc') {
-      await panel.getByTestId('order-size-qty').click();
-    }
-    await panel.getByTestId('order-qty').fill(String(order.qty ?? 1));
-  }
-  if (order.limit !== undefined) await panel.getByTestId('order-limit').fill(String(order.limit));
-}
 
 /** The order bodies and request ids this page sends to the market's intake. */
 function watchOrders(page: Page, marketId: string): { bodies: unknown[]; keys: string[] } {
@@ -85,19 +59,54 @@ function watchOrders(page: Page, marketId: string): { bodies: unknown[]; keys: s
   return seen;
 }
 
-/** 주문 확인, then the frozen table. */
-async function openReview(panel: Locator): Promise<Locator> {
-  await expect(panel.getByTestId('order-quote')).toBeVisible();
-  await expect(panel.getByTestId('order-confirm-open')).toBeEnabled();
-  await panel.getByTestId('order-confirm-open').click();
-  const review = panel.getByTestId('order-review');
-  await expect(review).toBeVisible();
-  return review;
-}
-
 /** M's orders on the market, through the API. */
 async function ordersOn(page: Page, marketId: string): Promise<Order[]> {
   return dataOf<Order[]>(await page.request.get(`/api/v1/me/orders?marketId=${marketId}`));
+}
+
+/**
+ * The page's realtime socket through Playwright (`routeWebSocket`), so a test can cut it as a lost
+ * connection does and let it back (#189 기준 3): proxied to the API frame for frame while up; on
+ * `cut` every open one is closed, and until `restore` each new one the client opens is closed at
+ * once (its polling fallback then meets the context's offline). `joins` counts the frames that ask
+ * for `marketId`'s room — one per (re)connect (`subscribed`'s predicate). Set before `goto`.
+ */
+async function cuttableRealtime(page: Page, marketId: string) {
+  let up = true;
+  let joins = 0;
+  const open: { client: WebSocketRoute; server: WebSocketRoute }[] = [];
+  await page.routeWebSocket(
+    (url) => url.searchParams.has('EIO'),
+    (client) => {
+      if (!up) {
+        void client.close().catch(() => undefined);
+        return;
+      }
+      const server = client.connectToServer();
+      client.onMessage((message) => {
+        const text = typeof message === 'string' ? message : message.toString('utf8');
+        if (text.includes('subscribe') && text.includes(marketId)) joins += 1;
+        server.send(message);
+      });
+      server.onMessage((message) => {
+        client.send(message);
+      });
+      open.push({ client, server });
+    },
+  );
+  return {
+    joins: () => joins,
+    async cut(): Promise<void> {
+      up = false;
+      for (const { client, server } of open.splice(0)) {
+        await server.close().catch(() => undefined);
+        await client.close().catch(() => undefined);
+      }
+    },
+    restore(): void {
+      up = true;
+    },
+  };
 }
 
 async function widthOf(admin: Parameters<typeof createOpenMarket>[0], marketId: string) {
@@ -107,7 +116,7 @@ async function widthOf(admin: Parameters<typeof createOpenMarket>[0], marketId: 
 }
 
 test.describe('주문 패널 (#66)', () => {
-  test('즉시 거래 네 경로와 금액 주문: 확인 화면의 한도가 보내는 한도이고, 남은 수량은 취소되며, 두 번 눌러도 주문은 하나다', async ({
+  test('즉시 거래 네 경로와 금액·수량 매수: 확인 화면의 한도가 보내는 한도이고, 남은 수량은 취소되며, 두 번 눌러도 주문은 하나이며, 결과가 MY에 있다 @ac189-1 @ac189-11', async ({
     admin,
     browser,
     page,
@@ -169,6 +178,8 @@ test.describe('주문 패널 (#66)', () => {
       await expect(review.getByTestId('order-review-payout-void')).toContainText('합계 50 Coin');
       // Prices are Coin per contract: no probability anywhere in 확인.
       await expect(review).not.toContainText('%');
+      // #189 기준 11: no probability input, score or rank on the panel and its 확인.
+      await expectNoExcludedText(page);
       // A double press sends one order.
       await review.getByTestId('order-submit').dblclick();
       let result = panel.getByTestId('order-result');
@@ -261,12 +272,121 @@ test.describe('주문 패널 (#66)', () => {
       expect(sent.bodies).toHaveLength(4);
       expect(new Set(sent.keys).size).toBe(4);
       expect((await ordersOn(page, market.id)).length).toBe(4);
+
+      // --- #189 기준 1: an immediate buy goes by an amount and by a quantity on both contracts.
+      // YES 금액 매수 100 against C's two NO bids of 40 left (YES asks of 60): one contract, 40 back.
+      await panel.getByTestId('order-new').click();
+      panel = await openPanel(page, 'YES');
+      await fillOrder(panel, { budget: 100 });
+      review = await openReview(panel);
+      await expect(review.getByTestId('order-review-size')).toContainText('100 Coin');
+      await review.getByTestId('order-submit').click();
+      await expect(panel.getByTestId('order-result')).toHaveAttribute('data-status', 'filled');
+      await expect(panel.getByTestId('order-result-unspent')).toContainText('40 Coin');
+      expect(sent.bodies[4]).toMatchObject({
+        outcome: 'YES',
+        side: 'buy',
+        budgetCoin: '100',
+        limitPriceCoin: buyLimit,
+      });
+      // NO 수량 매수 1 against C's YES bid of 40 left (a NO ask of 60).
+      await panel.getByTestId('order-new').click();
+      panel = await openPanel(page, 'NO');
+      await fillOrder(panel, { qty: 1 });
+      review = await openReview(panel);
+      await expect(review.getByTestId('order-review-size')).toContainText('1계약');
+      await review.getByTestId('order-submit').click();
+      await expect(panel.getByTestId('order-result')).toHaveAttribute('data-status', 'filled');
+      await expect(panel.getByTestId('order-result-filled-qty')).toContainText('1계약');
+      expect(sent.bodies[5]).toMatchObject({
+        outcome: 'NO',
+        side: 'buy',
+        qty: 1,
+        limitPriceCoin: buyLimit,
+      });
+      expect(sent.bodies).toHaveLength(6);
+      expect(new Set(sent.keys).size).toBe(6);
+      expect((await ordersOn(page, market.id)).length).toBe(6);
+
+      // --- MY (#189 범위 '결과가 MY의 보유 계약·대기 주문·거래 이력에 보인다'): one YES and one NO
+      // held, no order left waiting, and the six ended orders with their fills.
+      await expectOrdersOnMy(page, market.id);
+      await expectNoExcludedText(page);
     } finally {
       await cContext.close();
     }
   });
 
-  test('지정가 네 경로: 즉시 체결분과 대기분을 나누고(D8), 확인 중 호가가 바뀌면 알리되 고정한 숫자로 제출한다(D7)', async ({
+  test('모바일 폭의 주문 확인은 즉시 수량·금액 매수와 지정가 매수에서 가격·수량·금액을 접힌 영역에 두지 않고 화면 안에 보인다 @ac189-5', async ({
+    admin,
+    browser,
+    page,
+  }) => {
+    // 189-2: the 375 Chromium project alone. From md 확인 is the order column's, no sheet, so the
+    // desktop run skips rather than count as this criterion's.
+    test.skip(
+      (page.viewportSize()?.width ?? 0) >= 768,
+      '#189 기준 5 is the mobile-375 project (189-2)',
+    );
+    const market = await createOpenMarket(admin);
+    const cContext = await browser.newContext();
+    try {
+      const cPage = await cContext.newPage();
+      await signUp(cPage, freshEmail());
+      await signUp(page, freshEmail());
+      // C: a NO bid of 40 is a YES ask of 60, a YES bid of 40 a NO ask of 60 — one each, so both
+      // immediate buys have a quote.
+      for (const outcome of ['NO', 'YES'] as const) {
+        await placeOrder(cPage.request, market.id, crypto.randomUUID(), {
+          outcome,
+          side: 'buy',
+          timeInForce: 'gtc',
+          limitPriceCoin: 40,
+          qty: 1,
+        });
+      }
+      await page.goto(`/markets/${market.slug}`);
+
+      // N02 §4 (ADR-0135 D:16472): in each 확인 the price, the quantity or amount and what it pays
+      // are shown in full — no folded region around them, on screen once scrolled to. Nothing is
+      // sent: 수정 goes back to the panel each time.
+      const reviews = [
+        {
+          name: 'YES 즉시 수량 매수',
+          contract: 'YES',
+          order: { qty: 1 },
+          rows: ['size', 'limit', 'filled', 'avg', 'pay', 'max-spend'],
+        },
+        {
+          name: 'NO 즉시 금액 매수',
+          contract: 'NO',
+          order: { budget: 100 },
+          rows: ['size', 'limit', 'filled', 'pay', 'unspent'],
+        },
+        {
+          name: 'YES 지정가 매수',
+          contract: 'YES',
+          order: { kind: 'gtc', qty: 2, limit: 50 },
+          rows: ['size', 'limit', 'immediate', 'resting', 'pay', 'pay-full'],
+        },
+      ] as const;
+      for (const { name, contract, order, rows } of reviews) {
+        const panel = await openPanel(page, contract);
+        await fillOrder(panel, order);
+        const review = await openReview(panel);
+        for (const row of rows) {
+          await expectNotCollapsed(review.getByTestId(`order-review-${row}`), `${name} ${row}`);
+        }
+        await review.getByTestId('order-review-edit').click();
+        await expect(review).toHaveCount(0);
+      }
+      expect(await ordersOn(page, market.id)).toHaveLength(0);
+    } finally {
+      await cContext.close();
+    }
+  });
+
+  test('지정가 네 경로: 즉시 체결분과 대기분을 나누고(D8), 확인 중 호가가 바뀌면 알리되 고정한 숫자로 제출하며, 결과가 MY의 보유 계약·대기 주문·거래 이력에 있다(D7) @ac189-1 @ac189-11', async ({
     admin,
     browser,
     page,
@@ -411,12 +531,19 @@ test.describe('주문 패널 (#66)', () => {
         limitPriceCoin: 30,
       });
       expect(new Set(sent.keys).size).toBe(sent.keys.length);
+      await expectNoExcludedText(page);
+
+      // --- MY (#189 기준 1): the NO and the YES held, each locked by its resting sell; the five
+      // resting orders — the 62 one with its one left — on 대기 주문; the filled NO buy in the
+      // history; every fill.
+      await expectOrdersOnMy(page, market.id);
+      await expectNoExcludedText(page);
     } finally {
       await cContext.close();
     }
   });
 
-  test('호가 없음 방향의 즉시 거래는 막고 지정가를 안내하며, 보유 없는 매도는 꺼지고, 관리자에게는 견적까지 보이고 주문 확인만 끈다(D2·D9·D11·D13)', async ({
+  test('호가 없음 방향의 즉시 거래는 막고 지정가를 안내하며, 보유 없는 매도는 꺼지고, 관리자에게는 견적까지 보이고 주문 확인만 끈다(D2·D9·D11·D13) @ac189-4', async ({
     admin,
     browser,
     page,
@@ -570,7 +697,7 @@ test.describe('주문 패널 (#66)', () => {
     }
   });
 
-  test('닫힌 접수와 폭 없음은 문장으로, 답을 잃은 주문은 같은 요청 ID로 다시 읽고 다시 보내 한 건만 남기며, 응답 전에는 체결 소식이 와도 접수 중이다', async ({
+  test('닫힌 접수와 폭 없음은 문장으로, 답을 잃은 주문은 같은 요청 ID로 다시 읽고 다시 보내 한 건만 남기며, 응답 전에는 체결 소식이 와도 접수 중이다 @ac189-3', async ({
     admin,
     browser,
     page,
@@ -795,6 +922,92 @@ test.describe('주문 패널 (#66)', () => {
       await page.unroute(intake);
       expect((await ordersOn(page, market.id)).length).toBe(4);
     } finally {
+      await cContext.close();
+    }
+  });
+
+  test('연결이 끊긴 사이에 답을 잃은 주문은 연결이 돌아온 뒤 같은 요청 ID로 다시 읽어 서버의 결과 하나로 보이고, 끊긴 동안의 체결은 소켓이 다시 붙으면 리프레시 없이 보인다 @ac189-3', async ({
+    admin,
+    browser,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    // Another member, for the fill made while M is cut off: the helper's taker (helpers.ts).
+    const [, taker] = await helperTraders(admin);
+    const cContext = await browser.newContext();
+    try {
+      const cPage = await cContext.newPage();
+      await signUp(cPage, freshEmail());
+      await signUp(page, freshEmail());
+      // C: a NO bid of 40 (a YES ask of 60) that M's order meets, and one of 30 (a YES ask of 70)
+      // that the taker's meets while M is cut off.
+      for (const limitPriceCoin of [40, 30]) {
+        await placeOrder(cPage.request, market.id, crypto.randomUUID(), {
+          outcome: 'NO',
+          side: 'buy',
+          timeInForce: 'gtc',
+          limitPriceCoin,
+          qty: 1,
+        });
+      }
+      const realtime = await cuttableRealtime(page, market.id);
+      const sent = watchOrders(page, market.id);
+      await page.goto(`/markets/${market.slug}`);
+      await expect.poll(realtime.joins).toBeGreaterThan(0);
+      await markDocument(page);
+      const price = page.getByTestId('market-probability-value');
+      const fillRows = page.getByTestId('market-fills').locator('[data-testid^="market-fill-"]');
+
+      // --- The intake takes M's order, and the connection is lost before its answer: the
+      // context goes offline and the realtime socket is cut, as a dropped network does.
+      const intake = `**${ORDERS_PATH(market.id)}`;
+      await page.route(intake, async (route) => {
+        await route.fetch();
+        await page.context().setOffline(true);
+        await realtime.cut();
+        await route.abort('internetdisconnected');
+      });
+      const panel = await openPanel(page, 'YES');
+      await fillOrder(panel, { qty: 1 });
+      const review = await openReview(panel);
+      await review.getByTestId('order-submit').click();
+      // Offline the read-backs by its id fail too: no result is made up, and once the three reads
+      // have failed the panel waits for 다시 확인 (결정 2-6).
+      await expect(panel.getByTestId('order-recheck')).toBeVisible({ timeout: 20_000 });
+      await expect(panel.getByTestId('order-result')).toHaveCount(0);
+      await page.unroute(intake);
+
+      // --- While M is cut off, the taker's fill: YES 70 against C's NO bid of 30.
+      const missed = await placeOrder(taker, market.id, crypto.randomUUID(), {
+        outcome: 'YES',
+        side: 'buy',
+        timeInForce: 'ioc',
+        limitPriceCoin: 99,
+        qty: 1,
+      });
+      expect(missed.order.status).toBe('filled');
+
+      // --- The connection back: the socket joins the market's room again and reads what it
+      // missed — the price and the recent fills move with no reload — and 다시 확인 reads the
+      // order by the id it was sent with. One order, the server's, never sent again.
+      const joinsBefore = realtime.joins();
+      realtime.restore();
+      await page.context().setOffline(false);
+      await expect.poll(realtime.joins, { timeout: 20_000 }).toBeGreaterThan(joinsBefore);
+      await expect(price.getByText(`${copy.yes} 70%`, { exact: true })).toHaveCount(1);
+      await expect(fillRows).toHaveCount(2);
+      const readBack = page.waitForRequest((request) =>
+        request.url().includes(`/api/v1/me/orders/request/${sent.keys[0] ?? ''}`),
+      );
+      await panel.getByTestId('order-recheck').click();
+      await readBack;
+      await expect(panel.getByTestId('order-result')).toHaveAttribute('data-status', 'filled');
+      await expect(panel.getByTestId('order-result-filled-qty')).toContainText('1계약');
+      expect(sent.bodies).toHaveLength(1);
+      expect((await ordersOn(page, market.id)).length).toBe(1);
+      expect(await documentSurvived(page)).toBe(true);
+    } finally {
+      await page.context().setOffline(false);
       await cContext.close();
     }
   });

@@ -57,7 +57,7 @@ async function packageOnSale(admin: APIRequestContext): Promise<ChargePackage> {
 }
 
 test.describe('유료 충전 닫힘 (ADR-0049)', () => {
-  test('푸터·지갑 어디에도 충전·쿠폰·결제 진입점이 없고 /charge는 없는 페이지다', async ({
+  test('푸터·지갑 어디에도 충전·쿠폰·결제 진입점이 없고 /charge는 없는 페이지다 @ac189-12', async ({
     page,
   }) => {
     // --- a visitor: the footer keeps its policy links and business facts, without 충전 안내.
@@ -94,7 +94,7 @@ test.describe('유료 충전 닫힘 (ADR-0049)', () => {
     expect(signedIn?.status()).toBe(404);
   });
 
-  test('관리자 메뉴에 충전 상품·쿠폰·결제가 없다', async ({ page, admin }) => {
+  test('관리자 메뉴에 충전 상품·쿠폰·결제가 없다 @ac189-12', async ({ page, admin }) => {
     // The fixture verifies the seed admin's phone, so the onboarding gate lets it through.
     void admin;
     await signIn(page, adminAccount.email, adminAccount.password);
@@ -118,7 +118,7 @@ test.describe('유료 충전 닫힘 (ADR-0049)', () => {
     await expect(page.locator('[data-testid^="admin-payment-refund-"]')).toHaveCount(0);
   });
 
-  test('서버가 충전 상품·충전·쿠폰 요청을 거절하고 잔고는 그대로다', async ({
+  test('서버가 충전 상품·충전·쿠폰 요청을 거절하고 잔고는 그대로다 @ac189-12', async ({
     page,
     request,
     admin,

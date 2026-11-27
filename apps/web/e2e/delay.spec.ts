@@ -2,6 +2,7 @@ import type { APIRequestContext, APIResponse, Page, Request } from '@playwright/
 import type { AdminMarket, Market, MarketJudgementDelayRecordedPayload } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { formatKst } from '../src/lib/datetime';
+import { expectNoExcludedText } from './acceptance';
 import {
   adminAccount,
   closeMarket,
@@ -156,7 +157,7 @@ function nextRecord(page: Page, marketId: string): Promise<Request> {
 }
 
 test.describe('판정 지연 기록', () => {
-  test('예정 판정 시각이 지나 판정 지연으로 보이는 거래 마감 시장에 한 관리자가 지연 사유와 다음 검토 시각을 기록하면 방문자의 상세가 리프레시 없이 그 사유와 시각을 두 시간대로 보이고, 그 시각이 지나도 결과는 생기지 않고 공개 상세는 갱신 대기로, 관리자 상세는 늦은 갱신 경고로 바뀌며, 판정 칸에서 다시 기록하면 새 기록이 공개되고 두 기록이 이력과 이벤트 로그에 순서대로 남는다', async ({
+  test('예정 판정 시각이 지나 판정 지연으로 보이는 거래 마감 시장에 한 관리자가 지연 사유와 다음 검토 시각을 기록하면 방문자의 상세가 리프레시 없이 그 사유와 시각을 두 시간대로 보이고, 그 시각이 지나도 결과는 생기지 않고 공개 상세는 갱신 대기로, 관리자 상세는 늦은 갱신 경고로 바뀌며, 판정 칸에서 다시 기록하면 새 기록이 공개되고 두 기록이 이력과 이벤트 로그에 순서대로 남는다 @ac189-6 @ac189-11', async ({
     admin,
     browser,
     page,
@@ -313,6 +314,7 @@ test.describe('판정 지연 기록', () => {
       );
       await expect(notice.getByTestId('market-detail-next-review-passed')).toHaveCount(0);
       expect(await documentSurvived(page)).toBe(true);
+      await expectNoExcludedText(page);
       expect((await publicMarketOf(request, market.id)).judgementDelay).toEqual({
         reason,
         nextReviewAt,

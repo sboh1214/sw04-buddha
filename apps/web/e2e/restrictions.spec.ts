@@ -1,6 +1,7 @@
 import { type APIRequestContext, type Locator, type Page, type Request } from '@playwright/test';
 import { copy } from '../src/copy';
 import { fillBusinessInfo } from '../src/legal/business-info';
+import { expectNoExcludedText, orderOnPanel } from './acceptance';
 import { deadlineOnCard, expectDeadlineLine } from './appeal';
 import {
   adminAccount,
@@ -179,7 +180,7 @@ async function sendRestriction(adminPage: Page, userId: string): Promise<Restric
 }
 
 test.describe('작성 제한', () => {
-  test('운영자가 회원 화면에서 1일 작성 제한을 걸면 회원의 글쓰기 화면과 MY 요약에 끝나는 때와 조치·신고 내역 링크의 안내 띠가 보이고, 글·수정·댓글·소개의 새 값은 끝나는 때와 조치·신고 내역 링크로, 글 이미지는 단추 없는 토스트로 거절되며 좋아요와 지우기는 그대로이고, 운영자가 조기 해제하면 띠가 사라지고 다시 쓰며 조치·신고 내역에 조기 해제됨과 원래 끝나는 때가 보인다', async ({
+  test('운영자가 회원 화면에서 1일 작성 제한을 걸면 회원의 글쓰기 화면과 MY 요약에 끝나는 때와 조치·신고 내역 링크의 안내 띠가 보이고, 글·수정·댓글·소개의 새 값은 끝나는 때와 조치·신고 내역 링크로, 글 이미지는 단추 없는 토스트로 거절되며 좋아요와 지우기와 주문은 그대로이고, 운영자가 조기 해제하면 띠가 사라지고 다시 쓰며 조치·신고 내역에 조기 해제됨과 원래 끝나는 때가 보인다 @ac189-9 @ac189-11', async ({
     admin,
     page,
     browser,
@@ -373,6 +374,14 @@ test.describe('작성 제한', () => {
       await page.getByTestId('post-delete').click();
       await page.getByTestId('post-delete-confirm').click();
       await expect(page).toHaveURL('/community');
+
+      // #189 기준 9 (D7: 작성 제한 계정은 글을 쓰지 못하되 거래는 할 수 있다, #45-12): an order
+      // through the panel is taken — a 지정가 YES buy of one at 30 meets nothing and rests.
+      await page.goto(`/markets/${market.slug}`);
+      const panel = await orderOnPanel(page, 'YES', { kind: 'gtc', qty: 1, limit: 30 });
+      await expect(panel.getByTestId('order-result')).toHaveAttribute('data-status', 'open');
+      await expect(panel.getByTestId('order-account-blocked')).toHaveCount(0);
+      await expectNoExcludedText(page);
 
       // A new 소개 (#37-9): refused, clearing said to stay open.
       await page.goto('/my/settings');

@@ -1,5 +1,6 @@
 import type { Market, Order } from '@buddha/shared';
 import { copy } from '../src/copy';
+import { expectNoExcludedText } from './acceptance';
 import {
   ONE_READ_MS,
   REALTIME_BUDGET_MS,
@@ -64,7 +65,7 @@ const YES_TAKE: OrderTerms = {
 };
 
 test.describe('거래 알림 (#134)', () => {
-  test('대기하던 주문의 체결은 새로 고침 없이 안 읽은 수를 올리고, 읽기 전까지 한 알림에 합쳐 전량 체결이 되며, 읽은 뒤의 체결은 이번 수량과 주문 전체를 보이는 새 알림이고, 같은 요청을 다시 보내도, 상대인 즉시 주문자에게도 알림이 없다', async ({
+  test('대기하던 주문의 체결은 새로 고침 없이 안 읽은 수를 올리고, 읽기 전까지 한 알림에 합쳐 전량 체결이 되며, 읽은 뒤의 체결은 이번 수량과 주문 전체를 보이는 새 알림이고, 같은 요청을 다시 보내도, 상대인 즉시 주문자에게도 알림이 없다 @ac189-8 @ac189-11', async ({
     admin,
     browser,
     page,
@@ -120,6 +121,7 @@ test.describe('거래 알림 (#134)', () => {
         filledTitle('부분 체결 · 1계약 · 평균 40.00 Coin'),
       );
       await expect(firstRow).toHaveAttribute('href', `/my/orders/${first.id}`);
+      await expectNoExcludedText(page);
 
       // --- B again, while A has not read it: the same row, 체결 2회 · 누적 2계약, still on top
       // (52-6, 134-2 — its time the latest fill's).

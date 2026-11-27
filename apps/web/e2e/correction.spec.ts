@@ -66,13 +66,15 @@ import {
  * nothing holds, and a confirmed one takes no correction. Both tests wait for the worker, so they
  * skip on a database with a longer window or with no worker probe (`skipUnlessResolvable`).
  *
- * No member submits a 판정 이의 (only the helper's own members trade on a market a spec judges, and
- * they never dispute — dispute.spec.ts): a correction from an accepted dispute, the pending
- * disputes it closes as 정정으로 종결, the accepted ones a rejected or retracted correction sends back
- * to 검토 중, a second dispute on the corrected version, the
- * refusals' order and the records (the `market_judgements` row with its reason, the
- * `judgement_corrected` event, the admin actions, the hold and the old deadline's job) are the
- * API's, the database's and the worker's integration tests (admin-market-judgements.controller
+ * No member submits a 판정 이의 here (only the helper's own members trade on a market this spec
+ * judges, and they never dispute — dispute.spec.ts). Real disputes are other specs' (#189,
+ * ADR-0178): the pending disputes a correction closes as 정정으로 종결 and an accepted one a retracted
+ * correction sends back to 검토 중 are judgement-notifications.spec.ts's and conflicts.spec.ts's, a
+ * correction to 무효 after an accepted dispute judging-record.spec.ts's. A second dispute on the
+ * corrected version, a rejected correction's return of an accepted one, the refusals' order and
+ * the records (the `market_judgements` row with its reason, the `judgement_corrected` event, the
+ * admin actions, the hold and the old deadline's job) are the API's, the database's and the
+ * worker's integration tests (admin-market-judgements.controller
  * .test.ts, private-data.test.ts, packages/db market-judgement.test.ts and
  * market-dispute.test.ts, worker market-resolve.test.ts); the panel, its form and dialogs, the
  * queue's marker and the MY notes are unit-tested (market-judgement-panel.test.tsx,

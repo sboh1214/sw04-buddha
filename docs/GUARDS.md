@@ -324,7 +324,7 @@ SMS는 모두 `apps/api/src/sms/templates.ts`에서 만들고 `SMS_TEMPLATES`에
 ## 검사하지 않는 것
 
 - 저장된 행: 관리자가 쓴 시장 문구, 사용자가 고른 닉네임, 이미 DB에 있는 자동 닉네임 `예측가_XXXX`와 시드가 이미 넣은 시장 문구(TERMS.md '범위'). 검사는 코드와 스키마만 읽는다.
-- 화면에 그려진 결과(Playwright로 페이지를 훑지 않는다). 화면 수준 확인은 #189다.
+- 화면에 그려진 결과(이 검사들은 Playwright로 페이지를 훑지 않는다). 렌더된 화면의 확인은 화면 인수 시험(#189, ADR-0178)이 한다: `apps/web/e2e/acceptance.ts`의 `expectNoExcludedText`가 시험이 지나는 회원 화면과 알림함의 `innerText`를 같은 목록과 허용(`findExcludedText`)으로 읽되, #189 기준 11의 두 기능 `probability-input`·`scoring`만 본다. 그 밖의 제외 기능은 렌더된 화면에서 찾지 않고, 시험이 지나지 않는 화면도 보지 않는다.
 - 메일: 메일 패키지도 메일 모양의 형식도 쓰지 않고 메일 서비스를 부르는 코드(`fetch`로 HTTP 메일 API에 보내는 본문 등).
 - 메일: `Mailer`를 느슨한 형식으로 받아 부르는 곳. `@Inject(MAILER)`를 `{ send(message: object) }`로 받거나 `as unknown as { send(m: Record<string, string>) }`로 바꾸면 메일 모양의 매개변수가 아니라서 보내는 곳으로 찾지 못한다. `createRequire(…)('nodemailer')`처럼 `require`라는 이름이 아닌 함수로 가져온 메일 패키지도 찾지 못한다.
 - 메일: 추상 메서드·인터페이스 멤버로 부른 함수(`relayer.relay(…)`가 추상 선언으로 풀린다)와 문자열 키로 부른 함수(`this['relay'](…)`)의 인자. 그 함수의 매개변수를 거슬러 갈 때 부르는 곳으로 찾지 못한다.

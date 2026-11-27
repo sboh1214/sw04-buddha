@@ -1,6 +1,7 @@
 import { type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { copy } from '../src/copy';
 import { fillBusinessInfo } from '../src/legal/business-info';
+import { expectNoExcludedText, openPanel } from './acceptance';
 import { deadlineOnCard, expectDeadlineLine } from './appeal';
 import {
   adminAccount,
@@ -9,7 +10,9 @@ import {
   freshEmail,
   freshTag,
   meOf,
+  placeOrder,
   secondAdminAccount,
+  sendOrder,
   signIn,
   signUp,
   test,
@@ -202,7 +205,7 @@ async function showInRequests(page: Page, entry: Locator): Promise<void> {
 }
 
 test.describe('계정 제한', () => {
-  test('운영자가 회원 화면에서 7일 계정 제한을 요청하면 승인 전에는 아무것도 바뀌지 않고, 다른 운영자가 계정 제한 요청에서 승인하면 회원의 MY 요약·MY 설정에 끝나는 때와 조치·신고 내역 링크의 띠가 보이고 새 소개는 거절되며 글은 올라가고, 조치·신고 내역에 사유·설명·끝나는 때·이의 기한이 운영자 없이 보이며, 조기 해제도 요청과 승인으로 끝난다', async ({
+  test('운영자가 회원 화면에서 7일 계정 제한을 요청하면 승인 전에는 아무것도 바뀌지 않고, 다른 운영자가 계정 제한 요청에서 승인하면 회원의 MY 요약·MY 설정에 끝나는 때와 조치·신고 내역 링크의 띠가 보이고 새 소개는 거절되며 글은 올라가고, 대기 주문은 계정 제한으로 취소되고 새 매수·매도는 거절되되 지갑·이력·판정 이의는 열리며, 조치·신고 내역에 사유·설명·끝나는 때·이의 기한이 운영자 없이 보이며, 조기 해제도 요청과 승인으로 끝난다 @ac189-9 @ac189-11', async ({
     admin,
     secondAdmin,
     page,
@@ -216,6 +219,17 @@ test.describe('계정 제한', () => {
       data: { bio: `제한 전 소개 ${tag}`, expectedAccountId: member.id },
     });
     expect(bio.status(), await bio.text()).toBe(200);
+    // #189 기준 9: an order resting before the restriction — a 지정가 YES buy of one at 30.
+    const resting = (
+      await placeOrder(page.request, market.id, crypto.randomUUID(), {
+        outcome: 'YES',
+        side: 'buy',
+        timeInForce: 'gtc',
+        limitPriceCoin: 30,
+        qty: 1,
+      })
+    ).order;
+    expect(resting.status).toBe('open');
 
     const askingContext = await browser.newContext();
     const approvingContext = await browser.newContext();
@@ -438,6 +452,49 @@ test.describe('계정 제한', () => {
       await page.getByTestId('post-submit').click();
       await expect(page).toHaveURL(/\/community\/posts\/[0-9a-f-]{36}$/);
       await expect(page.getByTestId('post-title')).toHaveText(`계정 제한 중 글 ${tag}`);
+
+      // #189 기준 9 (D7, #57-12·#57-13·#57-14, ADR-0107 #119): the order that rested ended with the
+      // approval as 취소 완료(계정 제한), its lock back; a new buy and a sell — a new order too — are
+      // refused as RESTRICTED, and the panel offers neither, saying why; the wallet, the trade
+      // history and MY 판정 이의 stay open.
+      await page.goto(`/my/orders/${resting.id}`);
+      await expect(page.getByTestId('order-detail-status')).toHaveText(copy.orderStatusCancelled);
+      await expect(page.getByTestId('order-detail-reason')).toHaveText(
+        copy.orderCancelNameRestricted,
+      );
+      expect((await meOf(page.request)).balance.lockedCoin).toBe('0');
+      for (const side of ['buy', 'sell'] as const) {
+        const refused = await sendOrder(page.request, market.id, crypto.randomUUID(), {
+          outcome: 'YES',
+          side,
+          timeInForce: 'gtc',
+          limitPriceCoin: 30,
+          qty: 1,
+        });
+        expect(refused.status(), await refused.text()).toBe(403);
+        expect(((await refused.json()) as { error: { code: string } }).error.code).toBe(
+          'RESTRICTED',
+        );
+      }
+      await page.goto(`/markets/${market.slug}`);
+      const panel = await openPanel(page, 'YES');
+      await expect(panel.getByTestId('order-account-blocked')).toContainText(copy.orderRestricted);
+      await expect(panel.getByTestId('order-side-sell')).toBeDisabled();
+      await panel.getByTestId('order-qty').fill('1');
+      await expect(panel.getByTestId('order-confirm-open')).toBeDisabled();
+      await page.goto('/my/wallet');
+      await expect(page.getByTestId('wallet-available')).toBeVisible();
+      await expect(page.getByTestId('ledger-list')).toBeVisible();
+      await page.goto(`/my/history?market=${market.id}`);
+      await expect(
+        page
+          .getByTestId('my-order-history')
+          .getByTestId(`portfolio-order-${resting.id}`)
+          .getByTestId('portfolio-order-reason'),
+      ).toHaveText(copy.orderCancelNameRestricted);
+      await page.goto('/my/disputes');
+      await expect(page.getByTestId('my-disputes-empty')).toBeVisible();
+      await expectNoExcludedText(page);
 
       // 조치·신고 내역: the fact, the reason and explanation, the end and the appeal's deadline —
       // never who asked or approved, nor the approval's reason (#139). How to appeal it is the

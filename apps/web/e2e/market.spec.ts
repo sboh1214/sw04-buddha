@@ -1,21 +1,27 @@
 import { type Locator, type Page } from '@playwright/test';
+import { tickBucketSeconds, type Market } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { formatKst } from '../src/lib/datetime';
+import { expectNoExcludedText } from './acceptance';
 import {
   accountIdOf,
   adminAccount,
   approveSupplementAsReviewer,
   closeMarket,
   createOpenMarket,
+  dataOf,
   detailCopyTestId,
   expect,
   expectYellowWarning,
+  helperTraders,
   leaveNoSupplement,
+  placeOrder,
   REALTIME_BUDGET_MS,
   requestSupplement,
   signIn,
   subscribed,
   test,
+  waitPast,
 } from './helpers';
 
 /**
@@ -31,9 +37,10 @@ import {
  * has the helper members' one pair, traded just before the close so it stays CLOSED (#20); its
  * detail draws that one fill as a dot and a dotted hold to the end of trading, opening on 전체,
  * with no 24시간 badge (#64, ADR-0139). What a live fill moves — the live price, the chart's line
- * and its keyboard readout — comes back with the order panel and its screen tests (#189); the
- * priced header alone (YES with its 24시간 badge, the NO complement, '시장가격 · 최근 체결 <시각>')
- * is drawn here from the API's answer with a price put in.
+ * and its keyboard readout, and the line in the cookie-less first response — is the '실제 체결' test
+ * below (#189, ADR-0178), two real fills a 5-minute grid boundary apart; the priced header alone
+ * (YES with its 24시간 badge, the NO complement, '시장가격 · 최근 체결 <시각>') is drawn here from
+ * the API's answer with a price put in.
  *
  * The frame itself (#122): N02 §4's order at each width, the two columns from md up, the mobile
  * 호가·거래 내역 switch, the 매수 bar on the tab bar and its sheet, the 준비 중 slots (내 거래, 내
@@ -97,7 +104,10 @@ async function boxIn(scope: Locator, testId: string) {
 }
 
 test.describe('시장 상세', () => {
-  test('AC 2: 첫 응답 HTML에 질문·가격·규칙이 들어 있다', async ({ admin, request }) => {
+  test('AC 2: 첫 응답 HTML에 질문·가격·규칙이 들어 있다 @ac189-10 @ac189-12', async ({
+    admin,
+    request,
+  }) => {
     const background = `배경 문단 ${String(Date.now())}`;
     const market = await createOpenMarket(admin, { description: background });
 
@@ -143,8 +153,8 @@ test.describe('시장 상세', () => {
     /*
      * The chart is in the first paint, and with no fill it is the 체결 없음 state rather than a
      * line: opening writes no price tick (N02 §5). The SVG-geometry check that pinned the
-     * zero-dependency decision (ADR-0032) needs a fill to draw, so it returns with the order
-     * panel (#189).
+     * zero-dependency decision (ADR-0032) needs a fill to draw: the '실제 체결' test below reads the
+     * line's `d="M…"` in the first response of a market with two (#189).
      */
     expect(html).toContain('data-testid="probability-chart"');
     expect(html).toContain('data-testid="probability-chart-empty"');
@@ -611,6 +621,114 @@ test.describe('시장 상세', () => {
 });
 
 /**
+ * 실제 체결이 움직이는 상세 (#189 기준 7, ADR-0178; ADR-0048 결정 8, ADR-0067·ADR-0139가 #189로 넘긴
+ * 것): the helper's two members trade twice on an open market a visitor has open, each a pair mint
+ * (a resting NO bid and an immediate YES buy meeting it), at YES 60 and then YES 45. The line of
+ * the 1일 chart is a step between two recorded points, and the server records the 1일 series on a
+ * 5-minute grid (`tickBucketSeconds('1m', 1일)`) — the socket's points too, a later one in the same
+ * bucket replacing the last (`appendTickToSeries`) — so the second fill waits for the grid
+ * boundary after the first: up to five minutes, the test's only wait.
+ */
+// The grid the server picks for 1일's `1m` request over a day (ticksQueryFor('1D')), as
+// orders.spec.ts reads it.
+const GRID_MS = tickBucketSeconds('1m', 86_400_000) * 1_000;
+
+test.describe('시장 상세 · 실제 체결', () => {
+  test('거래 중 시장의 두 체결은 리프레시 없이 시장가격과 차트의 선을 바꾸고 키보드로 그 값을 읽으며, 쿠키 없는 첫 응답 HTML에도 그 선이 있다 @ac189-7 @ac189-11', async ({
+    admin,
+    page,
+    request,
+  }) => {
+    // The second fill waits for the 5-minute grid boundary after the first.
+    test.slow();
+    const market = await createOpenMarket(admin);
+    const [maker, taker] = await helperTraders(admin);
+    const tradeAt = async (noBid: number): Promise<Market> => {
+      const resting = await placeOrder(maker, market.id, crypto.randomUUID(), {
+        outcome: 'NO',
+        side: 'buy',
+        timeInForce: 'gtc',
+        limitPriceCoin: noBid,
+        qty: 1,
+      });
+      expect(resting.order.status).toBe('open');
+      const taken = await placeOrder(taker, market.id, crypto.randomUUID(), {
+        outcome: 'YES',
+        side: 'buy',
+        timeInForce: 'ioc',
+        limitPriceCoin: 99,
+        qty: 1,
+      });
+      expect(taken.order.status).toBe('filled');
+      return dataOf<Market>(await request.get(`/api/v1/markets/${market.id}`));
+    };
+
+    // --- the visitor, in the market's room before the first fill: 체결 없음, an empty chart.
+    const joined = subscribed(page, market.id);
+    await page.goto(`/markets/${market.slug}`);
+    await joined;
+    await markDocument(page);
+    const price = page.getByTestId('market-probability-value');
+    const chart = page.getByTestId('probability-chart');
+    const svg = chart.getByTestId('probability-chart-svg');
+    const readout = chart.getByTestId('chart-readout');
+    // The plot's focusable box — the plot's parent — takes the arrow keys that move the readout
+    // (ADR-0139).
+    const plot = chart.getByTestId('probability-chart-plot').locator('..');
+    await expect(chart.getByTestId('probability-chart-empty')).toHaveText(copy.noFills);
+
+    // --- the first fill: the price and the chart's first point, with no reload. Its dot, and no
+    // dotted hold yet: the live tick ends the open window at the fill itself (`chartLayout` reads
+    // no clock), so the hold is drawn by the server's layout below, which ends at its own now.
+    const first = await tradeAt(40);
+    // The server's clock (`lastFillAt`) against this runner's, so the wait below is for the
+    // server's grid boundary: read after the fill, it errs towards waiting longer.
+    const skewMs = Date.parse(first.lastFillAt ?? '') - Date.now();
+    expect(first.lastPrice).toBe(60);
+    await expect(price.getByText(`${copy.yes} 60%`, { exact: true })).toHaveCount(1);
+    await expect(chart.getByTestId('probability-chart-empty')).toHaveCount(0);
+    await expect(chart.getByTestId('probability-chart-dot')).toHaveCount(1);
+    await expect(svg).toHaveAttribute('aria-label', new RegExp(`${copy.chartSummaryCurrent} 60%$`));
+    // The keyboard's reading of it, announced (`aria-live` only for the keys).
+    await plot.focus();
+    await page.keyboard.press('End');
+    await expect(readout).toHaveText(/ · 60%$/);
+    await expect(readout).toHaveAttribute('aria-live', 'polite');
+
+    // --- the second fill past the grid boundary after the first: the line, with no reload.
+    const boundary = (Math.floor(Date.parse(first.lastFillAt ?? '') / GRID_MS) + 1) * GRID_MS;
+    await waitPast(page, new Date(boundary - skewMs).toISOString(), 2_000);
+    const second = await tradeAt(55);
+    expect(second.lastPrice).toBe(45);
+    // In the next bucket of the server's grid, or the step below can never be drawn.
+    expect(Date.parse(second.lastFillAt ?? '')).toBeGreaterThanOrEqual(boundary);
+    await expect(price.getByText(`${copy.yes} 45%`, { exact: true })).toHaveCount(1);
+    const line = chart.getByTestId('probability-chart-line');
+    await expect(line).toHaveCount(1);
+    // A step from 60 down to 45: a move, then a vertical to the new level.
+    await expect(line).toHaveAttribute('d', /^M[\d.]+,[\d.]+ H[\d.]+ V[\d.]+/);
+    await expect(chart.getByTestId('probability-chart-dot')).toHaveCount(1);
+    await expect(svg).toHaveAttribute('aria-label', new RegExp(`${copy.chartSummaryCurrent} 45%$`));
+    await plot.focus();
+    await page.keyboard.press('Home');
+    await expect(readout).toHaveText(/ · 60%$/);
+    await page.keyboard.press('End');
+    await expect(readout).toHaveText(/ · 45%$/);
+    expect(await documentSurvived(page)).toBe(true);
+    await expectNoExcludedText(page);
+
+    // --- the first response with no cookie (ADR-0048 결정 8, the SVG geometry of ADR-0032): the
+    // line's path is in the HTML, before any script ran — and the dotted hold from the last fill
+    // to the window's end, the server's now.
+    const html = await (await request.get(`/markets/${market.slug}`)).text();
+    expect(html).toMatch(
+      /<path d="M[\d.]+,[\d.]+ H[^"]*"[^>]*data-testid="probability-chart-line"/,
+    );
+    expect(html).toContain('data-testid="probability-chart-dotted"');
+  });
+});
+
+/**
  * The card's contents (#61, ADR-0062): what ADR-0061 put on it and what it took off. Runs in both
  * projects, so the footer line is measured at 375px and at 1280px.
  */
@@ -838,7 +956,7 @@ test.describe('시장 상세 · 375px', () => {
     expect(stops.some((stop) => stop.includes(copy.marketDetailViewBook))).toBe(true);
   });
 
-  test('YES 매수·NO 매수는 최우선 매도호가를 붙여 같은 시트를 열고, 시트는 누른 계약을 제목에 두고 비로그인도 주문 패널을 쓰며 주문 확인에서 로그인 안내를 보인다', async ({
+  test('YES 매수·NO 매수는 최우선 매도호가를 붙여 같은 시트를 열고, 시트는 누른 계약을 제목에 두고 비로그인도 주문 패널을 쓰며 주문 확인에서 로그인 안내를 보인다 @ac189-4', async ({
     admin,
     page,
   }) => {
@@ -1220,7 +1338,7 @@ test.describe('시장 상세 · 1280px', () => {
  * projects.
  */
 test.describe('시장 상세 · 상태와 로그인', () => {
-  test('열린 시장이 아니면 매수 진입점도 시트도 주문 영역도 없고, 상태 안내가 설명한다', async ({
+  test('열린 시장이 아니면 매수 진입점도 시트도 주문 영역도 없고, 상태 안내가 설명한다 @ac189-7', async ({
     admin,
     page,
   }) => {

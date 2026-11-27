@@ -1,7 +1,8 @@
 import type { APIRequestContext } from '@playwright/test';
-import type { AdminMarket, Market, MyMarketDispute, Notification } from '@buddha/shared';
+import type { AdminMarket, Market, MyDispute, MyMarketDispute, Notification } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { formatKst } from '../src/lib/datetime';
+import { expectNoExcludedText, openSettlementRecords } from './acceptance';
 import {
   DEFAULT_JUDGEMENT_TIME_ZONE,
   ONE_READ_MS,
@@ -218,7 +219,7 @@ async function releaseHolds(
 }
 
 test.describe('판정·정산 알림 (#188)', () => {
-  test('잠정 결과는 관심 등록자와 두 쪽 보유자에게 결과와 이의 기한으로 오고 관심 등록자의 수는 리프레시 없이 늘며, 누르면 결과·이의 기한·이의 제출 링크와 판정 기록의 출처가 있는 시장 상세가 열리고, 판정 정정은 같은 대상에게 정정된 결과와 새 이의 기한으로, 정정으로 종결된 이의를 낸 회원에게는 종결 알림도 오며, 다시 보낸 승인은 아무것도 더하지 않는다', async ({
+  test('잠정 결과는 관심 등록자와 두 쪽 보유자에게 결과와 이의 기한으로 오고 관심 등록자의 수는 리프레시 없이 늘며, 누르면 결과·이의 기한·이의 제출 링크와 판정 기록의 출처가 있는 시장 상세가 열리고, 판정 정정은 같은 대상에게 정정된 결과와 새 이의 기한으로, 정정으로 종결된 이의를 낸 회원에게는 종결 알림도 오며, 다시 보낸 승인은 아무것도 더하지 않는다 @ac189-6', async ({
     admin,
     reviewer,
     browser,
@@ -376,7 +377,7 @@ test.describe('판정·정산 알림 (#188)', () => {
     }
   });
 
-  test('판정 이의의 기각과 수용은 그 이의를 낸 회원에게만 공개 처리 사유와 함께 오고, 정정의 철회로 검토 중으로 돌아간 이의는 알리지 않고 다시 처리하면 새 알림이 오며, 이의가 결과 확정을 막는 동안에는 최종 정산 알림이 없고 마지막 기각 뒤 지급이 끝나면 보유자마다 한 번 온다', async ({
+  test('판정 이의를 화면에서 내면 상세가 이의 검토 중이고 지급이 보류되며, 기각과 수용은 그 이의를 낸 회원에게만 공개 처리 사유와 함께 오고, 정정의 철회로 검토 중으로 돌아간 이의는 알리지 않고 다시 처리하면 새 알림이 오며, 이의가 결과 확정을 막는 동안에는 최종 정산 알림이 없고 마지막 기각 뒤 지급이 끝나면 보유자마다 한 번 오고 MY 정산 기록도 하나다 @ac189-6 @ac189-11', async ({
     admin,
     browser,
     page,
@@ -395,14 +396,60 @@ test.describe('판정·정산 알림 (#188)', () => {
       marketId = market.id;
       await tradeAndClose(admin, market, a, b);
 
-      // --- 판정 YES; A and B each dispute v1 at once (both have a fill on it).
+      // --- 판정 YES; A and B each dispute v1 at once (both have a fill on it) — A on the submission
+      // screen (#189 기준 6, ADR-0178: the member's own way in), B through the API.
       const judged = await judgeMarket(admin, market.id, 'YES');
       const deadline = judged.disputeDeadline;
       if (deadline === null) throw new Error(`market ${market.id} has no dispute deadline`);
-      const aDispute = await submitDispute(a, market.id, 1);
+      await page.goto(`/markets/${market.slug}/dispute`);
+      const form = page.getByTestId('dispute-form');
+      await expect(form).toBeVisible();
+      await form
+        .getByTestId('dispute-link-0')
+        .fill(`https://example.com/e2e/dispute/${market.id}/1`);
+      await form
+        .getByTestId('dispute-reason')
+        .fill(`잠정 결과가 1차 출처의 발표와 다릅니다 ${market.tag}`);
+      const submitted = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname === `/api/v1/markets/${market.id}/disputes`,
+      );
+      await form.getByTestId('dispute-submit').click();
+      const answer = await submitted;
+      expect(answer.status(), await answer.text()).toBe(201);
+      const aDispute = ((await answer.json()) as { data: MyDispute }).data;
       disputeIds.push(aDispute.id);
+      await expect(page.getByTestId(`my-dispute-${aDispute.id}`)).toHaveAttribute(
+        'data-status',
+        'pending',
+      );
       const bDispute = await submitDispute(b, market.id, 1);
       disputeIds.push(bDispute.id);
+
+      // --- #189 기준 6 (N03 §9 '이의를 낼 수 있고 검토 중 지급 보류가 보인다'), inside the 이의 기한:
+      // A's detail reads '이의 검토 중' where '잠정 결과' was (#173 12항, the one label) and says the
+      // result waits for the review; MY 판정 이의 has A's 검토 중; MY's settlement records of the
+      // market are none — nothing is paid while the dispute holds it.
+      await page.goto(`/markets/${market.slug}`);
+      await expect(page.getByTestId('market-status-badge')).toHaveText(
+        copy.marketStatusDisputeUnderReview,
+      );
+      await expect(page.getByTestId('market-status-notice-detail')).toHaveText(
+        copy.marketProvisionalUnderReview,
+      );
+      await expectNoExcludedText(page);
+      await page.goto('/my/disputes');
+      await expect(
+        page
+          .getByTestId('my-disputes-list')
+          .getByTestId(`my-dispute-${aDispute.id}`)
+          .getByTestId(`my-dispute-${aDispute.id}-status`),
+      ).toHaveText(copy.disputeStatusPending);
+      await expectNoExcludedText(page);
+      const held = await openSettlementRecords(page, market.id);
+      await expect(page.getByTestId('my-settlement-history-empty')).toBeVisible();
+      await expect(held).toHaveCount(0);
       // A dispute is the member's own act: nothing told of it (ADR-0160 §6).
       for (const member of [a, b]) {
         expect((await judgementNoticesOf(member)).map((each) => each.type)).toEqual([
@@ -493,13 +540,21 @@ test.describe('판정·정산 알림 (#188)', () => {
         expect(payout).toMatchObject(marketNotice(market));
         expect(payout.params).toEqual({ marketTitle: market.title, result: 'YES', payoutCoin });
       }
+
+      // --- #189 기준 6: on A's screens the hold has ended in the payout — 지급 완료 on the detail
+      // and the market's settlement record once on MY (A's NO, paid 0).
+      await page.goto(`/markets/${market.slug}`);
+      await expect(page.getByTestId('market-status-badge')).toHaveText(copy.marketStatusSettled);
+      const paid = await openSettlementRecords(page, market.id);
+      await expect(page.getByTestId(`history-settlement-${market.id}-NO`)).toBeVisible();
+      await expect(paid).toHaveCount(1);
     } finally {
       if (marketId !== undefined) await releaseHolds(admin, marketId, disputeIds);
       await bContext.close();
     }
   });
 
-  test('예정 판정 시각이 지나는 것만으로는 아무것도 오지 않고, 판정 지연 기록은 관심 등록자에게 공개 사유와 다음 검토 시각으로 오며 판정 기준 시간대가 다르면 그 시각이 제목 아래 한 줄로 보이고, 같은 사유와 시각으로 다시 기록하면 알리지 않고 바뀐 기록만 알리며, 누르면 시장 상세의 지연 사유와 다음 검토 시각이 보인다', async ({
+  test('예정 판정 시각이 지나는 것만으로는 아무것도 오지 않고, 판정 지연 기록은 관심 등록자에게 공개 사유와 다음 검토 시각으로 오며 판정 기준 시간대가 다르면 그 시각이 제목 아래 한 줄로 보이고, 같은 사유와 시각으로 다시 기록하면 알리지 않고 바뀐 기록만 알리며, 누르면 시장 상세의 지연 사유와 다음 검토 시각이 보인다 @ac189-6', async ({
     admin,
     page,
     request,
