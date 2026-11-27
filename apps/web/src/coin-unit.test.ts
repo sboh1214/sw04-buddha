@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { copy } from './copy';
+import { SERVICE_FACT_LIST } from './legal/service-facts';
 import { LEGAL_BODIES, SRC, literalsOf, screenSources } from './test/screen-text';
 
 /**
@@ -11,7 +12,9 @@ import { LEGAL_BODIES, SRC, literalsOf, screenSources } from './test/screen-text
  * are gone from everything a page renders: the copy, and every string literal, template literal
  * and JSX text under `src/` (test/screen-text.ts reads them). Two kinds of file are left out on
  * purpose: the legal bodies (`LEGAL_BODIES`), which keep their wording until their own revision
- * (#137), and tests and their support, which are not screen text.
+ * (#137), and tests and their support, which are not screen text. The fact sentences the 이용약관
+ * shares with the service guide are a legal body only for the excluded features' negative notices
+ * (legal/service-facts.ts), so they are held to the old unit here as they render.
  *
  * The old unit is
  * - an amount followed by P — '100P', '1,000,000P', '1 P', and `${amount}P` in a template or
@@ -158,5 +161,10 @@ describe('the old currency unit (#13)', () => {
         .map((literal) => `${path.relative(SRC, file)}:${String(literal.line)}: ${literal.text}`),
     );
     expect(hits).toEqual([]);
+  });
+
+  it('is not in the fact sentences the 이용약관 shares with the service guide', () => {
+    expect(SERVICE_FACT_LIST).toHaveLength(32);
+    expect(SERVICE_FACT_LIST.filter(({ text }) => hasOldUnit(text))).toEqual([]);
   });
 });

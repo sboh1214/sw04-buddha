@@ -677,7 +677,10 @@ describe('excluded features on screens (#113)', () => {
   });
 
   it('holds the legal bodies to the gambling words until #137 revises them', () => {
-    // The rest — the old '예측', 'P 충전', the 순위 nickname clause — stays until #137.
+    // The rest — the old '예측', 'P 충전', the 순위 nickname clause — stays until #137. The fact
+    // sentences the 이용약관 shares with the service guide (legal/service-facts.ts) are held to every
+    // feature, with the guide's negative notices allowed, by their own test (137-4 (a)).
+    expect(LEGAL_BODIES).toContain(at('legal', 'service-facts.ts'));
     const hits = LEGAL_BODIES.flatMap((file) =>
       literalsOf(file, readFileSync(file, 'utf8')).flatMap((literal) =>
         describeHits(
