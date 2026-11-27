@@ -3,6 +3,7 @@ import { NICKNAME_HOLD_DAYS } from './nickname.js';
 import { RETENTION_PERIOD_SETTINGS } from './release-settings.js';
 import {
   NICKNAME_HOLD_PURGE_DAYS,
+  POLICY_RETENTION_DAYS,
   RETENTION_PERIODS,
   RETENTION_PURGE_KINDS,
   RETENTION_PURGE_KIND_PERIODS,
@@ -106,5 +107,16 @@ describe('retention (#184)', () => {
       'failed',
     );
     expect(retentionPurgeSchema.safeParse({ ...record, outcome: 'skipped' }).success).toBe(false);
+  });
+
+  it('states a figure in the 개인정보처리방침 for every period, each one a value its setting takes (133-8, #137)', () => {
+    expect(Object.keys(POLICY_RETENTION_DAYS)).toEqual([...RETENTION_PERIODS]);
+    for (const period of RETENTION_PERIODS) {
+      const days = POLICY_RETENTION_DAYS[period];
+      // Undecided until the owner approves a value; a figure is one the setting would take.
+      if (days !== null) {
+        expect(RETENTION_PERIOD_SETTINGS[period].schema.safeParse(days).success, period).toBe(true);
+      }
+    }
   });
 });

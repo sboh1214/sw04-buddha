@@ -3,18 +3,21 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { copy } from './copy';
+import { legalDocumentStrings, resolveLegalDocument } from './legal/document';
+import { PRIVACY } from './legal/privacy';
+import { REFUND } from './legal/refund';
 import { SERVICE_FACT_LIST } from './legal/service-facts';
+import { TERMS } from './legal/terms';
 import { LEGAL_BODIES, SRC, literalsOf, screenSources } from './test/screen-text';
 
 /**
  * The old currency unit must not come back into screen text (#13, ADR-0051). Amounts read
  * '12,345 Coin' (`formatCoin`), labels say '코인' or 'Coin', and the unit 'P' and the word '포인트'
  * are gone from everything a page renders: the copy, and every string literal, template literal
- * and JSX text under `src/` (test/screen-text.ts reads them). Two kinds of file are left out on
- * purpose: the legal bodies (`LEGAL_BODIES`), which keep their wording until their own revision
- * (#137), and tests and their support, which are not screen text. The fact sentences the 이용약관
- * shares with the service guide are a legal body only for the excluded features' negative notices
- * (legal/service-facts.ts), so they are held to the old unit here as they render.
+ * and JSX text under `src/` (test/screen-text.ts reads them), the legal bodies (`LEGAL_BODIES`,
+ * revised by #137) included — the walk leaves them out only for the excluded features' negative
+ * notices (legal/service-facts.ts), so they are checked here on their own, as they render. Tests
+ * and their support are left out on purpose: they are not screen text.
  *
  * The old unit is
  * - an amount followed by P — '100P', '1,000,000P', '1 P', and `${amount}P` in a template or
@@ -149,9 +152,9 @@ describe('the old currency unit (#13)', () => {
     expect(hits).toEqual([]);
   });
 
-  it('is not in any string or JSX text under src/ outside the legal bodies', () => {
+  it('is not in any string or JSX text under src/', () => {
     const files = screenSources(SRC);
-    // The walk reached the screens and the rest of legal/, and skipped only the legal bodies.
+    // The walk reached the screens and the rest of legal/; the legal bodies are checked below.
     expect(files.some((file) => file.endsWith(path.join('auth', 'auth-buttons.tsx')))).toBe(true);
     expect(files.some((file) => file.endsWith(path.join('legal', 'business-info.ts')))).toBe(true);
     expect(files.filter((file) => LEGAL_BODIES.includes(file))).toEqual([]);
@@ -166,5 +169,22 @@ describe('the old currency unit (#13)', () => {
   it('is not in the fact sentences the 이용약관 shares with the service guide', () => {
     expect(SERVICE_FACT_LIST).toHaveLength(32);
     expect(SERVICE_FACT_LIST.filter(({ text }) => hasOldUnit(text))).toEqual([]);
+  });
+
+  it('is not in the legal bodies (#137) nor in the documents as they render', () => {
+    expect(LEGAL_BODIES.length).toBeGreaterThan(0);
+    const hits = LEGAL_BODIES.flatMap((file) =>
+      literalsOf(file, readFileSync(file, 'utf8'))
+        .filter(({ text }) => hasOldUnit(text))
+        .map((literal) => `${path.relative(SRC, file)}:${String(literal.line)}: ${literal.text}`),
+    );
+    expect(hits).toEqual([]);
+    for (const doc of [TERMS, PRIVACY, REFUND]) {
+      const rendered = legalDocumentStrings(resolveLegalDocument(doc));
+      expect(
+        rendered.filter((text) => hasOldUnit(text)),
+        doc.title,
+      ).toEqual([]);
+    }
   });
 });

@@ -1,3 +1,4 @@
+import { currentConsentVersion } from '@buddha/shared';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,7 +34,7 @@ const DONE: Onboarding = {
 };
 const agreed = (item: 'terms' | 'privacy' | 'age') => ({
   item,
-  version: 'draft-2026-10-18',
+  version: currentConsentVersion(item),
   agreed: true,
   recordedAt: '2026-10-18T00:00:00.000Z',
 });

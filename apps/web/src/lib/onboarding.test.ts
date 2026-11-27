@@ -1,4 +1,4 @@
-import { PAID_COIN_SALES_ENABLED } from '@buddha/shared';
+import { PAID_COIN_SALES_ENABLED, currentConsentVersion } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { MY_CLOSURE_PATH } from './account-closure';
@@ -38,7 +38,7 @@ import { MY_PROPOSALS_PATH } from './proposals';
 /** A consent answer as `GET /me` lists it. */
 const agreed = (item: 'terms' | 'privacy' | 'age' | 'marketing', value = true) => ({
   item,
-  version: 'draft-2026-10-18',
+  version: currentConsentVersion(item),
   agreed: value,
   recordedAt: '2026-10-18T00:00:00.000Z',
 });

@@ -294,11 +294,14 @@ export const ADMIN_SCREEN_FEATURES: readonly ExcludedFeatureId[] = ['gambling'];
 // ---- screen text ----------------------------------------------------------------------
 
 /**
- * Where screen text is shown, as far as allowances care: everywhere, or the service guide page
- * (#136), the one place that may say what the product does not offer (owner decisions 2026-10-13
- * and 2026-10-14 #113). Which sources make up that page is the screen check's to say.
+ * Where screen text is shown, as far as allowances care: everywhere, the service guide page (#136),
+ * the one screen that may say what the product does not offer (owner decisions 2026-10-13 and
+ * 2026-10-14 #113), or the legal bodies — 이용약관, 개인정보처리방침, 환불정책 and the fact sentences
+ * the 이용약관 shares with the guide — which may say it as the guide may (owner answer 2026-11-27
+ * 137-4 (a), #137: ADR-0057 결정 1-2 widened to them). Which sources make up each is the screen
+ * check's to say.
  */
-export const ALLOWANCE_SCOPES = ['everywhere', 'service-guide'] as const;
+export const ALLOWANCE_SCOPES = ['everywhere', 'service-guide', 'legal-body'] as const;
 export type AllowanceScope = (typeof ALLOWANCE_SCOPES)[number];
 
 /**
@@ -437,7 +440,25 @@ export const TEXT_ALLOWANCES: readonly TextAllowance[] = [
     pattern: NEGATIVE_NOTICE,
     scope: 'service-guide',
     reason:
-      "'점수·순위를 제공하지 않습니다', '시장가격은 확률이 아닙니다' 같은 부정 안내는 서비스 안내(#136)에서만(오너 결정 2026-10-13·2026-10-14 #113). 도박 어휘는 여기서도 쓰지 않는다",
+      "'점수·순위를 제공하지 않습니다', '시장가격은 확률이 아닙니다' 같은 부정 안내는 서비스 안내(#136)에서만(오너 결정 2026-10-13·2026-10-14 #113 — 2026-11-27 오너 답 137-4 (a)로 법률 본문까지 넓힘, 아래 `legal-body`, ADR-0176). 도박 어휘는 여기서도 쓰지 않는다",
+  },
+  {
+    features: [
+      'probability-input',
+      'scoring',
+      'contest',
+      'paid-purchase',
+      'activity-reward',
+      'coin-transfer',
+      'cash-out',
+      'replaced-term',
+      'prediction-word',
+    ],
+    within: 'clause',
+    pattern: NEGATIVE_NOTICE,
+    scope: 'legal-body',
+    reason:
+      "약관·처리방침·환불정책 본문과 약관·서비스 안내가 함께 쓰는 사실 문장도 서비스 안내처럼 부정 안내('결제·충전 기능이 없습니다', '송금은 없습니다')를 쓴다(오너 답 2026-11-27 137-4 (a), ADR-0176 — ADR-0057 결정 1-2를 법률 본문까지 넓힘). 도박 어휘는 여기서도 쓰지 않는다",
   },
 ];
 

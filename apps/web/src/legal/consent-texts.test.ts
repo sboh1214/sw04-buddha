@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   CONSENT_DOCUMENTS,
   CONSENT_ITEMS,
+  LEGAL_FIRST_EFFECTIVE_DATE,
   currentConsentVersion,
   findExcludedText,
   type ConsentItem,
@@ -12,6 +13,7 @@ import { BUSINESS_INFO } from './business-info';
 import { MARKETING_CONSENT_TEXT, PRIVACY_CONSENT_TEXT } from './consent-texts';
 import { type LegalDocument, legalDocumentStrings, resolveLegalDocument } from './document';
 import { PRIVACY } from './privacy';
+import { retentionPeriodText } from './retention-periods';
 import { TERMS } from './terms';
 import { templateKeys } from './template';
 
@@ -90,8 +92,20 @@ describe('개인정보 수집·이용 동의 (the brief and ADR-0069 decision 1 
 
   it('says how long: until withdrawal, the retention-period records after it, the number hash', () => {
     expect(privacy).toContain('탈퇴하면 위 개인정보를 지체 없이 파기합니다');
-    expect(privacy).toContain('운영 정책으로 정한 보존기간');
-    expect(privacy).toContain('원래 번호를 알아낼 수 없는 형태');
+    // The number's hash by its name, the purpose with the code limits (owner answer 2 on #137).
+    expect(privacy).toContain('그 번호의 키 있는 해시만 탈퇴한 뒤에도 보관합니다');
+    expect(privacy).not.toContain('원래 번호를 알아낼 수 없');
+    expect(privacy).toContain('인증번호 발송 한도(부정 이용 방지)');
+    // The two periods in the 개인정보처리방침's own words and figures, not '운영 정책으로 정한
+    // 보존기간' (owner answer 137-5, ADR-0176).
+    expect(privacy).toContain(
+      `그 보관 기간은 ${retentionPeriodText('phone_verification_records', '탈퇴한 때부터')}입니다`,
+    );
+    expect(privacy).toContain(
+      `탈퇴한 뒤의 보관 기간은 ${retentionPeriodText('consent_records', '탈퇴한 때부터')}입니다`,
+    );
+    expect(privacy).toContain('다만 위에서 기간을 적은 기록은 그 기간이 지난 뒤 파기합니다');
+    expect(privacy).not.toContain('운영 정책');
   });
 
   it('says it may be refused, and that refusing it ends the sign-up', () => {
@@ -122,7 +136,8 @@ describe('마케팅 정보 수신 동의', () => {
  * What an agreement to each item is an agreement to: its line on the consent step and its text —
  * /terms for the terms, the consent text and /privacy for the privacy item, the consent text for
  * the marketing item, the line alone for the age check. The raw strings, placeholders unfilled:
- * entering a business fact the owner supplies (상호, 시행일) is no new wording.
+ * entering a business fact the owner supplies (상호) is no new wording. The 시행일 and the
+ * retention figures are written into the strings, so they are part of the wording.
  */
 const AGREED_TO: Readonly<Record<ConsentItem, readonly string[]>> = {
   terms: [CONSENT_LABELS.terms, ...legalDocumentStrings(TERMS)],
@@ -147,11 +162,18 @@ function fingerprint(strings: readonly string[]): string {
  * revision changes members' rights, which sends every account back to the consent step at its next
  * sign-in (#57-5) — then pin the new version and fingerprint here. Before #58 was merged, while no
  * record anywhere named a version, the privacy and marketing texts were reworded in review under
- * the same draft version, and only their fingerprints re-pinned (ADR-0072 7-8).
+ * the same draft version, and only their fingerprints re-pinned (ADR-0072 7-8). #137's revision
+ * (ADR-0176) is the first version of the terms and the privacy item that takes effect: until it is
+ * merged no record names it, so its fingerprint is re-pinned under it as its placeholders are
+ * filled, together with the documents' own pins (legal.test.ts `VERSION_FINGERPRINTS`): the
+ * privacy item's was re-pinned when the approved retention periods went into
+ * POLICY_RETENTION_DAYS (owner answer 2 on #137, ADR-0176 결과 3), and the terms' and the privacy
+ * item's are re-pinned once more when the 시행일 (LEGAL_FIRST_EFFECTIVE_DATE), which the 부칙
+ * writes out, is set to the deployment day.
  */
 const PINNED: Readonly<Record<ConsentItem, { version: string; fingerprint: string }>> = {
-  terms: { version: 'draft-2026-10-18', fingerprint: '345fbea9be0f9e51' },
-  privacy: { version: 'draft-2026-10-18', fingerprint: '82fffd0484932c2b' },
+  terms: { version: LEGAL_FIRST_EFFECTIVE_DATE, fingerprint: 'ec14ad69e66945ab' },
+  privacy: { version: LEGAL_FIRST_EFFECTIVE_DATE, fingerprint: '3afb9a18b96588bd' },
   age: { version: 'draft-2026-10-18', fingerprint: '2b86fed295e0c120' },
   marketing: { version: 'draft-2026-10-18', fingerprint: '079d6754df83aa51' },
 };
@@ -167,9 +189,11 @@ describe('the consent versions (#57-5)', () => {
     },
   );
 
-  it('records the documents as they stand while their effective date is undecided (decision 4 #58)', () => {
-    // `draft-` and the day the text was fixed until #137 sets a 시행일; then `YYYY-MM-DD`.
-    expect(BUSINESS_INFO.effectiveDate).toBe('미정');
+  it('names the 시행일 of the version in force for the terms and the privacy item (#137, ADR-0176)', () => {
+    // `draft-` and the day the text was fixed while no 시행일 was set (decision 4 #58); from #137
+    // on, the document's own 시행일 `YYYY-MM-DD`.
+    expect(currentConsentVersion('terms')).toBe(TERMS.effectiveDate);
+    expect(currentConsentVersion('privacy')).toBe(PRIVACY.effectiveDate);
     for (const item of CONSENT_ITEMS) {
       for (const { version } of CONSENT_DOCUMENTS[item].versions) {
         expect(version).toMatch(/^(?:draft-)?\d{4}-\d{2}-\d{2}$/);

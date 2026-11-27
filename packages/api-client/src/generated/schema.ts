@@ -8598,13 +8598,13 @@ export type components = {
                     /** @enum {boolean} */
                     agreed: true;
                     /** @enum {string} */
-                    version: "draft-2026-10-18";
+                    version: "2026-11-28";
                 };
                 terms?: {
                     /** @enum {boolean} */
                     agreed: true;
                     /** @enum {string} */
-                    version: "draft-2026-10-18";
+                    version: "2026-11-28";
                 };
             };
             expectedAccountId: string;

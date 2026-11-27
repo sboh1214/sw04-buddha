@@ -1,3 +1,4 @@
+import { currentConsentVersion } from '@buddha/shared';
 import { readFileSync } from 'node:fs';
 import { MutationObserver, QueryObserver, type QueryClient } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
@@ -61,7 +62,7 @@ const unverified: Me = {
     nextStep: 'verification',
     consents: (['terms', 'privacy', 'age', 'marketing'] as const).map((item) => ({
       item,
-      version: 'draft-2026-10-18',
+      version: currentConsentVersion(item),
       agreed: item !== 'marketing',
       recordedAt: '2026-10-18T00:00:00.000Z',
     })),

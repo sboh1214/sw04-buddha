@@ -3,6 +3,7 @@ import { JOB_NAMES, QUEUE_NAMES } from '../jobs.js';
 import { REPLACED_TERMS } from '../terms.js';
 import {
   ADMIN_SCREEN_FEATURES,
+  type AllowanceScope,
   EVERY_ROUTE_PATH_FEATURES,
   EXCLUDED_FEATURES,
   EXCLUDED_FEATURE_IDS,
@@ -17,7 +18,7 @@ import {
   tokenForms,
 } from './excluded.js';
 
-const features = (text: string, scope?: 'everywhere' | 'service-guide') => [
+const features = (text: string, scope?: AllowanceScope) => [
   ...new Set(findExcludedText(text, scope ? { scope } : {}).map((hit) => hit.feature)),
 ];
 
@@ -282,6 +283,24 @@ describe('findExcludedText', () => {
     expect(features(contest)).toEqual(['contest']);
     expect(features(contest, 'service-guide')).toEqual([]);
     expect(features('우승하면 상금을 드립니다.', 'service-guide')).toEqual(['contest']);
+  });
+
+  it('allows them in the legal bodies too, as on the guide (owner answer 137-4 (a), #137)', () => {
+    for (const notice of [
+      '지금은 Coin을 판매하지 않고 결제·충전 기능이 없습니다.',
+      '출석·거래량·주문 횟수에 따른 보상과 회원 사이의 Coin 송금은 없습니다.',
+      'YES/NO 선택은 거래할 계약의 선택이며 투표가 아닙니다.',
+    ]) {
+      expect(features(notice), notice).not.toEqual([]);
+      expect(features(notice, 'legal-body'), notice).toEqual([]);
+    }
+    // A sentence that offers one is still caught, and a gambling word is never cleared.
+    expect(features('쿠폰을 등록하면 Coin을 드립니다.', 'legal-body')).toEqual(['paid-purchase']);
+    expect(features('베팅은 할 수 없습니다.', 'legal-body')).toEqual(['gambling']);
+    // The clause rule is the guide's.
+    expect(features('점수를 제공하며 결제는 지원하지 않습니다.', 'legal-body')).toEqual([
+      'scoring',
+    ]);
   });
 
   it.each<[string, ExcludedFeatureId[]]>([
