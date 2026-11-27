@@ -74,8 +74,8 @@ export type ConsentDocuments = Readonly<Record<ConsentItem, ConsentDocument>>;
  * The first 시행일 of the 이용약관, the 개인정보처리방침 and the 환불정책: the revision #137 publishes
  * (ADR-0176), and so the version a consent record names for the `terms` and `privacy` items from
  * then on (#57-5). The revision takes effect when it is published — the day of its production
- * deploy, in KST (owner answer 137-2a) — so this is that day, filled in when the pull request is
- * merged; until then it is a provisional date. The web's legal documents read it from here
+ * deploy, in KST (owner answer 137-2a) — so this is that day, the day the pull request was merged
+ * and deployed (ADR-0176 결과 3). The web's legal documents read it from here
  * (`effectiveDate`, apps/web/src/legal/), and so do the generated API contract (the consent body's
  * version literal, `pnpm api:openapi`) and the e2e copy (apps/web/e2e/consent-versions.ts).
  */
