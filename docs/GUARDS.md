@@ -156,7 +156,7 @@
 - `PRESERVED_PAID_SOURCES`: 유료 판매를 끈 동안 회원 화면에 닿지 않는 보존한 결제 코드(공개 `/charge`, 지갑의 충전·쿠폰·결제 내역 컴포넌트, 메뉴에서 뺀 관리자 충전 상품·쿠폰·결제 화면, 그 도우미). 유료 구매만 빠지고 다른 항목은 그대로 검사한다. 관리자 화면의 줄은 그 주소와 링크를 위한 것이다(문구는 관리자 화면이라 도박 어휘만 본다). `PAID_COIN_SALES_ENABLED`가 `false`일 때만 성립하므로 시험이 그 값을 고정하고, 목록의 경로가 모두 있는지도 본다.
 - 판매 스위치가 여는 분기(`PAID_COIN_SALES_ENABLED ? … : …`의 참 쪽, `PAID_COIN_SALES_ENABLED && …`, `if (PAID_COIN_SALES_ENABLED) …`) 안의 문구·`copy` 읽기·`formatKrw`도 유료 구매만 빠진다(`screen-text.ts`의 `gated`).
 - `COPY_ALLOWANCES`: copy 키별 허용. 지갑 이용 내역의 원장 유형 라벨 `ledgerTypeDeposit`·`ledgerTypePaymentCancel`·`ledgerTypePaymentCancelReversal`(충전·결제, 판매를 닫기 전의 행을 부르는 이름, D9). 탈퇴 화면의 거절 `closureRefusalPayment`(결제 — 보존한 유료 충전 코드의 진행 중인 결제·환불이 끝날 때까지 탈퇴를 막는다는 문장이고 권유가 아니며, 판매가 닫힌 동안은 진행 중인 결제가 없어 보이지 않는다, ADR-0069 결정 7, #140 ADR-0086). 실명·휴대전화 수집 목적 안내의 결제·구매 허용(`onboardingSubtitle`·`settingsContactHint`·`setPasswordContactHeading`)은 본인확인이 확인 없는 연락처를 대신하면서 그 문구와 함께 지웠다(ADR-0070). 허용할 낱말이 그 값에서 없어지면 시험이 실패하므로 그때 허용을 지운다.
-- `SERVICE_GUIDE_ROOT`(`app/(service-guide)`): 서비스 안내(#136) 화면의 자리. 이 아래 파일과 이 아래에서만 읽는 copy 키는 서비스 안내의 허용을 받는다. 라우트 그룹은 주소에 들어가지 않으므로 주소는 #136이 정한다. 아직 아무것도 없어서 지금은 부정 안내가 어디서나 실패한다.
+- `SERVICE_GUIDE_ROOT`(`app/(service-guide)`): 서비스 안내(#136) 화면의 자리. 이 아래 파일과 이 아래에서만 읽는 copy 키는 서비스 안내의 허용을 받는다. 라우트 그룹은 주소에 들어가지 않으므로 주소는 #136이 정했다 — `/guide`(`app/(service-guide)/guide`, ADR-0177). 안내의 문구는 `copy.serviceGuide*`이고 제목(`serviceGuideTitle`, 바닥글 링크도 읽는다) 말고는 그룹 안에서만 읽는다. 그런 키를 그룹 밖 화면이 읽으면 부정 안내가 실패하고, 시험이 그것을 확인한다. 다른 화면에서 안내로 가는 링크 문구(`guideLink*`)에는 부정 문장이 없다.
 - `PRICE_FORMATTERS`(`formatKrw`): 원화 가격을 그리는 함수. 보존한 결제 코드와 판매 스위치 분기 밖에서 쓰면 가격표(N06)로 본다. 가져올 때 붙인 별칭(`import { formatKrw as money }` 뒤의 `money(…)`), 네임스페이스(`shared.formatKrw`), 문자열 키(`shared['formatKrw']`), 구조 분해(`{ formatKrw: won }`)로 써도 찾는다(`screen-text.ts`의 `usesOf`).
 - `LEGAL_BODIES`(`test/screen-text.ts`): 약관 본문 네 파일과 약관·서비스 안내가 함께 쓰는 사실 문장(`legal/service-facts.ts`, #137·#136). 본문 넷은 #137이 개정할 때까지 도박 어휘만 검사한다. 사실 문장은 '투표가 아닙니다'·'송금은 없습니다'처럼 제공하지 않는 것을 말하므로 화면 문구로 두지 않고, 그 단위 시험(`legal/service-facts.test.ts`)이 모든 항목으로 검사하되 서비스 안내의 부정 안내를 허용한다(오너 답 2026-11-27 137-4 (a)). 온보딩의 동의문 둘(`legal/consent-texts.ts`, ADR-0072)은 여기에 넣지 않았다 — 동의 단계가 그리는 화면 문구라 모든 항목을 검사받고, `legal/consent-texts.test.ts`도 같은 검사를 한다.
 
@@ -307,7 +307,7 @@ SMS는 모두 `apps/api/src/sms/templates.ts`에서 만들고 `SMS_TEMPLATES`에
 - 새 화면 문구는 그냥 검사된다. 제외 기능 낱말이 그 뜻이 아니게 들어가야 하면 위 허용 가운데 맞는 것을 쓰고, 없으면 이유와 함께 가장 좁은 허용(구절, copy 키)을 더한다.
 - 관리자 화면은 따로 등록하지 않는다. `app/admin` 아래 두거나 관리자 코드만 가져다 쓰면 도박 어휘만 검사된다. 관리자 전용이던 파일을 회원 화면이 가져다 쓰기 시작하면 그 파일은 회원 화면으로 모든 항목을 검사받는다.
 - 보존한 결제 코드를 회원 화면에 다시 그리려면 그것은 유료 판매를 여는 일이다(#111). `PRESERVED_PAID_SOURCES`에 파일을 더해 비켜 가지 않는다.
-- 서비스 안내(#136)는 `app/(service-guide)` 아래에 두거나, 다른 자리에 두면 `SERVICE_GUIDE_ROOT`를 그 폴더로 바꾼다. 부정 안내의 모양(`NEGATIVE_NOTICE`)이 #136의 문장에 맞지 않으면 그 이슈가 넓힌다.
+- 서비스 안내(#136, ADR-0177)의 문장은 `app/(service-guide)` 아래 파일이나 그 아래에서만 읽는 `copy.serviceGuide*`에 둔다. 다른 자리에 두면 그 문장은 화면 문구로 모든 항목을 검사받는다. 약관과 같은 사실은 공통 사실 문장(`legal/service-facts.ts`)을 쓴다. 부정 안내의 모양(`NEGATIVE_NOTICE`)은 #136이 넓히지 않았다 — 새 부정 문장은 지금 모양의 끝으로 쓰거나, 넓히려면 그 형태의 허용과 거절 사례를 `excluded.test.ts`에 더한다.
 
 ## 공개 판정 기록의 허용 목록 (#24, ADR-0121)
 

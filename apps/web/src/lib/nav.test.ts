@@ -100,7 +100,7 @@ describe('isPrimaryCurrent', () => {
       const lit = KEYS.filter((key) => isPrimaryCurrent(pathname, key));
       expect(lit.length, pathname).toBeLessThanOrEqual(1);
     }
-    for (const pathname of ['/login', '/terms', '/onboarding', '/admin/markets']) {
+    for (const pathname of ['/login', '/terms', '/guide', '/onboarding', '/admin/markets']) {
       expect(
         KEYS.filter((key) => isPrimaryCurrent(pathname, key)),
         pathname,
@@ -122,6 +122,8 @@ describe('showsCategoryRow', () => {
       '/my/wallet',
       '/login',
       '/terms',
+      // 서비스 안내 (#136): a reading page of its own, like the legal pages.
+      '/guide',
       '/onboarding',
       '/admin/markets',
       '/marketsx',

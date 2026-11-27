@@ -96,8 +96,10 @@ const PRICE_FORMATTERS = ['formatKrw'] as const;
  * The service guide (#136) is the one page that may say what the product does not offer —
  * '점수·순위를 제공하지 않습니다' (owner decision 2026-10-13 #113); the no-cash notice may stand
  * anywhere. The guide's sources go under this route group, which leaves its address to #136 (a
- * route group is not part of the URL). Nothing is there yet, so today every such sentence fails
- * wherever it is written.
+ * route group is not part of the URL): it is `/guide` (`app/(service-guide)/guide`, ADR-0177),
+ * and such a sentence fails on any other screen, a copy key read outside the group included. The
+ * legal bodies and the shared fact sentences are no screen text: their own checks hold them (the
+ * fact sentences with the guide's negative notices allowed, 137-4 (a)).
  */
 const SERVICE_GUIDE_ROOT = at('app', '(service-guide)');
 
@@ -498,6 +500,58 @@ describe('excluded features on screens (#113)', () => {
     expect(features(guide, '확률이 오르면 투표하세요.')).toEqual(['replaced-term']);
     // The no-cash notice stands anywhere.
     expect(literalHits(member, copy.walletNotice, false)).toEqual([]);
+  });
+
+  it("gives the guide's allowance to its own sources and copy alone (#136, ADR-0177)", () => {
+    const page = path.join(SERVICE_GUIDE_ROOT, 'guide', 'page.tsx');
+    expect(SOURCES).toContain(page);
+    expect(scopeOf(page)).toBe('service-guide');
+    // The guide's own copy, read under the group alone — but the title, which the footer's link
+    // to it reads too.
+    const guideKeys = Object.keys(copy).filter(
+      (key) => key.startsWith('serviceGuide') && key !== 'serviceGuideTitle',
+    );
+    expect(guideKeys.length).toBeGreaterThan(0);
+    for (const key of guideKeys) {
+      const refs = COPY_REFS.get(key) ?? [];
+      expect(refs.length, key).toBeGreaterThan(0);
+      expect(
+        refs.filter((ref) => scopeOf(ref.file) !== 'service-guide').map((ref) => ref.file),
+        key,
+      ).toEqual([]);
+    }
+    // Those that say what the product does not offer pass there; read by one screen outside the
+    // group, the same value fails.
+    const notices = guideKeys.filter((key) => findExcludedText(copy[key as CopyKey]).length > 0);
+    expect(notices).toEqual(
+      expect.arrayContaining([
+        'serviceGuideNotBelief',
+        'serviceGuideOpeningSetting',
+        'serviceGuideNoScore',
+      ]),
+    );
+    for (const key of notices) {
+      const value = copy[key as CopyKey];
+      const refs = COPY_REFS.get(key) ?? [];
+      expect(copyHits(key, value), key).toEqual([]);
+      const first = refs[0];
+      if (first === undefined) throw new Error(`${key} is read nowhere`);
+      COPY_REFS.set(key, [...refs, { ...first, file: at('app', 'my', 'page.tsx') }]);
+      try {
+        expect(copyHits(key, value).length, key).toBeGreaterThan(0);
+      } finally {
+        COPY_REFS.set(key, refs);
+      }
+    }
+    // The links to it from other screens say nothing of the kind.
+    for (const key of [
+      'serviceGuideTitle',
+      'guideLinkJudgement',
+      'guideLinkMarketPrice',
+      'guideLinkOrders',
+    ] as const) {
+      expect(findExcludedText(copy[key]), key).toEqual([]);
+    }
   });
 
   it('knows the admin screens: app/admin and what only it imports', () => {

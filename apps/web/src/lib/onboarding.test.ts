@@ -76,12 +76,14 @@ const DONE: Onboarding = { ...COMPLETED, interests: true };
 const RECONSENT: Onboarding = { ...DONE, consent: false, completed: false, nextStep: 'consent' };
 
 describe('isOnboardingExempt', () => {
-  it('lists exactly the routes ADR-0043 names, the 탈퇴 screen, 내 제안, 판정 이의, plus /api', () => {
+  it('lists exactly the routes ADR-0043 names, the 탈퇴 screen, 내 제안, 판정 이의, the guide, plus /api', () => {
     expect([...ONBOARDING_EXEMPT_PATHS].sort()).toEqual(
       [
         '/api',
         // The public charge guide, only while paid Coin is on sale (ADR-0049).
         ...(PAID_COIN_SALES_ENABLED ? ['/charge'] : []),
+        // 서비스 안내 (#136, owner answer 136-6): read-only and the same for every visitor.
+        '/guide',
         // 탈퇴 (#140, owner decision 2026-10-23 (2차) 3): an account not onboarded closes itself.
         '/my/settings/closure',
         // 내 제안 (#77, owner decision 2026-10-20): such an account takes its 접수 proposal back.
@@ -111,6 +113,7 @@ describe('isOnboardingExempt', () => {
       '/privacy',
       '/refund',
       '/terms/',
+      '/guide',
       '/my/settings/closure',
       '/my/proposals',
       '/my/disputes',
@@ -147,6 +150,7 @@ describe('isOnboardingExempt', () => {
       '/admin/users',
       '/admin/payments',
       '/termsx',
+      '/guidex',
       '/loginx',
       '/charges',
       '/apis',

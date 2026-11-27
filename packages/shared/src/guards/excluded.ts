@@ -305,8 +305,9 @@ export type AllowanceScope = (typeof ALLOWANCE_SCOPES)[number];
  * A clause that says something is not offered, cannot be done, is not there or is not what it
  * is called: '…을 제공하지 않습니다', '…은 제공되지 않습니다', '…할 수 없습니다', '…은 불가합니다',
  * '…기능은 없습니다', '…은 확률이 아닙니다', and the joined '…은 없고', '…이 아니며'. It clears a hit
- * only after it in the same clause (CLAUSE_END). The service guide (#136) may widen it when it
- * words its own sentences.
+ * only after it in the same clause (CLAUSE_END). The service guide (#136, ADR-0177) worded its
+ * sentences to these endings and did not widen it; widening it takes both an allowed and a
+ * rejected case in excluded.test.ts.
  */
 export const NEGATIVE_NOTICE =
   /(?:제공|지원|지급)(?:하|되)지\s*않|되지\s*않(?:습니다|아요)|할\s*수\s*없|불가(?:능)?(?:합니다|해요)|없(?:습니다|어요|으며|고|지만)|아닙니다|아니에요|아니(?:며|고|지만)/;

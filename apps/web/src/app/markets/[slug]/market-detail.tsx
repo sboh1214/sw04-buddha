@@ -74,6 +74,7 @@ import {
 } from '@/lib/market-detail';
 import { marketKey } from '@/lib/market-keys';
 import { marketStatusLabel } from '@/lib/market-status';
+import { serviceGuideHref } from '@/lib/service-guide';
 import { initialTickRange } from '@/lib/ticks';
 import { useSession } from '@/lib/use-session';
 import { MarketDiscussion } from './market-discussion';
@@ -285,10 +286,25 @@ export function MarketDetail({
           />
         )}
         {/* Right under the chart on every public status (ADR-0135 결정 1의 3, A4), and outside
-            the row's condition: a row or a series still loading or failed leaves it there. */}
-        <Text mt="2" fontSize="xs" color="fg.muted" data-testid="market-price-notice">
-          {copy.marketPriceNotice}
-        </Text>
+            the row's condition: a row or a series still loading or failed leaves it there. Its
+            link opens the guide's 시장가격의 뜻 (ADR-0135 '남은 것', #136, ADR-0177). The link's
+            line box is a fractional height (fontSize xs), so the scroll that brings it above the
+            매수 bar on focus (ORDER_ENTRY_SCROLL_PADDING) rounds to a whole pixel and could leave
+            its ring a fraction under the bar; its own 4px scroll margin keeps it clear. */}
+        <HStack mt="2" wrap="wrap" columnGap="2" rowGap="0.5" fontSize="xs">
+          <Text color="fg.muted" data-testid="market-price-notice">
+            {copy.marketPriceNotice}
+          </Text>
+          <ChakraLink
+            asChild
+            color="fg.muted"
+            textDecoration="underline"
+            scrollMarginBottom="1"
+            data-testid="market-price-guide-link"
+          >
+            <NextLink href={serviceGuideHref('market-price')}>{copy.guideLinkMarketPrice}</NextLink>
+          </ChakraLink>
+        </HStack>
       </Box>
     ),
     activity: (

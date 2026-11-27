@@ -10,6 +10,7 @@ import type { Me } from './api';
 import { MY_DISPUTES_PATH } from './disputes';
 import { safeNextPath } from './next-path';
 import { MY_PROPOSALS_PATH } from './proposals';
+import { SERVICE_GUIDE_PATH } from './service-guide';
 
 /**
  * The onboarding (#58, ADR-0072) as the screens read it: the gate that sends a signed-in account
@@ -56,6 +57,9 @@ export const ONBOARDING_PATH = '/onboarding';
  *   three legal documents — the consent step links /terms and /privacy in a new tab — and the
  *   public charge guide (ADR-0044) while paid Coin is on sale — `/charge` is not found otherwise
  *   (PAID_COIN_SALES_ENABLED, ADR-0049).
+ * - The service guide, /guide (#136, owner answer 2026-11-27 136-6, ADR-0177): a public page that
+ *   only reads, the same for every visitor — an account with steps left included, so it may read
+ *   how trading, judging and Coin work before it finishes. It writes nothing.
  * - The 탈퇴 screen, /my/settings/closure (#140, owner decision 2026-10-23 (2차) 3, ADR-0086): an
  *   account that has not finished its onboarding — a re-consent left included — may still close
  *   itself, as it may delete its own items with sign-in only (#46, #77); the API's closure is
@@ -94,6 +98,7 @@ export const ONBOARDING_EXEMPT_PATHS: readonly string[] = [
   '/privacy',
   '/refund',
   ...(PAID_COIN_SALES_ENABLED ? ['/charge'] : []),
+  SERVICE_GUIDE_PATH,
   MY_CLOSURE_PATH,
   MY_PROPOSALS_PATH,
   MY_DISPUTES_PATH,

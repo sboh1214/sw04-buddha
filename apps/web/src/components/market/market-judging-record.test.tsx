@@ -4,6 +4,7 @@ import { TimeZoneScope } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { BUSINESS_INFO } from '@/legal/business-info';
 import { formatInTimeZone } from '@/lib/datetime';
+import { serviceGuideHref } from '@/lib/service-guide';
 import { byTagName, byTestId, renderWithQueries, testIdsStartingWith } from '@/test/render';
 import {
   MarketJudgingRecord,
@@ -44,6 +45,13 @@ const VERSION: JudgingRecordMarket['judgingRecord']['versions'][number] = {
   publishedAt: '2026-11-09T02:00:00.000Z',
   disputeDeadline: '2026-11-10T02:00:00.000Z',
 };
+/**
+ * The record's links out to its sources: every link but the head's own to the service guide's
+ * 판정과 이의 (#136, ADR-0177), which stays in the service.
+ */
+const evidenceLinks = (html: string) =>
+  byTagName(html, 'a').filter((link) => link.attributes.href !== serviceGuideHref('judgement'));
+
 const draw = (market: JudgingRecordMarket = EMPTY) =>
   renderWithQueries(<MarketJudgingRecord market={market} testId={ID} />);
 
@@ -156,6 +164,10 @@ describe('public judging record (#24)', () => {
     ] as const) {
       const html = draw({ ...EMPTY, status });
       expect(byTestId(html, `${ID}-principle`)?.text).toBe(copy.judgingPrinciple);
+      // Beside it, on every state, the link to the guide's 판정과 이의 (ADR-0107 결정 4 #24, #136).
+      const guide = byTestId(html, `${ID}-guide-link`);
+      expect(guide?.attributes.href).toBe('/guide#judgement');
+      expect(guide?.text).toBe(copy.guideLinkJudgement);
       expect(html).not.toContain('href="/principles');
       expect(html).not.toContain(copy.comingSoon);
     }
@@ -217,10 +229,10 @@ describe('public judging record (#24)', () => {
     expect(byTestId(html, `${ID}-version-2-rule-version`)?.text).toBe('v3');
     expect(byTagName(html, 'details')).toHaveLength(1);
     expect(byTagName(html, 'details')[0]?.attributes.open).toBeUndefined();
-    expect(
-      byTagName(html, 'a').every((link) => link.attributes.rel === 'noopener noreferrer'),
-    ).toBe(true);
-    expect(byTagName(html, 'a').map((link) => link.attributes.href)).toContain(
+    expect(evidenceLinks(html).every((link) => link.attributes.rel === 'noopener noreferrer')).toBe(
+      true,
+    );
+    expect(evidenceLinks(html).map((link) => link.attributes.href)).toContain(
       VERSION.evidence.links[0],
     );
     const ids = testIdsStartingWith(html, ID);
@@ -410,9 +422,9 @@ describe('판정 정정 and the 결과 확정 뒤 report line (#144, ADR-0165)',
     expect(byTestId(html, `${ID}-version-1`)?.text).toContain(`${copy.judgingCurrentVersion} v1`);
     // No identity, no reviewer's reason: the public shape has none, and nothing names one.
     expect(section?.text).not.toContain('관리자');
-    expect(
-      byTagName(html, 'a').every((link) => link.attributes.rel === 'noopener noreferrer'),
-    ).toBe(true);
+    expect(evidenceLinks(html).every((link) => link.attributes.rel === 'noopener noreferrer')).toBe(
+      true,
+    );
     const ids = testIdsStartingWith(html, ID);
     expect(new Set(ids).size).toBe(ids.length);
   });
