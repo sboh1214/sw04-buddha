@@ -9,10 +9,13 @@
  * in the query types), and `account` got a unique (provider_id, account_id), the key better-auth
  * looks an account up by (ADR-0094). Column names are explicit snake_case, so drizzle's `casing`
  * setting does not affect them. better-auth reads/writes these tables through its Drizzle adapter;
- * application code never writes them (PLAN 6.1) except the seed, test factories and an admin
- * revoke, which deletes the account's `session` rows to sign it out everywhere (#171).
- * `user.account_type` and its partial unique index are ours too (#115, ADR-0108): add them back
- * after a regenerate.
+ * application code never writes them (PLAN 6.1) except the seed, test factories, an admin revoke,
+ * which deletes the account's `session` rows to sign it out everywhere (#171), an account closure,
+ * which deletes them too (#140), and the worker's `retention.purge`, which deletes the sessions
+ * whose period has passed since their expiry (#339, ADR-0181).
+ * `user.account_type` and its partial unique index are ours too (#115, ADR-0108), and so is
+ * `session_expires_at_idx` (#339, ADR-0181: the purge's batches): add them back after a
+ * regenerate.
  * Re-run the generator only on a better-auth upgrade and diff against this file.
  */
 import { sql } from 'drizzle-orm';
@@ -71,7 +74,11 @@ export const session = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: 'cascade' }),
   },
-  (table) => [index('session_userId_idx').on(table.userId)],
+  (table) => [
+    index('session_userId_idx').on(table.userId),
+    // Ours (#339, ADR-0181): the retention purge selects expired sessions by their expiry.
+    index('session_expires_at_idx').on(table.expiresAt),
+  ],
 );
 
 export const account = pgTable(

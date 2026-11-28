@@ -30,14 +30,16 @@ import { NICKNAME_HOLD_DAYS } from './nickname.js';
  * decides for it — a new setting in RETENTION_PERIOD_SETTINGS or an existing one's, whose
  * description then names the kind too — a purge kind here, and its step in the worker's job
  * (docs/SETTINGS.md '보존기간 항목 등록하기'). #77's market proposals came so, with a setting of
- * their own (ADR-0087's owner decision 2026-10-24 13), #53's notifications (ADR-0157 53-7) and
- * #151's visit records (ADR-0170, owner answer 151-5; ADR-0167 결정 8의 8). Unlike the
- * closure-anchored kinds (consent records, verification records, moderation records and market
- * proposals of a withdrawn account), notifications are deleted from a live member's inbox by their
- * 발생 시각 (53-10), read or unread: a closure deletes a closed one's inbox whole at once, so no
- * period counts from a withdrawal. Visit records count from 00:00 KST of the visit's Korean date
- * for every account, and a closure deletes none of them: a closed account's stay linked to it
- * until their period has passed (151-5).
+ * their own (ADR-0087's owner decision 2026-10-24 13), #53's notifications (ADR-0157 53-7),
+ * #151's visit records (ADR-0170, owner answer 151-5; ADR-0167 결정 8의 8) and #339's expired
+ * sessions (ADR-0181, owner answers 339-1 and 339-2). Unlike the closure-anchored kinds (consent
+ * records, verification records, moderation records and market proposals of a withdrawn account),
+ * notifications are deleted from a live member's inbox by their 발생 시각 (53-10), read or unread: a
+ * closure deletes a closed one's inbox whole at once, so no period counts from a withdrawal. Visit
+ * records count from 00:00 KST of the visit's Korean date for every account, and a closure deletes
+ * none of them: a closed account's stay linked to it until their period has passed (151-5). Expired
+ * sessions count from their own expiry (`session.expires_at`), every account's alike: a closure
+ * deletes an account's sessions at once.
  */
 
 /**
@@ -78,6 +80,10 @@ export const RETENTION_PERIOD_MAX_DAYS = 7_300;
  * - `market_visits`: 방문 기록 — every account's market-detail visit rows (#151, ADR-0170,
  *   `market_visits`: account, market and Korean date), once the period has passed since 00:00 KST
  *   of the visit's date (ADR-0167 결정 8의 8); a closure deletes none of them (owner answer 151-5).
+ * - `expired_sessions`: 만료 세션 — every account's better-auth sessions (`session`: the token, the
+ *   IP address and the browser) whose expiry (`expires_at`) the period has passed (#339, ADR-0181,
+ *   owner answers 339-1 and 339-2). A session a member signs out of, and a closed account's, are
+ *   deleted at once, not here.
  */
 export const RETENTION_PERIODS = [
   'consent_records',
@@ -88,6 +94,7 @@ export const RETENTION_PERIODS = [
   'market_proposals',
   'notifications',
   'market_visits',
+  'expired_sessions',
 ] as const;
 export type RetentionPeriod = (typeof RETENTION_PERIODS)[number];
 
@@ -100,9 +107,10 @@ export type RetentionPeriod = (typeof RETENTION_PERIODS)[number];
  * policy, published first, and the setting is requested and approved after it.
  *
  * `null` while the owner has approved no value: the documents then read '미정' in its place
- * (apps/web/src/legal/retention-periods.ts). The eight are the values the owner approved on #137
- * (owner answer 2, 2026-11-27, ADR-0176 결과 3): the production settings take the same values,
- * entered '승인됨' by two admins after the revision is deployed (ADR-0175).
+ * (apps/web/src/legal/retention-periods.ts). The first eight are the values the owner approved on
+ * #137 (owner answer 2, 2026-11-27, ADR-0176 결과 3), and the expired sessions' 30 days the one of
+ * #339 (owner answer 339-1, ADR-0181): the production settings take the same values, entered
+ * '승인됨' by two admins after the revision is deployed (ADR-0175).
  */
 export const POLICY_RETENTION_DAYS: Readonly<Record<RetentionPeriod, number | null>> = {
   consent_records: 1_095,
@@ -113,6 +121,7 @@ export const POLICY_RETENTION_DAYS: Readonly<Record<RetentionPeriod, number | nu
   market_proposals: 30,
   notifications: 30,
   market_visits: 84,
+  expired_sessions: 30,
 };
 
 /**
@@ -155,7 +164,9 @@ export const POLICY_RETENTION_DAYS: Readonly<Record<RetentionPeriod, number | nu
  *   inbox by their 발생 시각, read or unread.
  * - `market_visits`: 방문 기록 — every account's market-detail visit rows (#151, ADR-0170) whose
  *   period has passed since 00:00 KST of their visit date (ADR-0167 결정 8의 8), whoever's they are:
- *   a closure deletes none (owner answer 151-5). Nothing names them, so last.
+ *   a closure deletes none (owner answer 151-5). Nothing names them.
+ * - `expired_sessions`: every account's sessions whose period has passed since their expiry (#339,
+ *   ADR-0181; owner answers 339-1 and 339-2). Nothing names a session, so last.
  */
 export const RETENTION_PURGE_KINDS = [
   'nickname_holds',
@@ -176,6 +187,7 @@ export const RETENTION_PURGE_KINDS = [
   'market_proposals',
   'notifications',
   'market_visits',
+  'expired_sessions',
 ] as const;
 export type RetentionPurgeKind = (typeof RETENTION_PURGE_KINDS)[number];
 export const retentionPurgeKindSchema = z
@@ -210,6 +222,7 @@ export const RETENTION_PURGE_KIND_PERIODS: Readonly<
   market_proposals: 'market_proposals',
   notifications: 'notifications',
   market_visits: 'market_visits',
+  expired_sessions: 'expired_sessions',
 };
 
 /** The days a nickname hold is kept: the hold itself (#57-6), recorded as its purge's period. */

@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { copy } from './copy';
 import { legalDocumentStrings, resolveLegalDocument } from './legal/document';
 import { PRIVACY } from './legal/privacy';
+import { PRIVACY_2026_11_28 } from './legal/privacy-2026-11-28';
 import { REFUND } from './legal/refund';
 import { SERVICE_FACT_LIST } from './legal/service-facts';
 import { TERMS } from './legal/terms';
@@ -179,7 +180,7 @@ describe('the old currency unit (#13)', () => {
         .map((literal) => `${path.relative(SRC, file)}:${String(literal.line)}: ${literal.text}`),
     );
     expect(hits).toEqual([]);
-    for (const doc of [TERMS, PRIVACY, REFUND]) {
+    for (const doc of [TERMS, PRIVACY, PRIVACY_2026_11_28, REFUND]) {
       const rendered = legalDocumentStrings(resolveLegalDocument(doc));
       expect(
         rendered.filter((text) => hasOldUnit(text)),

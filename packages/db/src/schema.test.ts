@@ -8057,6 +8057,19 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         .values({ kind: 'market_visits', count: 2, periodDays: 90, ranAt })
         .returning();
       expect(visits).toMatchObject({ kind: 'market_visits', outcome: 'done' });
+      // Migration 0084 (#339, ADR-0181): the expired sessions' kind, last, and the index its
+      // batches select by.
+      const [sessions] = await t.db
+        .insert(retentionPurges)
+        .values({ kind: 'expired_sessions', count: 3, periodDays: 30, ranAt })
+        .returning();
+      expect(sessions).toMatchObject({ kind: 'expired_sessions', outcome: 'done' });
+      const { rows: sessionIndexes } = await t.db.execute<{ definition: string }>(sql`
+        SELECT indexdef AS definition FROM pg_indexes
+        WHERE tablename = 'session' AND indexname = 'session_expires_at_idx'`);
+      expect(sessionIndexes.map((row) => row.definition)).toEqual([
+        'CREATE INDEX session_expires_at_idx ON public.session USING btree (expires_at)',
+      ]);
       for (const [values, constraint] of [
         [{ kind: 'ledger_entries', count: 1, periodDays: 1 }, 'retention_purges_kind_check'],
         [{ kind: 'reports', count: -1, periodDays: 1 }, 'retention_purges_count_check'],

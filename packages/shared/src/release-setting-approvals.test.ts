@@ -82,6 +82,8 @@ const EXPECTED: readonly [string, ReleaseSettingApprovalRule][] = [
   ['retention.market_proposals', RETENTION],
   ['retention.notifications', RETENTION],
   ['retention.market_visits', RETENTION],
+  // 339-2 (ADR-0181): the retention group's rule, as the other periods.
+  ['retention.expired_sessions', RETENTION],
 ];
 
 const UNDECIDED: ReleaseSettingState = { status: 'undecided', value: null };
@@ -140,14 +142,14 @@ function classify(
 }
 
 describe('the approval rule of every shipped item (#331, ADR-0175)', () => {
-  it('pins each of the 36 to the owner answers, in registry order', () => {
+  it('pins each of the 37 to the owner answers, in registry order', () => {
     expect([...RELEASE_SETTINGS.values()].map((d) => [d.key, d.approval])).toEqual(EXPECTED);
     for (const { approval } of RELEASE_SETTINGS.values()) {
       expect(releaseSettingApprovalRuleSchema.parse(approval)).toEqual(approval);
     }
   });
 
-  it('counts the groups of ADR-0171 결정 10의 1: economic 20, observation 7, retention 8, order intake 1', () => {
+  it('counts the groups of ADR-0171 결정 10의 1 and 339-2: economic 20, observation 7, retention 9, order intake 1', () => {
     const count = (group: string) =>
       [...RELEASE_SETTINGS.values()].filter((d) => d.approval.group === group).length;
     expect([
@@ -155,7 +157,7 @@ describe('the approval rule of every shipped item (#331, ADR-0175)', () => {
       count('observation'),
       count('retention'),
       count('order_intake'),
-    ]).toEqual([20, 7, 8, 1]);
+    ]).toEqual([20, 7, 9, 1]);
   });
 
   it('gives a one-admin direction to exactly the eleven of 331-1, on integer items only', () => {

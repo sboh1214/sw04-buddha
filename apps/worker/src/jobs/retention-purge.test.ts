@@ -24,9 +24,11 @@
  * 발생 시각 — a merged one's latest event — with their keys, and one a write in flight holds passed
  * by. #151's visit records (ADR-0170, owner answer 151-5): every account's, a closed one's too, from
  * 00:00 KST of the visit's Korean date, without a row lock, and the horizon the metrics then read.
- * The release settings are changed the way the admin screen changes them (a row and its
- * record); the run's instant is moved past a period instead of backdating a closure (a closed
- * profile never changes, migration 0043). Skips when TEST_* are unset.
+ * #339's expired sessions (ADR-0181, owner answers 339-1 and 339-2): every account's, from their
+ * expiry, and one a request holds passed by. The release settings are changed the way the admin
+ * screen changes them (a row and its record); the run's instant is moved past a period instead of
+ * backdating a closure (a closed profile never changes, migration 0043). Skips when TEST_* are
+ * unset.
  */
 import {
   createNotifications,
@@ -53,6 +55,7 @@ import {
   createProfileImage,
   createProposal,
   createReport,
+  createSession,
   createTestNotification,
   createUser,
   createVisit,
@@ -70,6 +73,7 @@ import {
 import {
   CONSENT_RECORDS_RETENTION_SETTING,
   DELETED_POSTS_RETENTION_SETTING,
+  EXPIRED_SESSIONS_RETENTION_SETTING,
   MARKET_PROPOSALS_RETENTION_SETTING,
   MARKET_VISITS_RETENTION_SETTING,
   MODERATION_RECORDS_RETENTION_SETTING,
@@ -281,6 +285,8 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
       slug: marketSlug,
       occurredAt: before(new Date(), 1),
     });
+    // A live member's expired session (#339): its period has no row at all.
+    await createSession(t.db, { userId: other, expiresAt: before(new Date(), 1) });
     const closedAt = await closeAccount(t.db, user.id);
     await setPeriod(CONSENT_RECORDS_RETENTION_SETTING, 1, 'test');
     await setPeriod(MARKET_PROPOSALS_RETENTION_SETTING, 1, 'proposal');
@@ -306,6 +312,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     expect(await t.db.select().from(schema.linkFlags)).toHaveLength(1);
     expect(await t.db.select().from(schema.marketProposals)).toHaveLength(1);
     expect(await t.db.select().from(schema.notifications)).toHaveLength(1);
+    expect(await t.db.select().from(schema.session)).toHaveLength(1);
     const byKind = Object.fromEntries(outcome.kinds.map((kind) => [kind.kind, kind]));
     expect(byKind.consent_records).toEqual({
       kind: 'consent_records',
@@ -322,6 +329,12 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     expect(byKind.market_proposals).toMatchObject({ status: 'proposal', periodDays: null });
     expect(byKind.notifications).toEqual({
       kind: 'notifications',
+      status: 'undecided',
+      periodDays: null,
+      deleted: 0,
+    });
+    expect(byKind.expired_sessions).toEqual({
+      kind: 'expired_sessions',
       status: 'undecided',
       periodDays: null,
       deleted: 0,
@@ -2407,6 +2420,11 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     await createPostLike(t.db, { postId: live.id, userId: other });
     await createConsents(t.db, { userId: member });
     await codeSend(member);
+    // A session that has not expired by the run (#339): in use, never due.
+    const liveSession = await createSession(t.db, {
+      userId: other,
+      expiresAt: after(new Date(), 30),
+    });
     const closedAt = await closeAccount(t.db, member);
     for (const definition of [
       CONSENT_RECORDS_RETENTION_SETTING,
@@ -2417,6 +2435,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
       MARKET_PROPOSALS_RETENTION_SETTING,
       NOTIFICATIONS_RETENTION_SETTING,
       MARKET_VISITS_RETENTION_SETTING,
+      EXPIRED_SESSIONS_RETENTION_SETTING,
     ]) {
       await setPeriod(definition, 1);
     }
@@ -2442,6 +2461,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     expect((await postOf(post.id)).purgedAt).not.toBeNull();
     expect(await t.db.select().from(schema.consentRecords)).toEqual([]);
     expect(await t.db.select().from(schema.phoneVerificationCodes)).toEqual([]);
+    expect(await t.db.select().from(schema.session)).toEqual([liveSession]);
     // The purge records name no person: kind, count, period, instant and outcome only.
     const columns = Object.keys((await t.db.select().from(schema.retentionPurges))[0]!);
     expect(columns.sort()).toEqual(['count', 'id', 'kind', 'outcome', 'periodDays', 'ranAt']);
@@ -3373,6 +3393,148 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     await run(next);
     expect(await readVisits(t.db)).toEqual([]);
     expect(await countsAt(next)).toEqual({ market_visits: 1 });
+  });
+
+  /** The sessions left, by id, sorted. */
+  const sessionIds = async () =>
+    (await t.db.select({ id: schema.session.id }).from(schema.session)).map((row) => row.id).sort();
+
+  it('deletes nothing of the sessions while their period is undecided, a design proposal or a test value, and records nothing for them (#339, ADR-0181, 339-2)', async () => {
+    const member = (await createUser(t.db)).user.id;
+    const old = await createSession(t.db, { userId: member, expiresAt: before(new Date(), 400) });
+    const now = new Date();
+    for (const status of ['proposal', 'test', 'undecided'] as const) {
+      await setPeriod(
+        EXPIRED_SESSIONS_RETENTION_SETTING,
+        status === 'undecided' ? null : 1,
+        status,
+      );
+      const outcome = await run(now);
+      expect(outcome.kinds.find((kind) => kind.kind === 'expired_sessions')).toEqual({
+        kind: 'expired_sessions',
+        status,
+        periodDays: null,
+        deleted: 0,
+      });
+    }
+    expect(await sessionIds()).toEqual([old.id]);
+    expect((await purgeRecords()).filter((row) => row.kind === 'expired_sessions')).toEqual([]);
+  });
+
+  it('deletes every account’s sessions once the period has passed since their expiry, in batches recorded as done — never one not yet expired, and nothing else (#339, ADR-0181, 339-1)', async () => {
+    const member = (await createUser(t.db)).user.id;
+    const other = (await createUser(t.db)).user.id;
+    // A withdrawn account's consent records, whose own period is undecided: they stay.
+    const leaving = (await createUser(t.db)).user.id;
+    await createConsents(t.db, { userId: leaving });
+    await closeAccount(t.db, leaving);
+    const at = before(new Date(), 40);
+    const first = await createSession(t.db, { userId: member, expiresAt: at });
+    const second = await createSession(t.db, { userId: member, expiresAt: at });
+    const theirs = await createSession(t.db, { userId: other, expiresAt: at });
+    // A day younger: due a day later.
+    const younger = await createSession(t.db, { userId: member, expiresAt: after(at, 1) });
+    // In use: expires tomorrow.
+    const live = await createSession(t.db, { userId: member, expiresAt: after(new Date(), 1) });
+    await setPeriod(EXPIRED_SESSIONS_RETENTION_SETTING, 30);
+    const accounts = (await t.db.select().from(schema.user)).length;
+
+    // A millisecond short of 30 days: kept, and the run says it looked (0).
+    const early = after(at, 30, -1);
+    await run(early);
+    expect(await sessionIds()).toEqual(
+      [first.id, second.id, theirs.id, younger.id, live.id].sort(),
+    );
+    expect(await countsAt(early)).toEqual({ expired_sessions: 0 });
+
+    // Exactly 30 days: the three of that expiry, whoever's, in batches of two, each recorded in
+    // its transaction.
+    const due = after(at, 30);
+    const outcome = await run(due, 2);
+    expect(await sessionIds()).toEqual([younger.id, live.id].sort());
+    expect(outcome.kinds.find((kind) => kind.kind === 'expired_sessions')).toEqual({
+      kind: 'expired_sessions',
+      status: 'approved',
+      periodDays: 30,
+      deleted: 3,
+    });
+    expect(
+      (await purgeRecords()).filter(
+        (row) => row.kind === 'expired_sessions' && row.ranAt.getTime() === due.getTime(),
+      ),
+    ).toEqual([
+      { kind: 'expired_sessions', count: 2, periodDays: 30, ranAt: due, outcome: 'done' },
+      { kind: 'expired_sessions', count: 1, periodDays: 30, ranAt: due, outcome: 'done' },
+    ]);
+    // No other kind's period applied, and the accounts are untouched.
+    expect(await countsAt(due)).toEqual({ expired_sessions: 3 });
+    expect(await t.db.select().from(schema.consentRecords)).toHaveLength(4);
+    expect(await t.db.select().from(schema.user)).toHaveLength(accounts);
+
+    // A day on: the younger one; the one in use stays.
+    const later = after(at, 31);
+    await run(later);
+    expect(await sessionIds()).toEqual([live.id]);
+    expect(await countsAt(later)).toEqual({ expired_sessions: 1 });
+  });
+
+  it('passes by, waiting for none, a session a request holds, and deletes it on the next run (#339, ADR-0181)', async () => {
+    const member = (await createUser(t.db)).user.id;
+    const at = before(new Date(), 40);
+    await createSession(t.db, { userId: member, expiresAt: at });
+    const held = await createSession(t.db, { userId: member, expiresAt: at });
+    await setPeriod(EXPIRED_SESSIONS_RETENTION_SETTING, 30);
+    const due = after(at, 30);
+
+    // A request in flight holds one (better-auth's delete of an expired cookie that came back).
+    let holding = () => {};
+    const locked = new Promise<void>((resolve) => {
+      holding = resolve;
+    });
+    let release = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const request = t.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT 1 FROM session WHERE id = ${held.id} FOR UPDATE`);
+      holding();
+      await released;
+    });
+    await Promise.race([locked, request]);
+    try {
+      // FOR UPDATE without SKIP LOCKED would wait here for the request's commit.
+      await within(run(due), 10);
+    } finally {
+      release();
+      await request;
+    }
+    expect(await sessionIds()).toEqual([held.id]);
+    expect(await countsAt(due)).toEqual({ expired_sessions: 1 });
+
+    const next = after(due, 0, 1);
+    await run(next);
+    expect(await sessionIds()).toEqual([]);
+    expect(await countsAt(next)).toEqual({ expired_sessions: 1 });
+  });
+
+  it('records the expired sessions’ kind as failed (0) when a batch fails, keeping every row, and deletes them on the next run (#339, ADR-0181; owner decision 2026-10-24 14)', async () => {
+    const member = (await createUser(t.db)).user.id;
+    const at = before(new Date(), 40);
+    const expired = await createSession(t.db, { userId: member, expiresAt: at });
+    await setPeriod(EXPIRED_SESSIONS_RETENTION_SETTING, 30);
+    const now = after(at, 30);
+    const outcome = await purgeExpiredRecords(failingDelete(schema.session), storage, { now });
+    expect(outcome.kindFailures.map(({ kind, recorded }) => ({ kind, recorded }))).toEqual([
+      { kind: 'expired_sessions', recorded: true },
+    ]);
+    expect(await sessionIds()).toEqual([expired.id]);
+    expect((await purgeRecords()).filter((row) => row.kind === 'expired_sessions')).toEqual([
+      { kind: 'expired_sessions', count: 0, periodDays: 30, ranAt: now, outcome: 'failed' },
+    ]);
+    const next = after(now, 1);
+    await run(next);
+    expect(await sessionIds()).toEqual([]);
+    expect(await countsAt(next)).toEqual({ expired_sessions: 1 });
   });
 
   it('queues each object’s key with its row’s deletion and unqueues it once the store has removed it (#46, ADR-0087 7-12)', async () => {

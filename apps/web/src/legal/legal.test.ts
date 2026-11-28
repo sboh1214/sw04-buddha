@@ -9,6 +9,7 @@ import {
   NICKNAME_HOLD_DAYS,
   PAYMENT_REFUND_WINDOW_DAYS,
   POLICY_RETENTION_DAYS,
+  PRIVACY_EXPIRED_SESSIONS_EFFECTIVE_DATE,
   RETENTION_PERIODS,
   type RetentionPeriod,
   WRITE_LIMIT_DAY_SECONDS,
@@ -40,6 +41,7 @@ import {
   table,
 } from './document';
 import { DAILY_BACKUPS_KEPT, PRIVACY } from './privacy';
+import { PRIVACY_2026_11_28 } from './privacy-2026-11-28';
 import { REFUND } from './refund';
 import { SERVICE_FACTS, SERVICE_FACT_LIST } from './service-facts';
 import { TERMS } from './terms';
@@ -237,13 +239,16 @@ function fingerprint(strings: readonly string[]): string {
  * took effect is never rewritten — not by an edit of its module, nor of a sentence, a constant or a
  * retention figure it reads (service-facts.ts, copy.ts, POLICY_RETENTION_DAYS …). An archived
  * version is a literal copy (versions.ts), so its pin never moves; add one here when a version is
- * archived. #137's versions have not taken effect yet: they are re-pinned with consent-texts.test.ts's
- * PINNED as their placeholders are filled — the privacy one when the approved retention figures went
- * in (owner answer 2 on #137, ADR-0176 결과 3), all three when the 시행일 is set.
+ * archived. #137's three versions took effect on LEGAL_FIRST_EFFECTIVE_DATE: their pins never move,
+ * and the next revision of each freezes it (the policy's is in privacy-2026-11-28.ts). #339's
+ * (ADR-0181) has not taken effect until its pull request is merged and deployed, and is re-pinned
+ * with PINNED if its 시행일 (PRIVACY_EXPIRED_SESSIONS_EFFECTIVE_DATE), which its 부칙 writes out,
+ * moves to the deploy day.
  */
 const VERSION_FINGERPRINTS: Readonly<Record<string, string>> = {
   [`terms:${LEGAL_FIRST_EFFECTIVE_DATE}`]: '88d1d59a8646b5eb',
   [`privacy:${LEGAL_FIRST_EFFECTIVE_DATE}`]: '2eb446a4f4d62e91',
+  [`privacy:${PRIVACY_EXPIRED_SESSIONS_EFFECTIVE_DATE}`]: '037f491e1904d9a6',
   [`refund:${LEGAL_FIRST_EFFECTIVE_DATE}`]: '59a9c170d1ed38da',
 };
 
@@ -265,10 +270,15 @@ describe('the versions of the three documents (owner answer 137-2c, #137)', () =
       expect(legalVersionParams(kind), kind).toEqual(dates.map((date) => ({ date })));
       expect(legalVersionPath(kind, dates.at(-1)!)).toBe(`/${kind}/${dates.at(-1)!}`);
     }
-    // #137's revision is the first that takes effect: each document has one version so far.
-    for (const kind of LEGAL_DOCUMENT_KINDS) {
-      expect(LEGAL_VERSIONS[kind].map(effectiveDateOf), kind).toEqual([LEGAL_FIRST_EFFECTIVE_DATE]);
-    }
+    // #137's revision is the first that takes effect; #339's (ADR-0181) the policy's second, #137's
+    // archived before it as a literal copy.
+    expect(LEGAL_VERSIONS.terms.map(effectiveDateOf)).toEqual([LEGAL_FIRST_EFFECTIVE_DATE]);
+    expect(LEGAL_VERSIONS.privacy.map(effectiveDateOf)).toEqual([
+      LEGAL_FIRST_EFFECTIVE_DATE,
+      PRIVACY_EXPIRED_SESSIONS_EFFECTIVE_DATE,
+    ]);
+    expect(LEGAL_VERSIONS.privacy[0]).toBe(PRIVACY_2026_11_28);
+    expect(LEGAL_VERSIONS.refund.map(effectiveDateOf)).toEqual([LEGAL_FIRST_EFFECTIVE_DATE]);
   });
 
   it('is what a consent record names: the 시행일 of the version in force (#57-5)', () => {
@@ -631,10 +641,15 @@ describe('legal document contents (#137, ADR-0176)', () => {
     expect(copy.footerPrivacyOfficer).toContain('{{email}}');
   });
 
-  it('privacy: sessions, the request log and the backups as the deployment keeps them (137-7)', () => {
+  it('privacy: sessions, the request log and the backups as the deployment keeps them (137-7, 339-1)', () => {
     const privacy = text(PRIVACY);
     expect(privacy).toContain('로그아웃하거나 탈퇴할 때 지웁니다');
     expect(privacy).toContain('만료된 세션은 그 쿠키로 다시 접속할 때 지우며');
+    // #339 (ADR-0181): the expired sessions nobody returns to are kept for their period no more.
+    expect(privacy).not.toContain('계정이 있는 동안 남습니다');
+    expect(text(PRIVACY_2026_11_28)).toContain(
+      '다시 접속하지 않은 만료 세션은 계정이 있는 동안 남습니다',
+    );
     expect(privacy).toContain('서버 로그의 용량 한도 안에서 오래된 것부터 지우며');
     expect(privacy).toContain(`자동 백업은 지금 설정으로 최근 ${String(DAILY_BACKUPS_KEPT)}개까지`);
     // The figure is the infrastructure's current setting: a change there revises the policy.
@@ -661,9 +676,13 @@ const PROBE_DAYS: Readonly<Record<RetentionPeriod, number>> = {
   market_proposals: 9006,
   notifications: 9007,
   market_visits: 9008,
+  expired_sessions: 9009,
 };
 
-/** The periods the owner approved, in days (#137 오너 답 2, 2026-11-27, ADR-0176 결과 3). */
+/**
+ * The periods the owner approved, in days (#137 오너 답 2, 2026-11-27, ADR-0176 결과 3; the
+ * expired sessions' #339 오너 답 339-1, ADR-0181).
+ */
 const APPROVED_RETENTION_DAYS: Readonly<Record<RetentionPeriod, number>> = {
   consent_records: 1_095,
   phone_verification_records: 30,
@@ -673,6 +692,7 @@ const APPROVED_RETENTION_DAYS: Readonly<Record<RetentionPeriod, number>> = {
   market_proposals: 30,
   notifications: 30,
   market_visits: 84,
+  expired_sessions: 30,
 };
 
 /** Where the policy states each period: the moment it counts from, then the figure. */
@@ -696,6 +716,7 @@ const POLICY_SENTENCES: Readonly<Record<RetentionPeriod, readonly string[]>> = {
   market_visits: [
     '보관 기간은 방문한 날 0시(한국 시각)부터 84일이며, 탈퇴한 뒤에도 그 기간까지 보관합니다.',
   ],
+  expired_sessions: ['다시 접속하지 않은 만료 세션의 보관 기간은 만료된 때부터 30일입니다.'],
 };
 
 /**
@@ -713,6 +734,7 @@ const POLICY_ROWS: Readonly<Record<RetentionPeriod, readonly string[]>> = {
   market_proposals: ['시장 제안('],
   notifications: ['알림'],
   market_visits: ['시장 방문 기록('],
+  expired_sessions: ['세션 정보('],
 };
 const CONSENT_ROWS: Readonly<Partial<Record<RetentionPeriod, readonly string[]>>> = {
   phone_verification_records: ['본인확인('],

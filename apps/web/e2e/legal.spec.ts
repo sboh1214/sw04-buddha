@@ -7,13 +7,19 @@ import { expect, expectNoSideScroll, test } from './helpers';
  * 시행일 under the title and the versions that took effect after the 부칙, and each version is a
  * page of its own (`/terms/<시행일>`, owner answer 137-2c) — a date no version has is not found.
  * The terms and the privacy item are agreed to at the version their 시행일 names (#57-5), so the
- * consent step's versions are the dates these pages show.
+ * consent step's versions are the dates these pages show. The 개인정보처리방침 has a second version
+ * (#339, ADR-0181): #137's stays readable at its own address, marked as past.
  */
 
 const DOCUMENTS = [
-  { kind: 'terms', title: copy.legalTermsTitle, consent: E2E_CONSENT_VERSIONS.terms },
-  { kind: 'privacy', title: copy.legalPrivacyTitle, consent: E2E_CONSENT_VERSIONS.privacy },
-  { kind: 'refund', title: copy.legalRefundTitle, consent: undefined },
+  { kind: 'terms', title: copy.legalTermsTitle, consent: E2E_CONSENT_VERSIONS.terms, past: [] },
+  {
+    kind: 'privacy',
+    title: copy.legalPrivacyTitle,
+    consent: E2E_CONSENT_VERSIONS.privacy,
+    past: ['2026-11-28'],
+  },
+  { kind: 'refund', title: copy.legalRefundTitle, consent: undefined, past: [] },
 ] as const;
 
 /** `2026-11-28` as the documents write it: `2026년 11월 28일`. */
@@ -23,8 +29,9 @@ function dateText(date: string): string {
 }
 
 test.describe('약관·방침·환불정책과 판 목록 (#137)', () => {
-  for (const { kind, title, consent } of DOCUMENTS) {
+  for (const { kind, title, consent, past: earlier } of DOCUMENTS) {
     test(`${title}: 시행일과 시행한 판, 판마다의 주소`, async ({ page }) => {
+      const past: readonly string[] = earlier;
       await page.goto('/');
       await page.getByTestId('site-footer').getByTestId(`footer-link-${kind}`).click();
       await expect(page).toHaveURL(`/${kind}`);
@@ -45,13 +52,21 @@ test.describe('약관·방침·환불정책과 판 목록 (#137)', () => {
       }
       await expect(document.getByTestId(`legal-${kind}-past-version`)).toHaveCount(0);
 
-      // The versions after the 부칙: one so far, the current one, not a link on its own page.
+      // The versions after the 부칙, newest first: the current one, not a link on its own page,
+      // then each past one as a link.
       const versions = document.getByTestId(`legal-${kind}-versions`);
       await expect(versions.getByRole('heading', { name: copy.legalVersions })).toBeVisible();
       const items = versions.getByRole('listitem');
-      await expect(items).toHaveCount(1);
+      await expect(items).toHaveCount(1 + past.length);
       await expect(items.first()).toContainText(copy.legalVersionCurrent);
       await expect(items.first().getByRole('link')).toHaveCount(0);
+      for (const [index, date] of [...past].reverse().entries()) {
+        const item = items.nth(index + 1);
+        await expect(item).not.toContainText(copy.legalVersionCurrent);
+        await expect(
+          item.getByRole('link', { name: dateText(date), exact: false }),
+        ).toHaveAttribute('href', `/${kind}/${date}`);
+      }
       await expectNoSideScroll(page);
 
       // The same version at its own address.
@@ -61,7 +76,19 @@ test.describe('약관·방침·환불정책과 판 목록 (#137)', () => {
       const response = await page.goto(`/${kind}/${date}`);
       expect(response?.status()).toBe(200);
       await expect(page.getByTestId(`legal-${kind}-effective-date`)).toHaveText(shown);
-      await expect(page.getByTestId(`legal-${kind}-versions`).getByRole('listitem')).toHaveCount(1);
+      await expect(page.getByTestId(`legal-${kind}-versions`).getByRole('listitem')).toHaveCount(
+        1 + past.length,
+      );
+
+      // A past version at its own address says so and links to the one in force.
+      for (const date of past) {
+        const old = await page.goto(`/${kind}/${date}`);
+        expect(old?.status()).toBe(200);
+        await expect(page.getByTestId(`legal-${kind}-effective-date`)).toHaveText(
+          copy.legalEffectiveDate.replace('{date}', dateText(date)),
+        );
+        await expect(page.getByTestId(`legal-${kind}-past-version`)).toBeVisible();
+      }
 
       // The drafts never took effect: no page.
       const draft = await page.goto(`/${kind}/draft-2026-10-18`);

@@ -72,14 +72,27 @@ export type ConsentDocuments = Readonly<Record<ConsentItem, ConsentDocument>>;
 
 /**
  * The first 시행일 of the 이용약관, the 개인정보처리방침 and the 환불정책: the revision #137 publishes
- * (ADR-0176), and so the version a consent record names for the `terms` and `privacy` items from
- * then on (#57-5). The revision takes effect when it is published — the day of its production
- * deploy, in KST (owner answer 137-2a) — so this is that day, the day the pull request was merged
- * and deployed (ADR-0176 결과 3). The web's legal documents read it from here
- * (`effectiveDate`, apps/web/src/legal/), and so do the generated API contract (the consent body's
- * version literal, `pnpm api:openapi`) and the e2e copy (apps/web/e2e/consent-versions.ts).
+ * (ADR-0176), and so the version a consent record names for the `terms` item from then on, and for
+ * the `privacy` item until #339's revision (PRIVACY_EXPIRED_SESSIONS_EFFECTIVE_DATE, ADR-0181)
+ * (#57-5). The revision takes effect when it is published — the day of its production deploy, in
+ * KST (owner answer 137-2a) — so this is that day, the day the pull request was merged and deployed
+ * (ADR-0176 결과 3). The terms and the refund policy read it from here (`effectiveDate`,
+ * apps/web/src/legal/), and so do the generated API contract (the consent body's `terms` version
+ * literal, `pnpm api:openapi`) and the e2e copy's `terms` (apps/web/e2e/consent-versions.ts). The
+ * policy's archived #137 version (privacy-2026-11-28.ts) writes the date out as a literal.
  */
 export const LEGAL_FIRST_EFFECTIVE_DATE = '2026-11-28';
+
+/**
+ * The 시행일 of the 개인정보처리방침's second version (#339, ADR-0181): the expired sessions' period
+ * (owner answers 339-1 and 339-2). Like #137's, it takes effect when it is published — the day of
+ * its production deploy, in KST, before the launch (owner answer 339-3) — so this is that day,
+ * set when the pull request is merged and deployed. The web's 개인정보처리방침 reads it from here
+ * (`effectiveDate`, apps/web/src/legal/privacy.ts), and so do the `privacy` consent item's version
+ * below, the generated API contract (`pnpm api:openapi`) and the e2e copy
+ * (apps/web/e2e/consent-versions.ts).
+ */
+export const PRIVACY_EXPIRED_SESSIONS_EFFECTIVE_DATE = '2026-11-29';
 
 export const CONSENT_DOCUMENTS: ConsentDocuments = {
   // The revision (#137) changes members' rights — paid Coin's charge and refund are gone, and the
@@ -93,12 +106,15 @@ export const CONSENT_DOCUMENTS: ConsentDocuments = {
     ],
   },
   // The 개인정보처리방침 (items, retention periods, processors) and the consent text's retention
-  // periods (owner answer 137-5) are revised with it.
+  // periods (owner answer 137-5) are revised with it. #339's revision of the policy (ADR-0181)
+  // states the expired sessions' period: announced, not asked again (owner answer 339-3 — the
+  // re-initialization before the first market leaves no member to ask).
   privacy: {
     required: true,
     versions: [
       { version: 'draft-2026-10-18', requiresReconsent: true },
       { version: LEGAL_FIRST_EFFECTIVE_DATE, requiresReconsent: true },
+      { version: PRIVACY_EXPIRED_SESSIONS_EFFECTIVE_DATE, requiresReconsent: false },
     ],
   },
   // The age check's line and the marketing text are unchanged: no version (only the changed items

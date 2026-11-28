@@ -3,6 +3,7 @@ import {
   CONSENT_DOCUMENTS,
   CONSENT_ITEMS,
   LEGAL_FIRST_EFFECTIVE_DATE,
+  PRIVACY_EXPIRED_SESSIONS_EFFECTIVE_DATE,
   currentConsentVersion,
   findExcludedText,
   type ConsentItem,
@@ -169,11 +170,14 @@ function fingerprint(strings: readonly string[]): string {
  * privacy item's was re-pinned when the approved retention periods went into
  * POLICY_RETENTION_DAYS (owner answer 2 on #137, ADR-0176 결과 3), and the terms' and the privacy
  * item's are re-pinned once more when the 시행일 (LEGAL_FIRST_EFFECTIVE_DATE), which the 부칙
- * writes out, is set to the deployment day.
+ * writes out, is set to the deployment day. #339's revision of the 개인정보처리방침 (ADR-0181) adds
+ * the privacy item's next version (announced, `requiresReconsent: false` — owner answer 339-3),
+ * re-pinned the same way while its 시행일 (PRIVACY_EXPIRED_SESSIONS_EFFECTIVE_DATE) is not yet the
+ * deploy day.
  */
 const PINNED: Readonly<Record<ConsentItem, { version: string; fingerprint: string }>> = {
   terms: { version: LEGAL_FIRST_EFFECTIVE_DATE, fingerprint: 'ec14ad69e66945ab' },
-  privacy: { version: LEGAL_FIRST_EFFECTIVE_DATE, fingerprint: '3afb9a18b96588bd' },
+  privacy: { version: PRIVACY_EXPIRED_SESSIONS_EFFECTIVE_DATE, fingerprint: '8d32e37b98c26b82' },
   age: { version: 'draft-2026-10-18', fingerprint: '2b86fed295e0c120' },
   marketing: { version: 'draft-2026-10-18', fingerprint: '079d6754df83aa51' },
 };

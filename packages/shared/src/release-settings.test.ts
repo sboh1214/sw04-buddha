@@ -8,6 +8,7 @@ import {
 } from './market-judgement.js';
 import {
   DISPUTE_WINDOW_SETTING,
+  EXPIRED_SESSIONS_RETENTION_SETTING,
   JSONB_LONE_SURROGATE_MESSAGE,
   JSONB_NUL_MESSAGE,
   LEAD_CLOSE_GAP_SETTING,
@@ -112,8 +113,10 @@ describe('release settings registry', () => {
       'retention.market_proposals',
       // 알림 보존기간 (#53, ADR-0157 53-7): registered with no value.
       'retention.notifications',
-      // 방문 기록 보존기간 (#151, ADR-0170, 151-5): registered with no value, last.
+      // 방문 기록 보존기간 (#151, ADR-0170, 151-5): registered with no value.
       'retention.market_visits',
+      // 만료 세션 보존기간 (#339, ADR-0181, 339-2): registered with no value, last.
+      'retention.expired_sessions',
     ]);
     expect(RELEASE_SETTINGS.get('grant.start_coin')).toBe(START_COIN_SETTING);
     expect(RELEASE_SETTINGS.get('market.lead_close_gap')).toBe(LEAD_CLOSE_GAP_SETTING);
@@ -337,7 +340,7 @@ describe('release settings registry', () => {
       unit: '일',
     });
     expect(RELEASE_SETTINGS.get('retention.market_visits')).toBe(definition);
-    expect([...RELEASE_SETTINGS.keys()].at(-1)).toBe('retention.market_visits');
+    expect([...RELEASE_SETTINGS.keys()].at(-2)).toBe('retention.market_visits');
     // Every account's rows, counted from 00:00 KST of the Korean date of the visit (ADR-0167 결정
     // 8의 8), and a closure deletes none (151-5).
     expect(definition.description).toContain(
@@ -351,6 +354,34 @@ describe('release settings registry', () => {
     );
     expect(definition.description).toContain('상태가 승인됨일 때만 지우고');
     for (const value of [1, 83, 84, RETENTION_PERIOD_MAX_DAYS]) {
+      expect(definition.schema.safeParse(value).success, String(value)).toBe(true);
+    }
+    for (const value of [0, -1, 1.5, '30', RETENTION_PERIOD_MAX_DAYS + 1, null]) {
+      expect(definition.schema.safeParse(value).success, String(value)).toBe(false);
+    }
+  });
+
+  it('names the expired sessions’ period as the owner set it: every account’s sessions, from their expiry, in the retention group’s rule (#339, ADR-0181, 339-1, 339-2)', () => {
+    const definition = RETENTION_PERIOD_SETTINGS.expired_sessions;
+    expect(definition).toBe(EXPIRED_SESSIONS_RETENTION_SETTING);
+    expect(definition).toMatchObject({
+      key: 'retention.expired_sessions',
+      label: '만료 세션 보존기간',
+      unit: '일',
+    });
+    expect(RELEASE_SETTINGS.get('retention.expired_sessions')).toBe(definition);
+    expect([...RELEASE_SETTINGS.keys()].at(-1)).toBe('retention.expired_sessions');
+    // 339-2: the other retention periods' approval rule.
+    expect(definition.approval).toEqual(RETENTION_PERIOD_SETTINGS.notifications.approval);
+    // Counted from the session's expiry (339-1); a sign-out and a closure delete at once.
+    expect(definition.description).toContain(
+      '모든 계정의 로그인 세션(접속 주소·브라우저)을 만료 시각부터 이 기간이 지나면 지운다(#339)',
+    );
+    expect(definition.description).toContain(
+      '로그아웃한 세션과 탈퇴한 계정의 세션은 그때 바로 지운다',
+    );
+    expect(definition.description).toContain('상태가 승인됨일 때만 지우고');
+    for (const value of [1, 30, RETENTION_PERIOD_MAX_DAYS]) {
       expect(definition.schema.safeParse(value).success, String(value)).toBe(true);
     }
     for (const value of [0, -1, 1.5, '30', RETENTION_PERIOD_MAX_DAYS + 1, null]) {

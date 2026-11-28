@@ -57,6 +57,11 @@ describe('보존기간 처리 기록 (#184, ADR-0087)', () => {
     // date, a closure deleting none.
     expect(retentionPurgeKindLabel('market_visits')).toBe('방문 기록');
     expect(retentionPurgeKindLabel('market_visits')).toBe(copy.adminRetentionKindMarketVisits);
+    // Every account's sessions past their period since their expiry (#339, ADR-0181; 339-1).
+    expect(retentionPurgeKindLabel('expired_sessions')).toBe('만료된 세션');
+    expect(retentionPurgeKindLabel('expired_sessions')).toBe(
+      copy.adminRetentionKindExpiredSessions,
+    );
   });
 
   it('says counts in 건 and the period in 일, with thousands grouped — 0 too', () => {
