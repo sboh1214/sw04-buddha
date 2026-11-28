@@ -169,24 +169,23 @@ function dialogs(page: Page): { asked: string[]; answers: boolean[] } {
 }
 
 /**
- * Dismisses an open dialog the way `dismiss` does (Escape, a click outside it), as a person would —
- * sent again while the dialog is still open and not yet on its way out. Ark UI's dismissable layer
- * starts listening only a moment after the dialog shows (zag-js defers it: `whenNode`, then a frame
- * and a task in `trackInteractOutside`), so a press sent as soon as the dialog is visible can land
- * before it listens and leave the dialog open for good — measured on the 답글 box's dialog opened
- * again after an Escape: missed 12 times in 20 sent at once, none in 20 sent a second later. Not a
- * fault of the page (a person's press that early hits the backdrop, and the next one closes it).
- * Once the dialog is going (`data-state="closed"`) or gone nothing more is sent, so no stray click
- * moves the focus the test checks next.
+ * Dismisses the open discard dialog the way `dismiss` does (Escape, a click outside it), once the
+ * dialog listens, as posts.spec.ts does for the post's discard dialog. Visible is not yet listening
+ * (@zag-js 1.43): in the first frame after the dialog opens, its focus trap moves the focus to 취소
+ * and its Escape listener is attached right after; its outside-pointer listener comes a frame and a
+ * timer later. A dismissal sent earlier is lost and the dialog stays open, and an outside click
+ * that early moves the focus from the box's 취소 to the page as well. The frame and the timer
+ * awaited here come after those, so one press closes the dialog.
  */
 async function dismissDialog(dialog: Locator, dismiss: () => Promise<void>): Promise<void> {
-  await expect(async () => {
-    const state = await dialog.evaluateAll(
-      (found) => found[0]?.getAttribute('data-state') ?? 'gone',
+  await expect(dialog.getByTestId('comment-discard-cancel')).toBeFocused();
+  await dialog
+    .page()
+    .evaluate(
+      () => new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve))),
     );
-    if (state === 'open') await dismiss();
-    await expect(dialog).toHaveCount(0, { timeout: 1_000 });
-  }).toPass({ timeout: 15_000 });
+  await dismiss();
+  await expect(dialog).toHaveCount(0);
 }
 
 /** A 1×1 PNG for the edit screen's picker, as posts.spec.ts sends. */
@@ -588,6 +587,18 @@ test.describe('댓글·대댓글', () => {
       await expect(discardDialog).toBeVisible();
       await dismissDialog(discardDialog, dismiss);
       await expect(cancel).toBeFocused();
+      await expect(replyBox.getByTestId('comment-input')).toHaveValue(`쓰던 답글 ${tag}`);
+    }
+    // A press that does not focus 취소 still gets the focus back to it. Safari and iOS never focus
+    // a button on a click or a tap, so the focus is on the page; a click sent without a press (a
+    // script, assistive tech) leaves it in the text box. A dispatched click stands in for both.
+    for (const from of ['text box', 'page'] as const) {
+      if (from === 'text box') await replyBox.getByTestId('comment-input').focus();
+      else await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await cancel.dispatchEvent('click');
+      await expect(discardDialog).toBeVisible();
+      await dismissDialog(discardDialog, () => page.keyboard.press('Escape'));
+      await expect(cancel, from).toBeFocused();
       await expect(replyBox.getByTestId('comment-input')).toHaveValue(`쓰던 답글 ${tag}`);
     }
     // 버리기: the box closes holding nothing, the focus back on the 답글 that opened it.
