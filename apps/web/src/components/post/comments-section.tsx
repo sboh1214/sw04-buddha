@@ -1492,8 +1492,8 @@ function CommentBox({
   const [asking, setAsking] = useState(false);
   const closeOnExit = useRef(false);
   // The dialog gives the focus back to this 취소 by name, not to where the focus was when it
-  // opened: Safari and iOS never focus a button on a click or a tap, so that was the text box or
-  // the page there.
+  // opened: Safari and iOS never focus a button on a click or a tap, so that was the page there
+  // (and the text box for a click sent without a press, from a script or assistive tech).
   const cancelButton = useRef<HTMLButtonElement>(null);
 
   return (
@@ -1621,11 +1621,11 @@ function CommentBox({
  * 2026-10-21 답 3): '쓰던 내용 버리기', '쓰던 내용이 사라집니다. 버릴까요?', 취소 and 버리기 — the
  * post's discard (ADR-0073 3차 답 3) in words, the leave's sentence (오너 결정 2026-10-20 답 1)
  * in its first half. 취소, Escape and a click outside keep the box as it is, the focus back on its
- * 취소 (`finalFocusEl` — in every browser, Safari's click and iOS's tap included, which leave the
- * focus where it was); 버리기 closes the box once the dialog is out (`onClosed`), as the post's
- * dialog closes onto the field drawn afresh. A read that takes the box away while the dialog is
- * open takes the dialog with it: the focus in it was the box's (`contentRef`), and goes to the text
- * the box left (ADR-0074 7-25) rather than to the page's start.
+ * 취소 (`finalFocusEl` — in every browser: Safari's click and iOS's tap never focus the button and
+ * leave the focus on the page); 버리기 closes the box once the dialog is out (`onClosed`), as the
+ * post's dialog closes onto the field drawn afresh. A read that takes the box away while the
+ * dialog is open takes the dialog with it: the focus in it was the box's (`contentRef`), and goes
+ * to the text the box left (ADR-0074 7-25) rather than to the page's start.
  */
 function DiscardTextDialog({
   open,

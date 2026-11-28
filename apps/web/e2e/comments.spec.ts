@@ -589,9 +589,9 @@ test.describe('댓글·대댓글', () => {
       await expect(cancel).toBeFocused();
       await expect(replyBox.getByTestId('comment-input')).toHaveValue(`쓰던 답글 ${tag}`);
     }
-    // A press that does not focus 취소 — Safari and iOS never focus a button on a click or a tap;
-    // a dispatched click is the same in Chromium — still gets the focus back to 취소, not to the
-    // text box or the page where it was.
+    // A press that does not focus 취소 still gets the focus back to it. Safari and iOS never focus
+    // a button on a click or a tap, so the focus is on the page; a click sent without a press (a
+    // script, assistive tech) leaves it in the text box. A dispatched click stands in for both.
     for (const from of ['text box', 'page'] as const) {
       if (from === 'text box') await replyBox.getByTestId('comment-input').focus();
       else await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
