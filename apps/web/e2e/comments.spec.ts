@@ -2975,17 +2975,19 @@ test.describe('탭의 세션이 먼저 다른 회원을 말하는 글 화면의 
         await expect(editForm.getByTestId('comment-draft-restored')).toBeVisible();
         await expect.poll(() => commentDraftsInTab(page)).toEqual({});
       };
-      // Said in place, and that toast held there (the toaster holds its toasts while hovered): the
-      // reset's taking back says it in the same toast, with the time it had left (ADR-0092 8-36),
-      // which a slow reset could outlast — so the one counted after it is that toast, rewritten.
+      // Said in place, and that toast held at once (the toaster holds its toasts while hovered; a
+      // short wait, for the held session read lets nothing raise it again): the reset's taking back
+      // is said in it, with the time it had left (ADR-0092 8-36), which a slow reset could outlast.
       await toAMeFirst(async () => {
-        await textsInBoxes();
         await expect(restoredToasts(page)).toHaveCount(1);
-        await restoredToasts(page).hover();
+        await restoredToasts(page).hover({ timeout: 5_000 });
+        await textsInBoxes();
       });
       await textsInBoxes();
-      // Taken back twice — in place, then after the reset — and said once.
-      await expect(restoredToasts(page)).toHaveCount(1);
+      // Taken back twice — in place, then after the reset (the tab empty again) — and said once:
+      // counted once, not waited for. The held toast keeps one there, so the reset's taking back
+      // said apart would be a second toast — for its own 5 s, which a wait could see go.
+      expect(await restoredToasts(page).count()).toBe(1);
       await page.mouse.move(0, 0);
       await expect(page.getByTestId('comment-held')).toHaveCount(0);
       expect(writes).toEqual([]);
@@ -3032,12 +3034,15 @@ test.describe('계정이 바뀌었다 돌아온 글 화면의 콘솔 — 되살�
       await replyBox.getByTestId('comment-input').fill(`앞 계정의 답글 ${tag}`);
       await commentOf(page, mine).getByTestId('comment-edit').click();
       await editForm.getByTestId('comment-input').fill(`앞 계정이 고친 댓글 ${tag}`);
-      const takenBack = async () => {
+      const boxesTakenBack = async () => {
         await expect(composer.getByTestId('comment-input')).toHaveValue(`앞 계정의 새 댓글 ${tag}`);
         await expect(replyBox.getByTestId('comment-input')).toHaveValue(`앞 계정의 답글 ${tag}`);
         await expect(editForm.getByTestId('comment-input')).toHaveValue(
           `앞 계정이 고친 댓글 ${tag}`,
         );
+      };
+      const takenBack = async () => {
+        await boxesTakenBack();
         await expect(restoredToasts(page)).toHaveCount(1);
       };
       const bOnScreen = async () => {
@@ -3055,17 +3060,21 @@ test.describe('계정이 바뀌었다 돌아온 글 화면의 콘솔 — 되살�
       // --- the mixed order: B again, then A back with `GET /me` before the session — taken back
       // in place, and again in the boxes the session's reset draws, said in the one toast. The
       // forward order's toast goes first (the pointer off the toaster, which holds its toasts while
-      // hovered), so the one counted in place is this return's; held there, it is the one the
-      // reset's taking back rewrites, with the time it had left (ADR-0092 8-36).
+      // hovered), so the one counted in place is this return's; held at once, the reset's taking
+      // back is said in it (ADR-0092 8-36), and once the tab is empty again it is counted once, not
+      // waited for — said apart, it would be a second toast for its own 5 s.
       await page.mouse.move(0, 0);
       await expect(restoredToasts(page)).toHaveCount(0, { timeout: 15_000 });
       await toB();
       await bOnScreen();
       await toAMeFirst(async () => {
-        await takenBack();
-        await restoredToasts(page).hover();
+        await expect(restoredToasts(page)).toHaveCount(1);
+        await restoredToasts(page).hover({ timeout: 5_000 });
+        await boxesTakenBack();
       });
-      await takenBack();
+      await boxesTakenBack();
+      await expect.poll(() => commentDraftsInTab(page)).toEqual({});
+      expect(await restoredToasts(page).count()).toBe(1);
       await page.mouse.move(0, 0);
 
       expect(errors.filter((text) => text.includes('flushSync'))).toEqual([]);
