@@ -1,5 +1,6 @@
 import type { LegalDocument } from './document';
 import { PRIVACY } from './privacy';
+import { PRIVACY_2026_11_28 } from './privacy-2026-11-28';
 import { REFUND } from './refund';
 import { TERMS } from './terms';
 
@@ -26,7 +27,8 @@ export const LEGAL_VERSIONS: Readonly<
   Record<LegalDocumentKind, readonly [LegalDocument, ...LegalDocument[]]>
 > = {
   terms: [TERMS],
-  privacy: [PRIVACY],
+  // #137's version, then #339's (ADR-0181), which states the expired sessions' period.
+  privacy: [PRIVACY_2026_11_28, PRIVACY],
   refund: [REFUND],
 };
 

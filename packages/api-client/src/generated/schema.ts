@@ -8598,7 +8598,7 @@ export type components = {
                     /** @enum {boolean} */
                     agreed: true;
                     /** @enum {string} */
-                    version: "2026-11-28";
+                    version: "2026-11-29";
                 };
                 terms?: {
                     /** @enum {boolean} */
@@ -9055,7 +9055,7 @@ export type components = {
             ranAt: string;
         };
         /** @enum {string} */
-        RetentionPurgeKind: "nickname_holds" | "post_revisions" | "comment_revisions" | "deleted_posts" | "deleted_comments" | "reports" | "hidden_posts" | "hidden_comments" | "removed_profile_items" | "moderation_actions" | "approval_requests" | "link_flags" | "market_disputes" | "consent_records" | "phone_verification_records" | "market_proposals" | "notifications" | "market_visits";
+        RetentionPurgeKind: "nickname_holds" | "post_revisions" | "comment_revisions" | "deleted_posts" | "deleted_comments" | "reports" | "hidden_posts" | "hidden_comments" | "removed_profile_items" | "moderation_actions" | "approval_requests" | "link_flags" | "market_disputes" | "consent_records" | "phone_verification_records" | "market_proposals" | "notifications" | "market_visits" | "expired_sessions";
         /** @enum {string} */
         RetentionPurgeOutcome: "done" | "failed";
         RetractFillClassificationBody: {

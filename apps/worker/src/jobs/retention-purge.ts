@@ -1149,14 +1149,41 @@ const marketVisits: Step = async (tx, { cutoff, limit }) => {
 };
 
 /**
+ * Every account's better-auth sessions (#339, ADR-0181; owner answers 339-1 and 339-2 — their own
+ * period, '만료 세션'), once the period has passed since their expiry (`expires_at`): the token, the
+ * address and the browser a session was made with go with it. A sign-out, a closure and an admin
+ * revoke delete a session at once, and better-auth deletes an expired one whose cookie comes back;
+ * this is for the expired sessions nobody returns to. Every row due expired at least a day before
+ * the run's instant (the period is 1 day or more), and better-auth never refreshes an expired
+ * session (it deletes it instead), so nothing the run deletes is in use. Locked SKIP LOCKED: a
+ * request that holds a row (better-auth's delete of a returning expired cookie) leaves it to that
+ * request or the next run, and the run waits for none; a request that comes after finds the row
+ * gone, which better-auth answers as a session that ended. Nothing names a session (no foreign
+ * key), so last; `session_expires_at_idx` (migration 0084) serves the batches.
+ */
+const expiredSessions: Step = async (tx, { cutoff, limit }) => {
+  const { session: table } = schema;
+  const due = await tx
+    .select({ id: table.id })
+    .from(table)
+    .where(lte(table.expiresAt, cutoff))
+    .orderBy(asc(table.expiresAt), asc(table.id))
+    .limit(limit)
+    .for('update', { skipLocked: true });
+  const ids = due.map((row) => row.id);
+  if (ids.length > 0) await tx.delete(table).where(inArray(table.id, ids));
+  return { selected: ids.length, deleted: { expired_sessions: ids.length }, storageKeys: [] };
+};
+
+/**
  * The steps in the order a run takes them (RETENTION_PURGE_KINDS): each kind before what it names —
  * a report before its action (a hiding's among them, which goes with its hidden item and that
  * item's versions), a removed profile item and an ended hold before theirs, an action before its
  * requests — and the versions before the originals, so an original's images are judged against the
  * versions still kept. #187's review list names nothing the run deletes and nothing names it, nor
  * do #175's 판정 이의, emptied in place: they close the 신고·제재 kinds. #53's notifications name
- * nothing the run deletes, and only their own keys name them; #151's visit records, last, name
- * nothing the run deletes and nothing names them.
+ * nothing the run deletes, and only their own keys name them; #151's visit records name nothing
+ * the run deletes and nothing names them, nor do #339's expired sessions, last.
  */
 const STEPS: readonly { kind: RetentionPurgeKind; step: Step }[] = [
   { kind: 'nickname_holds', step: nicknameHolds },
@@ -1177,6 +1204,7 @@ const STEPS: readonly { kind: RetentionPurgeKind; step: Step }[] = [
   { kind: 'market_proposals', step: marketProposals },
   { kind: 'notifications', step: notifications },
   { kind: 'market_visits', step: marketVisits },
+  { kind: 'expired_sessions', step: expiredSessions },
 ];
 
 /**
@@ -1253,11 +1281,12 @@ async function readPeriods(
  * - Image objects go after their transaction commits, their keys queued in it (#46's
  *   `media_deletions`): one the store will not remove is logged and stays queued, and
  *   `media.orphan_cleanup` removes it later (ADR-0087 7-12).
- * - A kind's period counts from one of three bases: for most, an event of the record or of its
+ * - A kind's period counts from one of four bases: for most, an event of the record or of its
  *   account (the withdrawal, a deletion, a replacement, the end of a processing — whichever is
  *   later where several apply); for #53's notifications, their 발생 시각, every account's alike;
  *   for #151's visit records, 00:00 KST of the visit's Korean date, every account's alike — a
- *   closure counts for nothing — and with no row lock (buddha_app holds no UPDATE on them).
+ *   closure counts for nothing — and with no row lock (buddha_app holds no UPDATE on them); for
+ *   #339's expired sessions, their expiry, every account's alike.
  * - The ledger, orders, watch events, likes, posts not deleted, start grants and the operational
  *   records are never touched: no step names them. The visit records' collection start
  *   (`market_visit_collection`) is not a record of a person and is never touched either.

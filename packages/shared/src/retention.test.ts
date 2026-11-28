@@ -26,6 +26,8 @@ describe('retention (#184)', () => {
       'notifications',
       // The visit records' (#151, ADR-0170, 151-5): the eighth.
       'market_visits',
+      // The expired sessions' (#339, ADR-0181, 339-2): a ninth, a setting of its own.
+      'expired_sessions',
     ]);
     expect(Object.keys(RETENTION_PERIOD_SETTINGS)).toEqual([...RETENTION_PERIODS]);
   });
@@ -54,14 +56,17 @@ describe('retention (#184)', () => {
     // Every account's notifications (#53, ADR-0157 53-7, 53-10): their own period, the last kind
     // of a run — nothing names a notification.
     expect(RETENTION_PURGE_KIND_PERIODS.notifications).toBe('notifications');
-    expect(RETENTION_PURGE_KINDS.at(-2)).toBe('notifications');
-    expect(RETENTION_PURGE_KINDS.at(-3)).toBe('market_proposals');
+    expect(RETENTION_PURGE_KINDS.at(-3)).toBe('notifications');
+    expect(RETENTION_PURGE_KINDS.at(-4)).toBe('market_proposals');
     // Every account's visit records (#151, ADR-0170; 151-5, ADR-0167 결정 8의 8): their own
-    // period, the last kind of a run — nothing names a visit row, and it names nothing the run
-    // deletes.
+    // period — nothing names a visit row, and it names nothing the run deletes.
     expect(RETENTION_PURGE_KIND_PERIODS.market_visits).toBe('market_visits');
-    expect(RETENTION_PURGE_KINDS.at(-1)).toBe('market_visits');
-    expect(RETENTION_PURGE_KINDS).toHaveLength(18);
+    expect(RETENTION_PURGE_KINDS.at(-2)).toBe('market_visits');
+    // Every account's expired sessions (#339, ADR-0181; 339-1, 339-2): their own period, the last
+    // kind of a run — no foreign key names a session.
+    expect(RETENTION_PURGE_KIND_PERIODS.expired_sessions).toBe('expired_sessions');
+    expect(RETENTION_PURGE_KINDS.at(-1)).toBe('expired_sessions');
+    expect(RETENTION_PURGE_KINDS).toHaveLength(19);
     // Every period is applied to some kind.
     expect(new Set(Object.values(RETENTION_PURGE_KIND_PERIODS).filter(Boolean))).toEqual(
       new Set(RETENTION_PERIODS),
@@ -111,6 +116,8 @@ describe('retention (#184)', () => {
 
   it('states a figure in the 개인정보처리방침 for every period, each one a value its setting takes (133-8, #137)', () => {
     expect(Object.keys(POLICY_RETENTION_DAYS)).toEqual([...RETENTION_PERIODS]);
+    // The expired sessions' 30 days from their expiry (owner answer 339-1, ADR-0181).
+    expect(POLICY_RETENTION_DAYS.expired_sessions).toBe(30);
     for (const period of RETENTION_PERIODS) {
       const days = POLICY_RETENTION_DAYS[period];
       // Undecided until the owner approves a value; a figure is one the setting would take.

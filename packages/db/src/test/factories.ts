@@ -1113,6 +1113,39 @@ export async function createSignupAllowlistEntry(db: Db, phoneHash: string = ran
   return row;
 }
 
+export interface CreateSessionInput {
+  userId: string;
+  /** When the session expires (`expires_at`). Default: a day from now (the test process's clock). */
+  expiresAt?: Date;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+}
+
+/**
+ * A better-auth session (`session`) as a sign-in leaves it: a random id and token, the client's
+ * address and browser, and its expiry. `updated_at` has no database default (schema/auth.ts), so
+ * it is set here. The account must be an open person's: migrations 0043 and 0059 refuse a closed
+ * account's session and the 운영 마켓메이커's. For a test whose subject is what happens to a
+ * session row (the retention purge of #339), not the sign-in itself.
+ */
+export async function createSession(db: Db, input: CreateSessionInput) {
+  const now = new Date();
+  const [row] = await db
+    .insert(session)
+    .values({
+      id: randomUUID(),
+      token: randomBytes(24).toString('hex'),
+      userId: input.userId,
+      expiresAt: input.expiresAt ?? new Date(now.getTime() + 24 * 60 * 60 * 1000),
+      updatedAt: now,
+      ipAddress: input.ipAddress === undefined ? '203.0.113.7' : input.ipAddress,
+      userAgent: input.userAgent === undefined ? 'Mozilla/5.0 (test)' : input.userAgent,
+    })
+    .returning();
+  if (!row) throw new Error('session insert returned no row');
+  return row;
+}
+
 export interface CreateConsentsInput {
   userId: string;
   /** The optional marketing item's answer. Default: not agreed. */

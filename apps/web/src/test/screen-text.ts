@@ -16,12 +16,12 @@ const TEST_SUPPORT = path.dirname(fileURLToPath(import.meta.url));
 export const SRC = path.dirname(TEST_SUPPORT);
 
 /**
- * The legal bodies (#137): 이용약관, 개인정보처리방침, 환불정책, the no-sales sentence the first and
- * the last share, and the fact sentences the 이용약관 shares with the service guide (#136). They
- * may say what the product does not offer — '결제·충전 기능이 없습니다', '송금은 없습니다' — as the
- * guide may (owner answer 2026-11-27 137-4 (a), ADR-0176: ADR-0057 결정 1-2 widened to them), so
- * the screen walk leaves them out and the checks hold them to every excluded feature in the
- * `legal-body` scope instead (excluded-features.test.ts, legal/legal.test.ts,
+ * The legal bodies (#137): 이용약관, 개인정보처리방침 (with its archived 2026-11-28 version, #339), 환불정책, the
+ * no-sales sentence the first and the last share, and the fact sentences the 이용약관 shares with the
+ * service guide (#136). They may say what the product does not offer — '결제·충전 기능이 없습니다', '송금은 없습니다'
+ * — as the guide may (owner answer 2026-11-27 137-4 (a), ADR-0176: ADR-0057 결정 1-2 widened to
+ * them), so the screen walk leaves them out and the checks hold them to every excluded feature in
+ * the `legal-body` scope instead (excluded-features.test.ts, legal/legal.test.ts,
  * legal/service-facts.test.ts) and to the old unit like any screen (coin-unit.test.ts). The rest of
  * `legal/` — the business details the footer renders, the consent texts, the document views and
  * their helpers — is screen code like any other.
@@ -29,6 +29,7 @@ export const SRC = path.dirname(TEST_SUPPORT);
 export const LEGAL_BODIES: readonly string[] = [
   'terms.ts',
   'privacy.ts',
+  'privacy-2026-11-28.ts',
   'refund.ts',
   'cash-notice.ts',
   'service-facts.ts',

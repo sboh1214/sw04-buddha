@@ -1,6 +1,6 @@
 import {
-  LEGAL_FIRST_EFFECTIVE_DATE,
   NICKNAME_HOLD_DAYS,
+  PRIVACY_EXPIRED_SESSIONS_EFFECTIVE_DATE,
   WRITE_LIMIT_DAY_SECONDS,
 } from '@buddha/shared';
 import { copy } from '@/copy';
@@ -17,8 +17,10 @@ import { retentionPeriodText as kept } from './retention-periods';
 /**
  * 개인정보처리방침 (ADR-0044), following the items 「개인정보 보호법」 제30조 asks a policy to state,
  * revised by #137 (ADR-0176) to say what the code actually stores, for what, and for how long —
- * the list ADR-0170 결과 6 and the decision ADRs handed to #137. Business facts are
- * `{{placeholders}}` (business-info.ts). No external legal review (D11).
+ * the list ADR-0170 결과 6 and the decision ADRs handed to #137 — and by #339 (ADR-0181) to state
+ * the expired sessions' period (owner answers 339-1 and 339-2). #137's version is frozen in
+ * privacy-2026-11-28.ts. Business facts are `{{placeholders}}` (business-info.ts). No external
+ * legal review (D11).
  *
  * - **Items.** better-auth's `user`/`account`/`session` (email, password hash, the social provider's
  *   member id and email, the session's IP and browser), `phone_verifications` and
@@ -32,14 +34,15 @@ import { retentionPeriodText as kept } from './retention-periods';
  *   market visits (#151, ADR-0170 — by notice on 정당한 이익, no consent) and the API's request log.
  *   No payment data: sales are closed and nothing is collected (D9). Every number hash is a
  *   '키 있는 해시' (owner answer 2 of 2026-11-27 on #137, ADR-0176).
- * - **Periods.** The eight retention settings are figures from POLICY_RETENTION_DAYS (@buddha/shared;
- *   owner answer 133-8, the values owner answer 2 on #137 approved — a null would read '미정',
- *   `retention-periods.ts`); each `from` is the moment the setting's description and the purge
- *   count from. What has no period says so. No hold for an
+ * - **Periods.** The nine retention settings are figures from POLICY_RETENTION_DAYS
+ *   (@buddha/shared; owner answer 133-8, the values owner answer 2 on #137 and owner answer 339-1
+ *   approved — a null would read '미정', `retention-periods.ts`); each `from` is the moment the
+ *   setting's description and the purge count from. What has no period says so. No hold for an
  *   investigation: nothing can hold one record (owner answer 2). Sessions, the request log and the
- *   backups say what the deployment does now (owner answer 137-7): the expired sessions nobody
- *   returns to are kept until a job deletes them (#339). Manual backups go when their purpose ends
- *   (owner answer 2, docs/OPERATIONS.md).
+ *   backups say what the deployment does now (owner answer 137-7): a session goes at a sign-out or
+ *   a withdrawal, an expired one when its cookie comes back, and the expired ones nobody returns
+ *   to once their period has passed since their expiry (#339, ADR-0181). Manual backups go when
+ *   their purpose ends (owner answer 2, docs/OPERATIONS.md).
  * - **Numbers** (137-6 (a)): the age, the nickname hold's days and the write records' hours from
  *   their constants; the backups kept from the infrastructure (DAILY_BACKUPS_KEPT).
  *
@@ -65,7 +68,7 @@ const WRITE_RECORD_HOURS = WRITE_LIMIT_DAY_SECONDS / 3_600;
 export const PRIVACY: LegalDocument = {
   title: copy.legalPrivacyTitle,
   numbering: 'article',
-  effectiveDate: LEGAL_FIRST_EFFECTIVE_DATE,
+  effectiveDate: PRIVACY_EXPIRED_SESSIONS_EFFECTIVE_DATE,
   intro: [
     paragraph(
       '회사(상호: {{companyName}}, 이하 "회사")는 「개인정보 보호법」 등 관계 법령에 따라 {{serviceName}} 서비스 이용자의 개인정보를 보호하고, 이와 관련한 고충을 빠르고 원활하게 처리하기 위해 다음과 같이 개인정보처리방침을 정하여 공개합니다.',
@@ -203,7 +206,7 @@ export const PRIVACY: LegalDocument = {
             [
               '세션 정보(IP 주소, 브라우저 정보)와 세션 쿠키',
               '로그인 유지와 보안',
-              '로그아웃하거나 탈퇴할 때 지웁니다. 만료된 세션은 그 쿠키로 다시 접속할 때 지우며, 다시 접속하지 않은 만료 세션은 계정이 있는 동안 남습니다.',
+              `로그아웃하거나 탈퇴할 때 지웁니다. 만료된 세션은 그 쿠키로 다시 접속할 때 지우며, 다시 접속하지 않은 만료 세션의 보관 기간은 ${kept('expired_sessions', '만료된 때부터')}입니다.`,
             ],
             [
               '서버의 요청 기록(요청 방법과 경로, IP 주소, 시각)',
@@ -367,7 +370,7 @@ export const PRIVACY: LegalDocument = {
   ],
   addendum: [
     paragraph(
-      `이 개인정보처리방침은 ${effectiveDateText(LEGAL_FIRST_EFFECTIVE_DATE)}부터 시행합니다.`,
+      `이 개인정보처리방침은 ${effectiveDateText(PRIVACY_EXPIRED_SESSIONS_EFFECTIVE_DATE)}부터 시행합니다.`,
     ),
   ],
 };

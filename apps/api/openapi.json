@@ -47576,7 +47576,7 @@
                   "version": {
                     "type": "string",
                     "enum": [
-                      "2026-11-28"
+                      "2026-11-29"
                     ]
                   },
                   "agreed": {
@@ -52273,7 +52273,8 @@
           "phone_verification_records",
           "market_proposals",
           "notifications",
-          "market_visits"
+          "market_visits",
+          "expired_sessions"
         ]
       },
       "RetentionPurgeOutcome": {

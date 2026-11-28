@@ -135,8 +135,8 @@ export type ReleaseSettingJson =
 export type ReleaseSettingValue = Exclude<ReleaseSettingJson, null>;
 
 /**
- * The approval groups of ADR-0171 결정 10의 1 (#331, ADR-0175): 경제 값 (20), 관측 값 (7),
- * 보존기간 (8) and 주문 접수 (1).
+ * The approval groups of ADR-0171 결정 10의 1 (#331, ADR-0175; 339-2, ADR-0181): 경제 값 (20),
+ * 관측 값 (7), 보존기간 (9) and 주문 접수 (1).
  */
 export const RELEASE_SETTING_APPROVAL_GROUPS = [
   'economic',
@@ -880,6 +880,24 @@ export const MARKET_VISITS_RETENTION_SETTING = defineReleaseSetting({
   approval: RETENTION,
 });
 
+/**
+ * 만료 세션 보존기간 (#339, ADR-0181; owner answers 339-1 and 339-2): every account's better-auth
+ * sessions (`session` — the token, the IP address and the browser it was made with), deleted once
+ * this period has passed since their expiry (`expires_at`). A session is deleted at once when its
+ * member signs out, when its account is closed, or when an expired cookie comes back; this is for
+ * the expired ones nobody returns to. Registered with no value, in the retention group's approval
+ * rule (339-2): nothing is deleted before two admins approve one. The key is never renamed after
+ * deploy (docs/SETTINGS.md).
+ */
+export const EXPIRED_SESSIONS_RETENTION_SETTING = defineReleaseSetting({
+  key: 'retention.expired_sessions',
+  label: '만료 세션 보존기간',
+  unit: '일',
+  description: `모든 계정의 로그인 세션(접속 주소·브라우저)을 만료 시각부터 이 기간이 지나면 지운다(#339). 로그아웃한 세션과 탈퇴한 계정의 세션은 그때 바로 지운다. ${RETENTION_RULES}`,
+  schema: retentionDaysSchema,
+  approval: RETENTION,
+});
+
 /** The retention items by period (retention.ts): the worker's job reads each once per run. */
 export const RETENTION_PERIOD_SETTINGS: Readonly<
   Record<RetentionPeriod, ReleaseSettingDefinition<number>>
@@ -892,6 +910,7 @@ export const RETENTION_PERIOD_SETTINGS: Readonly<
   market_proposals: MARKET_PROPOSALS_RETENTION_SETTING,
   notifications: NOTIFICATIONS_RETENTION_SETTING,
   market_visits: MARKET_VISITS_RETENTION_SETTING,
+  expired_sessions: EXPIRED_SESSIONS_RETENTION_SETTING,
 };
 
 /**
@@ -900,7 +919,7 @@ export const RETENTION_PERIOD_SETTINGS: Readonly<
  * it (#70 the start grant, #74 the re-grant's six, #22 the lead-close gap, #152 the dispute window,
  * #119 the order intake, the order rate limit and the price-protection width, #184 the retention
  * periods, #77 the market proposals' retention period, #53 the notifications', #151 the visit
- * records', …) — define it with
+ * records', #339 the expired sessions', …) — define it with
  * `defineReleaseSetting` and list it here, then update every test that pins the list
  * (docs/SETTINGS.md, 항목 등록하기).
  * Tests inject their own registry (`createTestApp({ releaseSettings })` in apps/api).
@@ -927,6 +946,7 @@ export const RELEASE_SETTINGS: ReleaseSettingsRegistry = defineReleaseSettings([
   MARKET_PROPOSALS_RETENTION_SETTING,
   NOTIFICATIONS_RETENTION_SETTING,
   MARKET_VISITS_RETENTION_SETTING,
+  EXPIRED_SESSIONS_RETENTION_SETTING,
 ]);
 
 /** A stored status and value: `value` is null exactly when `status` is `undecided`. */

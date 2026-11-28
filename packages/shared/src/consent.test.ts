@@ -4,6 +4,7 @@ import {
   CONSENT_ITEMS,
   CONSENT_VERSION_MAX_LENGTH,
   LEGAL_FIRST_EFFECTIVE_DATE,
+  PRIVACY_EXPIRED_SESSIONS_EFFECTIVE_DATE,
   REQUIRED_CONSENT_ITEMS,
   consentAgreed,
   consentAnswerStands,
@@ -57,10 +58,22 @@ describe('consent items (#57-4·#57-5)', () => {
   it("puts #137's revision of the terms and the privacy text in force, asking both again (#57-5)", () => {
     // The revision's 시행일 is the version (decision 4 #58); the drafts never took effect.
     for (const item of ['terms', 'privacy'] as const) {
-      expect(current(item), item).toBe(LEGAL_FIRST_EFFECTIVE_DATE);
-      expect(CONSENT_DOCUMENTS[item].versions.at(-1)?.requiresReconsent, item).toBe(true);
+      const revision = CONSENT_DOCUMENTS[item].versions.find(
+        ({ version }) => version === LEGAL_FIRST_EFFECTIVE_DATE,
+      );
+      expect(revision?.requiresReconsent, item).toBe(true);
+      expect(consentVersionHolds(item, LEGAL_FIRST_EFFECTIVE_DATE), item).toBe(true);
       expect(consentVersionHolds(item, 'draft-2026-10-18'), item).toBe(false);
     }
+    expect(current('terms')).toBe(LEGAL_FIRST_EFFECTIVE_DATE);
+    // #339's revision of the 개인정보처리방침 (ADR-0181) is announced only (owner answer 339-3): an
+    // agreement to #137's version still holds.
+    expect(current('privacy')).toBe(PRIVACY_EXPIRED_SESSIONS_EFFECTIVE_DATE);
+    expect(CONSENT_DOCUMENTS.privacy.versions.at(-1)).toEqual({
+      version: PRIVACY_EXPIRED_SESSIONS_EFFECTIVE_DATE,
+      requiresReconsent: false,
+    });
+    expect(PRIVACY_EXPIRED_SESSIONS_EFFECTIVE_DATE > LEGAL_FIRST_EFFECTIVE_DATE).toBe(true);
     // The other two are unchanged, so their answers stand (only the changed items are asked).
     expect(current('age')).toBe('draft-2026-10-18');
     expect(current('marketing')).toBe('draft-2026-10-18');

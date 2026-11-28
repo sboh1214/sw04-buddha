@@ -9,8 +9,9 @@ import { accountIdOf, adminAccount, expect, freshEmail, signIn, signUp, test } f
  * 기준액, 1회 지급액, 대기기간, 주기, 주기 안 횟수, 누적 상한), 선행 마감 최소 간격 (`market.lead_close_gap`, #22, ADR-0098), 이의
  * 기간 (`market.dispute_window`, #152, ADR-0103), 주문 접수, 주문 속도 제한 and 가격 보호 폭 표준값 (`order.*`, #119,
  * ADR-0112 — the first a flag), three MM risk-stage items (`#129` risk stages), the MM human
- * concentration N (#182), six anomaly inputs (#98), and the seven retention periods (`retention.*`
- * — #184's five, ADR-0087, #77's market proposals, ADR-0089, and #53's notifications, ADR-0157) —
+ * concentration N (#182), six anomaly inputs (#98), and the nine retention periods (`retention.*`
+ * — #184's five, ADR-0087, #77's market proposals, ADR-0089, #53's notifications, ADR-0157,
+ * #151's visit records, ADR-0170, and #339's expired sessions, ADR-0181) —
  * which the screen and the API list alike, in the registry's order. Changing and recording an item
  * are fixed by the API suite with injected test items (`createTestApp({ releaseSettings })`),
  * paying the start Coin once a value is entered by the API and worker suites, deleting what a
@@ -83,8 +84,9 @@ const MARKET_MAKER_ITEMS = [
 ] as const;
 
 /**
- * The retention periods (`RETENTION_PERIOD_SETTINGS`, #184, #77 and #53) with their names,
- * restated: these specs import only types from `@buddha/shared` (helpers.ts). Whole days each.
+ * The retention periods (`RETENTION_PERIOD_SETTINGS`, #184, #77, #53, #151 and #339) with their
+ * names, restated: these specs import only types from `@buddha/shared` (helpers.ts). Whole days
+ * each.
  */
 const LIQUIDITY_ITEMS = [
   ['market_maker.default_budget_coin', '시장 유동성 예산 표준값', 'Coin', 'string'],
@@ -127,6 +129,9 @@ const RETENTION_ITEMS = [
   // of the visit's date. The global setup enters no value for it either: an approved one would
   // have the worker delete what observation-metrics.spec.ts counts.
   ['retention.market_visits', '방문 기록 보존기간'],
+  // #339 (ADR-0181, owner answers 339-1 and 339-2): every account's sessions, from their expiry.
+  // The global setup enters no value for it either, as for every retention period.
+  ['retention.expired_sessions', '만료 세션 보존기간'],
 ] as const;
 
 /**
@@ -172,7 +177,7 @@ async function expectForbidden(response: APIResponse): Promise<void> {
 }
 
 test.describe('출시 설정 (#170)', () => {
-  test('관리자 메뉴에서 열면 시작 지급액·재지급 여섯 항목·선행 마감 최소 간격·이의 기간, 주문·MM 각 세 항목·유동성 표준값 여섯·집중도 인원·거래 패턴 여섯 항목·여덟 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
+  test('관리자 메뉴에서 열면 시작 지급액·재지급 여섯 항목·선행 마감 최소 간격·이의 기간, 주문·MM 각 세 항목·유동성 표준값 여섯·집중도 인원·거래 패턴 여섯 항목·아홉 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
     page,
     admin,
   }) => {
