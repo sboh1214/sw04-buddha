@@ -15,6 +15,7 @@ import type {
 import { MINUS_SIGN, formatCoin, parseCoinAmount, tickBucketSeconds } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { formatKst } from '../src/lib/datetime';
+import { expectNoExcludedText } from './acceptance';
 import {
   type OrderTerms,
   adminAccount,
@@ -336,7 +337,7 @@ test.describe('주문 접수 (#119)', () => {
 });
 
 test.describe('주문 취소 (#178)', () => {
-  test('본인 취소는 남은 수량 전부를 그 요청 안에서 끝내 잠금을 돌려주고, 다른 계정의 주문은 없는 주문처럼 404이며, 일시 중단은 대기 주문을 취소한다', async ({
+  test('본인 취소는 남은 수량 전부를 그 요청 안에서 끝내 잠금을 돌려주고, 다른 계정의 주문은 없는 주문처럼 404이며, 일시 중단은 대기 주문을 취소한다 @ac189-6 @ac189-10', async ({
     admin,
     browser,
     page,
@@ -480,7 +481,11 @@ async function coinOn(locator: Locator): Promise<number> {
  * still reaches both order pages. A places three orders (and cancels three), B three; M two.
  */
 test.describe('대기 주문과 주문 상세 (#123)', () => {
-  test('대기 주문 화면과 취소 (#123)', async ({ admin, browser, page }) => {
+  test('대기 주문 화면과 취소 (#123) @ac189-2 @ac189-10 @ac189-11', async ({
+    admin,
+    browser,
+    page,
+  }) => {
     const market = await createOpenMarket(admin);
     const bContext = await browser.newContext();
     try {
@@ -526,6 +531,8 @@ test.describe('대기 주문과 주문 상세 (#123)', () => {
       await expect(yesRow.getByTestId('order-row-gtc')).toHaveText(copy.orderUnfilledGtc);
       // No 일괄 취소 (E2): one 주문 취소 per row and none besides.
       await expect(list.getByTestId('order-row-cancel')).toHaveCount(2);
+      // #189 기준 11: no probability input, score or rank on MY's 대기 주문.
+      await expectNoExcludedText(page);
 
       // --- MY 요약: the buy rows' Σ 한도가격 × 남은 수량 is the 주문 잠금 코인 above them (수용 기준 9).
       await page.goto('/my');
@@ -677,6 +684,7 @@ test.describe('대기 주문과 주문 상세 (#123)', () => {
         );
       };
       await expectDetail();
+      await expectNoExcludedText(page);
       await page.reload();
       await expectDetail();
       // 거래·정산 이력: its reason by name and the way back to this page.

@@ -1,5 +1,6 @@
 import type { Locator, Page } from '@playwright/test';
 import { copy } from '../src/copy';
+import { expectNoExcludedText } from './acceptance';
 import {
   REALTIME_BUDGET_MS,
   accountIdOf,
@@ -127,7 +128,7 @@ test.describe('앱 내 알림함 (#53)', () => {
     expect(new URL(page.url()).searchParams.get('next')).toBe('/my/notifications');
   });
 
-  test('새 알림은 최신순으로 안 읽음 표시와 함께 보이고, 누르면 그 시장(마감·취소 포함)이 열리며 읽음이 되고, 모두 읽음은 다른 탭의 안 읽은 수도 지운다', async ({
+  test('새 알림은 최신순으로 안 읽음 표시와 함께 보이고, 누르면 그 시장(마감·취소 포함)이 열리며 읽음이 되고, 모두 읽음은 다른 탭의 안 읽은 수도 지운다 @ac189-7 @ac189-11', async ({
     page,
     admin,
   }) => {
@@ -268,6 +269,7 @@ test.describe('앱 내 알림함 (#53)', () => {
       await expect(page.locator('[data-testid="notification-row"][data-read="false"]')).toHaveCount(
         25,
       );
+      await expectNoExcludedText(page);
     } finally {
       await fixture.close();
     }

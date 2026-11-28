@@ -1,6 +1,7 @@
 import { type APIRequestContext, type Locator, type Page, type Route } from '@playwright/test';
 import type { Category, Me } from '@buddha/shared';
 import { copy } from '../src/copy';
+import { expectNoExcludedText } from './acceptance';
 import {
   E2E_REAL_NAME,
   createOpenMarket,
@@ -176,7 +177,7 @@ async function expectBio(bio: Locator, text: string): Promise<void> {
 }
 
 test.describe('공개 프로필', () => {
-  test('회원이 MY 설정에서 소개와 관심 카테고리를 고치면 자기 공개 프로필에 보이고, 자기 프로필에만 MY 설정으로 가는 링크가 있으며, 비우면 둘 다 사라지고, 고친 뒤 뒤로 가기로 돌아간 프로필에도 바뀐 것이 보인다', async ({
+  test('회원이 MY 설정에서 소개와 관심 카테고리를 고치면 자기 공개 프로필에 보이고, 자기 프로필에만 MY 설정으로 가는 링크가 있으며, 비우면 둘 다 사라지고, 고친 뒤 뒤로 가기로 돌아간 프로필에도 바뀐 것이 보인다 @ac189-9 @ac189-11', async ({
     page,
   }) => {
     const tag = freshTag();
@@ -307,10 +308,11 @@ test.describe('공개 프로필', () => {
     await page.getByTestId('my-view-profile').click();
     await expect(page).toHaveURL(profileUrl);
     await expect(page.getByTestId('profile-nickname')).toHaveText(nickname);
+    await expectNoExcludedText(page);
     expect(hydration).toEqual([]);
   });
 
-  test('작성자 표기(글·댓글·카드)에서 누구나 그 프로필로 가 같은 공개 항목과 수를 보고, 운영자의 프로필에는 운영자 표시가, 닉네임을 바꿔도 옛 주소에 새 닉네임이 보이며, 없는 프로필은 404다', async ({
+  test('작성자 표기(글·댓글·카드)에서 누구나 그 프로필로 가 같은 공개 항목과 수를 보고, 운영자의 프로필에는 운영자 표시가, 닉네임을 바꿔도 옛 주소에 새 닉네임이 보이며, 없는 프로필은 404다 @ac189-9 @ac189-11', async ({
     admin,
     page,
   }) => {
@@ -395,6 +397,7 @@ test.describe('공개 프로필', () => {
     // The public id typed in capitals finds the same member; an unknown one is a 404, noindex too.
     await page.goto(`/u/${me.profile.publicId.toUpperCase()}`);
     await expect(page.getByTestId('profile-nickname')).toHaveText(nickname);
+    await expectNoExcludedText(page);
     const missing = await page.goto('/u/zzzzzzzzzz');
     expect(missing?.status()).toBe(404);
     await expect(page.locator('meta[name="robots"]').first()).toHaveAttribute('content', /noindex/);

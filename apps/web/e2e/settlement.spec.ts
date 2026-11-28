@@ -2,6 +2,7 @@ import type { APIRequestContext, APIResponse, Page, Request } from '@playwright/
 import type {
   AdminMarket,
   LedgerEntry,
+  Market,
   MySettlement,
   PlaceOrderResult,
   Position,
@@ -9,6 +10,7 @@ import type {
 import { formatCoin } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { formatKst } from '../src/lib/datetime';
+import { expectNoExcludedText } from './acceptance';
 import {
   DEFAULT_JUDGEMENT_TIME_ZONE,
   SETTLEMENT_WAIT_MS,
@@ -33,6 +35,7 @@ import {
   onlyNoticeOf,
   openCounted,
   pauseMarket,
+  postThroughApi,
   requestPauseDecision,
   resolveWaitMs,
   secondAdminAccount,
@@ -187,7 +190,7 @@ async function expectDetailRecap(
 }
 
 test.describe('정산', () => {
-  test('AC 7: 한 관리자의 판정 등록 → 다른 관리자의 승인 → 잠정 결과 → 이의 기한 뒤 결과 확정 → 정산 → 상세 배지', async ({
+  test('AC 7: 한 관리자의 판정 등록 → 다른 관리자의 승인 → 잠정 결과 → 이의 기한 뒤 결과 확정 → 정산 → 상세 배지 @ac189-6 @ac189-11 @ac189-12', async ({
     browser,
     admin,
     page,
@@ -344,10 +347,12 @@ test.describe('정산', () => {
     await expect(page.getByTestId(detailCopyTestId(page, 'market-rules'))).not.toContainText(
       '정산 예정',
     );
+    // #189 기준 11: the detail the judgement walked through names no score, rank or Forecast.
+    await expectNoExcludedText(page);
   });
 
   for (const result of ['YES', 'NO', 'VOID'] as const) {
-    test(`${result}: 실제 체결 계약을 정산하고 잔액·손익·지급 원장을 보존한다`, async ({
+    test(`${result}: 실제 체결 계약을 정산하고 잔액·손익·지급 원장을 보존한다 @ac189-6 @ac189-10 @ac189-11${result === 'YES' ? ' @ac189-7' : ''}`, async ({
       admin,
       browser,
       baseURL,
@@ -376,6 +381,12 @@ test.describe('정산', () => {
         const yesHolder = yesPage.request;
         const market = await createOpenMarket(admin);
         if (watcherPage !== null) await watchThroughApi(watcherPage, market.id);
+        // #189 기준 7: a 근거 글 on the market, for its 토론 after the payout (YES only).
+        const postTitle = `정산 전 근거 ${market.tag}`;
+        const postId =
+          result === 'YES'
+            ? await postThroughApi(yesHolder, market.id, postTitle, market.tag)
+            : null;
         const order = async (
           context: APIRequestContext,
           outcome: 'YES' | 'NO',
@@ -450,6 +461,8 @@ test.describe('정산', () => {
           );
           await expect(row).not.toContainText('환불');
           await expect(row).not.toContainText('원금');
+          // #189 기준 11: the inbox the payout lands in names no score, rank or Forecast.
+          await expectNoExcludedText(holderPage);
           await row.click();
           await expect(holderPage).toHaveURL(`/markets/${market.slug}`);
           await expect(holderPage.getByTestId('market-status-badge')).toHaveText(
@@ -559,6 +572,7 @@ test.describe('정산', () => {
           );
           await expect(list).not.toContainText('환불');
           await expect(list).not.toContainText('원금');
+          await expectNoExcludedText(holderPage);
           if ((viewport?.width ?? 0) < 768) await expectNoSideScroll(holderPage);
           if (result === 'VOID') {
             // 지갑 (#69, ADR-0144): the void market's payout is '정산 지급' — the newest row, linked
@@ -584,9 +598,60 @@ test.describe('정산', () => {
           }
           if (record !== undefined) await expectDetailRecap(holderPage, market, outcome, record);
         }
-        await page.goto(`/markets/${market.slug}`);
+        if (postId !== null) {
+          // #189 기준 7 (오너 답 '종료 시장 링크' (c)): the visitor finds the paid-out market among
+          // the search results (every status is searched by default) and its card opens the
+          // detail — the rest of the links to an ended market are notifications.spec.ts's,
+          // posts.spec.ts's, authored.spec.ts's and watchlist.spec.ts's.
+          await page.goto(`/search?q=${market.tag}`);
+          const card = page.getByTestId(`market-card-${market.id}`);
+          await expect(card).toContainText(copy.marketStatusSettled);
+          // The card is the server's, so it says nothing of hydration; a link pressed before it
+          // can land and leave the page where it was (discussion.spec.ts `openDetail`). The
+          // header's 로그인 link is drawn once the session is known (search.spec.ts
+          // `sessionKnown`).
+          await expect(
+            page.locator('header').getByRole('link', { name: copy.login }),
+          ).toBeVisible();
+          await card.getByRole('link', { name: market.title }).click();
+          await expect(page).toHaveURL(`/markets/${market.slug}`);
+        } else {
+          await page.goto(`/markets/${market.slug}`);
+        }
         await expect(page.getByTestId('market-status-badge')).toHaveText(copy.marketStatusSettled);
         await expect(page.getByTestId('market-detail-result')).toHaveText(resultLabel);
+        // #189 기준 6 (N03 §5 '결과 확정과 실제 지급 완료를 각각 표시한다'): the public 판정 기록 says
+        // when the result was confirmed and when the payout ended, each on its own row.
+        const publicMarket = await dataOf<Market>(
+          await page.request.get(`/api/v1/markets/${market.id}`),
+        );
+        const record = page.getByTestId(detailCopyTestId(page, 'market-judging-record'));
+        const recordId = detailCopyTestId(page, 'market-judging-record');
+        await expect(record).toContainText(copy.judgingResolvedAt);
+        await expect(record).toContainText(copy.judgingSettledAt);
+        await expect(page.getByTestId(`${recordId}-resolved-at-viewer-zone`)).toHaveText(
+          formatKst(publicMarket.resolvedAt ?? ''),
+        );
+        await expect(page.getByTestId(`${recordId}-settled-at-viewer-zone`)).toHaveText(
+          formatKst(publicMarket.settledAt ?? ''),
+        );
+        await expect(record).not.toContainText(copy.judgingPayoutDelayed);
+        if (postId !== null) {
+          // #189 기준 7 (N05 §3): the ended market reads its rules, its chart, its result and its
+          // 토론 — the chart ends on '마지막' at the one fill, YES 30.
+          await expect(page.getByTestId(detailCopyTestId(page, 'market-rules'))).toContainText(
+            market.yesCondition,
+          );
+          const chart = page.getByTestId('probability-chart');
+          await expect(chart.getByTestId('probability-chart-dot')).toHaveCount(1);
+          await expect(chart.getByTestId('probability-chart-svg')).toHaveAttribute(
+            'aria-label',
+            new RegExp(`${copy.chartSummaryLast} 30%$`),
+          );
+          const post = page.getByTestId('market-discussion').getByTestId(`post-card-${postId}`);
+          await expect(post.getByRole('heading', { level: 3 })).toHaveText(postTitle);
+        }
+        await expectNoExcludedText(page);
         // A visitor (수용 기준 5): the one sign-in prompt, and nothing of anyone's recap.
         await expect(page.getByTestId('market-personal-signed-out')).toHaveCount(1);
         await expect(page.locator('[data-testid^="market-settled-"]')).toHaveCount(0);

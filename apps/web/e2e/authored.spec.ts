@@ -1,6 +1,7 @@
 import { type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import type { HiddenNotice } from '@buddha/shared';
 import { copy } from '../src/copy';
+import { expectNoExcludedText } from './acceptance';
 import {
   closeMarket,
   createOpenMarket,
@@ -162,7 +163,7 @@ async function expectCounts(page: Page, posts: number, comments: number): Promis
 }
 
 test.describe('작성자별 글·댓글', () => {
-  test('회원이 쓴 글과 댓글·답글이 MY 내 글(요약 포함)과 공개 프로필의 두 탭에 최신순으로 보이고, 항목에서 글과 시장(마감된 시장도)으로 가며 뒤로 가기는 그 탭으로 돌아오고, 지우면 MY·프로필·수에서 빠진다', async ({
+  test('회원이 쓴 글과 댓글·답글이 MY 내 글(요약 포함)과 공개 프로필의 두 탭에 최신순으로 보이고, 항목에서 글과 시장(마감된 시장도)으로 가며 뒤로 가기는 그 탭으로 돌아오고, 지우면 MY·프로필·수에서 빠진다 @ac189-7 @ac189-9 @ac189-11', async ({
     admin,
     page,
   }) => {
@@ -324,13 +325,14 @@ test.describe('작성자별 글·댓글', () => {
       'true',
     );
     await expectComments(page.getByTestId('profile-comments-list'), [reply]);
+    await expectNoExcludedText(page);
     // The lists are read in the browser: the server's HTML holds none of their items.
     const html = await (await page.request.get(`${profileUrl}?tab=comments`)).text();
     expect(html).not.toContain(`내 답글 ${tag}`);
     expect(hydration).toEqual([]);
   });
 
-  test('누구나 작성자 표기(글·답글)에서 공개 프로필로, 프로필의 글·댓글에서 그 글과 시장으로 끝까지 간다', async ({
+  test('누구나 작성자 표기(글·답글)에서 공개 프로필로, 프로필의 글·댓글에서 그 글과 시장으로 끝까지 간다 @ac189-9', async ({
     admin,
     page,
   }) => {

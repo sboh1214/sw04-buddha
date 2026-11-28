@@ -8,6 +8,7 @@ import {
 import { type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { copy } from '../src/copy';
 import { fillBusinessInfo } from '../src/legal/business-info';
+import { expectNoExcludedText } from './acceptance';
 import { deadlineOnCard, expectDeadlineLine } from './appeal';
 import {
   adminAccount,
@@ -439,7 +440,7 @@ async function sendReport(page: Page, path: string): Promise<string> {
 }
 
 test.describe('신고와 운영 처리', () => {
-  test('회원이 글과 댓글을 신고하면 접수로 보이고, 운영자가 글을 숨기면 작성자는 숨김과 사유·조치·신고 내역 링크를, 내역에서 이의 안내와 이의 기한(지나면 지났다는 줄)을, 신고자는 조치함을 보며, 댓글의 신고를 기각하면 신고자는 기각을 본다', async ({
+  test('회원이 글과 댓글을 신고하면 접수로 보이고, 운영자가 글을 숨기면 작성자는 숨김과 사유·조치·신고 내역 링크를, 내역에서 이의 안내와 이의 기한(지나면 지났다는 줄)을, 신고자는 조치함을 보며, 댓글의 신고를 기각하면 신고자는 기각을 본다 @ac189-8 @ac189-11', async ({
     admin,
     page,
     browser,
@@ -720,6 +721,8 @@ test.describe('신고와 운영 처리', () => {
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
       ).toBe(true);
+      // #189 기준 11: MY 내 글 with its hidden-post notice names no probability input, score or rank.
+      await expectNoExcludedText(page);
       // The action as the page reads it, for the exact instant its card's minute ends.
       const actionsRead = page.waitForResponse(
         (response) =>
@@ -751,6 +754,8 @@ test.describe('신고와 운영 처리', () => {
       await expect(page.getByTestId('my-reports-list-empty')).toHaveText(
         copy.myModerationReportsEmpty,
       );
+      // #189 기준 11: 조치·신고 내역 names no probability input, score or rank.
+      await expectNoExcludedText(page);
       const authorView = (await page.getByTestId('my-moderation').textContent()) ?? '';
       expect(authorView).not.toContain(reporterMe.profile.nickname);
       expect(authorView).not.toContain(operator.profile.nickname);
@@ -790,6 +795,7 @@ test.describe('신고와 운영 처리', () => {
       await expect(commentItem.getByTestId('my-report-status')).toHaveText(
         copy.reportStatusDismissed,
       );
+      await expectNoExcludedText(reporter);
       const reporterView = (await reporter.getByTestId('my-moderation').textContent()) ?? '';
       expect(reporterView).not.toContain(operator.profile.nickname);
       expect(reporterView).not.toContain(note);
@@ -980,7 +986,7 @@ test.describe('신고와 운영 처리', () => {
     }
   });
 
-  test('카드의 신고는 글을 열지 않고 신고하며, 운영자에게만 공개 화면의 운영 링크가 보이고, 그 링크로 준 경고는 취소될 때까지 MY 요약에 이의 안내 없는 안내 띠로 보이고 그 기한은 조치·신고 내역의 카드에 있다', async ({
+  test('카드의 신고는 글을 열지 않고 신고하며, 운영자에게만 공개 화면의 운영 링크가 보이고, 그 링크로 준 경고는 취소될 때까지 MY 요약에 이의 안내 없는 안내 띠로 보이고 그 기한은 조치·신고 내역의 카드에 있다 @ac189-8 @ac189-11', async ({
     admin,
     page,
     browser,
@@ -1159,6 +1165,8 @@ test.describe('신고와 운영 처리', () => {
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
       ).toBe(true);
+      // #189 기준 11: the MY summary with its banner names no probability input, score or rank.
+      await expectNoExcludedText(page);
       await expect(page.getByTestId('my-sanction-banner')).toHaveCount(0);
       await gotoWithBannersRead(
         page,
@@ -1178,6 +1186,7 @@ test.describe('신고와 운영 처리', () => {
       // There: how to appeal once above the list, and the warning's own deadline on its card.
       await expectAppealGuidance(page);
       await expectDeadlineLine(warningCard, await deadlineOnCard(warningCard), false);
+      await expectNoExcludedText(page);
 
       // Cancelled, the banner is gone.
       await adminPage

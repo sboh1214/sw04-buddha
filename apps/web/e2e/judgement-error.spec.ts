@@ -7,7 +7,9 @@ import type {
   Market,
   MySettlement,
 } from '@buddha/shared';
+import { MINUS_SIGN } from '@buddha/shared';
 import { copy } from '../src/copy';
+import { expectNoExcludedText } from './acceptance';
 import { test } from './admin-role-fixture';
 import {
   accountIdOf,
@@ -198,7 +200,7 @@ function nextWrite(page: Page, marketId: string, suffix: string): Promise<Reques
 }
 
 test.describe('판정 오류 사건 (#144, ADR-0165)', () => {
-  test('지급 완료 시장에서 지급한 판정의 등록자가 사건을 등록하면 아무것도 공개되지 않고, 다른 관리자가 검토 대기에서 찾아 사유와 함께 오류 확인하면 방문자의 상세가 리프레시 없이 정정된 결과와 판정 정정을 보이고 공개 판정 기록에 정정 기록과 고객센터 이메일 안내가 올라가며, 시장 행과 판정 버전은 그대로다', async ({
+  test('지급 완료 시장에서 지급한 판정의 등록자가 사건을 등록하면 아무것도 공개되지 않고, 다른 관리자가 검토 대기에서 찾아 사유와 함께 오류 확인하면 방문자의 상세가 리프레시 없이 정정된 결과와 판정 정정을 보이고 공개 판정 기록에 정정 기록과 고객센터 이메일 안내가 올라가며, 시장 행과 판정 버전은 그대로다 @ac189-6', async ({
     browser,
     admin,
     reviewer,
@@ -507,7 +509,7 @@ test.describe('판정 오류 사건 (#144, ADR-0165)', () => {
  * list, the recap and the wallet row are unit-tested.
  */
 test.describe('판정 오류 보상 (#144, ADR-0166)', () => {
-  test('오류가 확인된 지급 완료 시장에서 지급한 판정의 등록자가 보상을 요청하고 다른 관리자가 승인하면 더 받을 회원만 그 차액을 판정 오류 보상으로 받아 지갑·복기·알림에 보이고, 더 받은 회원의 Coin과 정산 기록은 그대로이며 공개 판정 기록은 건수와 총액만 싣는다', async ({
+  test('오류가 확인된 지급 완료 시장에서 지급한 판정의 등록자가 보상을 요청하고 다른 관리자가 승인하면 더 받을 회원만 그 차액을 판정 오류 보상으로 받아 지갑·복기·알림에 보이고, 더 받은 회원의 Coin과 정산 기록은 그대로이며 두 회원의 잔액은 음수로 보이지 않고 공개 판정 기록은 건수와 총액만 싣는다 @ac189-6 @ac189-11', async ({
     browser,
     baseURL,
     admin,
@@ -808,6 +810,39 @@ test.describe('판정 오류 보상 (#144, ADR-0166)', () => {
       await expect(row.getByTestId('history-settlement-corrected')).toHaveText(
         '판정 정정 · 결과 NO',
       );
+
+      // --- #189 기준 6 (지급 후 오류, N03 §9 '잔액이 음수로 보이지 않는다'): neither member's
+      // balance reads below zero anywhere it is shown — the header chip, the wallet's card and each
+      // ledger row's balance after it, MY 보유 계약's card. Not the wallet as a whole: a ledger
+      // row that takes Coin is written with the minus sign (ledger-list.tsx), and the helper
+      // members' realized P&L may be a loss.
+      for (const memberPage of [noPage, yesPage]) {
+        await memberPage.goto(`/my/wallet?market=${market.id}`);
+        await expect(memberPage.getByTestId('ledger-balance-after').first()).toBeVisible();
+        // Each balance drawn before it is read — none left out of the reading below.
+        await expect(memberPage.getByTestId('balance-chip')).toHaveText(/\d/);
+        await expect(memberPage.getByTestId('wallet-available')).toBeVisible();
+        await expect(memberPage.getByTestId('wallet-locked')).toBeVisible();
+        const balances = [
+          ...(await memberPage.getByTestId('balance-chip').allTextContents()),
+          ...(await memberPage.getByTestId('wallet-available').allTextContents()),
+          ...(await memberPage.getByTestId('wallet-locked').allTextContents()),
+          ...(await memberPage.getByTestId('ledger-balance-after').allTextContents()),
+        ];
+        await memberPage.goto('/my/positions');
+        await expect(memberPage.getByTestId('portfolio-available')).toBeVisible();
+        await expectNoExcludedText(memberPage);
+        balances.push(
+          ...(await memberPage.getByTestId('portfolio-available').allTextContents()),
+          ...(await memberPage.getByTestId('portfolio-locked').allTextContents()),
+        );
+        expect(balances.length).toBeGreaterThanOrEqual(5);
+        for (const balance of balances) {
+          expect(balance, memberPage.url()).toMatch(/\d/);
+          expect(balance, memberPage.url()).not.toContain(MINUS_SIGN);
+          expect(balance, memberPage.url()).not.toContain('-');
+        }
+      }
 
       // --- 375 wide, the record with its 판정 정정 and 보상 scrolls nothing sideways.
       await noPage.setViewportSize({ width: 375, height: 812 });

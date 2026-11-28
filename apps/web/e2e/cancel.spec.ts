@@ -2,6 +2,7 @@ import type { APIRequestContext, APIResponse, Locator, Page, Request } from '@pl
 import type { AdminMarket, Market, Order, PlaceOrderResult } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { formatKst } from '../src/lib/datetime';
+import { expectNoExcludedText } from './acceptance';
 import {
   NO_FILL_CANCEL_REASON,
   adminAccount,
@@ -133,7 +134,7 @@ function nextWrite(page: Page, marketId: string, suffix: string): Promise<Reques
 }
 
 test.describe('거래 없는 시장의 취소 (#20)', () => {
-  test('사람이 낀 체결 없이 거래 마감 시각이 온 시장은 워커가 취소하고 남은 주문은 만료로 잠금을 돌려주며 결과는 비고, 한 쌍이 체결된 쌍둥이 시장은 거래 마감이다', async ({
+  test('사람이 낀 체결 없이 거래 마감 시각이 온 시장은 워커가 취소하고 남은 주문은 만료로 잠금을 돌려주며 결과는 비고, 한 쌍이 체결된 쌍둥이 시장은 거래 마감이다 @ac189-6 @ac189-11', async ({
     admin,
     page,
     request,
@@ -236,6 +237,7 @@ test.describe('거래 없는 시장의 취소 (#20)', () => {
     await page.getByTestId('market-my-open-orders').getByTestId('market-history-orders').click();
     const ended = page.getByTestId('my-order-history').getByTestId(`portfolio-order-${resting.id}`);
     await expect(ended.getByTestId('history-order-status')).toHaveText(copy.orderStatusExpired);
+    await expectNoExcludedText(page);
 
     // --- the twin: one fill with a person on it, so 거래 마감, waiting for its judgement.
     const closed = await adminMarketOf(admin, traded.id);
@@ -247,7 +249,7 @@ test.describe('거래 없는 시장의 취소 (#20)', () => {
     expect(closed.resolvedResult).toBeNull();
   });
 
-  test('개장 예정 시장은 한 관리자가 사유와 함께 취소를 요청하고 그 관리자는 승인하지 못하며, 다른 관리자가 승인하면 열리지 않고 바로 취소된다', async ({
+  test('개장 예정 시장은 한 관리자가 사유와 함께 취소를 요청하고 그 관리자는 승인하지 못하며, 다른 관리자가 승인하면 열리지 않고 바로 취소된다 @ac189-6', async ({
     admin,
     secondAdmin,
     browser,

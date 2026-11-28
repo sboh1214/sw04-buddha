@@ -9,17 +9,23 @@ import {
   MARKET_WORK_KINDS,
 } from '@buddha/shared';
 import { copy } from '../src/copy';
+import { asMember, expectNoExcludedText, openSettlementRecords } from './acceptance';
 import {
   accountIdOf,
   adminAccount,
   approveJudgementAsReviewer,
   closeMarket,
   createOpenMarket,
+  detailCopyTestId,
   expect,
   expectNoSideScroll,
   helperTraders,
+  inboxOf,
   judgeMarket,
   leaveNoJudgement,
+  noticesOf,
+  notificationRow,
+  openCounted,
   pauseMarket,
   recordJudgementDelay,
   recoverMarketHold,
@@ -579,15 +585,17 @@ test.describe('운영 대기열 (#145)', () => {
     }
   });
 
-  test('정산 중단과 재시도: 원장 장애로 묶인 시장의 지급이 실패하면 정산 실패에 대사 보류와 시도 횟수로 보이고, 보류가 남은 동안의 정산 다시 시도는 실패를 보이며, 복구 뒤에는 지급을 마치고 목록에서 빠진다 — 그 시장의 작업 이력에는 수정·중단·판정·지급이 담당자·시각·사유와 함께 남고 다른 시장의 것은 없다', async ({
+  test('정산 중단과 재시도: 원장 장애로 묶인 시장의 지급이 실패하면 정산 실패에 대사 보류와 시도 횟수로 보이고 보유자의 화면은 지급 중·지급 지연이며, 보류가 남은 동안의 정산 다시 시도는 실패를 보이고, 복구 뒤에는 지급을 마치고 목록에서 빠지며 보유자의 정산 기록과 지급 알림은 하나다 — 그 시장의 작업 이력에는 수정·중단·판정·지급이 담당자·시각·사유와 함께 남고 다른 시장의 것은 없다 @ac189-6 @ac189-11', async ({
     admin,
     secondAdmin,
+    browser,
     page,
   }) => {
     test.skip(workerProbeDisabled(), 'The worker must close, confirm and pay the market');
     test.slow();
     await skipUnlessResolvable(admin);
-    await helperTraders(admin);
+    // `tradeOnce`'s pair: the second member buys the YES the judgement pays (#189 기준 6's holder).
+    const [, holder] = await helperTraders(admin);
     await signIn(page, adminAccount.email, adminAccount.password);
     const operatorId = await accountIdOf(admin);
     const market = await createOpenMarket(admin, {
@@ -600,6 +608,7 @@ test.describe('운영 대기열 (#145)', () => {
     const addedTag = `${market.tag}w`;
     const pauseNote = `원장 장애로 멈춘 시장의 지급 재시도 확인 ${market.tag}`;
     let settledReason: string | null = null;
+    const holderPage = await asMember(browser, holder, page);
     try {
       // --- 수정 while OPEN (D): a tag added, recorded with the actor, the time and both values.
       await editTags(admin, market.id, [...market.tags, addedTag]);
@@ -627,6 +636,23 @@ test.describe('운영 대기열 (#145)', () => {
       expect(listed.settlement.ledgerHeld).toBe(true);
       const attemptsBefore = listed.settlement.settlementAttempts;
       expect((await marketOf(admin, market.id)).status).toBe('settling');
+
+      // --- #189 기준 6 (정산 중단, N03 §9 '지급이 끝나기 전에는 지급 완료로 보이지 않고'): the YES
+      // holder's screens while the payout fails — 지급 중 on the detail, never 지급 완료; '지급 지연'
+      // in the public 판정 기록 (ADR-0121); no settlement record of the market on MY.
+      await holderPage.goto(`/markets/${market.slug}`);
+      await expect(holderPage.getByTestId('market-status-badge')).toHaveText(
+        copy.marketStatusSettling,
+      );
+      const holderRecord = detailCopyTestId(holderPage, 'market-judging-record');
+      await expect(holderPage.getByTestId(`${holderRecord}-payout-delay`)).toContainText(
+        copy.judgingPayoutDelayed,
+      );
+      await expect(holderPage.getByTestId(holderRecord)).not.toContainText(copy.judgingSettledAt);
+      await expectNoExcludedText(holderPage);
+      const unpaid = await openSettlementRecords(holderPage, market.id);
+      await expect(holderPage.getByTestId('my-settlement-history-empty')).toBeVisible();
+      await expect(unpaid).toHaveCount(0);
 
       // --- on screen: 정산 실패 with 대사 보류 and its attempts.
       await page.goto('/admin/operations?list=failures');
@@ -703,6 +729,27 @@ test.describe('운영 대기열 (#145)', () => {
       }
       expect((await waitForSettled(admin, market.id)).status).toBe('settled');
 
+      // --- #189 기준 6 (재시도 뒤 정산 기록이 한 번만): the holder's detail is 지급 완료 with no 지급
+      // 지연, and the market's settlement record and payout notice are one each — however many
+      // attempts it took (the holder trades on other markets of the worker too: counted by market).
+      await holderPage.goto(`/markets/${market.slug}`);
+      await expect(holderPage.getByTestId('market-status-badge')).toHaveText(
+        copy.marketStatusSettled,
+      );
+      await expect(holderPage.getByTestId(`${holderRecord}-payout-delay`)).toHaveCount(0);
+      const records = await openSettlementRecords(holderPage, market.id);
+      await expect(holderPage.getByTestId(`history-settlement-${market.id}-YES`)).toBeVisible();
+      await expect(records).toHaveCount(1);
+      const payouts = noticesOf(await inboxOf(holder), 'market_settled').filter(
+        (notice) => notice.params.marketTitle === market.title,
+      );
+      expect(payouts).toHaveLength(1);
+      await openCounted(holderPage, '/my/notifications');
+      await expect(
+        notificationRow(holderPage, payouts[0]?.id ?? '').getByTestId('notification-row-title'),
+      ).toContainText(market.title);
+      await expectNoExcludedText(holderPage);
+
       // --- settled: out of the list (AC 4).
       expect(await failureRow(admin, market.id)).toBeUndefined();
       await page.goto('/admin/operations?list=failures');
@@ -717,7 +764,11 @@ test.describe('운영 대기열 (#145)', () => {
         other: { id: other.id, addedTag: otherTag },
       });
     } finally {
-      await leaveNoJudgement(admin, market.id);
+      try {
+        await leaveNoJudgement(admin, market.id);
+      } finally {
+        await holderPage.context().close();
+      }
     }
   });
 });

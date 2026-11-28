@@ -1,16 +1,21 @@
 import { type APIRequestContext, type Page } from '@playwright/test';
+import { formatCoin, parseCoinAmount } from '@buddha/shared';
 import { copy } from '../src/copy';
+import { expectNoExcludedText, expectNoPrivateFigures } from './acceptance';
 import {
   E2E_PASSWORD,
   closeMarket,
+  commentThroughApi,
   completeOnboardingThroughApi,
   createOpenMarket,
   expect,
   freshEmail,
   freshTag,
+  helperTraders,
   logOut,
   meOf,
   openSetPassword,
+  placeOrder,
   setFirstPassword,
   signUp,
   test,
@@ -35,7 +40,8 @@ import {
  *
  * What the API leaves out — deleted and hidden posts, a draft market, an author's holdings or
  * orders — is the API's integration and guard tests' (posts.controller.test.ts,
- * private-data.test.ts); this walks the screens.
+ * private-data.test.ts); this walks the screens, and since #189 (기준 10, ADR-0178) reads them
+ * for an author's holding, resting order and balance as another member and a visitor see them.
  */
 
 const section = (page: Page) => page.getByTestId('market-discussion');
@@ -210,7 +216,7 @@ test.describe('시장 상세 · 토론', () => {
     await expect(page.getByTestId('post-title')).toHaveText(titles[0] ?? '');
   });
 
-  test('마감된 시장에서도 토론의 글을 읽고 글쓰기가 있으며, 카드에는 시장 줄도 상태도 없다', async ({
+  test('마감된 시장에서도 토론의 글을 읽고 글쓰기가 있으며, 카드에는 시장 줄도 상태도 없다 @ac189-7', async ({
     admin,
     page,
     request,
@@ -450,5 +456,110 @@ test.describe('시장 상세 · 토론', () => {
     const detail = await request.get(`/markets/${market.slug}`);
     expect(detail.status()).toBe(200);
     expect(detail.headers()['x-robots-tag']).toBeUndefined();
+  });
+});
+
+/**
+ * 비공개 비노출 (#189 기준 10, ADR-0178; N04 §2·§7, N05 §2·§8): an author M with a holding, an
+ * order resting and a balance of their own writes a 근거 글 and a 댓글 on a market, and another
+ * member and a signed-out visitor read the post with its comment, the community list of the
+ * market and M's public profile (both tabs) — nothing of M's holding, order or balance on any of
+ * them, in the text or in the HTML. M's figures are picked to be no public count: 37 YES bought
+ * from the helper's maker (the market's volume is 37 too, but the screens read here show no
+ * volume), 29 resting at 13. The API's guards are private-data.test.ts's.
+ */
+test.describe('토론 · 비공개 비노출', () => {
+  test('작성자의 보유·대기 주문·잔액은 그 글·댓글·커뮤니티 목록·공개 프로필 어디에도 없다 — 다른 회원에게도 비로그인 방문자에게도 @ac189-10 @ac189-11', async ({
+    admin,
+    browser,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    const [maker] = await helperTraders(admin);
+    const authorContext = await browser.newContext();
+    const otherContext = await browser.newContext();
+    try {
+      const authorPage = await authorContext.newPage();
+      const otherPage = await otherContext.newPage();
+      await signUp(authorPage, freshEmail());
+      await signUp(otherPage, freshEmail());
+      const author = authorPage.request;
+
+      // --- M's holding (37 YES at 57, the maker's NO bids of 43 met) and resting order (29 at 13).
+      await placeOrder(maker, market.id, crypto.randomUUID(), {
+        outcome: 'NO',
+        side: 'buy',
+        timeInForce: 'gtc',
+        limitPriceCoin: 43,
+        qty: 37,
+      });
+      const bought = await placeOrder(author, market.id, crypto.randomUUID(), {
+        outcome: 'YES',
+        side: 'buy',
+        timeInForce: 'ioc',
+        limitPriceCoin: 99,
+        qty: 37,
+      });
+      expect(bought.order).toMatchObject({ status: 'filled', filledQty: 37 });
+      const resting = await placeOrder(author, market.id, crypto.randomUUID(), {
+        outcome: 'YES',
+        side: 'buy',
+        timeInForce: 'gtc',
+        limitPriceCoin: 13,
+        qty: 29,
+      });
+      expect(resting.order.status).toBe('open');
+      const me = await meOf(author);
+      const available = formatCoin(parseCoinAmount(me.balance.availableCoin));
+      const figures = [
+        '37계약',
+        '29계약',
+        available,
+        available.replace(/ Coin$/, ''),
+        me.balance.availableCoin,
+        formatCoin(parseCoinAmount(me.balance.lockedCoin)),
+      ];
+      expect(me.balance.lockedCoin).toBe('377');
+
+      // --- M's post and M's comment under it.
+      const title = `보유를 밝히지 않은 근거 ${tag}`;
+      const postId = await postThroughApi(author, market.id, title, `근거 본문 ${tag}`);
+      const comment = await commentThroughApi(author, postId, null, `작성자의 댓글 ${tag}`);
+      const profileUrl = `/u/${me.profile.publicId}`;
+
+      for (const reader of [otherPage, page]) {
+        // The post and its comment (read in the browser).
+        await reader.goto(`/community/posts/${postId}`);
+        await expect(reader.getByTestId('post-title')).toHaveText(title);
+        await expect(reader.getByTestId(`comment-${comment.id}`)).toContainText(
+          `작성자의 댓글 ${tag}`,
+        );
+        await expectNoPrivateFigures(reader, figures);
+        await expectNoExcludedText(reader);
+        // The community list of the market.
+        await reader.goto(`/community?market=${market.id}`);
+        await expect(
+          reader.getByTestId(`post-card-${postId}`).getByRole('heading', { level: 3 }),
+        ).toHaveText(title);
+        await expectNoPrivateFigures(reader, figures);
+        await expectNoExcludedText(reader);
+        // M's public profile, a visitor's too (#37-1): the 글 tab and the 댓글 tab.
+        await reader.goto(profileUrl);
+        await expect(
+          reader.getByTestId('profile-posts-list').getByTestId(`post-card-${postId}`),
+        ).toBeVisible();
+        await expectNoPrivateFigures(reader, figures);
+        await expectNoExcludedText(reader);
+        await reader.goto(`${profileUrl}?tab=comments`);
+        await expect(
+          reader.getByTestId('profile-comments-list').getByTestId(`authored-comment-${comment.id}`),
+        ).toBeVisible();
+        await expectNoPrivateFigures(reader, figures);
+      }
+    } finally {
+      await authorContext.close();
+      await otherContext.close();
+    }
   });
 });

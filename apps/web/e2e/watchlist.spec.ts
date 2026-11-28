@@ -183,7 +183,7 @@ test.describe('관심 시장', () => {
     await expect(page.getByTestId(`market-card-${second.id}`)).toHaveCount(0);
   });
 
-  test('끝난 시장은 해제할 때까지 상태와 함께 남고, 카드는 실시간으로 바뀌며 누르면 그 상세가 열린다', async ({
+  test('끝난 시장은 해제할 때까지 상태와 함께 남고, 카드는 실시간으로 바뀌며 누르면 그 상세가 열린다 @ac189-7', async ({
     page,
     admin,
   }) => {

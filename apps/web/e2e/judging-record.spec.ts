@@ -88,7 +88,7 @@ async function approve(
 
 /** All temporary pending requests are removed even when a public assertion fails. */
 test.describe('공개 판정 기록 (#24)', () => {
-  test('방문자와 회원이 승인된 v1·정정 v2와 이의 처리 사유를 보고 내부 요청·계정·이의 본문은 보지 못한다', async ({
+  test('방문자와 회원이 승인된 v1·정정 v2와 이의 처리 사유를 보고 내부 요청·계정·이의 본문은 보지 못한다 @ac189-6', async ({
     admin,
     secondAdmin,
     browser,
@@ -426,7 +426,7 @@ test.describe('공개 판정 기록 (#24)', () => {
     }
   });
 
-  test('운영자 취소와 무체결 자동 취소는 사유·취소 시각만 공개하고 판정이나 지급 완료를 만들어 내지 않는다', async ({
+  test('운영자 취소와 무체결 자동 취소는 사유·취소 시각만 공개하고 판정이나 지급 완료를 만들어 내지 않는다 @ac189-6', async ({
     admin,
     secondAdmin,
     page,

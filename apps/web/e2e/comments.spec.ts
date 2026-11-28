@@ -1,6 +1,7 @@
 import { type Locator, type Page, type Route } from '@playwright/test';
 import type { Me } from '@buddha/shared';
 import { copy } from '../src/copy';
+import { expectNoExcludedText } from './acceptance';
 import {
   commentThroughApi,
   createOpenMarket,
@@ -229,7 +230,7 @@ async function idOf(article: Locator): Promise<string> {
 }
 
 test.describe('댓글·대댓글', () => {
-  test('회원이 댓글을 달고 답글에 답해도 같은 댓글 아래로 가며, 고치면 수정됨, 지운 댓글과 지운 글은 자리표시로 남아 댓글이 읽힌다', async ({
+  test('회원이 댓글을 달고 답글에 답해도 같은 댓글 아래로 가며, 고치면 수정됨, 지운 댓글과 지운 글은 자리표시로 남아 댓글이 읽힌다 @ac189-8 @ac189-11', async ({
     admin,
     page,
   }) => {
@@ -385,9 +386,10 @@ test.describe('댓글·대댓글', () => {
     await expect(page.getByTestId('comments-closed')).toHaveText(copy.commentClosedPostDeleted);
     await expect(page.getByTestId('comment-composer')).toHaveCount(0);
     await expect(page.getByTestId('comment-reply')).toHaveCount(0);
+    await expectNoExcludedText(page);
   });
 
-  test('로그인하지 않은 방문자는 브라우저가 불러온 댓글과 대댓글을 읽고(서버가 그린 HTML에는 없다), 쓰기 대신 이 글로 돌아오는 로그인 안내를 받는다', async ({
+  test('로그인하지 않은 방문자는 브라우저가 불러온 댓글과 대댓글을 읽고(서버가 그린 HTML에는 없다), 쓰기 대신 이 글로 돌아오는 로그인 안내를 받는다 @ac189-8 @ac189-11', async ({
     admin,
     page,
     request,
@@ -443,6 +445,7 @@ test.describe('댓글·대댓글', () => {
     await expect(page.getByTestId('comment-reply')).toHaveCount(0);
     await expect(page.getByTestId('comment-edit')).toHaveCount(0);
     await expect(page.getByTestId('comment-delete')).toHaveCount(0);
+    await expectNoExcludedText(page);
   });
 
   test('답글이 50개를 넘는 댓글은 처음 50개와 답글 더 보기를 보이고, 새 답글은 남은 답글을 읽은 뒤 맨 끝에 온다', async ({

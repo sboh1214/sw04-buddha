@@ -2,6 +2,7 @@ import type { APIRequestContext, Page } from '@playwright/test';
 import type { Notification, PlaceOrderResult } from '@buddha/shared';
 import { formatCoin } from '@buddha/shared';
 import { copy } from '../src/copy';
+import { expectNoExcludedText } from './acceptance';
 import {
   NOTIFICATION_SETTINGS_API_PATH,
   ONE_READ_MS,
@@ -258,7 +259,7 @@ test.describe('알림 수신 설정 (#56)', () => {
     }
   });
 
-  test('거래를 끈 동안 대기 주문의 체결은 알림을 만들지도 안 읽은 알림에 더하지도 않고, 이미 받은 알림은 그대로 목록과 안 읽은 수에 남으며, 다시 켜면 다음 체결이 그 알림에 합쳐지되 꺼 둔 동안의 체결은 세지 않는다', async ({
+  test('거래를 끈 동안 대기 주문의 체결은 알림을 만들지도 안 읽은 알림에 더하지도 않고, 이미 받은 알림은 그대로 목록과 안 읽은 수에 남으며, 다시 켜면 다음 체결이 그 알림에 합쳐지되 꺼 둔 동안의 체결은 세지 않는다 @ac189-8', async ({
     admin,
     browser,
     page,
@@ -342,7 +343,7 @@ test.describe('알림 수신 설정 (#56)', () => {
     }
   });
 
-  test('한 일시 중단에서 거래만 끈 회원은 시장 알림만, 시장만 끈 회원은 주문 취소 알림만 받고, 시장을 다시 켜면 재개 알림이 온다', async ({
+  test('한 일시 중단에서 거래만 끈 회원은 시장 알림만, 시장만 끈 회원은 주문 취소 알림만 받고, 시장을 다시 켜면 재개 알림이 온다 @ac189-8', async ({
     admin,
     browser,
     page,
@@ -398,7 +399,7 @@ test.describe('알림 수신 설정 (#56)', () => {
     }
   });
 
-  test('커뮤니티를 끈 동안 내 글의 댓글과 운영 조치는 알림이 없고, 다시 켜면 다음 댓글이 안 읽은 알림에 합쳐지고 경고 알림이 온다', async ({
+  test('커뮤니티를 끈 동안 내 글의 댓글과 운영 조치는 알림이 없고, 다시 켜면 다음 댓글이 안 읽은 알림에 합쳐지고 경고 알림이 온다 @ac189-8', async ({
     admin,
     browser,
     page,
@@ -473,7 +474,7 @@ test.describe('알림 수신 설정 (#56)', () => {
     }
   });
 
-  test('모두 꺼도 판정·정산은 알림 없이 진행되고, 지급 0의 정산 기록은 MY 거래·정산 이력의 정산 목록에 있다', async ({
+  test('모두 꺼도 판정·정산은 알림 없이 진행되고, 지급 0의 정산 기록은 MY 거래·정산 이력의 정산 목록에 있다 @ac189-8 @ac189-11', async ({
     admin,
     browser,
     baseURL,
@@ -556,6 +557,7 @@ test.describe('알림 수신 설정 (#56)', () => {
       await expect(row.getByTestId('history-settlement-qty')).toHaveText('2계약');
       await expect(row.getByTestId('history-settlement-payout')).toHaveText(formatCoin(0n));
       if ((viewport?.width ?? 0) < 768) await expectNoSideScroll(page);
+      await expectNoExcludedText(page);
     } finally {
       if (marketId !== undefined) {
         await leaveNoPauseDecision(admin, marketId);
