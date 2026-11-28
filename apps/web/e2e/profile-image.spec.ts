@@ -360,6 +360,20 @@ test.describe('프로필 이미지', () => {
     await dialog.getByTestId('profile-image-delete-cancel').click();
     await expect(dialog).toHaveCount(0);
     await expect(card.getByTestId('profile-image-delete')).toBeFocused();
+    // After a press that does not focus 삭제 too. Safari and iOS never focus a button on a click or
+    // a tap — WebKit's mousedown moves the focus to the page (ADR-0067) — so the focus is on the
+    // page as the dialog opens; a dispatched click from the page is the same in Chromium. Escape
+    // once the dialog listens: its Escape listener comes in the frame its focus moves to 취소, its
+    // outside-pointer one a frame and a timer later (@zag-js 1.43, posts.spec.ts).
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await card.getByTestId('profile-image-delete').dispatchEvent('click');
+    await expect(dialog.getByTestId('profile-image-delete-cancel')).toBeFocused();
+    await page.evaluate(
+      () => new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve))),
+    );
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await expect(card.getByTestId('profile-image-delete')).toBeFocused();
     expect((await meOf(page.request)).profile.imageUrl).toBe(second);
     await card.getByTestId('profile-image-delete').click();
     await page.getByTestId('profile-image-delete-confirm').click();

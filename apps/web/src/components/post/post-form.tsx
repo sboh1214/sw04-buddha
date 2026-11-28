@@ -255,6 +255,11 @@ export function PostForm(props: PostFormProps) {
   }
   // The title field of the fields on screen: where a discard leaves the focus.
   const titleRef = useRef<HTMLInputElement>(null);
+  // The discard button of the fields on screen: where the dialog gives the focus back when it
+  // closes on nothing discarded. Named, not left to the dialog's own return (where the focus was
+  // when it opened): Safari and iOS never focus a button on a click or a tap — WebKit's mousedown
+  // moves the focus to the page (ADR-0067) — so that was the page there.
+  const discardRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (kept !== null) clearSessionPostDraft(kept.key, kept.accountId);
   }, [kept]);
@@ -267,6 +272,7 @@ export function PostForm(props: PostFormProps) {
         restored={held.restored}
         focusTitle={held.generation > 0}
         titleRef={titleRef}
+        discardRef={discardRef}
         onDiscard={() => send('ask')}
       />
       {kept !== null && (
@@ -275,6 +281,7 @@ export function PostForm(props: PostFormProps) {
           open={held.asking && props.gone !== true}
           discarded={held.discarded}
           titleRef={titleRef}
+          discardRef={discardRef}
           onCancel={() => send('cancel')}
           onDiscard={() => {
             // Once: a second click on 버리기 while the dialog closes discards nothing, and says
@@ -295,18 +302,21 @@ export function PostForm(props: PostFormProps) {
  * typed since the restore goes with the draft. 버리기 discards; 취소, Escape and a click outside keep
  * the form as it is. Its focus comes back to the discard button when it closes, or — once
  * discarded, the button gone with the fields it was in — goes to the redrawn title field
- * (`finalFocusEl`).
+ * (`finalFocusEl`). Both by name, in every browser: Safari's click and iOS's tap never focus the
+ * discard button and leave the focus on the page, where the dialog would otherwise return it.
  */
 function DiscardDialog({
   open,
   discarded,
   titleRef,
+  discardRef,
   onCancel,
   onDiscard,
 }: {
   open: boolean;
   discarded: boolean;
   titleRef: RefObject<HTMLInputElement | null>;
+  discardRef: RefObject<HTMLButtonElement | null>;
   onCancel: () => void;
   onDiscard: () => void;
 }) {
@@ -320,7 +330,7 @@ function DiscardDialog({
       lazyMount
       unmountOnExit
       closeOnInteractOutside
-      {...(discarded ? { finalFocusEl: () => titleRef.current } : {})}
+      finalFocusEl={() => (discarded ? titleRef.current : discardRef.current)}
     >
       <Portal>
         <Dialog.Backdrop />
@@ -383,12 +393,15 @@ function PostFormFields({
   restored,
   focusTitle,
   titleRef,
+  discardRef,
   onDiscard,
 }: PostFormProps & {
   restored: PostDraft | null;
   /** Drawn afresh by a discard: the title field takes the focus the discard button had. */
   focusTitle: boolean;
   titleRef: RefObject<HTMLInputElement | null>;
+  /** On the discard button: the dialog gives the focus back to it (`DiscardDialog`). */
+  discardRef: RefObject<HTMLButtonElement | null>;
   /** The discard button: asks first (`DiscardDialog`). */
   onDiscard: () => void;
 }) {
@@ -513,6 +526,7 @@ function PostFormFields({
             <Alert.Description id={noticeTextId}>{copy.postDraftRestored}</Alert.Description>
           </Alert.Content>
           <Button
+            ref={discardRef}
             size="xs"
             variant="outline"
             alignSelf="center"

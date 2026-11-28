@@ -99,9 +99,13 @@ function ProfileImageFields({
   const format = useFormatDateTime();
   const fileInput = useRef<HTMLInputElement>(null);
   const uploadButton = useRef<HTMLButtonElement>(null);
+  const deleteButton = useRef<HTMLButtonElement>(null);
   // Whether the dialog closes on a deletion that went through: the 삭제 button it opened from is
   // gone then (no image, no button), and focus would fall to the page's start (WCAG 2.4.3) — so it
-  // goes to the card's 올리기 instead. A 취소, an Escape or a refused deletion return to 삭제.
+  // goes to the card's 올리기 instead. A 취소, an Escape or a refused deletion return to 삭제 — by
+  // name, not left to the dialog's own return (where the focus was when it opened): Safari and iOS
+  // never focus a button on a click or a tap — WebKit's mousedown moves the focus to the page
+  // (ADR-0067) — so that was the page there.
   const deleted = useRef(false);
   // A new key per refusal: each mounts an alert of its own, which a screen reader announces — the
   // same sentence set again (a second GIF picked) would leave the page as it was, and say nothing.
@@ -197,6 +201,7 @@ function ProfileImageFields({
           </Button>
           {imageUrl !== null && (
             <Button
+              ref={deleteButton}
               size="sm"
               variant="outline"
               colorPalette="no"
@@ -235,7 +240,7 @@ function ProfileImageFields({
         unmountOnExit
         closeOnInteractOutside={!remove.isPending}
         closeOnEscape={!remove.isPending}
-        finalFocusEl={() => (deleted.current ? uploadButton.current : null)}
+        finalFocusEl={() => (deleted.current ? uploadButton.current : deleteButton.current)}
       >
         <Portal>
           <Dialog.Backdrop />

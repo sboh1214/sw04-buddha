@@ -169,16 +169,17 @@ function dialogs(page: Page): { asked: string[]; answers: boolean[] } {
 }
 
 /**
- * Dismisses the open discard dialog the way `dismiss` does (Escape, a click outside it), once the
- * dialog listens, as posts.spec.ts does for the post's discard dialog. Visible is not yet listening
- * (@zag-js 1.43): in the first frame after the dialog opens, its focus trap moves the focus to 취소
- * and its Escape listener is attached right after; its outside-pointer listener comes a frame and a
- * timer later. A dismissal sent earlier is lost and the dialog stays open, and an outside click
- * that early moves the focus from the box's 취소 to the page as well. The frame and the timer
- * awaited here come after those, so one press closes the dialog.
+ * Dismisses an open dialog — a discard's or a deletion's — the way `dismiss` does (Escape, a click
+ * outside it), once the dialog listens, as posts.spec.ts does for the post's discard dialog.
+ * Visible is not yet listening (@zag-js 1.43): in the first frame after the dialog opens, its focus
+ * trap moves the focus to the dialog's 취소 and its Escape listener is attached right after; its
+ * outside-pointer listener comes a frame and a timer later. A dismissal sent earlier is lost and
+ * the dialog stays open, and an outside click that early moves the focus from the box's 취소 to the
+ * page as well. The frame and the timer awaited here come after those, so one press closes the
+ * dialog.
  */
 async function dismissDialog(dialog: Locator, dismiss: () => Promise<void>): Promise<void> {
-  await expect(dialog.getByTestId('comment-discard-cancel')).toBeFocused();
+  await expect(dialog.getByRole('button', { name: copy.cancel, exact: true })).toBeFocused();
   await dialog
     .page()
     .evaluate(
@@ -349,6 +350,17 @@ test.describe('댓글·대댓글', () => {
     // --- delete the 댓글 its 대댓글 hang under (#45-5): '삭제된 글입니다', its author hidden, its
     // 대댓글 kept, and no new 대댓글 under it.
     await page.goto(`/community/posts/${postId}`);
+    // Asked first: dismissed, the comment stays and the focus is back on its 삭제 — after a press
+    // that does not focus 삭제 too. Safari and iOS never focus a button on a click or a tap —
+    // WebKit's mousedown moves the focus to the page (ADR-0067) — so the focus is on the page as
+    // the dialog opens; a dispatched click from the page is the same in Chromium.
+    const deleteDialog = page.getByTestId('comment-delete-dialog');
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await own.getByTestId('comment-delete').dispatchEvent('click');
+    await expect(deleteDialog).toBeVisible();
+    await dismissDialog(deleteDialog, () => page.keyboard.press('Escape'));
+    await expect(own.getByTestId('comment-delete')).toBeFocused();
+    await expect(own).not.toHaveAttribute('data-state', 'deleted');
     await own.getByTestId('comment-delete').click();
     await page.getByTestId('comment-delete-confirm').click();
     // Said, though the comment it was asked from is a placeholder by the time the answer lands.
