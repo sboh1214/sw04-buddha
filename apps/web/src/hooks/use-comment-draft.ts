@@ -489,7 +489,9 @@ interface TakenBack {
  * open — adds what it finds. `take` drops the ones a box has taken, or that are shown apart;
  * `reads` counts the reads that found some (the section reads the thread again for each before
  * placing them). A read while the toast of the one before is still up says it in that toast rather
- * than in a second one: `['me']` naming the writer again before the session does takes the drafts
+ * than in a second one, for the time that toast has left (zag starts its close timer again only for
+ * a new type or duration, so a read in its last moment goes with it: ADR-0092 8-36, 오너 결정
+ * 2026-11-28): `['me']` naming the writer again before the session does takes the drafts
  * back, and the session's reset a moment later takes them away again with the boxes and draws them
  * for the writer once more (ADR-0092 8-36) — one taking back, as the writer sees it.
  */
