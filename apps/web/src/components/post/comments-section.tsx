@@ -1722,6 +1722,10 @@ function useFocusOn(
  * The outcome is said from the write's promise, not from per-call callbacks: the answer takes the
  * comment out of the thread (or makes it its placeholder) before the mutation settles, which
  * unmounts this component and the observer such callbacks ride on. The toaster is the page's.
+ *
+ * 취소, Escape and a click outside give the focus back to 삭제 (`finalFocusEl`), in every browser:
+ * Safari's click and iOS's tap never focus the button and leave the focus on the page, where the
+ * dialog would otherwise return it.
  */
 function DeleteComment({
   postId,
@@ -1736,10 +1740,16 @@ function DeleteComment({
   const { refetch: refetchSession } = useSession();
   const remove = useDeleteComment(postId, () => void refetchSession());
   const format = useFormatDateTime();
+  // The dialog gives the focus back to this 삭제 by name, not to where the focus was when it
+  // opened: Safari and iOS never focus a button on a click or a tap — WebKit's mousedown moves the
+  // focus to the page (ADR-0067) — so that was the page there. Null once the comment is gone
+  // (this component with it), and then the dialog's own return stands.
+  const deleteButton = useRef<HTMLButtonElement>(null);
 
   return (
     <>
       <Button
+        ref={deleteButton}
         size="xs"
         variant="ghost"
         colorPalette="no"
@@ -1758,6 +1768,7 @@ function DeleteComment({
         unmountOnExit
         closeOnInteractOutside={!remove.isPending}
         closeOnEscape={!remove.isPending}
+        finalFocusEl={() => deleteButton.current}
       >
         <Portal>
           <Dialog.Backdrop />

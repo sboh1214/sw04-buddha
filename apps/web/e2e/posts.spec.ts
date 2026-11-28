@@ -1060,6 +1060,27 @@ test.describe('근거 글', () => {
       await expect(editor).toContainText('되살린 뒤 쓴 근거');
       await expect(discarded).toHaveCount(0);
     }
+    // A press that does not focus the discard button still gets the focus back to it. Safari and
+    // iOS never focus a button on a click or a tap — WebKit's mousedown moves the focus to the
+    // page (ADR-0067) — so the focus is on the page as the dialog opens; a dispatched click from
+    // the page is the same in Chromium. Each dismissal once the dialog listens, as above.
+    for (const dismiss of [
+      () => page.getByTestId('post-draft-discard-cancel').click(),
+      () => page.keyboard.press('Escape'),
+      () => page.mouse.click(4, 4),
+    ] as const) {
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await discard.dispatchEvent('click');
+      await expect(dialog).toBeVisible();
+      await expect(page.getByTestId('post-draft-discard-cancel')).toBeFocused();
+      await page.evaluate(
+        () => new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve))),
+      );
+      await dismiss();
+      await expect(dialog).toHaveCount(0);
+      await expect(discard).toBeFocused();
+      await expect(discarded).toHaveCount(0);
+    }
 
     // --- discarded on 버리기: the saved post again — what was typed after the restore goes too —
     // said in a toast (오너 결정 2026-10-20 3차 답 5: on screen too, and once to screen readers),
